@@ -56,6 +56,7 @@ struct PhotoExportApp: App {
           configureRecordStore(for: newId)
         }
     }
+    .defaultSize(width: 1100, height: 640)
     .commands {
       CommandGroup(replacing: .appInfo) {
         AboutCommand()

@@ -96,6 +96,7 @@ struct ExportToolbarView: ToolbarContent {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+        .fixedSize()
       }
       // Inter-item spacing: 16pt past the system default. Matches the
       // trailing padding on `includeOriginalsToggle` so adjacent items
