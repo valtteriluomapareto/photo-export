@@ -64,7 +64,7 @@ struct LibraryRootView: View {
       ToolbarItem(placement: .navigation) {
         sectionPicker
       }
-      ExportToolbarView()
+      ExportToolbarView(section: section)
     }
     .sheet(isPresented: $isShowingImportSheet) {
       ImportView()

@@ -362,6 +362,72 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  /// Starts an export of every user album in the library, walking nested folders.
+  /// Favorites and smart albums are excluded — albums-only, mirroring what the
+  /// Collections sidebar surfaces. Mirrors `startExportAll`'s pattern: serialises
+  /// the per-album enqueues inside one Task so all jobs land in the queue before
+  /// processing kicks in.
+  func startExportAllAlbums() {
+    guard canExportCollection else {
+      logger.error(
+        "startExportAllAlbums ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
+      )
+      return
+    }
+    guard !isEnqueueingAll else { return }
+    let selection = versionSelection
+    clearEmptyRunMessage()
+    isEnqueueingAll = true
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
+    let gen = generation
+    Task { [weak self] in
+      guard let self, self.generation == gen else {
+        self?.isEnqueueingAll = false
+        return
+      }
+      do {
+        let tree = try photoLibraryService.fetchCollectionTree()
+        let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
+        var totalEnqueued = 0
+        var sawUnauthorized = false
+        for collectionId in albumIds {
+          let outcome = try await enqueueCollection(
+            selection: .album(collectionId: collectionId),
+            scope: .album(collectionId: collectionId),
+            selectionMode: selection,
+            generation: gen
+          )
+          guard self.generation == gen else {
+            self.isEnqueueingAll = false
+            return
+          }
+          switch outcome {
+          case .enqueued(let count):
+            totalEnqueued += count
+          case .alreadyComplete:
+            break
+          case .unauthorized:
+            sawUnauthorized = true
+          }
+        }
+        self.isEnqueueingAll = false
+        if totalEnqueued == 0 && !sawUnauthorized {
+          if albumIds.isEmpty {
+            setEmptyRunMessage("No albums to export.")
+          } else {
+            setEmptyRunMessage("All albums in this destination are already exported.")
+          }
+        }
+        processQueueIfNeeded()
+      } catch {
+        self.isEnqueueingAll = false
+        logger.error(
+          "Failed to enqueue all-albums export: \(String(describing: error), privacy: .public)"
+        )
+      }
+    }
+  }
+
   /// Starts an export of a single user album by `collectionLocalIdentifier`.
   func startExportAlbum(collectionId: String) {
     guard canExportCollection else {
