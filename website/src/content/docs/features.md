@@ -19,6 +19,7 @@ Photo Export is a focused macOS app for exporting and tracking Apple Photos back
 
 - One-click export for a single month, a year, or the entire library
 - One-click export for Favorites or any album you've created in Photos, written to `Collections/Favorites/` or `Collections/Albums/<Album>/`
+- One-click batch export of every album (including albums nested in folders) via the **Export All Albums** toolbar button on the Collections tab
 - Only copies assets that haven't been exported yet
 - Automatic folder creation in `<year>/<month>/` for the timeline and `Collections/...` for albums and favorites
 - Albums under folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`)
@@ -80,6 +81,7 @@ asymmetric rename.
 - Export folder unavailable or write-protected detection
 - Individual asset failures are skipped and recorded — the batch continues
 - Failed assets are logged with error details
+- **Help → Save Diagnostic Report…** writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state with its underlying error message — attach it to a bug report so the cause is visible
 
 ## Current boundaries
 

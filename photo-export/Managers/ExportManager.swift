@@ -54,6 +54,13 @@ final class ExportManager: ObservableObject {
   @Published private(set) var emptyRunMessage: String?
   private var emptyRunMessageTask: Task<Void, Never>?
 
+  /// Persistent warning attached to *active* queue work — for example, "couldn't list every
+  /// album, continuing with what was queued." Rendered alongside the progress bar so the
+  /// user sees both the partial run AND the reason it's partial. Distinct from
+  /// `emptyRunMessage` because that one only renders when the queue is empty. Cleared on
+  /// every new `startExport*` call and on `cancelAndClear`.
+  @Published private(set) var queueWarningMessage: String?
+
   /// Which variants the pipeline writes for each asset. Persisted to `UserDefaults` so the
   /// choice survives restart and stays globally consistent regardless of destination.
   @Published var versionSelection: ExportVersionSelection {
@@ -82,6 +89,16 @@ final class ExportManager: ObservableObject {
   /// Whether the export queue is active (has pending/in-flight work).
   var hasActiveExportWork: Bool {
     isRunning || queueCount > 0 || isEnqueueingAll
+  }
+
+  /// Whether the pause/resume toolbar control should accept clicks. Pausing is meaningful
+  /// whenever there is work that *would* run — both the run-loop case (`isRunning`) and the
+  /// "jobs queued, run loop not started yet" window (`queueCount > 0`) that opens between
+  /// `enqueue*` appending jobs and `processQueueIfNeeded()` flipping `isRunning` to true.
+  /// Without this, the pause button shows up during the second case but `pause()` no-ops,
+  /// leaving the user unable to park a partially-enqueued batch.
+  var canTogglePause: Bool {
+    isRunning || queueCount > 0
   }
 
   // MARK: - Dependencies
@@ -197,6 +214,7 @@ final class ExportManager: ObservableObject {
     // this snapshot is the correctness guarantee.
     let selection = versionSelection
     clearEmptyRunMessage()
+    clearQueueWarningMessage()
     // Only reset progress counters when the queue is truly idle. "Paused
     // with pending jobs" satisfies `!isRunning && !isProcessing` but is
     // not idle — resetting the counter there detaches the visible
@@ -235,6 +253,7 @@ final class ExportManager: ObservableObject {
     }
     let selection = versionSelection
     clearEmptyRunMessage()
+    clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
@@ -268,6 +287,7 @@ final class ExportManager: ObservableObject {
     guard !isEnqueueingAll else { return }
     let selection = versionSelection
     clearEmptyRunMessage()
+    clearQueueWarningMessage()
     isEnqueueingAll = true
     // Same idle check as the other start functions: a paused queue with
     // pending jobs must not reset the counter — Export All accumulates
@@ -310,6 +330,15 @@ final class ExportManager: ObservableObject {
         logger.error(
           "Failed to enqueue export-all: \(String(describing: error), privacy: .public)"
         )
+        // A throw partway through year-by-year enqueueing can leave earlier years'
+        // jobs already in `pendingJobs`. Drain whatever was queued and surface the
+        // partial state so the user isn't stuck with a non-empty queue and no
+        // active processor.
+        if !pendingJobs.isEmpty {
+          setQueueWarningMessage(
+            "Couldn't list every year. Continuing with the photos already queued.")
+          processQueueIfNeeded()
+        }
       }
     }
   }
@@ -339,6 +368,7 @@ final class ExportManager: ObservableObject {
     }
     let selection = versionSelection
     clearEmptyRunMessage()
+    clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
@@ -362,6 +392,82 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  /// Starts an export of every user album in the library, walking nested folders.
+  /// Favorites and smart albums are excluded — albums-only, mirroring what the
+  /// Collections sidebar surfaces. Mirrors `startExportAll`'s pattern: serialises
+  /// the per-album enqueues inside one Task so all jobs land in the queue before
+  /// processing kicks in.
+  func startExportAllAlbums() {
+    guard canExportCollection else {
+      logger.error(
+        "startExportAllAlbums ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
+      )
+      return
+    }
+    guard !isEnqueueingAll else { return }
+    let selection = versionSelection
+    clearEmptyRunMessage()
+    clearQueueWarningMessage()
+    isEnqueueingAll = true
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
+    let gen = generation
+    Task { [weak self] in
+      guard let self, self.generation == gen else {
+        self?.isEnqueueingAll = false
+        return
+      }
+      do {
+        let tree = try photoLibraryService.fetchCollectionTree()
+        let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
+        var totalEnqueued = 0
+        var sawUnauthorized = false
+        for collectionId in albumIds {
+          let outcome = try await enqueueCollection(
+            selection: .album(collectionId: collectionId),
+            scope: .album(collectionId: collectionId),
+            selectionMode: selection,
+            generation: gen
+          )
+          guard self.generation == gen else {
+            self.isEnqueueingAll = false
+            return
+          }
+          switch outcome {
+          case .enqueued(let count):
+            totalEnqueued += count
+          case .alreadyComplete:
+            break
+          case .unauthorized:
+            sawUnauthorized = true
+          }
+        }
+        self.isEnqueueingAll = false
+        if totalEnqueued == 0 && !sawUnauthorized {
+          if albumIds.isEmpty {
+            setEmptyRunMessage("No albums to export.")
+          } else {
+            setEmptyRunMessage("All albums in this destination are already exported.")
+          }
+        }
+        processQueueIfNeeded()
+      } catch {
+        self.isEnqueueingAll = false
+        logger.error(
+          "Failed to enqueue all-albums export: \(String(describing: error), privacy: .public)"
+        )
+        // A throw partway through album-by-album enqueueing can leave earlier
+        // albums' jobs already in `pendingJobs`. Drain whatever was queued and
+        // surface the partial state so the user isn't stuck with a non-empty
+        // queue and no active processor.
+        if !pendingJobs.isEmpty {
+          setQueueWarningMessage(
+            "Couldn't list every album. Continuing with the photos already queued.")
+          processQueueIfNeeded()
+        }
+      }
+    }
+  }
+
   /// Starts an export of a single user album by `collectionLocalIdentifier`.
   func startExportAlbum(collectionId: String) {
     guard canExportCollection else {
@@ -372,6 +478,7 @@ final class ExportManager: ObservableObject {
     }
     let selection = versionSelection
     clearEmptyRunMessage()
+    clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
@@ -501,6 +608,7 @@ final class ExportManager: ObservableObject {
     totalJobsCompleted = 0
     currentAssetFilename = nil
     clearEmptyRunMessage()
+    clearQueueWarningMessage()
     updateQueueCount()
   }
 
@@ -530,8 +638,20 @@ final class ExportManager: ObservableObject {
     emptyRunMessageTask = nil
   }
 
+  /// Clears the queue-warning message. Called from every path that invalidates it: a fresh
+  /// `startExport*` (the new run owns the warning slot) and `cancelAndClear`. The message
+  /// itself is not auto-expiring — it persists until the queue it describes drains or the
+  /// user kicks off something new.
+  private func clearQueueWarningMessage() {
+    queueWarningMessage = nil
+  }
+
+  private func setQueueWarningMessage(_ message: String) {
+    queueWarningMessage = message
+  }
+
   func pause() {
-    guard isRunning else { return }
+    guard canTogglePause else { return }
     isPaused = true
     logger.info("Export queue paused")
   }

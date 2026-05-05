@@ -44,7 +44,7 @@ Once you've picked a scope, decide what to write:
 Then export:
 
 - **Timeline:** navigate to a month and click **Export Month**, or click **Export All** in the toolbar to queue the whole library.
-- **Collections:** select **Favorites** or any album and click **Export Favorites** / **Export Album**.
+- **Collections:** select **Favorites** or any album and click **Export Favorites** / **Export Album**, or click **Export All Albums** in the toolbar to queue every user album in one go (Favorites is excluded — it has its own button).
 
 The app organizes the output on disk:
 
@@ -61,6 +61,10 @@ remain fast.
 ## Resuming an interrupted export
 
 If the export is interrupted — you unplug the drive, close the app, or your Mac goes to sleep — you can resume and the app will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again, but no data is lost.
+
+## If an export gets stuck
+
+If the progress fraction stops climbing or you suspect specific photos are failing, use **Help → Save Diagnostic Report…**. The app writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state, along with the underlying error message (e.g. iCloud download failure, disk full). Attach the file to a [GitHub issue](https://github.com/valtteriluomapareto/photo-export/issues) so the actual failure cause is visible — it is otherwise only in the macOS unified log under the `com.valtteriluoma.photo-export` subsystem.
 
 ## Why use Photo Export instead of manually dragging photos?
 

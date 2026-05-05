@@ -43,3 +43,23 @@ struct PhotoCollectionDescriptor: Identifiable, Hashable, Sendable {
   /// Children of a `.folder`. Empty for `.album` and `.favorites`.
   let children: [PhotoCollectionDescriptor]
 }
+
+extension PhotoCollectionDescriptor {
+  /// Recursively collects `localIdentifier` for every `.album` in the tree, walking
+  /// through `.folder` nodes. `.favorites` is excluded by design — the batch
+  /// "Export All Albums" action covers user albums only.
+  static func albumLocalIds(in tree: [PhotoCollectionDescriptor]) -> [String] {
+    var ids: [String] = []
+    for descriptor in tree {
+      switch descriptor.kind {
+      case .album:
+        if let id = descriptor.localIdentifier { ids.append(id) }
+      case .folder:
+        ids.append(contentsOf: albumLocalIds(in: descriptor.children))
+      case .favorites:
+        continue
+      }
+    }
+    return ids
+  }
+}

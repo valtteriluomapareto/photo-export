@@ -36,6 +36,15 @@ final class FakePhotoLibraryService: PhotoLibraryService {
 
   // Error injection
   var fetchAssetsError: Error?
+  /// Per-album error injection. When `fetchAssets(in: .album(id))` is called and
+  /// `id` is in this map, the fake throws the mapped error instead of returning the
+  /// canned assets. Used to exercise partial-enqueue failure paths.
+  var fetchAssetsErrorByAlbumId: [String: Error] = [:]
+  /// Per-album async delay. When `fetchAssets(in: .album(id))` is called and `id` is
+  /// in this map, the fake `Task.sleep`s for the given seconds before returning. Used
+  /// to widen the "queued but run loop not started" window for tests that exercise the
+  /// pre-process pause path.
+  var fetchAssetsDelayByAlbumId: [String: TimeInterval] = [:]
   var requestFullImageError: Error?
 
   func requestAuthorization() async -> Bool { isAuthorized }
@@ -132,6 +141,12 @@ final class FakePhotoLibraryService: PhotoLibraryService {
       }
       return favoritesAssets
     case .album(let collectionId):
+      if let perAlbumError = fetchAssetsErrorByAlbumId[collectionId] {
+        throw perAlbumError
+      }
+      if let delay = fetchAssetsDelayByAlbumId[collectionId] {
+        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+      }
       let assets = assetsByAlbumLocalId[collectionId] ?? []
       if let mediaType {
         return assets.filter { $0.mediaType == mediaType }

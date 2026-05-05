@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Top-level layout for the authorized state. Hosts the segmented Timeline/Collections
 /// selector above a `NavigationSplitView`. The sidebar swaps between
@@ -64,7 +66,7 @@ struct LibraryRootView: View {
       ToolbarItem(placement: .navigation) {
         sectionPicker
       }
-      ExportToolbarView()
+      ExportToolbarView(section: section)
     }
     .sheet(isPresented: $isShowingImportSheet) {
       ImportView()
@@ -101,8 +103,45 @@ struct LibraryRootView: View {
           exportManager.startImport()
         } : nil
     )
+    .focusedSceneValue(
+      \.saveDiagnosticReportAction,
+      SaveDiagnosticReportAction { saveDiagnosticReport() }
+    )
     .frame(minWidth: 900, minHeight: 600)
     .background(Color(.windowBackgroundColor))
+  }
+
+  // MARK: - Diagnostic report
+
+  private func saveDiagnosticReport() {
+    let info = Bundle.main.infoDictionary
+    let appVersion = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+    let buildNumber = (info?["CFBundleVersion"] as? String) ?? "?"
+    let reporter = DiagnosticReporter(
+      timelineStore: exportRecordStore,
+      collectionStore: collectionExportRecordStore,
+      destinationId: exportDestinationManager.destinationId,
+      appVersion: appVersion,
+      buildNumber: buildNumber
+    )
+    let report = reporter.makeReport()
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.plainText]
+    let stamp = ISO8601DateFormatter().string(from: Date())
+      .replacingOccurrences(of: ":", with: "-")
+    panel.nameFieldStringValue = "photo-export-diagnostic-\(stamp).txt"
+    panel.canCreateDirectories = true
+    panel.title = "Save Diagnostic Report"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    do {
+      try report.write(to: url, atomically: true, encoding: .utf8)
+    } catch {
+      let alert = NSAlert()
+      alert.messageText = "Could not save diagnostic report"
+      alert.informativeText = error.localizedDescription
+      alert.alertStyle = .warning
+      alert.runModal()
+    }
   }
 
   // MARK: - Section picker

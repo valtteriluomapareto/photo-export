@@ -52,6 +52,7 @@ struct OnboardingView: View {
                 exportDestinationManager.selectFolder()
               }
               .buttonStyle(.bordered)
+              .fixedSize()
             } else {
               Button("Choose Folder\u{2026}") {
                 exportDestinationManager.selectFolder()

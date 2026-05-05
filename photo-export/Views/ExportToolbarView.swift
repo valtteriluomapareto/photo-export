@@ -4,6 +4,11 @@ struct ExportToolbarView: ToolbarContent {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
+  /// Drives the primary action button's label and target. Timeline shows
+  /// "Export All"; Collections shows "Export All Albums". The pause/cancel buttons
+  /// are shared because the underlying queue is shared.
+  let section: LibrarySection
+
   var body: some ToolbarContent {
     ToolbarItem(placement: .automatic) {
       destinationIndicator
@@ -96,6 +101,7 @@ struct ExportToolbarView: ToolbarContent {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+        .fixedSize()
       }
       // Inter-item spacing: 16pt past the system default. Matches the
       // trailing padding on `includeOriginalsToggle` so adjacent items
@@ -114,12 +120,20 @@ struct ExportToolbarView: ToolbarContent {
 
   private var primaryActions: some View {
     HStack(alignment: .center, spacing: 8) {
-      Button("Export All") {
-        exportManager.startExportAll()
+      Button(primaryActionLabel) {
+        switch section {
+        case .timeline:
+          exportManager.startExportAll()
+        case .collections:
+          exportManager.startExportAllAlbums()
+        }
       }
       .buttonStyle(.borderedProminent)
-      .disabled(!exportDestinationManager.canExportNow || exportManager.isImporting)
-      .help(exportAllHelpText)
+      .disabled(
+        !exportDestinationManager.canExportNow || exportManager.isImporting
+          || exportManager.hasActiveExportWork
+      )
+      .help(primaryActionHelpText)
 
       Button {
         if exportManager.isPaused {
@@ -131,8 +145,8 @@ struct ExportToolbarView: ToolbarContent {
         Image(systemName: exportManager.isPaused ? "play.fill" : "pause.fill")
       }
       .help(exportManager.isPaused ? "Resume export" : "Pause export")
-      .opacity(exportManager.isRunning || exportManager.queueCount > 0 ? 1 : 0)
-      .disabled(!(exportManager.isRunning || exportManager.queueCount > 0))
+      .opacity(exportManager.canTogglePause ? 1 : 0)
+      .disabled(!exportManager.canTogglePause)
 
       Button {
         exportManager.cancelAndClear()
@@ -140,28 +154,43 @@ struct ExportToolbarView: ToolbarContent {
         Image(systemName: "xmark.circle")
       }
       .help("Cancel and clear queue")
-      .opacity(exportManager.isRunning || exportManager.queueCount > 0 ? 1 : 0)
-      .disabled(!(exportManager.isRunning || exportManager.queueCount > 0))
+      .opacity(exportManager.hasActiveExportWork ? 1 : 0)
+      .disabled(!exportManager.hasActiveExportWork)
     }
     // Right-most toolbar item: pad twice the inter-item spacing so
     // the cancel button doesn't sit flush against the window edge.
     .padding(.trailing, 32)
   }
 
-  private var exportAllHelpText: String {
+  private var primaryActionLabel: String {
+    switch section {
+    case .timeline: return "Export All"
+    case .collections: return "Export All Albums"
+    }
+  }
+
+  private var primaryActionHelpText: String {
     guard exportDestinationManager.canExportNow else {
       return "Select a writable export folder first"
     }
-    switch exportManager.versionSelection {
-    case .edited:
+    switch (section, exportManager.versionSelection) {
+    case (.timeline, .edited):
       return
-        "Export every photo in the timeline (year/month) view, in the version Photos shows. "
-        + "Use the Export Favorites or Export Album button on the Collections tab to export those."
-    case .editedWithOriginals:
+        "Export every photo in the timeline (year/month) view, in the version Photos shows."
+    case (.timeline, .editedWithOriginals):
       return
-        "Export every photo in the timeline (year/month) view, plus a _orig companion for any "
-        + "photo edited in Photos. Use the Export Favorites or Export Album button on the "
-        + "Collections tab to export those."
+        "Export every photo in the timeline (year/month) view, plus a _orig companion "
+        + "for any photo edited in Photos."
+    case (.collections, .edited):
+      return
+        "Export every user album, including albums nested in folders, in the version "
+        + "Photos shows. Favorites is excluded — use the Export Favorites button on its "
+        + "pane."
+    case (.collections, .editedWithOriginals):
+      return
+        "Export every user album, including albums nested in folders, plus a _orig "
+        + "companion for any photo edited in Photos. Favorites is excluded — use the "
+        + "Export Favorites button on its pane."
     }
   }
 
