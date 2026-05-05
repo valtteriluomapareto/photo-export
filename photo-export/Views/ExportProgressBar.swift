@@ -21,13 +21,44 @@ struct ExportProgressBar: View {
   var body: some View {
     Group {
       if exportManager.totalJobsEnqueued > 0 {
-        progressContent
+        VStack(alignment: .leading, spacing: 0) {
+          if let warning = exportManager.queueWarningMessage {
+            queueWarningBanner(message: warning)
+          }
+          progressContent
+        }
       } else if let message = exportManager.emptyRunMessage {
         emptyRunBanner(message: message)
       }
     }
     .animation(.default, value: exportManager.totalJobsEnqueued > 0)
     .animation(.default, value: exportManager.emptyRunMessage)
+    .animation(.default, value: exportManager.queueWarningMessage)
+  }
+
+  /// Persistent warning rendered above the progress strip when an enqueue partially
+  /// failed and the queue is now draining what got through. The progress bar still
+  /// shows the subset; this row tells the user *why* the run is partial.
+  private func queueWarningBanner(message: String) -> some View {
+    HStack(alignment: .center, spacing: 8) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .foregroundColor(.orange)
+        .font(.caption)
+      Text(message)
+        .font(.caption)
+        .foregroundColor(.secondary)
+        .lineLimit(2)
+        .truncationMode(.tail)
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 6)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.bar)
+    .overlay(alignment: .bottom) {
+      Divider()
+    }
+    .transition(.move(edge: .top).combined(with: .opacity))
   }
 
   // MARK: - Active progress

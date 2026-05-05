@@ -145,12 +145,8 @@ struct ExportToolbarView: ToolbarContent {
         Image(systemName: exportManager.isPaused ? "play.fill" : "pause.fill")
       }
       .help(exportManager.isPaused ? "Resume export" : "Pause export")
-      // Pause is a no-op while `isRunning` is false (see `ExportManager.pause()`),
-      // so the button stays hidden during the enqueue window even though
-      // `hasActiveExportWork` is true. Cancel works in any state, so it follows
-      // `hasActiveExportWork` and stays available throughout.
-      .opacity(exportManager.isRunning || exportManager.queueCount > 0 ? 1 : 0)
-      .disabled(!(exportManager.isRunning || exportManager.queueCount > 0))
+      .opacity(exportManager.canTogglePause ? 1 : 0)
+      .disabled(!exportManager.canTogglePause)
 
       Button {
         exportManager.cancelAndClear()

@@ -186,6 +186,51 @@ struct ExportAllAlbumsTests {
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 
+  /// During the "queued but run loop not started" window — `enqueueCollection` has
+  /// appended jobs from album A but the album-B `fetchAssets` is still suspended —
+  /// `pause()` must be honoured. Pre-fix it was a no-op (it required `isRunning`),
+  /// so the queue would resume processing as soon as the enqueue loop completed
+  /// and called `processQueueIfNeeded()`.
+  @Test func pauseHonoredDuringEnqueueWindow() async throws {
+    let h = makeHarness()
+    defer {
+      try? FileManager.default.removeItem(at: h.storeRoot)
+      h.dest.cleanup()
+    }
+
+    let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
+    let albumB = seedAlbum(h.photoLib, localId: "B", ids: ["b1"])
+    h.photoLib.collectionTree = [albumA, albumB]
+    // Suspend album B's fetch long enough that we observe the post-A,
+    // pre-processQueueIfNeeded state and pause from there.
+    h.photoLib.fetchAssetsDelayByAlbumId["B"] = 0.5
+
+    h.manager.startExportAllAlbums()
+
+    // Wait for album A's job to land in the queue while album B is still suspended.
+    await waitUntil(h.manager.queueCount > 0 && h.manager.isEnqueueingAll)
+    #expect(h.manager.queueCount > 0)
+    #expect(h.manager.isEnqueueingAll)
+    #expect(!h.manager.isRunning)
+
+    // The pre-fix bug: pause() guarded on `isRunning`, so this no-op'd.
+    h.manager.pause()
+    #expect(h.manager.isPaused)
+
+    // Let the enqueue loop finish. After processQueueIfNeeded() runs at the end,
+    // the queue must stay parked because isPaused=true.
+    await waitUntil(timeout: 3, !h.manager.isEnqueueingAll)
+    try? await Task.sleep(nanoseconds: 100_000_000)  // give run loop a chance to (incorrectly) start
+    #expect(h.manager.isPaused)
+    #expect(!h.manager.isRunning)
+    #expect(h.manager.queueCount > 0)
+
+    // Resume drains the queue normally.
+    h.manager.resume()
+    await waitUntil(timeout: 5, h.manager.queueCount == 0)
+    #expect(h.manager.queueCount == 0)
+  }
+
   /// A throw partway through the album loop must not strand earlier albums' jobs in
   /// `pendingJobs` with no active processor. The catch path drains what was queued and
   /// surfaces the partial state via the empty-run message slot.
@@ -210,10 +255,12 @@ struct ExportAllAlbumsTests {
     #expect(h.manager.totalJobsCompleted == 2)
     #expect(h.manager.queueCount == 0)
     #expect(!h.manager.isEnqueueingAll)
-    // The partial-failure message lands in the empty-run slot.
+    // The partial-failure message lands in the queue-warning slot (rendered alongside
+    // active progress). emptyRunMessage stays nil because the queue isn't empty.
     #expect(
-      h.manager.emptyRunMessage
+      h.manager.queueWarningMessage
         == "Couldn't list every album. Continuing with the photos already queued.")
+    #expect(h.manager.emptyRunMessage == nil)
   }
 
   @Test func allAlbumsAlreadyExportedSetsAlreadyDoneMessage() async throws {
