@@ -129,7 +129,10 @@ struct ExportToolbarView: ToolbarContent {
         }
       }
       .buttonStyle(.borderedProminent)
-      .disabled(!exportDestinationManager.canExportNow || exportManager.isImporting)
+      .disabled(
+        !exportDestinationManager.canExportNow || exportManager.isImporting
+          || exportManager.hasActiveExportWork
+      )
       .help(primaryActionHelpText)
 
       Button {
@@ -142,8 +145,8 @@ struct ExportToolbarView: ToolbarContent {
         Image(systemName: exportManager.isPaused ? "play.fill" : "pause.fill")
       }
       .help(exportManager.isPaused ? "Resume export" : "Pause export")
-      .opacity(exportManager.isRunning || exportManager.queueCount > 0 ? 1 : 0)
-      .disabled(!(exportManager.isRunning || exportManager.queueCount > 0))
+      .opacity(exportManager.hasActiveExportWork ? 1 : 0)
+      .disabled(!exportManager.hasActiveExportWork)
 
       Button {
         exportManager.cancelAndClear()
@@ -151,8 +154,8 @@ struct ExportToolbarView: ToolbarContent {
         Image(systemName: "xmark.circle")
       }
       .help("Cancel and clear queue")
-      .opacity(exportManager.isRunning || exportManager.queueCount > 0 ? 1 : 0)
-      .disabled(!(exportManager.isRunning || exportManager.queueCount > 0))
+      .opacity(exportManager.hasActiveExportWork ? 1 : 0)
+      .disabled(!exportManager.hasActiveExportWork)
     }
     // Right-most toolbar item: pad twice the inter-item spacing so
     // the cancel button doesn't sit flush against the window edge.
