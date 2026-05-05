@@ -46,7 +46,7 @@ The folder needs to be writable. The app remembers your choice across launches u
 Once the destination is set, you'll see the main window with a **Timeline / Collections** segmented control above the sidebar and a **thumbnail grid** in the center.
 
 - **Timeline** — browse year by year, month by month. Click a month to see its photos. Click **Export Month** in the grid header to export that month, or **Export All** in the toolbar to queue the entire library.
-- **Collections** — see your **Favorites** at the top, then every album and folder from Photos beneath. Click an album to see its photos, then **Export Favorites** or **Export Album** in the grid header. Albums under Photos folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`).
+- **Collections** — see your **Favorites** at the top, then every album and folder from Photos beneath. Click an album to see its photos, then **Export Favorites** or **Export Album** in the grid header. To queue every user album in one go, use **Export All Albums** in the toolbar (Favorites is excluded — it has its own button). Albums under Photos folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`).
 
 A few extras that work in both views:
 
@@ -61,6 +61,7 @@ Export progress is shown in the toolbar. You can pause, resume, or cancel at any
 - **"Export folder is not reachable"** — Check that the external drive is plugged in and mounted.
 - **"Export folder is read-only"** — Right-click the folder, choose Get Info, and make sure you have write permission.
 - **Photos permission denied** — Open **System Settings → Privacy & Security → Photos** and enable access for Photo Export.
+- **Export stuck near 100%** — Use **Help → Save Diagnostic Report…** to write a text file listing every photo whose export is in `failed` or `in-progress` state, including the underlying error message. Attach it to a [GitHub issue](https://github.com/valtteriluomapareto/photo-export/issues) so the cause is visible.
 
 ## Updates and distribution channels
 
