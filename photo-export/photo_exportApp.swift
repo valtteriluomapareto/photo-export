@@ -64,6 +64,9 @@ struct PhotoExportApp: App {
       CommandGroup(after: .importExport) {
         ImportBackupCommand()
       }
+      CommandGroup(after: .help) {
+        SaveDiagnosticReportCommand()
+      }
     }
 
     Window("About Photo Export", id: "about") {
@@ -145,5 +148,33 @@ private struct ImportBackupCommand: View {
     }
     .keyboardShortcut("i", modifiers: [.command, .shift])
     .disabled(importAction == nil)
+  }
+}
+
+// MARK: - Save Diagnostic Report Command
+
+struct SaveDiagnosticReportAction {
+  let callAsFunction: () -> Void
+}
+
+struct SaveDiagnosticReportActionKey: FocusedValueKey {
+  typealias Value = SaveDiagnosticReportAction
+}
+
+extension FocusedValues {
+  var saveDiagnosticReportAction: SaveDiagnosticReportAction? {
+    get { self[SaveDiagnosticReportActionKey.self] }
+    set { self[SaveDiagnosticReportActionKey.self] = newValue }
+  }
+}
+
+private struct SaveDiagnosticReportCommand: View {
+  @FocusedValue(\.saveDiagnosticReportAction) private var action
+
+  var body: some View {
+    Button("Save Diagnostic Report\u{2026}") {
+      action?.callAsFunction()
+    }
+    .disabled(action == nil)
   }
 }
