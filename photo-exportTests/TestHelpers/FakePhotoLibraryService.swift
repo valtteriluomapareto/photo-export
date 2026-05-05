@@ -36,6 +36,10 @@ final class FakePhotoLibraryService: PhotoLibraryService {
 
   // Error injection
   var fetchAssetsError: Error?
+  /// Per-album error injection. When `fetchAssets(in: .album(id))` is called and
+  /// `id` is in this map, the fake throws the mapped error instead of returning the
+  /// canned assets. Used to exercise partial-enqueue failure paths.
+  var fetchAssetsErrorByAlbumId: [String: Error] = [:]
   var requestFullImageError: Error?
 
   func requestAuthorization() async -> Bool { isAuthorized }
@@ -132,6 +136,9 @@ final class FakePhotoLibraryService: PhotoLibraryService {
       }
       return favoritesAssets
     case .album(let collectionId):
+      if let perAlbumError = fetchAssetsErrorByAlbumId[collectionId] {
+        throw perAlbumError
+      }
       let assets = assetsByAlbumLocalId[collectionId] ?? []
       if let mediaType {
         return assets.filter { $0.mediaType == mediaType }

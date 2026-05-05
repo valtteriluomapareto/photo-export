@@ -186,6 +186,36 @@ struct ExportAllAlbumsTests {
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 
+  /// A throw partway through the album loop must not strand earlier albums' jobs in
+  /// `pendingJobs` with no active processor. The catch path drains what was queued and
+  /// surfaces the partial state via the empty-run message slot.
+  @Test func partialEnqueueFailureDrainsTheJobsAlreadyQueued() async throws {
+    let h = makeHarness()
+    defer {
+      try? FileManager.default.removeItem(at: h.storeRoot)
+      h.dest.cleanup()
+    }
+
+    let albumA = seedAlbum(h.photoLib, localId: "album-A", ids: ["a1", "a2"])
+    let albumB = seedAlbum(h.photoLib, localId: "broken-album", ids: ["b1"])
+    h.photoLib.collectionTree = [albumA, albumB]
+    h.photoLib.fetchAssetsErrorByAlbumId["broken-album"] = NSError(
+      domain: "Test", code: 7, userInfo: [NSLocalizedDescriptionKey: "boom"])
+
+    h.manager.startExportAllAlbums()
+    await waitUntil(h.manager.totalJobsCompleted == 2)
+
+    // Album A's two jobs were already queued before B threw. They must drain
+    // (totalJobsCompleted reaches 2) and the queue empties.
+    #expect(h.manager.totalJobsCompleted == 2)
+    #expect(h.manager.queueCount == 0)
+    #expect(!h.manager.isEnqueueingAll)
+    // The partial-failure message lands in the empty-run slot.
+    #expect(
+      h.manager.emptyRunMessage
+        == "Couldn't list every album. Continuing with the photos already queued.")
+  }
+
   @Test func allAlbumsAlreadyExportedSetsAlreadyDoneMessage() async throws {
     let h = makeHarness()
     defer {

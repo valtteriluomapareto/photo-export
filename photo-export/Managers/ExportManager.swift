@@ -310,6 +310,15 @@ final class ExportManager: ObservableObject {
         logger.error(
           "Failed to enqueue export-all: \(String(describing: error), privacy: .public)"
         )
+        // A throw partway through year-by-year enqueueing can leave earlier years'
+        // jobs already in `pendingJobs`. Drain whatever was queued and surface the
+        // partial state so the user isn't stuck with a non-empty queue and no
+        // active processor.
+        if !pendingJobs.isEmpty {
+          setEmptyRunMessage(
+            "Couldn't list every year. Continuing with the photos already queued.")
+          processQueueIfNeeded()
+        }
       }
     }
   }
@@ -424,6 +433,15 @@ final class ExportManager: ObservableObject {
         logger.error(
           "Failed to enqueue all-albums export: \(String(describing: error), privacy: .public)"
         )
+        // A throw partway through album-by-album enqueueing can leave earlier
+        // albums' jobs already in `pendingJobs`. Drain whatever was queued and
+        // surface the partial state so the user isn't stuck with a non-empty
+        // queue and no active processor.
+        if !pendingJobs.isEmpty {
+          setEmptyRunMessage(
+            "Couldn't list every album. Continuing with the photos already queued.")
+          processQueueIfNeeded()
+        }
       }
     }
   }
