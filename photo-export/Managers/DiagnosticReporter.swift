@@ -45,10 +45,18 @@ struct DiagnosticReporter {
     let collectionFailed = collectCollectionProblems(status: .failed)
     let collectionInProgress = collectCollectionProblems(status: .inProgress)
 
+    let timelineFallbacks = timelineFailed.filter { $0.fallbackFilename != nil }.count
+    let collectionFallbacks = collectionFailed.filter { $0.fallbackFilename != nil }.count
+
     lines.append("== Summary ==")
     lines.append("Timeline store state: \(String(describing: timelineStore.state))")
     lines.append("  Total records:        \(timelineStore.recordsById.count)")
     lines.append("  Failed variants:      \(timelineFailed.count)")
+    if timelineFallbacks > 0 {
+      lines.append(
+        "    of which fallback-covered (original written as _orig): \(timelineFallbacks)"
+      )
+    }
     lines.append("  In-progress variants: \(timelineInProgress.count)")
     lines.append("Collection store state: \(String(describing: collectionStore.state))")
     lines.append("  Placements:           \(collectionStore.placements.count)")
@@ -56,6 +64,11 @@ struct DiagnosticReporter {
       .reduce(0) { $0 + $1.count }
     lines.append("  Total records:        \(collectionTotalRecords)")
     lines.append("  Failed variants:      \(collectionFailed.count)")
+    if collectionFallbacks > 0 {
+      lines.append(
+        "    of which fallback-covered (original written as _orig): \(collectionFallbacks)"
+      )
+    }
     lines.append("  In-progress variants: \(collectionInProgress.count)")
     lines.append("")
 
@@ -75,6 +88,10 @@ struct DiagnosticReporter {
     let filename: String?
     let lastError: String?
     let exportDate: Date?
+    /// When this is a `.failed` `.edited` variant covered by the issue #22
+    /// `_orig` fallback (matching record has `.original` `.done`), this holds
+    /// the on-disk filename of that fallback so the report can call it out.
+    let fallbackFilename: String?
   }
 
   private func collectTimelineProblems(status target: ExportStatus) -> [Problem] {
@@ -87,7 +104,10 @@ struct DiagnosticReporter {
             assetId: record.id, variant: variant,
             filename: variantRecord.filename,
             lastError: variantRecord.lastError,
-            exportDate: variantRecord.exportDate))
+            exportDate: variantRecord.exportDate,
+            fallbackFilename: editedFallbackFilename(
+              variant: variant, variantRecord: variantRecord,
+              originalRecord: record.variants[.original])))
       }
     }
     return problems.sorted { $0.scope < $1.scope }
@@ -102,17 +122,39 @@ struct DiagnosticReporter {
         ?? "Unknown placement \(placementId)"
       for (assetId, body) in byAsset {
         for (variantKey, variantRecord) in body.variants where variantRecord.status == target {
+          let variant = ExportVariant(rawValue: variantKey) ?? .original
           problems.append(
             Problem(
               scope: scope, assetId: assetId,
-              variant: ExportVariant(rawValue: variantKey) ?? .original,
+              variant: variant,
               filename: variantRecord.filename,
               lastError: variantRecord.lastError,
-              exportDate: variantRecord.exportDate))
+              exportDate: variantRecord.exportDate,
+              fallbackFilename: editedFallbackFilename(
+                variant: variant, variantRecord: variantRecord,
+                originalRecord: body.variants[ExportVariant.original.rawValue])))
         }
       }
     }
     return problems.sorted { $0.scope < $1.scope }
+  }
+
+  /// Returns the original-side filename when this `.failed` `.edited` variant
+  /// is covered by the `_orig` fallback. Otherwise nil. Used to annotate the
+  /// row in the report so users can see which file on disk is standing in
+  /// for the unavailable edit.
+  private func editedFallbackFilename(
+    variant: ExportVariant,
+    variantRecord: ExportVariantRecord,
+    originalRecord: ExportVariantRecord?
+  ) -> String? {
+    guard variant == .edited,
+      variantRecord.status == .failed,
+      variantRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage,
+      let original = originalRecord,
+      original.status == .done
+    else { return nil }
+    return original.filename
   }
 
   private func section(_ title: String, _ problems: [Problem]) -> [String] {
@@ -133,6 +175,9 @@ struct DiagnosticReporter {
       lines.append("  error: \(problem.lastError ?? "<no error message>")")
       if let date = problem.exportDate {
         lines.append("  date: \(Self.formatter.string(from: date))")
+      }
+      if let fallback = problem.fallbackFilename {
+        lines.append("  fallback: original exported as \(fallback)")
       }
     }
     lines.append("")

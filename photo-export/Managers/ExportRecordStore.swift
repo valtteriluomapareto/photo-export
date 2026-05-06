@@ -328,10 +328,36 @@ final class ExportRecordStore: ObservableObject {
   /// every required variant is `.done`. No filename inspection — a `.original.done` row at
   /// any filename satisfies an unedited asset's requirement, and an adjusted asset is only
   /// satisfied when `.edited.done` (and `.original.done` under `editedWithOriginals`).
+  ///
+  /// Issue #22 fallback: when an adjusted asset's `.edited` variant is
+  /// `.failed` with the `editedResourceUnavailableMessage` sentinel and the
+  /// pipeline wrote the original to `<stem>_orig` as a fallback, the asset
+  /// counts as exported. Without this, the asset is re-queued every run and
+  /// fails the same way (Photos refuses the edited resource for that asset),
+  /// producing the "stuck at 99%" bug.
   func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
     let required = requiredVariants(for: asset, selection: selection)
     guard let record = recordsById[asset.id] else { return false }
-    return required.allSatisfy { record.variants[$0]?.status == .done }
+    if required.allSatisfy({ record.variants[$0]?.status == .done }) { return true }
+    return Self.satisfiesEditedFallback(
+      record: record, asset: asset, selection: selection)
+  }
+
+  /// True when an adjusted asset asked to export `.edited` is covered by the
+  /// `_orig` fallback: `.original` is `.done` AND `.edited` is `.failed` with
+  /// the recoverable sentinel. Mirror in `CollectionExportRecordStore` so the
+  /// same rule applies on the collection path.
+  static func satisfiesEditedFallback(
+    record: ExportRecord, asset: AssetDescriptor, selection: ExportVersionSelection
+  ) -> Bool {
+    guard asset.hasAdjustments, selection == .edited else { return false }
+    guard
+      record.variants[.original]?.status == .done,
+      let editedRecord = record.variants[.edited],
+      editedRecord.status == .failed,
+      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+    else { return false }
+    return true
   }
 
   func exportInfo(assetId: String) -> ExportRecord? {

@@ -486,6 +486,12 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   /// True when every required variant for `asset` under `selection` is `.done`.
+  ///
+  /// Issue #22 fallback (mirrors `ExportRecordStore.isExported`): an adjusted
+  /// asset asked to export `.edited` is also "exported" when `.edited` is
+  /// `.failed` with the `editedResourceUnavailableMessage` sentinel AND
+  /// `.original` is `.done` (the pipeline wrote the original to `<stem>_orig`
+  /// as a fallback).
   func isExported(
     asset: AssetDescriptor,
     placement: ExportPlacement,
@@ -494,9 +500,27 @@ final class CollectionExportRecordStore: ObservableObject {
     guard accept(placement) else { return false }
     let required = requiredVariants(for: asset, selection: selection)
     guard let body = recordBodies[placement.id]?[asset.id] else { return false }
-    for variant in required {
-      guard let v = body.variants[variant.rawValue], v.status == .done else { return false }
+    let allDone = required.allSatisfy { variant in
+      body.variants[variant.rawValue]?.status == .done
     }
+    if allDone { return true }
+    return satisfiesEditedFallback(
+      body: body, asset: asset, selection: selection)
+  }
+
+  /// Collection-store mirror of `ExportRecordStore.satisfiesEditedFallback`.
+  /// Kept in this store rather than reaching into the timeline-store helper so
+  /// the two stores remain independent (per the disjoint-key-spaces design).
+  private func satisfiesEditedFallback(
+    body: RecordBody, asset: AssetDescriptor, selection: ExportVersionSelection
+  ) -> Bool {
+    guard asset.hasAdjustments, selection == .edited else { return false }
+    guard
+      body.variants[ExportVariant.original.rawValue]?.status == .done,
+      let editedRecord = body.variants[ExportVariant.edited.rawValue],
+      editedRecord.status == .failed,
+      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+    else { return false }
     return true
   }
 

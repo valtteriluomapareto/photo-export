@@ -978,6 +978,20 @@ final class ExportManager: ObservableObject {
           inFlight = nil
         }
       }
+
+      // Issue #22 fallback: when the user asked for `.edited` only (no
+      // `_orig` companion), but Photos refused the edited resource, write the
+      // original to the `_orig` path. The natural-stem slot stays free, so a
+      // future run can still write the edited file if Photos' state changes.
+      // `isExported(asset:selection:)` recognises this pair and stops
+      // re-queueing the asset every run.
+      if shouldRunEditedFallback(
+        descriptor: descriptor, job: job, required: required)
+      {
+        await runEditedFallbackOriginal(
+          descriptor: descriptor, resources: resources, destDir: destDir,
+          relPath: relPath, job: job, generation: gen, inFlight: &inFlight)
+      }
     } catch is CancellationError {
       logger.info(
         "Export cancelled for id: \(job.assetLocalIdentifier, privacy: .public)")
@@ -1314,6 +1328,122 @@ final class ExportManager: ObservableObject {
       {
         return stem
       }
+      stem = "\(baseStem) (\(index))"
+      index += 1
+    }
+    return stem
+  }
+
+  // MARK: - Edited-unavailable fallback (issue #22)
+
+  /// Decides whether to run the original-as-`_orig` fallback after the
+  /// orderedVariants loop. Conditions:
+  /// 1. The user asked for `.edited` only (the include-originals path already
+  ///    writes the original, so no fallback is needed there).
+  /// 2. `.edited` is now `.failed` with the recoverable
+  ///    `editedResourceUnavailableMessage` sentinel.
+  /// 3. `.original` isn't already `.done` (idempotent — a previous run may
+  ///    have already executed the fallback).
+  private func shouldRunEditedFallback(
+    descriptor: AssetDescriptor, job: ExportJob, required: Set<ExportVariant>
+  ) -> Bool {
+    guard required == [.edited] else { return false }
+    let variants = currentVariants(assetId: descriptor.id, placement: job.placement)
+    guard let editedRecord = variants[.edited],
+      editedRecord.status == .failed,
+      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+    else { return false }
+    if variants[.original]?.status == .done { return false }
+    return true
+  }
+
+  /// Writes the original variant to a `<stem>_orig.<originalExt>` slot. Used
+  /// when the edited variant was unavailable so the user still gets the bytes
+  /// for this asset. Reuses the same `_orig` naming the include-originals
+  /// feature uses, so a future run that successfully retrieves the edit can
+  /// write `<stem>.<editedExt>` without colliding.
+  ///
+  /// Errors here are logged but do not propagate or rewrite the
+  /// `editedResourceUnavailable` failure — the user keeps the original
+  /// failure context in the diagnostic report.
+  private func runEditedFallbackOriginal(
+    descriptor: AssetDescriptor,
+    resources: [ResourceDescriptor],
+    destDir: URL,
+    relPath: String,
+    job: ExportJob,
+    generation gen: Int,
+    inFlight: inout (assetId: String, variant: ExportVariant)?
+  ) async {
+    guard
+      let originalRes = ResourceSelection.selectOriginalResource(
+        from: resources, mediaType: descriptor.mediaType)
+    else {
+      logger.info(
+        "Edited fallback skipped: no original-side resource for id: \(descriptor.id, privacy: .public)"
+      )
+      return
+    }
+    let baseStem = splitFilename(originalRes.originalFilename).base
+    let originalExt = (originalRes.originalFilename as NSString).pathExtension
+    let stem = allocateUnusedOrigStem(
+      baseStem: baseStem, originalExt: originalExt, destDir: destDir)
+    do {
+      try throwIfCancelledOrStale(gen)
+      _ = try await exportSingleVariant(
+        variant: .original,
+        descriptor: descriptor,
+        resources: resources,
+        destDir: destDir,
+        relPath: relPath,
+        job: job,
+        groupStem: stem,
+        pairOriginalWithSuffix: true,
+        generation: gen,
+        inFlight: &inFlight
+      )
+      logger.info(
+        "Edited fallback wrote original for id: \(descriptor.id, privacy: .public) stem: \(stem, privacy: .public)"
+      )
+    } catch is CancellationError {
+      logger.info("Edited fallback cancelled for id: \(descriptor.id, privacy: .public)")
+    } catch {
+      logger.error(
+        "Edited fallback failed for id: \(descriptor.id, privacy: .public) error: \(String(describing: error), privacy: .public)"
+      )
+    }
+  }
+
+  /// Variants currently recorded for the asset under `placement`, joined from
+  /// whichever store owns this placement kind. Returns `[:]` when no record
+  /// exists.
+  private func currentVariants(
+    assetId: String, placement: ExportPlacement
+  ) -> [ExportVariant: ExportVariantRecord] {
+    switch placement.kind {
+    case .timeline:
+      return exportRecordStore.exportInfo(assetId: assetId)?.variants ?? [:]
+    case .favorites, .album:
+      return collectionExportRecordStore.exportInfo(
+        assetId: assetId, placement: placement)?.variants ?? [:]
+    }
+  }
+
+  /// Finds the smallest `(N)`-suffixed `baseStem` whose `_orig` companion
+  /// slot is free. The fallback only writes the original; the natural-stem
+  /// edited slot is intentionally not checked because we don't know the
+  /// edited extension here, and a future run that succeeds at the edit will
+  /// allocate its own stem.
+  private func allocateUnusedOrigStem(
+    baseStem: String, originalExt: String, destDir: URL
+  ) -> String {
+    var stem = baseStem
+    var index = 1
+    while index < 10_000 {
+      let target = destDir.appendingPathComponent(
+        stem + ExportFilenamePolicy.originalSuffix
+      ).appendingPathExtension(originalExt)
+      if !fileSystem.fileExists(atPath: target.path) { return stem }
       stem = "\(baseStem) (\(index))"
       index += 1
     }
