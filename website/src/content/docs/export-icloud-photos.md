@@ -62,6 +62,10 @@ remain fast.
 
 If the export is interrupted — you unplug the drive, close the app, or your Mac goes to sleep — you can resume and the app will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again, but no data is lost.
 
+## Rebuilding state from an existing backup
+
+If you reinstall the app, switch builds, or restore your data on a new Mac, **File → Import Existing Backup…** rebuilds local export state from disk. It scans the destination, matches files to your Photos library, and adopts what's already there as exported. As part of the same step, it **prunes records for files that are no longer on disk** — for example if you deleted a folder, recreated it empty under the same name, or removed individual exports. The result always reflects the current contents of the destination.
+
 ## If an export gets stuck
 
 If the progress fraction stops climbing or you suspect specific photos are failing, use **Help → Save Diagnostic Report…**. The app writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state, along with the underlying error message (e.g. iCloud download failure, disk full). Attach the file to a [GitHub issue](https://github.com/valtteriluomapareto/photo-export/issues) so the actual failure cause is visible — it is otherwise only in the macOS unified log under the `com.valtteriluoma.photo-export` subsystem.
