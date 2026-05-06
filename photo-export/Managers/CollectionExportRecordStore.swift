@@ -504,15 +504,14 @@ final class CollectionExportRecordStore: ObservableObject {
       body.variants[variant.rawValue]?.status == .done
     }
     if allDone { return true }
-    return satisfiesEditedFallback(
-      body: body, asset: asset, selection: selection)
+    return Self.satisfiesEditedFallback(body: body, asset: asset, selection: selection)
   }
 
   /// Collection-store mirror of `ExportRecordStore.satisfiesEditedFallback`.
   /// Kept in this store rather than reaching into the timeline-store helper so
   /// the two stores remain independent (per the disjoint-key-spaces design).
   /// See the timeline helper for the rationale on the `_orig` filename check.
-  private func satisfiesEditedFallback(
+  private static func satisfiesEditedFallback(
     body: RecordBody, asset: AssetDescriptor, selection: ExportVersionSelection
   ) -> Bool {
     guard asset.hasAdjustments, selection == .edited else { return false }

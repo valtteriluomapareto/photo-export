@@ -346,8 +346,7 @@ final class ExportRecordStore: ObservableObject {
     let required = requiredVariants(for: asset, selection: selection)
     guard let record = recordsById[asset.id] else { return false }
     if required.allSatisfy({ record.variants[$0]?.status == .done }) { return true }
-    return Self.satisfiesEditedFallback(
-      record: record, asset: asset, selection: selection)
+    return Self.satisfiesEditedFallback(record: record, asset: asset, selection: selection)
   }
 
   /// True when an adjusted asset asked to export `.edited` is covered by the
@@ -362,7 +361,7 @@ final class ExportRecordStore: ObservableObject {
   /// covered — no `_orig` file ever got written. Letting that count as
   /// fallback would inflate the sidebar's exported total and put a misleading
   /// "fallback" annotation in the diagnostic report. Per-PR review feedback.
-  static func satisfiesEditedFallback(
+  private static func satisfiesEditedFallback(
     record: ExportRecord, asset: AssetDescriptor, selection: ExportVersionSelection
   ) -> Bool {
     guard asset.hasAdjustments, selection == .edited else { return false }
@@ -476,15 +475,20 @@ final class ExportRecordStore: ObservableObject {
     guard let adjustedCount else { return nil }
     let uneditedCount = max(0, totalCount - adjustedCount)
     let origOnlyAtStem = recordCountOriginalDoneAtNaturalStem(year: year, month: month)
-    let fallbackCovered = recordCountEditedFallback(year: year, month: month)
     switch selection {
     case .edited:
       let editedDone = recordCountEditedDone(year: year, month: month)
+      let fallbackCovered = recordCountEditedFallback(year: year, month: month)
       let exported = editedDone + min(origOnlyAtStem, uneditedCount) + fallbackCovered
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
     case .editedWithOriginals:
+      // `editedFallbackCovered` is intentionally NOT added here:
+      // `satisfiesEditedFallback` is gated to `selection == .edited`, so the
+      // asset-aware `isExported(asset:selection:)` keeps re-queueing fallback
+      // records under `.editedWithOriginals`. The sidebar must agree, or a
+      // year that's actually 0% covered would advertise as 100%.
       let bothDone = recordCountBothVariantsDone(year: year, month: month)
-      let exported = bothDone + min(origOnlyAtStem, uneditedCount) + fallbackCovered
+      let exported = bothDone + min(origOnlyAtStem, uneditedCount)
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
     }
   }
