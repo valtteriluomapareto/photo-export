@@ -65,7 +65,7 @@ final class ExportManager: ObservableObject {
   /// choice survives restart and stays globally consistent regardless of destination.
   @Published var versionSelection: ExportVersionSelection {
     didSet {
-      UserDefaults.standard.set(
+      userDefaults.set(
         versionSelection.rawValue, forKey: Self.versionSelectionDefaultsKey)
       // The "already exported" copy is scoped to the previous selection — under a new
       // selection the user may have new work, so the message would be misleading.
@@ -156,6 +156,13 @@ final class ExportManager: ObservableObject {
   private(set) var queuedCountsByPlacementId: [String: Int] = [:]
   private var importTask: Task<Void, Never>?
 
+  /// Backing store for `versionSelection`. Mirrors the injected-`UserDefaults`
+  /// pattern used by `ExportDestinationManager` so tests can hand a per-suite
+  /// instance and stop sharing `UserDefaults.standard` across concurrently-running
+  /// `@MainActor` test suites — the cross-suite race that PR #29 papered over
+  /// with `.serialized`.
+  private let userDefaults: UserDefaults
+
   init(
     photoLibraryService: any PhotoLibraryService,
     exportDestination: any ExportDestination,
@@ -163,8 +170,10 @@ final class ExportManager: ObservableObject {
     collectionExportRecordStore: CollectionExportRecordStore? = nil,
     assetResourceWriter: any AssetResourceWriter = ProductionAssetResourceWriter(),
     mediaRenderer: (any MediaRenderer)? = nil,
-    fileSystem: any FileSystemService = FileIOService()
+    fileSystem: any FileSystemService = FileIOService(),
+    userDefaults: UserDefaults = .standard
   ) {
+    self.userDefaults = userDefaults
     self.photoLibraryService = photoLibraryService
     self.exportDestination = exportDestination
     self.exportRecordStore = exportRecordStore
@@ -182,7 +191,7 @@ final class ExportManager: ObservableObject {
     } else {
       self.mediaRenderer = ProductionMediaRenderer { _ in }
     }
-    if let raw = UserDefaults.standard.string(forKey: Self.versionSelectionDefaultsKey),
+    if let raw = userDefaults.string(forKey: Self.versionSelectionDefaultsKey),
       let saved = ExportVersionSelection(rawValue: raw)
     {
       self.versionSelection = saved
