@@ -23,7 +23,7 @@ The project is intentionally small: SwiftUI on top, system frameworks only, and 
   of the original bytes alongside the user-visible edit
 - Track exported assets per destination so interrupted exports can resume safely
 - Pause, resume, cancel, and clear queued work
-- Import an existing backup folder to rebuild local export state on a fresh install
+- Import an existing backup folder to rebuild local export state, pruning records for files no longer present on disk
 - Save a diagnostic report (Help menu) listing failed and in-progress exports with their error messages, for attaching to bug reports
 
 ## Requirements

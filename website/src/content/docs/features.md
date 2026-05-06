@@ -71,8 +71,9 @@ asymmetric rename.
 ## Existing backup import
 
 - Rebuild local export state from an existing backup folder via **File → Import Existing Backup...** (Cmd+Shift+I)
-- Four-stage process: scan backup folder, read Photos library, match files, rebuild state
-- Shows a detailed report with matched, ambiguous, and unmatched file counts
+- Five-stage process: scan backup folder, read Photos library, match files, rebuild state, reconcile against disk
+- The reconcile step **prunes records for files that no longer exist** at the destination, so a re-run after deleting some exports always reflects current disk contents
+- Shows a detailed report with matched, ambiguous, unmatched, and pruned counts
 - Continue exporting on a fresh install without re-copying known assets
 
 ## Error handling

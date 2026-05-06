@@ -52,7 +52,7 @@ A few extras that work in both views:
 
 - The **Include originals** toggle in the toolbar chooses what gets written. Off (default) exports one file per asset, in the version Photos shows. On adds a `_orig` companion for any photo or video edited in Photos so you keep a copy of the original bytes.
 - Edited videos render through Photos and may take longer than copying — especially for 4K or iCloud-only originals. The toolbar may briefly show `(downloading…)` while Photos prepares the source, then `(rendering…)` while the edit is applied.
-- **File → Import Existing Backup...** (Cmd+Shift+I) is useful if you already have a previous timeline export and want to avoid re-copying those files.
+- **File → Import Existing Backup...** (Cmd+Shift+I) rebuilds local state to match the destination on disk. It adopts any files that are already there as exported, and prunes records for files that have since been deleted — useful both on a fresh install and when you've manually cleared part of a backup folder.
 
 Export progress is shown in the toolbar. You can pause, resume, or cancel at any time.
 

@@ -202,6 +202,10 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Public API
   func startExportMonth(year: Int, month: Int) {
+    guard !isImporting else {
+      logger.warning("startExportMonth ignored: import in progress")
+      return
+    }
     guard canExportTimeline else {
       logger.error(
         "startExportMonth ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public) (need .ready)"
@@ -245,6 +249,10 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportYear(year: Int) {
+    guard !isImporting else {
+      logger.warning("startExportYear ignored: import in progress")
+      return
+    }
     guard canExportTimeline else {
       logger.error(
         "startExportYear ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public)"
@@ -278,6 +286,10 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportAll() {
+    guard !isImporting else {
+      logger.warning("startExportAll ignored: import in progress")
+      return
+    }
     guard canExportTimeline else {
       logger.error(
         "startExportAll ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public)"
@@ -360,6 +372,10 @@ final class ExportManager: ObservableObject {
   /// `canExportCollection`; the timeline store's state is not consulted (collection and
   /// timeline exports are independent under the disjoint-key-spaces rationale).
   func startExportFavorites() {
+    guard !isImporting else {
+      logger.warning("startExportFavorites ignored: import in progress")
+      return
+    }
     guard canExportCollection else {
       logger.error(
         "startExportFavorites ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public) (need .ready)"
@@ -398,6 +414,10 @@ final class ExportManager: ObservableObject {
   /// the per-album enqueues inside one Task so all jobs land in the queue before
   /// processing kicks in.
   func startExportAllAlbums() {
+    guard !isImporting else {
+      logger.warning("startExportAllAlbums ignored: import in progress")
+      return
+    }
     guard canExportCollection else {
       logger.error(
         "startExportAllAlbums ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
@@ -470,6 +490,10 @@ final class ExportManager: ObservableObject {
 
   /// Starts an export of a single user album by `collectionLocalIdentifier`.
   func startExportAlbum(collectionId: String) {
+    guard !isImporting else {
+      logger.warning("startExportAlbum ignored: import in progress")
+      return
+    }
     guard canExportCollection else {
       logger.error(
         "startExportAlbum ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
@@ -1525,6 +1549,22 @@ final class ExportManager: ObservableObject {
         }
         defer { self.exportDestination.endScopedAccess(for: scopedURL) }
 
+        // Probe the root before any destructive step. `BackupScanner.scanBackupFolder`
+        // swallows root-enumeration failure as `[]`, which would make a transiently
+        // unreadable drive look identical to "the user deleted everything." Reconcile
+        // would then prune every record. Catch that case here and bail without touching
+        // the stores.
+        do {
+          _ = try FileManager.default.contentsOfDirectory(
+            at: rootURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        } catch {
+          self.logger.error(
+            "Import root unreachable: \(error.localizedDescription, privacy: .public)")
+          self.isImporting = false
+          self.importStage = nil
+          return
+        }
+
         self.importStage = .scanningBackupFolder
         try Task.checkCancellation()
         let scannedFiles = await Task.detached {
@@ -1538,13 +1578,9 @@ final class ExportManager: ObservableObject {
           return
         }
 
-        if scannedFiles.isEmpty {
-          self.importResult = ImportReport(
-            matchedCount: 0, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 0)
-          self.importStage = .done
-          self.isImporting = false
-          return
-        }
+        // No early return on `scannedFiles.isEmpty` — an empty destination still needs
+        // reconcile so existing records get pruned to match disk truth. The bulk-import
+        // call below is a no-op for an empty matched list.
 
         self.importStage = .readingPhotosLibrary
         let matchResult = try await BackupScanner.matchFiles(
@@ -1607,18 +1643,47 @@ final class ExportManager: ObservableObject {
           return
         }
 
+        // Reconcile both stores after bulkImport so the final state reflects disk
+        // truth at the latest possible moment. Closes the TOCTOU window where a file
+        // present at scan time gets deleted before bulkImport applies it.
+        self.importStage = .reconcilingDiskState
+        try Task.checkCancellation()
+        let timelineSummary = await self.exportRecordStore.reconcileAgainstFilesystem(
+          at: rootURL)
+        try Task.checkCancellation()
+        guard self.generation == importGen else {
+          self.isImporting = false
+          self.importStage = nil
+          return
+        }
+        let collectionSummary = await self.collectionExportRecordStore
+          .reconcileAgainstFilesystem(at: rootURL)
+        try Task.checkCancellation()
+        guard self.generation == importGen else {
+          self.isImporting = false
+          self.importStage = nil
+          return
+        }
+
+        let totalPrunedVariants =
+          timelineSummary.prunedVariants + collectionSummary.prunedVariants
+        let totalPrunedRecords =
+          timelineSummary.prunedRecords + collectionSummary.prunedRecords
+
         self.importResult = ImportReport(
           matchedCount: matchResult.matched.count,
           ambiguousCount: matchResult.ambiguous.count,
           unmatchedCount: matchResult.unmatched.count,
-          totalScanned: scannedFiles.count
+          totalScanned: scannedFiles.count,
+          prunedVariants: totalPrunedVariants,
+          prunedRecords: totalPrunedRecords
         )
 
         self.importStage = .done
         self.isImporting = false
 
         self.logger.info(
-          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned"
+          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
         )
       } catch is CancellationError {
         self.logger.info("Import task cancelled")
@@ -1652,4 +1717,23 @@ struct ImportReport: Equatable {
   let ambiguousCount: Int
   let unmatchedCount: Int
   let totalScanned: Int
+  /// Variants pruned from records because their backing file was missing on disk
+  /// (or replaced by a directory, or the variant was a corrupt `.done` with nil
+  /// filename). Counts the timeline and collection stores together.
+  let prunedVariants: Int
+  /// Records removed entirely after their last variant was pruned. Counts the
+  /// timeline and collection stores together.
+  let prunedRecords: Int
+
+  init(
+    matchedCount: Int, ambiguousCount: Int, unmatchedCount: Int, totalScanned: Int,
+    prunedVariants: Int = 0, prunedRecords: Int = 0
+  ) {
+    self.matchedCount = matchedCount
+    self.ambiguousCount = ambiguousCount
+    self.unmatchedCount = unmatchedCount
+    self.totalScanned = totalScanned
+    self.prunedVariants = prunedVariants
+    self.prunedRecords = prunedRecords
+  }
 }

@@ -365,6 +365,112 @@ final class CollectionExportRecordStore: ObservableObject {
     append(.deleteRecord(placementId: placement.id, assetId: assetId))
   }
 
+  // MARK: - Reconcile against filesystem
+
+  /// Result of `reconcileAgainstFilesystem(at:)`. Same shape as the timeline store's
+  /// summary; the import flow sums both before reporting.
+  struct ReconcileSummary: Equatable {
+    let prunedVariants: Int
+    let prunedRecords: Int
+
+    static let zero = ReconcileSummary(prunedVariants: 0, prunedRecords: 0)
+  }
+
+  /// Removes every `.done` variant whose backing file is missing from the destination.
+  /// Mirrors the timeline-store reconcile but joins each record body to its
+  /// `ExportPlacement` by id to source the on-disk relative path. Record bodies whose
+  /// placement metadata is gone (orphans) are pruned wholesale — they're
+  /// unreconcilable garbage with no path to check.
+  ///
+  /// Two-phase: snapshot on main, file checks off-main, mutations on main. Callers
+  /// must run this only when no export is active.
+  func reconcileAgainstFilesystem(at root: URL) async -> ReconcileSummary {
+    guard state == .ready else { return .zero }
+
+    struct Probe: Sendable {
+      let placementId: String
+      let assetId: String
+      let variantKey: String
+      let path: String
+      let isCorrupt: Bool
+    }
+    var probes: [Probe] = []
+    var orphanDeletes: [(placementId: String, assetId: String)] = []
+
+    // Phase 1 (main): snapshot. Orphan-body keys (placementId not in `placements`)
+    // are queued for direct deletion; everything else is probed.
+    for (placementId, byAsset) in recordBodies {
+      guard let placement = placements[placementId] else {
+        for assetId in byAsset.keys {
+          orphanDeletes.append((placementId, assetId))
+        }
+        continue
+      }
+      for (assetId, body) in byAsset {
+        for (variantKey, vr) in body.variants where vr.status == .done {
+          guard let filename = vr.filename else {
+            probes.append(
+              Probe(
+                placementId: placementId, assetId: assetId, variantKey: variantKey,
+                path: "", isCorrupt: true))
+            continue
+          }
+          let path = root.appendingPathComponent(placement.relativePath)
+            .appendingPathComponent(filename).path
+          probes.append(
+            Probe(
+              placementId: placementId, assetId: assetId, variantKey: variantKey,
+              path: path, isCorrupt: false))
+        }
+      }
+    }
+
+    // Phase 2 (off-main): file checks.
+    let probesCopy = probes
+    let toPrune: [(placementId: String, assetId: String, variantKey: String)] = await Task.detached
+    {
+      let fm = FileManager.default
+      var keys: [(placementId: String, assetId: String, variantKey: String)] = []
+      for probe in probesCopy {
+        if probe.isCorrupt {
+          keys.append((probe.placementId, probe.assetId, probe.variantKey))
+          continue
+        }
+        var isDir: ObjCBool = false
+        let exists = fm.fileExists(atPath: probe.path, isDirectory: &isDir)
+        if !exists || isDir.boolValue {
+          keys.append((probe.placementId, probe.assetId, probe.variantKey))
+        }
+      }
+      return keys
+    }.value
+
+    // Phase 3 (main): apply mutations. Orphan bodies first, then variant prunes.
+    var prunedVariants = 0
+    var prunedRecords = 0
+    for (placementId, assetId) in orphanDeletes {
+      guard recordBodies[placementId]?[assetId] != nil else { continue }
+      append(.deleteRecord(placementId: placementId, assetId: assetId))
+      prunedRecords += 1
+    }
+    for (placementId, assetId, variantKey) in toPrune {
+      guard var body = recordBodies[placementId]?[assetId] else { continue }
+      guard body.variants.removeValue(forKey: variantKey) != nil else { continue }
+      prunedVariants += 1
+      if body.variants.isEmpty {
+        append(.deleteRecord(placementId: placementId, assetId: assetId))
+        prunedRecords += 1
+      } else {
+        append(.upsertRecord(placementId: placementId, assetId: assetId, body: body))
+      }
+    }
+    logger.info(
+      "Reconciled collections: pruned \(prunedVariants) variants, \(prunedRecords) records (incl. orphan bodies)"
+    )
+    return ReconcileSummary(
+      prunedVariants: prunedVariants, prunedRecords: prunedRecords)
+  }
+
   // MARK: - Read API
 
   func exportInfo(assetId: String, placement: ExportPlacement) -> ScopedExportRecord? {
