@@ -29,7 +29,12 @@ import Testing
 /// progress fraction overshot 100%. Fix: only `resetProgressCounters`
 /// when `pendingJobs.isEmpty`. The accumulating-counter assertions
 /// below catch that regression directly.
+///
+/// `.serialized` because the suite uses `writeDelaySeconds` and polls
+/// transient `isRunning` state. Concurrent `@MainActor` suites exposed the
+/// timing fragility under CI load. See issue #28.
 @MainActor
+@Suite(.serialized)
 struct QueueStateAcrossModesTests {
 
   // MARK: - Fixtures

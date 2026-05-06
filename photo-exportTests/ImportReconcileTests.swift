@@ -13,7 +13,13 @@ import Testing
 /// 1. Direct unit tests against `ExportRecordStore.reconcileAgainstFilesystem(at:)`
 /// 2. Direct unit tests against `CollectionExportRecordStore.reconcileAgainstFilesystem(at:)`
 /// 3. Integration tests that drive the full `startImport` flow.
+///
+/// `.serialized` because the integration tests poll `manager.isImporting` after
+/// kicking off `startImport` — under concurrent `@MainActor` suite execution on
+/// slower runners the import Task can be starved long enough that the wait
+/// times out. See issue #28.
 @MainActor
+@Suite(.serialized)
 struct ImportReconcileTests {
 
   // MARK: - Filesystem helpers
@@ -341,7 +347,17 @@ struct ImportReconcileTests {
       try Data("x".utf8).write(to: file)
     }
 
+    /// Tear down in the right order: cancel any in-flight work, flush both
+    /// stores' IO queues so no async append is still racing toward the temp
+    /// dirs we're about to remove, then delete the dirs. Without this,
+    /// `defer { removeItem }` can fire while `JSONLRecordFile` is still
+    /// writing to the now-deleted `collection-records.jsonl` — the surfacing
+    /// "file doesn't exist" log is benign for the test that just passed but
+    /// the underlying race contributes to flake on slow runners.
     func cleanup() {
+      manager.cancelAndClear()
+      timeline.flushForTesting()
+      collection.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
