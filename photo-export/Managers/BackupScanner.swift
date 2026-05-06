@@ -51,6 +51,7 @@ struct BackupScanner {
     case readingPhotosLibrary
     case matchingAssets(matched: Int, total: Int)
     case rebuildingLocalState
+    case reconcilingDiskState
     case done
   }
 

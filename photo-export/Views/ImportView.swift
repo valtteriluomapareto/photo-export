@@ -54,6 +54,8 @@ struct ImportView: View {
       return "Matching assets\u{2026} \(matched) found of \(total) files"
     case .rebuildingLocalState:
       return "Rebuilding local state\u{2026}"
+    case .reconcilingDiskState:
+      return "Pruning records for missing files\u{2026}"
     case .done:
       return "Done"
     case .none:
@@ -97,6 +99,13 @@ struct ImportView: View {
             icon: "xmark.circle"
           )
         }
+        if report.prunedRecords > 0 || report.prunedVariants > 0 {
+          reportRow(
+            label: "Records pruned (file missing)",
+            value: pruneSummary(report),
+            icon: "trash"
+          )
+        }
       }
       .padding()
       .background(Color(.controlBackgroundColor))
@@ -129,6 +138,13 @@ struct ImportView: View {
         .buttonStyle(.borderedProminent)
       }
     }
+  }
+
+  private func pruneSummary(_ report: ImportReport) -> String {
+    if report.prunedVariants == report.prunedRecords {
+      return "\(report.prunedRecords)"
+    }
+    return "\(report.prunedRecords) records, \(report.prunedVariants) variants"
   }
 
   private func reportRow(label: String, value: String, icon: String) -> some View {

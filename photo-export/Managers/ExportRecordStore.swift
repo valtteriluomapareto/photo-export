@@ -478,6 +478,96 @@ final class ExportRecordStore: ObservableObject {
       year: year, month: month, exportedCount: exported, totalCount: total, status: status)
   }
 
+  // MARK: - Reconcile against filesystem
+
+  /// Result of `reconcileAgainstFilesystem(at:)`.
+  struct ReconcileSummary: Equatable {
+    let prunedVariants: Int
+    let prunedRecords: Int
+
+    static let zero = ReconcileSummary(prunedVariants: 0, prunedRecords: 0)
+  }
+
+  /// Removes every `.done` variant whose backing file is missing from the destination.
+  /// Used by Import Existing Backup so a destination whose contents have shrunk (or
+  /// vanished) reflects disk truth instead of stale state from a previous run.
+  ///
+  /// Pruning rules:
+  /// - `.failed`/`.inProgress` variants are left alone — they have signal value (Save
+  ///   Diagnostic Report surfaces them) and the next export run retries them anyway.
+  /// - A `.done` variant with a `nil` filename is corrupt (the writer always sets a
+  ///   filename on success) and is pruned wholesale; there's no path to check.
+  /// - A `.done` variant whose path resolves to a directory (file replaced by a folder
+  ///   of the same name) is pruned — only regular files satisfy "exported."
+  /// - When all variants are pruned, the record is removed entirely.
+  ///
+  /// Two-phase to respect the `@MainActor` isolation: snapshot on main, file checks
+  /// off-main via `Task.detached`, mutations applied on main. Callers must run this
+  /// only when no export is active (the import flow already gates on
+  /// `!hasActiveExportWork`); concurrent mutation would invalidate the snapshot.
+  func reconcileAgainstFilesystem(at root: URL) async -> ReconcileSummary {
+    guard state == .ready else { return .zero }
+
+    // Phase 1 (main): snapshot every .done variant's expected on-disk path.
+    struct Probe: Sendable {
+      let assetId: String
+      let variant: ExportVariant
+      let path: String
+      let isCorrupt: Bool
+    }
+    var probes: [Probe] = []
+    for (assetId, record) in recordsById {
+      for (variant, vr) in record.variants where vr.status == .done {
+        guard let filename = vr.filename else {
+          probes.append(Probe(assetId: assetId, variant: variant, path: "", isCorrupt: true))
+          continue
+        }
+        let path = root.appendingPathComponent(record.relPath)
+          .appendingPathComponent(filename).path
+        probes.append(Probe(assetId: assetId, variant: variant, path: path, isCorrupt: false))
+      }
+    }
+
+    // Phase 2 (off-main): file checks. `fileExists(atPath:isDirectory:)` rejects a
+    // directory standing in for the expected file.
+    let probesCopy = probes
+    let toPrune: [(assetId: String, variant: ExportVariant)] = await Task.detached {
+      let fm = FileManager.default
+      var keys: [(assetId: String, variant: ExportVariant)] = []
+      for probe in probesCopy {
+        if probe.isCorrupt {
+          keys.append((probe.assetId, probe.variant))
+          continue
+        }
+        var isDir: ObjCBool = false
+        let exists = fm.fileExists(atPath: probe.path, isDirectory: &isDir)
+        if !exists || isDir.boolValue {
+          keys.append((probe.assetId, probe.variant))
+        }
+      }
+      return keys
+    }.value
+
+    // Phase 3 (main): apply mutations.
+    var prunedVariants = 0
+    var prunedRecords = 0
+    for (assetId, variant) in toPrune {
+      guard var record = recordsById[assetId] else { continue }
+      guard record.variants.removeValue(forKey: variant) != nil else { continue }
+      prunedVariants += 1
+      if record.variants.isEmpty {
+        append(.delete(id: assetId))
+        prunedRecords += 1
+      } else {
+        append(.upsert(record))
+      }
+    }
+    logger.info(
+      "Reconciled timeline: pruned \(prunedVariants) variants, \(prunedRecords) records")
+    return ReconcileSummary(
+      prunedVariants: prunedVariants, prunedRecords: prunedRecords)
+  }
+
   // MARK: - Bulk import (for backup import)
 
   /// Imports a batch of records from the backup-scan flow, merging per variant. An existing
