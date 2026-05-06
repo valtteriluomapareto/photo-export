@@ -209,6 +209,59 @@ struct BackupScannerSizeDiscriminatorTests {
     #expect(result.ambiguous.count == 1)
   }
 
+  /// Codex pre-merge finding (issue #32 PR review): the size check must be
+  /// scoped to the resource that admitted the candidate. Otherwise an
+  /// unrelated `.alternatePhoto` (or any other resource) on the same asset
+  /// can rescue a candidate whose named-match resource doesn't actually have
+  /// the scanned size, silently matching the wrong asset.
+  ///
+  /// Setup: scanned `IMG_0001.JPG` is 2 MB. Asset A's named-match
+  /// `IMG_0001.JPG` is 1 MB but its unrelated `.alternatePhoto` is 2 MB.
+  /// Asset B's named-match is 3 MB. With a "any resource on this side"
+  /// check, A would incorrectly pass the size narrow via its alternate.
+  /// With the scoped check, neither candidate passes → ambiguous (correct).
+  @Test func sizeNarrowIgnoresUnrelatedAlternateResources() async throws {
+    let burstDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let assetA = TestAssetFactory.makeAsset(
+      id: "alt-A", creationDate: burstDate, mediaType: .image)
+    let assetB = TestAssetFactory.makeAsset(
+      id: "alt-B", creationDate: burstDate, mediaType: .image)
+
+    let service = makeService(
+      assets: [("2025-6", [assetA, assetB])],
+      resources: [
+        "alt-A": [
+          TestAssetFactory.makeResource(
+            type: .photo, originalFilename: "IMG_0001.JPG", fileSize: 1_000_000),
+          // Unrelated alternate resource happens to share the scanned file's
+          // size. The pre-fix discriminator would have matched A on this.
+          TestAssetFactory.makeResource(
+            type: .alternatePhoto, originalFilename: "IMG_0001.RAW",
+            fileSize: 2_000_000),
+        ],
+        "alt-B": [
+          TestAssetFactory.makeResource(
+            type: .photo, originalFilename: "IMG_0001.JPG", fileSize: 3_000_000)
+        ],
+      ]
+    )
+
+    let (files, rootDir) = try makeScannedFiles([
+      (
+        year: 2025, month: 6, filename: "IMG_0001.JPG", modDate: burstDate,
+        fileSize: 2_000_000
+      )
+    ])
+    defer { try? FileManager.default.removeItem(at: rootDir) }
+
+    let result = try await BackupScanner.matchFiles(
+      files, photoLibraryService: service
+    ) { _ in }
+
+    #expect(result.matched.isEmpty)
+    #expect(result.ambiguous.count == 1)
+  }
+
   /// Edited variant with `_orig` sibling: the edited scanned file must
   /// compare against the edited resource's size, and the `_orig` file
   /// against the original resource's size. Variant-awareness is the point.

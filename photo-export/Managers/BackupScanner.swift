@@ -571,17 +571,21 @@ struct BackupScanner {
     return abs(modDate.timeIntervalSince(created)) <= 1.0
   }
 
-  /// Narrows by exact byte-for-byte resource file size, scoped to the variant
-  /// being matched: `.original` files are compared against `originalResources`'
-  /// sizes, `.edited` files against `editedResources`'. Returns nil when the
+  /// Narrows by exact byte-for-byte resource file size. Returns nil when the
   /// scanned file's size is missing — the caller should treat that as
   /// "discriminator unavailable" and stay conservative.
   ///
-  /// A candidate fingerprint passes the filter iff *any* of its resources on the
-  /// matching side has a non-nil `fileSize` exactly equal to the scanned file's
-  /// size. Resources with nil size are skipped (the comparison would be
-  /// unsound). Same size on multiple candidates leaves the result ambiguous —
-  /// the caller's `count == 1` check enforces conservative behaviour.
+  /// The check is scoped to the resource(s) on each candidate that *could have
+  /// admitted the candidate* via the classifier's filename/stem rules — see
+  /// `resourcesCompatible(with:in:variant:)`. Without that scoping, an
+  /// unrelated resource (e.g. an `.alternatePhoto` on the same asset) of the
+  /// right size could rescue a candidate whose named resource doesn't match,
+  /// silently mismatching the wrong asset to the wrong file. Filtering to the
+  /// admitting resources keeps the discriminator strict.
+  ///
+  /// Resources with nil size are skipped. Multiple candidates passing the
+  /// filter leaves the result ambiguous — the caller's `count == 1` check
+  /// enforces conservative behaviour.
   private static func narrowByResourceFileSize(
     file: ScannedFile,
     candidates: [AssetFingerprint],
@@ -590,8 +594,45 @@ struct BackupScanner {
     guard let scannedSize = file.fileSize else { return nil }
     let target = Int64(scannedSize)
     return candidates.filter { fp in
-      let resources = (variant == .original) ? fp.originalResources : fp.editedResources
+      let resources = resourcesCompatible(with: file, in: fp, variant: variant)
       return resources.contains { $0.fileSize == target }
+    }
+  }
+
+  /// Returns the resources of `fp` that could have admitted the candidate for
+  /// matching `file` under `variant`. The classifier admits candidates by
+  /// filename, collision-stripped base filename, `_orig` parsed stem (with
+  /// extension), or edited-resource extension; this helper mirrors those
+  /// predicates so the size discriminator only considers resources the file
+  /// could plausibly correspond to.
+  private static func resourcesCompatible(
+    with file: ScannedFile,
+    in fp: AssetFingerprint,
+    variant: ExportVariant
+  ) -> [ResourceFingerprint] {
+    switch variant {
+    case .original:
+      // `_orig` companion path: scanned filename parses as `_orig` and the
+      // candidate has an original resource at the parsed stem with matching
+      // extension. The byte source is that resource.
+      if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+        let acceptableStems: Set<String> = [parsed.groupStem, parsed.canonicalOriginalStem]
+        let matches = fp.originalResources.filter { res in
+          let stem = (res.filename as NSString).deletingPathExtension
+          let ext = (res.filename as NSString).pathExtension.lowercased()
+          return acceptableStems.contains(stem) && ext == file.fileExtension
+        }
+        if !matches.isEmpty { return matches }
+      }
+      // Step 2 / 3: exact filename match (or collision-stripped base).
+      let acceptableFilenames: Set<String> = [file.filename, file.baseFilename]
+      return fp.originalResources.filter { acceptableFilenames.contains($0.filename) }
+    case .edited:
+      // Step 2/3 override and step 4 (cross-extension edited): the byte source
+      // is an edited-side resource whose extension matches the scanned file.
+      return fp.editedResources.filter {
+        ($0.filename as NSString).pathExtension.lowercased() == file.fileExtension
+      }
     }
   }
 
