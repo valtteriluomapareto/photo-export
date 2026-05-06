@@ -26,8 +26,9 @@ enum TestAssetFactory {
 
   static func makeResource(
     type: PHAssetResourceType = .photo,
-    originalFilename: String = "IMG_0001.JPG"
+    originalFilename: String = "IMG_0001.JPG",
+    fileSize: Int64? = nil
   ) -> ResourceDescriptor {
-    ResourceDescriptor(type: type, originalFilename: originalFilename)
+    ResourceDescriptor(type: type, originalFilename: originalFilename, fileSize: fileSize)
   }
 }

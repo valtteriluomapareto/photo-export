@@ -19,4 +19,21 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
 struct ResourceDescriptor: Sendable, Equatable {
   let type: PHAssetResourceType
   let originalFilename: String
+  /// Bytes on disk for the resource as reported by PhotoKit. Nil when PhotoKit
+  /// declines to report (the underlying KVC property is undocumented and may be
+  /// missing on some assets) or when this descriptor is built by a test fake
+  /// that doesn't model size. The `BackupScanner` matcher uses this as a
+  /// last-resort discriminator for burst photos that share metadata but
+  /// produce different compressed sizes.
+  let fileSize: Int64?
+
+  init(
+    type: PHAssetResourceType,
+    originalFilename: String,
+    fileSize: Int64? = nil
+  ) {
+    self.type = type
+    self.originalFilename = originalFilename
+    self.fileSize = fileSize
+  }
 }
