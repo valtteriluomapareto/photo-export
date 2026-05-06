@@ -44,7 +44,21 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// in this map, the fake `Task.sleep`s for the given seconds before returning. Used
   /// to widen the "queued but run loop not started" window for tests that exercise the
   /// pre-process pause path.
+  ///
+  /// Prefer `fetchAssetsCheckpointByAlbumId` over this for any test that asserts
+  /// on transient queue state — a delay only widens a window, but a checkpoint
+  /// makes arrival deterministic. See issue #30.
   var fetchAssetsDelayByAlbumId: [String: TimeInterval] = [:]
+  /// Per-album release-on-demand checkpoint. When `fetchAssets(in: .album(id))` is
+  /// called and `id` is in this map, the fake calls `await checkpoint.enter()`
+  /// before any per-album error/delay handling, so the gate signals "the enqueue
+  /// loop reached this album fetch." Tests can `waitForEnter(count:)` to assert
+  /// the loop is suspended on this album, take some action (pause, start another
+  /// export), then `release(_:)` or `releaseAll()`.
+  ///
+  /// Harness teardown must call `await checkpoint.releaseAll()` so a suspended
+  /// fetch task can't outlive the test.
+  var fetchAssetsCheckpointByAlbumId: [String: AsyncCheckpoint] = [:]
   var requestFullImageError: Error?
 
   func requestAuthorization() async -> Bool { isAuthorized }
@@ -141,6 +155,12 @@ final class FakePhotoLibraryService: PhotoLibraryService {
       }
       return favoritesAssets
     case .album(let collectionId):
+      // The checkpoint runs *before* the error/delay branches so the gate's
+      // "entered" semantic is "the enqueue loop reached this album fetch,"
+      // independent of whether the album is wired to throw or sleep next.
+      if let checkpoint = fetchAssetsCheckpointByAlbumId[collectionId] {
+        await checkpoint.enter()
+      }
       if let perAlbumError = fetchAssetsErrorByAlbumId[collectionId] {
         throw perAlbumError
       }

@@ -39,14 +39,16 @@ struct ReuseSourceDestinationErrorTests {
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
+    let defaults = UserDefaults(
+      suiteName: "test-ReuseDestErr-\(UUID().uuidString)")!
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: timelineStore,
       collectionExportRecordStore: collectionStore,
       assetResourceWriter: writer,
-      fileSystem: fileSystem
+      fileSystem: fileSystem,
+      userDefaults: defaults
     )
     return (manager, photoLib, dest, writer, fileSystem, timelineStore, collectionStore, storeRoot)
   }

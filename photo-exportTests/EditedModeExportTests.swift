@@ -6,15 +6,7 @@ import Testing
 
 /// Covers the export pipeline for the redesigned two-mode selection: filename contract,
 /// collision pairing, failure propagation, and selection-aware enqueue/skip behaviour.
-///
-/// Marked `.serialized` because tests share `UserDefaults.standard` (via
-/// `ExportManager.versionSelection`) and run timing-sensitive `waitForQueueDrained`
-/// assertions. Swift Testing runs `@MainActor` suite tests concurrently by default,
-/// which under CI load lets one test's UserDefaults reset race another test's
-/// queue drain — see issue #28. Until tests are converted to release-on-demand
-/// gates, serialised execution is the correct stopgap.
 @MainActor
-@Suite(.serialized)
 struct EditedModeExportTests {
   // MARK: - Test harness
 
@@ -31,14 +23,20 @@ struct EditedModeExportTests {
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "test")
 
-    UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
+    // Per-test UserDefaults suite isolates `versionSelection` from any other
+    // suite running concurrently. Replacing the pre-existing `.standard
+    // .removeObject(...)` pattern that raced across `@MainActor` test suites
+    // (issue #28).
+    let defaults = UserDefaults(
+      suiteName: "test-EditedMode-\(UUID().uuidString)")!
 
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
       assetResourceWriter: writer,
-      fileSystem: fileSystem
+      fileSystem: fileSystem,
+      userDefaults: defaults
     )
     return (manager, photoLib, dest, writer, fileSystem, store)
   }

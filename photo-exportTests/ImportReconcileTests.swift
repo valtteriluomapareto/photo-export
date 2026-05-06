@@ -14,12 +14,7 @@ import Testing
 /// 2. Direct unit tests against `CollectionExportRecordStore.reconcileAgainstFilesystem(at:)`
 /// 3. Integration tests that drive the full `startImport` flow.
 ///
-/// `.serialized` because the integration tests poll `manager.isImporting` after
-/// kicking off `startImport` — under concurrent `@MainActor` suite execution on
-/// slower runners the import Task can be starved long enough that the wait
-/// times out. See issue #28.
 @MainActor
-@Suite(.serialized)
 struct ImportReconcileTests {
 
   // MARK: - Filesystem helpers
@@ -330,6 +325,7 @@ struct ImportReconcileTests {
     let timeline: ExportRecordStore
     let collection: CollectionExportRecordStore
     let storeRoot: URL
+    let userDefaultsSuite: String
 
     func waitForImport(timeout: TimeInterval = 5) async {
       let deadline = Date().addingTimeInterval(timeout)
@@ -360,6 +356,7 @@ struct ImportReconcileTests {
       collection.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
+      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
     }
   }
 
@@ -374,17 +371,20 @@ struct ImportReconcileTests {
     timeline.configure(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collection.configure(for: "test")
-    UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
+    let suiteName = "test-ImportReconcile-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: timeline,
       collectionExportRecordStore: collection,
       assetResourceWriter: writer,
-      fileSystem: fileSystem
+      fileSystem: fileSystem,
+      userDefaults: defaults
     )
     return ImportHarness(
       manager: manager, photoLib: photoLib, dest: dest,
-      timeline: timeline, collection: collection, storeRoot: storeRoot)
+      timeline: timeline, collection: collection,
+      storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
 }
