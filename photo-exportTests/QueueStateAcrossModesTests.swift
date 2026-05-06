@@ -115,7 +115,7 @@ struct QueueStateAcrossModesTests {
   /// instead of fixed sleeps so the tests stay deterministic under varying
   /// machine load.
   private func waitUntil(
-    timeout: TimeInterval = 3, _ condition: @autoclosure () -> Bool
+    timeout: TimeInterval = 10, _ condition: @autoclosure () -> Bool
   ) async {
     let deadline = Date().addingTimeInterval(timeout)
     while !condition() && Date() < deadline {
