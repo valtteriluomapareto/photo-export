@@ -503,8 +503,20 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   func resources(for assetId: String) -> [ResourceDescriptor] {
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return [] }
     return PHAssetResource.assetResources(for: asset).map {
-      ResourceDescriptor(type: $0.type, originalFilename: $0.originalFilename)
+      ResourceDescriptor(
+        type: $0.type,
+        originalFilename: $0.originalFilename,
+        fileSize: Self.resourceFileSize($0))
     }
+  }
+
+  /// Reads PhotoKit's undocumented `fileSize` KVC property. Same trick used by
+  /// `assetDetails(for:)` — see issue #32. Returns nil when the property is
+  /// missing, non-numeric, or non-positive (treated as "unknown").
+  fileprivate static func resourceFileSize(_ resource: PHAssetResource) -> Int64? {
+    guard let size = resource.value(forKey: "fileSize") as? Int64, size > 0
+    else { return nil }
+    return size
   }
 
   func assetDetails(for assetId: String) -> AssetDetails? {
@@ -515,15 +527,12 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       ?? phResources.first(where: { $0.type == .video })
       ?? phResources.first
     let originalFilename = primaryResource?.originalFilename
-    // "fileSize" is an undocumented KVC property on PHAssetResource
-    let fileSize: Int64? = {
-      guard let r = primaryResource,
-        let size = r.value(forKey: "fileSize") as? Int64, size > 0
-      else { return nil }
-      return size
-    }()
+    let fileSize = primaryResource.flatMap(Self.resourceFileSize)
     let descriptors = phResources.map {
-      ResourceDescriptor(type: $0.type, originalFilename: $0.originalFilename)
+      ResourceDescriptor(
+        type: $0.type,
+        originalFilename: $0.originalFilename,
+        fileSize: Self.resourceFileSize($0))
     }
     return AssetDetails(
       originalFilename: originalFilename, fileSize: fileSize, resources: descriptors)

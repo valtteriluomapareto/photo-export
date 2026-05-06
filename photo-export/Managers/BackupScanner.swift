@@ -154,6 +154,15 @@ struct BackupScanner {
 
   // MARK: - Asset fingerprint (cheap, built once per asset)
 
+  /// Per-resource snapshot used by the matcher. Filename + the optional
+  /// PhotoKit-reported file size; the size is used as a last-resort
+  /// discriminator when otherwise-identical bursts would land in the
+  /// "ambiguous" bucket. See issue #32.
+  struct ResourceFingerprint: Sendable, Equatable {
+    let filename: String
+    let fileSize: Int64?
+  }
+
   /// Value-type snapshot of an asset's metadata, built once per asset batch.
   /// Avoids repeated resource lookups during matching.
   struct AssetFingerprint {
@@ -167,11 +176,14 @@ struct BackupScanner {
     let duration: TimeInterval
     /// Whether Photos reports this asset as adjusted at fingerprint time.
     let hasAdjustments: Bool
-    /// Filenames of original-side resources (`.photo`, `.video`, `.alternatePhoto`).
-    let originalResourceFilenames: [String]
-    /// Filenames of edited-side resources (`.fullSizePhoto`, `.fullSizeVideo`). Extensions are
-    /// kept verbatim so the scanner can use them as a strong filter.
-    let editedResourceFilenames: [String]
+    /// Original-side resources (`.photo`, `.video`, `.alternatePhoto`).
+    let originalResources: [ResourceFingerprint]
+    /// Edited-side resources (`.fullSizePhoto`, `.fullSizeVideo`).
+    let editedResources: [ResourceFingerprint]
+
+    /// Filename adapters for the existing classifier code that only needs filenames.
+    var originalResourceFilenames: [String] { originalResources.map(\.filename) }
+    var editedResourceFilenames: [String] { editedResources.map(\.filename) }
     /// Stems of original-side resources, used for cross-extension edited matching.
     var originalResourceStems: [String] {
       originalResourceFilenames.map { ($0 as NSString).deletingPathExtension }
@@ -189,18 +201,18 @@ struct BackupScanner {
   ) -> [AssetFingerprint] {
     assets.map { asset in
       let resources = service.resources(for: asset.id)
-      let originalFilenames =
+      let originalResources =
         resources
         .filter {
           ResourceSelection.isOriginalResource(type: $0.type, mediaType: asset.mediaType)
         }
-        .map(\.originalFilename)
-      let editedFilenames =
+        .map { ResourceFingerprint(filename: $0.originalFilename, fileSize: $0.fileSize) }
+      let editedResources =
         resources
         .filter {
           ResourceSelection.isEditedResource(type: $0.type, mediaType: asset.mediaType)
         }
-        .map(\.originalFilename)
+        .map { ResourceFingerprint(filename: $0.originalFilename, fileSize: $0.fileSize) }
       let creationSecond: Int? =
         asset.creationDate.map { Int($0.timeIntervalSinceReferenceDate) }
       return AssetFingerprint(
@@ -212,8 +224,8 @@ struct BackupScanner {
         pixelHeight: asset.pixelHeight,
         duration: asset.duration,
         hasAdjustments: asset.hasAdjustments,
-        originalResourceFilenames: originalFilenames,
-        editedResourceFilenames: editedFilenames
+        originalResources: originalResources,
+        editedResources: editedResources
       )
     }
   }
@@ -534,7 +546,17 @@ struct BackupScanner {
         return abs(modDate.timeIntervalSince(created)) <= 1.0
       }
       if byDate.count == 1 { return wrap(byDate[0]) }
-      if byDate.count > 1 { return .ambiguous }
+      if byDate.count > 1 {
+        // Burst photos commonly land here: same filename or near-stem, same
+        // creation second, identical dimensions. Resource file size is
+        // usually the only metadata that differs. See issue #32.
+        if let bySize = narrowByResourceFileSize(
+          file: file, candidates: byDate, variant: variant), bySize.count == 1
+        {
+          return wrap(bySize[0])
+        }
+        return .ambiguous
+      }
     }
 
     let discriminated = discriminateByFileMetadata(file: file, candidates: candidates)
@@ -547,6 +569,71 @@ struct BackupScanner {
     guard let modDate = file.modificationDate, let created = fingerprint.creationDate
     else { return false }
     return abs(modDate.timeIntervalSince(created)) <= 1.0
+  }
+
+  /// Narrows by exact byte-for-byte resource file size. Returns nil when the
+  /// scanned file's size is missing — the caller should treat that as
+  /// "discriminator unavailable" and stay conservative.
+  ///
+  /// The check is scoped to the resource(s) on each candidate that *could have
+  /// admitted the candidate* via the classifier's filename/stem rules — see
+  /// `resourcesCompatible(with:in:variant:)`. Without that scoping, an
+  /// unrelated resource (e.g. an `.alternatePhoto` on the same asset) of the
+  /// right size could rescue a candidate whose named resource doesn't match,
+  /// silently mismatching the wrong asset to the wrong file. Filtering to the
+  /// admitting resources keeps the discriminator strict.
+  ///
+  /// Resources with nil size are skipped. Multiple candidates passing the
+  /// filter leaves the result ambiguous — the caller's `count == 1` check
+  /// enforces conservative behaviour.
+  private static func narrowByResourceFileSize(
+    file: ScannedFile,
+    candidates: [AssetFingerprint],
+    variant: ExportVariant
+  ) -> [AssetFingerprint]? {
+    guard let scannedSize = file.fileSize else { return nil }
+    let target = Int64(scannedSize)
+    return candidates.filter { fp in
+      let resources = resourcesCompatible(with: file, in: fp, variant: variant)
+      return resources.contains { $0.fileSize == target }
+    }
+  }
+
+  /// Returns the resources of `fp` that could have admitted the candidate for
+  /// matching `file` under `variant`. The classifier admits candidates by
+  /// filename, collision-stripped base filename, `_orig` parsed stem (with
+  /// extension), or edited-resource extension; this helper mirrors those
+  /// predicates so the size discriminator only considers resources the file
+  /// could plausibly correspond to.
+  private static func resourcesCompatible(
+    with file: ScannedFile,
+    in fp: AssetFingerprint,
+    variant: ExportVariant
+  ) -> [ResourceFingerprint] {
+    switch variant {
+    case .original:
+      // `_orig` companion path: scanned filename parses as `_orig` and the
+      // candidate has an original resource at the parsed stem with matching
+      // extension. The byte source is that resource.
+      if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+        let acceptableStems: Set<String> = [parsed.groupStem, parsed.canonicalOriginalStem]
+        let matches = fp.originalResources.filter { res in
+          let stem = (res.filename as NSString).deletingPathExtension
+          let ext = (res.filename as NSString).pathExtension.lowercased()
+          return acceptableStems.contains(stem) && ext == file.fileExtension
+        }
+        if !matches.isEmpty { return matches }
+      }
+      // Step 2 / 3: exact filename match (or collision-stripped base).
+      let acceptableFilenames: Set<String> = [file.filename, file.baseFilename]
+      return fp.originalResources.filter { acceptableFilenames.contains($0.filename) }
+    case .edited:
+      // Step 2/3 override and step 4 (cross-extension edited): the byte source
+      // is an edited-side resource whose extension matches the scanned file.
+      return fp.editedResources.filter {
+        ($0.filename as NSString).pathExtension.lowercased() == file.fileExtension
+      }
+    }
   }
 
   /// Lazy discriminator: reads file dimensions/duration ONCE and checks all candidates.
