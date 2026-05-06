@@ -606,6 +606,7 @@ struct ExportRecordStoreQueryGoldenTests {
           var byVariantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
           var bothDone = 0
           var origAtNaturalStem = 0
+          var editedFallback = 0
           for record in store.recordsById.values
           where record.year == year && record.month == month {
             for (variant, variantRec) in record.variants {
@@ -619,6 +620,15 @@ struct ExportRecordStoreQueryGoldenTests {
               !ExportFilenamePolicy.isOrigCompanion(filename: filename)
             {
               origAtNaturalStem += 1
+            }
+            if originalDone,
+              let filename = record.variants[.original]?.filename,
+              ExportFilenamePolicy.isOrigCompanion(filename: filename),
+              let editedRecord = record.variants[.edited],
+              editedRecord.status == .failed,
+              editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+            {
+              editedFallback += 1
             }
             if originalDone { yearOriginalDone += 1 }
           }
@@ -637,6 +647,9 @@ struct ExportRecordStoreQueryGoldenTests {
           #expect(
             store.recordCountOriginalDoneAtNaturalStem(year: year, month: month)
               == origAtNaturalStem)
+          #expect(
+            store.recordCountEditedFallback(year: year, month: month) == editedFallback,
+            "recordCountEditedFallback(\(year)-\(month)) drift")
         }
         #expect(
           store.yearExportedCount(year: year) == yearOriginalDone,
@@ -695,6 +708,37 @@ struct ExportRecordStoreQueryGoldenTests {
     store.markVariantExported(
       assetId: "c", variant: .original, year: 2026, month: 1, relPath: "2026/01/",
       filename: "C.HEIC", exportedAt: now)
+    assertConsistentCountsForAllCells()
+
+    // Step 8: compose a fallback record in 2026-02 — `.original` `.done` at a
+    // `_orig` filename plus `.edited` `.failed` with the recoverable sentinel.
+    // Exercises the `editedFallbackCovered` counter's increment path.
+    store.markVariantExported(
+      assetId: "fb", variant: .original, year: 2026, month: 2, relPath: "2026/02/",
+      filename: "FB_orig.HEIC", exportedAt: now)
+    store.markVariantFailed(
+      assetId: "fb", variant: .edited,
+      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+    assertConsistentCountsForAllCells()
+
+    // Step 9: transition `.edited` to `.done` (the edit becomes available on a
+    // future run) — fallback counter must decrement, both-done counter must
+    // increment.
+    store.markVariantExported(
+      assetId: "fb", variant: .edited, year: 2026, month: 2, relPath: "2026/02/",
+      filename: "FB.JPG", exportedAt: now)
+    assertConsistentCountsForAllCells()
+
+    // Step 10: remove the fallback-covering record entirely (e.g. a reconcile
+    // pass after the user deleted the file). Counter must drop to zero.
+    store.markVariantFailed(
+      assetId: "fb2", variant: .edited,
+      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+    store.markVariantExported(
+      assetId: "fb2", variant: .original, year: 2026, month: 3, relPath: "2026/03/",
+      filename: "FB2_orig.HEIC", exportedAt: now)
+    assertConsistentCountsForAllCells()
+    store.remove(assetId: "fb2")
     assertConsistentCountsForAllCells()
   }
 
@@ -1190,6 +1234,7 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(storeB.recordCountBothVariantsDone(year: 2025, month: 6) == 0)
     #expect(storeB.recordCountOriginalDoneAtNaturalStem(year: 2025, month: 6) == 0)
     #expect(storeB.recordCountEditedDone(year: 2025, month: 6) == 0)
+    #expect(storeB.recordCountEditedFallback(year: 2025, month: 6) == 0)
     #expect(storeB.yearExportedCount(year: 2025) == 0)
     let summary = storeB.monthSummary(year: 2025, month: 6, totalAssets: 5)
     #expect(summary.exportedCount == 0)

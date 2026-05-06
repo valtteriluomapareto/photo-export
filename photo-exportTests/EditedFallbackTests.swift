@@ -20,6 +20,7 @@ struct EditedFallbackTests {
     let photoLib: FakePhotoLibraryService
     let dest: FakeExportDestination
     let writer: FakeAssetResourceWriter
+    let renderer: FakeMediaRenderer
     let store: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
@@ -39,6 +40,7 @@ struct EditedFallbackTests {
     let photoLib = FakePhotoLibraryService()
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
+    let renderer = FakeMediaRenderer()
     let fileSystem = FakeFileSystem()
     let storeRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent("EditedFallback-\(UUID().uuidString)", isDirectory: true)
@@ -54,12 +56,13 @@ struct EditedFallbackTests {
       exportRecordStore: store,
       collectionExportRecordStore: collectionStore,
       assetResourceWriter: writer,
+      mediaRenderer: renderer,
       fileSystem: fileSystem,
       userDefaults: defaults
     )
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      store: store, collectionStore: collectionStore,
+      renderer: renderer, store: store, collectionStore: collectionStore,
       storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
 
@@ -149,6 +152,10 @@ struct EditedFallbackTests {
 
   /// A second export run on an asset that already has the fallback recorded
   /// must be a no-op — `isExported` returns true and the asset isn't queued.
+  /// Hardened per review feedback: assert `isExported` is true between runs
+  /// and that the wait deadline wasn't reached, otherwise `queueCount == 0`
+  /// and unchanged `writeCalls` could pass for the wrong reasons (e.g. a
+  /// silently-failed second start, or a hung queue that timed out).
   @Test func reExportSkipsAssetCoveredByFallback() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
@@ -162,15 +169,36 @@ struct EditedFallbackTests {
 
     // First run: records the fallback.
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    let firstFinished = await waitForQueueDrainedAssertingDeadline(h.manager)
+    #expect(firstFinished, "First export run timed out")
     let writeCountAfterFirst = h.writer.writeCalls.count
+    #expect(writeCountAfterFirst > 0, "First run should have written the fallback original")
+    #expect(
+      h.store.isExported(asset: asset, selection: .edited),
+      "Asset must be recognised as fallback-covered before the second run")
 
     // Second run: queue should not pick up this asset again.
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    let secondFinished = await waitForQueueDrainedAssertingDeadline(h.manager)
+    #expect(secondFinished, "Second export run timed out")
 
     #expect(h.writer.writeCalls.count == writeCountAfterFirst)
     #expect(h.manager.queueCount == 0)
+  }
+
+  /// Polls until the queue drains, returns true if it drained before the
+  /// deadline, false if the deadline was reached. Lets callers assert their
+  /// run finished cleanly rather than passing on a silent timeout.
+  private func waitForQueueDrainedAssertingDeadline(
+    _ manager: ExportManager, timeout: TimeInterval = 5
+  ) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    await Task.yield()
+    try? await Task.sleep(nanoseconds: 30_000_000)
+    while manager.hasActiveExportWork && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    return !manager.hasActiveExportWork
   }
 
   // MARK: - Store-level isExported recognition
@@ -311,6 +339,178 @@ struct EditedFallbackTests {
       error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
 
     #expect(h.store.recordCountEditedFallback(year: yr, month: mo) == 0)
+  }
+
+  /// R2 finding: in `.editedWithOriginals` selection, a fallback-only record
+  /// (`.original .done` at `_orig` + `.edited .failed[recoverable]`) must NOT
+  /// count as exported. The asset-aware `isExported` keeps re-queueing it
+  /// because it requires both variants `.done`; the sidebar must agree, or
+  /// it would advertise 100% while the queue retries forever.
+  @Test
+  func sidebarSummaryEditedWithOriginalsDoesNotCountFallbackCoveredRecords() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    let yr = 2025
+    let mo = 9
+    let rel = "2025/09/"
+    let now = Date(timeIntervalSince1970: 0)
+
+    h.store.markVariantInProgress(
+      assetId: "fb", variant: .original, year: yr, month: mo,
+      relPath: rel, filename: "FB_orig.HEIC")
+    h.store.markVariantExported(
+      assetId: "fb", variant: .original, year: yr, month: mo,
+      relPath: rel, filename: "FB_orig.HEIC", exportedAt: now)
+    h.store.markVariantFailed(
+      assetId: "fb", variant: .edited,
+      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+
+    let summary = h.store.sidebarSummary(
+      year: yr, month: mo, totalCount: 1, adjustedCount: 1,
+      selection: .editedWithOriginals)
+    #expect(summary?.exportedCount == 0)
+    #expect(summary?.status == .notExported)
+  }
+
+  // MARK: - Collection store
+
+  /// `CollectionExportRecordStore.satisfiesEditedFallback` is a hand-maintained
+  /// mirror of the timeline-store helper. Pin its behaviour with a direct
+  /// asset+placement test so a future refactor that touches one and forgets
+  /// the other surfaces here.
+  @Test func collectionStoreRecognisesFallbackState() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let placement = ExportPlacement(
+      kind: .album,
+      id: "collections:album:abc:def",
+      displayName: "Trip",
+      collectionLocalIdentifier: "album-1",
+      relativePath: "Collections/Albums/Trip/",
+      createdAt: Date())
+    h.collectionStore.upsertPlacement(placement)
+
+    let asset = TestAssetFactory.makeAsset(id: "fb-album", hasAdjustments: true)
+
+    h.collectionStore.markVariantInProgress(
+      assetId: asset.id, placement: placement, variant: .original,
+      filename: "IMG_A_orig.HEIC")
+    h.collectionStore.markVariantExported(
+      assetId: asset.id, placement: placement, variant: .original,
+      filename: "IMG_A_orig.HEIC", exportedAt: Date())
+    h.collectionStore.markVariantFailed(
+      assetId: asset.id, placement: placement, variant: .edited,
+      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: Date())
+
+    #expect(
+      h.collectionStore.isExported(
+        asset: asset, placement: placement, selection: .edited))
+  }
+
+  /// Collection-store mirror of the natural-stem rejection test.
+  @Test func collectionStoreRejectsNaturalStemOriginalAsFallback() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let placement = ExportPlacement(
+      kind: .album,
+      id: "collections:album:xyz:123",
+      displayName: "Trip 2",
+      collectionLocalIdentifier: "album-2",
+      relativePath: "Collections/Albums/Trip 2/",
+      createdAt: Date())
+    h.collectionStore.upsertPlacement(placement)
+
+    let asset = TestAssetFactory.makeAsset(id: "natural-album", hasAdjustments: true)
+    h.collectionStore.markVariantInProgress(
+      assetId: asset.id, placement: placement, variant: .original,
+      filename: "IMG_A.HEIC")
+    h.collectionStore.markVariantExported(
+      assetId: asset.id, placement: placement, variant: .original,
+      filename: "IMG_A.HEIC", exportedAt: Date())
+    h.collectionStore.markVariantFailed(
+      assetId: asset.id, placement: placement, variant: .edited,
+      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: Date())
+
+    #expect(
+      !h.collectionStore.isExported(
+        asset: asset, placement: placement, selection: .edited))
+  }
+
+  // MARK: - Video fallback
+
+  /// Adjusted videos route through `MediaRenderer` for the edited variant.
+  /// When the render fails, `exportSingleVariant` rewrites the error to the
+  /// `editedResourceUnavailableMessage` sentinel (see ExportManager line
+  /// ~1170), so the same fallback path applies. Pin the end-to-end behaviour
+  /// for video here.
+  @Test func editUnavailableVideoFallbackWritesOriginal() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.manager.versionSelection = .edited
+
+    let asset = AssetDescriptor(
+      id: "broken-video", creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      mediaType: .video, pixelWidth: 1920, pixelHeight: 1080,
+      duration: 30, hasAdjustments: true)
+    h.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    h.photoLib.resourcesByAssetId["broken-video"] = [
+      // Only the original `.video` resource exists. With `hasAdjustments`,
+      // `selectEditedProducer` routes to `.render`, which we make fail.
+      ResourceDescriptor(type: .video, originalFilename: "IMG_4019.MOV")
+    ]
+    h.renderer.renderError = NSError(
+      domain: "Test", code: 7,
+      userInfo: [NSLocalizedDescriptionKey: "render unavailable"])
+
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await waitForQueueDrained(h.manager)
+
+    let record = h.store.exportInfo(assetId: "broken-video")
+    #expect(record?.variants[.edited]?.status == .failed)
+    #expect(
+      record?.variants[.edited]?.lastError
+        == ExportVariantRecovery.editedResourceUnavailableMessage)
+    #expect(record?.variants[.original]?.status == .done)
+    #expect(record?.variants[.original]?.filename == "IMG_4019_orig.MOV")
+    #expect(h.store.isExported(asset: asset, selection: .edited))
+  }
+
+  // MARK: - Allocator collision
+
+  /// `allocateUnusedOrigStem` must bump to a `(N)`-suffixed stem when the
+  /// natural `<base>_orig.<ext>` slot is already occupied on disk. Two
+  /// adjusted assets that share the same original-resource stem (e.g.
+  /// duplicates from a re-import) should both end up with bytes on disk via
+  /// the fallback, not collide.
+  @Test func fallbackAvoidsCollisionWithExistingOrigFile() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.manager.versionSelection = .edited
+
+    let assetA = TestAssetFactory.makeAsset(id: "share-A", hasAdjustments: true)
+    let assetB = TestAssetFactory.makeAsset(id: "share-B", hasAdjustments: true)
+    h.photoLib.assetsByYearMonth["2025-7"] = [assetA, assetB]
+    h.photoLib.resourcesByAssetId["share-A"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "DUP.HEIC")
+    ]
+    h.photoLib.resourcesByAssetId["share-B"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "DUP.HEIC")
+    ]
+
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await waitForQueueDrained(h.manager)
+
+    let recordA = h.store.exportInfo(assetId: "share-A")
+    let recordB = h.store.exportInfo(assetId: "share-B")
+    let nameA = recordA?.variants[.original]?.filename
+    let nameB = recordB?.variants[.original]?.filename
+
+    #expect(nameA == "DUP_orig.HEIC" || nameB == "DUP_orig.HEIC")
+    #expect(nameA != nameB, "Filenames must differ to avoid collision on disk")
+    let suffixed: Set<String?> = [nameA, nameB]
+    #expect(suffixed.contains("DUP (1)_orig.HEIC"))
   }
 
   // MARK: - Diagnostic report
