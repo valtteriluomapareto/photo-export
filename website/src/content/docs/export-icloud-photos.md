@@ -70,7 +70,7 @@ If you reinstall the app, switch builds, or restore your data on a new Mac, **Fi
 
 If the progress fraction stops climbing or you suspect specific photos are failing, use **Help → Save Diagnostic Report…**. The app writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state, along with the underlying error message (e.g. iCloud download failure, disk full). Attach the file to a [GitHub issue](https://github.com/valtteriluomapareto/photo-export/issues) so the actual failure cause is visible — it is otherwise only in the macOS unified log under the `com.valtteriluoma.photo-export` subsystem.
 
-When Photos can't provide the edited version of an asset (`Edited resource unavailable` in the report), the app **falls back to writing the original instead**, with a `_orig` suffix on the filename — for example `IMG_4019_orig.MOV` next to where the edit would have lived. The diagnostic report annotates the affected entries with `fallback: original exported as <filename>` so you can see exactly which assets used the fallback.
+When Photos can't provide the edited version of an asset (`Edited resource unavailable` in the report), the app **falls back to writing the original instead**, with a `_orig` suffix on the filename — for example `IMG_4019_orig.MOV`. The natural-stem slot (where the edit would have lived) is left empty, so a future export run can still write the edited file there if Photos starts cooperating. The diagnostic report flags these assets so you can see which ones used the original instead of the edit.
 
 ## Why use Photo Export instead of manually dragging photos?
 
