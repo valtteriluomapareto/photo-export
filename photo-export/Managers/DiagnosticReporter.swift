@@ -143,6 +143,12 @@ struct DiagnosticReporter {
   /// is covered by the `_orig` fallback. Otherwise nil. Used to annotate the
   /// row in the report so users can see which file on disk is standing in
   /// for the unavailable edit.
+  ///
+  /// The `isOrigCompanion` filename check matches `satisfiesEditedFallback` —
+  /// only true `_orig` writes count as fallback. A `.original` recorded at
+  /// the natural stem (e.g. from a prior unedited-asset export, before the
+  /// asset became adjusted) is *not* annotated as fallback, because no
+  /// fallback action ever happened for that record.
   private func editedFallbackFilename(
     variant: ExportVariant,
     variantRecord: ExportVariantRecord,
@@ -152,9 +158,11 @@ struct DiagnosticReporter {
       variantRecord.status == .failed,
       variantRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage,
       let original = originalRecord,
-      original.status == .done
+      original.status == .done,
+      let filename = original.filename,
+      ExportFilenamePolicy.isOrigCompanion(filename: filename)
     else { return nil }
-    return original.filename
+    return filename
   }
 
   private func section(_ title: String, _ problems: [Problem]) -> [String] {

@@ -54,6 +54,13 @@ final class ExportRecordStore: ObservableObject {
     /// AND `.edited` is not `.done`. The records-only sidebar formula's "unedited asset
     /// exported once" estimator depends on this.
     var originalDoneAtNaturalStem: Int = 0
+    /// Records covered by the issue #22 fallback: `.original.done` at a `_orig`-companion
+    /// filename AND `.edited.failed` with the `editedResourceUnavailableMessage`
+    /// sentinel. These represent adjusted assets where Photos refused the edit and the
+    /// pipeline wrote the original as a fallback. Without this counter, the sidebar's
+    /// records-only formula would never count fallback-covered records, leaving years
+    /// stuck at 99% even after `isExported` correctly recognises them as covered.
+    var editedFallbackCovered: Int = 0
     static let zero = MonthCounters()
   }
   private var monthCounters: [MonthKey: MonthCounters] = [:]
@@ -344,15 +351,26 @@ final class ExportRecordStore: ObservableObject {
   }
 
   /// True when an adjusted asset asked to export `.edited` is covered by the
-  /// `_orig` fallback: `.original` is `.done` AND `.edited` is `.failed` with
-  /// the recoverable sentinel. Mirror in `CollectionExportRecordStore` so the
-  /// same rule applies on the collection path.
+  /// `_orig` fallback: `.original` is `.done` at a `_orig`-companion filename
+  /// AND `.edited` is `.failed` with the recoverable sentinel. Mirror in
+  /// `CollectionExportRecordStore` so the same rule applies on the collection
+  /// path.
+  ///
+  /// The filename check is load-bearing: a record where `.original` is `.done`
+  /// at a *natural-stem* filename (e.g. an unedited asset that became
+  /// adjusted in Photos *after* its first export) is not really fallback-
+  /// covered — no `_orig` file ever got written. Letting that count as
+  /// fallback would inflate the sidebar's exported total and put a misleading
+  /// "fallback" annotation in the diagnostic report. Per-PR review feedback.
   static func satisfiesEditedFallback(
     record: ExportRecord, asset: AssetDescriptor, selection: ExportVersionSelection
   ) -> Bool {
     guard asset.hasAdjustments, selection == .edited else { return false }
     guard
-      record.variants[.original]?.status == .done,
+      let originalRecord = record.variants[.original],
+      originalRecord.status == .done,
+      let originalFilename = originalRecord.filename,
+      ExportFilenamePolicy.isOrigCompanion(filename: originalFilename),
       let editedRecord = record.variants[.edited],
       editedRecord.status == .failed,
       editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
@@ -435,6 +453,14 @@ final class ExportRecordStore: ObservableObject {
     monthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
   }
 
+  /// Records covered by the issue #22 fallback in `(year, month)`. Counted as
+  /// "exported" by the sidebar's records-only formula in `.edited` mode so a
+  /// year that finishes with fallback-covered assets reads as 100% rather
+  /// than 99% — matching the asset-aware `isExported(asset:selection:)`.
+  func recordCountEditedFallback(year: Int, month: Int) -> Int {
+    monthCounters[MonthKey(year: year, month: month)]?.editedFallbackCovered ?? 0
+  }
+
   /// Records-only approximation of "fully exported under this selection," capped by the
   /// count of unedited assets in scope so that natural-stem `.original.done` records
   /// belonging to currently-adjusted assets cannot over-contribute past the number of
@@ -450,14 +476,15 @@ final class ExportRecordStore: ObservableObject {
     guard let adjustedCount else { return nil }
     let uneditedCount = max(0, totalCount - adjustedCount)
     let origOnlyAtStem = recordCountOriginalDoneAtNaturalStem(year: year, month: month)
+    let fallbackCovered = recordCountEditedFallback(year: year, month: month)
     switch selection {
     case .edited:
       let editedDone = recordCountEditedDone(year: year, month: month)
-      let exported = editedDone + min(origOnlyAtStem, uneditedCount)
+      let exported = editedDone + min(origOnlyAtStem, uneditedCount) + fallbackCovered
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
     case .editedWithOriginals:
       let bothDone = recordCountBothVariantsDone(year: year, month: month)
-      let exported = bothDone + min(origOnlyAtStem, uneditedCount)
+      let exported = bothDone + min(origOnlyAtStem, uneditedCount) + fallbackCovered
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
     }
   }
@@ -710,6 +737,15 @@ final class ExportRecordStore: ObservableObject {
       !ExportFilenamePolicy.isOrigCompanion(filename: filename)
     {
       counters.originalDoneAtNaturalStem += sign
+    }
+    if originalDone,
+      let originalFilename = record.variants[.original]?.filename,
+      ExportFilenamePolicy.isOrigCompanion(filename: originalFilename),
+      let editedRecord = record.variants[.edited],
+      editedRecord.status == .failed,
+      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+    {
+      counters.editedFallbackCovered += sign
     }
     monthCounters[key] = counters
   }

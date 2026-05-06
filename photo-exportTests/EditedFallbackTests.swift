@@ -197,6 +197,31 @@ struct EditedFallbackTests {
     #expect(h.store.isExported(asset: asset, selection: .edited))
   }
 
+  /// Per-PR review tightening: a record with `.original .done` at a
+  /// *natural-stem* filename (e.g. an asset that was unedited at first
+  /// export and later became adjusted) is NOT recognised as fallback —
+  /// the `_orig` file never got written for that record. Without this
+  /// the sidebar's records-only formula would over-count and the
+  /// diagnostic would falsely annotate a fallback that never happened.
+  @Test func isExportedRejectsNaturalStemOriginalAsFallback() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let asset = TestAssetFactory.makeAsset(id: "natural-orig", hasAdjustments: true)
+    h.store.markVariantInProgress(
+      assetId: asset.id, variant: .original, year: 2025, month: 7,
+      relPath: "2025/07/", filename: "IMG_X.HEIC")
+    h.store.markVariantExported(
+      assetId: asset.id, variant: .original, year: 2025, month: 7,
+      relPath: "2025/07/", filename: "IMG_X.HEIC", exportedAt: Date())
+    h.store.markVariantFailed(
+      assetId: asset.id, variant: .edited,
+      error: ExportVariantRecovery.editedResourceUnavailableMessage,
+      at: Date())
+
+    #expect(!h.store.isExported(asset: asset, selection: .edited))
+  }
+
   /// The same `.failed` `.edited` variant with a *different* error message
   /// must NOT count as exported — the fallback rule is keyed on the
   /// recoverable sentinel only, so other failures still re-queue.
@@ -216,6 +241,76 @@ struct EditedFallbackTests {
       error: "Disk full", at: Date())
 
     #expect(!h.store.isExported(asset: asset, selection: .edited))
+  }
+
+  // MARK: - Sidebar count
+
+  /// The records-only sidebar formula must include fallback-covered records
+  /// in the exported count, matching the asset-aware `isExported`. Without
+  /// this the year/month sidebar badge stays partial (typically 99%) even
+  /// after the queue stops re-trying the asset.
+  @Test func sidebarSummaryCountsFallbackCoveredRecords() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    let yr = 2025
+    let mo = 7
+    let rel = "2025/07/"
+    let now = Date(timeIntervalSince1970: 0)
+
+    // Compose 3 records:
+    // - 1 normal edited.done (adjusted asset, edit succeeded).
+    // - 1 fallback-covered: .original .done at _orig + .edited .failed[recoverable].
+    // - 1 unadjusted asset with .original .done at natural stem.
+    h.store.markVariantExported(
+      assetId: "edit-ok", variant: .edited, year: yr, month: mo, relPath: rel,
+      filename: "OK.JPG", exportedAt: now)
+
+    h.store.markVariantInProgress(
+      assetId: "fallback", variant: .original, year: yr, month: mo,
+      relPath: rel, filename: "FALLBACK_orig.HEIC")
+    h.store.markVariantExported(
+      assetId: "fallback", variant: .original, year: yr, month: mo,
+      relPath: rel, filename: "FALLBACK_orig.HEIC", exportedAt: now)
+    h.store.markVariantFailed(
+      assetId: "fallback", variant: .edited,
+      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+
+    h.store.markVariantExported(
+      assetId: "plain", variant: .original, year: yr, month: mo, relPath: rel,
+      filename: "PLAIN.HEIC", exportedAt: now)
+
+    // Scope: 3 photos total, 2 adjusted (edit-ok + fallback), 1 unedited.
+    let summary = h.store.sidebarSummary(
+      year: yr, month: mo, totalCount: 3, adjustedCount: 2, selection: .edited)
+
+    // .edited formula = editedDone (1: edit-ok) + min(origOnlyAtStem, unedited) (1) +
+    //                   editedFallbackCovered (1) = 3 → fully exported.
+    #expect(summary?.exportedCount == 3)
+    #expect(summary?.totalCount == 3)
+    #expect(summary?.status == .complete)
+  }
+
+  /// A natural-stem `.original` paired with `.edited .failed[recoverable]`
+  /// must NOT contribute to the fallback bucket. The reviewer's case: an
+  /// asset previously exported as unedited (natural-stem original) that
+  /// later became adjusted should still be counted in `origOnlyAtStem`,
+  /// not in `editedFallbackCovered`.
+  @Test func sidebarSummaryDoesNotCountNaturalStemAsFallback() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    let yr = 2025
+    let mo = 8
+    let rel = "2025/08/"
+    let now = Date(timeIntervalSince1970: 0)
+
+    h.store.markVariantExported(
+      assetId: "natural", variant: .original, year: yr, month: mo, relPath: rel,
+      filename: "NATURAL.HEIC", exportedAt: now)
+    h.store.markVariantFailed(
+      assetId: "natural", variant: .edited,
+      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+
+    #expect(h.store.recordCountEditedFallback(year: yr, month: mo) == 0)
   }
 
   // MARK: - Diagnostic report

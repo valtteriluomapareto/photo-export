@@ -1342,8 +1342,13 @@ final class ExportManager: ObservableObject {
   ///    writes the original, so no fallback is needed there).
   /// 2. `.edited` is now `.failed` with the recoverable
   ///    `editedResourceUnavailableMessage` sentinel.
-  /// 3. `.original` isn't already `.done` (idempotent — a previous run may
-  ///    have already executed the fallback).
+  /// 3. `.original` isn't already `.done` *at a `_orig` filename*. A
+  ///    `.original` recorded at the natural stem (e.g. from a prior unedited-
+  ///    asset export, before the asset became adjusted) does not satisfy the
+  ///    fallback contract, so we still write the `_orig` file. The newly-
+  ///    written `.original` overwrites the natural-stem record; the orphaned
+  ///    natural-stem file on disk is intentionally left in place — deleting
+  ///    it would silently remove user data.
   private func shouldRunEditedFallback(
     descriptor: AssetDescriptor, job: ExportJob, required: Set<ExportVariant>
   ) -> Bool {
@@ -1353,7 +1358,13 @@ final class ExportManager: ObservableObject {
       editedRecord.status == .failed,
       editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
     else { return false }
-    if variants[.original]?.status == .done { return false }
+    if let originalRecord = variants[.original],
+      originalRecord.status == .done,
+      let filename = originalRecord.filename,
+      ExportFilenamePolicy.isOrigCompanion(filename: filename)
+    {
+      return false
+    }
     return true
   }
 
