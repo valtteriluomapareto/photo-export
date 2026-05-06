@@ -1338,17 +1338,18 @@ final class ExportManager: ObservableObject {
 
   /// Decides whether to run the original-as-`_orig` fallback after the
   /// orderedVariants loop. Conditions:
-  /// 1. The user asked for `.edited` only (the include-originals path already
-  ///    writes the original, so no fallback is needed there).
-  /// 2. `.edited` is now `.failed` with the recoverable
-  ///    `editedResourceUnavailableMessage` sentinel.
-  /// 3. `.original` isn't already `.done` *at a `_orig` filename*. A
-  ///    `.original` recorded at the natural stem (e.g. from a prior unedited-
-  ///    asset export, before the asset became adjusted) does not satisfy the
-  ///    fallback contract, so we still write the `_orig` file. The newly-
-  ///    written `.original` overwrites the natural-stem record; the orphaned
-  ///    natural-stem file on disk is intentionally left in place — deleting
-  ///    it would silently remove user data.
+  /// 1. The user asked for `.edited` only (the include-originals path
+  ///    already writes the original, so no fallback is needed there).
+  /// 2. `.edited` is `.failed` with the *generic*
+  ///    `editedResourceUnavailableMessage` sentinel — that's the signal
+  ///    the variant loop emitted in this run.
+  /// 3. `.edited`'s `lastError` isn't already
+  ///    `editedUnavailableOriginalBackedUpMessage` — that would mean a
+  ///    previous run's fallback already succeeded; nothing to do.
+  ///
+  /// Note we no longer key on the `.original` filename's shape (the
+  /// `_orig` filename pattern collides with real user filenames like
+  /// `vacation_orig.JPG`). The new explicit sentinel is the only signal.
   private func shouldRunEditedFallback(
     descriptor: AssetDescriptor, job: ExportJob, required: Set<ExportVariant>
   ) -> Bool {
@@ -1358,13 +1359,6 @@ final class ExportManager: ObservableObject {
       editedRecord.status == .failed,
       editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
     else { return false }
-    if let originalRecord = variants[.original],
-      originalRecord.status == .done,
-      let filename = originalRecord.filename,
-      ExportFilenamePolicy.isOrigCompanion(filename: filename)
-    {
-      return false
-    }
     return true
   }
 
@@ -1413,6 +1407,14 @@ final class ExportManager: ObservableObject {
         generation: gen,
         inFlight: &inFlight
       )
+      // Mark `.edited` with the explicit fallback sentinel so future runs
+      // recognise the asset as covered without relying on the ambiguous
+      // `_orig` filename shape. Overwrites the generic
+      // `editedResourceUnavailableMessage` the variant loop recorded.
+      recordVariantFailed(
+        assetId: descriptor.id, placement: job.placement, variant: .edited,
+        error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+        at: Date())
       logger.info(
         "Edited fallback wrote original for id: \(descriptor.id, privacy: .public) stem: \(stem, privacy: .public)"
       )

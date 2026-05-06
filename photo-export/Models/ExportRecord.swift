@@ -35,8 +35,23 @@ enum ExportVariantRecovery {
   /// Photos did not provide an edited-side resource for an asset whose
   /// `hasAdjustments == true`. Sometimes transient (an iCloud full-size
   /// render that hasn't materialised) and sometimes persistent (PhotoKit
-  /// just doesn't expose one). Either way the next export run will retry.
+  /// just doesn't expose one). The export pipeline will attempt a
+  /// `_orig` fallback after the main variant loop; on success the
+  /// variant's `lastError` is rewritten to
+  /// `editedUnavailableOriginalBackedUpMessage` so future runs know the
+  /// asset is covered.
   static let editedResourceUnavailableMessage = "Edited resource unavailable"
+
+  /// Terminal state for issue #22: the edited resource was unavailable
+  /// AND the `_orig` fallback successfully wrote the original. The asset
+  /// is considered covered under `.edited` selection — `isExported`
+  /// returns true and the queue stops re-attempting the edit.
+  ///
+  /// Disambiguating sentinel rather than a filename-shape check (e.g.
+  /// "filename ends in `_orig`") because that shape collides with real
+  /// user filenames like `vacation_orig.JPG`. Per-PR review feedback.
+  static let editedUnavailableOriginalBackedUpMessage =
+    "Edited resource unavailable; original backed up as _orig"
 
   /// Returns true when `lastError` matches a known recoverable case the UI
   /// can render with softer copy.
@@ -44,6 +59,7 @@ enum ExportVariantRecovery {
     guard let message else { return false }
     return message == interruptedMessage
       || message == editedResourceUnavailableMessage
+      || message == editedUnavailableOriginalBackedUpMessage
   }
 
   /// User-facing copy for a recoverable failure. Returns nil when the
@@ -54,6 +70,8 @@ enum ExportVariantRecovery {
       return "\(label): Will retry on next export"
     case editedResourceUnavailableMessage:
       return "\(label) version could not be exported this time. Future exports will try again."
+    case editedUnavailableOriginalBackedUpMessage:
+      return "\(label) version was unavailable. The original was saved as a `_orig` companion."
     default:
       return nil
     }

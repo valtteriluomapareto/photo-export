@@ -622,11 +622,10 @@ struct ExportRecordStoreQueryGoldenTests {
               origAtNaturalStem += 1
             }
             if originalDone,
-              let filename = record.variants[.original]?.filename,
-              ExportFilenamePolicy.isOrigCompanion(filename: filename),
               let editedRecord = record.variants[.edited],
               editedRecord.status == .failed,
-              editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+              editedRecord.lastError
+                == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
             {
               editedFallback += 1
             }
@@ -711,14 +710,15 @@ struct ExportRecordStoreQueryGoldenTests {
     assertConsistentCountsForAllCells()
 
     // Step 8: compose a fallback record in 2026-02 — `.original` `.done` at a
-    // `_orig` filename plus `.edited` `.failed` with the recoverable sentinel.
-    // Exercises the `editedFallbackCovered` counter's increment path.
+    // `_orig` filename plus `.edited` `.failed` with the explicit
+    // fallback-covered sentinel. Exercises the `editedFallbackCovered`
+    // counter's increment path.
     store.markVariantExported(
       assetId: "fb", variant: .original, year: 2026, month: 2, relPath: "2026/02/",
       filename: "FB_orig.HEIC", exportedAt: now)
     store.markVariantFailed(
       assetId: "fb", variant: .edited,
-      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage, at: now)
     assertConsistentCountsForAllCells()
 
     // Step 9: transition `.edited` to `.done` (the edit becomes available on a
@@ -733,7 +733,7 @@ struct ExportRecordStoreQueryGoldenTests {
     // pass after the user deleted the file). Counter must drop to zero.
     store.markVariantFailed(
       assetId: "fb2", variant: .edited,
-      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage, at: now)
     store.markVariantExported(
       assetId: "fb2", variant: .original, year: 2026, month: 3, relPath: "2026/03/",
       filename: "FB2_orig.HEIC", exportedAt: now)

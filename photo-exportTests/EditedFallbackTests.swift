@@ -93,9 +93,12 @@ struct EditedFallbackTests {
 
     let record = h.store.exportInfo(assetId: "edit-gone")
     #expect(record?.variants[.edited]?.status == .failed)
+    // After a successful fallback write, `.edited.lastError` is the explicit
+    // `editedUnavailableOriginalBackedUpMessage` sentinel — that's what the
+    // store keys recognition on, not the generic "Edited resource unavailable".
     #expect(
       record?.variants[.edited]?.lastError
-        == ExportVariantRecovery.editedResourceUnavailableMessage)
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage)
     #expect(record?.variants[.original]?.status == .done)
     #expect(record?.variants[.original]?.filename == "IMG_8000_orig.HEIC")
 
@@ -209,8 +212,10 @@ struct EditedFallbackTests {
 
     let asset = TestAssetFactory.makeAsset(id: "fallback", hasAdjustments: true)
 
-    // Compose the fallback record shape directly: original .done at _orig,
-    // edited .failed with the recoverable sentinel.
+    // Compose the fallback record shape directly: original .done + edited
+    // .failed with the explicit `editedUnavailableOriginalBackedUpMessage`
+    // sentinel. This is the state `runEditedFallbackOriginal` leaves
+    // behind after a successful `_orig` write.
     h.store.markVariantInProgress(
       assetId: asset.id, variant: .original, year: 2025, month: 7,
       relPath: "2025/07/", filename: "IMG_X_orig.HEIC")
@@ -219,29 +224,29 @@ struct EditedFallbackTests {
       relPath: "2025/07/", filename: "IMG_X_orig.HEIC", exportedAt: Date())
     h.store.markVariantFailed(
       assetId: asset.id, variant: .edited,
-      error: ExportVariantRecovery.editedResourceUnavailableMessage,
+      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
       at: Date())
 
     #expect(h.store.isExported(asset: asset, selection: .edited))
   }
 
-  /// Per-PR review tightening: a record with `.original .done` at a
-  /// *natural-stem* filename (e.g. an asset that was unedited at first
-  /// export and later became adjusted) is NOT recognised as fallback —
-  /// the `_orig` file never got written for that record. Without this
-  /// the sidebar's records-only formula would over-count and the
-  /// diagnostic would falsely annotate a fallback that never happened.
-  @Test func isExportedRejectsNaturalStemOriginalAsFallback() {
+  /// Per-PR review tightening: an `.edited.failed` with the *generic*
+  /// `editedResourceUnavailableMessage` (the variant-loop's first emission,
+  /// before the fallback writer has run) must NOT count as fallback-covered.
+  /// Recognition requires the explicit
+  /// `editedUnavailableOriginalBackedUpMessage` sentinel, which is only
+  /// written after `runEditedFallbackOriginal` successfully finishes.
+  @Test func isExportedRejectsGenericSentinelAsFallback() {
     let h = makeHarness()
     defer { h.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "natural-orig", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(id: "generic-only", hasAdjustments: true)
     h.store.markVariantInProgress(
       assetId: asset.id, variant: .original, year: 2025, month: 7,
-      relPath: "2025/07/", filename: "IMG_X.HEIC")
+      relPath: "2025/07/", filename: "IMG_X_orig.HEIC")
     h.store.markVariantExported(
       assetId: asset.id, variant: .original, year: 2025, month: 7,
-      relPath: "2025/07/", filename: "IMG_X.HEIC", exportedAt: Date())
+      relPath: "2025/07/", filename: "IMG_X_orig.HEIC", exportedAt: Date())
     h.store.markVariantFailed(
       assetId: asset.id, variant: .edited,
       error: ExportVariantRecovery.editedResourceUnavailableMessage,
@@ -301,7 +306,8 @@ struct EditedFallbackTests {
       relPath: rel, filename: "FALLBACK_orig.HEIC", exportedAt: now)
     h.store.markVariantFailed(
       assetId: "fallback", variant: .edited,
-      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      at: now)
 
     h.store.markVariantExported(
       assetId: "plain", variant: .original, year: yr, month: mo, relPath: rel,
@@ -318,12 +324,11 @@ struct EditedFallbackTests {
     #expect(summary?.status == .complete)
   }
 
-  /// A natural-stem `.original` paired with `.edited .failed[recoverable]`
-  /// must NOT contribute to the fallback bucket. The reviewer's case: an
-  /// asset previously exported as unedited (natural-stem original) that
-  /// later became adjusted should still be counted in `origOnlyAtStem`,
-  /// not in `editedFallbackCovered`.
-  @Test func sidebarSummaryDoesNotCountNaturalStemAsFallback() {
+  /// A `.edited.failed` with the *generic* `editedResourceUnavailableMessage`
+  /// (the variant-loop's pre-fallback emission) must NOT contribute to the
+  /// fallback bucket — only records carrying the explicit
+  /// `editedUnavailableOriginalBackedUpMessage` sentinel count.
+  @Test func sidebarSummaryDoesNotCountGenericSentinelAsFallback() {
     let h = makeHarness()
     defer { h.cleanup() }
     let yr = 2025
@@ -332,20 +337,19 @@ struct EditedFallbackTests {
     let now = Date(timeIntervalSince1970: 0)
 
     h.store.markVariantExported(
-      assetId: "natural", variant: .original, year: yr, month: mo, relPath: rel,
-      filename: "NATURAL.HEIC", exportedAt: now)
+      assetId: "generic", variant: .original, year: yr, month: mo, relPath: rel,
+      filename: "GEN_orig.HEIC", exportedAt: now)
     h.store.markVariantFailed(
-      assetId: "natural", variant: .edited,
+      assetId: "generic", variant: .edited,
       error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
 
     #expect(h.store.recordCountEditedFallback(year: yr, month: mo) == 0)
   }
 
   /// R2 finding: in `.editedWithOriginals` selection, a fallback-only record
-  /// (`.original .done` at `_orig` + `.edited .failed[recoverable]`) must NOT
-  /// count as exported. The asset-aware `isExported` keeps re-queueing it
-  /// because it requires both variants `.done`; the sidebar must agree, or
-  /// it would advertise 100% while the queue retries forever.
+  /// must NOT count as exported. The asset-aware `isExported` keeps
+  /// re-queueing it because it requires both variants `.done`; the sidebar
+  /// must agree, or it would advertise 100% while the queue retries forever.
   @Test
   func sidebarSummaryEditedWithOriginalsDoesNotCountFallbackCoveredRecords() {
     let h = makeHarness()
@@ -363,7 +367,8 @@ struct EditedFallbackTests {
       relPath: rel, filename: "FB_orig.HEIC", exportedAt: now)
     h.store.markVariantFailed(
       assetId: "fb", variant: .edited,
-      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      at: now)
 
     let summary = h.store.sidebarSummary(
       year: yr, month: mo, totalCount: 1, adjustedCount: 1,
@@ -401,15 +406,16 @@ struct EditedFallbackTests {
       filename: "IMG_A_orig.HEIC", exportedAt: Date())
     h.collectionStore.markVariantFailed(
       assetId: asset.id, placement: placement, variant: .edited,
-      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: Date())
+      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      at: Date())
 
     #expect(
       h.collectionStore.isExported(
         asset: asset, placement: placement, selection: .edited))
   }
 
-  /// Collection-store mirror of the natural-stem rejection test.
-  @Test func collectionStoreRejectsNaturalStemOriginalAsFallback() {
+  /// Collection-store mirror of the generic-sentinel rejection test.
+  @Test func collectionStoreRejectsGenericSentinelAsFallback() {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -423,12 +429,16 @@ struct EditedFallbackTests {
     h.collectionStore.upsertPlacement(placement)
 
     let asset = TestAssetFactory.makeAsset(id: "natural-album", hasAdjustments: true)
+    // Compose with the *generic* sentinel — the variant-loop's pre-fallback
+    // emission. Without the explicit
+    // `editedUnavailableOriginalBackedUpMessage` marker, the asset must NOT
+    // be considered fallback-covered.
     h.collectionStore.markVariantInProgress(
       assetId: asset.id, placement: placement, variant: .original,
-      filename: "IMG_A.HEIC")
+      filename: "IMG_A_orig.HEIC")
     h.collectionStore.markVariantExported(
       assetId: asset.id, placement: placement, variant: .original,
-      filename: "IMG_A.HEIC", exportedAt: Date())
+      filename: "IMG_A_orig.HEIC", exportedAt: Date())
     h.collectionStore.markVariantFailed(
       assetId: asset.id, placement: placement, variant: .edited,
       error: ExportVariantRecovery.editedResourceUnavailableMessage, at: Date())
@@ -438,13 +448,79 @@ struct EditedFallbackTests {
         asset: asset, placement: placement, selection: .edited))
   }
 
+  // MARK: - Sentinel disambiguation
+
+  /// Reviewer-requested regression: an asset whose Photos-side original
+  /// filename literally ends in `_orig` (e.g. `vacation_orig.JPG`) is
+  /// indistinguishable from a `_orig` companion by filename shape alone.
+  /// The fallback path must not be tricked into thinking such an asset is
+  /// already covered. End-to-end:
+  ///
+  /// 1. Asset starts unedited → first export writes `vacation_orig.JPG`
+  ///    at the natural stem.
+  /// 2. Asset becomes adjusted, edited resource is unavailable.
+  /// 3. Re-export must still run the fallback (because the explicit
+  ///    sentinel isn't set yet) and write a fresh `_orig` companion at a
+  ///    non-colliding path.
+  /// 4. Only after the fallback's marker is set does the asset count as
+  ///    covered.
+  @Test func fallbackTreatsNaturalOrigFilenameCorrectly() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.manager.versionSelection = .edited
+
+    // Step 1: asset's Photos-side original filename literally ends in `_orig`.
+    let assetUnedited = TestAssetFactory.makeAsset(
+      id: "natural-orig", hasAdjustments: false)
+    h.photoLib.assetsByYearMonth["2025-7"] = [assetUnedited]
+    h.photoLib.resourcesByAssetId["natural-orig"] = [
+      TestAssetFactory.makeResource(
+        type: .photo, originalFilename: "vacation_orig.JPG")
+    ]
+
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await waitForQueueDrained(h.manager)
+
+    let firstRecord = h.store.exportInfo(assetId: "natural-orig")
+    #expect(firstRecord?.variants[.original]?.filename == "vacation_orig.JPG")
+    #expect(firstRecord?.variants[.edited] == nil)
+
+    // Step 2/3: same asset id, now adjusted, edited resource unavailable.
+    let assetAdjusted = TestAssetFactory.makeAsset(
+      id: "natural-orig", hasAdjustments: true)
+    h.photoLib.assetsByYearMonth["2025-7"] = [assetAdjusted]
+
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await waitForQueueDrained(h.manager)
+
+    // The fallback must have run and written a fresh _orig companion at a
+    // non-colliding path. The `.edited.lastError` carries the explicit
+    // sentinel — this is what `isExported` keys on, NOT the filename shape.
+    let finalRecord = h.store.exportInfo(assetId: "natural-orig")
+    #expect(finalRecord?.variants[.edited]?.status == .failed)
+    #expect(
+      finalRecord?.variants[.edited]?.lastError
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage)
+
+    // The .original now points at the fallback companion. The previous
+    // natural-stem file (`vacation_orig.JPG`) is left on disk untouched —
+    // deleting it would lose user data — but the record points to the new
+    // path. allocateUnusedOrigStem bumped to a `(N)` suffix to avoid
+    // colliding with the natural-stem file.
+    let newFilename = finalRecord?.variants[.original]?.filename
+    #expect(newFilename != nil)
+    #expect(newFilename != "vacation_orig.JPG")
+    #expect(newFilename?.hasSuffix("_orig.JPG") == true)
+    #expect(h.store.isExported(asset: assetAdjusted, selection: .edited))
+  }
+
   // MARK: - Video fallback
 
   /// Adjusted videos route through `MediaRenderer` for the edited variant.
   /// When the render fails, `exportSingleVariant` rewrites the error to the
-  /// `editedResourceUnavailableMessage` sentinel (see ExportManager line
-  /// ~1170), so the same fallback path applies. Pin the end-to-end behaviour
-  /// for video here.
+  /// generic `editedResourceUnavailableMessage`; `runEditedFallbackOriginal`
+  /// then writes the original and rewrites `.edited.lastError` to the
+  /// `editedUnavailableOriginalBackedUpMessage` sentinel.
   @Test func editUnavailableVideoFallbackWritesOriginal() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
@@ -471,7 +547,7 @@ struct EditedFallbackTests {
     #expect(record?.variants[.edited]?.status == .failed)
     #expect(
       record?.variants[.edited]?.lastError
-        == ExportVariantRecovery.editedResourceUnavailableMessage)
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage)
     #expect(record?.variants[.original]?.status == .done)
     #expect(record?.variants[.original]?.filename == "IMG_4019_orig.MOV")
     #expect(h.store.isExported(asset: asset, selection: .edited))
@@ -535,7 +611,9 @@ struct EditedFallbackTests {
     )
     let report = reporter.makeReport()
 
-    #expect(report.contains("Edited resource unavailable"))
+    #expect(
+      report.contains(
+        ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage))
     #expect(report.contains("fallback: original exported as IMG_X_orig.HEIC"))
     #expect(report.contains("of which fallback-covered (original written as _orig): 1"))
   }

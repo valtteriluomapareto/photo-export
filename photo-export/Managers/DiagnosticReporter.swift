@@ -139,16 +139,13 @@ struct DiagnosticReporter {
     return problems.sorted { $0.scope < $1.scope }
   }
 
-  /// Returns the original-side filename when this `.failed` `.edited` variant
-  /// is covered by the `_orig` fallback. Otherwise nil. Used to annotate the
-  /// row in the report so users can see which file on disk is standing in
-  /// for the unavailable edit.
+  /// Returns the original-side filename when this `.failed` `.edited`
+  /// variant is covered by the `_orig` fallback. Otherwise nil.
   ///
-  /// The `isOrigCompanion` filename check matches `satisfiesEditedFallback` —
-  /// only true `_orig` writes count as fallback. A `.original` recorded at
-  /// the natural stem (e.g. from a prior unedited-asset export, before the
-  /// asset became adjusted) is *not* annotated as fallback, because no
-  /// fallback action ever happened for that record.
+  /// Keys on `editedUnavailableOriginalBackedUpMessage` — the explicit
+  /// sentinel `runEditedFallbackOriginal` writes only after a successful
+  /// `_orig` write. The previous filename-shape check (`isOrigCompanion`)
+  /// was ambiguous for real user filenames like `vacation_orig.JPG`.
   private func editedFallbackFilename(
     variant: ExportVariant,
     variantRecord: ExportVariantRecord,
@@ -156,11 +153,11 @@ struct DiagnosticReporter {
   ) -> String? {
     guard variant == .edited,
       variantRecord.status == .failed,
-      variantRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage,
+      variantRecord.lastError
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
       let original = originalRecord,
       original.status == .done,
-      let filename = original.filename,
-      ExportFilenamePolicy.isOrigCompanion(filename: filename)
+      let filename = original.filename
     else { return nil }
     return filename
   }

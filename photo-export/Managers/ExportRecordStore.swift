@@ -54,12 +54,15 @@ final class ExportRecordStore: ObservableObject {
     /// AND `.edited` is not `.done`. The records-only sidebar formula's "unedited asset
     /// exported once" estimator depends on this.
     var originalDoneAtNaturalStem: Int = 0
-    /// Records covered by the issue #22 fallback: `.original.done` at a `_orig`-companion
-    /// filename AND `.edited.failed` with the `editedResourceUnavailableMessage`
-    /// sentinel. These represent adjusted assets where Photos refused the edit and the
-    /// pipeline wrote the original as a fallback. Without this counter, the sidebar's
-    /// records-only formula would never count fallback-covered records, leaving years
-    /// stuck at 99% even after `isExported` correctly recognises them as covered.
+    /// Records covered by the issue #22 fallback: `.original.done` AND
+    /// `.edited.failed` with the explicit
+    /// `editedUnavailableOriginalBackedUpMessage` sentinel that
+    /// `runEditedFallbackOriginal` writes after a successful `_orig` write.
+    /// These represent adjusted assets where Photos refused the edit and the
+    /// pipeline wrote the original as a fallback. Without this counter, the
+    /// sidebar's records-only formula would never count fallback-covered
+    /// records, leaving years stuck at 99% even after `isExported` correctly
+    /// recognises them as covered.
     var editedFallbackCovered: Int = 0
     static let zero = MonthCounters()
   }
@@ -337,11 +340,11 @@ final class ExportRecordStore: ObservableObject {
   /// satisfied when `.edited.done` (and `.original.done` under `editedWithOriginals`).
   ///
   /// Issue #22 fallback: when an adjusted asset's `.edited` variant is
-  /// `.failed` with the `editedResourceUnavailableMessage` sentinel and the
-  /// pipeline wrote the original to `<stem>_orig` as a fallback, the asset
-  /// counts as exported. Without this, the asset is re-queued every run and
-  /// fails the same way (Photos refuses the edited resource for that asset),
-  /// producing the "stuck at 99%" bug.
+  /// `.failed` with the explicit `editedUnavailableOriginalBackedUpMessage`
+  /// sentinel (written by `runEditedFallbackOriginal` only after a successful
+  /// `<stem>_orig` write), the asset counts as exported. Without this, the
+  /// asset is re-queued every run and fails the same way (Photos refuses the
+  /// edited resource for that asset), producing the "stuck at 99%" bug.
   func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
     let required = requiredVariants(for: asset, selection: selection)
     guard let record = recordsById[asset.id] else { return false }
@@ -350,29 +353,29 @@ final class ExportRecordStore: ObservableObject {
   }
 
   /// True when an adjusted asset asked to export `.edited` is covered by the
-  /// `_orig` fallback: `.original` is `.done` at a `_orig`-companion filename
-  /// AND `.edited` is `.failed` with the recoverable sentinel. Mirror in
-  /// `CollectionExportRecordStore` so the same rule applies on the collection
-  /// path.
+  /// `_orig` fallback: `.original` is `.done` AND `.edited` is `.failed`
+  /// with the explicit `editedUnavailableOriginalBackedUpMessage` sentinel
+  /// (which `runEditedFallbackOriginal` writes only after a successful
+  /// `_orig` write).
   ///
-  /// The filename check is load-bearing: a record where `.original` is `.done`
-  /// at a *natural-stem* filename (e.g. an unedited asset that became
-  /// adjusted in Photos *after* its first export) is not really fallback-
-  /// covered — no `_orig` file ever got written. Letting that count as
-  /// fallback would inflate the sidebar's exported total and put a misleading
-  /// "fallback" annotation in the diagnostic report. Per-PR review feedback.
+  /// Mirror in `CollectionExportRecordStore` so the same rule applies on
+  /// the collection path.
+  ///
+  /// We deliberately do NOT key on the `.original` filename's shape (the
+  /// `_orig` ending is ambiguous — see
+  /// `ExportFilenamePolicy.isOrigCompanion`'s comment about real user
+  /// filenames like `vacation_orig.JPG`). The explicit sentinel is the
+  /// only authoritative signal that the fallback ran.
   private static func satisfiesEditedFallback(
     record: ExportRecord, asset: AssetDescriptor, selection: ExportVersionSelection
   ) -> Bool {
     guard asset.hasAdjustments, selection == .edited else { return false }
     guard
-      let originalRecord = record.variants[.original],
-      originalRecord.status == .done,
-      let originalFilename = originalRecord.filename,
-      ExportFilenamePolicy.isOrigCompanion(filename: originalFilename),
+      record.variants[.original]?.status == .done,
       let editedRecord = record.variants[.edited],
       editedRecord.status == .failed,
-      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+      editedRecord.lastError
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
     else { return false }
     return true
   }
@@ -743,11 +746,10 @@ final class ExportRecordStore: ObservableObject {
       counters.originalDoneAtNaturalStem += sign
     }
     if originalDone,
-      let originalFilename = record.variants[.original]?.filename,
-      ExportFilenamePolicy.isOrigCompanion(filename: originalFilename),
       let editedRecord = record.variants[.edited],
       editedRecord.status == .failed,
-      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+      editedRecord.lastError
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
     {
       counters.editedFallbackCovered += sign
     }

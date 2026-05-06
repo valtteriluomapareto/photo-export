@@ -489,9 +489,9 @@ final class CollectionExportRecordStore: ObservableObject {
   ///
   /// Issue #22 fallback (mirrors `ExportRecordStore.isExported`): an adjusted
   /// asset asked to export `.edited` is also "exported" when `.edited` is
-  /// `.failed` with the `editedResourceUnavailableMessage` sentinel AND
-  /// `.original` is `.done` (the pipeline wrote the original to `<stem>_orig`
-  /// as a fallback).
+  /// `.failed` with the explicit `editedUnavailableOriginalBackedUpMessage`
+  /// sentinel AND `.original` is `.done` (`runEditedFallbackOriginal` writes
+  /// that sentinel only after a successful `<stem>_orig` write).
   func isExported(
     asset: AssetDescriptor,
     placement: ExportPlacement,
@@ -510,19 +510,18 @@ final class CollectionExportRecordStore: ObservableObject {
   /// Collection-store mirror of `ExportRecordStore.satisfiesEditedFallback`.
   /// Kept in this store rather than reaching into the timeline-store helper so
   /// the two stores remain independent (per the disjoint-key-spaces design).
-  /// See the timeline helper for the rationale on the `_orig` filename check.
+  /// See the timeline helper for the rationale on keying off the explicit
+  /// `editedUnavailableOriginalBackedUpMessage` sentinel.
   private static func satisfiesEditedFallback(
     body: RecordBody, asset: AssetDescriptor, selection: ExportVersionSelection
   ) -> Bool {
     guard asset.hasAdjustments, selection == .edited else { return false }
     guard
-      let originalRecord = body.variants[ExportVariant.original.rawValue],
-      originalRecord.status == .done,
-      let originalFilename = originalRecord.filename,
-      ExportFilenamePolicy.isOrigCompanion(filename: originalFilename),
+      body.variants[ExportVariant.original.rawValue]?.status == .done,
       let editedRecord = body.variants[ExportVariant.edited.rawValue],
       editedRecord.status == .failed,
-      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+      editedRecord.lastError
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
     else { return false }
     return true
   }
