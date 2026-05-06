@@ -192,9 +192,14 @@ struct EditedModeExportTests {
     manager.startExportMonth(year: 2025, month: 8)
     await waitForQueueDrained(manager)
 
+    // The .edited variant is recorded as failed with the recoverable
+    // sentinel, AND the issue #22 fallback fires: the original is written to
+    // the `_orig` slot so the user has bytes for this asset.
     let record = store.exportInfo(assetId: "broken-edit")
     #expect(record?.variants[.edited]?.status == .failed)
     #expect(record?.variants[.edited]?.lastError == "Edited resource unavailable")
+    #expect(record?.variants[.original]?.status == .done)
+    #expect(record?.variants[.original]?.filename == "IMG_0001_orig.JPG")
   }
 
   // MARK: - Companion follows the asset's collision-suffixed group stem
