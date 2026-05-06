@@ -30,15 +30,12 @@ import Testing
 /// when `pendingJobs.isEmpty`. The accumulating-counter assertions
 /// below catch that regression directly.
 ///
-/// `.serialized` because the suite uses `writeDelaySeconds` and polls
-/// transient `isRunning` state. Concurrent `@MainActor` suites exposed the
-/// timing fragility under CI load. See issue #28.
 @MainActor
-@Suite(.serialized)
 struct QueueStateAcrossModesTests {
 
   // MARK: - Fixtures
 
+  @MainActor
   private struct Harness {
     let manager: ExportManager
     let photoLib: FakePhotoLibraryService
@@ -47,6 +44,19 @@ struct QueueStateAcrossModesTests {
     let timelineStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
+    let userDefaultsSuite: String
+
+    /// See note on `ExportAllAlbumsTests.Harness.cleanup` — same ordering: cancel,
+    /// flush, remove dirs, drop UserDefaults suite. Tests using checkpoints must
+    /// `await checkpoint.releaseAll()` first.
+    func cleanup() {
+      manager.cancelAndClear()
+      timelineStore.flushForTesting()
+      collectionStore.flushForTesting()
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
+    }
   }
 
   private func makeHarness() -> Harness {
@@ -60,18 +70,21 @@ struct QueueStateAcrossModesTests {
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
+    let suiteName = "test-QueueAcrossModes-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: timelineStore,
       collectionExportRecordStore: collectionStore,
       assetResourceWriter: writer,
-      fileSystem: fileSystem
+      fileSystem: fileSystem,
+      userDefaults: defaults
     )
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      timelineStore: timelineStore, collectionStore: collectionStore, storeRoot: storeRoot)
+      timelineStore: timelineStore, collectionStore: collectionStore,
+      storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
 
   private func makeAsset(id: String, year: Int = 2025, month: Int = 4) -> AssetDescriptor {
@@ -146,26 +159,29 @@ struct QueueStateAcrossModesTests {
   /// the same depth the run loop will actually drain.
   @Test func startingNewExportWhilePausedAccumulatesCounter() async throws {
     let h = makeHarness()
-    defer {
-      try? FileManager.default.removeItem(at: h.storeRoot)
-      h.dest.cleanup()
-    }
+    defer { h.cleanup() }
 
-    // Slow the writer so we can reliably observe the in-flight + paused state.
-    h.writer.writeDelaySeconds = 0.05
+    // Gate writes so we can deterministically observe the in-flight → paused
+    // transition without racing a `writeDelaySeconds` timer against the runner.
+    let writeGate = AsyncCheckpoint()
+    h.writer.checkpoint = writeGate
 
     seedAlbum(h.photoLib, localId: "album-A", ids: (1...4).map { "A\($0)" })
     seedTimelineMonth(h.photoLib, year: 2025, month: 6, ids: (1...3).map { "M\($0)" })
     seedAlbum(h.photoLib, localId: "album-B", ids: (1...2).map { "B\($0)" })
 
-    // Step 1: start album A.
+    // Step 1: start album A. The first writer enters the gate; queueCount stays
+    // at 4 - 1 = 3 because the job currently in flight has been popped.
     h.manager.startExportAlbum(collectionId: "album-A")
     await waitUntil(h.manager.totalJobsEnqueued == 4)
+    await writeGate.waitForEnter(count: 1)
     #expect(h.manager.totalJobsEnqueued == 4)
+    #expect(h.manager.isRunning)
 
-    // Pause. Queue parks once the in-flight job drains.
-    await waitUntil(h.manager.isRunning)
+    // Pause, then release the in-flight write so it completes. After processNext
+    // sees isPaused=true, the queue parks.
     h.manager.pause()
+    await writeGate.release(1)
     await waitUntil(!h.manager.isRunning)
     #expect(h.manager.isPaused)
     let completedAfterAPause = h.manager.totalJobsCompleted
@@ -178,9 +194,7 @@ struct QueueStateAcrossModesTests {
     // Counter must accumulate, NOT reset. Pre-fix this dropped to 3.
     #expect(h.manager.totalJobsEnqueued == 7)
     #expect(h.manager.totalJobsCompleted == completedAfterAPause)
-    // queueCount tracks the full pending depth.
     #expect(h.manager.queueCount >= queueAfterAPause)
-    // Pause must persist across the new enqueue.
     #expect(h.manager.isPaused)
     #expect(!h.manager.isRunning)
 
@@ -191,6 +205,8 @@ struct QueueStateAcrossModesTests {
     #expect(h.manager.totalJobsEnqueued == 9)
     #expect(h.manager.totalJobsCompleted == completedAfterAPause)
     #expect(h.manager.isPaused)
+
+    await writeGate.releaseAll()
   }
 
   // MARK: - 2. Pause state survives cross-mode enqueue
@@ -201,18 +217,17 @@ struct QueueStateAcrossModesTests {
   /// without a test failing.
   @Test func pausedQueueStaysParkedWhenNewWorkIsAdded() async throws {
     let h = makeHarness()
-    defer {
-      try? FileManager.default.removeItem(at: h.storeRoot)
-      h.dest.cleanup()
-    }
-    h.writer.writeDelaySeconds = 0.05
+    defer { h.cleanup() }
+    let writeGate = AsyncCheckpoint()
+    h.writer.checkpoint = writeGate
 
     seedTimelineMonth(h.photoLib, year: 2025, month: 7, ids: (1...3).map { "M\($0)" })
     seedAlbum(h.photoLib, localId: "album-X", ids: (1...3).map { "X\($0)" })
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitUntil(h.manager.isRunning)
+    await writeGate.waitForEnter(count: 1)
     h.manager.pause()
+    await writeGate.release(1)
     await waitUntil(!h.manager.isRunning)
     #expect(h.manager.isPaused)
 
@@ -222,6 +237,8 @@ struct QueueStateAcrossModesTests {
     // Adding work must not unpause the run loop.
     #expect(h.manager.isPaused)
     #expect(!h.manager.isRunning)
+
+    await writeGate.releaseAll()
   }
 
   // MARK: - 3. Pending queue is shared across timeline and collections
@@ -233,18 +250,17 @@ struct QueueStateAcrossModesTests {
   /// every dependent assumption.
   @Test func pendingJobsHoldsMixedTimelineAndCollectionWork() async throws {
     let h = makeHarness()
-    defer {
-      try? FileManager.default.removeItem(at: h.storeRoot)
-      h.dest.cleanup()
-    }
-    h.writer.writeDelaySeconds = 0.05
+    defer { h.cleanup() }
+    let writeGate = AsyncCheckpoint()
+    h.writer.checkpoint = writeGate
 
     seedTimelineMonth(h.photoLib, year: 2025, month: 8, ids: (1...4).map { "M\($0)" })
     seedAlbum(h.photoLib, localId: "album-Y", ids: (1...3).map { "Y\($0)" })
 
     h.manager.startExportMonth(year: 2025, month: 8)
-    await waitUntil(h.manager.isRunning)
+    await writeGate.waitForEnter(count: 1)
     h.manager.pause()
+    await writeGate.release(1)
     await waitUntil(!h.manager.isRunning)
     h.manager.startExportAlbum(collectionId: "album-Y")
     await waitUntil(h.manager.totalJobsEnqueued == 7)
@@ -253,6 +269,8 @@ struct QueueStateAcrossModesTests {
     #expect(kinds.contains(.timeline))
     #expect(kinds.contains(.album))
     #expect(h.manager.pendingJobs.count == h.manager.queueCount)
+
+    await writeGate.releaseAll()
   }
 
   // MARK: - 4. Resume drains FIFO across modes
@@ -263,18 +281,17 @@ struct QueueStateAcrossModesTests {
   /// run loop actually does another.
   @Test func resumeDrainsFifoAcrossModes() async throws {
     let h = makeHarness()
-    defer {
-      try? FileManager.default.removeItem(at: h.storeRoot)
-      h.dest.cleanup()
-    }
-    h.writer.writeDelaySeconds = 0.02
+    defer { h.cleanup() }
+    let writeGate = AsyncCheckpoint()
+    h.writer.checkpoint = writeGate
 
     seedTimelineMonth(h.photoLib, year: 2025, month: 9, ids: (1...3).map { "M\($0)" })
     seedAlbum(h.photoLib, localId: "album-Z", ids: (1...3).map { "Z\($0)" })
 
     h.manager.startExportMonth(year: 2025, month: 9)
-    await waitUntil(h.manager.isRunning)
+    await writeGate.waitForEnter(count: 1)
     h.manager.pause()
+    await writeGate.releaseAll()
     await waitUntil(!h.manager.isRunning)
     h.manager.startExportAlbum(collectionId: "album-Z")
     await waitUntil(h.manager.totalJobsEnqueued == 6)

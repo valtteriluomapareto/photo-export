@@ -34,7 +34,8 @@ struct ExportManagerVideoRenderTests {
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "test")
 
-    UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
+    let defaults = UserDefaults(
+      suiteName: "test-VideoRender-\(UUID().uuidString)")!
 
     let manager = ExportManager(
       photoLibraryService: photoLib,
@@ -42,7 +43,8 @@ struct ExportManagerVideoRenderTests {
       exportRecordStore: store,
       assetResourceWriter: writer,
       mediaRenderer: renderer,
-      fileSystem: fileSystem
+      fileSystem: fileSystem,
+      userDefaults: defaults
     )
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer,

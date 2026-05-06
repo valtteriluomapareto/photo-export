@@ -30,13 +30,15 @@ struct ExportManagerImportTests {
       .appendingPathComponent("ExportManagerImport-\(UUID().uuidString)", isDirectory: true)
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
-    UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
+    let defaults = UserDefaults(
+      suiteName: "test-ExportManagerImport-\(UUID().uuidString)")!
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
       assetResourceWriter: writer,
-      fileSystem: fileSystem
+      fileSystem: fileSystem,
+      userDefaults: defaults
     )
     return (manager, photoLib, dest, store, storeRoot)
   }

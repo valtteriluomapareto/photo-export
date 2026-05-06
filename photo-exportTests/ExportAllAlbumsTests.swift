@@ -7,12 +7,7 @@ import Testing
 /// Coverage for `ExportManager.startExportAllAlbums()` and the supporting
 /// `PhotoCollectionDescriptor.albumLocalIds(in:)` tree-walk helper.
 ///
-/// `.serialized` because `pauseHonoredDuringEnqueueWindow` and
-/// `partialEnqueueFailureDrainsTheJobsAlreadyQueued` poll for transient queue
-/// state. Concurrent `@MainActor` suites exposed the timing fragility under CI
-/// load. See issue #28.
 @MainActor
-@Suite(.serialized)
 struct ExportAllAlbumsTests {
 
   // MARK: - Tree walk
@@ -60,12 +55,31 @@ struct ExportAllAlbumsTests {
 
   // MARK: - Test harness
 
+  @MainActor
   private struct Harness {
     let manager: ExportManager
     let photoLib: FakePhotoLibraryService
     let dest: FakeExportDestination
+    let writer: FakeAssetResourceWriter
+    let timelineStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
+    let userDefaultsSuite: String
+
+    /// Tear down in the right order: cancel anything in flight, flush both stores'
+    /// IO queues so no async append is still racing toward the temp dirs, remove
+    /// the dirs, drop the per-suite UserDefaults. Tests using `AsyncCheckpoint`
+    /// must call `await checkpoint.releaseAll()` before this so suspended
+    /// writer/fetch tasks unblock — otherwise `cancelAndClear` waits on tasks
+    /// that have nothing to wake them up.
+    func cleanup() {
+      manager.cancelAndClear()
+      timelineStore.flushForTesting()
+      collectionStore.flushForTesting()
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
+    }
   }
 
   private func makeHarness() -> Harness {
@@ -79,18 +93,21 @@ struct ExportAllAlbumsTests {
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
+    let suiteName = "test-ExportAllAlbums-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: timelineStore,
       collectionExportRecordStore: collectionStore,
       assetResourceWriter: writer,
-      fileSystem: fileSystem
+      fileSystem: fileSystem,
+      userDefaults: defaults
     )
     return Harness(
-      manager: manager, photoLib: photoLib, dest: dest,
-      collectionStore: collectionStore, storeRoot: storeRoot)
+      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
+      timelineStore: timelineStore, collectionStore: collectionStore,
+      storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {
@@ -134,10 +151,7 @@ struct ExportAllAlbumsTests {
   /// because the batch is albums-only.
   @Test func enqueuesEveryAlbumIncludingNestedAndExcludesFavorites() async throws {
     let h = makeHarness()
-    defer {
-      try? FileManager.default.removeItem(at: h.storeRoot)
-      h.dest.cleanup()
-    }
+    defer { h.cleanup() }
 
     let topAlbum = seedAlbum(h.photoLib, localId: "top-A", ids: ["a1", "a2"])
     let nestedAlbum = seedAlbum(
@@ -174,10 +188,7 @@ struct ExportAllAlbumsTests {
 
   @Test func emptyAlbumTreeSetsNoAlbumsMessage() async throws {
     let h = makeHarness()
-    defer {
-      try? FileManager.default.removeItem(at: h.storeRoot)
-      h.dest.cleanup()
-    }
+    defer { h.cleanup() }
 
     h.photoLib.collectionTree = [
       PhotoCollectionDescriptor(
@@ -199,22 +210,23 @@ struct ExportAllAlbumsTests {
   /// and called `processQueueIfNeeded()`.
   @Test func pauseHonoredDuringEnqueueWindow() async throws {
     let h = makeHarness()
-    defer {
-      try? FileManager.default.removeItem(at: h.storeRoot)
-      h.dest.cleanup()
-    }
+    defer { h.cleanup() }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
     let albumB = seedAlbum(h.photoLib, localId: "B", ids: ["b1"])
     h.photoLib.collectionTree = [albumA, albumB]
-    // Suspend album B's fetch long enough that we observe the post-A,
-    // pre-processQueueIfNeeded state and pause from there.
-    h.photoLib.fetchAssetsDelayByAlbumId["B"] = 0.5
+    // Gate album B's fetch deterministically. The enqueue loop will reach
+    // album B, suspend on `enter()`, and stay there until we release. That
+    // pins the "queued (album A's jobs) but run loop not started yet" window
+    // open for as long as the test needs — no sleeping.
+    let fetchGate = AsyncCheckpoint()
+    h.photoLib.fetchAssetsCheckpointByAlbumId["B"] = fetchGate
 
     h.manager.startExportAllAlbums()
 
-    // Wait for album A's job to land in the queue while album B is still suspended.
-    await waitUntil(h.manager.queueCount > 0 && h.manager.isEnqueueingAll)
+    // Wait until the enqueue loop has appended album A's job and is
+    // suspended on album B's fetch gate.
+    await fetchGate.waitForEnter(count: 1)
     #expect(h.manager.queueCount > 0)
     #expect(h.manager.isEnqueueingAll)
     #expect(!h.manager.isRunning)
@@ -223,18 +235,20 @@ struct ExportAllAlbumsTests {
     h.manager.pause()
     #expect(h.manager.isPaused)
 
-    // Let the enqueue loop finish. After processQueueIfNeeded() runs at the end,
-    // the queue must stay parked because isPaused=true.
-    await waitUntil(timeout: 3, !h.manager.isEnqueueingAll)
-    try? await Task.sleep(nanoseconds: 100_000_000)  // give run loop a chance to (incorrectly) start
+    // Release the fetch gate so the enqueue loop can complete and call
+    // processQueueIfNeeded(). With pause held, the run loop must NOT start.
+    await fetchGate.release(1)
+    await waitUntil(!h.manager.isEnqueueingAll)
     #expect(h.manager.isPaused)
     #expect(!h.manager.isRunning)
     #expect(h.manager.queueCount > 0)
 
     // Resume drains the queue normally.
     h.manager.resume()
-    await waitUntil(timeout: 5, h.manager.queueCount == 0)
+    await waitUntil(h.manager.queueCount == 0)
     #expect(h.manager.queueCount == 0)
+
+    await fetchGate.releaseAll()
   }
 
   /// A throw partway through the album loop must not strand earlier albums' jobs in
@@ -242,10 +256,7 @@ struct ExportAllAlbumsTests {
   /// surfaces the partial state via the empty-run message slot.
   @Test func partialEnqueueFailureDrainsTheJobsAlreadyQueued() async throws {
     let h = makeHarness()
-    defer {
-      try? FileManager.default.removeItem(at: h.storeRoot)
-      h.dest.cleanup()
-    }
+    defer { h.cleanup() }
 
     let albumA = seedAlbum(h.photoLib, localId: "album-A", ids: ["a1", "a2"])
     let albumB = seedAlbum(h.photoLib, localId: "broken-album", ids: ["b1"])
@@ -253,11 +264,21 @@ struct ExportAllAlbumsTests {
     h.photoLib.fetchAssetsErrorByAlbumId["broken-album"] = NSError(
       domain: "Test", code: 7, userInfo: [NSLocalizedDescriptionKey: "boom"])
 
+    // Gate the writer so we can step through the queue drain deterministically.
+    // The queue processes one job at a time, so the second writer cannot enter
+    // while the first is still suspended on the gate — release sequentially.
+    let writeGate = AsyncCheckpoint()
+    h.writer.checkpoint = writeGate
+
     h.manager.startExportAllAlbums()
+    await writeGate.waitForEnter(count: 1)
+    await writeGate.release(1)
+    await writeGate.waitForEnter(count: 2)
+    await writeGate.releaseAll()
     await waitUntil(h.manager.totalJobsCompleted == 2)
 
     // Album A's two jobs were already queued before B threw. They must drain
-    // (totalJobsCompleted reaches 2) and the queue empties.
+    // and the queue empties.
     #expect(h.manager.totalJobsCompleted == 2)
     #expect(h.manager.queueCount == 0)
     #expect(!h.manager.isEnqueueingAll)
@@ -271,10 +292,7 @@ struct ExportAllAlbumsTests {
 
   @Test func allAlbumsAlreadyExportedSetsAlreadyDoneMessage() async throws {
     let h = makeHarness()
-    defer {
-      try? FileManager.default.removeItem(at: h.storeRoot)
-      h.dest.cleanup()
-    }
+    defer { h.cleanup() }
 
     let album = seedAlbum(h.photoLib, localId: "done-album", ids: ["d1"])
     h.photoLib.collectionTree = [album]

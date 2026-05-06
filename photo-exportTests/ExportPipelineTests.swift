@@ -32,14 +32,16 @@ struct ExportPipelineTests {
 
     // Clear the persisted version selection so ExportManager starts at its default
     // regardless of what a sibling test suite may have written.
-    UserDefaults.standard.removeObject(forKey: ExportManager.versionSelectionDefaultsKey)
+    let defaults = UserDefaults(
+      suiteName: "test-ExportPipeline-\(UUID().uuidString)")!
 
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
       assetResourceWriter: writer,
-      fileSystem: fileSystem
+      fileSystem: fileSystem,
+      userDefaults: defaults
     )
     return (manager, photoLib, dest, writer, fileSystem, store)
   }
