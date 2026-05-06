@@ -6,7 +6,13 @@ import Testing
 
 /// Coverage for `ExportManager.startExportAllAlbums()` and the supporting
 /// `PhotoCollectionDescriptor.albumLocalIds(in:)` tree-walk helper.
+///
+/// `.serialized` because `pauseHonoredDuringEnqueueWindow` and
+/// `partialEnqueueFailureDrainsTheJobsAlreadyQueued` poll for transient queue
+/// state. Concurrent `@MainActor` suites exposed the timing fragility under CI
+/// load. See issue #28.
 @MainActor
+@Suite(.serialized)
 struct ExportAllAlbumsTests {
 
   // MARK: - Tree walk

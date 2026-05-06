@@ -20,7 +20,12 @@ import Testing
 /// `pause()` after the first asset's write starts, wait for the in-flight job
 /// to finish, then assert the queue parked correctly. Resume and verify the
 /// remaining work drains.
+///
+/// `.serialized` because the suite uses `writeDelaySeconds` and polls transient
+/// `isRunning` state — running concurrently with other `@MainActor` suites
+/// starves the main-actor scheduler under CI load. See issue #28.
 @MainActor
+@Suite(.serialized)
 struct ExportManagerPauseResumeTests {
 
   // MARK: - Fixtures
