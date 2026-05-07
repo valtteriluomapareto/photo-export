@@ -36,16 +36,6 @@ struct EmptyRunMessageTests {
     return (manager, photoLib, dest, store)
   }
 
-  private func waitForEnqueueIdle(_ manager: ExportManager, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 50_000_000)
-    while (manager.isRunning || manager.queueCount > 0 || manager.hasActiveExportWork)
-      && Date() < deadline
-    {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-  }
 
   // MARK: - Empty Export Month
 
@@ -63,7 +53,7 @@ struct EmptyRunMessageTests {
       filename: "X.JPG", exportedAt: Date())
 
     manager.startExportMonth(year: 2025, month: 3)
-    await waitForEnqueueIdle(manager)
+    await manager.waitForQueueDrained()
 
     #expect(manager.emptyRunMessage == "This month is already exported.")
     #expect(manager.totalJobsEnqueued == 0)
@@ -83,7 +73,7 @@ struct EmptyRunMessageTests {
       filename: "Y.JPG", exportedAt: Date())
 
     manager.startExportYear(year: 2024)
-    await waitForEnqueueIdle(manager)
+    await manager.waitForQueueDrained()
 
     #expect(manager.emptyRunMessage == "This year is already exported.")
   }
@@ -103,7 +93,7 @@ struct EmptyRunMessageTests {
       filename: "Z.JPG", exportedAt: Date())
 
     manager.startExportAll()
-    await waitForEnqueueIdle(manager)
+    await manager.waitForQueueDrained()
 
     #expect(manager.emptyRunMessage == "Everything in this destination is already exported.")
   }
@@ -121,7 +111,7 @@ struct EmptyRunMessageTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 4)
-    await waitForEnqueueIdle(manager)
+    await manager.waitForQueueDrained()
 
     #expect(manager.emptyRunMessage == nil)
   }
@@ -142,7 +132,7 @@ struct EmptyRunMessageTests {
       filename: "A.JPG", exportedAt: Date())
 
     manager.startExportMonth(year: 2025, month: 5)
-    await waitForEnqueueIdle(manager)
+    await manager.waitForQueueDrained()
     #expect(manager.emptyRunMessage != nil)
 
     let workAsset = TestAssetFactory.makeAsset(id: "todo-2")
@@ -152,7 +142,7 @@ struct EmptyRunMessageTests {
     ]
     manager.startExportMonth(year: 2025, month: 6)
     #expect(manager.emptyRunMessage == nil)
-    await waitForEnqueueIdle(manager)
+    await manager.waitForQueueDrained()
   }
 
   @Test func versionSelectionChangeClearsMessage() async throws {
@@ -169,7 +159,7 @@ struct EmptyRunMessageTests {
       filename: "S.JPG", exportedAt: Date())
 
     manager.startExportMonth(year: 2025, month: 7)
-    await waitForEnqueueIdle(manager)
+    await manager.waitForQueueDrained()
     #expect(manager.emptyRunMessage != nil)
 
     manager.versionSelection = .editedWithOriginals
@@ -190,7 +180,7 @@ struct EmptyRunMessageTests {
       filename: "C.JPG", exportedAt: Date())
 
     manager.startExportMonth(year: 2025, month: 8)
-    await waitForEnqueueIdle(manager)
+    await manager.waitForQueueDrained()
     #expect(manager.emptyRunMessage != nil)
 
     manager.cancelAndClear()

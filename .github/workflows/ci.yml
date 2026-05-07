@@ -98,6 +98,10 @@ jobs:
           echo "::group::Unit tests"
           echo "Running unit tests with code coverage enabled..."
           set -o pipefail
+          # Keep enough trailing output that any `#expect` failure messages
+          # survive in the log alongside the `Failing tests:` summary. The
+          # previous `tail -30` only kept the summary, forcing a download of
+          # the 89 MB xcresult bundle to find out *why* a test failed.
           xcodebuild \
             -project photo-export.xcodeproj \
             -scheme "photo-export" \
@@ -105,7 +109,7 @@ jobs:
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            test 2>&1 | tail -30
+            test 2>&1 | tail -300
           echo "Unit tests passed."
           echo "Result bundle: $(du -sh TestResults.xcresult)"
           echo "::endgroup::"

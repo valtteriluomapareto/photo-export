@@ -58,16 +58,6 @@ struct ReuseSourceCopyPathTests {
     )
   }
 
-  private func waitForQueueDrained(_ manager: ExportManager, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 50_000_000)
-    while Date() < deadline {
-      if !manager.isRunning && manager.queueCount == 0 { return }
-      try? await Task.sleep(nanoseconds: 50_000_000)
-    }
-  }
-
   // MARK: - Reuse from timeline → favorites
 
   /// An asset already exported to timeline `2025/02/IMG.HEIC` then re-exported under
@@ -97,7 +87,7 @@ struct ReuseSourceCopyPathTests {
     // than calling the asset resource writer.
     let writeCallsBefore = writer.writeCalls.count
     manager.startExportFavorites()
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == writeCallsBefore)  // PhotoKit writer not invoked
     let copyCalls = fileSystem.copyCalls
@@ -138,7 +128,7 @@ struct ReuseSourceCopyPathTests {
 
     let writeCallsBefore = writer.writeCalls.count
     manager.startExportMonth(year: 2025, month: 3)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Reuse-source lookup found favorites first; PhotoKit not invoked.
     #expect(writer.writeCalls.count == writeCallsBefore)
@@ -173,7 +163,7 @@ struct ReuseSourceCopyPathTests {
 
     let writeCallsBefore = writer.writeCalls.count
     manager.startExportFavorites()
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // The copy attempt failed (source missing), so PhotoKit was called as fallback.
     #expect(writer.writeCalls.count == writeCallsBefore + 1)
@@ -197,7 +187,7 @@ struct ReuseSourceCopyPathTests {
 
     let writeCallsBefore = writer.writeCalls.count
     manager.startExportMonth(year: 2025, month: 5)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == writeCallsBefore + 1)
     #expect(fileSystem.copyCalls.isEmpty)

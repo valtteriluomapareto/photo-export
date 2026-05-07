@@ -66,15 +66,6 @@ struct EditedFallbackTests {
       storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
 
-  private func waitForQueueDrained(_ manager: ExportManager) async {
-    let deadline = Date().addingTimeInterval(5)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 30_000_000)
-    while manager.hasActiveExportWork && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-  }
-
   // MARK: - Pipeline behaviour
 
   @Test func editUnavailableTriggersOrigFallback() async throws {
@@ -89,7 +80,7 @@ struct EditedFallbackTests {
     ]
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: "edit-gone")
     #expect(record?.variants[.edited]?.status == .failed)
@@ -119,7 +110,7 @@ struct EditedFallbackTests {
     ]
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     // Default-mode unedited assets write the original at the natural stem
     // (no `_orig` suffix). The fallback path only triggers on adjusted
@@ -143,7 +134,7 @@ struct EditedFallbackTests {
     ]
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     // Include-originals already requires `.original`, so the original is
     // written by the normal pipeline (no fallback path needed). The edited
@@ -170,10 +161,12 @@ struct EditedFallbackTests {
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_X.HEIC")
     ]
 
-    // First run: records the fallback.
+    // First run: records the fallback. The shared `waitForQueueDrained()` either
+    // returns once the queue genuinely drains, or hangs to its safety timeout —
+    // there is no silent "deadline expired but queue still busy" outcome to guard
+    // against, so the previous bool-returning helper is no longer needed.
     h.manager.startExportMonth(year: 2025, month: 7)
-    let firstFinished = await waitForQueueDrainedAssertingDeadline(h.manager)
-    #expect(firstFinished, "First export run timed out")
+    await h.manager.waitForQueueDrained()
     let writeCountAfterFirst = h.writer.writeCalls.count
     #expect(writeCountAfterFirst > 0, "First run should have written the fallback original")
     #expect(
@@ -182,27 +175,12 @@ struct EditedFallbackTests {
 
     // Second run: queue should not pick up this asset again.
     h.manager.startExportMonth(year: 2025, month: 7)
-    let secondFinished = await waitForQueueDrainedAssertingDeadline(h.manager)
-    #expect(secondFinished, "Second export run timed out")
+    await h.manager.waitForQueueDrained()
 
     #expect(h.writer.writeCalls.count == writeCountAfterFirst)
     #expect(h.manager.queueCount == 0)
   }
 
-  /// Polls until the queue drains, returns true if it drained before the
-  /// deadline, false if the deadline was reached. Lets callers assert their
-  /// run finished cleanly rather than passing on a silent timeout.
-  private func waitForQueueDrainedAssertingDeadline(
-    _ manager: ExportManager, timeout: TimeInterval = 5
-  ) async -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 30_000_000)
-    while manager.hasActiveExportWork && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-    return !manager.hasActiveExportWork
-  }
 
   // MARK: - Store-level isExported recognition
 
@@ -479,7 +457,7 @@ struct EditedFallbackTests {
     ]
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let firstRecord = h.store.exportInfo(assetId: "natural-orig")
     #expect(firstRecord?.variants[.original]?.filename == "vacation_orig.JPG")
@@ -491,7 +469,7 @@ struct EditedFallbackTests {
     h.photoLib.assetsByYearMonth["2025-7"] = [assetAdjusted]
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     // The fallback must have run and written a fresh _orig companion at a
     // non-colliding path. The `.edited.lastError` carries the explicit
@@ -541,7 +519,7 @@ struct EditedFallbackTests {
       userInfo: [NSLocalizedDescriptionKey: "render unavailable"])
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: "broken-video")
     #expect(record?.variants[.edited]?.status == .failed)
@@ -576,7 +554,7 @@ struct EditedFallbackTests {
     ]
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let recordA = h.store.exportInfo(assetId: "share-A")
     let recordB = h.store.exportInfo(assetId: "share-B")
@@ -603,7 +581,7 @@ struct EditedFallbackTests {
     ]
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let reporter = DiagnosticReporter(
       timelineStore: h.store, collectionStore: h.collectionStore,

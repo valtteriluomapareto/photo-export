@@ -67,16 +67,6 @@ struct ReuseSourceAlbumPathTests {
     )
   }
 
-  private func waitForQueueDrained(_ manager: ExportManager, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 50_000_000)
-    while Date() < deadline {
-      if !manager.isRunning && manager.queueCount == 0 { return }
-      try? await Task.sleep(nanoseconds: 50_000_000)
-    }
-  }
-
   /// Pre-stages an album placement and a real file in the destination, then drives a
   /// timeline export of the same asset. The timeline export should reuse the album's
   /// existing file via `copyItem` rather than invoking the PhotoKit writer.
@@ -115,7 +105,7 @@ struct ReuseSourceAlbumPathTests {
     // the album file rather than calling the asset resource writer.
     let writeCallsBefore = writer.writeCalls.count
     manager.startExportMonth(year: 2025, month: 3)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == writeCallsBefore)
     let copyCalls = fileSystem.copyCalls
@@ -172,7 +162,7 @@ struct ReuseSourceAlbumPathTests {
     // Now export album B. Should reuse A's file via copyItem, not PhotoKit.
     let writeCallsBefore = writer.writeCalls.count
     manager.startExportAlbum(collectionId: "album-B-id")
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == writeCallsBefore, "PhotoKit writer must not run")
     #expect(fileSystem.copyCalls.count == 1)
@@ -235,7 +225,7 @@ struct ReuseSourceAlbumPathTests {
     // Now export the new album. Reuse must come from the timeline (timeline-first
     // preference), not from the old album.
     manager.startExportAlbum(collectionId: "album-new")
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.isEmpty, "PhotoKit writer must not run when timeline reuse is available")
     #expect(fileSystem.copyCalls.count == 1)
@@ -293,7 +283,7 @@ struct ReuseSourceAlbumPathTests {
     }
 
     manager.startExportAlbum(collectionId: "album-new")
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.isEmpty)
     #expect(fileSystem.copyCalls.count == 1)
@@ -337,7 +327,7 @@ struct ReuseSourceAlbumPathTests {
 
     // Drive the export.
     manager.startExportAlbum(collectionId: "solo-album")
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // The export completed (PhotoKit was called because no reuse source matched).
     #expect(writer.writeCalls.count == 1)

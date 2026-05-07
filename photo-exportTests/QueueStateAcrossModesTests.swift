@@ -141,13 +141,6 @@ struct QueueStateAcrossModesTests {
     }
   }
 
-  private func waitForQueueDrained(_ manager: ExportManager, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    while (manager.isRunning || manager.queueCount > 0) && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-  }
-
   // MARK: - 1. Counter monotonicity across mode switch (the reported bug)
 
   /// Reproduces the user-reported scenario:
@@ -304,7 +297,7 @@ struct QueueStateAcrossModesTests {
     #expect(firstTimelineRunLength >= 1, "Expected at least one timeline job at queue head")
 
     h.manager.resume()
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     // Final counter is consistent: total == completed, no overshoot.
     #expect(h.manager.totalJobsEnqueued == 6)

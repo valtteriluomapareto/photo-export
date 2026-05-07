@@ -141,7 +141,11 @@ final class ExportManager: ObservableObject {
   // MARK: - Internals
   private(set) var pendingJobs: [ExportJob] = []
   private var isProcessing: Bool = false
-  private var currentTask: Task<Void, Never>?
+  /// Handle to the in-flight per-job export Task. Same-module readers (the test
+  /// target via `@testable import`) can `await currentTask?.value` to wait for
+  /// real completion instead of polling wall-clock time. Writes stay private to
+  /// `ExportManager`.
+  private(set) var currentTask: Task<Void, Never>?
   private(set) var currentJobAssetId: String?
   private(set) var currentJobVariant: ExportVariant?
   /// The placement of the job currently in flight. Set in `processNext()` *before*
@@ -154,7 +158,9 @@ final class ExportManager: ObservableObject {
   private(set) var generation: Int = 0
   private(set) var isEnqueueingAll: Bool = false
   private(set) var queuedCountsByPlacementId: [String: Int] = [:]
-  private var importTask: Task<Void, Never>?
+  /// Handle to the in-flight import Task. Test targets can `await importTask?.value`
+  /// for deterministic completion. Writes stay private to `ExportManager`.
+  private(set) var importTask: Task<Void, Never>?
 
   /// Backing store for `versionSelection`. Mirrors the injected-`UserDefaults`
   /// pattern used by `ExportDestinationManager` so tests can hand a per-suite
