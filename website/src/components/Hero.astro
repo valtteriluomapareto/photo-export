@@ -11,27 +11,25 @@ const base = import.meta.env.BASE_URL;
 			width="160"
 			height="160"
 		/>
-		<h1>Photo Export</h1>
+		<p class="kicker">Photo Export</p>
+		<h1>Back up iCloud Photos from your Mac to an external drive</h1>
 		<p class="tagline">
-			Free, open-source macOS app to back up your iCloud photos to any local or
-			external drive.
-		</p>
-		<p class="sub-tagline">
-			Browse by year and month — or export your <strong>Favorites</strong> and
-			<strong>individual albums</strong> straight from Apple Photos.
+			Free, open-source macOS app for exporting Apple Photos — entire library,
+			Favorites, individual albums, and videos — to folders you control. Optional
+			<strong>Include originals</strong> toggle keeps unedited copies of edited shots.
 		</p>
 		<p class="subtitle">
-			A native, open-source app. No cloud services, no subscriptions, no account
-			required — your photos, your folders.
+			A native app built on Apple's PhotoKit. No cloud services, no
+			subscriptions, no account required — your photos, your folders.
 		</p>
 		<div class="hero-actions">
 			<a
-				href="https://apps.apple.com/app/photo-export-local-backup/id6761410742"
-				class="btn btn-primary">Download on the Mac App Store</a
+				href="https://github.com/valtteriluomapareto/photo-export/releases"
+				class="btn btn-primary">Download free from GitHub</a
 			>
 			<a
-				href="https://github.com/valtteriluomapareto/photo-export/releases"
-				class="btn btn-secondary">Download from GitHub (free)</a
+				href="https://apps.apple.com/app/photo-export-local-backup/id6761410742"
+				class="btn btn-primary">Get it on the Mac App Store</a
 			>
 			<a href={`${base}/getting-started`} class="btn btn-secondary"
 				>Get Started</a
@@ -76,30 +74,30 @@ const base = import.meta.env.BASE_URL;
 		filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.3));
 	}
 
+	.kicker {
+		font-size: 0.85rem;
+		font-weight: 700;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		opacity: 0.7;
+		margin: 0 0 0.5rem;
+	}
+
 	h1 {
-		font-size: 3.5rem;
+		font-size: 3rem;
 		font-weight: 800;
 		margin: 0 0 1rem;
 		letter-spacing: -0.02em;
+		max-width: 36rem;
+		line-height: 1.1;
 	}
 
 	.tagline {
-		font-size: 1.35rem;
+		font-size: 1.2rem;
 		opacity: 0.95;
-		margin: 0 0 0.6rem;
-		line-height: 1.5;
-	}
-
-	.sub-tagline {
-		font-size: 1.15rem;
-		opacity: 0.92;
 		margin: 0 0 1rem;
 		line-height: 1.5;
-		max-width: 36rem;
-	}
-
-	.sub-tagline strong {
-		font-weight: 700;
+		max-width: 38rem;
 	}
 
 	.subtitle {
@@ -136,7 +134,7 @@ const base = import.meta.env.BASE_URL;
 
 	@media (max-width: 640px) {
 		h1 {
-			font-size: 2.5rem;
+			font-size: 2.1rem;
 		}
 		.hero {
 			padding: 4rem 1.5rem 3rem;

@@ -3,43 +3,52 @@
 [![CI](https://github.com/valtteriluomapareto/photo-export/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/valtteriluomapareto/photo-export/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Photo Export is a native macOS app for exporting your Apple Photos library to local or external storage. Pick the layout that fits your library: a predictable `YYYY/MM/` timeline, or per-album folders under `Collections/Favorites/` and `Collections/Albums/<Album>/`.
+A free, open-source macOS app for backing up Apple Photos and iCloud Photos to normal folders on a local or external drive.
 
-**[Download on the Mac App Store](https://apps.apple.com/app/photo-export-local-backup/id6761410742)** · [Download from GitHub (free)](https://github.com/valtteriluomapareto/photo-export/releases) · [Documentation](https://valtteriluomapareto.github.io/photo-export/)
+Export by year and month (`YYYY/MM/`), by Favorites, or by individual albums. Photo Export runs locally on your Mac using Apple's PhotoKit framework — no account, no cloud service, no subscription.
 
-The project is intentionally small: SwiftUI on top, system frameworks only, and a straightforward export pipeline that favors reliability over feature sprawl.
+![Photo Export — timeline view, thumbnail grid, and full-size preview](website/src/assets/photo_export_screenshot.png)
 
-## Current Capabilities
+## Download
+
+- **[Mac App Store](https://apps.apple.com/app/photo-export-local-backup/id6761410742)** — paid. Automatic updates, and your purchase supports development.
+- **[GitHub Releases](https://github.com/valtteriluomapareto/photo-export/releases)** — free. Same app, same features.
+
+Both versions are signed and notarized by Apple. Project [website and docs](https://valtteriluomapareto.github.io/photo-export/).
+
+## Privacy
+
+Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to read the same library the built-in Photos app sees, **read-only** — it can't modify or delete anything in your Photos library. It does not upload your photos, use any third-party cloud service, require an account, or ask for your Apple Account password.
+
+## Features
 
 - Browse your library two ways via a Timeline / Collections segmented control
-  - Timeline: year and month
-  - Collections: Favorites plus your Photos albums and folders
+  - **Timeline** — by year and month
+  - **Collections** — Favorites plus your Photos albums and folders
 - Preview thumbnails and selected assets
-- Export a month, a year, or the full queue without overwriting existing files
-- Export your Favorites or any album you've created in Photos to `Collections/Favorites/` or `Collections/Albums/<Album>/`, individually or via **Export All Albums** in the toolbar
-- Choose what to write with the toolbar's **Include originals** toggle. Off (default)
-  exports one file per asset, in the version Photos shows. On adds a `_orig` companion
-  (e.g. `IMG_0001_orig.HEIC`) for any photo or video edited in Photos so you keep a copy
-  of the original bytes alongside the user-visible edit
-- Track exported assets per destination so interrupted exports can resume safely
+- Export a month, a year, an album, or the full queue without overwriting existing files
+- Export Favorites or any album you've created in Photos to `Collections/Favorites/` or `Collections/Albums/<Album>/`, individually or via **Export All Albums** in the toolbar
+- Choose what to write with the toolbar's **Include originals** toggle. Off (default) exports one file per asset, in the version Photos shows. On adds a `_orig` companion (e.g. `IMG_0001_orig.HEIC`) for any photo or video edited in Photos so you keep a copy of the original bytes alongside the user-visible edit
+- Track exported assets per destination so interrupted exports resume safely
 - Pause, resume, cancel, and clear queued work
 - Import an existing backup folder to rebuild local export state, pruning records for files no longer present on disk
 - Save a diagnostic report (Help menu) listing failed and in-progress exports with their error messages, for attaching to bug reports
 - If Photos can't provide an asset's edited version, fall back to writing the original with a `_orig` suffix so the asset still gets backed up
 
+## Known limitations
+
+- Requires **macOS 15.0** or later.
+- **Live Photos** currently export as still images. Paired image + video export is planned.
+- **Albums and Favorites** are supported. Smart albums other than Favorites, and shared albums, are not currently included.
+- Edited photos export as the version Photos renders for you. Turn on **Include originals** to also keep an `_orig` companion with the original bytes.
+
 ## Requirements
 
 - macOS 15.0+
-- Xcode 16.2+ tested in CI
+- Xcode 16.2+ (tested in CI) for building from source
 - No third-party runtime dependencies
 
-Optional local tools:
-
-- `swiftlint`
-- `swift-format`
-- `xcpretty`
-
-## Build and Test
+## Build from source
 
 Open the project in Xcode:
 
@@ -86,27 +95,18 @@ xcodebuild \
 ./scripts/xccov2lcov.sh TestResults.xcresult lcov.info
 ```
 
-## Documentation
-
-- Project website: [valtteriluomapareto.github.io/photo-export](https://valtteriluomapareto.github.io/photo-export/)
-- User docs: [`website/src/content/docs/`](website/src/content/docs/)
-- Contributor guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- AI agent guide: [`AGENTS.md`](AGENTS.md)
-- Maintainer notes and plans: [`docs/README.md`](docs/README.md) (canonical map of every doc location)
-- Persistence store reference: [`docs/reference/persistence-store.md`](docs/reference/persistence-store.md)
-
-## Repository Layout
-
-- `photo-export/` app source
-- `photo-exportTests/` unit tests
-- `photo-exportUITests/` UI tests
-- `website/` documentation website
-- `docs/` maintainer-facing notes, plans, and reference material
-- `scripts/` small development utilities
+Optional local tools: `swiftlint`, `swift-format`, `xcpretty`.
 
 ## Contributing
 
-Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for local setup and testing expectations. For docs ownership and the "what to update when behavior changes" table, see [`docs/README.md`](docs/README.md).
+Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for local setup and testing expectations.
+
+For maintainers and contributors, additional internal references live in:
+
+- User-facing docs source: [`website/src/content/docs/`](website/src/content/docs/)
+- Maintainer notes and plans: [`docs/README.md`](docs/README.md)
+- Persistence store reference: [`docs/reference/persistence-store.md`](docs/reference/persistence-store.md)
+- Agent guidance: [`AGENTS.md`](AGENTS.md)
 
 ## License
 

@@ -107,8 +107,9 @@ const faqData = {
 				This matters because PhotoKit is <strong>the only supported way</strong> to
 				read the Photos library on macOS. It means the app works reliably across macOS
 				updates, respects your privacy settings, and can request iCloud originals
-				on demand through Apple's own infrastructure. Your credentials never leave
-				your Mac.
+				on demand through Apple's own infrastructure. The app never asks for your
+				Apple Account password, and reads your library <strong>read-only</strong> —
+				it can't modify or delete anything in Photos.
 			</p>
 			<div class="value-props">
 				<div class="value-prop">
@@ -128,7 +129,8 @@ const faqData = {
 				<div class="value-prop">
 					<strong>Only exports new photos</strong>
 					<span
-						>Skips photos you've already exported. Never creates duplicates.</span
+						>Skips files you've already exported. Handles filename collisions
+						safely — never overwrites an existing file.</span
 					>
 				</div>
 				<div class="value-prop">
@@ -253,21 +255,68 @@ const faqData = {
 		</div>
 	</section>
 
+	<!-- Built with community feedback -->
+	<section class="section" aria-labelledby="community-feedback">
+		<div class="container">
+			<h2 id="community-feedback">Shipped from real-world feedback</h2>
+			<p class="section-lead">
+				Photo Export improves on what users actually report. Recent releases
+				added <strong>album and Favorites export</strong>, <strong>backup-folder
+				import</strong> to rebuild export state from an existing folder, and the
+				<strong>Include originals</strong> toggle for keeping unedited copies of
+				edited photos. See the <a
+					href="https://github.com/valtteriluomapareto/photo-export/releases"
+					>release notes</a
+				> for the full history.
+			</p>
+			<p class="section-lead">
+				If something doesn't work the way you expect, <a
+					href="https://github.com/valtteriluomapareto/photo-export/issues"
+					>open an issue</a
+				> — bug reports and feature suggestions are read and acted on.
+			</p>
+		</div>
+	</section>
+
+	<!-- Known limitations -->
+	<section class="section section-alt" aria-labelledby="limitations">
+		<div class="container">
+			<h2 id="limitations">Known limitations</h2>
+			<p class="section-lead">
+				Backup tools should be honest about what they don't do yet. Here's what
+				to expect today:
+			</p>
+			<ul class="limitations-list">
+				<li>
+					<strong>Requires macOS 15.0 or later.</strong>
+				</li>
+				<li>
+					<strong>Live Photos export as still images.</strong> Paired image + video
+					export is planned for a future release.
+				</li>
+				<li>
+					<strong>Albums and Favorites are supported.</strong> Smart albums other
+					than Favorites, and shared albums, are not currently included.
+				</li>
+				<li>
+					<strong>Edited photos export as the version Photos shows you</strong>,
+					at the original filename. Turn on <strong>Include originals</strong> to
+					also keep an <code>_orig</code> companion with the original bytes.
+				</li>
+			</ul>
+		</div>
+	</section>
+
 	<!-- Installation -->
 	<section class="section" aria-labelledby="installation">
 		<div class="container">
-			<h2 id="installation">Installation</h2>
+			<h2 id="installation">Download &amp; install</h2>
+			<p class="section-lead">
+				<strong>Free from GitHub.</strong> <strong>Paid on the Mac App Store</strong>
+				if you want automatic updates and to support development. Same app,
+				same features — both signed and notarized by Apple.
+			</p>
 			<div class="install-channels">
-				<div class="install-channel">
-					<h3>Mac App Store</h3>
-					<p>
-						Install directly from the <a
-							href="https://apps.apple.com/app/photo-export-local-backup/id6761410742"
-							>Mac App Store</a
-						> for automatic updates and trusted distribution. Your purchase supports
-						development of an open-source project.
-					</p>
-				</div>
 				<div class="install-channel">
 					<h3>GitHub Releases (free)</h3>
 					<ol>
@@ -285,10 +334,20 @@ const faqData = {
 						</li>
 					</ol>
 				</div>
+				<div class="install-channel">
+					<h3>Mac App Store (paid)</h3>
+					<p>
+						Install directly from the <a
+							href="https://apps.apple.com/app/photo-export-local-backup/id6761410742"
+							>Mac App Store</a
+						> for automatic updates and trusted distribution. Your purchase
+						supports continued development of an open-source project.
+					</p>
+				</div>
 			</div>
 			<div class="requirements">
-				<strong>Requirements:</strong> macOS 15.0+. Both versions are signed and notarized
-				by Apple. Both are identical in functionality.
+				<strong>Requirements:</strong> macOS 15.0+. Both versions are signed and
+				notarized by Apple and identical in functionality.
 			</div>
 		</div>
 	</section>
@@ -566,6 +625,22 @@ const faqData = {
 	.roadmap-list li {
 		margin-bottom: 0.5rem;
 		color: var(--site-muted);
+	}
+
+	.limitations-list {
+		max-width: 42rem;
+		margin: 1rem auto 0;
+		padding-left: 1.25rem;
+	}
+
+	.limitations-list li {
+		margin-bottom: 0.75rem;
+		color: var(--site-muted);
+		line-height: 1.55;
+	}
+
+	.limitations-list strong {
+		color: var(--site-text);
 	}
 
 	.feedback-cta {
