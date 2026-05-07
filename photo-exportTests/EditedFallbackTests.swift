@@ -181,7 +181,6 @@ struct EditedFallbackTests {
     #expect(h.manager.queueCount == 0)
   }
 
-
   // MARK: - Store-level isExported recognition
 
   @Test func isExportedRecognisesFallbackState() {
