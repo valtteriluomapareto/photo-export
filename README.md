@@ -25,6 +25,7 @@ The project is intentionally small: SwiftUI on top, system frameworks only, and 
 - Pause, resume, cancel, and clear queued work
 - Import an existing backup folder to rebuild local export state, pruning records for files no longer present on disk
 - Save a diagnostic report (Help menu) listing failed and in-progress exports with their error messages, for attaching to bug reports
+- If Photos can't provide an asset's edited version, fall back to writing the original with a `_orig` suffix so the asset still gets backed up
 
 ## Requirements
 

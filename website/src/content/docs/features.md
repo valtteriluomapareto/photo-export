@@ -83,6 +83,7 @@ asymmetric rename.
 - Individual asset failures are skipped and recorded — the batch continues
 - Failed assets are logged with error details
 - **Help → Save Diagnostic Report…** writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state with its underlying error message — attach it to a bug report so the cause is visible
+- When Photos can't provide an asset's edited version (`Edited resource unavailable`), the app **falls back to writing the original** with a `_orig` suffix so the asset still gets bytes on disk; the diagnostic report annotates the affected entries
 
 ## Current boundaries
 

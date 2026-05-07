@@ -54,6 +54,16 @@ final class ExportRecordStore: ObservableObject {
     /// AND `.edited` is not `.done`. The records-only sidebar formula's "unedited asset
     /// exported once" estimator depends on this.
     var originalDoneAtNaturalStem: Int = 0
+    /// Records covered by the issue #22 fallback: `.original.done` AND
+    /// `.edited.failed` with the explicit
+    /// `editedUnavailableOriginalBackedUpMessage` sentinel that
+    /// `runEditedFallbackOriginal` writes after a successful `_orig` write.
+    /// These represent adjusted assets where Photos refused the edit and the
+    /// pipeline wrote the original as a fallback. Without this counter, the
+    /// sidebar's records-only formula would never count fallback-covered
+    /// records, leaving years stuck at 99% even after `isExported` correctly
+    /// recognises them as covered.
+    var editedFallbackCovered: Int = 0
     static let zero = MonthCounters()
   }
   private var monthCounters: [MonthKey: MonthCounters] = [:]
@@ -328,10 +338,46 @@ final class ExportRecordStore: ObservableObject {
   /// every required variant is `.done`. No filename inspection — a `.original.done` row at
   /// any filename satisfies an unedited asset's requirement, and an adjusted asset is only
   /// satisfied when `.edited.done` (and `.original.done` under `editedWithOriginals`).
+  ///
+  /// Issue #22 fallback: when an adjusted asset's `.edited` variant is
+  /// `.failed` with the explicit `editedUnavailableOriginalBackedUpMessage`
+  /// sentinel (written by `runEditedFallbackOriginal` only after a successful
+  /// `<stem>_orig` write), the asset counts as exported. Without this, the
+  /// asset is re-queued every run and fails the same way (Photos refuses the
+  /// edited resource for that asset), producing the "stuck at 99%" bug.
   func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
     let required = requiredVariants(for: asset, selection: selection)
     guard let record = recordsById[asset.id] else { return false }
-    return required.allSatisfy { record.variants[$0]?.status == .done }
+    if required.allSatisfy({ record.variants[$0]?.status == .done }) { return true }
+    return Self.satisfiesEditedFallback(record: record, asset: asset, selection: selection)
+  }
+
+  /// True when an adjusted asset asked to export `.edited` is covered by the
+  /// `_orig` fallback: `.original` is `.done` AND `.edited` is `.failed`
+  /// with the explicit `editedUnavailableOriginalBackedUpMessage` sentinel
+  /// (which `runEditedFallbackOriginal` writes only after a successful
+  /// `_orig` write).
+  ///
+  /// Mirror in `CollectionExportRecordStore` so the same rule applies on
+  /// the collection path.
+  ///
+  /// We deliberately do NOT key on the `.original` filename's shape (the
+  /// `_orig` ending is ambiguous — see
+  /// `ExportFilenamePolicy.isOrigCompanion`'s comment about real user
+  /// filenames like `vacation_orig.JPG`). The explicit sentinel is the
+  /// only authoritative signal that the fallback ran.
+  private static func satisfiesEditedFallback(
+    record: ExportRecord, asset: AssetDescriptor, selection: ExportVersionSelection
+  ) -> Bool {
+    guard asset.hasAdjustments, selection == .edited else { return false }
+    guard
+      record.variants[.original]?.status == .done,
+      let editedRecord = record.variants[.edited],
+      editedRecord.status == .failed,
+      editedRecord.lastError
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
+    else { return false }
+    return true
   }
 
   func exportInfo(assetId: String) -> ExportRecord? {
@@ -409,6 +455,14 @@ final class ExportRecordStore: ObservableObject {
     monthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
   }
 
+  /// Records covered by the issue #22 fallback in `(year, month)`. Counted as
+  /// "exported" by the sidebar's records-only formula in `.edited` mode so a
+  /// year that finishes with fallback-covered assets reads as 100% rather
+  /// than 99% — matching the asset-aware `isExported(asset:selection:)`.
+  func recordCountEditedFallback(year: Int, month: Int) -> Int {
+    monthCounters[MonthKey(year: year, month: month)]?.editedFallbackCovered ?? 0
+  }
+
   /// Records-only approximation of "fully exported under this selection," capped by the
   /// count of unedited assets in scope so that natural-stem `.original.done` records
   /// belonging to currently-adjusted assets cannot over-contribute past the number of
@@ -427,9 +481,15 @@ final class ExportRecordStore: ObservableObject {
     switch selection {
     case .edited:
       let editedDone = recordCountEditedDone(year: year, month: month)
-      let exported = editedDone + min(origOnlyAtStem, uneditedCount)
+      let fallbackCovered = recordCountEditedFallback(year: year, month: month)
+      let exported = editedDone + min(origOnlyAtStem, uneditedCount) + fallbackCovered
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
     case .editedWithOriginals:
+      // `editedFallbackCovered` is intentionally NOT added here:
+      // `satisfiesEditedFallback` is gated to `selection == .edited`, so the
+      // asset-aware `isExported(asset:selection:)` keeps re-queueing fallback
+      // records under `.editedWithOriginals`. The sidebar must agree, or a
+      // year that's actually 0% covered would advertise as 100%.
       let bothDone = recordCountBothVariantsDone(year: year, month: month)
       let exported = bothDone + min(origOnlyAtStem, uneditedCount)
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
@@ -684,6 +744,14 @@ final class ExportRecordStore: ObservableObject {
       !ExportFilenamePolicy.isOrigCompanion(filename: filename)
     {
       counters.originalDoneAtNaturalStem += sign
+    }
+    if originalDone,
+      let editedRecord = record.variants[.edited],
+      editedRecord.status == .failed,
+      editedRecord.lastError
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
+    {
+      counters.editedFallbackCovered += sign
     }
     monthCounters[key] = counters
   }

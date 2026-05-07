@@ -121,7 +121,7 @@ struct ExportManagerVideoRenderTests {
     #expect(h.writer.writeCalls.contains { $0.assetId == asset.id })
   }
 
-  // MARK: - 3. Render failure → recoverable .failed with stable message
+  // MARK: - 3. Render failure → recoverable .failed, then fallback covers it
 
   @Test func renderFailureRecordsRecoverableEditedFailure() async throws {
     let h = makeHarness()
@@ -139,12 +139,17 @@ struct ExportManagerVideoRenderTests {
     h.manager.startExportMonth(year: 2025, month: 5)
     await waitForQueueDrained(h.manager)
 
+    // Render failure marks `.edited` as recoverable with the generic
+    // sentinel; the issue #22 fallback then writes the original as `_orig`
+    // and rewrites `.edited.lastError` to the explicit fallback-covered
+    // sentinel. Both messages are `isRecoverable`.
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.edited]?.status == .failed)
     #expect(
       record?.variants[.edited]?.lastError
-        == ExportVariantRecovery.editedResourceUnavailableMessage)
+        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage)
     #expect(ExportVariantRecovery.isRecoverable(record?.variants[.edited]?.lastError))
+    #expect(record?.variants[.original]?.status == .done)
     // Render activity must be cleared even on failure.
     #expect(h.manager.renderActivity == nil)
   }
