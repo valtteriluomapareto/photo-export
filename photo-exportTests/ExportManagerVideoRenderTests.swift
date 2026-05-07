@@ -51,17 +51,6 @@ struct ExportManagerVideoRenderTests {
       renderer: renderer, fileSystem: fileSystem, store: store)
   }
 
-  private func waitForQueueDrained(_ manager: ExportManager, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 50_000_000)
-    while (manager.isRunning || manager.queueCount > 0 || manager.hasActiveExportWork)
-      && Date() < deadline
-    {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-  }
-
   private func adjustedVideo(
     id: String = "edited-video",
     filename: String = "IMG_1234.MOV"
@@ -84,7 +73,7 @@ struct ExportManagerVideoRenderTests {
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
     h.manager.startExportMonth(year: 2025, month: 3)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.edited]?.status == .done)
@@ -112,7 +101,7 @@ struct ExportManagerVideoRenderTests {
     ]
 
     h.manager.startExportMonth(year: 2025, month: 4)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.edited]?.status == .done)
@@ -137,7 +126,7 @@ struct ExportManagerVideoRenderTests {
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
     h.manager.startExportMonth(year: 2025, month: 5)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     // Render failure marks `.edited` as recoverable with the generic
     // sentinel; the issue #22 fallback then writes the original as `_orig`
@@ -167,7 +156,7 @@ struct ExportManagerVideoRenderTests {
     h.photoLib.resourcesByAssetId[asset.id] = []  // no .video, no .fullSizeVideo
 
     h.manager.startExportMonth(year: 2025, month: 6)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.edited]?.status == .failed)
@@ -189,7 +178,7 @@ struct ExportManagerVideoRenderTests {
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
     h.manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.edited]?.status == .done)
@@ -226,7 +215,7 @@ struct ExportManagerVideoRenderTests {
     await entered.wait()
     h.manager.cancelAndClear()
     latch.signal()
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.edited]?.status != .failed)
@@ -260,7 +249,7 @@ struct ExportManagerVideoRenderTests {
     FileManager.default.createFile(atPath: staleTmp.path, contents: Data("stale".utf8))
 
     h.manager.startExportMonth(year: 2025, month: 9)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.edited]?.status == .done)
@@ -282,7 +271,7 @@ struct ExportManagerVideoRenderTests {
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
     h.manager.startExportMonth(year: 2025, month: 10)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.edited]?.status == .failed)
@@ -306,14 +295,14 @@ struct ExportManagerVideoRenderTests {
       TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_7777.MOV")
     ]
     h.manager.startExportMonth(year: 2025, month: 11)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     // User edits in Photos. hasAdjustments flips to true.
     asset = TestAssetFactory.makeAsset(
       id: "re-edit", mediaType: .video, hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-11"] = [asset]
     h.manager.startExportMonth(year: 2025, month: 11)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.edited]?.status == .done)
@@ -336,7 +325,7 @@ struct ExportManagerVideoRenderTests {
     ]
 
     h.manager.startExportMonth(year: 2025, month: 12)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     let record = h.store.exportInfo(assetId: asset.id)
     #expect(record?.variants[.original]?.status == .done)
@@ -355,7 +344,7 @@ struct ExportManagerVideoRenderTests {
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
     h.manager.startExportMonth(year: 2025, month: 1)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     #expect(h.manager.renderActivity == nil)
   }
@@ -376,7 +365,7 @@ struct ExportManagerVideoRenderTests {
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
     h.manager.startExportMonth(year: 2025, month: 2)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
 
     // Pipeline does not size-sanity-check the renderer's output. The
     // record completes. Documenting this as known-acceptable behaviour:

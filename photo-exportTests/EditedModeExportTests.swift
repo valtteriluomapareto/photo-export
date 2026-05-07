@@ -41,17 +41,6 @@ struct EditedModeExportTests {
     return (manager, photoLib, dest, writer, fileSystem, store)
   }
 
-  private func waitForQueueDrained(_ manager: ExportManager, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 50_000_000)
-    while (manager.isRunning || manager.queueCount > 0 || manager.hasActiveExportWork)
-      && Date() < deadline
-    {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-  }
-
   // MARK: - Default mode: unedited asset writes original at the natural stem
 
   @Test func editedDefaultExportsUneditedAtOriginalFilename() async throws {
@@ -66,7 +55,7 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 3)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == 1)
     #expect(writer.writeCalls.first?.resource.type == .photo)
@@ -91,7 +80,7 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 4)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == 1)
     #expect(writer.writeCalls.first?.resource.type == .fullSizePhoto)
@@ -116,7 +105,7 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 5)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == 1)
     let record = store.exportInfo(assetId: "heic-asset")
@@ -138,7 +127,7 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 6)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == 2)
     let record = store.exportInfo(assetId: "dual-asset")
@@ -160,7 +149,7 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == 1)
     let record = store.exportInfo(assetId: "plain")
@@ -190,7 +179,7 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 8)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // The .edited variant is recorded as .failed with the issue #22 fallback
     // sentinel (rewritten from the generic "Edited resource unavailable" once
@@ -224,7 +213,7 @@ struct EditedModeExportTests {
     photoLib.resourcesByAssetId["asset-b"] = [bOriginal, bEdited]
 
     manager.startExportMonth(year: 2025, month: 9)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Asset A goes first, gets natural-stem `IMG_0001.JPG` (unedited, no `_orig`).
     #expect(store.exportInfo(assetId: "asset-a")?.variants[.original]?.filename == "IMG_0001.JPG")
@@ -252,7 +241,7 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 11)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
     #expect(store.exportInfo(assetId: "b")?.variants[.edited]?.filename == "IMG_0001.JPG")
 
     // Pre-seed `IMG_0001_orig.JPG` with another asset's bytes — asset B's later switch to
@@ -264,7 +253,7 @@ struct EditedModeExportTests {
 
     manager.versionSelection = .editedWithOriginals
     manager.startExportMonth(year: 2025, month: 11)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let bRecord = store.exportInfo(assetId: "b")
     #expect(bRecord?.variants[.original]?.status == .failed)
@@ -292,7 +281,7 @@ struct EditedModeExportTests {
     #expect(FileManager.default.fileExists(atPath: staleTmp.path))
 
     manager.startExportMonth(year: 2025, month: 12)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(!FileManager.default.fileExists(atPath: staleTmp.path))
   }
@@ -312,13 +301,13 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 1)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
     #expect(writer.writeCalls.count == 1)
     #expect(store.exportInfo(assetId: "switch-asset")?.variants[.edited]?.status == .done)
 
     manager.versionSelection = .editedWithOriginals
     manager.startExportMonth(year: 2025, month: 1)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(writer.writeCalls.count == 2)
     let rec = store.exportInfo(assetId: "switch-asset")
@@ -342,14 +331,14 @@ struct EditedModeExportTests {
       TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullRender.JPG"),
     ]
     manager.startExportMonth(year: 2025, month: 2)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
     #expect(store.exportInfo(assetId: "post-edit")?.variants[.original]?.filename == "IMG_0001.JPG")
 
     // The user later edits the photo in Photos. Re-run default export.
     asset = TestAssetFactory.makeAsset(id: "post-edit", hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-2"] = [asset]
     manager.startExportMonth(year: 2025, month: 2)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let rec = store.exportInfo(assetId: "post-edit")
     // Old `.original.done` is preserved at natural stem; new `.edited.done` lands at the
@@ -374,7 +363,7 @@ struct EditedModeExportTests {
       TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullRender.JPG"),
     ]
     manager.startExportMonth(year: 2025, month: 3)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
     #expect(
       store.exportInfo(assetId: "user-orig")?.variants[.original]?.filename
         == "vacation_orig.JPG")
@@ -384,7 +373,7 @@ struct EditedModeExportTests {
     asset = TestAssetFactory.makeAsset(id: "user-orig", hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     manager.startExportMonth(year: 2025, month: 3)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let rec = store.exportInfo(assetId: "user-orig")
     #expect(rec?.variants[.edited]?.filename == "vacation_orig (1).JPG")
@@ -411,7 +400,7 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 4)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let rec = store.exportInfo(assetId: "fresh-pair")
     #expect(rec?.variants[.edited]?.filename == "IMG_0001 (1).JPG")
@@ -475,7 +464,7 @@ struct EditedModeExportTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 2)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let record = store.exportInfo(assetId: "mixed")
     #expect(record?.variants[.original]?.status == .done)

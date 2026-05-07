@@ -68,19 +68,6 @@ struct ExportManagerPauseResumeTests {
       store: store, storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
 
-  private func waitForQueueDrained(_ manager: ExportManager, timeout: TimeInterval = 5)
-    async
-  {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 50_000_000)
-    while (manager.isRunning || manager.queueCount > 0 || manager.hasActiveExportWork)
-      && Date() < deadline
-    {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-  }
-
   /// Polls until `condition` returns true or the timeout elapses. Used for parking
   /// against intermediate states the queue passes through (e.g. "pause has taken
   /// effect") without sleeping a fixed duration.
@@ -146,7 +133,7 @@ struct ExportManagerPauseResumeTests {
     await writeGate.releaseAll()
     h.manager.resume()
     #expect(!h.manager.isPaused)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
     #expect(h.manager.totalJobsCompleted == 3)
     #expect(h.manager.queueCount == 0)
     #expect(!h.manager.isRunning)
@@ -166,7 +153,7 @@ struct ExportManagerPauseResumeTests {
     ]
 
     h.manager.startExportMonth(year: 2025, month: 1)
-    await waitForQueueDrained(h.manager)
+    await h.manager.waitForQueueDrained()
     #expect(h.manager.totalJobsCompleted == 1)
 
     h.manager.pause()

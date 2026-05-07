@@ -327,13 +327,8 @@ struct ImportReconcileTests {
     let storeRoot: URL
     let userDefaultsSuite: String
 
-    func waitForImport(timeout: TimeInterval = 5) async {
-      let deadline = Date().addingTimeInterval(timeout)
-      await Task.yield()
-      try? await Task.sleep(nanoseconds: 20_000_000)
-      while manager.isImporting && Date() < deadline {
-        try? await Task.sleep(nanoseconds: 10_000_000)
-      }
+    func waitForImport() async {
+      await manager.waitForImportCompletion()
     }
 
     func plant(year: Int, month: Int, filename: String) throws {

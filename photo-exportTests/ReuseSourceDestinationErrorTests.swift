@@ -65,22 +65,6 @@ struct ReuseSourceDestinationErrorTests {
     )
   }
 
-  private func waitForQueueDrained(_ manager: ExportManager, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 50_000_000)
-    while !manager.isRunning && manager.queueCount == 0 && manager.totalJobsEnqueued == 0
-      && Date() < deadline
-    {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-    while (manager.isRunning || manager.queueCount > 0 || manager.hasActiveExportWork)
-      && Date() < deadline
-    {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-  }
-
   // MARK: - Out-of-space (destination-side)
 
   /// `NSFileWriteOutOfSpaceError` is a destination-side error: the source file
@@ -120,7 +104,7 @@ struct ReuseSourceDestinationErrorTests {
 
     let writeCallsBefore = writer.writeCalls.count
     manager.startExportMonth(year: 2025, month: 3)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // The copy was attempted (proves reuse path was taken) but PhotoKit was NOT
     // invoked as fallback (proves the destination-side classification rejected the
@@ -168,7 +152,7 @@ struct ReuseSourceDestinationErrorTests {
 
     let writeCallsBefore = writer.writeCalls.count
     manager.startExportMonth(year: 2025, month: 4)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(fileSystem.copyCalls.count == 1)
     #expect(writer.writeCalls.count == writeCallsBefore)

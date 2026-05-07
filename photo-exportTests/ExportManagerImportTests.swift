@@ -43,16 +43,6 @@ struct ExportManagerImportTests {
     return (manager, photoLib, dest, store, storeRoot)
   }
 
-  private func waitForImportCompletion(_ manager: ExportManager, timeout: TimeInterval = 5)
-    async
-  {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    while manager.isImporting && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
-  }
-
   /// Plants a real file at `<dest.rootURL>/YYYY/MM/<filename>` with given content
   /// and modification date. The modification date is load-bearing for matching: the
   /// `BackupScanner.matchFiles` confirmation step compares `ScannedFile.modificationDate`
@@ -137,7 +127,7 @@ struct ExportManagerImportTests {
     #expect(manager.importStage == stageBefore)
 
     // Drain so the harness teardown is clean.
-    await waitForImportCompletion(manager)
+    await manager.waitForImportCompletion()
   }
 
   @Test func startImportWithoutDestinationIsNoOp() {
@@ -171,7 +161,7 @@ struct ExportManagerImportTests {
     defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
 
     manager.startImport()
-    await waitForImportCompletion(manager)
+    await manager.waitForImportCompletion()
 
     #expect(!manager.isImporting)
     #expect(manager.importStage == .done)
@@ -211,7 +201,7 @@ struct ExportManagerImportTests {
     ]
 
     manager.startImport()
-    await waitForImportCompletion(manager)
+    await manager.waitForImportCompletion()
 
     // Outcome: import completed, and the matched record was persisted.
     #expect(!manager.isImporting)
@@ -245,7 +235,7 @@ struct ExportManagerImportTests {
     ]
 
     manager.startImport()
-    await waitForImportCompletion(manager)
+    await manager.waitForImportCompletion()
 
     #expect(manager.importResult?.matchedCount == 0)
     #expect(manager.importResult?.unmatchedCount == 1)

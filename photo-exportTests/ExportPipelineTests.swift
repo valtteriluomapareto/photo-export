@@ -46,23 +46,6 @@ struct ExportPipelineTests {
     return (manager, photoLib, dest, writer, fileSystem, store)
   }
 
-  /// Wait for the export queue to drain (with timeout).
-  /// First yields to let enqueue Tasks start, then waits for completion.
-  private func waitForQueueDrained(_ manager: ExportManager, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-
-    // Yield to let the enqueue Task start running on the main actor
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms for enqueue to complete
-
-    // Now wait for all work to finish
-    while (manager.isRunning || manager.queueCount > 0 || manager.hasActiveExportWork)
-      && Date() < deadline
-    {
-      try? await Task.sleep(nanoseconds: 10_000_000)  // 10ms
-    }
-  }
-
   // MARK: - Export happy path
 
   @Test func exportHappyPath() async throws {
@@ -78,7 +61,7 @@ struct ExportPipelineTests {
     photoLib.resourcesByAssetId["asset-1"] = [resource]
 
     manager.startExportMonth(year: 2025, month: 6)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Verify resource was written
     #expect(writer.writeCalls.count == 1)
@@ -122,7 +105,7 @@ struct ExportPipelineTests {
     photoLib.missingAssetIds = ["vanishing-asset"]
 
     manager.startExportMonth(year: 2025, month: 1)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Should have recorded a failure
     let record = store.exportInfo(assetId: "vanishing-asset")
@@ -144,7 +127,7 @@ struct ExportPipelineTests {
     photoLib.resourcesByAssetId["no-resource-asset"] = []  // No resources
 
     manager.startExportMonth(year: 2025, month: 3)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let record = store.exportInfo(assetId: "no-resource-asset")
     #expect(record?.variants[.original]?.status == .failed)
@@ -169,7 +152,7 @@ struct ExportPipelineTests {
     writer.shouldCreateFile = false
 
     manager.startExportMonth(year: 2025, month: 4)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let record = store.exportInfo(assetId: "write-fail-asset")
     #expect(record?.variants[.original]?.status == .failed)
@@ -198,7 +181,7 @@ struct ExportPipelineTests {
       userInfo: [NSLocalizedDescriptionKey: "Permission denied"])
 
     manager.startExportMonth(year: 2025, month: 5)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let record = store.exportInfo(assetId: "move-fail-asset")
     #expect(record?.variants[.original]?.status == .failed)
@@ -228,7 +211,7 @@ struct ExportPipelineTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // After drain, verify all completed
     #expect(manager.totalJobsCompleted == 2)
@@ -261,7 +244,7 @@ struct ExportPipelineTests {
 
     manager.startExportMonth(year: 2025, month: 1)
     manager.startExportMonth(year: 2025, month: 2)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     #expect(store.isExported(assetId: "jan-1"))
     #expect(store.isExported(assetId: "feb-1"))
@@ -286,7 +269,7 @@ struct ExportPipelineTests {
       filename: "IMG_0001.JPG", exportedAt: Date())
 
     manager.startExportMonth(year: 2025, month: 8)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Writer should not have been called — asset was already exported
     #expect(writer.writeCalls.isEmpty)
@@ -350,7 +333,7 @@ struct ExportPipelineTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 11)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // The new asset should be the last one written
     let lastWrite = writer.writeCalls.last
@@ -369,7 +352,7 @@ struct ExportPipelineTests {
     photoLib.resourcesByAssetId["scope-test"] = [resource]
 
     manager.startExportMonth(year: 2025, month: 12)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Every beginScopedAccess should have a matching endScopedAccess
     #expect(dest.beginScopedAccessCount == dest.endScopedAccessCount)
@@ -392,7 +375,7 @@ struct ExportPipelineTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 1)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Should have selected .photo type
     #expect(writer.writeCalls.count == 1)
@@ -417,7 +400,7 @@ struct ExportPipelineTests {
     ]
 
     manager.startExportMonth(year: 2025, month: 3)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let rec1 = store.exportInfo(assetId: "multi-1")
     let rec2 = store.exportInfo(assetId: "multi-2")

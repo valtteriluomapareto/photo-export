@@ -61,16 +61,6 @@ struct CrossStoreIndependenceTests {
     )
   }
 
-  private func waitForQueueDrained(_ manager: ExportManager, timeout: TimeInterval = 5) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    await Task.yield()
-    try? await Task.sleep(nanoseconds: 50_000_000)
-    while Date() < deadline {
-      if !manager.isRunning && manager.queueCount == 0 { return }
-      try? await Task.sleep(nanoseconds: 50_000_000)
-    }
-  }
-
   // MARK: - Failure on one side does not mutate the other
 
   /// A failed favorites export marks the failure on the collection store only — the
@@ -92,7 +82,7 @@ struct CrossStoreIndependenceTests {
     writer.shouldCreateFile = false
 
     manager.startExportFavorites()
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Collection store records the failure under the favorites placement.
     let favorites = ExportPlacement.favorites()
@@ -124,7 +114,7 @@ struct CrossStoreIndependenceTests {
     writer.shouldCreateFile = false
 
     manager.startExportMonth(year: 2025, month: 7)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Timeline store records the failure.
     let timelineRecord = timelineStore.exportInfo(assetId: asset.id)
@@ -158,7 +148,7 @@ struct CrossStoreIndependenceTests {
     // Yield so the run-loop advances into the writer call.
     try? await Task.sleep(nanoseconds: 100_000_000)
     manager.cancelAndClear()
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Timeline store: in-progress variant removed by cancel routing.
     let info = timelineStore.exportInfo(assetId: asset.id)
@@ -187,7 +177,7 @@ struct CrossStoreIndependenceTests {
     manager.startExportFavorites()
     try? await Task.sleep(nanoseconds: 100_000_000)
     manager.cancelAndClear()
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     // Collection store: in-progress variant removed.
     let favorites = ExportPlacement.favorites()
@@ -230,7 +220,7 @@ struct CrossStoreIndependenceTests {
       ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")
     ]
     manager.startExportMonth(year: 2025, month: 9)
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let info = manager.exportRecordStore.exportInfo(assetId: asset.id)
     #expect(info?.variants[.original]?.status == .done)
@@ -264,7 +254,7 @@ struct CrossStoreIndependenceTests {
       ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")
     ]
     manager.startExportFavorites()
-    await waitForQueueDrained(manager)
+    await manager.waitForQueueDrained()
 
     let info = manager.collectionExportRecordStore.exportInfo(
       assetId: asset.id, placement: ExportPlacement.favorites())
