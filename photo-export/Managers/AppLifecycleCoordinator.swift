@@ -148,19 +148,23 @@ final class AppLifecycleCoordinator: ObservableObject {
     log.info(
       "Destination id changed: \(self.currentDestination.id ?? "nil", privacy: .public) → \(destination.id ?? "nil", privacy: .public)"
     )
-    let oldId = currentDestination.id
-    let newId = destination.id
-    if oldId != nil && newId == nil {
+    // Same-id case is filtered by the early return above; the `(nil, nil)` branch is
+    // therefore defensive (would only fire if some future caller bypasses that check).
+    switch (currentDestination.id, destination.id) {
+    case (nil, nil):
+      break
+    case (.some, nil):
       // Drive unmount or destination cleared. Resolve any active run as transient
       // (`cancelReason: .destinationUnavailable`) so AutoSync can resume when the
       // drive returns rather than treating every queued job as permanently failed.
       interruptForDestinationUnavailable()
-    } else if oldId == nil && newId != nil {
-      // First selection or drive remount. There can be no active export work to
-      // cancel — the previous destination was nil — so this is a no-op cleanup.
-    } else {
-      // True destination change (oldId != nil, newId != nil, different ids). Treat
-      // the previous destination's queued work as orphaned and cancel.
+    case (nil, .some):
+      // First selection or drive remount. There is no active export work tied to the
+      // previous (nil) destination, so no cleanup is needed.
+      break
+    case (.some, .some):
+      // True destination change. Treat the previous destination's queued work as
+      // orphaned and cancel.
       cancelActiveWork()
     }
     currentDestination = destination
