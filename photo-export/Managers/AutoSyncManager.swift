@@ -70,7 +70,7 @@ final class AutoSyncManager: ObservableObject {
       .sink { [weak self] snapshot in
         dispatchPrecondition(condition: .onQueue(.main))
         MainActor.assumeIsolated {
-          self?.dispatch(.destinationChanged(snapshot))
+          self?.handleDestinationSnapshot(snapshot)
         }
       }
       .store(in: &subscriptions)
@@ -133,6 +133,43 @@ final class AutoSyncManager: ObservableObject {
     // .appLaunch debounce when destination + scopes are already valid.
     let enabled = environment.userDefaults.bool(forKey: Self.enabledDefaultsKey)
     dispatch(.enabledChanged(enabled))
+  }
+
+  /// Destination-snapshot sink. Loads the new destination's persisted state
+  /// from disk on the *first* observation of a given id (or when the id
+  /// changes), then dispatches the standard `destinationChanged` event. The
+  /// load + dispatch ordering matters: `destinationDirtyStateLoaded` must hit
+  /// the reducer first so subsequent `photosChanged` / debounce decisions for
+  /// the new destination see the persisted dirty state, not `.empty`.
+  ///
+  /// `lastRunSummary` is loaded directly into the manager's `@Published` field
+  /// rather than flowing through the reducer — the reducer doesn't read it,
+  /// and the UI consumes it via observation. The per-destination
+  /// `lastDurablyRecordedToken` is loaded but currently unused; Phase 3 retry
+  /// / resume logic will read it.
+  private func handleDestinationSnapshot(_ snapshot: DestinationSnapshot) {
+    guard let environment else { return }
+    let newId = snapshot.fingerprint?.id
+    let oldId = reducerState.destination.id
+    if let newId, newId != oldId {
+      let dirty = environment.dirtyStateStore.load(destinationId: newId)
+      dispatch(.destinationDirtyStateLoaded(destinationId: newId, dirtyState: dirty))
+
+      let summary = environment.runSummaryStore.load(destinationId: newId)
+      if lastRunSummary != summary {
+        lastRunSummary = summary
+      }
+      // Per-destination token is loaded for resume detection in Phase 3; the
+      // load itself surfaces decode failures in logs at the right moment
+      // (destination switch) rather than first time we'd want to use it.
+      _ = environment.perDestinationTokenStore.load(destinationId: newId)
+    } else if newId == nil, lastRunSummary != nil {
+      // Destination cleared (drive removed, user de-selected). Drop the stale
+      // summary so the UI doesn't show "last run on Drive A" when no drive is
+      // selected.
+      lastRunSummary = nil
+    }
+    dispatch(.destinationChanged(snapshot))
   }
 
   /// User toggles Auto Export. Persists the flag and dispatches the event.
@@ -217,22 +254,30 @@ final class AutoSyncManager: ObservableObject {
         }
 
       case .persistRunSummary(let summary, let destinationId):
-        // Persistence wiring lands in a subsequent slice (per-destination
-        // lastRunSummary file). For now, surface to the @Published field for the
-        // current destination only. Equatable guard prevents redundant
-        // objectWillChange when the same summary is re-emitted (e.g. multi-event
-        // dispatch in one tick).
+        // Surface to the @Published field for the active destination so SwiftUI
+        // observers update; persist to disk so the summary survives app restart
+        // and is reloaded on `handleDestinationSnapshot`. Equatable guard
+        // prevents the willChange storm when the same summary is re-emitted in
+        // a single tick.
         if lastRunSummary != summary {
           lastRunSummary = summary
         }
-        _ = destinationId
+        do {
+          try environment.runSummaryStore.save(summary, destinationId: destinationId)
+        } catch {
+          log.error(
+            "Failed to persist run summary for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+          )
+        }
 
       case .advancePersistentChangeToken(let token, let destinationId):
-        // Token persistence lands in a subsequent slice (lastDurablyRecordedToken
-        // sibling file). For now, the effect is logged but not persisted.
-        log.debug(
-          "advancePersistentChangeToken for \(destinationId, privacy: .public) (\(token.count) bytes) — persistence not yet wired"
-        )
+        do {
+          try environment.perDestinationTokenStore.save(token, destinationId: destinationId)
+        } catch {
+          log.error(
+            "Failed to persist per-destination token for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+          )
+        }
       }
     }
   }

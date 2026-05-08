@@ -147,6 +147,121 @@ struct AutoSyncManagerTests {
     #expect(builder.exportRunner.receivedContexts.isEmpty)
   }
 
+  // MARK: - Per-destination state load on destinationChanged
+
+  @Test func destinationChangeLoadsPersistedDirtyState() {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let destId = safeDestination().id!
+    var seeded = AutoSyncDirtyState.empty
+    var timelineScope = seeded.scope(.timeline)
+    timelineScope.recordPendingAssetId("seeded-asset", costCap: 500)
+    seeded.setScope(.timeline, timelineScope)
+    try? builder.dirtyStore.save(seeded, destinationId: destId)
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true))
+
+    manager.attach(to: builder.environment)
+    builder.destination.subject.send(safeDestination())
+
+    // Pushing a photos event for *new* asset ids should accumulate on top of the
+    // seeded state, not overwrite it. If the load failed, the new ids would
+    // entirely replace `seeded-asset`.
+    builder.photos.push(
+      PhotoLibraryPersistentChangeEvent(
+        insertedLocalIdentifiers: ["new-asset"],
+        observedAt: builder.clock.now()
+      ))
+
+    let stored = builder.dirtyStore.load(destinationId: destId)
+    #expect(stored.scope(.timeline).pendingAssetIds.contains("seeded-asset"))
+    #expect(stored.scope(.timeline).pendingAssetIds.contains("new-asset"))
+  }
+
+  @Test func destinationChangeLoadsPersistedRunSummary() {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let destId = safeDestination().id!
+    let priorSummary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, reason: .appLaunch,
+        scope: .autoExport(AutoExportScopeSelection(timeline: true)),
+        selection: .edited
+      ),
+      endedAt: Date(),
+      enqueuedCount: 12, completedCount: 12, failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: .completed
+    )
+    try? builder.runSummaryStore.save(priorSummary, destinationId: destId)
+
+    manager.attach(to: builder.environment)
+    builder.destination.subject.send(safeDestination())
+
+    #expect(manager.lastRunSummary == priorSummary)
+  }
+
+  @Test func destinationClearedDropsLastRunSummary() {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let destId = safeDestination().id!
+    let priorSummary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, reason: .appLaunch,
+        scope: .autoExport(AutoExportScopeSelection(timeline: true)),
+        selection: .edited
+      ),
+      endedAt: Date(),
+      enqueuedCount: 1, completedCount: 1, failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: .completed
+    )
+    try? builder.runSummaryStore.save(priorSummary, destinationId: destId)
+    manager.attach(to: builder.environment)
+    builder.destination.subject.send(safeDestination())
+    #expect(manager.lastRunSummary == priorSummary)
+
+    builder.destination.subject.send(.none)
+
+    #expect(manager.lastRunSummary == nil)
+  }
+
+  @Test func runCompletionPersistsRunSummaryToStore() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true))
+    manager.attach(to: builder.environment)
+
+    builder.clock.advance(by: 10)
+    await Task.yield()
+    await Task.yield()
+
+    let destId = safeDestination().id!
+    let saved = builder.runSummaryStore.load(destinationId: destId)
+    #expect(saved != nil)
+    #expect(saved?.context.source == .autoSync)
+  }
+
+  @Test func photosChangeAdvancesPerDestinationToken() {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true))
+    manager.attach(to: builder.environment)
+
+    let opaqueToken = Data([0xDE, 0xAD, 0xBE, 0xEF])
+    builder.photos.push(
+      PhotoLibraryPersistentChangeEvent(
+        insertedLocalIdentifiers: ["asset-1"],
+        observedAt: builder.clock.now(),
+        nextToken: opaqueToken
+      ))
+
+    let destId = safeDestination().id!
+    #expect(builder.perDestinationTokenStore.load(destinationId: destId) == opaqueToken)
+  }
+
   // MARK: - Idempotent attach
 
   @Test func attachIsIdempotent() {

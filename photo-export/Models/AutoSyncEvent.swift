@@ -59,4 +59,13 @@ enum AutoSyncEvent: Sendable {
   /// A user-visible manual full export finished — clears compatible pending auto-sync
   /// dirty work for the same destination/selection/scope.
   case manualFullExportCompleted(ExportRunSummary)
+
+  /// Persisted dirty state for `destinationId` was loaded from disk. Dispatched
+  /// by the manager on destination-change so accumulated targeted-asset work
+  /// survives app restart. Carries no effects — the reducer just merges into
+  /// `dirtyStateByDestination`. Other per-destination persisted state
+  /// (`lastRunSummary`, `lastDurablyRecordedToken`) does not flow through this
+  /// event because the reducer doesn't read it; the manager loads and surfaces
+  /// it directly.
+  case destinationDirtyStateLoaded(destinationId: String, dirtyState: AutoSyncDirtyState)
 }

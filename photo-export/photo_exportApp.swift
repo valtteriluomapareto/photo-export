@@ -28,6 +28,8 @@ struct PhotoExportApp: App {
   private let autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   private let autoSyncDirtyStateStore: FileBackedAutoSyncDirtyStateStore
   private let autoSyncRetryStateStore: FileBackedAutoSyncRetryStateStore
+  private let autoSyncRunSummaryStore: FileBackedAutoSyncRunSummaryStore
+  private let autoSyncPerDestinationTokenStore: FileBackedAutoSyncPerDestinationTokenStore
   private let autoSyncClock: SystemAutoSyncClock
 
   init() {
@@ -58,6 +60,10 @@ struct PhotoExportApp: App {
       "destinations", isDirectory: true)
     let dirtyStore = FileBackedAutoSyncDirtyStateStore(baseDirectoryURL: destinationsRoot)
     let retryStore = FileBackedAutoSyncRetryStateStore(baseDirectoryURL: destinationsRoot)
+    let runSummaryStore = FileBackedAutoSyncRunSummaryStore(
+      baseDirectoryURL: destinationsRoot)
+    let perDestinationTokenStore = FileBackedAutoSyncPerDestinationTokenStore(
+      baseDirectoryURL: destinationsRoot)
     let tokenStore = GlobalPhotoChangeTokenStore(
       fileURL: autoSyncRoot.appendingPathComponent("photo-library-change-token.data"))
     let photoAdapter = PhotoLibraryPersistentChangeAdapter(tokenStore: tokenStore)
@@ -79,6 +85,8 @@ struct PhotoExportApp: App {
     self.autoSyncPhotoChangeAdapter = photoAdapter
     self.autoSyncDirtyStateStore = dirtyStore
     self.autoSyncRetryStateStore = retryStore
+    self.autoSyncRunSummaryStore = runSummaryStore
+    self.autoSyncPerDestinationTokenStore = perDestinationTokenStore
     self.autoSyncClock = clock
   }
 
@@ -117,6 +125,8 @@ struct PhotoExportApp: App {
             importing: exportManager,
             dirtyStateStore: autoSyncDirtyStateStore,
             retryStateStore: autoSyncRetryStateStore,
+            runSummaryStore: autoSyncRunSummaryStore,
+            perDestinationTokenStore: autoSyncPerDestinationTokenStore,
             clock: autoSyncClock,
             userDefaults: .standard
           )

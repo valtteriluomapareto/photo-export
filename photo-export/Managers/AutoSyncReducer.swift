@@ -260,6 +260,15 @@ enum AutoSyncReducer {
       // semantics. Plan §"State Reducer" lists these events; the slice that
       // implements each will append the corresponding `case` here.
       break
+
+    case .destinationDirtyStateLoaded(let destinationId, let dirty):
+      // Manager dispatches this on destination-change before
+      // `destinationChanged`, so the reducer's `dirtyStateByDestination` cache
+      // is populated for the new destination *before* downstream events
+      // (photosChanged, debounce) consult it. Idempotent: re-loading the same
+      // state is a byte-identical merge, and the recompute pass below has no
+      // input changes to react to.
+      newState.dirtyStateByDestination[destinationId] = dirty
     }
 
     // Save the trigger reason for resume *before* recompute decides whether to

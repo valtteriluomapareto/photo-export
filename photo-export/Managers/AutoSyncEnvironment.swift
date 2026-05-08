@@ -15,6 +15,8 @@ struct AutoSyncEnvironment {
   let importing: any AutoSyncImportProviding
   let dirtyStateStore: any AutoSyncDirtyStateStore
   let retryStateStore: any AutoSyncRetryStateStore
+  let runSummaryStore: any AutoSyncRunSummaryStore
+  let perDestinationTokenStore: any AutoSyncPerDestinationTokenStore
   let clock: any AutoSyncClock
   let userDefaults: UserDefaults
 }
