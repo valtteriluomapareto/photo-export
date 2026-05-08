@@ -114,9 +114,15 @@ struct PhotoExportApp: App {
     }
     let coordinator = ExportRecordsDirectoryCoordinator(
       storeRootURL: timelineStore.storeRootURL)
+    // Priority: most-recent legacy form first. For low-confidence drives, the
+    // volumeIdentifier-based digest (introduced in Phase 0 collections, replaced in
+    // auto-sync Phase 0a) is the most recent pre-upgrade form, so it ranks above the
+    // even older bookmark-hash form. High-confidence drives have only the bookmark-
+    // hash legacy id (`currentPreV2LowConfidenceLegacyId` returns nil), so the order
+    // is moot for them.
     let legacyIds = [
-      destinationManager.currentLegacyDestinationId(),
       destinationManager.currentPreV2LowConfidenceLegacyId(),
+      destinationManager.currentLegacyDestinationId(),
     ].compactMap { $0 }
     let result = coordinator.prepareDirectory(for: newId, legacyIds: legacyIds)
     switch result {
