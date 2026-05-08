@@ -103,10 +103,16 @@ final class AppLifecycleCoordinator: ObservableObject {
     // thread hop. `removeDuplicates()` (over the id hash) filters value-equal re-assignments;
     // the `currentDestination.id == newId` check inside `apply` is a belt-and-braces guard
     // for any future publisher implementation that does not honor that filter.
+    //
+    // **IMPORTANT:** the upstream publisher MUST emit on the main thread. If a future caller
+    // wires a publisher that hops threads (e.g. `.subscribe(on: .global)`), the
+    // `assumeIsolated` call will trap. The debug-only precondition below makes that case
+    // observable in development; release builds rely on the contract being honored.
     destinationObservation =
       fingerprintPublisher
       .removeDuplicates(by: { $0?.id == $1?.id })
       .sink { [weak self] fingerprint in
+        dispatchPrecondition(condition: .onQueue(.main))
         MainActor.assumeIsolated {
           self?.apply(destination: DestinationIdentitySnapshot(fingerprint: fingerprint))
         }

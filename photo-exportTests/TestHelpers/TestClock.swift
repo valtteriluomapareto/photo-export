@@ -60,7 +60,10 @@ final class TestClock: AutoSyncClock {
       return true
     }
     dueItems.sort { lhs, rhs in lhs.fireAt < rhs.fireAt }
-    cancelledDuringAdvance.removeAll(keepingCapacity: true)
+    // `cancelledDuringAdvance` is reset *after* the firing loop. Pre-loop cancellations
+    // already removed the item from `pending`, so this set only carries cancellations
+    // that happen *during* this advance. Clearing it on entry would be redundant; clearing
+    // on exit keeps the next advance's accounting clean.
     for item in dueItems {
       if cancelledDuringAdvance.contains(item.id) {
         continue

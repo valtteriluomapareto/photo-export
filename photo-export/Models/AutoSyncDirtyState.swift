@@ -101,6 +101,10 @@ struct AutoSyncDirtyState: Codable, Equatable, Sendable {
   /// Sets `lastUpdatedAt`. Reducer/manager code calls this once per persisted change with
   /// the time supplied by the injected `AutoSyncClock`, so tests using `TestClock` can pin
   /// the value deterministically rather than reading wall-clock time.
+  ///
+  /// Phase 2 audit obligation: when `AutoSyncManager` lands, every reducer entry point
+  /// that mutates `AutoSyncDirtyState` must call `markUpdated(at:)` exactly once per
+  /// reducer event — not once per `setScope` call inside a batched mutation.
   mutating func markUpdated(at date: Date) {
     lastUpdatedAt = date
   }

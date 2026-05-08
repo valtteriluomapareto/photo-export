@@ -28,12 +28,15 @@ enum DestinationIdentityConfidence: String, Codable, Equatable, Sendable {
 /// canonical/standardized path only — the plan explicitly forbids encoding
 /// `URLResourceValues.volumeIdentifier` (a same-session-only token) as the primary identity.
 ///
-/// Migration note: a small number of pre-Phase-0 users with low-confidence drives (no volume
-/// UUID — exFAT external volumes, network shares) had their record store keyed by a digest
-/// that *included* `volumeIdentifier`. After this change those record stores appear orphaned
-/// at `<oldId>/`. The plan's `ExportRecordsDirectoryCoordinator`-level multi-legacy-id
-/// migration is a Phase 0b follow-up; until then affected users would need to re-run Import
-/// Existing Backup. APFS users (high confidence) are unaffected.
+/// Migration notes:
+///   - Pre-Phase-0a users with low-confidence drives (no volume UUID — exFAT, network
+///     shares) had their record store keyed by a digest that included `volumeIdentifier`.
+///     `ExportRecordsDirectoryCoordinator` accepts `preV2LowConfidenceId(for:)` as a
+///     secondary legacy id so those record stores migrate transparently on first launch
+///     after the upgrade.
+///   - The persisted `Codable` shape changed: pre-Phase-0a fingerprints carried an `id`
+///     key; the new form excludes it. Decoding is forward-compatible (extra keys are
+///     ignored), but anyone holding pre-Phase-0a JSON should re-encode it on next save.
 struct DestinationFingerprint: Codable, Hashable, Sendable {
   /// Schema version of the fingerprint format. Bumping this is a deliberate breaking change
   /// that requires a migration plan; v1 reproduces the existing high-confidence id derivation.

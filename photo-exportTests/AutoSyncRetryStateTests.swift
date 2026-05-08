@@ -116,6 +116,39 @@ struct AutoSyncRetryStateTests {
     #expect(entry?.category == .photoKitTransient)
   }
 
+  /// Oscillation A → B → A: the third call sees a category-mismatch with the existing
+  /// (B-categorized) entry and resets attempt count to 1. Documents that flapping
+  /// categories restart the budget every time — there is no per-category sub-bucket. If
+  /// future product feedback wants accumulating retries across category flaps, this is
+  /// the test that codifies the current decision.
+  @Test func categoryOscillationResetsEachTransition() {
+    var state = AutoSyncRetryState()
+    let firstAt = Date(timeIntervalSince1970: 1_700_000_000)
+    let secondAt = firstAt.addingTimeInterval(60)
+    let thirdAt = firstAt.addingTimeInterval(120)
+
+    state.recordFailure(
+      scope: .timeline, assetId: "a", variant: .original,
+      category: .iCloudTransient, errorSignature: "sig",
+      at: firstAt, nextEligibleAt: nil
+    )
+    state.recordFailure(
+      scope: .timeline, assetId: "a", variant: .original,
+      category: .destinationNoSpace, errorSignature: "sig",
+      at: secondAt, nextEligibleAt: nil
+    )
+    state.recordFailure(
+      scope: .timeline, assetId: "a", variant: .original,
+      category: .iCloudTransient, errorSignature: "sig",
+      at: thirdAt, nextEligibleAt: nil
+    )
+
+    let entry = state.entry(scope: .timeline, assetId: "a", variant: .original)
+    #expect(entry?.attemptCount == 1)
+    #expect(entry?.firstFailedAt == thirdAt)
+    #expect(entry?.category == .iCloudTransient)
+  }
+
   // MARK: - Scope independence
 
   @Test func failuresInDifferentAlbumsDoNotShareCounts() {
