@@ -57,48 +57,74 @@ final class AutoSyncManager: ObservableObject {
     // persisted destination / scope / import / run-state values already loaded into
     // reducer state. CurrentValueSubject replays its current value on subscribe;
     // each replay turns into a reducer event before we flip the enabled flag.
+    // Sinks dispatch into the @MainActor reducer. Each upstream is driven by
+    // @MainActor-isolated writes (publishers on @MainActor managers, or
+    // `CurrentValueSubject` written from @MainActor adapters), so the sink fires
+    // on the main thread. `dispatchPrecondition(.onQueue(.main))` traps loudly if
+    // a future contributor wires a publisher that hops threads;
+    // `MainActor.assumeIsolated` makes the cross-actor dispatch call explicit
+    // under Swift 6 strict mode without paying for a thread hop.
+
     environment.destination.destinationSnapshotPublisher
       .removeDuplicates()
       .sink { [weak self] snapshot in
-        self?.dispatch(.destinationChanged(snapshot))
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          self?.dispatch(.destinationChanged(snapshot))
+        }
       }
       .store(in: &subscriptions)
 
     environment.scopes.scopeSelectionPublisher
       .removeDuplicates()
       .sink { [weak self] scopes in
-        self?.dispatch(.scopeSelectionChanged(scopes))
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          self?.dispatch(.scopeSelectionChanged(scopes))
+        }
       }
       .store(in: &subscriptions)
 
     environment.importing.isImportingPublisher
       .removeDuplicates()
       .sink { [weak self] isImporting in
-        self?.dispatch(.importStateChanged(isImporting: isImporting))
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          self?.dispatch(.importStateChanged(isImporting: isImporting))
+        }
       }
       .store(in: &subscriptions)
 
     environment.exportRunner.exportRunStatePublisher
       .removeDuplicates()
       .sink { [weak self] runState in
-        self?.dispatch(.exportRunStateChanged(runState))
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          self?.dispatch(.exportRunStateChanged(runState))
+        }
       }
       .store(in: &subscriptions)
 
     environment.exportRunner.versionSelectionPublisher
       .removeDuplicates()
       .sink { [weak self] selection in
-        self?.dispatch(.versionSelectionChanged(selection))
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          self?.dispatch(.versionSelectionChanged(selection))
+        }
       }
       .store(in: &subscriptions)
 
     environment.photos.changes
       .sink { [weak self] outcome in
-        switch outcome {
-        case .success(let event):
-          self?.dispatch(.photosChanged(event))
-        case .failure(let fetchError):
-          self?.dispatch(.photosChangeFetchFailed(fetchError))
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          switch outcome {
+          case .success(let event):
+            self?.dispatch(.photosChanged(event))
+          case .failure(let fetchError):
+            self?.dispatch(.photosChangeFetchFailed(fetchError))
+          }
         }
       }
       .store(in: &subscriptions)
@@ -136,10 +162,22 @@ final class AutoSyncManager: ObservableObject {
   }
 
   private func process(_ event: AutoSyncEvent) {
-    let now = environment?.clock.now() ?? Date()
+    guard let environment else {
+      log.error(
+        "dispatch called before attach — dropping event \(String(describing: event), privacy: .public)"
+      )
+      return
+    }
+    let now = environment.clock.now()
     let (next, effects) = AutoSyncReducer.reduce(event, in: reducerState, now: now)
     reducerState = next
-    state = next.current
+    // Equatable guard: skip the `@Published` assignment when the value is
+    // unchanged. Prevents the willChange storm during attach (5+ initial replays
+    // before the enabledChanged dispatch) from flooding SwiftUI views with
+    // redundant re-renders.
+    if state != next.current {
+      state = next.current
+    }
     runEffects(effects)
   }
 
@@ -181,8 +219,12 @@ final class AutoSyncManager: ObservableObject {
       case .persistRunSummary(let summary, let destinationId):
         // Persistence wiring lands in a subsequent slice (per-destination
         // lastRunSummary file). For now, surface to the @Published field for the
-        // current destination only.
-        lastRunSummary = summary
+        // current destination only. Equatable guard prevents redundant
+        // objectWillChange when the same summary is re-emitted (e.g. multi-event
+        // dispatch in one tick).
+        if lastRunSummary != summary {
+          lastRunSummary = summary
+        }
         _ = destinationId
 
       case .advancePersistentChangeToken(let token, let destinationId):
