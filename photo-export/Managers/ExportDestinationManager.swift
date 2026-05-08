@@ -13,9 +13,12 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   @Published private(set) var statusMessage: String?
   @Published private(set) var destinationId: String?
   /// Structured form of the same identity carried by `destinationId`. Both are kept in sync —
-  /// `destinationFingerprint?.id == destinationId` always holds. AutoSync code subscribes to
-  /// the fingerprint so it can read `identityConfidence` and the volume/path components
-  /// without having to recompute them from a URL.
+  /// `destinationFingerprint?.id == destinationId` always holds *between* mutations. The
+  /// two `@Published` writes are not transactional, so a subscriber to `$destinationFingerprint`
+  /// that reads `destinationId` synchronously may observe a brief moment where the id has not
+  /// yet caught up; downstream code should subscribe to `$destinationFingerprint` and read
+  /// the id via `fingerprint?.id` to avoid the gap. All callers inside this class go through
+  /// `setIdentity(fingerprint:)` so the field-pair stays consistent.
   @Published private(set) var destinationFingerprint: DestinationFingerprint?
 
   // MARK: - Keys & Logger
@@ -141,8 +144,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     isAvailable = false
     isWritable = false
     statusMessage = "No export folder selected"
-    destinationId = nil
-    destinationFingerprint = nil
+    setIdentity(nil)
     stashedLegacyDestinationId = nil
     userDefaults.removeObject(forKey: bookmarkDefaultsKey)
     logger.info("Cleared export destination selection")
@@ -392,6 +394,17 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     return Self.legacyDestinationId(from: data)
   }
 
+  /// Sets `destinationFingerprint` and `destinationId` together. Pair-write helper kept
+  /// private so the class's own callers can't desynchronize the two `@Published` properties.
+  /// Note: `@Published` emits one event per write, so subscribers see two emissions per
+  /// call (fingerprint then id); by the time both have fired the pair is consistent. Mid-
+  /// emission reads must use `$destinationFingerprint` and read `fingerprint?.id` rather
+  /// than `destinationId` directly.
+  private func setIdentity(_ fingerprint: DestinationFingerprint?) {
+    destinationFingerprint = fingerprint
+    destinationId = fingerprint?.id
+  }
+
   /// Pre-Phase-0a low-confidence legacy id for the currently selected folder. Returns the
   /// volumeIdentifier-based digest the previous code used as the record-store directory name
   /// for drives without a volume UUID; returns nil for high-confidence drives or when no
@@ -421,8 +434,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   private func restoreBookmarkIfAvailable() {
     guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else {
       statusMessage = "No export folder selected"
-      destinationId = nil
-      destinationFingerprint = nil
+      setIdentity(nil)
       return
     }
     // Capture the legacy hash from the *original* bytes before any stale-bookmark refresh.
@@ -451,8 +463,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       selectedFolderURL = nil
       isAvailable = false
       isWritable = false
-      destinationId = nil
-      destinationFingerprint = nil
+      setIdentity(nil)
       stashedLegacyDestinationId = nil
     }
   }
@@ -494,12 +505,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // unmounted, volume-resource keys are unreadable; clear both the id and the fingerprint
     // so the rest of the app treats the destination as unavailable until the drive comes back.
     if isAvailable {
-      let fingerprint = Self.computeDestinationFingerprint(for: url)
-      destinationFingerprint = fingerprint
-      destinationId = fingerprint?.id
+      setIdentity(Self.computeDestinationFingerprint(for: url))
     } else {
-      destinationFingerprint = nil
-      destinationId = nil
+      setIdentity(nil)
     }
   }
 
