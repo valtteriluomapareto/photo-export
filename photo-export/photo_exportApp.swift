@@ -5,6 +5,7 @@
 //  Created by Valtteri Luoma on 22.4.2025.
 //
 
+import Combine
 import SwiftUI
 
 @main
@@ -14,21 +15,35 @@ struct PhotoExportApp: App {
   @StateObject private var exportRecordStore: ExportRecordStore
   @StateObject private var collectionExportRecordStore: CollectionExportRecordStore
   @StateObject private var exportManager: ExportManager
+  @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
 
   init() {
-    // Initialize dependencies locally, then assign to stored properties and StateObjects
     let edm = ExportDestinationManager()
     let plm = PhotoLibraryManager()
     let ers = ExportRecordStore()
     let cers = CollectionExportRecordStore()
+    let em = ExportManager(
+      photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers,
+      collectionExportRecordStore: cers)
+
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: { [em] in em.cancelAndClear() },
+      configureRecordStores: { [edm, ers, cers] newId in
+        Self.configureRecordStores(
+          for: newId,
+          destinationManager: edm,
+          timelineStore: ers,
+          collectionStore: cers
+        )
+      }
+    )
+
     _exportDestinationManager = StateObject(wrappedValue: edm)
     _photoLibraryManager = StateObject(wrappedValue: plm)
     _exportRecordStore = StateObject(wrappedValue: ers)
     _collectionExportRecordStore = StateObject(wrappedValue: cers)
-    _exportManager = StateObject(
-      wrappedValue: ExportManager(
-        photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers,
-        collectionExportRecordStore: cers))
+    _exportManager = StateObject(wrappedValue: em)
+    _lifecycleCoordinator = StateObject(wrappedValue: coordinator)
   }
 
   var body: some Scene {
@@ -47,13 +62,10 @@ struct PhotoExportApp: App {
         .environmentObject(exportRecordStore)
         .environmentObject(collectionExportRecordStore)
         .task {
-          // Configure store for current destination (if any) at launch
-          configureRecordStore(for: exportDestinationManager.destinationId)
-        }
-        .onChange(of: exportDestinationManager.destinationId) { _, newId in
-          // Cancel any in-flight exports and reconfigure the per-destination store
-          exportManager.cancelAndClear()
-          configureRecordStore(for: newId)
+          lifecycleCoordinator.attach(
+            initialDestinationId: exportDestinationManager.destinationId,
+            destinationIdPublisher: exportDestinationManager.$destinationId.eraseToAnyPublisher()
+          )
         }
     }
     .defaultSize(width: 1100, height: 640)
@@ -81,33 +93,42 @@ struct PhotoExportApp: App {
   /// before either store touches the directory, so the legacy `<oldId>` → `<newId>` rename
   /// happens exactly once and neither store can race the other to create `<newId>/`
   /// (which would orphan the legacy directory).
-  private func configureRecordStore(for newId: String?) {
+  ///
+  /// Static so `AppLifecycleCoordinator` can call it from a closure captured at app-init time
+  /// without holding a reference to `PhotoExportApp` (which is a struct value type recreated by
+  /// SwiftUI on every body evaluation).
+  static func configureRecordStores(
+    for newId: String?,
+    destinationManager: ExportDestinationManager,
+    timelineStore: ExportRecordStore,
+    collectionStore: CollectionExportRecordStore
+  ) {
     guard let newId else {
-      exportRecordStore.configure(for: nil)
-      collectionExportRecordStore.configure(for: nil)
+      timelineStore.configure(for: nil)
+      collectionStore.configure(for: nil)
       return
     }
     let coordinator = ExportRecordsDirectoryCoordinator(
-      storeRootURL: exportRecordStore.storeRootURL)
+      storeRootURL: timelineStore.storeRootURL)
     let result = coordinator.prepareDirectory(
       for: newId,
-      legacyId: exportDestinationManager.currentLegacyDestinationId()
+      legacyId: destinationManager.currentLegacyDestinationId()
     )
     switch result {
     case .success, .failure(.conflict):
       // Either the migration succeeded or `<newId>/` already exists with `<oldId>/` left
       // for inspection. Either way, configuring is safe — both stores adopt whatever's at
       // `<newId>/`. Coordinator already logged the conflict case.
-      exportRecordStore.configure(for: newId)
-      collectionExportRecordStore.configure(for: newId)
+      timelineStore.configure(for: newId)
+      collectionStore.configure(for: newId)
     case .failure(.migrationFailed):
       // Transient I/O error during the legacy → new rename. `<legacyId>/` still has the
       // user's records; `<newId>/` does not exist yet. Configuring `for: newId` would
       // create `<newId>/` and trip the conflict-detection branch on every subsequent
       // launch, permanently stranding the legacy records. Leave both stores unconfigured;
       // next launch (or the next destinationId change) retries the rename.
-      exportRecordStore.configure(for: nil)
-      collectionExportRecordStore.configure(for: nil)
+      timelineStore.configure(for: nil)
+      collectionStore.configure(for: nil)
     }
   }
 }
