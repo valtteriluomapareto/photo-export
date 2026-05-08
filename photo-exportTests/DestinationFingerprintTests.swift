@@ -90,8 +90,9 @@ struct DestinationFingerprintTests {
   }
 
   /// The fingerprint round-trips through Codable (it is persisted alongside record-store state
-  /// in later commits).
-  @Test func fingerprintRoundTripsThroughCodable() throws {
+  /// in later commits). `id` is intentionally excluded from the persisted form and re-derived
+  /// after decode, so the decoded fingerprint's id must equal the original's.
+  @Test func fingerprintRoundTripsThroughCodableAndIdIsRederived() throws {
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("Fingerprint-Codable-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -106,5 +107,83 @@ struct DestinationFingerprintTests {
     let decoded = try JSONDecoder().decode(DestinationFingerprint.self, from: data)
 
     #expect(decoded == original)
+    #expect(decoded.id == original.id)
+
+    // `id` is computed from the persistent components, not stored — its key must not appear
+    // in the persisted JSON (so future schema bumps can re-derive without a migration).
+    let json = try #require(
+      try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(json["id"] == nil)
+  }
+
+  /// The id of a low-confidence fingerprint depends *only* on `standardizedPath`, not on
+  /// `volumeIdentifier` (which is a same-session-only token — encoding it would silently
+  /// change the id across reboots and orphan the record store).
+  @Test func lowConfidenceIdDependsOnStandardizedPathOnly() {
+    let original = DestinationFingerprint(
+      schemaVersion: DestinationFingerprint.currentSchemaVersion,
+      volumeUUIDString: nil,
+      volumeRootPath: nil,
+      relativePathFromVolumeRoot: "/photos",
+      standardizedPath: "/Volumes/External/photos",
+      identityConfidence: .low
+    )
+    let drifted = DestinationFingerprint(
+      schemaVersion: DestinationFingerprint.currentSchemaVersion,
+      volumeUUIDString: nil,
+      volumeRootPath: "/Volumes/Renamed",
+      relativePathFromVolumeRoot: "/elsewhere",
+      standardizedPath: "/Volumes/External/photos",
+      identityConfidence: .low
+    )
+
+    #expect(original.id == drifted.id)
+  }
+
+  /// Two `.high`-confidence fingerprints with the same volume UUID + relative path produce
+  /// the same id even if their `standardizedPath` differs (e.g. drive renamed).
+  @Test func highConfidenceIdSurvivesDriveRename() {
+    let beforeRename = DestinationFingerprint(
+      schemaVersion: DestinationFingerprint.currentSchemaVersion,
+      volumeUUIDString: "ABC-UUID",
+      volumeRootPath: "/Volumes/MyDrive",
+      relativePathFromVolumeRoot: "/photos",
+      standardizedPath: "/Volumes/MyDrive/photos",
+      identityConfidence: .high
+    )
+    let afterRename = DestinationFingerprint(
+      schemaVersion: DestinationFingerprint.currentSchemaVersion,
+      volumeUUIDString: "ABC-UUID",
+      volumeRootPath: "/Volumes/PhotoBackup",
+      relativePathFromVolumeRoot: "/photos",
+      standardizedPath: "/Volumes/PhotoBackup/photos",
+      identityConfidence: .high
+    )
+
+    #expect(beforeRename.id == afterRename.id)
+  }
+
+  /// `.high` and `.low` confidences with otherwise-equivalent path components must produce
+  /// distinct ids — otherwise a low-confidence drive could collide with a high-confidence
+  /// one whose UUID happens to digest the same.
+  @Test func highAndLowConfidenceIdsAreDistinct() {
+    let high = DestinationFingerprint(
+      schemaVersion: DestinationFingerprint.currentSchemaVersion,
+      volumeUUIDString: "UUID",
+      volumeRootPath: nil,
+      relativePathFromVolumeRoot: "/photos",
+      standardizedPath: "/Volumes/X/photos",
+      identityConfidence: .high
+    )
+    let low = DestinationFingerprint(
+      schemaVersion: DestinationFingerprint.currentSchemaVersion,
+      volumeUUIDString: nil,
+      volumeRootPath: nil,
+      relativePathFromVolumeRoot: "/photos",
+      standardizedPath: "/Volumes/X/photos",
+      identityConfidence: .low
+    )
+
+    #expect(high.id != low.id)
   }
 }
