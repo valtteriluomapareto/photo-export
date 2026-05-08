@@ -35,9 +35,11 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   private let library: PHPhotoLibrary
   private let tokenStore: GlobalPhotoChangeTokenStore
   private let logger: Logger
+  private let authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never>?
   private let subject = PassthroughSubject<PhotoLibraryChangeOutcome, Never>()
   private var lastToken: PHPersistentChangeToken?
   private var registered = false
+  private var authorizationSubscription: AnyCancellable?
 
   var authorizationStatus: PHAuthorizationStatus {
     PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -47,39 +49,70 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
     subject.eraseToAnyPublisher()
   }
 
+  /// `authorizationStatusPublisher` lets the adapter retry registration after
+  /// the user grants access from inside the app — without it, an adapter
+  /// `start()`-ed during `.notDetermined` would stay un-registered until the
+  /// next launch. `nil` is acceptable in tests where the fake never observes
+  /// auth state; production wires `PhotoLibraryManager.$authorizationStatus`.
   init(
     library: PHPhotoLibrary = .shared(),
     tokenStore: GlobalPhotoChangeTokenStore,
+    authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never>? = nil,
     logger: Logger = Logger(
       subsystem: "com.valtteriluoma.photo-export", category: "PhotoLibraryChanges")
   ) {
     self.library = library
     self.tokenStore = tokenStore
+    self.authorizationStatusPublisher = authorizationStatusPublisher
     self.logger = logger
     self.lastToken = tokenStore.load()
     super.init()
   }
 
   /// Register with PhotoKit and run an immediate catch-up fetch for any
-  /// changes that landed since the last persisted token. Idempotent.
+  /// changes that landed since the last persisted token. Idempotent — safe to
+  /// call multiple times. When access is not yet sufficient, subscribes to
+  /// the authorization-status publisher and self-starts on the first
+  /// sufficient value, so the user granting access from inside the app
+  /// activates observation without an explicit re-call.
   func start() {
     guard !registered else { return }
-    guard PhotoLibraryManager.isAuthorizationSufficient(authorizationStatus) else {
-      logger.debug("Photo library not authorized; skipping observer registration")
+    if PhotoLibraryManager.isAuthorizationSufficient(authorizationStatus) {
+      registerAndCatchUp()
       return
     }
-    library.register(self)
-    registered = true
-    fetchAndEmit()
+    logger.debug("Photo library not authorized yet; deferring registration")
+    if authorizationSubscription == nil, let publisher = authorizationStatusPublisher {
+      authorizationSubscription = publisher.sink { [weak self] status in
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          guard let self, !self.registered,
+            PhotoLibraryManager.isAuthorizationSufficient(status)
+          else { return }
+          self.registerAndCatchUp()
+          // One-shot: stop listening once we've registered.
+          self.authorizationSubscription?.cancel()
+          self.authorizationSubscription = nil
+        }
+      }
+    }
   }
 
   /// Unregister from PhotoKit. Idempotent. Tests call this on tear-down; the
   /// app does not need to call it because the adapter lives for the process
   /// lifetime.
   func stop() {
+    authorizationSubscription?.cancel()
+    authorizationSubscription = nil
     guard registered else { return }
     library.unregisterChangeObserver(self)
     registered = false
+  }
+
+  private func registerAndCatchUp() {
+    library.register(self)
+    registered = true
+    fetchAndEmit()
   }
 
   // MARK: - PHPhotoLibraryChangeObserver

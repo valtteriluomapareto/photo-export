@@ -66,7 +66,10 @@ struct PhotoExportApp: App {
       baseDirectoryURL: destinationsRoot)
     let tokenStore = GlobalPhotoChangeTokenStore(
       fileURL: autoSyncRoot.appendingPathComponent("photo-library-change-token.data"))
-    let photoAdapter = PhotoLibraryPersistentChangeAdapter(tokenStore: tokenStore)
+    let photoAdapter = PhotoLibraryPersistentChangeAdapter(
+      tokenStore: tokenStore,
+      authorizationStatusPublisher: plm.$authorizationStatus.eraseToAnyPublisher()
+    )
     let destinationAdapter = DestinationSnapshotAdapter(
       destinationManager: edm, lifecycleCoordinator: coordinator)
     let scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: .standard)
