@@ -66,11 +66,20 @@ final class AppLifecycleCoordinator: ObservableObject {
 
     apply(destinationId: initialDestinationId)
 
+    // The publisher is driven by `ExportDestinationManager`'s `@MainActor` writes, so
+    // emissions arrive on the main thread. `MainActor.assumeIsolated` makes the call to
+    // `apply(destinationId:)` (a `@MainActor` method) explicit under Swift 6 strict
+    // concurrency without paying for a thread hop. `removeDuplicates()` filters
+    // value-equal re-assignments; the `lastConfiguredDestinationId` check inside `apply`
+    // is a belt-and-braces guard for any future publisher implementation that does not
+    // honor that filter.
     destinationIdObservation =
       destinationIdPublisher
       .removeDuplicates()
       .sink { [weak self] newId in
-        self?.apply(destinationId: newId)
+        MainActor.assumeIsolated {
+          self?.apply(destinationId: newId)
+        }
       }
   }
 
