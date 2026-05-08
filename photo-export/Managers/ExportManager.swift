@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import Photos
 import SwiftUI
@@ -94,6 +95,21 @@ final class ExportManager: ObservableObject {
   /// awaitable run; no event is emitted for runs started via the existing fire-and-forget
   /// `start*` methods.
   @Published private(set) var activeRunContext: ExportRunContext?
+
+  /// Composite run-state observable for AutoSync. Republishes on every transition of
+  /// `activeRunContext` so subscribers see one snapshot per change. `isManualActive` /
+  /// `isAutoSyncActive` are derived from the active context's `source`.
+  var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
+    $activeRunContext
+      .map { context in
+        ExportRunState(
+          activeContext: context,
+          isManualActive: context?.source == .manual,
+          isAutoSyncActive: context?.source == .autoSync
+        )
+      }
+      .eraseToAnyPublisher()
+  }
 
   private struct ActiveRunBookkeeping {
     let totalJobsEnqueuedAtStart: Int
