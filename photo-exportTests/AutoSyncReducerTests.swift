@@ -656,6 +656,83 @@ struct AutoSyncReducerTests {
     #expect(effects.contains(.advancePersistentChangeToken(token, destinationId: destId)))
   }
 
+  // MARK: - photosChangeFetchFailed → fallback
+
+  @Test func tokenExpiredSchedulesFallbackReconciliation() {
+    let state = enabledStateWithSafeDestinationAndScope()
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .photosChangeFetchFailed(.tokenExpired), in: state, now: now)
+
+    let fireAt = now.addingTimeInterval(120)
+    #expect(next.current == .scheduled(reason: .photosChangeFallback, fireAt: fireAt))
+    #expect(effects.contains(.scheduleDebounce(.photosChangeFallback, fireAt: fireAt)))
+
+    let destId = state.destination.id!
+    #expect(
+      next.dirtyStateByDestination[destId]?.scope(.timeline).pendingFullReconciliation == true)
+  }
+
+  @Test func tokenInvalidAndDetailsUnavailableAlsoScheduleFallback() {
+    let state = enabledStateWithSafeDestinationAndScope()
+
+    for failure in [
+      PhotoLibraryPersistentChangeFetchError.tokenInvalid,
+      .detailsUnavailable,
+    ] {
+      let (next, effects) = AutoSyncReducer.reduce(
+        .photosChangeFetchFailed(failure), in: state, now: now)
+
+      let fireAt = now.addingTimeInterval(120)
+      #expect(
+        next.current == .scheduled(reason: .photosChangeFallback, fireAt: fireAt),
+        "Expected fallback schedule for \(failure)")
+      #expect(effects.contains(.scheduleDebounce(.photosChangeFallback, fireAt: fireAt)))
+    }
+  }
+
+  @Test func fetchFailedWhenDisabledIsIgnored() {
+    let state = AutoSyncReducer.State.initial  // enabled = false
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .photosChangeFetchFailed(.tokenExpired), in: state, now: now)
+
+    #expect(next.current == .disabled)
+    #expect(effects.isEmpty)
+  }
+
+  // MARK: - Effect ordering contract (plan: persist before token advance)
+
+  /// Plan §"Photo Library Changes": "Advance the token only after a dirty event has
+  /// been durably recorded." The reducer returns persistDirtyState BEFORE
+  /// advancePersistentChangeToken in the effects list; the runner is required to
+  /// process effects in list order. Pinned by exact equality (not `.contains`).
+  @Test func photosChangedEmitsPersistBeforeTokenAdvance() {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let token = Data([0x01])
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["a"], observedAt: now, nextToken: token)
+
+    let (_, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    let destId = state.destination.id!
+    // Find the indices to assert order without depending on the schedule effect's position.
+    let persistIdx = effects.firstIndex(where: { effect in
+      if case .persistDirtyState(_, let did) = effect, did == destId { return true }
+      return false
+    })
+    let tokenIdx = effects.firstIndex(where: { effect in
+      if case .advancePersistentChangeToken(_, let did) = effect, did == destId { return true }
+      return false
+    })
+    #expect(persistIdx != nil)
+    #expect(tokenIdx != nil)
+    if let persistIdx, let tokenIdx {
+      #expect(
+        persistIdx < tokenIdx, "persistDirtyState must come before advancePersistentChangeToken")
+    }
+  }
+
   // MARK: - Idempotence (plan §"State Reducer" dispatch contract)
 
   @Test func sameEventAppliedTwiceIsIdempotentForCurrentState() {

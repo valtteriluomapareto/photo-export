@@ -10,6 +10,16 @@ import Foundation
 /// effect (e.g. `exportRunStateChanged` from `startRun`) are queued and processed after
 /// the current event's effects complete. Timer cancellation is itself an effect
 /// (`cancelDebounce`, `cancelRetryTimer`), not a reducer side effect.
+///
+/// **Effect-list ordering is load-bearing.** The runner must process effects in the
+/// order returned. The reducer relies on this for at least one durability invariant:
+/// when a `photosChanged` event produces both `persistDirtyState` and
+/// `advancePersistentChangeToken`, the persist effect is emitted *before* the token
+/// advance. Plan §"Photo Library Changes": "Advance the token only after a dirty
+/// event has been durably recorded" — if the token were advanced first and the
+/// process crashed before the dirty write committed, the next launch would skip the
+/// range without recording the dirty IDs. Pinned by reducer tests that assert effect
+/// list equality (not just `.contains`).
 enum AutoSyncEffect: Equatable, Sendable {
   /// Schedule a debounce timer for `reason` to fire at `fireAt`. If a debounce for the
   /// same reason is already scheduled, the runner replaces it (the most recent

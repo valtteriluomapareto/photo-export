@@ -26,6 +26,14 @@ enum AutoSyncEvent: Sendable {
   /// fall back to bounded full reconciliation, or no-op.
   case photosChanged(PhotoLibraryPersistentChangeEvent)
 
+  /// `PHPhotoLibrary.fetchPersistentChanges(since:)` failed for the current
+  /// persistent-change token. Plan §"Photo Library Changes": "Distinguish three
+  /// failure modes from `fetchPersistentChanges(since:)` and route each explicitly:
+  /// token-expired, token-invalid, and details-unavailable. All three reset the
+  /// affected destination's `lastDurablyRecordedToken` ... and schedule one bounded
+  /// full reconciliation."
+  case photosChangeFetchFailed(PhotoLibraryPersistentChangeFetchError)
+
   /// `ExportManager`'s active-run state changed. Used to detect a run starting,
   /// completing, or being cancelled out from under the reducer.
   case exportRunStateChanged(ExportRunState)

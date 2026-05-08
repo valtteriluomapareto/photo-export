@@ -219,6 +219,38 @@ enum AutoSyncReducer {
         }
       }
 
+    case .photosChangeFetchFailed(let failure):
+      // Plan §"Photo Library Changes": all three failure modes (tokenExpired,
+      // tokenInvalid, detailsUnavailable) reset the affected destination's
+      // lastDurablyRecordedToken and schedule one bounded full reconciliation. The
+      // 2-minute photosChangeFallback debounce gives the system a quiet window
+      // before the recovery run.
+      //
+      // Disabled / no-destination / no-scopes selected → ignore (no work to do).
+      if state.enabled, let destinationId = state.destination.id,
+        !state.scopeSelection.isEmpty
+      {
+        // Mark every selected scope as needing full reconciliation. The runner
+        // resets the per-destination token snapshot to the current global token
+        // when it sees the matching `lastDurablyRecordedToken` reset path; the
+        // reducer's contribution is to flip the dirty flags and trigger the
+        // fallback debounce.
+        var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
+        for scope in state.scopeSelection.enabledScopes {
+          var scopeState = dirty.scope(scope)
+          scopeState.pendingFullReconciliation = true
+          scopeState.pendingAssetIds.removeAll()
+          dirty.setScope(scope, scopeState)
+        }
+        dirty.markUpdated(at: now)
+        newState.dirtyStateByDestination[destinationId] = dirty
+        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
+        triggerReason = .photosChangeFallback
+        // failure is informational — subsequent slices that wire diagnostics may
+        // log/route by category. Avoid `unused` warning with explicit suppression.
+        _ = failure
+      }
+
     case .retryTimerFired, .manualFullExportCompleted:
       // Handled by subsequent slices that wire dirty-state, retry, and run-summary
       // semantics. Plan §"State Reducer" lists these events; the slice that
