@@ -64,15 +64,16 @@ struct AutoSyncReducerTests {
     #expect(next.current == .blocked(.noScopesSelected))
   }
 
-  @Test func enableWithSafeDestinationAndScopeReachesIdle() {
+  @Test func enableWithSafeDestinationAndScopeSchedulesAppLaunch() {
     var state = AutoSyncReducer.State.initial
     state.destination = safeDestination()
     state.scopeSelection = AutoExportScopeSelection(timeline: true, favorites: true)
 
     let (next, effects) = AutoSyncReducer.reduce(.enabledChanged(true), in: state, now: now)
 
-    #expect(next.current == .idle)
-    #expect(effects.isEmpty)
+    let fireAt = now.addingTimeInterval(10)
+    #expect(next.current == .scheduled(reason: .appLaunch, fireAt: fireAt))
+    #expect(effects == [.scheduleDebounce(.appLaunch, fireAt: fireAt)])
   }
 
   @Test func disableFromAnyStateReturnsToDisabled() {
@@ -149,18 +150,20 @@ struct AutoSyncReducerTests {
     #expect(next.current == .blocked(.noScopesSelected))
   }
 
-  @Test func enablingNewScopeReachesIdle() {
+  @Test func enablingNewScopeSchedulesScopeChange() {
     var state = AutoSyncReducer.State.initial
     state.enabled = true
     state.destination = safeDestination()
     state.scopeSelection = AutoExportScopeSelection()
     state.current = .blocked(.noScopesSelected)
 
-    let (next, _) = AutoSyncReducer.reduce(
+    let (next, effects) = AutoSyncReducer.reduce(
       .scopeSelectionChanged(AutoExportScopeSelection(albums: true)),
       in: state, now: now)
 
-    #expect(next.current == .idle)
+    let fireAt = now.addingTimeInterval(2)
+    #expect(next.current == .scheduled(reason: .scopeSelectionChanged, fireAt: fireAt))
+    #expect(effects == [.scheduleDebounce(.scopeSelectionChanged, fireAt: fireAt)])
     #expect(next.scopeSelection.includes(.albums))
   }
 
@@ -190,15 +193,158 @@ struct AutoSyncReducerTests {
 
   // MARK: - versionSelectionChanged
 
-  @Test func versionSelectionChangeUpdatesStateButDoesNotTransition() {
+  @Test func versionSelectionChangeSchedulesDebounce() {
     let state = enabledStateWithSafeDestinationAndScope()
 
     let (next, effects) = AutoSyncReducer.reduce(
       .versionSelectionChanged(.editedWithOriginals), in: state, now: now)
 
+    let fireAt = now.addingTimeInterval(2)
     #expect(next.versionSelection == .editedWithOriginals)
+    #expect(next.current == .scheduled(reason: .versionSelectionChanged, fireAt: fireAt))
+    #expect(effects == [.scheduleDebounce(.versionSelectionChanged, fireAt: fireAt)])
+  }
+
+  @Test func versionSelectionUnchangedIsNoOp() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.versionSelection = .editedWithOriginals
+    state.current = .idle
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .versionSelectionChanged(.editedWithOriginals), in: state, now: now)
+
     #expect(next.current == .idle)
     #expect(effects.isEmpty)
+  }
+
+  // MARK: - debounceFired → running → idle
+
+  @Test func debounceFiredFromScheduledStartsRun() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    let fireAt = now.addingTimeInterval(10)
+    state.current = .scheduled(reason: .appLaunch, fireAt: fireAt)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .debounceFired(.appLaunch), in: state, now: fireAt)
+
+    #expect(next.current == .running(reason: .appLaunch))
+    #expect(effects.count == 1)
+    if case .startRun(let spec) = effects[0] {
+      #expect(spec.source == .autoSync)
+      #expect(spec.visibility == .background)
+      #expect(spec.reason == .appLaunch)
+      #expect(spec.selection == .edited)
+      // .autoExport scope carries the current selection.
+      if case .autoExport(let scopes) = spec.scope {
+        #expect(scopes == state.scopeSelection)
+      } else {
+        Issue.record("Expected .autoExport scope, got \(spec.scope)")
+      }
+    } else {
+      Issue.record("Expected .startRun effect, got \(effects[0])")
+    }
+  }
+
+  @Test func staleDebounceFiredIsIgnored() {
+    // Scheduled with .appLaunch, but the firing event names a different reason —
+    // typical of a debounce that was cancelled and replaced after the user toggled
+    // a scope. Honor only the reason matching the current schedule.
+    var state = enabledStateWithSafeDestinationAndScope()
+    let fireAt = now.addingTimeInterval(10)
+    state.current = .scheduled(reason: .appLaunch, fireAt: fireAt)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .debounceFired(.scopeSelectionChanged), in: state, now: fireAt)
+
+    #expect(next.current == .scheduled(reason: .appLaunch, fireAt: fireAt))
+    #expect(effects.isEmpty)
+  }
+
+  @Test func runCompletionReturnsToIdle() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .running(reason: .appLaunch)
+    state.exportRunState = .idle  // Run finished — exporter signals idle.
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .exportRunStateChanged(.idle), in: state, now: now)
+
+    #expect(next.current == .idle)
+    // No re-schedule on run completion — only events that introduce new work do.
+    #expect(effects.isEmpty)
+  }
+
+  // MARK: - Cancel-on-transition-out
+
+  @Test func unmountWhileScheduledCancelsDebounce() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    let fireAt = now.addingTimeInterval(2)
+    state.current = .scheduled(reason: .scopeSelectionChanged, fireAt: fireAt)
+
+    let unmounted = DestinationSnapshot(
+      fingerprint: state.destination.fingerprint,
+      isAvailable: false,
+      safety: .safe
+    )
+    let (next, effects) = AutoSyncReducer.reduce(
+      .destinationChanged(unmounted), in: state, now: now)
+
+    #expect(next.current == .waiting(.destinationUnavailable))
+    #expect(effects == [.cancelDebounce(.scopeSelectionChanged)])
+  }
+
+  @Test func remountAfterUnmountSchedulesDestinationBecameAvailable() {
+    // Was scheduled when drive went away, transitioned to .waiting. When the same
+    // drive comes back, schedule with .destinationBecameAvailable (the appropriate
+    // 3s debounce).
+    var state = enabledStateWithSafeDestinationAndScope()
+    let unavailable = DestinationSnapshot(
+      fingerprint: state.destination.fingerprint,
+      isAvailable: false,
+      safety: .safe
+    )
+    state.destination = unavailable
+    state.current = .waiting(.destinationUnavailable)
+
+    let restored = DestinationSnapshot(
+      fingerprint: state.destination.fingerprint,
+      isAvailable: true,
+      safety: .safe
+    )
+    let (next, effects) = AutoSyncReducer.reduce(.destinationChanged(restored), in: state, now: now)
+
+    let fireAt = now.addingTimeInterval(3)
+    #expect(next.current == .scheduled(reason: .destinationBecameAvailable, fireAt: fireAt))
+    #expect(effects == [.scheduleDebounce(.destinationBecameAvailable, fireAt: fireAt)])
+  }
+
+  @Test func disablingWhileScheduledCancelsDebounce() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .scheduled(reason: .appLaunch, fireAt: now.addingTimeInterval(10))
+
+    let (next, effects) = AutoSyncReducer.reduce(.enabledChanged(false), in: state, now: now)
+
+    #expect(next.current == .disabled)
+    #expect(effects == [.cancelDebounce(.appLaunch)])
+  }
+
+  @Test func newTriggerDuringScheduledReplacesDebounce() {
+    // Was scheduled with .appLaunch (10s); user changes scopes — replace with
+    // .scopeSelectionChanged (2s). Plan: "the most recent scheduling wins" via
+    // cancel-then-schedule.
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .scheduled(reason: .appLaunch, fireAt: now.addingTimeInterval(10))
+
+    let newScopes = AutoExportScopeSelection(timeline: true, favorites: true)
+    let (next, effects) = AutoSyncReducer.reduce(
+      .scopeSelectionChanged(newScopes), in: state, now: now)
+
+    let fireAt = now.addingTimeInterval(2)
+    #expect(next.current == .scheduled(reason: .scopeSelectionChanged, fireAt: fireAt))
+    #expect(
+      effects == [
+        .cancelDebounce(.appLaunch),
+        .scheduleDebounce(.scopeSelectionChanged, fireAt: fireAt),
+      ])
   }
 
   // MARK: - Idempotence (plan §"State Reducer" dispatch contract)
