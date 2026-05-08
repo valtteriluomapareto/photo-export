@@ -99,6 +99,10 @@ final class ExportManager: ObservableObject {
     let totalJobsEnqueuedAtStart: Int
     let totalJobsCompletedAtStart: Int
     let continuation: CheckedContinuation<ExportRunSummary, Never>
+    /// Variant-failure count accumulated during this run. Bumped from
+    /// `recordVariantFailed`. Reported as `ExportRunSummary.failedCount`; a non-zero
+    /// value also flips a `.completed` queue-drain finalize to `.failed`.
+    var failedCount: Int = 0
   }
   private var activeRunBookkeeping: ActiveRunBookkeeping?
 
@@ -954,15 +958,25 @@ final class ExportManager: ObservableObject {
     guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
       return
     }
+    // A natural queue-drain finalize comes in as `.completed`. If any variants failed
+    // during this run we remap to `.failed` so callers can distinguish a clean run
+    // from one that needs retry-store inspection. Explicit cancel/interrupt paths keep
+    // their incoming result untouched.
+    let effectiveResult: ExportRunResult
+    if result == .completed && bookkeeping.failedCount > 0 {
+      effectiveResult = .failed
+    } else {
+      effectiveResult = result
+    }
     let summary = ExportRunSummary(
       context: context,
       endedAt: Date(),
       enqueuedCount: max(0, totalJobsEnqueued - bookkeeping.totalJobsEnqueuedAtStart),
       completedCount: max(0, totalJobsCompleted - bookkeeping.totalJobsCompletedAtStart),
-      failedCount: 0,
+      failedCount: bookkeeping.failedCount,
       skippedCount: 0,
       cancelReason: cancelReason,
-      result: result
+      result: effectiveResult
     )
     activeRunContext = nil
     activeRunBookkeeping = nil
@@ -1825,6 +1839,7 @@ final class ExportManager: ObservableObject {
       collectionExportRecordStore.markVariantFailed(
         assetId: assetId, placement: placement, variant: variant, error: error, at: date)
     }
+    activeRunBookkeeping?.failedCount += 1
   }
 
   private func recordVariantInProgress(
