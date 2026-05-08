@@ -16,6 +16,19 @@ struct PhotoExportApp: App {
   @StateObject private var collectionExportRecordStore: CollectionExportRecordStore
   @StateObject private var exportManager: ExportManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
+  @StateObject private var autoSyncManager: AutoSyncManager
+
+  // AutoSync collaborators retained for the app's lifetime. They are not
+  // `@StateObject` because no view observes them directly — they only need to
+  // outlive `attach(to:)`, which `AutoSyncManager` references through its
+  // captured `AutoSyncEnvironment`. Stored as plain `let` because the
+  // `App` struct itself is created once at process launch.
+  private let autoSyncDestinationAdapter: DestinationSnapshotAdapter
+  private let autoSyncScopeStore: UserDefaultsAutoExportScopeStore
+  private let autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+  private let autoSyncDirtyStateStore: FileBackedAutoSyncDirtyStateStore
+  private let autoSyncRetryStateStore: FileBackedAutoSyncRetryStateStore
+  private let autoSyncClock: SystemAutoSyncClock
 
   init() {
     let edm = ExportDestinationManager()
@@ -40,12 +53,33 @@ struct PhotoExportApp: App {
       configureRecordStores: configure
     )
 
+    let autoSyncRoot = Self.autoSyncDirectoryURL()
+    let destinationsRoot = autoSyncRoot.appendingPathComponent(
+      "destinations", isDirectory: true)
+    let dirtyStore = FileBackedAutoSyncDirtyStateStore(baseDirectoryURL: destinationsRoot)
+    let retryStore = FileBackedAutoSyncRetryStateStore(baseDirectoryURL: destinationsRoot)
+    let tokenStore = GlobalPhotoChangeTokenStore(
+      fileURL: autoSyncRoot.appendingPathComponent("photo-library-change-token.data"))
+    let photoAdapter = PhotoLibraryPersistentChangeAdapter(tokenStore: tokenStore)
+    let destinationAdapter = DestinationSnapshotAdapter(
+      destinationManager: edm, lifecycleCoordinator: coordinator)
+    let scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: .standard)
+    let clock = SystemAutoSyncClock()
+    let asm = AutoSyncManager()
+
     _exportDestinationManager = StateObject(wrappedValue: edm)
     _photoLibraryManager = StateObject(wrappedValue: plm)
     _exportRecordStore = StateObject(wrappedValue: ers)
     _collectionExportRecordStore = StateObject(wrappedValue: cers)
     _exportManager = StateObject(wrappedValue: em)
     _lifecycleCoordinator = StateObject(wrappedValue: coordinator)
+    _autoSyncManager = StateObject(wrappedValue: asm)
+    self.autoSyncDestinationAdapter = destinationAdapter
+    self.autoSyncScopeStore = scopeStore
+    self.autoSyncPhotoChangeAdapter = photoAdapter
+    self.autoSyncDirtyStateStore = dirtyStore
+    self.autoSyncRetryStateStore = retryStore
+    self.autoSyncClock = clock
   }
 
   var body: some Scene {
@@ -63,6 +97,7 @@ struct PhotoExportApp: App {
         .environmentObject(exportManager)
         .environmentObject(exportRecordStore)
         .environmentObject(collectionExportRecordStore)
+        .environmentObject(autoSyncManager)
         .task {
           lifecycleCoordinator.attach(
             initial: DestinationIdentitySnapshot(
@@ -70,6 +105,23 @@ struct PhotoExportApp: App {
             fingerprintPublisher: exportDestinationManager.$destinationFingerprint
               .eraseToAnyPublisher()
           )
+          // Wire AutoSync after the lifecycle coordinator so the
+          // destination snapshot adapter sees the initial migration-conflict
+          // state on first emission. AutoSyncManager.attach is idempotent;
+          // the photo change adapter is a no-op until Photos authorization.
+          let environment = AutoSyncEnvironment(
+            exportRunner: exportManager,
+            destination: autoSyncDestinationAdapter,
+            scopes: autoSyncScopeStore,
+            photos: autoSyncPhotoChangeAdapter,
+            importing: exportManager,
+            dirtyStateStore: autoSyncDirtyStateStore,
+            retryStateStore: autoSyncRetryStateStore,
+            clock: autoSyncClock,
+            userDefaults: .standard
+          )
+          autoSyncManager.attach(to: environment)
+          autoSyncPhotoChangeAdapter.start()
         }
     }
     .defaultSize(width: 1100, height: 640)
@@ -90,6 +142,25 @@ struct PhotoExportApp: App {
     }
     .windowResizability(.contentSize)
     .windowStyle(.hiddenTitleBar)
+  }
+
+  /// Returns `<App Support>/<bundle-id>/AutoSync/` as the root for AutoSync persistence.
+  /// Mirrors the pattern in `ExportRecordStore.init` so all per-bundle state lands
+  /// under the same parent. The directory itself is created lazily by the individual
+  /// stores (dirty/retry stores create per-destination subfolders; the token store
+  /// creates the parent on first save).
+  static func autoSyncDirectoryURL() -> URL {
+    let appSupport = try! FileManager.default.url(
+      for: .applicationSupportDirectory,
+      in: .userDomainMask,
+      appropriateFor: nil,
+      create: true
+    )
+    let bundleId = Bundle.main.bundleIdentifier ?? "com.valtteriluoma.photo-export"
+    return
+      appSupport
+      .appendingPathComponent(bundleId, isDirectory: true)
+      .appendingPathComponent("AutoSync", isDirectory: true)
   }
 
   /// Runs the per-destination directory coordinator (Phase 0 lazy migration) and then
