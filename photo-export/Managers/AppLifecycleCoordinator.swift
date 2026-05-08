@@ -25,16 +25,18 @@ struct MigrationConflictState: Equatable, Sendable {
 /// unmounted / no destination selected). The id alone is what determines whether a change
 /// is "same destination" — equal ids skip the cancel/reconfigure cycle even if a transient
 /// fingerprint refresh produced a slightly different live fingerprint.
+///
+/// Construction is via `init(fingerprint:)` or `.none`; both keep `id == fingerprint?.id`
+/// invariant. There is intentionally no public initializer that takes id and fingerprint
+/// separately — earlier review caught that allowing them to drift silently would let a
+/// caller pass an id that disagrees with the embedded fingerprint's derived id, which
+/// would then split downstream code that mixes `currentDestination.id` (used today) with
+/// `currentDestination.fingerprint?.id` (the future safety-gate read).
 struct DestinationIdentitySnapshot: Equatable, Sendable {
   let id: String?
   let fingerprint: DestinationFingerprint?
 
-  static let none = DestinationIdentitySnapshot(id: nil, fingerprint: nil)
-
-  init(id: String?, fingerprint: DestinationFingerprint?) {
-    self.id = id
-    self.fingerprint = fingerprint
-  }
+  static let none = DestinationIdentitySnapshot(fingerprint: nil)
 
   init(fingerprint: DestinationFingerprint?) {
     self.fingerprint = fingerprint

@@ -12,21 +12,30 @@ import Testing
 @MainActor
 struct AppLifecycleCoordinatorTests {
 
-  private static func snapshot(_ id: String?, confidence: DestinationIdentityConfidence = .high)
-    -> DestinationIdentitySnapshot
-  {
-    guard let id else { return .none }
-    let fingerprint = DestinationFingerprint(
-      schemaVersion: DestinationFingerprint.currentSchemaVersion,
-      volumeUUIDString: confidence == .high ? "uuid-\(id)" : nil,
-      volumeRootPath: nil,
-      relativePathFromVolumeRoot: "/dummy",
-      standardizedPath: "/Volumes/dummy/\(id)",
-      identityConfidence: confidence
-    )
-    // Replace the snapshot's id with the supplied id so tests can use stable strings — the
-    // hash derivation is verified separately in DestinationFingerprintTests.
-    return DestinationIdentitySnapshot(id: id, fingerprint: fingerprint)
+  /// Builds a snapshot whose id is derived from a fingerprint constructed from `tag` so
+  /// each call produces a stable, distinct id. Tests assert against the snapshot's
+  /// derived `id` rather than `tag` directly — the snapshot's id is the SHA-256 hex of
+  /// the fingerprint's components, which is what `AppLifecycleCoordinator` compares.
+  private static func snapshot(
+    _ tag: String, confidence: DestinationIdentityConfidence = .high
+  ) -> DestinationIdentitySnapshot {
+    let fingerprint: DestinationFingerprint
+    switch confidence {
+    case .high:
+      fingerprint = .makeHigh(
+        volumeUUIDString: "uuid-\(tag)",
+        volumeRootPath: nil,
+        relativePathFromVolumeRoot: "/\(tag)",
+        standardizedPath: "/Volumes/\(tag)"
+      )
+    case .low:
+      fingerprint = .makeLow(
+        volumeRootPath: nil,
+        relativePathFromVolumeRoot: "/\(tag)",
+        standardizedPath: "/Volumes/\(tag)"
+      )
+    }
+    return DestinationIdentitySnapshot(fingerprint: fingerprint)
   }
 
   @Test func sameIdAssignmentIsANoOp() {
@@ -40,12 +49,13 @@ struct AppLifecycleCoordinatorTests {
       }
     )
 
-    coordinator.apply(destination: Self.snapshot("dest-A"))
-    coordinator.apply(destination: Self.snapshot("dest-A"))
-    coordinator.apply(destination: Self.snapshot("dest-A"))
+    let snap = Self.snapshot("dest-A")
+    coordinator.apply(destination: snap)
+    coordinator.apply(destination: snap)
+    coordinator.apply(destination: snap)
 
     #expect(cancelCount == 1)
-    #expect(configureCalls == ["dest-A"])
+    #expect(configureCalls == [snap.id])
   }
 
   @Test func differentIdsCancelAndReconfigure() {
@@ -59,12 +69,14 @@ struct AppLifecycleCoordinatorTests {
       }
     )
 
-    coordinator.apply(destination: Self.snapshot("dest-A"))
-    coordinator.apply(destination: Self.snapshot("dest-B"))
+    let snapA = Self.snapshot("dest-A")
+    let snapB = Self.snapshot("dest-B")
+    coordinator.apply(destination: snapA)
+    coordinator.apply(destination: snapB)
     coordinator.apply(destination: .none)
 
     #expect(cancelCount == 3)
-    #expect(configureCalls == ["dest-A", "dest-B", nil])
+    #expect(configureCalls == [snapA.id, snapB.id, nil])
   }
 
   @Test func attachAppliesInitialIdAndIsIdempotent() {
@@ -79,16 +91,14 @@ struct AppLifecycleCoordinatorTests {
     )
 
     let publisher = Empty<DestinationFingerprint?, Never>().eraseToAnyPublisher()
-    coordinator.attach(
-      initial: Self.snapshot("dest-A"), fingerprintPublisher: publisher)
-    coordinator.attach(
-      initial: Self.snapshot("dest-X"), fingerprintPublisher: publisher)
-    coordinator.attach(
-      initial: .none, fingerprintPublisher: publisher)
+    let snapA = Self.snapshot("dest-A")
+    coordinator.attach(initial: snapA, fingerprintPublisher: publisher)
+    coordinator.attach(initial: Self.snapshot("dest-X"), fingerprintPublisher: publisher)
+    coordinator.attach(initial: .none, fingerprintPublisher: publisher)
 
     #expect(cancelCount == 1)
-    #expect(configureCalls == ["dest-A"])
-    #expect(coordinator.lastConfiguredDestinationId == "dest-A")
+    #expect(configureCalls == [snapA.id])
+    #expect(coordinator.lastConfiguredDestinationId == snapA.id)
   }
 
   @Test func currentDestinationCarriesIdentityConfidence() {
@@ -97,9 +107,10 @@ struct AppLifecycleCoordinatorTests {
       configureRecordStores: { _ in .success }
     )
 
-    coordinator.apply(destination: Self.snapshot("dest-A", confidence: .low))
+    let snap = Self.snapshot("dest-A", confidence: .low)
+    coordinator.apply(destination: snap)
 
-    #expect(coordinator.currentDestination.id == "dest-A")
+    #expect(coordinator.currentDestination.id == snap.id)
     #expect(coordinator.currentDestination.fingerprint?.identityConfidence == .low)
   }
 
