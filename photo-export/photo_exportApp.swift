@@ -26,16 +26,17 @@ struct PhotoExportApp: App {
       photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers,
       collectionExportRecordStore: cers)
 
+    let configure: (String?) -> ConfigureRecordStoresResult = { [edm, ers, cers] newId in
+      Self.configureRecordStores(
+        for: newId,
+        destinationManager: edm,
+        timelineStore: ers,
+        collectionStore: cers
+      )
+    }
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { [em] in em.cancelAndClear() },
-      configureRecordStores: { [edm, ers, cers] newId in
-        Self.configureRecordStores(
-          for: newId,
-          destinationManager: edm,
-          timelineStore: ers,
-          collectionStore: cers
-        )
-      } as (String?) -> ConfigureRecordStoresResult
+      configureRecordStores: configure
     )
 
     _exportDestinationManager = StateObject(wrappedValue: edm)
@@ -63,8 +64,10 @@ struct PhotoExportApp: App {
         .environmentObject(collectionExportRecordStore)
         .task {
           lifecycleCoordinator.attach(
-            initialDestinationId: exportDestinationManager.destinationId,
-            destinationIdPublisher: exportDestinationManager.$destinationId.eraseToAnyPublisher()
+            initial: DestinationIdentitySnapshot(
+              fingerprint: exportDestinationManager.destinationFingerprint),
+            fingerprintPublisher: exportDestinationManager.$destinationFingerprint
+              .eraseToAnyPublisher()
           )
         }
     }

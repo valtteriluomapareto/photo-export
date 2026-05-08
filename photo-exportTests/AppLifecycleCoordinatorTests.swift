@@ -5,82 +5,102 @@ import Testing
 @testable import Photo_Export
 
 /// Phase 0a (auto-sync plan): bootstrap and destination-change handling now live in
-/// `AppLifecycleCoordinator`. Same-fingerprint destination assignments must NOT call
-/// `cancelAndClear()` or reconfigure the record stores; only true id changes do.
+/// `AppLifecycleCoordinator`. Same-id destination assignments must NOT call
+/// `cancelAndClear()` or reconfigure the record stores; only true id changes do. The
+/// coordinator now carries the full `DestinationFingerprint` so downstream code (safety
+/// gate, AutoSync) can react to `identityConfidence` without recomputing it from a URL.
 @MainActor
 struct AppLifecycleCoordinatorTests {
 
-  private struct Spy {
-    var cancelCount = 0
-    var configureCalls: [String?] = []
-  }
-
-  private func makeCoordinator() -> (AppLifecycleCoordinator, () -> Spy) {
-    var spy = Spy()
-    let coordinator = AppLifecycleCoordinator(
-      cancelActiveWork: { spy.cancelCount += 1 },
-      configureRecordStores: { newId in
-        spy.configureCalls.append(newId)
-        return .success
-      }
+  private static func snapshot(_ id: String?, confidence: DestinationIdentityConfidence = .high)
+    -> DestinationIdentitySnapshot
+  {
+    guard let id else { return .none }
+    let fingerprint = DestinationFingerprint(
+      schemaVersion: DestinationFingerprint.currentSchemaVersion,
+      volumeUUIDString: confidence == .high ? "uuid-\(id)" : nil,
+      volumeRootPath: nil,
+      relativePathFromVolumeRoot: "/dummy",
+      standardizedPath: "/Volumes/dummy/\(id)",
+      identityConfidence: confidence
     )
-    return (coordinator, { spy })
+    // Replace the snapshot's id with the supplied id so tests can use stable strings — the
+    // hash derivation is verified separately in DestinationFingerprintTests.
+    return DestinationIdentitySnapshot(id: id, fingerprint: fingerprint)
   }
 
   @Test func sameIdAssignmentIsANoOp() {
-    var spy = Spy()
+    var cancelCount = 0
+    var configureCalls: [String?] = []
     let coordinator = AppLifecycleCoordinator(
-      cancelActiveWork: { spy.cancelCount += 1 },
+      cancelActiveWork: { cancelCount += 1 },
       configureRecordStores: { newId in
-        spy.configureCalls.append(newId)
+        configureCalls.append(newId)
         return .success
       }
     )
 
-    coordinator.apply(destinationId: "dest-A")
-    coordinator.apply(destinationId: "dest-A")
-    coordinator.apply(destinationId: "dest-A")
+    coordinator.apply(destination: Self.snapshot("dest-A"))
+    coordinator.apply(destination: Self.snapshot("dest-A"))
+    coordinator.apply(destination: Self.snapshot("dest-A"))
 
-    #expect(spy.cancelCount == 1)
-    #expect(spy.configureCalls == ["dest-A"])
+    #expect(cancelCount == 1)
+    #expect(configureCalls == ["dest-A"])
   }
 
   @Test func differentIdsCancelAndReconfigure() {
-    var spy = Spy()
+    var cancelCount = 0
+    var configureCalls: [String?] = []
     let coordinator = AppLifecycleCoordinator(
-      cancelActiveWork: { spy.cancelCount += 1 },
+      cancelActiveWork: { cancelCount += 1 },
       configureRecordStores: { newId in
-        spy.configureCalls.append(newId)
+        configureCalls.append(newId)
         return .success
       }
     )
 
-    coordinator.apply(destinationId: "dest-A")
-    coordinator.apply(destinationId: "dest-B")
-    coordinator.apply(destinationId: nil)
+    coordinator.apply(destination: Self.snapshot("dest-A"))
+    coordinator.apply(destination: Self.snapshot("dest-B"))
+    coordinator.apply(destination: .none)
 
-    #expect(spy.cancelCount == 3)
-    #expect(spy.configureCalls == ["dest-A", "dest-B", nil])
+    #expect(cancelCount == 3)
+    #expect(configureCalls == ["dest-A", "dest-B", nil])
   }
 
   @Test func attachAppliesInitialIdAndIsIdempotent() {
-    var spy = Spy()
+    var cancelCount = 0
+    var configureCalls: [String?] = []
     let coordinator = AppLifecycleCoordinator(
-      cancelActiveWork: { spy.cancelCount += 1 },
+      cancelActiveWork: { cancelCount += 1 },
       configureRecordStores: { newId in
-        spy.configureCalls.append(newId)
+        configureCalls.append(newId)
         return .success
       }
     )
 
-    let publisher = Empty<String?, Never>().eraseToAnyPublisher()
-    coordinator.attach(initialDestinationId: "dest-A", destinationIdPublisher: publisher)
-    coordinator.attach(initialDestinationId: "dest-X", destinationIdPublisher: publisher)
-    coordinator.attach(initialDestinationId: nil, destinationIdPublisher: publisher)
+    let publisher = Empty<DestinationFingerprint?, Never>().eraseToAnyPublisher()
+    coordinator.attach(
+      initial: Self.snapshot("dest-A"), fingerprintPublisher: publisher)
+    coordinator.attach(
+      initial: Self.snapshot("dest-X"), fingerprintPublisher: publisher)
+    coordinator.attach(
+      initial: .none, fingerprintPublisher: publisher)
 
-    #expect(spy.cancelCount == 1)
-    #expect(spy.configureCalls == ["dest-A"])
+    #expect(cancelCount == 1)
+    #expect(configureCalls == ["dest-A"])
     #expect(coordinator.lastConfiguredDestinationId == "dest-A")
+  }
+
+  @Test func currentDestinationCarriesIdentityConfidence() {
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {},
+      configureRecordStores: { _ in .success }
+    )
+
+    coordinator.apply(destination: Self.snapshot("dest-A", confidence: .low))
+
+    #expect(coordinator.currentDestination.id == "dest-A")
+    #expect(coordinator.currentDestination.fingerprint?.identityConfidence == .low)
   }
 
   @Test func migrationConflictPropagatesToCoordinatorState() {
@@ -91,7 +111,7 @@ struct AppLifecycleCoordinatorTests {
       }
     )
 
-    coordinator.apply(destinationId: "new-id")
+    coordinator.apply(destination: Self.snapshot("new-id"))
 
     #expect(
       coordinator.migrationConflict
@@ -106,48 +126,74 @@ struct AppLifecycleCoordinatorTests {
       configureRecordStores: { _ in nextResult }
     )
 
-    coordinator.apply(destinationId: "first")
+    coordinator.apply(destination: Self.snapshot("first"))
     #expect(coordinator.migrationConflict != nil)
 
     nextResult = .success
-    coordinator.apply(destinationId: "second")
+    coordinator.apply(destination: Self.snapshot("second"))
 
     #expect(coordinator.migrationConflict == nil)
   }
 
-  @Test func migrationFailedDoesNotSurfaceAsConflict() {
+  @Test func migrationFailedPreservesAnyPriorConflict() {
+    var nextResult: ConfigureRecordStoresResult = .migrationConflict(
+      newId: "n", legacyId: "l")
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {},
+      configureRecordStores: { _ in nextResult }
+    )
+
+    coordinator.apply(destination: Self.snapshot("first"))
+    let priorConflict = coordinator.migrationConflict
+    #expect(priorConflict != nil)
+
+    // Transient I/O failure during the next configure: must NOT clear the prior conflict
+    // — a real legacy/stable mismatch surfaced earlier still needs user resolution.
+    nextResult = .migrationFailed(message: "io error")
+    coordinator.apply(destination: Self.snapshot("second"))
+
+    #expect(coordinator.migrationConflict == priorConflict)
+  }
+
+  @Test func migrationFailedFromCleanStateDoesNotInventAConflict() {
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: {},
       configureRecordStores: { _ in .migrationFailed(message: "io error") }
     )
 
-    coordinator.apply(destinationId: "pending")
+    coordinator.apply(destination: Self.snapshot("pending"))
 
     #expect(coordinator.migrationConflict == nil)
   }
 
   @Test func publisherEventsDriveTransitions() {
-    var spy = Spy()
+    var cancelCount = 0
+    var configureCalls: [String?] = []
     let coordinator = AppLifecycleCoordinator(
-      cancelActiveWork: { spy.cancelCount += 1 },
+      cancelActiveWork: { cancelCount += 1 },
       configureRecordStores: { newId in
-        spy.configureCalls.append(newId)
+        configureCalls.append(newId)
         return .success
       }
     )
 
-    let subject = PassthroughSubject<String?, Never>()
+    let subject = PassthroughSubject<DestinationFingerprint?, Never>()
     coordinator.attach(
-      initialDestinationId: nil,
-      destinationIdPublisher: subject.eraseToAnyPublisher()
+      initial: .none,
+      fingerprintPublisher: subject.eraseToAnyPublisher()
     )
 
-    subject.send("dest-A")
-    subject.send("dest-A")  // duplicate; removeDuplicates filters
-    subject.send("dest-B")
+    let fpA = Self.snapshot("dest-A").fingerprint
+    let fpB = Self.snapshot("dest-B").fingerprint
+    let idA = fpA?.id
+    let idB = fpB?.id
 
-    #expect(spy.configureCalls == ["dest-A", "dest-B"])
-    #expect(spy.cancelCount == 2)
-    #expect(coordinator.lastConfiguredDestinationId == "dest-B")
+    subject.send(fpA)
+    subject.send(fpA)  // duplicate id; removeDuplicates filters
+    subject.send(fpB)
+
+    #expect(configureCalls == [idA, idB])
+    #expect(cancelCount == 2)
+    #expect(coordinator.lastConfiguredDestinationId == idB)
   }
 }

@@ -12,6 +12,11 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   @Published private(set) var isWritable: Bool = false
   @Published private(set) var statusMessage: String?
   @Published private(set) var destinationId: String?
+  /// Structured form of the same identity carried by `destinationId`. Both are kept in sync —
+  /// `destinationFingerprint?.id == destinationId` always holds. AutoSync code subscribes to
+  /// the fingerprint so it can read `identityConfidence` and the volume/path components
+  /// without having to recompute them from a URL.
+  @Published private(set) var destinationFingerprint: DestinationFingerprint?
 
   // MARK: - Keys & Logger
   private let userDefaults: UserDefaults
@@ -137,6 +142,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     isWritable = false
     statusMessage = "No export folder selected"
     destinationId = nil
+    destinationFingerprint = nil
     stashedLegacyDestinationId = nil
     userDefaults.removeObject(forKey: bookmarkDefaultsKey)
     logger.info("Cleared export destination selection")
@@ -406,6 +412,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else {
       statusMessage = "No export folder selected"
       destinationId = nil
+      destinationFingerprint = nil
       return
     }
     // Capture the legacy hash from the *original* bytes before any stale-bookmark refresh.
@@ -435,6 +442,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       isAvailable = false
       isWritable = false
       destinationId = nil
+      destinationFingerprint = nil
       stashedLegacyDestinationId = nil
     }
   }
@@ -472,12 +480,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       statusMessage = nil
     }
 
-    // Derive the stable destinationId once the volume is reachable. When the drive is
-    // unmounted, volume-resource keys are unreadable; clear the id so the rest of the app
-    // treats the destination as unavailable until the drive comes back.
+    // Derive the stable fingerprint once the volume is reachable. When the drive is
+    // unmounted, volume-resource keys are unreadable; clear both the id and the fingerprint
+    // so the rest of the app treats the destination as unavailable until the drive comes back.
     if isAvailable {
-      destinationId = Self.computeDestinationId(for: url)
+      let fingerprint = Self.computeDestinationFingerprint(for: url)
+      destinationFingerprint = fingerprint
+      destinationId = fingerprint?.id
     } else {
+      destinationFingerprint = nil
       destinationId = nil
     }
   }
