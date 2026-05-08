@@ -264,6 +264,19 @@ struct AutoSyncRetryStateTests {
     #expect(store.savedDestinationIds == ["dest-A"])
   }
 
+  @Test func inMemoryStoreSaveThrowsWhenNextSaveErrorIsSet() {
+    let store = InMemoryAutoSyncRetryStateStore()
+    store.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
+
+    #expect(throws: InMemoryAutoSyncStoreError.self) {
+      try store.save(.empty, destinationId: "dest-A")
+    }
+    // Cleared after one throw.
+    #expect(throws: Never.self) {
+      try store.save(.empty, destinationId: "dest-A")
+    }
+  }
+
   @Test func inMemoryStoreDeleteRemovesEntry() throws {
     let store = InMemoryAutoSyncRetryStateStore()
     try store.save(.empty, destinationId: "dest-A")

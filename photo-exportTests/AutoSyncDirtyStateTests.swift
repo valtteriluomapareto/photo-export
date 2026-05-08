@@ -27,6 +27,16 @@ struct AutoSyncDirtyStateTests {
     #expect(scope.pendingFullReconciliation == false)
   }
 
+  @Test func recordPendingAssetIdExactlyAtCapDoesNotRollOver() {
+    var scope = ScopeDirtyState(pendingAssetIds: ["a", "b"])
+
+    let rolledOver = scope.recordPendingAssetId("c", costCap: 3)
+
+    #expect(rolledOver == false)
+    #expect(scope.pendingAssetIds == ["a", "b", "c"])
+    #expect(scope.pendingFullReconciliation == false)
+  }
+
   @Test func recordPendingAssetIdAtCapRollsOverToFullReconciliation() {
     var scope = ScopeDirtyState(pendingAssetIds: ["a", "b", "c"])
 
@@ -115,6 +125,15 @@ struct AutoSyncDirtyStateTests {
     #expect(state.isEmpty)
   }
 
+  @Test func markUpdatedSetsLastUpdatedAt() {
+    var state = AutoSyncDirtyState()
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    state.markUpdated(at: now)
+
+    #expect(state.lastUpdatedAt == now)
+  }
+
   @Test func dirtyStateRoundTripsThroughCodable() throws {
     var scope = ScopeDirtyState()
     scope.recordPendingAssetId("asset-1", costCap: 10)
@@ -155,6 +174,33 @@ struct AutoSyncDirtyStateTests {
 
     #expect(store.load(destinationId: "dest-A") == state)
     #expect(store.savedDestinationIds == ["dest-A"])
+  }
+
+  @Test func storeSaveThrowsWhenNextSaveErrorIsSet() {
+    let store = InMemoryAutoSyncDirtyStateStore()
+    store.nextSaveError = InMemoryAutoSyncStoreError("disk-full")
+
+    var thrown = false
+    do {
+      try store.save(.empty, destinationId: "dest-A")
+    } catch {
+      thrown = true
+    }
+
+    #expect(thrown)
+    // Knob clears after one throw — subsequent saves succeed.
+    #expect(throws: Never.self) {
+      try store.save(.empty, destinationId: "dest-A")
+    }
+  }
+
+  @Test func storeDeleteThrowsWhenNextDeleteErrorIsSet() {
+    let store = InMemoryAutoSyncDirtyStateStore()
+    store.nextDeleteError = InMemoryAutoSyncStoreError("io")
+
+    #expect(throws: InMemoryAutoSyncStoreError.self) {
+      try store.deleteState(destinationId: "dest-A")
+    }
   }
 
   @Test func storeDeleteRemovesEntry() throws {

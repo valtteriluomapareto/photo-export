@@ -87,12 +87,21 @@ struct AutoSyncDirtyState: Codable, Equatable, Sendable {
   }
 
   /// Stores the dirty state for a scope. Empty values are removed from the dictionary so the
-  /// persisted JSON stays sparse.
+  /// persisted JSON stays sparse. `lastUpdatedAt` is *not* touched — callers update it via
+  /// `markUpdated(at:)` after batching mutations so a single reducer event produces one
+  /// timestamp rather than one per scope mutated.
   mutating func setScope(_ scope: AutoExportLibraryScope, _ value: ScopeDirtyState) {
     if value.isEmpty {
       scopes.removeValue(forKey: scope.rawValue)
     } else {
       scopes[scope.rawValue] = value
     }
+  }
+
+  /// Sets `lastUpdatedAt`. Reducer/manager code calls this once per persisted change with
+  /// the time supplied by the injected `AutoSyncClock`, so tests using `TestClock` can pin
+  /// the value deterministically rather than reading wall-clock time.
+  mutating func markUpdated(at date: Date) {
+    lastUpdatedAt = date
   }
 }

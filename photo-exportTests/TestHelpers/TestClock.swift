@@ -88,6 +88,8 @@ final class TestClock: AutoSyncClock {
   }
 }
 
+// `AutoSyncCancellable` is itself a `@MainActor` protocol, so the `cancel()` impl is
+// already main-actor-isolated by inheritance — no additional annotation is needed.
 private final class TestCancellable: AutoSyncCancellable {
   private let id: UUID
   private weak var clock: TestClock?
