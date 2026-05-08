@@ -23,6 +23,12 @@ enum AutoSyncReducer {
     /// Keyed by destination id; entries persist across destination switches so
     /// reconnecting the same drive resumes its accumulated work.
     var dirtyStateByDestination: [String: AutoSyncDirtyState]
+    /// Trigger reason that was set while the reducer was blocked (waiting on import,
+    /// destination unavailable, etc.) and couldn't immediately schedule. The
+    /// resume hook re-fires it when the blocker resolves so non-dirty triggers
+    /// (appLaunch, scope change, version change) aren't silently lost. Cleared on
+    /// fire or on superseding trigger.
+    var pendingTriggerReason: AutoSyncReason?
 
     static let initial = State(
       current: .disabled,
@@ -32,7 +38,8 @@ enum AutoSyncReducer {
       versionSelection: .edited,
       importActive: false,
       exportRunState: .idle,
-      dirtyStateByDestination: [:]
+      dirtyStateByDestination: [:],
+      pendingTriggerReason: nil
     )
   }
 
@@ -110,27 +117,24 @@ enum AutoSyncReducer {
       newState.importActive = isImporting
 
     case .exportRunStateChanged(let runState):
-      // Detect a transition out of our own auto-sync run. `state.current == .running`
-      // means the previous tick was an auto-sync run we own (manual runs never
-      // transition the reducer to .running — environmentAllowsRun blocks them).
-      let ourRunJustFinished: Bool
-      if case .running = state.current,
-        state.exportRunState.activeContext != nil,
-        runState.activeContext == nil
-      {
-        ourRunJustFinished = true
-      } else {
-        ourRunJustFinished = false
-      }
+      // Just track the run state — dirty-clearing is gated on the auto-sync run's
+      // *result* and arrives via a separate `.autoSyncRunCompleted(summary)` event
+      // dispatched by the manager after the run task returns. Without that signal
+      // we'd clear dirty on cancelled/interrupted/failed runs and lose pending
+      // work the run never actually exported.
       newState.exportRunState = runState
-      if ourRunJustFinished, let destinationId = newState.destination.id {
-        // The auto-sync run we just executed was a full reconciliation across the
-        // selected scopes (.autoExport scope umbrella). Clear dirty for those
-        // scopes; new photosChanged events that arrived mid-run would have
-        // accumulated into the same scope-dirty entry and *also* be processed by
-        // the full-reconciliation run, so clearing them is correct for now.
-        // (Targeted-asset runs that land later will need a per-run snapshot to
-        // avoid clearing post-start additions.)
+
+    case .autoSyncRunCompleted(let summary):
+      // The summary's `result` distinguishes a clean run (where the full
+      // reconciliation processed everything in scope) from a transient failure
+      // (where pending IDs must remain queued for retry). Persist the summary in
+      // either case so the UI can surface "last ran X ago, with N failures."
+      if let destinationId = newState.destination.id {
+        effects.append(.persistRunSummary(summary, destinationId: destinationId))
+      }
+      if summary.result == .completed,
+        let destinationId = newState.destination.id
+      {
         var dirty = newState.dirtyStateByDestination[destinationId] ?? .empty
         for scope in AutoExportLibraryScope.allCases
         where newState.scopeSelection.includes(scope) {
@@ -258,27 +262,52 @@ enum AutoSyncReducer {
       break
     }
 
+    // Save the trigger reason for resume *before* recompute decides whether to
+    // schedule. If recompute lands the state in idle/scheduled, the trigger fires
+    // there and we clear pendingTriggerReason. If it lands blocked/waiting, the
+    // trigger is preserved for resume.
+    if let triggerReason {
+      newState.pendingTriggerReason = triggerReason
+    }
+
     let nextCurrent = recomputeCurrent(
-      from: newState, previous: state.current, triggerReason: triggerReason, now: now,
+      from: newState, previous: state.current,
+      triggerReason: newState.pendingTriggerReason, now: now,
       effects: &effects)
     newState.current = nextCurrent
+
+    // If the recompute scheduled a debounce, the trigger has been "consumed" — drop
+    // pendingTriggerReason. Same for direct .running transitions.
+    if case .scheduled = newState.current {
+      newState.pendingTriggerReason = nil
+    } else if case .running = newState.current {
+      newState.pendingTriggerReason = nil
+    }
 
     // Work-preservation hook. If we just landed in `.idle` from a state that paused
     // pending work — `.running` (run finished), `.waiting(.importActive)` (import
     // done), `.waiting(.manualExportActive)` (manual run done) — and there's
-    // accumulated dirty for the current destination, schedule a debounce so the
-    // pending work is processed instead of sitting forever. Without this, photos
-    // changes during long exports / imports / manual runs are silently abandoned
-    // until an unrelated event happens to re-trigger.
+    // accumulated dirty for the current destination OR a pendingTriggerReason
+    // from a non-dirty trigger (appLaunch, scope change, etc.), schedule a debounce
+    // so the pending work is processed instead of sitting forever. Without this,
+    // photos changes / scope changes / app-launch enables during long exports /
+    // imports / manual runs would be silently abandoned until an unrelated event
+    // happens to re-trigger.
     if case .idle = newState.current,
       previousIsBlockingResumePoint(state.current),
-      let destinationId = newState.destination.id,
-      let dirty = newState.dirtyStateByDestination[destinationId],
-      !dirty.isEmpty
+      let destinationId = newState.destination.id
     {
-      let fireAt = now.addingTimeInterval(debounceDelay(for: .photosChanged))
-      effects.append(.scheduleDebounce(.photosChanged, fireAt: fireAt))
-      newState.current = .scheduled(reason: .photosChanged, fireAt: fireAt)
+      let hasDirty = newState.dirtyStateByDestination[destinationId]?.isEmpty == false
+      if let resumeReason = newState.pendingTriggerReason {
+        let fireAt = now.addingTimeInterval(debounceDelay(for: resumeReason))
+        effects.append(.scheduleDebounce(resumeReason, fireAt: fireAt))
+        newState.current = .scheduled(reason: resumeReason, fireAt: fireAt)
+        newState.pendingTriggerReason = nil
+      } else if hasDirty {
+        let fireAt = now.addingTimeInterval(debounceDelay(for: .photosChanged))
+        effects.append(.scheduleDebounce(.photosChanged, fireAt: fireAt))
+        newState.current = .scheduled(reason: .photosChanged, fireAt: fireAt)
+      }
     }
 
     return (newState, effects)

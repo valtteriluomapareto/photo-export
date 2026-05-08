@@ -85,6 +85,13 @@ final class AutoSyncManager: ObservableObject {
       }
       .store(in: &subscriptions)
 
+    environment.exportRunner.versionSelectionPublisher
+      .removeDuplicates()
+      .sink { [weak self] selection in
+        self?.dispatch(.versionSelectionChanged(selection))
+      }
+      .store(in: &subscriptions)
+
     environment.photos.changes
       .sink { [weak self] outcome in
         switch outcome {
@@ -211,11 +218,17 @@ final class AutoSyncManager: ObservableObject {
       selection: spec.selection,
       startedAt: environment.clock.now()
     )
-    Task { [weak self] in
+    // The Task is intentionally not stored — `runExport` owns its own cancellation
+    // (single-active-run gate inside ExportManager), so we don't need a Set<Task>
+    // to invalidate it. `[weak self]` lets the closure drop cleanly if the manager
+    // is torn down mid-run.
+    Task { @MainActor [weak self] in
       let summary = await environment.exportRunner.runExport(context: context)
-      await MainActor.run { [weak self] in
-        self?.lastRunSummary = summary
-      }
+      // Dispatching `.autoSyncRunCompleted` is what tells the reducer the run
+      // result (success vs failure) so dirty state is only cleared on `.completed`.
+      // The `.exportRunStateChanged(.idle)` event also fires, but it's now purely
+      // a state-tracking signal.
+      self?.dispatch(.autoSyncRunCompleted(summary))
     }
   }
 

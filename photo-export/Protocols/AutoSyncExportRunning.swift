@@ -14,6 +14,10 @@ protocol AutoSyncExportRunning: AnyObject {
   /// new subscribers always have a value.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> { get }
 
+  /// Stream of the user's `ExportVersionSelection` (Include Originals toggle).
+  /// AutoSync needs this to honor the user's selection in background runs.
+  var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> { get }
+
   /// Awaitable run entry point. Caller (typically AutoSyncManager) constructs the
   /// `ExportRunContext` (incl. UUID + startedAt) and awaits the terminal summary.
   func runExport(context: ExportRunContext) async -> ExportRunSummary

@@ -38,6 +38,12 @@ enum AutoSyncEvent: Sendable {
   /// completing, or being cancelled out from under the reducer.
   case exportRunStateChanged(ExportRunState)
 
+  /// An auto-sync run we started has reached a terminal state. The summary's
+  /// `result` distinguishes successful completion from `.failed` / `.cancelled` /
+  /// `.interrupted`; the reducer only clears dirty work on `.completed` so
+  /// transient failures keep their pending IDs intact for retry.
+  case autoSyncRunCompleted(ExportRunSummary)
+
   /// Import Existing Backup started or finished. AutoSync defers while import is
   /// active and re-evaluates afterward.
   case importStateChanged(isImporting: Bool)

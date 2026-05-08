@@ -96,19 +96,36 @@ final class ExportManager: ObservableObject {
   /// `start*` methods.
   @Published private(set) var activeRunContext: ExportRunContext?
 
-  /// Composite run-state observable for AutoSync. Republishes on every transition of
-  /// `activeRunContext` so subscribers see one snapshot per change. `isManualActive` /
-  /// `isAutoSyncActive` are derived from the active context's `source`.
+  /// Composite run-state observable for AutoSync. Republishes whenever the active
+  /// context, the running flag, or the queue depth changes — so the fire-and-forget
+  /// `start*` methods (which never set `activeRunContext`) still register as
+  /// `isManualActive` while the queue is processing them. Without this, AutoSync
+  /// would attempt to start a background run during a manual toolbar export and
+  /// fight the busy queue.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
-    $activeRunContext
-      .map { context in
-        ExportRunState(
+    Publishers.CombineLatest3($activeRunContext, $isRunning, $queueCount)
+      .map { context, isRunning, queueCount in
+        let manualFireAndForget = context == nil && (isRunning || queueCount > 0)
+        return ExportRunState(
           activeContext: context,
-          isManualActive: context?.source == .manual,
+          isManualActive: context?.source == .manual || manualFireAndForget,
           isAutoSyncActive: context?.source == .autoSync
         )
       }
+      .removeDuplicates()
       .eraseToAnyPublisher()
+  }
+
+  /// Combine publisher for `versionSelection` so AutoSync can subscribe to user
+  /// changes (Include Originals toggle). Without this, the reducer would default
+  /// to `.edited` regardless of the user's actual setting.
+  var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> {
+    $versionSelection.eraseToAnyPublisher()
+  }
+
+  /// Combine publisher for the import flag.
+  var isImportingPublisher: AnyPublisher<Bool, Never> {
+    $isImporting.eraseToAnyPublisher()
   }
 
   private struct ActiveRunBookkeeping {

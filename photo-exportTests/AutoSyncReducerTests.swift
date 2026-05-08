@@ -502,22 +502,117 @@ struct AutoSyncReducerTests {
       afterPhotos.dirtyStateByDestination[destId]?.scope(.timeline)
         .pendingAssetIds == ["mid-run-asset"])
 
-    // Run completes. The mid-run dirty would normally be cleared (full reconciliation
-    // is assumed to have processed it), but BEFORE the fix, no schedule fired and
-    // any subsequent event would have to re-trigger. After the fix, the
-    // work-preservation hook detects the resumable transition; dirty has been
-    // cleared, so the schedule does NOT fire here. Validating the cleared-state
-    // path is the point.
+    // Run completes successfully — autoSyncRunCompleted clears dirty + persists summary.
+    let summary = ExportRunSummary(
+      context: runContext, endedAt: now,
+      enqueuedCount: 1, completedCount: 1, failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: .completed)
     let (afterCompletion, effects) = AutoSyncReducer.reduce(
-      .exportRunStateChanged(.idle), in: afterPhotos, now: now)
-    #expect(afterCompletion.current == .idle)
-    // Dirty cleared by the run-completion handler (full reconciliation assumed).
+      .autoSyncRunCompleted(summary), in: afterPhotos, now: now)
+    // Dirty cleared by the run-completion handler (.completed result).
     #expect(afterCompletion.dirtyStateByDestination[destId]?.scope(.timeline).isEmpty == true)
-    // persistDirtyState was emitted during the clear.
+    // persistDirtyState + persistRunSummary were emitted during the clear.
     #expect(
       effects.contains(where: { effect in
         if case .persistDirtyState = effect { return true } else { return false }
       }))
+  }
+
+  /// Codex P2: non-dirty triggers (appLaunch, scope change, version change) used
+  /// to be silently lost when they arrived while AutoSync was waiting on import or
+  /// a manual export. The pendingTriggerReason field preserves them; the resume
+  /// hook fires the saved trigger when the blocker resolves.
+  @Test func scopeChangeWhileImportingResumesAfterImportCompletes() {
+    var state = AutoSyncReducer.State.initial
+    state.enabled = true
+    state.destination = safeDestination()
+    state.scopeSelection = AutoExportScopeSelection(timeline: true)
+    state.importActive = true
+    state.current = .waiting(.importActive)
+
+    // User adds a new scope while import is running. With my fix, the trigger is
+    // saved as pendingTriggerReason; recompute lands in .waiting (blocked).
+    let (afterScope, scopeEffects) = AutoSyncReducer.reduce(
+      .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: true)),
+      in: state, now: now)
+    #expect(afterScope.current == .waiting(.importActive))
+    #expect(afterScope.pendingTriggerReason == .scopeSelectionChanged)
+    // No schedule effects — we're still waiting.
+    #expect(
+      !scopeEffects.contains(where: {
+        if case .scheduleDebounce = $0 { return true } else { return false }
+      }))
+
+    // Import finishes. Resume hook should re-fire the saved trigger.
+    let (afterImport, importEffects) = AutoSyncReducer.reduce(
+      .importStateChanged(isImporting: false), in: afterScope, now: now)
+
+    let fireAt = now.addingTimeInterval(2)  // .scopeSelectionChanged delay
+    #expect(afterImport.current == .scheduled(reason: .scopeSelectionChanged, fireAt: fireAt))
+    #expect(afterImport.pendingTriggerReason == nil)  // consumed
+    #expect(importEffects.contains(.scheduleDebounce(.scopeSelectionChanged, fireAt: fireAt)))
+  }
+
+  /// Codex P1: a failed/cancelled/interrupted run must NOT clear dirty state —
+  /// pending IDs need to remain queued for retry.
+  @Test func failedRunPreservesDirtyState() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    let runContext = ExportRunContext(
+      source: .autoSync, visibility: .background, reason: .appLaunch,
+      scope: .autoExport(state.scopeSelection), selection: state.versionSelection)
+    state.current = .running(reason: .appLaunch)
+    let destId = state.destination.id!
+    var scope = ScopeDirtyState()
+    scope.recordPendingAssetId("preserve-me", costCap: 500)
+    var dirty = AutoSyncDirtyState()
+    dirty.setScope(.timeline, scope)
+    state.dirtyStateByDestination[destId] = dirty
+
+    let summary = ExportRunSummary(
+      context: runContext, endedAt: now,
+      enqueuedCount: 1, completedCount: 0, failedCount: 1, skippedCount: 0,
+      cancelReason: nil, result: .failed)
+    let (next, effects) = AutoSyncReducer.reduce(
+      .autoSyncRunCompleted(summary), in: state, now: now)
+
+    #expect(
+      next.dirtyStateByDestination[destId]?.scope(.timeline).pendingAssetIds == ["preserve-me"])
+    // persistRunSummary fires; persistDirtyState does NOT (no mutation).
+    #expect(
+      effects.contains(where: { effect in
+        if case .persistRunSummary = effect { return true } else { return false }
+      }))
+    #expect(
+      !effects.contains(where: { effect in
+        if case .persistDirtyState = effect { return true } else { return false }
+      }))
+  }
+
+  @Test func cancelledAndInterruptedRunsPreserveDirtyState() {
+    let runContext = ExportRunContext(
+      source: .autoSync, visibility: .background, reason: .appLaunch,
+      scope: .autoExport(AutoExportScopeSelection(timeline: true)), selection: .edited)
+
+    for result in [ExportRunResult.cancelled, .interrupted] {
+      var state = enabledStateWithSafeDestinationAndScope()
+      let destId = state.destination.id!
+      var scope = ScopeDirtyState()
+      scope.recordPendingAssetId("preserve-me", costCap: 500)
+      var dirty = AutoSyncDirtyState()
+      dirty.setScope(.timeline, scope)
+      state.dirtyStateByDestination[destId] = dirty
+
+      let summary = ExportRunSummary(
+        context: runContext, endedAt: now,
+        enqueuedCount: 0, completedCount: 0, failedCount: 0, skippedCount: 0,
+        cancelReason: nil, result: result)
+      let (next, _) = AutoSyncReducer.reduce(
+        .autoSyncRunCompleted(summary), in: state, now: now)
+
+      #expect(
+        next.dirtyStateByDestination[destId]?.scope(.timeline).pendingAssetIds == ["preserve-me"],
+        "Expected dirty preserved for \(result)")
+    }
   }
 
   /// Codex P1: if photosChanged accumulates dirty BEFORE a run starts (e.g. during

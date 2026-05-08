@@ -16,6 +16,11 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
     subject.eraseToAnyPublisher()
   }
 
+  let versionSelectionSubject = CurrentValueSubject<ExportVersionSelection, Never>(.edited)
+  var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> {
+    versionSelectionSubject.eraseToAnyPublisher()
+  }
+
   /// If set, the next `runExport` returns this summary. Otherwise a default
   /// `.completed` summary is constructed from the requested context.
   var nextRunSummary: ExportRunSummary?
