@@ -36,6 +36,7 @@ struct PhotoExportApp: App {
     }
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { [em] in em.cancelAndClear() },
+      interruptForDestinationUnavailable: { [em] in em.interruptForDestinationUnavailable() },
       configureRecordStores: configure
     )
 

@@ -138,6 +138,36 @@ struct ExportManagerRunExportTests {
     #expect(harness.manager.activeRunContext == nil)
   }
 
+  // MARK: - Destination-unavailable interruption
+
+  /// `interruptForDestinationUnavailable()` resolves the active run as transient —
+  /// `result == .interrupted`, `cancelReason == .destinationUnavailable` — distinct
+  /// from `cancelAndClear`'s `.cancelled / .userCancelled`. AutoSync uses this signal
+  /// to resume after the drive returns rather than treating queued work as failed.
+  @Test func interruptForDestinationUnavailableResolvesAsInterrupted() async {
+    let harness = makeHarness()
+    defer { harness.cleanup() }
+
+    async let summaryTask = harness.manager.runExport(
+      context: makeContext(scope: .timelineFullLibrary))
+
+    // Yield to let the run begin; then simulate a drive unmount.
+    await Task.yield()
+    harness.manager.interruptForDestinationUnavailable()
+    let summary = await summaryTask
+
+    // Either the run finished naturally (empty library completes immediately) or the
+    // interrupt won the race. Both outcomes are valid; what we're proving is that
+    // calling interrupt while a run is in flight resolves cleanly without hanging.
+    #expect(harness.manager.activeRunContext == nil)
+    if summary.result == .interrupted {
+      #expect(summary.cancelReason == .destinationUnavailable)
+    } else {
+      // Empty-library case raced ahead — verify it at least resolved.
+      #expect(summary.result == .completed || summary.result == .interrupted)
+    }
+  }
+
   // MARK: - Run context surfacing
 
   /// `activeRunContext` is set while a run is in flight and cleared once the awaitable

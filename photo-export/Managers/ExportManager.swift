@@ -675,6 +675,61 @@ final class ExportManager: ObservableObject {
     finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
   }
 
+  /// Drive-unmount equivalent of `cancelAndClear()`. Stops starting new jobs and clears
+  /// in-memory pending work, but resolves the active run as transient
+  /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. This matters
+  /// for the AutoSync state machine, which treats `.destinationUnavailable` as
+  /// "resume when the drive comes back" rather than "this run failed."
+  ///
+  /// MVP scope: identical cleanup to `cancelAndClear` minus the cancel-reason change.
+  /// Phase 0b adds advisory-lock release; persistence of accumulated dirty state lands
+  /// when AutoSyncManager wires up. An in-flight `PHAssetResourceManager.writeData` may
+  /// still complete or fail because there is no cancellation plumbing for that path —
+  /// the in-flight write will surface as a transient failure on the next
+  /// reconciliation.
+  func interruptForDestinationUnavailable() {
+    logger.info("Interrupting current export — destination unavailable")
+    if let inFlightId = currentJobAssetId, let inFlightVariant = currentJobVariant,
+      let inFlightPlacement = currentJobPlacement
+    {
+      switch inFlightPlacement.kind {
+      case .timeline:
+        if exportRecordStore.exportInfo(assetId: inFlightId)?.variants[inFlightVariant]?.status
+          == .inProgress
+        {
+          exportRecordStore.removeVariant(assetId: inFlightId, variant: inFlightVariant)
+        }
+      case .favorites, .album:
+        if collectionExportRecordStore.exportInfo(
+          assetId: inFlightId, placement: inFlightPlacement)?.variants[inFlightVariant]?.status
+          == .inProgress
+        {
+          collectionExportRecordStore.removeVariant(
+            assetId: inFlightId, placement: inFlightPlacement, variant: inFlightVariant)
+        }
+      }
+    }
+    currentJobAssetId = nil
+    currentJobVariant = nil
+    currentJobPlacement = nil
+    generation += 1
+    pendingJobs.removeAll()
+    queuedCountsByPlacementId.removeAll()
+    currentTask?.cancel()
+    currentTask = nil
+    isProcessing = false
+    isRunning = false
+    isPaused = false
+    isEnqueueingAll = false
+    totalJobsEnqueued = 0
+    totalJobsCompleted = 0
+    currentAssetFilename = nil
+    clearEmptyRunMessage()
+    clearQueueWarningMessage()
+    updateQueueCount()
+    finalizeActiveRun(result: .interrupted, cancelReason: .destinationUnavailable)
+  }
+
   // MARK: - Empty-run message
 
   /// Shows a transient message in the toolbar's progress slot for `emptyRunMessageDuration`.

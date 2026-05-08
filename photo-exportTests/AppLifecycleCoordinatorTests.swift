@@ -43,6 +43,7 @@ struct AppLifecycleCoordinatorTests {
     var configureCalls: [String?] = []
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { cancelCount += 1 },
+      interruptForDestinationUnavailable: {},
       configureRecordStores: { newId in
         configureCalls.append(newId)
         return .success
@@ -54,15 +55,19 @@ struct AppLifecycleCoordinatorTests {
     coordinator.apply(destination: snap)
     coordinator.apply(destination: snap)
 
-    #expect(cancelCount == 1)
+    // First apply is nil → snap (first selection, no cleanup); 2nd/3rd are same-id no-ops.
+    // So cancelCount stays at 0 and configure runs exactly once.
+    #expect(cancelCount == 0)
     #expect(configureCalls == [snap.id])
   }
 
-  @Test func differentIdsCancelAndReconfigure() {
+  @Test func transitionTypesRouteToTheCorrectCleanup() {
     var cancelCount = 0
+    var interruptCount = 0
     var configureCalls: [String?] = []
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { cancelCount += 1 },
+      interruptForDestinationUnavailable: { interruptCount += 1 },
       configureRecordStores: { newId in
         configureCalls.append(newId)
         return .success
@@ -71,12 +76,14 @@ struct AppLifecycleCoordinatorTests {
 
     let snapA = Self.snapshot("dest-A")
     let snapB = Self.snapshot("dest-B")
-    coordinator.apply(destination: snapA)
-    coordinator.apply(destination: snapB)
-    coordinator.apply(destination: .none)
+    coordinator.apply(destination: snapA)  // nil → A: first selection (no cleanup)
+    coordinator.apply(destination: snapB)  // A → B: true change (cancel)
+    coordinator.apply(destination: .none)  // B → nil: unmount (interrupt)
+    coordinator.apply(destination: snapA)  // nil → A: remount (no cleanup)
 
-    #expect(cancelCount == 3)
-    #expect(configureCalls == [snapA.id, snapB.id, nil])
+    #expect(cancelCount == 1)
+    #expect(interruptCount == 1)
+    #expect(configureCalls == [snapA.id, snapB.id, nil, snapA.id])
   }
 
   @Test func attachAppliesInitialIdAndIsIdempotent() {
@@ -84,6 +91,7 @@ struct AppLifecycleCoordinatorTests {
     var configureCalls: [String?] = []
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { cancelCount += 1 },
+      interruptForDestinationUnavailable: {},
       configureRecordStores: { newId in
         configureCalls.append(newId)
         return .success
@@ -96,7 +104,9 @@ struct AppLifecycleCoordinatorTests {
     coordinator.attach(initial: Self.snapshot("dest-X"), fingerprintPublisher: publisher)
     coordinator.attach(initial: .none, fingerprintPublisher: publisher)
 
-    #expect(cancelCount == 1)
+    // First attach: nil → snapA (first selection, no cancel). Subsequent attaches are
+    // idempotent no-ops. cancelCount remains 0.
+    #expect(cancelCount == 0)
     #expect(configureCalls == [snapA.id])
     #expect(coordinator.lastConfiguredDestinationId == snapA.id)
   }
@@ -104,6 +114,7 @@ struct AppLifecycleCoordinatorTests {
   @Test func sameIdDoesNotRePublishCurrentDestinationWhenSnapshotIsEqual() {
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: {},
+      interruptForDestinationUnavailable: {},
       configureRecordStores: { _ in .success }
     )
     var emissions = 0
@@ -126,6 +137,7 @@ struct AppLifecycleCoordinatorTests {
   @Test func currentDestinationCarriesIdentityConfidence() {
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: {},
+      interruptForDestinationUnavailable: {},
       configureRecordStores: { _ in .success }
     )
 
@@ -139,6 +151,7 @@ struct AppLifecycleCoordinatorTests {
   @Test func migrationConflictPropagatesToCoordinatorState() {
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: {},
+      interruptForDestinationUnavailable: {},
       configureRecordStores: { _ in
         .migrationConflict(newId: "new-id", legacyId: "legacy-id")
       }
@@ -156,6 +169,7 @@ struct AppLifecycleCoordinatorTests {
       newId: "n", legacyId: "l")
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: {},
+      interruptForDestinationUnavailable: {},
       configureRecordStores: { _ in nextResult }
     )
 
@@ -173,6 +187,7 @@ struct AppLifecycleCoordinatorTests {
       newId: "n", legacyId: "l")
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: {},
+      interruptForDestinationUnavailable: {},
       configureRecordStores: { _ in nextResult }
     )
 
@@ -191,6 +206,7 @@ struct AppLifecycleCoordinatorTests {
   @Test func migrationFailedFromCleanStateDoesNotInventAConflict() {
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: {},
+      interruptForDestinationUnavailable: {},
       configureRecordStores: { _ in .migrationFailed(message: "io error") }
     )
 
@@ -204,6 +220,7 @@ struct AppLifecycleCoordinatorTests {
     var configureCalls: [String?] = []
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { cancelCount += 1 },
+      interruptForDestinationUnavailable: {},
       configureRecordStores: { newId in
         configureCalls.append(newId)
         return .success
@@ -225,8 +242,10 @@ struct AppLifecycleCoordinatorTests {
     subject.send(fpA)  // duplicate id; removeDuplicates filters
     subject.send(fpB)
 
+    // nil → A: first selection (no cancel). A → A: filtered duplicate. A → B: true change
+    // (cancel). cancelCount is 1.
     #expect(configureCalls == [idA, idB])
-    #expect(cancelCount == 2)
+    #expect(cancelCount == 1)
     #expect(coordinator.lastConfiguredDestinationId == idB)
   }
 }
