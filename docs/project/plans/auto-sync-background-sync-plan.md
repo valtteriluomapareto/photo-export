@@ -106,7 +106,7 @@ If the destination is disconnected, auto-sync waits. When the drive containing t
 
 If Photos access is limited, auto-sync applies only to the visible limited library. Settings/status copy must say this explicitly; "new photos" means new photos visible to this app. Detection is straightforward: `PHPhotoLibrary.authorizationStatus(for: .readWrite)` reports `.limited` distinctly from `.authorized`, and `PHPhotoLibraryChangeObserver` fires when the user expands or narrows the selection. The total size of the user's actual library is intentionally not exposed by Apple, so copy must avoid implying we can quantify the gap.
 
-Auto-sync must never present the limited-library picker automatically. Expanding limited Photos access is allowed only from an explicit user action in the UI, not from a scheduled/background run.
+Expanding limited Photos access on macOS is done by the user in System Settings → Privacy & Security → Photos. macOS does not expose the iOS `presentLimitedLibraryPicker(from:)` API — `PhotosUI/PHPhotoLibrary+PhotosUISupport.h` is iOS / visionOS only. The app must therefore deep-link to System Settings rather than offering an in-app picker; auto-sync never invokes a picker because there is none to invoke.
 
 A non-empty limited library should run Auto Export normally with the limited-access notice visible — blocking on `limitedPhotosAccess` is reserved for the case where the limited set is empty (nothing visible to export). Limited access is a deliberate user choice, not an error state.
 
@@ -128,6 +128,8 @@ The Auto Export tab gets two distinct background-related settings:
 
 Ships in MVP via `SMAppService.mainApp`. Status copy distinguishes `.enabled`, `.requiresApproval`, and `.notRegistered`/`.notFound`. Copy must be explicit that this only helps while Photo Export is running — quitting the app stops Auto Export until the next login.
 
+`Open Photo Export at login` is an **independent** setting from Auto Export enablement; either can be on without the other. The Auto Export tab surfaces a non-blocking inline hint suggesting login launch when Auto Export is enabled but the login item is not registered, but does not auto-enable the login item.
+
 > Run Auto Export when Photo Export is closed
 
 Ships later via a LaunchAgent. This setting must remain hidden or disabled until the LaunchAgent implementation lands. Its status copy distinguishes "registered and enabled", "requires approval", and "not registered".
@@ -136,15 +138,22 @@ Ships later via a LaunchAgent. This setting must remain hidden or disabled until
 
 When `PHPhotoLibrary.authorizationStatus(for: .readWrite)` is `.limited`, the Auto Export tab shows a persistent notice above the scope checkboxes:
 
-> **Limited Photos access.** Photo Export only sees photos you've selected to share. Auto Export covers only those photos — new photos elsewhere in your library will not be exported.
+> **Limited Photos access.** Photo Export only sees photos you've selected to share. Auto Export covers only those photos — new photos elsewhere in your library will not be exported. Use System Settings to change which photos are shared.
 >
-> [Manage selected photos…] [Open Privacy & Security in System Settings]
+> [Open Privacy & Security in System Settings]
 
-- "Manage selected photos…" calls `PHPhotoLibrary.shared().presentLimitedLibraryPicker(from:)` from explicit user action only. Never from a schedule or auto-sync run.
-- "Open Privacy & Security in System Settings" opens `x-apple.systempreferences:com.apple.preference.security?Privacy_Photos`.
+- macOS does not expose `presentLimitedLibraryPicker(from:)` — that API lives in `PhotosUI/PHPhotoLibrary+PhotosUISupport.h`, which is iOS / visionOS only. The notice therefore offers a single action that opens System Settings → Privacy & Security → Photos via `x-apple.systempreferences:com.apple.preference.security?Privacy_Photos`.
 - The notice updates live: registering as a `PHPhotoLibraryChangeObserver` covers both authorization-status transitions and limited-selection changes.
 - Mirror a compact version of the notice in the main window when Auto Export is enabled with `.limited` access, so the gap is visible without opening Settings.
 - Copy must not imply the app can count assets it cannot see; do not say "X photos hidden from Photo Export" or similar.
+
+### Launch-at-login Behavior
+
+When `Open Photo Export at login` is enabled and the OS launches the app at login, the app starts without showing the main window. The `NSStatusItem` (see Phase 4) is visible immediately so the user can see Auto Export status and access Export Now / Open Issues / Open Settings from the menu bar. Manual launch from Finder/Dock continues to show the main window as today.
+
+Detection: at finish-launching time, check whether the launch was a system background launch (the launch context exposed by `SMAppService` / LaunchServices) and skip the main-window presentation when true. The activation policy stays `.regular` — the app is not an `LSUIElement`. Users can re-open the main window from the Dock or status item at any time.
+
+While Auto Export is enabled, closing the main window keeps the app running (`applicationShouldTerminateAfterLastWindowClosed = false` for that mode) so Auto Export continues. Quitting from the application menu stops Auto Export until the next launch. Settings copy must state this trade-off so users understand that close-window ≠ quit when Auto Export is on.
 
 ### First-Run UX
 
@@ -609,8 +618,8 @@ Implementation direction:
 - For inserted/updated asset IDs, schedule targeted runs for selected scopes where targeting is reliable:
   - `Timeline` → `.timelineAssets(ids)`,
   - `Favorites` → `.favoritesAssets(ids)`, where the export path re-checks whether each asset is currently visible in Favorites and skips non-favorites,
-  - `Albums` → `.allAlbumsAssets(ids)` only if the implementation can cheaply resolve the affected album placements; otherwise mark all albums dirty and schedule `.allAlbumsFull` after the album debounce.
-- Collection-only changes are no longer always ignorable. If only `Timeline` is selected, ignore collection-only changes. If `Albums` is selected, treat album/folder membership or placement changes as pending album reconciliation. If `Favorites` is selected and no asset details changed, do not run Favorites unless measurement shows Photos reports favorite changes through a non-asset channel.
+  - `Albums` (MVP) → mark all albums dirty and schedule `.allAlbumsFull` after the album debounce. Targeted album-membership exporting (resolving which albums an asset belongs to and writing only those) is intentionally deferred past MVP — it requires PhotoKit behavior verification (see Open Risks) and the bounded all-albums path is correct, just less efficient.
+- Collection-only changes are no longer always ignorable. If only `Timeline` is selected, ignore collection-only changes. If `Albums` is selected, treat album/folder membership or placement changes as pending all-albums reconciliation (MVP does not target individual albums). If `Favorites` is selected and no asset details changed, do not run Favorites unless measurement shows Photos reports favorite changes through a non-asset channel.
 - Distinguish three failure modes from `fetchPersistentChanges(since:)` and route each explicitly: token-expired, token-invalid, and details-unavailable. All three reset the affected destination's `lastDurablyRecordedToken` to the current global position and schedule one bounded full reconciliation for the affected selected scopes; logs and Export Issues distinguish them so we can tell whether the OS is recycling tokens too aggressively or our handling has a bug.
 - While the destination is unavailable or an auto-sync run was interrupted for destination loss, the global token may advance but the per-destination snapshot only advances after dirty IDs/full-reconciliation intent have been durably recorded for that destination. Accumulate changed asset IDs in the destination's dirty state; if the set exceeds the targeting cost limit, collapse it to one pending full reconciliation for the destination.
 
@@ -675,8 +684,11 @@ Persisted retry-state sketch:
 
 ```swift
 struct AutoSyncRetryState: Codable {
-  /// Nested key is `ExportVariant.rawValue` so the persisted JSON shape stays explicit.
-  var entriesByAssetId: [String: [String: RetryEntry]]
+  /// Outer key: scope/placement key — `"timeline"`, `"favorites"`, or `"album:<placementId>"`.
+  /// Middle key: assetId. Inner key: `ExportVariant.rawValue`.
+  /// Placement-first nesting is required so a failure in one album does not suppress retries
+  /// for the same asset in another album, in Favorites, or in Timeline.
+  var entriesByPlacement: [String: [String: [String: RetryEntry]]]
 }
 
 struct RetryEntry: Codable, Equatable {
@@ -696,8 +708,8 @@ Initial automatic retry policy:
 - Retry `photoKitTransient`, `iCloudTransient`, and `unknown` with exponential backoff.
 - Retry `destinationUnavailable` only after destination availability changes to available.
 - Do not automatically retry `destinationPermission`, `destinationNoSpace`, `assetMissing`, or stable `resourceMissing` until the user runs a manual retry or the relevant state changes.
-- Cap automatic attempts per asset/variant/error signature.
-- Persist retry state per destination and asset variant.
+- Cap automatic attempts per scope/placement + asset + variant + error signature.
+- Persist retry state per destination, scope/placement, asset, and variant.
 
 Export Issues "Retry Failed" or a normal manual export after disabling Auto Export can override backoff.
 
@@ -713,11 +725,6 @@ Persisted shape:
 struct AutoSyncDirtyState: Codable {
   /// Keyed by `AutoExportLibraryScope.rawValue` so the persisted JSON shape stays explicit.
   var scopes: [String: ScopeDirtyState]
-
-  /// Persistent change token observed at the time of the most recent durable record. Used to
-  /// detect whether the dirty set is consistent with the current global token position when
-  /// auto-sync resumes.
-  var tokenAtRecord: Data?
 
   var lastUpdatedAt: Date
 }
@@ -747,6 +754,8 @@ Bookkeeping rules:
 - A manual full export for the same destination/selection/scope clears compatible dirty flags as part of the existing pending-reason expiry rules.
 - Persistent change events that arrive while the destination is unavailable accumulate into the affected scope's `pendingAssetIds`, with the inline cap rule still applying.
 - Switching the selected destination retains the previous destination's dirty state. The state is GC'd only when the destination's record store is deleted or the user explicitly clears auto-sync state from settings.
+
+Token authority for this dirty state lives in the sibling file `lastDurablyRecordedToken.data` per destination — the dirty-state struct deliberately does not carry its own token field, so there is exactly one source of truth. The two files are written atomically as a pair: dirty-state changes are flushed first, then the token snapshot, then the global `currentToken` advances. If a crash interrupts the pair mid-write, the next launch detects inconsistency by comparing file modification timestamps and rolls back the affected destination to "force full reconciliation" rather than trusting a half-advanced token.
 
 ## Multi-Instance and Locking
 
@@ -917,7 +926,7 @@ Existing testing patterns to reuse: `photo-exportTests/TestHelpers/AsyncCheckpoi
 - Show concise main-window status: waiting, scheduled, blocked, running, last run. Mirror a compact limited-library notice and a compact failure summary ("3 photos couldn't export — Review…") that links into Export Issues.
 - Add an explicit `Export Now` action in Settings, the main window, and a menu command. This is the user-facing path for bypassing disabled state, debounce, and transient retry timers while still honoring safety and hard blockers.
 - Group the Export Issues tab by failure category first (*Destination*, *iCloud*, *Asset missing*, *Permission*), then by scope, then by asset — matches the way Mail's Connection Doctor groups failures by account, not by message.
-- Add an `NSStatusItem` (menu bar item) with: Enable/Disable Auto Export, Export Now, current status, Open Issues, Open Settings. Standard for macOS sync utilities and effectively required once closed-app sync ships.
+- Add an `NSStatusItem` (menu bar item) **in MVP** with: Enable/Disable Auto Export, Export Now, current status, Open Issues, Open Settings. Required because launch-at-login starts the app without showing the main window, and `Open Photo Export at login` ships in MVP — without a status item the user has no surface for status or Export Now in that mode.
 - Schedule completion/failure notifications via `UNUserNotificationCenter`, gated by a Settings checkbox (default: failures only). Add a Dock badge for the count of unresolved issues.
 - Specify VoiceOver labels for the Auto Export status pill so the announced value carries context (for example, "Auto Export waiting, destination disconnected") rather than just "waiting". Make Settings tab navigation reachable via keyboard.
 - Add the `Open Photo Export at login` setting via `SMAppService.mainApp` with `.enabled`/`.requiresApproval`/`.notRegistered`/`.notFound` status reporting and a deep link to System Settings → Login Items. On first register, surface an inline explainer that macOS will post a system "'Photo Export' Added" notification, since that notification arrives without app context. On `unregister()`, poll status when the Settings window becomes key (`NSWindow.didBecomeKeyNotification`); if status remains `.enabled`, surface a "Still showing in Login Items? Open Login Items…" hint because System Settings does not notify the app.
@@ -946,7 +955,7 @@ Existing testing patterns to reuse: `photo-exportTests/TestHelpers/AsyncCheckpoi
   - destination-unavailable interrupts auto-sync with dirty state, not `cancelAndClear()`.
 - Persistent-change-tracking tests:
   - collection-only Photos changes do not run export when only Timeline is selected,
-  - album/folder changes schedule album reconciliation when Albums is selected,
+  - album/folder changes schedule a bounded all-albums reconciliation when Albums is selected (MVP behavior; targeted per-album reconciliation is not implemented),
   - asset inserted/updated changes schedule targeted asset re-evaluation for selected scopes where targeting is reliable,
   - targeted IDs above the threshold/cost limit collapse to bounded full reconciliation,
   - token-expired, token-invalid, and details-unavailable each route to bounded full reconciliation distinctly (each path has its own log/issue category),
@@ -1037,7 +1046,7 @@ Remaining risks:
 - A Photos asset insert/update while the app is running schedules a targeted re-evaluation for selected scopes when the ID set is bounded and the scope supports targeting.
 - A Photos asset inserted while the app was closed is detected on next launch through that destination's per-destination token snapshot or the bounded full-reconciliation fallback.
 - A collection-only Photos change does not schedule export when only Timeline is selected.
-- If Albums is selected, album membership/rename/folder changes schedule targeted album reconciliation when possible or bounded all-albums reconciliation when not.
+- If Albums is selected, album-relevant changes (asset insert/update, album/folder membership/rename) schedule a bounded all-albums reconciliation in MVP. Targeted per-album reconciliation is post-MVP.
 - Favorite toggles are reflected in Favorites Auto Export within the configured debounce window — the criterion is the observable behavior, not which PhotoKit channel reports the change.
 - A token-expired, token-invalid, or details-unavailable failure schedules at most one bounded full reconciliation per affected destination in the configured interval, and each path is logged distinctly.
 - Disconnecting the destination during an auto-sync run records transient interruption and per-destination dirty state instead of converting every remaining job into permanent failures.

@@ -97,7 +97,7 @@ commit that followed.
 - Automatically deleting files when an album is removed in Photos.
 - Adding a new closed-app background export process.
 - Changing the existing timeline folder layout.
-- Auto-sync of collections. Auto-sync (per `auto-sync-background-sync-plan.md`) remains timeline-only.
+- (Superseded.) The collections plan originally scoped auto-sync to timeline only. The auto-sync plan (`auto-sync-background-sync-plan.md`, revised 2026-05-08) now covers Timeline, Favorites, and Albums. Albums auto-sync uses a bounded all-albums reconciliation in MVP rather than targeted per-album work; collection exports triggered manually still keep their existing user-confirmation flows for renames/large writes.
 - Unifying the timeline and collection records into a single store. Two sibling stores are intentional: the
   timeline store keeps its current asset-keyed shape and API; the collection store is placement-keyed. A future
   unification, if ever needed, would be a fresh plan with its own migration.
@@ -151,8 +151,10 @@ This plan's value lives in this section. Each item below changed the design.
   dominated by `Σ placements records`, not `placements × assets`. Compaction threshold (currently 1000 mutations)
   is reused per store; profile during Phase 1 and tune if snapshot writes on slow USB targets become noticeable.
   Worst-case a 50k-asset / 100-album library is single-digit MB across both stores.
-- **Auto-sync interaction.** When auto-sync ships, it enumerates timeline placements only. Collection exports —
-  which can prompt for rename confirmation and write large numbers of files — stay user-triggered.
+- **Auto-sync interaction.** Auto-sync (per `auto-sync-background-sync-plan.md`, revised 2026-05-08) covers
+  Timeline, Favorites, and Albums. Albums auto-sync runs a bounded all-albums reconciliation rather than
+  targeted per-album work; rename detection and other flows requiring user input remain manual-only and surface
+  through Export Issues when an automatic run would otherwise need to prompt.
 - **Destination identity must be stable before this ships.** Today `destinationId` is a SHA-256 of the bookmark
   data (`ExportDestinationManager.swift:218`). When a bookmark is refreshed (e.g. after the OS regenerates it),
   the hash changes and the entire record store appears to be a fresh empty destination. Pre-collections, the
