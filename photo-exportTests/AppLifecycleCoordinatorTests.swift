@@ -215,6 +215,45 @@ struct AppLifecycleCoordinatorTests {
     #expect(coordinator.migrationConflict == nil)
   }
 
+  /// Same-id fingerprint refresh (e.g. drive rename — same UUID + relative path, different
+  /// `volumeRootPath` / `standardizedPath`) must propagate through the publisher so
+  /// `currentDestination` reflects the freshest metadata. The dedup must be on full
+  /// fingerprint equality, not just id.
+  @Test func sameIdFingerprintRefreshUpdatesCurrentDestination() {
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {},
+      interruptForDestinationUnavailable: {},
+      configureRecordStores: { _ in .success }
+    )
+
+    let original = DestinationFingerprint.makeHigh(
+      volumeUUIDString: "uuid-stable",
+      volumeRootPath: "/Volumes/MyDrive",
+      relativePathFromVolumeRoot: "/photos",
+      standardizedPath: "/Volumes/MyDrive/photos"
+    )
+    let renamed = DestinationFingerprint.makeHigh(
+      volumeUUIDString: "uuid-stable",
+      volumeRootPath: "/Volumes/PhotoBackup",
+      relativePathFromVolumeRoot: "/photos",
+      standardizedPath: "/Volumes/PhotoBackup/photos"
+    )
+
+    // Same id (UUID + relative path identical), different metadata.
+    #expect(original.id == renamed.id)
+    #expect(original != renamed)
+
+    let subject = PassthroughSubject<DestinationFingerprint?, Never>()
+    coordinator.attach(
+      initial: .none, fingerprintPublisher: subject.eraseToAnyPublisher())
+
+    subject.send(original)
+    #expect(coordinator.currentDestination.fingerprint == original)
+
+    subject.send(renamed)
+    #expect(coordinator.currentDestination.fingerprint == renamed)
+  }
+
   @Test func publisherEventsDriveTransitions() {
     var cancelCount = 0
     var configureCalls: [String?] = []

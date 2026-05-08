@@ -111,9 +111,14 @@ final class AppLifecycleCoordinator: ObservableObject {
     // wires a publisher that hops threads (e.g. `.subscribe(on: .global)`), the
     // `assumeIsolated` call will trap. The debug-only precondition below makes that case
     // observable in development; release builds rely on the contract being honored.
+    // `removeDuplicates()` filters fingerprint-equal re-emissions (full identity, not just id).
+    // The id-only filter would drop same-id-different-metadata events — e.g. a high-confidence
+    // drive rename that keeps the volume UUID + relative path but changes `volumeRootPath` /
+    // `standardizedPath` — which the same-id branch in `apply(destination:)` is designed to
+    // surface to subscribers.
     destinationObservation =
       fingerprintPublisher
-      .removeDuplicates(by: { $0?.id == $1?.id })
+      .removeDuplicates()
       .sink { [weak self] fingerprint in
         dispatchPrecondition(condition: .onQueue(.main))
         MainActor.assumeIsolated {
