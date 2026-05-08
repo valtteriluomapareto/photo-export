@@ -86,6 +86,22 @@ final class ExportManager: ObservableObject {
   @Published private(set) var importStage: BackupScanner.ImportStage?
   @Published var importResult: ImportReport?
 
+  // MARK: - Awaitable run lifecycle (auto-sync Phase 0a)
+
+  /// The `ExportRunContext` of the run currently in flight, or `nil` when idle. Set by
+  /// `runExport(context:)`; cleared when the run reaches a terminal state. Callers
+  /// observing this property see exactly one transition `nil → context → nil` per
+  /// awaitable run; no event is emitted for runs started via the existing fire-and-forget
+  /// `start*` methods.
+  @Published private(set) var activeRunContext: ExportRunContext?
+
+  private struct ActiveRunBookkeeping {
+    let totalJobsEnqueuedAtStart: Int
+    let totalJobsCompletedAtStart: Int
+    let continuation: CheckedContinuation<ExportRunSummary, Never>
+  }
+  private var activeRunBookkeeping: ActiveRunBookkeeping?
+
   /// Whether the export queue is active (has pending/in-flight work).
   var hasActiveExportWork: Bool {
     isRunning || queueCount > 0 || isEnqueueingAll
@@ -365,6 +381,8 @@ final class ExportManager: ObservableObject {
           setQueueWarningMessage(
             "Couldn't list every year. Continuing with the photos already queued.")
           processQueueIfNeeded()
+        } else {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
         }
       }
     }
@@ -419,6 +437,9 @@ final class ExportManager: ObservableObject {
         logger.error(
           "Failed to enqueue favorites export: \(String(describing: error), privacy: .public)"
         )
+        if pendingJobs.isEmpty {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
       }
     }
   }
@@ -498,6 +519,8 @@ final class ExportManager: ObservableObject {
           setQueueWarningMessage(
             "Couldn't list every album. Continuing with the photos already queued.")
           processQueueIfNeeded()
+        } else {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
         }
       }
     }
@@ -649,6 +672,7 @@ final class ExportManager: ObservableObject {
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     updateQueueCount()
+    finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
   }
 
   // MARK: - Empty-run message
@@ -771,10 +795,97 @@ final class ExportManager: ObservableObject {
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
 
+  /// Runs an export and returns its terminal summary. Wraps the existing fire-and-forget
+  /// `start*` methods with single-active-run ownership: at most one `runExport` is in
+  /// flight per `ExportManager`, and the await resolves when the run reaches a terminal
+  /// state — completed, cancelled, or failed.
+  ///
+  /// MVP scope coverage: `.timelineFullLibrary`, `.favoritesFull`, `.allAlbumsFull` map
+  /// to the existing manual-export entry points. Targeted asset-id scopes
+  /// (`.timelineAssets`, `.favoritesAssets`, `.allAlbumsAssets`) and the umbrella
+  /// `.autoExport` scope land in subsequent Phase 0a slices; for now they resolve
+  /// immediately with `.failed` so callers see a deterministic outcome rather than a
+  /// hang.
+  func runExport(context: ExportRunContext) async -> ExportRunSummary {
+    precondition(
+      activeRunContext == nil,
+      "runExport called while another run is active; ExportManager has at most one active run"
+    )
+    return await withCheckedContinuation {
+      (continuation: CheckedContinuation<ExportRunSummary, Never>) in
+      activeRunContext = context
+      activeRunBookkeeping = ActiveRunBookkeeping(
+        totalJobsEnqueuedAtStart: totalJobsEnqueued,
+        totalJobsCompletedAtStart: totalJobsCompleted,
+        continuation: continuation
+      )
+
+      switch context.scope {
+      case .timelineFullLibrary:
+        if !isImporting && canExportTimeline {
+          startExportAll()
+        } else {
+          // Existing start* methods silently no-op when their preconditions aren't met
+          // (timeline store not .ready, import in progress). Without this fail-fast, the
+          // awaitable would hang forever waiting for a run that never started. Finalize
+          // as failed so callers see a deterministic outcome.
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      case .favoritesFull:
+        if !isImporting && canExportCollection {
+          startExportFavorites()
+        } else {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      case .allAlbumsFull:
+        if !isImporting && canExportCollection {
+          startExportAllAlbums()
+        } else {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      case .timelineAssets, .favoritesAssets, .allAlbumsAssets, .autoExport:
+        finalizeActiveRun(result: .failed, cancelReason: nil)
+      }
+    }
+  }
+
+  /// Resolves the awaitable run's continuation if one is active. Idempotent — second
+  /// and later calls are no-ops, so existing run-terminal paths can call this without
+  /// worrying about whether they're the first to detect the end. No-op when the run
+  /// was started via the existing fire-and-forget `start*` methods (i.e.,
+  /// `activeRunContext` is nil).
+  private func finalizeActiveRun(
+    result: ExportRunResult,
+    cancelReason: ExportCancelReason?
+  ) {
+    guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
+      return
+    }
+    let summary = ExportRunSummary(
+      context: context,
+      endedAt: Date(),
+      enqueuedCount: max(0, totalJobsEnqueued - bookkeeping.totalJobsEnqueuedAtStart),
+      completedCount: max(0, totalJobsCompleted - bookkeeping.totalJobsCompletedAtStart),
+      failedCount: 0,
+      skippedCount: 0,
+      cancelReason: cancelReason,
+      result: result
+    )
+    activeRunContext = nil
+    activeRunBookkeeping = nil
+    bookkeeping.continuation.resume(returning: summary)
+  }
+
   func processQueueIfNeeded() {
     guard !isProcessing else { return }
     guard !isPaused else { return }
-    guard !pendingJobs.isEmpty else { return }
+    guard !pendingJobs.isEmpty else {
+      // Nothing to process. If an awaitable run is in flight (e.g. `runExport` for an
+      // already-complete library), the queue-drain hook in `processNext` won't fire
+      // because `processNext` won't run. Finalize here so the awaiter resolves.
+      finalizeActiveRun(result: .completed, cancelReason: nil)
+      return
+    }
     isProcessing = true
     isRunning = true
     processNext()
@@ -797,6 +908,7 @@ final class ExportManager: ObservableObject {
       currentAssetFilename = nil
       updateQueueCount()
       logger.info("Export queue drained")
+      finalizeActiveRun(result: .completed, cancelReason: nil)
       return
     }
     let job = pendingJobs.removeFirst()
