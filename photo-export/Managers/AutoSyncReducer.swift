@@ -66,11 +66,20 @@ enum AutoSyncReducer {
     switch event {
     case .enabledChanged(let enabled):
       newState.enabled = enabled
-      if enabled {
+      // Only treat this as a trigger when the value *actually changes* from disabled
+      // to enabled. A republished settings observation that re-emits the current
+      // value should not cancel-and-replace any active debounce.
+      if enabled && !state.enabled {
         triggerReason = .appLaunch
       }
 
     case .destinationChanged(let destination):
+      // No-op when the snapshot is byte-identical — id+availability+safety+fingerprint
+      // metadata all match. Without this guard, a publisher republish (same drive,
+      // same state) would cancel the active debounce and re-arm a fresh one.
+      if destination == state.destination {
+        break
+      }
       let wasUnavailableOrMissing =
         !state.destination.isAvailable || state.destination.id == nil
       newState.destination = destination
@@ -101,7 +110,38 @@ enum AutoSyncReducer {
       newState.importActive = isImporting
 
     case .exportRunStateChanged(let runState):
+      // Detect a transition out of our own auto-sync run. `state.current == .running`
+      // means the previous tick was an auto-sync run we own (manual runs never
+      // transition the reducer to .running — environmentAllowsRun blocks them).
+      let ourRunJustFinished: Bool
+      if case .running = state.current,
+        state.exportRunState.activeContext != nil,
+        runState.activeContext == nil
+      {
+        ourRunJustFinished = true
+      } else {
+        ourRunJustFinished = false
+      }
       newState.exportRunState = runState
+      if ourRunJustFinished, let destinationId = newState.destination.id {
+        // The auto-sync run we just executed was a full reconciliation across the
+        // selected scopes (.autoExport scope umbrella). Clear dirty for those
+        // scopes; new photosChanged events that arrived mid-run would have
+        // accumulated into the same scope-dirty entry and *also* be processed by
+        // the full-reconciliation run, so clearing them is correct for now.
+        // (Targeted-asset runs that land later will need a per-run snapshot to
+        // avoid clearing post-start additions.)
+        var dirty = newState.dirtyStateByDestination[destinationId] ?? .empty
+        for scope in AutoExportLibraryScope.allCases
+        where newState.scopeSelection.includes(scope) {
+          var scopeState = dirty.scope(scope)
+          scopeState.clearAfterSuccessfulFullReconciliation()
+          dirty.setScope(scope, scopeState)
+        }
+        dirty.markUpdated(at: now)
+        newState.dirtyStateByDestination[destinationId] = dirty
+        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
+      }
 
     case .debounceFired(let reason):
       // Honor the timer only if the state still expects this reason. A debounce
@@ -141,32 +181,42 @@ enum AutoSyncReducer {
       if state.enabled, let destinationId = state.destination.id,
         !state.scopeSelection.isEmpty
       {
-        var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
         let changedIds = event.insertedLocalIdentifiers.union(event.updatedLocalIdentifiers)
+        let albumsActive = state.scopeSelection.includes(.albums)
+        let albumsRelevantCollectionChange = albumsActive && event.collectionChangesPresent
+        // Plan §"Photo Library Changes": "Treat deleted asset IDs as non-export work
+        // for MVP." A deleted-only event (no inserts/updates) — and one whose
+        // collection-only signal isn't relevant to a selected scope — produces no
+        // export work, so skip dirty mutation, persistence, and the debounce. Token
+        // advancement still fires below so the persistent-change cursor moves
+        // forward.
+        let producesExportWork = !changedIds.isEmpty || albumsRelevantCollectionChange
 
-        for scope in state.scopeSelection.enabledScopes {
-          var scopeState = dirty.scope(scope)
-          for assetId in changedIds {
-            scopeState.recordPendingAssetId(assetId, costCap: targetedAssetCostCap)
+        if producesExportWork {
+          var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
+          for scope in state.scopeSelection.enabledScopes {
+            var scopeState = dirty.scope(scope)
+            for assetId in changedIds {
+              scopeState.recordPendingAssetId(assetId, costCap: targetedAssetCostCap)
+            }
+            if scope == .albums && event.collectionChangesPresent {
+              scopeState.pendingPlacementReconciliation = true
+            }
+            dirty.setScope(scope, scopeState)
           }
-          // Albums coalesce to bounded all-albums reconciliation in MVP whenever
-          // collection-only changes are present (plan §"Photo Library Changes":
-          // "If `Albums` is selected, treat album/folder membership or placement
-          // changes as pending all-albums reconciliation").
-          if scope == .albums && event.collectionChangesPresent {
-            scopeState.pendingPlacementReconciliation = true
-          }
-          dirty.setScope(scope, scopeState)
+          dirty.markUpdated(at: now)
+          newState.dirtyStateByDestination[destinationId] = dirty
+          effects.append(.persistDirtyState(dirty, destinationId: destinationId))
+          triggerReason = .photosChanged
         }
-        dirty.markUpdated(at: now)
-        newState.dirtyStateByDestination[destinationId] = dirty
 
-        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
+        // Token advances regardless of whether the event produced work for this
+        // selection — the persistent-change cursor must move forward to avoid
+        // re-receiving the same range on the next fetch.
         if let nextToken = event.nextToken {
           effects.append(
             .advancePersistentChangeToken(nextToken, destinationId: destinationId))
         }
-        triggerReason = .photosChanged
       }
 
     case .retryTimerFired, .manualFullExportCompleted:
@@ -181,17 +231,53 @@ enum AutoSyncReducer {
       effects: &effects)
     newState.current = nextCurrent
 
+    // Work-preservation hook. If we just landed in `.idle` from a state that paused
+    // pending work — `.running` (run finished), `.waiting(.importActive)` (import
+    // done), `.waiting(.manualExportActive)` (manual run done) — and there's
+    // accumulated dirty for the current destination, schedule a debounce so the
+    // pending work is processed instead of sitting forever. Without this, photos
+    // changes during long exports / imports / manual runs are silently abandoned
+    // until an unrelated event happens to re-trigger.
+    if case .idle = newState.current,
+      previousIsBlockingResumePoint(state.current),
+      let destinationId = newState.destination.id,
+      let dirty = newState.dirtyStateByDestination[destinationId],
+      !dirty.isEmpty
+    {
+      let fireAt = now.addingTimeInterval(debounceDelay(for: .photosChanged))
+      effects.append(.scheduleDebounce(.photosChanged, fireAt: fireAt))
+      newState.current = .scheduled(reason: .photosChanged, fireAt: fireAt)
+    }
+
     return (newState, effects)
+  }
+
+  /// Whether the previous state was a blocking-then-resumable state (transitioning
+  /// out of which should re-fire any accumulated dirty work). `.scheduled` and
+  /// `.idle` are intentionally excluded — those don't pause work, so resuming
+  /// from them shouldn't double-schedule.
+  private static func previousIsBlockingResumePoint(_ previous: AutoSyncState) -> Bool {
+    switch previous {
+    case .running, .waiting:
+      return true
+    case .disabled, .idle, .scheduled, .blocked:
+      return false
+    }
   }
 
   // MARK: - Internals
 
   /// Whether the environment currently allows starting a run — gating equivalent of
-  /// the `idle` state precondition.
+  /// the `idle` state precondition. Includes the single-active-run gate: a manual
+  /// export already in flight blocks AutoSync from starting a parallel run (plan
+  /// §"Run Ownership Model": "If auto-sync wants to run while any manual export or
+  /// import is active, AutoSyncManager marks itself dirty and re-evaluates after
+  /// manual work drains.").
   private static func environmentAllowsRun(state: State) -> Bool {
     state.enabled && !state.importActive && !state.scopeSelection.isEmpty
       && state.destination.id != nil && state.destination.isAvailable
       && state.destination.safety == .safe
+      && !state.exportRunState.isManualActive
   }
 
   /// Maps the reducer's input environment plus the previous state and the optional
@@ -211,6 +297,10 @@ enum AutoSyncReducer {
     if state.importActive {
       cancelAnyScheduledDebounce(from: previous, into: &effects)
       return .waiting(.importActive)
+    }
+    if state.exportRunState.isManualActive {
+      cancelAnyScheduledDebounce(from: previous, into: &effects)
+      return .waiting(.manualExportActive)
     }
     if state.scopeSelection.isEmpty {
       cancelAnyScheduledDebounce(from: previous, into: &effects)

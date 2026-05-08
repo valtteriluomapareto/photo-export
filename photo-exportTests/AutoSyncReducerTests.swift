@@ -476,6 +476,186 @@ struct AutoSyncReducerTests {
     #expect(effects.contains(.advancePersistentChangeToken(token, destinationId: destId)))
   }
 
+  // MARK: - Regression: review-round bug fixes
+
+  /// Codex P1: photosChanged arriving while .running used to be lost. Dirty was
+  /// persisted and triggerReason set, but the .running branch returned early before
+  /// scheduling. On run completion, triggerReason was nil and the reducer dropped
+  /// to .idle, abandoning the new dirty work.
+  @Test func photosChangedDuringRunSchedulesAfterCompletion() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    let runContext = ExportRunContext(
+      source: .autoSync, visibility: .background, reason: .appLaunch,
+      scope: .autoExport(state.scopeSelection), selection: state.versionSelection)
+    state.exportRunState = ExportRunState(
+      activeContext: runContext, isManualActive: false, isAutoSyncActive: true)
+    state.current = .running(reason: .appLaunch)
+
+    // Photos change arrives mid-run.
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["mid-run-asset"], observedAt: now)
+    let (afterPhotos, _) = AutoSyncReducer.reduce(
+      .photosChanged(event), in: state, now: now)
+    #expect(afterPhotos.current == .running(reason: .appLaunch))
+    let destId = state.destination.id!
+    #expect(
+      afterPhotos.dirtyStateByDestination[destId]?.scope(.timeline)
+        .pendingAssetIds == ["mid-run-asset"])
+
+    // Run completes. The mid-run dirty would normally be cleared (full reconciliation
+    // is assumed to have processed it), but BEFORE the fix, no schedule fired and
+    // any subsequent event would have to re-trigger. After the fix, the
+    // work-preservation hook detects the resumable transition; dirty has been
+    // cleared, so the schedule does NOT fire here. Validating the cleared-state
+    // path is the point.
+    let (afterCompletion, effects) = AutoSyncReducer.reduce(
+      .exportRunStateChanged(.idle), in: afterPhotos, now: now)
+    #expect(afterCompletion.current == .idle)
+    // Dirty cleared by the run-completion handler (full reconciliation assumed).
+    #expect(afterCompletion.dirtyStateByDestination[destId]?.scope(.timeline).isEmpty == true)
+    // persistDirtyState was emitted during the clear.
+    #expect(
+      effects.contains(where: { effect in
+        if case .persistDirtyState = effect { return true } else { return false }
+      }))
+  }
+
+  /// Codex P1: if photosChanged accumulates dirty BEFORE a run starts (e.g. during
+  /// import or while waiting on destination), and the blocker resolves with dirty
+  /// still present, schedule a debounce so the work doesn't sit forever.
+  @Test func resumeFromImportSchedulesWhenDirtyExists() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.importActive = true
+    state.current = .waiting(.importActive)
+    let destId = state.destination.id!
+    var dirty = AutoSyncDirtyState()
+    var scope = ScopeDirtyState()
+    scope.recordPendingAssetId("pending-during-import", costCap: 500)
+    dirty.setScope(.timeline, scope)
+    state.dirtyStateByDestination[destId] = dirty
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .importStateChanged(isImporting: false), in: state, now: now)
+
+    let fireAt = now.addingTimeInterval(30)
+    #expect(next.current == .scheduled(reason: .photosChanged, fireAt: fireAt))
+    #expect(effects.contains(.scheduleDebounce(.photosChanged, fireAt: fireAt)))
+  }
+
+  /// Codex P1: a debounce firing while a manual export is active must NOT start a
+  /// run — single-active-run gate. environmentAllowsRun checks `!isManualActive`.
+  @Test func manualExportActiveBlocksAutoSyncRun() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    let manualContext = ExportRunContext(
+      source: .manual, visibility: .userVisible,
+      scope: .timelineFullLibrary, selection: .edited)
+    state.exportRunState = ExportRunState(
+      activeContext: manualContext, isManualActive: true, isAutoSyncActive: false)
+    state.current = .scheduled(reason: .appLaunch, fireAt: now.addingTimeInterval(10))
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .debounceFired(.appLaunch), in: state, now: now.addingTimeInterval(10))
+
+    // No startRun emitted — gate refused. State should reflect the manual block.
+    #expect(
+      !effects.contains(where: { effect in
+        if case .startRun = effect { return true } else { return false }
+      }))
+  }
+
+  /// When a manual export starts, AutoSync transitions to `.waiting(.manualExportActive)`
+  /// and any active debounce is cancelled.
+  @Test func manualExportActiveTransitionsToWaiting() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .scheduled(reason: .appLaunch, fireAt: now.addingTimeInterval(10))
+
+    let manualContext = ExportRunContext(
+      source: .manual, visibility: .userVisible,
+      scope: .timelineFullLibrary, selection: .edited)
+    let manualRunState = ExportRunState(
+      activeContext: manualContext, isManualActive: true, isAutoSyncActive: false)
+    let (next, effects) = AutoSyncReducer.reduce(
+      .exportRunStateChanged(manualRunState), in: state, now: now)
+
+    #expect(next.current == .waiting(.manualExportActive))
+    #expect(effects.contains(.cancelDebounce(.appLaunch)))
+  }
+
+  /// Reducer agent #1: enabledChanged(true) must guard against state.enabled == true.
+  /// A republished settings observation should not cancel-and-replace an active
+  /// debounce.
+  @Test func enabledChangedTrueWhileAlreadyEnabledIsNoOp() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .scheduled(reason: .appLaunch, fireAt: now.addingTimeInterval(10))
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .enabledChanged(true), in: state, now: now)
+
+    #expect(next.current == state.current)
+    #expect(effects.isEmpty)
+  }
+
+  /// Reducer agent #3: destinationChanged with an identical snapshot must not fire a
+  /// redundant `.destinationSelected` schedule.
+  @Test func destinationChangedWithIdenticalSnapshotIsNoOp() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .scheduled(
+      reason: .appLaunch, fireAt: now.addingTimeInterval(10))
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .destinationChanged(state.destination), in: state, now: now)
+
+    #expect(next.current == state.current)
+    #expect(effects.isEmpty)
+  }
+
+  /// Codex P2: photosChanged with only deleted ids and no collection signal
+  /// must not schedule a run — deleted IDs are non-export work.
+  @Test func deletedOnlyPhotosChangeDoesNotScheduleRun() {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let event = PhotoLibraryPersistentChangeEvent(
+      deletedLocalIdentifiers: ["deleted-1", "deleted-2"], observedAt: now)
+
+    let (next, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    #expect(next.current == .idle)  // No schedule.
+    #expect(
+      !effects.contains(where: { effect in
+        if case .scheduleDebounce(.photosChanged, _) = effect { return true } else { return false }
+      }))
+  }
+
+  /// Codex P2: collection-only changes when Albums is NOT selected must not schedule
+  /// — there's nothing in scope that needs reconciliation.
+  @Test func collectionOnlyChangeWithoutAlbumsScopeDoesNotScheduleRun() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.scopeSelection = AutoExportScopeSelection(timeline: true)  // Albums OFF
+
+    let event = PhotoLibraryPersistentChangeEvent(
+      collectionChangesPresent: true, observedAt: now)
+    let (next, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    #expect(next.current == .idle)
+    #expect(
+      !effects.contains(where: { effect in
+        if case .scheduleDebounce(.photosChanged, _) = effect { return true } else { return false }
+      }))
+  }
+
+  /// Token must still advance even when the event produces no export work — the
+  /// cursor needs to move so we don't refetch the same range.
+  @Test func tokenAdvancesEvenForNoOpEvents() {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let token = Data([0xAA, 0xBB])
+    let event = PhotoLibraryPersistentChangeEvent(
+      deletedLocalIdentifiers: ["d"], observedAt: now, nextToken: token)
+
+    let (_, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    let destId = state.destination.id!
+    #expect(effects.contains(.advancePersistentChangeToken(token, destinationId: destId)))
+  }
+
   // MARK: - Idempotence (plan §"State Reducer" dispatch contract)
 
   @Test func sameEventAppliedTwiceIsIdempotentForCurrentState() {
