@@ -97,7 +97,10 @@ struct AutoSyncRetryState: Codable, Equatable, Sendable {
 
     let attemptCount: Int
     let firstFailedAt: Date
-    if let existing, existing.errorSignature == errorSignature {
+    // Plan §"Retry and Failure Policy": retry counts are scoped to scope/placement +
+    // assetId + variant + category + errorSignature. A change in *either* category or
+    // signature means the previous backoff sequence does not apply — reset to attempt 1.
+    if let existing, existing.errorSignature == errorSignature, existing.category == category {
       attemptCount = existing.attemptCount + 1
       firstFailedAt = existing.firstFailedAt
     } else {

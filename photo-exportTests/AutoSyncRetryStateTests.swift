@@ -71,6 +71,28 @@ struct AutoSyncRetryStateTests {
     #expect(entry?.lastFailedAt == secondAt)
   }
 
+  @Test func differentCategoryResetsAttemptCountEvenWithSameSignature() {
+    var state = AutoSyncRetryState()
+    let firstAt = Date(timeIntervalSince1970: 1_700_000_000)
+    let secondAt = firstAt.addingTimeInterval(60)
+
+    state.recordFailure(
+      scope: .timeline, assetId: "a", variant: .original,
+      category: .iCloudTransient, errorSignature: "E:5",
+      at: firstAt, nextEligibleAt: nil
+    )
+    state.recordFailure(
+      scope: .timeline, assetId: "a", variant: .original,
+      category: .destinationNoSpace, errorSignature: "E:5",
+      at: secondAt, nextEligibleAt: nil
+    )
+
+    let entry = state.entry(scope: .timeline, assetId: "a", variant: .original)
+    #expect(entry?.attemptCount == 1)
+    #expect(entry?.firstFailedAt == secondAt)
+    #expect(entry?.category == .destinationNoSpace)
+  }
+
   @Test func differentSignatureResetsAttemptCount() {
     var state = AutoSyncRetryState()
     let firstAt = Date(timeIntervalSince1970: 1_700_000_000)
