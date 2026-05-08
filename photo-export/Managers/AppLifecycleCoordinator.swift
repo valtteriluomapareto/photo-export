@@ -14,19 +14,37 @@ import os
 /// volume) is a no-op rather than a `cancelAndClear()` + reconfigure cycle. Splitting fingerprint
 /// awareness from the bootstrap move would leave the app in a state where bookmark refreshes
 /// silently interrupt active exports, so the two changes intentionally land together.
+/// Result of running the per-destination directory coordinator and configuring the record stores.
+/// Surfaces the migration-conflict case so the UI (when wired up) can present a recoverable
+/// blocked state instead of silently adopting `<newId>/` and orphaning `<legacyId>/`.
+enum ConfigureRecordStoresResult: Equatable, Sendable {
+  case success
+  case migrationConflict(newId: String, legacyId: String)
+  case migrationFailed(message: String)
+}
+
+/// Snapshot of a migration-conflict situation. Both `<newId>/` and `<legacyId>/` exist on
+/// disk; the auto-sync plan calls for blocking automatic export and exposing recovery
+/// options in Settings until the user resolves it.
+struct MigrationConflictState: Equatable, Sendable {
+  let newId: String
+  let legacyId: String
+}
+
 @MainActor
 final class AppLifecycleCoordinator: ObservableObject {
   private let cancelActiveWork: () -> Void
-  private let configureRecordStores: (String?) -> Void
+  private let configureRecordStores: (String?) -> ConfigureRecordStoresResult
   private let log: Logger
 
   private(set) var lastConfiguredDestinationId: String?
+  @Published private(set) var migrationConflict: MigrationConflictState?
   private var didAttach = false
   private var destinationIdObservation: AnyCancellable?
 
   init(
     cancelActiveWork: @escaping () -> Void,
-    configureRecordStores: @escaping (String?) -> Void,
+    configureRecordStores: @escaping (String?) -> ConfigureRecordStoresResult,
     log: Logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Lifecycle")
   ) {
     self.cancelActiveWork = cancelActiveWork
@@ -72,6 +90,12 @@ final class AppLifecycleCoordinator: ObservableObject {
     )
     cancelActiveWork()
     lastConfiguredDestinationId = newId
-    configureRecordStores(newId)
+    let result = configureRecordStores(newId)
+    switch result {
+    case .success, .migrationFailed:
+      migrationConflict = nil
+    case .migrationConflict(let newId, let legacyId):
+      migrationConflict = MigrationConflictState(newId: newId, legacyId: legacyId)
+    }
   }
 }

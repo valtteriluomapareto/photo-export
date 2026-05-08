@@ -35,7 +35,7 @@ struct PhotoExportApp: App {
           timelineStore: ers,
           collectionStore: cers
         )
-      }
+      } as (String?) -> ConfigureRecordStoresResult
     )
 
     _exportDestinationManager = StateObject(wrappedValue: edm)
@@ -102,11 +102,11 @@ struct PhotoExportApp: App {
     destinationManager: ExportDestinationManager,
     timelineStore: ExportRecordStore,
     collectionStore: CollectionExportRecordStore
-  ) {
+  ) -> ConfigureRecordStoresResult {
     guard let newId else {
       timelineStore.configure(for: nil)
       collectionStore.configure(for: nil)
-      return
+      return .success
     }
     let coordinator = ExportRecordsDirectoryCoordinator(
       storeRootURL: timelineStore.storeRootURL)
@@ -115,13 +115,18 @@ struct PhotoExportApp: App {
       legacyId: destinationManager.currentLegacyDestinationId()
     )
     switch result {
-    case .success, .failure(.conflict):
-      // Either the migration succeeded or `<newId>/` already exists with `<oldId>/` left
-      // for inspection. Either way, configuring is safe — both stores adopt whatever's at
-      // `<newId>/`. Coordinator already logged the conflict case.
+    case .success:
       timelineStore.configure(for: newId)
       collectionStore.configure(for: newId)
-    case .failure(.migrationFailed):
+      return .success
+    case .failure(.conflict(let conflictNewId, let legacyId)):
+      // Both `<newId>/` and `<legacyId>/` exist. Configuring proceeds with `<newId>/` so
+      // the user can keep using the app, but the conflict is surfaced on the lifecycle
+      // coordinator so future Settings UI / auto-sync can present recovery options.
+      timelineStore.configure(for: newId)
+      collectionStore.configure(for: newId)
+      return .migrationConflict(newId: conflictNewId, legacyId: legacyId)
+    case .failure(.migrationFailed(let message)):
       // Transient I/O error during the legacy → new rename. `<legacyId>/` still has the
       // user's records; `<newId>/` does not exist yet. Configuring `for: newId` would
       // create `<newId>/` and trip the conflict-detection branch on every subsequent
@@ -129,6 +134,7 @@ struct PhotoExportApp: App {
       // next launch (or the next destinationId change) retries the rename.
       timelineStore.configure(for: nil)
       collectionStore.configure(for: nil)
+      return .migrationFailed(message: message)
     }
   }
 }

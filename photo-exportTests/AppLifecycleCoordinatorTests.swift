@@ -19,7 +19,10 @@ struct AppLifecycleCoordinatorTests {
     var spy = Spy()
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { spy.cancelCount += 1 },
-      configureRecordStores: { spy.configureCalls.append($0) }
+      configureRecordStores: { newId in
+        spy.configureCalls.append(newId)
+        return .success
+      }
     )
     return (coordinator, { spy })
   }
@@ -28,7 +31,10 @@ struct AppLifecycleCoordinatorTests {
     var spy = Spy()
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { spy.cancelCount += 1 },
-      configureRecordStores: { spy.configureCalls.append($0) }
+      configureRecordStores: { newId in
+        spy.configureCalls.append(newId)
+        return .success
+      }
     )
 
     coordinator.apply(destinationId: "dest-A")
@@ -43,7 +49,10 @@ struct AppLifecycleCoordinatorTests {
     var spy = Spy()
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { spy.cancelCount += 1 },
-      configureRecordStores: { spy.configureCalls.append($0) }
+      configureRecordStores: { newId in
+        spy.configureCalls.append(newId)
+        return .success
+      }
     )
 
     coordinator.apply(destinationId: "dest-A")
@@ -58,7 +67,10 @@ struct AppLifecycleCoordinatorTests {
     var spy = Spy()
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { spy.cancelCount += 1 },
-      configureRecordStores: { spy.configureCalls.append($0) }
+      configureRecordStores: { newId in
+        spy.configureCalls.append(newId)
+        return .success
+      }
     )
 
     let publisher = Empty<String?, Never>().eraseToAnyPublisher()
@@ -71,11 +83,57 @@ struct AppLifecycleCoordinatorTests {
     #expect(coordinator.lastConfiguredDestinationId == "dest-A")
   }
 
+  @Test func migrationConflictPropagatesToCoordinatorState() {
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {},
+      configureRecordStores: { _ in
+        .migrationConflict(newId: "new-id", legacyId: "legacy-id")
+      }
+    )
+
+    coordinator.apply(destinationId: "new-id")
+
+    #expect(
+      coordinator.migrationConflict
+        == MigrationConflictState(newId: "new-id", legacyId: "legacy-id"))
+  }
+
+  @Test func successResultClearsAnyPriorConflict() {
+    var nextResult: ConfigureRecordStoresResult = .migrationConflict(
+      newId: "n", legacyId: "l")
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {},
+      configureRecordStores: { _ in nextResult }
+    )
+
+    coordinator.apply(destinationId: "first")
+    #expect(coordinator.migrationConflict != nil)
+
+    nextResult = .success
+    coordinator.apply(destinationId: "second")
+
+    #expect(coordinator.migrationConflict == nil)
+  }
+
+  @Test func migrationFailedDoesNotSurfaceAsConflict() {
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {},
+      configureRecordStores: { _ in .migrationFailed(message: "io error") }
+    )
+
+    coordinator.apply(destinationId: "pending")
+
+    #expect(coordinator.migrationConflict == nil)
+  }
+
   @Test func publisherEventsDriveTransitions() {
     var spy = Spy()
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { spy.cancelCount += 1 },
-      configureRecordStores: { spy.configureCalls.append($0) }
+      configureRecordStores: { newId in
+        spy.configureCalls.append(newId)
+        return .success
+      }
     )
 
     let subject = PassthroughSubject<String?, Never>()
