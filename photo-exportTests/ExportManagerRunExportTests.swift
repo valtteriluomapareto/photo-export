@@ -16,12 +16,17 @@ struct ExportManagerRunExportTests {
     let manager: ExportManager
     let photoLib: FakePhotoLibraryService
     let dest: FakeExportDestination
+    let writer: FakeAssetResourceWriter
     let store: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
     let userDefaultsSuite: String
 
-    func cleanup() {
+    func cleanup() async {
+      // Release any suspended writers before cancelling so the writer Task can complete.
+      if let checkpoint = writer.checkpoint {
+        await checkpoint.releaseAll()
+      }
       manager.cancelAndClear()
       store.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
@@ -53,7 +58,7 @@ struct ExportManagerRunExportTests {
       userDefaults: defaults
     )
     return Harness(
-      manager: manager, photoLib: photoLib, dest: dest,
+      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
       store: store, collectionStore: collectionStore,
       storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
@@ -73,7 +78,7 @@ struct ExportManagerRunExportTests {
   /// — `processQueueIfNeeded` early-returns on the empty queue and finalizes the run.
   @Test func timelineFullLibraryEmptyResolvesCompleted() async {
     let harness = makeHarness()
-    defer { harness.cleanup() }
+    defer { Task { await harness.cleanup() } }
     // Empty `yearCounts` → availableYears() returns []; nothing to enqueue.
 
     let summary = await harness.manager.runExport(
@@ -89,7 +94,7 @@ struct ExportManagerRunExportTests {
   /// `.favoritesFull` against an empty favorites collection resolves immediately.
   @Test func favoritesFullEmptyResolvesCompleted() async {
     let harness = makeHarness()
-    defer { harness.cleanup() }
+    defer { Task { await harness.cleanup() } }
     // `favoritesAssets` is empty by default.
 
     let summary = await harness.manager.runExport(
@@ -102,7 +107,7 @@ struct ExportManagerRunExportTests {
   /// `.allAlbumsFull` against an empty album set resolves immediately.
   @Test func allAlbumsFullEmptyResolvesCompleted() async {
     let harness = makeHarness()
-    defer { harness.cleanup() }
+    defer { Task { await harness.cleanup() } }
     // `collectionTree` is empty by default.
 
     let summary = await harness.manager.runExport(
@@ -116,7 +121,7 @@ struct ExportManagerRunExportTests {
 
   @Test func timelineAssetsScopeResolvesFailedForNow() async {
     let harness = makeHarness()
-    defer { harness.cleanup() }
+    defer { Task { await harness.cleanup() } }
 
     let summary = await harness.manager.runExport(
       context: makeContext(scope: .timelineAssets(["asset-1"])))
@@ -127,7 +132,7 @@ struct ExportManagerRunExportTests {
 
   @Test func autoExportScopeResolvesFailedForNow() async {
     let harness = makeHarness()
-    defer { harness.cleanup() }
+    defer { Task { await harness.cleanup() } }
 
     let summary = await harness.manager.runExport(
       context: makeContext(
@@ -144,28 +149,37 @@ struct ExportManagerRunExportTests {
   /// `result == .interrupted`, `cancelReason == .destinationUnavailable` — distinct
   /// from `cancelAndClear`'s `.cancelled / .userCancelled`. AutoSync uses this signal
   /// to resume after the drive returns rather than treating queued work as failed.
-  @Test func interruptForDestinationUnavailableResolvesAsInterrupted() async {
+  ///
+  /// Deterministic via a writer checkpoint: real assets enqueue, the writer suspends
+  /// on the gate, the test then fires the interrupt. No `Task.yield()` race.
+  @Test func interruptForDestinationUnavailableResolvesAsInterrupted() async throws {
     let harness = makeHarness()
-    defer { harness.cleanup() }
+    defer { Task { await harness.cleanup() } }
+
+    let asset = TestAssetFactory.makeAsset(id: "interrupt-1")
+    harness.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    harness.photoLib.yearCounts = [(year: 2025, count: 1)]
+    harness.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "interrupt-1.JPG")
+    ]
+    let writeGate = AsyncCheckpoint()
+    harness.writer.checkpoint = writeGate
 
     async let summaryTask = harness.manager.runExport(
       context: makeContext(scope: .timelineFullLibrary))
 
-    // Yield to let the run begin; then simulate a drive unmount.
-    await Task.yield()
+    // Wait for the writer to arrive at the gate — the run is now actively processing.
+    await writeGate.waitForEnter(count: 1)
     harness.manager.interruptForDestinationUnavailable()
+    // Release the suspended writer so its Task can complete; the interrupt has already
+    // resolved the awaitable continuation.
+    await writeGate.releaseAll()
+
     let summary = await summaryTask
 
-    // Either the run finished naturally (empty library completes immediately) or the
-    // interrupt won the race. Both outcomes are valid; what we're proving is that
-    // calling interrupt while a run is in flight resolves cleanly without hanging.
+    #expect(summary.result == .interrupted)
+    #expect(summary.cancelReason == .destinationUnavailable)
     #expect(harness.manager.activeRunContext == nil)
-    if summary.result == .interrupted {
-      #expect(summary.cancelReason == .destinationUnavailable)
-    } else {
-      // Empty-library case raced ahead — verify it at least resolved.
-      #expect(summary.result == .completed || summary.result == .interrupted)
-    }
   }
 
   // MARK: - Run context surfacing
@@ -175,7 +189,7 @@ struct ExportManagerRunExportTests {
   /// can observe this directly.
   @Test func activeRunContextSurfacesAndClears() async {
     let harness = makeHarness()
-    defer { harness.cleanup() }
+    defer { Task { await harness.cleanup() } }
 
     var observedContexts: [ExportRunContext?] = []
     let cancellable = harness.manager.$activeRunContext.sink { ctx in
