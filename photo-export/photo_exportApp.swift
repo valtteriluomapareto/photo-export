@@ -113,10 +113,11 @@ struct PhotoExportApp: App {
     }
     let coordinator = ExportRecordsDirectoryCoordinator(
       storeRootURL: timelineStore.storeRootURL)
-    let result = coordinator.prepareDirectory(
-      for: newId,
-      legacyId: destinationManager.currentLegacyDestinationId()
-    )
+    let legacyIds = [
+      destinationManager.currentLegacyDestinationId(),
+      destinationManager.currentPreV2LowConfidenceLegacyId(),
+    ].compactMap { $0 }
+    let result = coordinator.prepareDirectory(for: newId, legacyIds: legacyIds)
     switch result {
     case .success:
       timelineStore.configure(for: newId)

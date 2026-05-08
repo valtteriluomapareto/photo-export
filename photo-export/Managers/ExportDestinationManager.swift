@@ -392,6 +392,16 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     return Self.legacyDestinationId(from: data)
   }
 
+  /// Pre-Phase-0a low-confidence legacy id for the currently selected folder. Returns the
+  /// volumeIdentifier-based digest the previous code used as the record-store directory name
+  /// for drives without a volume UUID; returns nil for high-confidence drives or when no
+  /// folder is selected. `ExportRecordsDirectoryCoordinator` accepts this as a secondary
+  /// legacy id so existing low-confidence record stores keep working across the upgrade.
+  func currentPreV2LowConfidenceLegacyId() -> String? {
+    guard let url = selectedFolderURL else { return nil }
+    return DestinationFingerprint.preV2LowConfidenceId(for: url)
+  }
+
   private func saveBookmark(for url: URL) -> Bool {
     do {
       let data = try url.bookmarkData(

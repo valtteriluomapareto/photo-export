@@ -99,6 +99,41 @@ extension DestinationFingerprint {
   private static let log = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "DestinationFingerprint")
 
+  /// Pre-Phase-0a low-confidence id derivation for migration purposes only. Returns the
+  /// `SHA-256(volumeIdentifier-description || U+0000 || /relativePath)` digest the previous
+  /// code used as the record-store directory name when no volume UUID was available.
+  /// Returns `nil` for high-confidence drives (the high-confidence id derivation is
+  /// unchanged, so no migration applies) and for unmounted drives.
+  ///
+  /// The new low-confidence digest hashes `standardizedPath` only — `volumeIdentifier` is a
+  /// same-session-only token. `ExportRecordsDirectoryCoordinator` accepts this value as a
+  /// secondary legacy id so existing low-confidence record stores keep working across the
+  /// upgrade.
+  static func preV2LowConfidenceId(for url: URL) -> String? {
+    let resolved = url.resolvingSymlinksInPath()
+    let keys: Set<URLResourceKey> = [
+      .volumeUUIDStringKey, .volumeIdentifierKey, .volumeURLKey,
+    ]
+    guard let values = try? resolved.resourceValues(forKeys: keys),
+      values.volumeUUIDString == nil,
+      let identifier = values.volumeIdentifier
+    else { return nil }
+
+    let volumeRoot = values.volume?.standardizedFileURL.path ?? ""
+    let canonicalPath = resolved.standardizedFileURL.path
+    var relativePath = canonicalPath
+    if !volumeRoot.isEmpty, volumeRoot != "/", canonicalPath.hasPrefix(volumeRoot) {
+      relativePath = String(canonicalPath.dropFirst(volumeRoot.count))
+    }
+    if !relativePath.hasPrefix("/") {
+      relativePath = "/" + relativePath
+    }
+
+    let combined = String(describing: identifier) + "\u{0000}" + relativePath
+    let digest = SHA256.hash(data: Data(combined.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined()
+  }
+
   /// Computes the fingerprint for a folder URL. Returns `nil` when the URL's resource values
   /// cannot be read (typically because the volume is unmounted) or when no usable identity
   /// component is present even with successfully read resource values.
