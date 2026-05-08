@@ -235,6 +235,18 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  // MARK: - Lifetime contract
+  //
+  // `ExportManager` is owned by `PhotoExportApp` as an `@StateObject` for the entire
+  // app lifetime, so a pending `runExport` continuation effectively cannot outlive the
+  // process. Tests must call `cancelAndClear()` (or `interruptForDestinationUnavailable()`)
+  // during teardown to resolve any active run before the harness drops its reference —
+  // otherwise the `CheckedContinuation` will trap when deallocated unresumed. There is
+  // no `deinit`-side cleanup because reaching @MainActor state from a nonisolated
+  // deinit would require `MainActor.assumeIsolated`, which itself traps off-main, and
+  // resolving the trap with weak references is not possible (continuation is a value
+  // type that cannot be `weak`-referenced).
+
   // MARK: - Public API
   func startExportMonth(year: Int, month: Int) {
     guard !isImporting else {
@@ -836,6 +848,11 @@ final class ExportManager: ObservableObject {
   /// `.autoExport` scope land in subsequent Phase 0a slices; for now they resolve
   /// immediately with `.failed` so callers see a deterministic outcome rather than a
   /// hang.
+  ///
+  /// **Awaiter behavior under pause**: `pause()` while a `runExport` is active leaves
+  /// the queue parked and the awaitable suspended until either `resume()` drains the
+  /// queue or `cancelAndClear()` / `interruptForDestinationUnavailable()` resolves the
+  /// run. Callers that pause mid-run are responsible for unblocking the awaiter.
   func runExport(context: ExportRunContext) async -> ExportRunSummary {
     precondition(
       activeRunContext == nil,
@@ -959,7 +976,14 @@ final class ExportManager: ObservableObject {
       // Nothing to process. If an awaitable run is in flight (e.g. `runExport` for an
       // already-complete library), the queue-drain hook in `processNext` won't fire
       // because `processNext` won't run. Finalize here so the awaiter resolves.
-      finalizeActiveRun(result: .completed, cancelReason: nil)
+      //
+      // Guard on `!isEnqueueingAll` so a `resume()` during the brief window between
+      // an enqueueing Task starting and adding the first job (queue is empty,
+      // `processQueueIfNeeded` triggered from `resume()`) doesn't prematurely resolve
+      // a run that's still in its enqueue phase.
+      if !isEnqueueingAll {
+        finalizeActiveRun(result: .completed, cancelReason: nil)
+      }
       return
     }
     isProcessing = true
