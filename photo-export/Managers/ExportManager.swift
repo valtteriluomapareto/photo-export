@@ -635,57 +635,15 @@ final class ExportManager: ObservableObject {
 
   func cancelAndClear() {
     logger.info("Cancelling current export and clearing queue due to destination change")
-    if let inFlightId = currentJobAssetId, let inFlightVariant = currentJobVariant,
-      let inFlightPlacement = currentJobPlacement
-    {
-      // Route the cleanup to the correct store by `placement.kind`. In Phase 1 only
-      // `.timeline` jobs reach here in production; the `.favorites`/`.album` cases land
-      // when collection exports start in Phase 3. The store-side `removeVariant` is a
-      // no-op when the variant is not `.inProgress`, so the cross-store check that used
-      // to live here is now baked into the store call.
-      switch inFlightPlacement.kind {
-      case .timeline:
-        if exportRecordStore.exportInfo(assetId: inFlightId)?.variants[inFlightVariant]?.status
-          == .inProgress
-        {
-          exportRecordStore.removeVariant(assetId: inFlightId, variant: inFlightVariant)
-        }
-      case .favorites, .album:
-        if collectionExportRecordStore.exportInfo(
-          assetId: inFlightId, placement: inFlightPlacement)?.variants[inFlightVariant]?.status
-          == .inProgress
-        {
-          collectionExportRecordStore.removeVariant(
-            assetId: inFlightId, placement: inFlightPlacement, variant: inFlightVariant)
-        }
-      }
-    }
-    currentJobAssetId = nil
-    currentJobVariant = nil
-    currentJobPlacement = nil
-    generation += 1
-    pendingJobs.removeAll()
-    queuedCountsByPlacementId.removeAll()
-    currentTask?.cancel()
-    currentTask = nil
-    isProcessing = false
-    isRunning = false
-    isPaused = false
-    isEnqueueingAll = false
-    totalJobsEnqueued = 0
-    totalJobsCompleted = 0
-    currentAssetFilename = nil
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    updateQueueCount()
+    teardownActiveWork()
     finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
   }
 
   /// Drive-unmount equivalent of `cancelAndClear()`. Stops starting new jobs and clears
   /// in-memory pending work, but resolves the active run as transient
-  /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. This matters
-  /// for the AutoSync state machine, which treats `.destinationUnavailable` as
-  /// "resume when the drive comes back" rather than "this run failed."
+  /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. The AutoSync
+  /// state machine treats `.destinationUnavailable` as "resume when the drive comes
+  /// back" rather than "this run failed."
   ///
   /// MVP scope: identical cleanup to `cancelAndClear` minus the cancel-reason change.
   /// Phase 0b adds advisory-lock release; persistence of accumulated dirty state lands
@@ -695,9 +653,21 @@ final class ExportManager: ObservableObject {
   /// reconciliation.
   func interruptForDestinationUnavailable() {
     logger.info("Interrupting current export — destination unavailable")
+    teardownActiveWork()
+    finalizeActiveRun(result: .interrupted, cancelReason: .destinationUnavailable)
+  }
+
+  /// Common in-memory teardown shared by `cancelAndClear` and
+  /// `interruptForDestinationUnavailable`. Removes any in-progress variant from the
+  /// correct record store, then zeros queue + run + counter state. The call sites differ
+  /// only in their log line and the `finalizeActiveRun` arguments.
+  private func teardownActiveWork() {
     if let inFlightId = currentJobAssetId, let inFlightVariant = currentJobVariant,
       let inFlightPlacement = currentJobPlacement
     {
+      // Route the cleanup to the correct store by `placement.kind`. The store-side
+      // `removeVariant` is a no-op when the variant is not `.inProgress`, so the
+      // cross-store check that used to live here is now baked into the store call.
       switch inFlightPlacement.kind {
       case .timeline:
         if exportRecordStore.exportInfo(assetId: inFlightId)?.variants[inFlightVariant]?.status
@@ -733,7 +703,6 @@ final class ExportManager: ObservableObject {
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     updateQueueCount()
-    finalizeActiveRun(result: .interrupted, cancelReason: .destinationUnavailable)
   }
 
   // MARK: - Empty-run message
