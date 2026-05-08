@@ -163,6 +163,49 @@ struct DestinationFingerprintTests {
     #expect(beforeRename.id == afterRename.id)
   }
 
+  /// Schema v1's id derivation is pinned and must not change when future schema versions
+  /// land — old persisted fingerprints always re-derive a v1 id. Bumping `currentSchemaVersion`
+  /// requires adding a new branch in `id`, never replacing this one.
+  @Test func schemaV1IdLayoutIsPinned() {
+    let high = DestinationFingerprint(
+      schemaVersion: 1,
+      volumeUUIDString: "fixed-uuid",
+      volumeRootPath: nil,
+      relativePathFromVolumeRoot: "/photos",
+      standardizedPath: "/Volumes/X/photos",
+      identityConfidence: .high
+    )
+
+    // Hash of "fixed-uuid" + U+0000 + "/photos". Computed once and pinned here so any
+    // accidental change to the derivation immediately fails this test.
+    #expect(
+      high.id == "3a945585d7df9e765c1c96e9e5fd6cfd941e3a158d15ed404c408158e90d42c2")
+  }
+
+  /// An unknown future `schemaVersion` does not crash; it falls back to the latest known
+  /// layout and (in production) logs an error. Tests can rely on it always returning a
+  /// deterministic non-empty id rather than failing.
+  @Test func unknownSchemaVersionFallsBackToLatestLayout() {
+    let weird = DestinationFingerprint(
+      schemaVersion: 99,
+      volumeUUIDString: "u",
+      volumeRootPath: nil,
+      relativePathFromVolumeRoot: "/p",
+      standardizedPath: "/Volumes/u/p",
+      identityConfidence: .high
+    )
+    let v1 = DestinationFingerprint(
+      schemaVersion: 1,
+      volumeUUIDString: "u",
+      volumeRootPath: nil,
+      relativePathFromVolumeRoot: "/p",
+      standardizedPath: "/Volumes/u/p",
+      identityConfidence: .high
+    )
+
+    #expect(weird.id == v1.id)
+  }
+
   /// `.high` and `.low` confidences with otherwise-equivalent path components must produce
   /// distinct ids — otherwise a low-confidence drive could collide with a high-confidence
   /// one whose UUID happens to digest the same.

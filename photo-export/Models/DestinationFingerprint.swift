@@ -61,24 +61,42 @@ struct DestinationFingerprint: Codable, Hashable, Sendable {
   }
 
   /// SHA-256 hex digest used as the per-destination record-store directory name. Derived
-  /// purely from the persistent components, not stored, so a future `schemaVersion` bump can
-  /// change the byte layout without invalidating decoded values.
+  /// purely from the persistent components, not stored, so a future `schemaVersion` bump
+  /// can change the byte layout without invalidating decoded values.
+  ///
+  /// The derivation switches on `schemaVersion`: each schema version owns its own byte
+  /// layout *forever*, so an old persisted v1 fingerprint always re-derives a v1 id even
+  /// after the code learns a v2 layout. Bumping `currentSchemaVersion` requires adding a
+  /// new case here plus a coordinator-level migration; it never replaces an existing case.
   var id: String {
-    let identityKey: String
-    switch identityConfidence {
-    case .high:
-      // Plan-compliant high-confidence input: volume UUID + relative path within the volume.
-      identityKey = volumeUUIDString ?? ""
-    case .low:
-      // Plan-compliant low-confidence input: canonical/standardized path only. Volume
-      // identifier is intentionally absent; it is a same-session-only hint.
-      identityKey = ""
+    switch schemaVersion {
+    case 1:
+      return idV1
+    default:
+      // Forward-compatibility hatch for an in-flight schema bump or a v0 file from an
+      // experimental build. Falls back to the latest known layout and logs once so the
+      // mismatch is observable. Production v2+ code MUST add an explicit case above.
+      Self.log.error(
+        "Unknown DestinationFingerprint.schemaVersion=\(self.schemaVersion, privacy: .public); falling back to latest layout"
+      )
+      return idV1
     }
+  }
+
+  /// v1 id derivation: SHA-256(identityKey || U+0000 || pathComponent).
+  /// `.high`: volume UUID + relative path within the volume. `.low`: empty key + canonical
+  /// standardized path. Bug-for-bug compatible with the pre-Phase-0a high-confidence
+  /// derivation; low-confidence callers are migrated separately by
+  /// `ExportRecordsDirectoryCoordinator` via `preV2LowConfidenceId(for:)`.
+  private var idV1: String {
+    let identityKey: String
     let pathComponent: String
     switch identityConfidence {
     case .high:
+      identityKey = volumeUUIDString ?? ""
       pathComponent = relativePathFromVolumeRoot
     case .low:
+      identityKey = ""
       pathComponent = standardizedPath
     }
     let combined = identityKey + "\u{0000}" + pathComponent
