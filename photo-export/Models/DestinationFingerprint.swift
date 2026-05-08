@@ -60,6 +60,77 @@ struct DestinationFingerprint: Codable, Hashable, Sendable {
     case identityConfidence
   }
 
+  /// Memberwise initializer enforcing the confidence ↔ volume-UUID invariant: `.high`
+  /// requires a non-nil `volumeUUIDString`, `.low` requires nil. Violations are programmer
+  /// errors — they would mint an id with no input distinguishing the two confidence levels
+  /// (`.high` with nil UUID would silently digest `"" + relPath`, indistinguishable from
+  /// `.low` minus the metadata field). Use the `makeHigh` / `makeLow` factories from
+  /// production code; this initializer remains accessible for `Codable` synthesis to work.
+  init(
+    schemaVersion: Int,
+    volumeUUIDString: String?,
+    volumeRootPath: String?,
+    relativePathFromVolumeRoot: String,
+    standardizedPath: String,
+    identityConfidence: DestinationIdentityConfidence
+  ) {
+    switch identityConfidence {
+    case .high:
+      precondition(
+        volumeUUIDString != nil,
+        ".high-confidence DestinationFingerprint requires a non-nil volumeUUIDString")
+    case .low:
+      precondition(
+        volumeUUIDString == nil,
+        ".low-confidence DestinationFingerprint must have a nil volumeUUIDString — the "
+          + "low-confidence id derivation hashes standardizedPath only and a stray UUID would be "
+          + "ignored, so storing it invites a misleading audit trail.")
+    }
+    self.schemaVersion = schemaVersion
+    self.volumeUUIDString = volumeUUIDString
+    self.volumeRootPath = volumeRootPath
+    self.relativePathFromVolumeRoot = relativePathFromVolumeRoot
+    self.standardizedPath = standardizedPath
+    self.identityConfidence = identityConfidence
+  }
+
+  /// Factory for `.high`-confidence fingerprints — i.e. drives with a volume UUID.
+  static func makeHigh(
+    volumeUUIDString: String,
+    volumeRootPath: String?,
+    relativePathFromVolumeRoot: String,
+    standardizedPath: String,
+    schemaVersion: Int = currentSchemaVersion
+  ) -> DestinationFingerprint {
+    DestinationFingerprint(
+      schemaVersion: schemaVersion,
+      volumeUUIDString: volumeUUIDString,
+      volumeRootPath: volumeRootPath,
+      relativePathFromVolumeRoot: relativePathFromVolumeRoot,
+      standardizedPath: standardizedPath,
+      identityConfidence: .high
+    )
+  }
+
+  /// Factory for `.low`-confidence fingerprints — i.e. drives without a volume UUID.
+  /// `volumeUUIDString` is omitted because it would not be hashed and would mislead anyone
+  /// reading the persisted record.
+  static func makeLow(
+    volumeRootPath: String?,
+    relativePathFromVolumeRoot: String,
+    standardizedPath: String,
+    schemaVersion: Int = currentSchemaVersion
+  ) -> DestinationFingerprint {
+    DestinationFingerprint(
+      schemaVersion: schemaVersion,
+      volumeUUIDString: nil,
+      volumeRootPath: volumeRootPath,
+      relativePathFromVolumeRoot: relativePathFromVolumeRoot,
+      standardizedPath: standardizedPath,
+      identityConfidence: .low
+    )
+  }
+
   /// SHA-256 hex digest used as the per-destination record-store directory name. Derived
   /// purely from the persistent components, not stored, so a future `schemaVersion` bump
   /// can change the byte layout without invalidating decoded values.
@@ -188,21 +259,21 @@ extension DestinationFingerprint {
       volumeIdentifier: values.volumeIdentifier.map { String(describing: $0) }
     )
 
-    let confidence: DestinationIdentityConfidence
-    if values.volumeUUIDString != nil {
-      confidence = .high
+    let fingerprint: DestinationFingerprint
+    if let uuid = values.volumeUUIDString {
+      fingerprint = .makeHigh(
+        volumeUUIDString: uuid,
+        volumeRootPath: volumeRoot.isEmpty ? nil : volumeRoot,
+        relativePathFromVolumeRoot: relativePath,
+        standardizedPath: canonicalPath
+      )
     } else {
-      confidence = .low
+      fingerprint = .makeLow(
+        volumeRootPath: volumeRoot.isEmpty ? nil : volumeRoot,
+        relativePathFromVolumeRoot: relativePath,
+        standardizedPath: canonicalPath
+      )
     }
-
-    let fingerprint = DestinationFingerprint(
-      schemaVersion: currentSchemaVersion,
-      volumeUUIDString: values.volumeUUIDString,
-      volumeRootPath: volumeRoot.isEmpty ? nil : volumeRoot,
-      relativePathFromVolumeRoot: relativePath,
-      standardizedPath: canonicalPath,
-      identityConfidence: confidence
-    )
     return (fingerprint, hints)
   }
 }
