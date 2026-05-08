@@ -26,8 +26,16 @@ protocol AutoSyncCancellable: AnyObject {
   func cancel()
 }
 
-/// Production clock backed by `Date()` and `Task.sleep(nanoseconds:)`. The scheduled task runs
-/// on the main actor, matching the rest of the manager layer.
+/// Production clock backed by `Date()` and `Task.sleep(nanoseconds:)`. The scheduled task
+/// runs on the main actor, matching the rest of the manager layer.
+///
+/// Cancellation contract: `cancel()` and the scheduled work both execute on `@MainActor`.
+/// The main actor does not preempt, so the `isCancelled` check + `work()` invocation are
+/// atomic with respect to any other main-actor code, including a `cancel()` call from another
+/// `Task`. This means: after `cancel()` returns, the work either (a) has not yet reached
+/// its `isCancelled` check and will not run, or (b) has already completed. There is no
+/// interleaving where `cancel()` arrives "between" the check and the invocation. This
+/// matches the `TestClock` contract where in-window cancellation is honored.
 @MainActor
 final class SystemAutoSyncClock: AutoSyncClock {
   init() {}

@@ -106,6 +106,28 @@ struct TestClockTests {
     #expect(fired)
   }
 
+  @Test func cancellingFromAFiringClosurePreventsLaterDueWork() {
+    let clock = TestClock()
+    var firstFired = false
+    var secondFired = false
+
+    var firstToken: AutoSyncCancellable?
+    var secondToken: AutoSyncCancellable?
+
+    firstToken = clock.schedule(after: 1) {
+      firstFired = true
+      secondToken?.cancel()
+    }
+    secondToken = clock.schedule(after: 2) { secondFired = true }
+
+    clock.advance(by: 5)
+
+    #expect(firstFired)
+    #expect(secondFired == false)
+    #expect(clock.pendingCount == 0)
+    _ = firstToken  // silence unused warning
+  }
+
   @Test func advanceFiresAllDueWorkAtomicallyBeforeReturning() {
     let clock = TestClock()
     var firingsAtCheck = 0
