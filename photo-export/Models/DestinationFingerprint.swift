@@ -147,13 +147,15 @@ struct DestinationFingerprint: Codable, Hashable, Sendable {
     case 1:
       return idV1
     default:
-      // Forward-compatibility hatch for an in-flight schema bump or a v0 file from an
-      // experimental build. Falls back to the latest known layout and logs once so the
-      // mismatch is observable. Production v2+ code MUST add an explicit case above.
-      Self.log.error(
-        "Unknown DestinationFingerprint.schemaVersion=\(self.schemaVersion, privacy: .public); falling back to latest layout"
+      // An unknown `schemaVersion` is unsafe to silently fall back on — silently
+      // re-deriving an id with a stale layout would relocate the user's record-store
+      // directory to a wrong path. This branch traps so the bug surfaces immediately
+      // (during decode of a forward-incompatible file or a development bump that
+      // forgot to add the corresponding case here). Bumping `currentSchemaVersion`
+      // requires adding an explicit `case` above plus a coordinator-level migration.
+      preconditionFailure(
+        "Unknown DestinationFingerprint.schemaVersion=\(schemaVersion). Add an explicit case in `id` to avoid silent record-store relocation."
       )
-      return idV1
     }
   }
 

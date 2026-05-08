@@ -182,28 +182,12 @@ struct DestinationFingerprintTests {
       high.id == "3a945585d7df9e765c1c96e9e5fd6cfd941e3a158d15ed404c408158e90d42c2")
   }
 
-  /// An unknown future `schemaVersion` does not crash; it falls back to the latest known
-  /// layout and (in production) logs an error. Tests can rely on it always returning a
-  /// deterministic non-empty id rather than failing.
-  @Test func unknownSchemaVersionFallsBackToLatestLayout() {
-    let weird = DestinationFingerprint(
-      schemaVersion: 99,
-      volumeUUIDString: "u",
-      volumeRootPath: nil,
-      relativePathFromVolumeRoot: "/p",
-      standardizedPath: "/Volumes/u/p",
-      identityConfidence: .high
-    )
-    let v1 = DestinationFingerprint(
-      schemaVersion: 1,
-      volumeUUIDString: "u",
-      volumeRootPath: nil,
-      relativePathFromVolumeRoot: "/p",
-      standardizedPath: "/Volumes/u/p",
-      identityConfidence: .high
-    )
-
-    #expect(weird.id == v1.id)
+  /// `currentSchemaVersion` is the only id-deriving case today. Bumping it requires
+  /// adding an explicit `case` in `var id`; the default branch traps on unknown
+  /// versions to prevent silent record-store relocation. (We don't test the trap
+  /// itself — `preconditionFailure` aborts the process.)
+  @Test func currentSchemaVersionMatchesV1() {
+    #expect(DestinationFingerprint.currentSchemaVersion == 1)
   }
 
   /// `.high` and `.low` confidences with otherwise-equivalent path components must produce

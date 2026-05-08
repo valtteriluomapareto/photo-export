@@ -41,7 +41,11 @@ final class FileBackedAutoSyncRetryStateStore: AutoSyncRetryStateStore {
   func save(_ state: AutoSyncRetryState, destinationId: String) throws {
     let url = fileURL(for: destinationId)
     try ensureDirectoryExists(for: url)
-    let data = try JSONEncoder().encode(state)
+    let encoder = JSONEncoder()
+    // Stable byte order — same `state` re-encoded yields the same bytes, so diffing
+    // tooling and any future "skip write if equal" optimization stay meaningful.
+    encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+    let data = try encoder.encode(state)
     try data.write(to: url, options: .atomic)
   }
 
