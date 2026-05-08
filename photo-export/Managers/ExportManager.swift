@@ -316,7 +316,7 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  func startExportAll() {
+  func startExportAll(selectionOverride: ExportVersionSelection? = nil) {
     guard !isImporting else {
       logger.warning("startExportAll ignored: import in progress")
       return
@@ -328,7 +328,9 @@ final class ExportManager: ObservableObject {
       return
     }
     guard !isEnqueueingAll else { return }
-    let selection = versionSelection
+    // selectionOverride lets `runExport(context:)` honor the run context's selection
+    // without mutating the user-visible toolbar `versionSelection`.
+    let selection = selectionOverride ?? versionSelection
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -404,7 +406,7 @@ final class ExportManager: ObservableObject {
   /// placement is the canonical `collections:favorites`. Gated on
   /// `canExportCollection`; the timeline store's state is not consulted (collection and
   /// timeline exports are independent under the disjoint-key-spaces rationale).
-  func startExportFavorites() {
+  func startExportFavorites(selectionOverride: ExportVersionSelection? = nil) {
     guard !isImporting else {
       logger.warning("startExportFavorites ignored: import in progress")
       return
@@ -415,7 +417,7 @@ final class ExportManager: ObservableObject {
       )
       return
     }
-    let selection = versionSelection
+    let selection = selectionOverride ?? versionSelection
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -449,7 +451,7 @@ final class ExportManager: ObservableObject {
   /// Collections sidebar surfaces. Mirrors `startExportAll`'s pattern: serialises
   /// the per-album enqueues inside one Task so all jobs land in the queue before
   /// processing kicks in.
-  func startExportAllAlbums() {
+  func startExportAllAlbums(selectionOverride: ExportVersionSelection? = nil) {
     guard !isImporting else {
       logger.warning("startExportAllAlbums ignored: import in progress")
       return
@@ -461,7 +463,7 @@ final class ExportManager: ObservableObject {
       return
     }
     guard !isEnqueueingAll else { return }
-    let selection = versionSelection
+    let selection = selectionOverride ?? versionSelection
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -869,36 +871,72 @@ final class ExportManager: ObservableObject {
     return await withCheckedContinuation {
       (continuation: CheckedContinuation<ExportRunSummary, Never>) in
       activeRunContext = context
-      activeRunBookkeeping = ActiveRunBookkeeping(
-        totalJobsEnqueuedAtStart: totalJobsEnqueued,
-        totalJobsCompletedAtStart: totalJobsCompleted,
-        continuation: continuation
-      )
 
+      // Bookkeeping is captured *after* dispatch because the start* methods call
+      // `resetProgressCounters()` synchronously when the queue is idle. Capturing
+      // before dispatch would snapshot stale totals from a prior run, producing a
+      // negative-clamped delta on the next finalize.
+      //
+      // The fail-fast guards block dispatch when the manager isn't idle. Without
+      // `!hasActiveExportWork`, a fire-and-forget run already in flight would
+      // silently no-op the dispatched `start*` (its `isEnqueueingAll` guard returns
+      // early) and the awaiter would hang forever.
       switch context.scope {
       case .timelineFullLibrary:
-        if !isImporting && canExportTimeline {
-          startExportAll()
+        if !isImporting && canExportTimeline && !hasActiveExportWork {
+          startExportAll(selectionOverride: context.selection)
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
         } else {
-          // Existing start* methods silently no-op when their preconditions aren't met
-          // (timeline store not .ready, import in progress). Without this fail-fast, the
-          // awaitable would hang forever waiting for a run that never started. Finalize
-          // as failed so callers see a deterministic outcome.
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
           finalizeActiveRun(result: .failed, cancelReason: nil)
         }
       case .favoritesFull:
-        if !isImporting && canExportCollection {
-          startExportFavorites()
+        if !isImporting && canExportCollection && !hasActiveExportWork {
+          startExportFavorites(selectionOverride: context.selection)
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
         } else {
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
           finalizeActiveRun(result: .failed, cancelReason: nil)
         }
       case .allAlbumsFull:
-        if !isImporting && canExportCollection {
-          startExportAllAlbums()
+        if !isImporting && canExportCollection && !hasActiveExportWork {
+          startExportAllAlbums(selectionOverride: context.selection)
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
         } else {
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
           finalizeActiveRun(result: .failed, cancelReason: nil)
         }
       case .timelineAssets, .favoritesAssets, .allAlbumsAssets, .autoExport:
+        // Targeted asset-id and autoExport scopes land in subsequent Phase 0a slices.
+        activeRunBookkeeping = ActiveRunBookkeeping(
+          totalJobsEnqueuedAtStart: totalJobsEnqueued,
+          totalJobsCompletedAtStart: totalJobsCompleted,
+          continuation: continuation
+        )
         finalizeActiveRun(result: .failed, cancelReason: nil)
       }
     }
