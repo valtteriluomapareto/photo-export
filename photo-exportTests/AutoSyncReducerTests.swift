@@ -347,6 +347,135 @@ struct AutoSyncReducerTests {
       ])
   }
 
+  // MARK: - photosChanged
+
+  @Test func photosChangedWhenDisabledIsIgnored() {
+    let state = AutoSyncReducer.State.initial  // enabled = false
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["asset-1"], observedAt: now)
+
+    let (next, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    #expect(next.dirtyStateByDestination.isEmpty)
+    #expect(effects.isEmpty)
+  }
+
+  @Test func photosChangedWithNoDestinationIsIgnored() {
+    var state = AutoSyncReducer.State.initial
+    state.enabled = true
+    state.scopeSelection = AutoExportScopeSelection(timeline: true)
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["asset-1"], observedAt: now)
+
+    let (next, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    #expect(next.dirtyStateByDestination.isEmpty)
+    #expect(effects.isEmpty)
+  }
+
+  @Test func photosChangedWithNoSelectedScopesIsIgnored() {
+    var state = AutoSyncReducer.State.initial
+    state.enabled = true
+    state.destination = safeDestination()
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["asset-1"], observedAt: now)
+
+    let (next, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    #expect(next.dirtyStateByDestination.isEmpty)
+    #expect(effects.isEmpty)
+  }
+
+  @Test func photosChangedAccumulatesDirtyAssetIds() {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["a", "b"],
+      updatedLocalIdentifiers: ["c"],
+      observedAt: now
+    )
+
+    let (next, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    let destId = state.destination.id!
+    let dirty = next.dirtyStateByDestination[destId]
+    #expect(dirty?.scope(.timeline).pendingAssetIds == ["a", "b", "c"])
+    #expect(dirty?.lastUpdatedAt == now)
+
+    let fireAt = now.addingTimeInterval(30)
+    #expect(next.current == .scheduled(reason: .photosChanged, fireAt: fireAt))
+    // persistDirtyState + scheduleDebounce expected. (No nextToken in event so no
+    // advancePersistentChangeToken effect.)
+    #expect(effects.contains(.scheduleDebounce(.photosChanged, fireAt: fireAt)))
+    #expect(
+      effects.contains(where: {
+        if case .persistDirtyState(_, let did) = $0 { return did == destId }
+        return false
+      }))
+  }
+
+  @Test func photosChangedAccumulatesDirtyEvenWhenDestinationUnavailable() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.destination = DestinationSnapshot(
+      fingerprint: state.destination.fingerprint, isAvailable: false, safety: .safe)
+    state.current = .waiting(.destinationUnavailable)
+
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["asset-x"], observedAt: now)
+
+    let (next, _) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    let destId = state.destination.id!
+    #expect(next.dirtyStateByDestination[destId]?.scope(.timeline).pendingAssetIds == ["asset-x"])
+    // State stays .waiting — we accumulate dirty state but don't try to run.
+    #expect(next.current == .waiting(.destinationUnavailable))
+  }
+
+  @Test func photosChangedRollsOverToFullReconciliationAtCostCap() {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let cap = AutoSyncReducer.targetedAssetCostCap
+    let ids = Set((0..<(cap + 1)).map { "asset-\($0)" })
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ids, observedAt: now)
+
+    let (next, _) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    let destId = state.destination.id!
+    let dirty = next.dirtyStateByDestination[destId]
+    let timelineScope = dirty?.scope(.timeline)
+    #expect(timelineScope?.pendingFullReconciliation == true)
+    #expect(timelineScope?.pendingAssetIds.isEmpty == true)
+  }
+
+  @Test func photosChangedWithCollectionChangesMarksAlbumsForPlacementReconciliation() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.scopeSelection = AutoExportScopeSelection(timeline: true, albums: true)
+
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["a"],
+      collectionChangesPresent: true,
+      observedAt: now
+    )
+
+    let (next, _) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    let destId = state.destination.id!
+    let dirty = next.dirtyStateByDestination[destId]
+    #expect(dirty?.scope(.albums).pendingPlacementReconciliation == true)
+    #expect(dirty?.scope(.timeline).pendingPlacementReconciliation == false)
+  }
+
+  @Test func photosChangedAdvancesTokenWhenEventCarriesOne() {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let token = Data([0x01, 0x02, 0x03])
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["a"], observedAt: now, nextToken: token)
+
+    let (_, effects) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    let destId = state.destination.id!
+    #expect(effects.contains(.advancePersistentChangeToken(token, destinationId: destId)))
+  }
+
   // MARK: - Idempotence (plan §"State Reducer" dispatch contract)
 
   @Test func sameEventAppliedTwiceIsIdempotentForCurrentState() {
@@ -368,8 +497,6 @@ struct AutoSyncReducerTests {
     state.current = .idle  // Pin current so we can compare against the reducer's output.
 
     let unhandledEvents: [AutoSyncEvent] = [
-      .photosChanged(PhotoLibraryPersistentChangeEvent()),
-      .debounceFired(.appLaunch),
       .retryTimerFired,
       .manualFullExportCompleted(
         ExportRunSummary(

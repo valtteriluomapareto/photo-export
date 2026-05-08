@@ -18,6 +18,11 @@ enum AutoSyncReducer {
     var versionSelection: ExportVersionSelection
     var importActive: Bool
     var exportRunState: ExportRunState
+    /// Per-destination accumulated dirty state. Updated by `photosChanged` events
+    /// (asset id targeting + cost-cap rollover) and by full-reconciliation completion.
+    /// Keyed by destination id; entries persist across destination switches so
+    /// reconnecting the same drive resumes its accumulated work.
+    var dirtyStateByDestination: [String: AutoSyncDirtyState]
 
     static let initial = State(
       current: .disabled,
@@ -26,9 +31,16 @@ enum AutoSyncReducer {
       scopeSelection: AutoExportScopeSelection(),
       versionSelection: .edited,
       importActive: false,
-      exportRunState: .idle
+      exportRunState: .idle,
+      dirtyStateByDestination: [:]
     )
   }
+
+  /// Per-scope cost cap for targeted asset-id accumulation. Plan §"Photo Library
+  /// Changes" / §"Trigger and Debounce Rules": "Use a tunable implementation constant
+  /// backed by measurement, and prefer a cost model once enough data exists." MVP value
+  /// is conservative; tuned by measurement post-launch.
+  static let targetedAssetCostCap = 500
 
   /// Single entry point. Plan §"State Reducer" dispatch contract:
   /// - Invoked synchronously, once per event, with no mutation in flight.
@@ -119,7 +131,45 @@ enum AutoSyncReducer {
     // Reducer-level no-op: stale debounce or environment changed; the recompute
     // pass below routes to whatever the current environment dictates.
 
-    case .photosChanged, .retryTimerFired, .manualFullExportCompleted:
+    case .photosChanged(let event):
+      // Accumulate dirty state per selected scope for the *current* destination.
+      // Plan §"Photo Library Changes": "Photos changes while destination is
+      // unavailable accumulate per-destination and export after reconnect" — so we
+      // accumulate even if the destination is currently offline (just don't start a
+      // run; the debounce-fired handler gates that on environmentAllowsRun).
+      // Disabled / no-destination / no-scopes selected → ignore the event entirely.
+      if state.enabled, let destinationId = state.destination.id,
+        !state.scopeSelection.isEmpty
+      {
+        var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
+        let changedIds = event.insertedLocalIdentifiers.union(event.updatedLocalIdentifiers)
+
+        for scope in state.scopeSelection.enabledScopes {
+          var scopeState = dirty.scope(scope)
+          for assetId in changedIds {
+            scopeState.recordPendingAssetId(assetId, costCap: targetedAssetCostCap)
+          }
+          // Albums coalesce to bounded all-albums reconciliation in MVP whenever
+          // collection-only changes are present (plan §"Photo Library Changes":
+          // "If `Albums` is selected, treat album/folder membership or placement
+          // changes as pending all-albums reconciliation").
+          if scope == .albums && event.collectionChangesPresent {
+            scopeState.pendingPlacementReconciliation = true
+          }
+          dirty.setScope(scope, scopeState)
+        }
+        dirty.markUpdated(at: now)
+        newState.dirtyStateByDestination[destinationId] = dirty
+
+        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
+        if let nextToken = event.nextToken {
+          effects.append(
+            .advancePersistentChangeToken(nextToken, destinationId: destinationId))
+        }
+        triggerReason = .photosChanged
+      }
+
+    case .retryTimerFired, .manualFullExportCompleted:
       // Handled by subsequent slices that wire dirty-state, retry, and run-summary
       // semantics. Plan §"State Reducer" lists these events; the slice that
       // implements each will append the corresponding `case` here.
