@@ -342,44 +342,25 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   /// Derives a stable `destinationId` for a folder URL.
   ///
-  /// The id is `SHA-256(volumeUUID || U+0000 || volumeRelativePath)`. Survives bookmark refresh
-  /// on the same drive **and** rename of the drive (e.g. `/Volumes/MyDrive` →
-  /// `/Volumes/PhotoBackup`) — the path component is taken in the volume's coordinate system,
-  /// not as the absolute mount path. Changes only when the volume is reformatted, the folder is
-  /// moved to a different volume, or the user duplicates the folder via Finder.
+  /// Delegates to `DestinationFingerprint.compute(for:)`. The id is bug-for-bug compatible with
+  /// the pre-Phase-0 derivation: `SHA-256(volumeUUID || U+0000 || volumeRelativePath)` for
+  /// drives with a volume UUID, falling back to `String(describing: volumeIdentifier)` for
+  /// drives without one (low-confidence identity). Survives bookmark refresh on the same drive
+  /// and rename of the drive, since the path component is taken in the volume's coordinate
+  /// system rather than the absolute mount path.
   ///
-  /// Returns `nil` when the volume identifier cannot be read (typically because the drive is
-  /// unmounted). Callers treat this as "destination not yet available" and wait for the volume
-  /// to mount.
+  /// Returns `nil` when no usable identity component can be read (typically because the drive
+  /// is unmounted). Callers treat this as "destination not yet available" and wait for the
+  /// volume to mount.
   static func computeDestinationId(for url: URL) -> String? {
-    let resolved = url.resolvingSymlinksInPath()
-    let keys: Set<URLResourceKey> = [.volumeUUIDStringKey, .volumeIdentifierKey, .volumeURLKey]
-    guard let values = try? resolved.resourceValues(forKeys: keys) else { return nil }
-    let volumeId: String
-    if let uuid = values.volumeUUIDString {
-      volumeId = uuid
-    } else if let identifier = values.volumeIdentifier {
-      // `volumeIdentifier` is `(NSCopying & NSSecureCoding & NSObjectProtocol)?`; its description is
-      // the platform's stable token for the volume.
-      volumeId = String(describing: identifier)
-    } else {
-      return nil
-    }
-    // Strip the volume mount prefix so renaming the drive (`/Volumes/MyDrive` →
-    // `/Volumes/PhotoBackup`) doesn't change the digest. For the boot volume the mount root
-    // is "/" and the relative path equals the absolute path.
-    let canonicalPath = resolved.standardizedFileURL.path
-    let volumeRoot = values.volume?.standardizedFileURL.path ?? ""
-    var relativePath = canonicalPath
-    if !volumeRoot.isEmpty, volumeRoot != "/", canonicalPath.hasPrefix(volumeRoot) {
-      relativePath = String(canonicalPath.dropFirst(volumeRoot.count))
-    }
-    if !relativePath.hasPrefix("/") {
-      relativePath = "/" + relativePath
-    }
-    let combined = volumeId + "\u{0000}" + relativePath
-    let digest = SHA256.hash(data: Data(combined.utf8))
-    return digest.map { String(format: "%02x", $0) }.joined()
+    DestinationFingerprint.compute(for: url)?.fingerprint.id
+  }
+
+  /// Computes the full `DestinationFingerprint` for a folder URL. Used by code paths that need
+  /// identity-confidence and the structured volume/path components in addition to the id.
+  /// Returns `nil` under the same conditions as `computeDestinationId(for:)`.
+  static func computeDestinationFingerprint(for url: URL) -> DestinationFingerprint? {
+    DestinationFingerprint.compute(for: url)?.fingerprint
   }
 
   /// Pre-Phase-0 destination-id derivation: SHA-256 of the security-scoped bookmark bytes.
