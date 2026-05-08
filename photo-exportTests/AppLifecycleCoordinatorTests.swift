@@ -101,6 +101,28 @@ struct AppLifecycleCoordinatorTests {
     #expect(coordinator.lastConfiguredDestinationId == snapA.id)
   }
 
+  @Test func sameIdDoesNotRePublishCurrentDestinationWhenSnapshotIsEqual() {
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {},
+      configureRecordStores: { _ in .success }
+    )
+    var emissions = 0
+    let cancellable = coordinator.$currentDestination.dropFirst().sink { _ in
+      emissions += 1
+    }
+
+    let snap = Self.snapshot("dest-A")
+    coordinator.apply(destination: snap)
+    coordinator.apply(destination: snap)
+    coordinator.apply(destination: snap)
+
+    cancellable.cancel()
+
+    // Three apply calls, only one is a real change: the first. Subsequent same-snapshot
+    // applies must not re-fire @Published.
+    #expect(emissions == 1)
+  }
+
   @Test func currentDestinationCarriesIdentityConfidence() {
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: {},

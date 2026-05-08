@@ -122,8 +122,13 @@ final class AppLifecycleCoordinator: ObservableObject {
         "Same-id destination assignment (\(destination.id ?? "nil", privacy: .public)); skipping cancel/reconfigure"
       )
       // Update the fingerprint snapshot anyway so downstream code sees the freshest live
-      // metadata, but do not reconfigure or cancel.
-      currentDestination = destination
+      // metadata — but only if the snapshot actually differs. Skipping the assignment when
+      // the value is equal avoids re-firing `objectWillChange` on every transient
+      // fingerprint refresh, which would otherwise re-render any SwiftUI view observing
+      // `currentDestination`.
+      if destination != currentDestination {
+        currentDestination = destination
+      }
       return
     }
     log.info(
