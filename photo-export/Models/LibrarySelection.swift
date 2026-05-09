@@ -17,6 +17,10 @@ enum LibrarySelection: Hashable, Sendable {
   case timelineMonth(year: Int, month: Int)
   case favorites
   case album(collectionId: String)
+  /// User-created folder (a `PHCollectionList`). Folders are not directly exportable as a
+  /// single placement — selecting one drives the folder content view, where the export
+  /// action enqueues each descendant album to its own existing album placement.
+  case folder(collectionId: String)
 }
 
 /// Photos query scope. Both timeline (per-year, per-month, or all) and collection scopes

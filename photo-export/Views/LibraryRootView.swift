@@ -104,7 +104,7 @@ struct LibraryRootView: View {
         }
       case .collections:
         switch newValue {
-        case .favorites, .album:
+        case .favorites, .album, .folder:
           lastCollectionsSelection = newValue
         case .timelineMonth, .none:
           break  // ignore — only collection-shaped values count for this section
@@ -233,6 +233,17 @@ struct LibraryRootView: View {
       .environmentObject(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+    case .folder(let collectionId):
+      FolderContentView(
+        folderId: collectionId,
+        title: folderTitle(forCollectionId: collectionId),
+        selection: $selection,
+        selectedAsset: $selectedAsset,
+        photoLibraryService: photoLibraryManager
+      )
+      .environmentObject(photoLibraryManager)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
     case nil:
       VStack {
         Spacer()
@@ -249,17 +260,23 @@ struct LibraryRootView: View {
   /// the title via the placement metadata anyway.
   private func albumTitle(forCollectionId id: String) -> String {
     let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
-    return findTitle(forCollectionId: id, in: tree) ?? "Album"
+    return findTitle(kind: .album, id: id, in: tree) ?? "Album"
   }
 
-  private func findTitle(forCollectionId id: String, in tree: [PhotoCollectionDescriptor])
-    -> String?
-  {
+  private func folderTitle(forCollectionId id: String) -> String {
+    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    return findTitle(kind: .folder, id: id, in: tree) ?? "Folder"
+  }
+
+  private func findTitle(
+    kind: PhotoCollectionDescriptor.Kind, id: String,
+    in tree: [PhotoCollectionDescriptor]
+  ) -> String? {
     for descriptor in tree {
-      if descriptor.kind == .album, descriptor.localIdentifier == id {
+      if descriptor.kind == kind, descriptor.localIdentifier == id {
         return descriptor.title
       }
-      if let found = findTitle(forCollectionId: id, in: descriptor.children) {
+      if let found = findTitle(kind: kind, id: id, in: descriptor.children) {
         return found
       }
     }

@@ -32,6 +32,11 @@ struct ExportPlacementResolver {
     /// `LibrarySelection.album(collectionId:)` referenced an id that is not present in
     /// the supplied `collections` tree (album was deleted or never existed).
     case albumNotFound(collectionId: String)
+    /// `LibrarySelection.folder(...)` was passed to the resolver. Folders are not
+    /// directly placed — `ExportManager.startExportFolder(folderId:)` walks the subtree
+    /// and resolves each descendant album individually. Surfaced as an error so a stray
+    /// callsite is loud rather than silently producing a malformed placement.
+    case folderNotResolvable(collectionId: String)
   }
 
   private let logger: Logger
@@ -69,6 +74,9 @@ struct ExportPlacementResolver {
         collections: collections,
         existingPlacements: existingPlacements
       )
+
+    case .folder(let collectionId):
+      throw ResolutionError.folderNotResolvable(collectionId: collectionId)
     }
   }
 
