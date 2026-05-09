@@ -766,7 +766,15 @@ final class ExportManager: ObservableObject {
 
   /// Shows a transient message in the toolbar's progress slot for `emptyRunMessageDuration`.
   /// Replaces any previously-shown message and resets the auto-clear timer.
+  ///
+  /// Auto-sync (`.background` visibility) runs suppress this — plan §"Phase 3":
+  /// "auto-sync empty runs update lastRunSummary but do not show toolbar
+  /// empty-run messages." The user-visible surface for those is
+  /// AutoSyncManager.lastRunSummary, rendered in Settings → Auto Export.
   private func setEmptyRunMessage(_ message: String) {
+    if activeRunContext?.visibility == .background {
+      return
+    }
     emptyRunMessage = message
     emptyRunMessageTask?.cancel()
     let duration = Self.emptyRunMessageDuration
