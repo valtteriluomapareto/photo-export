@@ -98,11 +98,30 @@ struct AutoSyncManagerTests {
     #expect(ctx.source == .autoSync)
     #expect(ctx.visibility == .background)
     #expect(ctx.reason == .appLaunch)
-    if case .autoExport(let scopes) = ctx.scope {
-      #expect(scopes.includes(.timeline))
-    } else {
-      Issue.record("Expected .autoExport scope, got \(ctx.scope)")
-    }
+    // Manager fans out `.autoExport(scopes)` into per-scope full-library runs.
+    // With timeline-only selected, the first (and only) per-scope run is
+    // `.timelineFullLibrary`.
+    #expect(ctx.scope == .timelineFullLibrary)
+  }
+
+  @Test func multiScopeAutoExportFansOutToSequentialPerScopeRuns() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(
+      AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    manager.attach(to: builder.environment)
+
+    builder.clock.advance(by: 10)
+    // Each per-scope runExport awaits one suspension point in the fake (no
+    // real work), so we need to yield enough times for all three scopes to
+    // step through. `await Task.yield()` between awaits is the standard way
+    // to drive the structured-concurrency loop deterministically here.
+    for _ in 0..<6 { await Task.yield() }
+
+    let scopes = builder.exportRunner.receivedContexts.map(\.scope)
+    #expect(scopes == [.timelineFullLibrary, .favoritesFull, .allAlbumsFull])
   }
 
   // MARK: - Photos changes → dirty state persistence

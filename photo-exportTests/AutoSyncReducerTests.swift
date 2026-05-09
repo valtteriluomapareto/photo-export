@@ -999,6 +999,41 @@ struct AutoSyncReducerTests {
     #expect(effects.isEmpty)
   }
 
+  @Test func autoSyncRunCompletedClearsOnlyTheScopeTheSummaryCovers() {
+    // Manager fans out `.autoExport(scopes)` into per-scope full runs and
+    // dispatches one autoSyncRunCompleted per scope. A timeline-only summary
+    // must not touch favorites dirty — favorites' own run will handle that.
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.scopeSelection = AutoExportScopeSelection(timeline: true, favorites: true)
+    let destId = state.destination.id!
+    var dirty = AutoSyncDirtyState.empty
+    var timelineState = dirty.scope(.timeline)
+    timelineState.pendingFullReconciliation = true
+    dirty.setScope(.timeline, timelineState)
+    var favoritesState = dirty.scope(.favorites)
+    favoritesState.pendingFullReconciliation = true
+    dirty.setScope(.favorites, favoritesState)
+    state.dirtyStateByDestination[destId] = dirty
+
+    let summary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, reason: .appLaunch,
+        scope: .timelineFullLibrary, selection: .edited),
+      endedAt: now,
+      enqueuedCount: 1, completedCount: 1,
+      failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: .completed
+    )
+
+    let (next, _) = AutoSyncReducer.reduce(
+      .autoSyncRunCompleted(summary), in: state, now: now)
+
+    let cleared = next.dirtyStateByDestination[destId]!
+    #expect(cleared.scope(.timeline).pendingFullReconciliation == false)
+    // Favorites untouched — its own per-scope run will clear it.
+    #expect(cleared.scope(.favorites).pendingFullReconciliation == true)
+  }
+
   @Test func manualFullExportClearingDirtyCancelsStaleScheduledPhotosDebounce() {
     // Scenario: a `.photosChanged` event accumulated dirty work and scheduled
     // the 30s debounce. Before the timer fires the user runs a manual full

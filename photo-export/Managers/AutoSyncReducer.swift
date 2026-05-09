@@ -135,9 +135,17 @@ enum AutoSyncReducer {
       if summary.result == .completed,
         let destinationId = newState.destination.id
       {
+        // Clear dirty only for the scope the summary actually covered. The
+        // manager's autoExport fan-out dispatches one `autoSyncRunCompleted`
+        // per scope, so a Timeline-only summary must not clear Favorites
+        // dirty (which Favorites' own run will handle). For the legacy
+        // `.autoExport(scopes)` summary shape (still used by tests and any
+        // future single-pass runner), clear all selected scopes that the
+        // umbrella scope set covers.
+        let coveredScopes = Self.coveredScopes(
+          summary: summary, currentSelection: newState.scopeSelection)
         var dirty = newState.dirtyStateByDestination[destinationId] ?? .empty
-        for scope in AutoExportLibraryScope.allCases
-        where newState.scopeSelection.includes(scope) {
+        for scope in coveredScopes {
           var scopeState = dirty.scope(scope)
           scopeState.clearAfterSuccessfulFullReconciliation()
           dirty.setScope(scope, scopeState)
@@ -397,6 +405,30 @@ enum AutoSyncReducer {
   /// §"Run Ownership Model": "If auto-sync wants to run while any manual export or
   /// import is active, AutoSyncManager marks itself dirty and re-evaluates after
   /// manual work drains.").
+  /// Maps a completed run's scope to the `AutoExportLibraryScope` set it
+  /// reconciled. Single-scope full runs map to one scope; the legacy
+  /// `.autoExport(scopes)` umbrella covers all enabled scopes; targeted-asset
+  /// scopes don't reconcile a full scope and return empty so dirty stays put
+  /// (their pending-asset bookkeeping happens elsewhere).
+  private static func coveredScopes(
+    summary: ExportRunSummary, currentSelection: AutoExportScopeSelection
+  ) -> Set<AutoExportLibraryScope> {
+    switch summary.context.scope {
+    case .timelineFullLibrary: return [.timeline]
+    case .favoritesFull: return [.favorites]
+    case .allAlbumsFull: return [.albums]
+    case .autoExport(let scopes):
+      // Intersect with the *current* selection — if the user removed a scope
+      // between dispatch and completion, we don't clear its lingering dirty.
+      return Set(scopes.enabledScopes).intersection(Set(currentSelection.enabledScopes))
+    case .timelineAssets, .favoritesAssets, .allAlbumsAssets:
+      // Targeted runs don't reconcile a full scope; their bookkeeping
+      // (removing exported asset ids from `pendingAssetIds`) happens via a
+      // different path. Don't blanket-clear.
+      return []
+    }
+  }
+
   private static func environmentAllowsRun(state: State) -> Bool {
     state.enabled && !state.importActive && !state.scopeSelection.isEmpty
       && state.destination.id != nil && state.destination.isAvailable

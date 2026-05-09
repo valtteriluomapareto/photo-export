@@ -331,26 +331,48 @@ final class AutoSyncManager: ObservableObject {
 
   private func startRun(spec: StartRunSpec) {
     guard let environment else { return }
-    let context = ExportRunContext(
-      runId: UUID(),
-      source: spec.source,
-      visibility: spec.visibility,
-      reason: spec.reason,
-      scope: spec.scope,
-      selection: spec.selection,
-      startedAt: environment.clock.now()
-    )
-    // The Task is intentionally not stored — `runExport` owns its own cancellation
-    // (single-active-run gate inside ExportManager), so we don't need a Set<Task>
-    // to invalidate it. `[weak self]` lets the closure drop cleanly if the manager
-    // is torn down mid-run.
+    // For an `.autoExport(scopes)` spec, fan out to one `runExport` call per
+    // enabled scope and dispatch `autoSyncRunCompleted` after each. The
+    // reducer clears only the dirty for the scope each summary covers, so
+    // sequential per-scope runs keep dirty-state correctness intact even if a
+    // later scope fails. ExportManager's `runExport` doesn't implement
+    // `.autoExport` directly — translating here keeps the runner narrow.
+    let runScopes = Self.expand(scope: spec.scope)
     Task { @MainActor [weak self] in
-      let summary = await environment.exportRunner.runExport(context: context)
-      // Dispatching `.autoSyncRunCompleted` is what tells the reducer the run
-      // result (success vs failure) so dirty state is only cleared on `.completed`.
-      // The `.exportRunStateChanged(.idle)` event also fires, but it's now purely
-      // a state-tracking signal.
-      self?.dispatch(.autoSyncRunCompleted(summary))
+      for runScope in runScopes {
+        let context = ExportRunContext(
+          runId: UUID(),
+          source: spec.source,
+          visibility: spec.visibility,
+          reason: spec.reason,
+          scope: runScope,
+          selection: spec.selection,
+          startedAt: environment.clock.now()
+        )
+        let summary = await environment.exportRunner.runExport(context: context)
+        self?.dispatch(.autoSyncRunCompleted(summary))
+        if summary.result != .completed {
+          // Stop the chain on the first non-completion so a destination that
+          // went unavailable mid-run doesn't churn through the remaining
+          // scopes' fail-fast paths. The reducer's recompute will route to
+          // the appropriate waiting/blocked state from the first summary's
+          // signal.
+          break
+        }
+      }
+    }
+  }
+
+  /// Expands an `.autoExport(scopes)` spec scope into per-scope full-scope
+  /// runs. Other scope shapes pass through unchanged.
+  private static func expand(scope: ExportRunScope) -> [ExportRunScope] {
+    guard case .autoExport(let scopes) = scope else { return [scope] }
+    return scopes.enabledScopes.map { libraryScope in
+      switch libraryScope {
+      case .timeline: return .timelineFullLibrary
+      case .favorites: return .favoritesFull
+      case .albums: return .allAlbumsFull
+      }
     }
   }
 
