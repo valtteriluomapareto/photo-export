@@ -999,6 +999,56 @@ struct AutoSyncReducerTests {
     #expect(effects.isEmpty)
   }
 
+  @Test func manualFullExportClearingDirtyCancelsStaleScheduledPhotosDebounce() {
+    // Scenario: a `.photosChanged` event accumulated dirty work and scheduled
+    // the 30s debounce. Before the timer fires the user runs a manual full
+    // timeline export. manualFullExportCompleted clears the dirty work for
+    // timeline; without this guard, the recompute pass would preserve the
+    // stale `.scheduled(.photosChanged, …)` and fire an export with nothing
+    // to do once the timer expires.
+    var state = enabledStateWithSafeDestinationAndScope()
+    let destId = state.destination.id!
+    let fireAt = now.addingTimeInterval(30)
+    state.current = .scheduled(reason: .photosChanged, fireAt: fireAt)
+    var dirty = AutoSyncDirtyState.empty
+    var scopeState = dirty.scope(.timeline)
+    _ = scopeState.recordPendingAssetId("seed-1", costCap: 100)
+    dirty.setScope(.timeline, scopeState)
+    state.dirtyStateByDestination[destId] = dirty
+
+    let summary = manualFullSummary(scope: .timelineFullLibrary)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    #expect(next.current == .idle)
+    #expect(effects.contains(.cancelDebounce(.photosChanged)))
+  }
+
+  @Test func nonPhotosScheduledDebouncePreservedAcrossManualExport() {
+    // The cancel-stale-debounce path is gated to photos-related reasons. A
+    // `.scheduled(.appLaunch, …)` waiting for the post-launch quiet window
+    // shouldn't be cancelled by a manual export — it isn't gated on dirty
+    // state.
+    var state = enabledStateWithSafeDestinationAndScope()
+    let destId = state.destination.id!
+    let fireAt = now.addingTimeInterval(10)
+    state.current = .scheduled(reason: .appLaunch, fireAt: fireAt)
+    var dirty = AutoSyncDirtyState.empty
+    var scopeState = dirty.scope(.timeline)
+    scopeState.pendingFullReconciliation = true
+    dirty.setScope(.timeline, scopeState)
+    state.dirtyStateByDestination[destId] = dirty
+
+    let summary = manualFullSummary(scope: .timelineFullLibrary)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    #expect(next.current == .scheduled(reason: .appLaunch, fireAt: fireAt))
+    #expect(!effects.contains(.cancelDebounce(.appLaunch)))
+  }
+
   @Test func manualTimelineFullDoesNotClearWhenTimelineNotSelected() {
     // User is auto-syncing favorites only; a manual *timeline* full export
     // shouldn't touch the favorites dirty state. (And it can't clear timeline,

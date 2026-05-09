@@ -461,6 +461,21 @@ enum AutoSyncReducer {
     }
 
     if case .scheduled(let reason, let fireAt) = previous, triggerReason == nil {
+      // A photos-related debounce that's still scheduled but has no remaining
+      // work for any selected scope is stale — it would fire a run with
+      // nothing to export. Common path: manualFullExportCompleted just
+      // cleared the dirty work the debounce was waiting on. Cancel and drop
+      // to idle. Other reasons (appLaunch, destinationSelected, scope/version
+      // changes) preserve their schedule because they aren't gated on
+      // dirty-state contents.
+      if reason == .photosChanged || reason == .photosChangeFallback,
+        let destinationId = state.destination.id,
+        let dirty = state.dirtyStateByDestination[destinationId],
+        state.scopeSelection.enabledScopes.allSatisfy({ dirty.scope($0).isEmpty })
+      {
+        effects.append(.cancelDebounce(reason))
+        return .idle
+      }
       // No new trigger; preserve the existing schedule.
       return .scheduled(reason: reason, fireAt: fireAt)
     }
