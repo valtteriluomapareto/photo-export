@@ -278,6 +278,9 @@ private struct CollectionRow: View {
 }
 
 private struct FolderRow: View {
+  @EnvironmentObject private var exportManager: ExportManager
+  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+
   let descriptor: PhotoCollectionDescriptor
   let depth: Int
   let albumCount: Int
@@ -300,6 +303,20 @@ private struct FolderRow: View {
       }
     }
     .help(tooltip)
+    .contextMenu {
+      Button("Export Folder") {
+        if let id = descriptor.localIdentifier {
+          exportManager.startExportFolder(folderId: id)
+        }
+      }
+      .disabled(
+        descriptor.localIdentifier == nil
+          || albumCount == 0
+          || !exportDestinationManager.canExportNow
+          || exportManager.hasActiveExportWork
+          || !exportManager.canExportCollection
+      )
+    }
   }
 
   private var tooltip: String {

@@ -62,4 +62,11 @@ extension PhotoCollectionDescriptor {
     }
     return ids
   }
+
+  /// Album local ids in this descriptor's subtree, recursively. Returns an empty array
+  /// for `.album` and `.favorites` descriptors. Used by `ExportManager.startExportFolder`
+  /// to bound the per-album enqueue loop to a single folder's contents.
+  static func albumLocalIds(under descriptor: PhotoCollectionDescriptor) -> [String] {
+    albumLocalIds(in: descriptor.children)
+  }
 }

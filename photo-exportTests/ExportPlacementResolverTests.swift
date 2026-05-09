@@ -336,4 +336,19 @@ struct ExportPlacementResolverTests {
         collections: [], existingPlacements: [])
     }
   }
+
+  /// Folder selections must throw — folders are not their own placements.
+  /// `ExportManager.startExportFolder` walks the subtree and resolves each descendant
+  /// album individually; the resolver itself never produces a folder placement.
+  @Test func folderSelectionThrowsFolderNotResolvable() {
+    let resolver = makeResolver()
+    #expect(
+      throws: ExportPlacementResolver.ResolutionError.folderNotResolvable(
+        collectionId: "F1")
+    ) {
+      _ = try resolver.placement(
+        for: .folder(collectionId: "F1"),
+        collections: [], existingPlacements: [])
+    }
+  }
 }
