@@ -115,6 +115,20 @@ final class AutoSyncManager: ObservableObject {
       }
       .store(in: &subscriptions)
 
+    // Manual-run completion hook for plan §"Dirty State" clear rule. AutoSync-
+    // sourced summaries are routed through the `runExport`-await return path
+    // inside `startRun`; filtering here to `.manual` avoids dispatching
+    // `manualFullExportCompleted` for our own runs.
+    environment.exportRunner.completedRunsPublisher
+      .sink { [weak self] summary in
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          guard summary.context.source == .manual else { return }
+          self?.dispatch(.manualFullExportCompleted(summary))
+        }
+      }
+      .store(in: &subscriptions)
+
     environment.photos.changes
       .sink { [weak self] outcome in
         dispatchPrecondition(condition: .onQueue(.main))

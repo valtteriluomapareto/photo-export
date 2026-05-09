@@ -255,11 +255,54 @@ enum AutoSyncReducer {
         _ = failure
       }
 
-    case .retryTimerFired, .manualFullExportCompleted:
-      // Handled by subsequent slices that wire dirty-state, retry, and run-summary
-      // semantics. Plan §"State Reducer" lists these events; the slice that
-      // implements each will append the corresponding `case` here.
+    case .retryTimerFired:
+      // Plan §"Retry and Failure Policy" — retry eligibility lives at enqueue
+      // time inside `ExportManager`, not here. The reducer's role is to fall
+      // through to the recompute pass so any state that became eligible in the
+      // wall-clock interval since the timer was scheduled is re-evaluated.
+      // Dirty-state mutation and run-start decisions hang off the existing
+      // recompute path; nothing reducer-side has to change for the timer
+      // itself.
       break
+
+    case .manualFullExportCompleted(let summary):
+      // Plan §"Dirty State": "A manual full export for the same destination /
+      // selection / scope clears compatible dirty flags." Compatibility is
+      // strict — only `.completed` runs from `.manual` source over a full
+      // scope (timelineFullLibrary / favoritesFull / allAlbumsFull) clear
+      // anything, and the run's `selection` must match the current
+      // versionSelection. Targeted asset runs and partial-failure runs leave
+      // dirty state untouched: they didn't process the full scope, so pending
+      // assets that *weren't* in their target list are still pending.
+      guard summary.result == .completed,
+        summary.context.source == .manual,
+        summary.context.selection == newState.versionSelection,
+        let destinationId = newState.destination.id
+      else { break }
+
+      let coveredScopes: Set<AutoExportLibraryScope>
+      switch summary.context.scope {
+      case .timelineFullLibrary: coveredScopes = [.timeline]
+      case .favoritesFull: coveredScopes = [.favorites]
+      case .allAlbumsFull: coveredScopes = [.albums]
+      case .timelineAssets, .favoritesAssets, .allAlbumsAssets, .autoExport:
+        coveredScopes = []
+      }
+      guard !coveredScopes.isEmpty else { break }
+
+      var dirty = newState.dirtyStateByDestination[destinationId] ?? .empty
+      var changed = false
+      for scope in coveredScopes where newState.scopeSelection.includes(scope) {
+        var scopeState = dirty.scope(scope)
+        scopeState.clearAfterSuccessfulFullReconciliation()
+        dirty.setScope(scope, scopeState)
+        changed = true
+      }
+      if changed {
+        dirty.markUpdated(at: now)
+        newState.dirtyStateByDestination[destinationId] = dirty
+        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
+      }
 
     case .destinationDirtyStateLoaded(let destinationId, let dirty):
       // Manager dispatches this on destination-change before

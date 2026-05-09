@@ -262,6 +262,81 @@ struct AutoSyncManagerTests {
     #expect(builder.perDestinationTokenStore.load(destinationId: destId) == opaqueToken)
   }
 
+  // MARK: - Manual run completion (Phase 3)
+
+  @Test func manualFullExportCompletedClearsCompatibleDirty() {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true))
+    manager.attach(to: builder.environment)
+
+    let destId = safeDestination().id!
+    builder.photos.push(
+      PhotoLibraryPersistentChangeEvent(
+        insertedLocalIdentifiers: ["asset-A"],
+        observedAt: builder.clock.now()
+      ))
+    // Confirm the dirty seed actually landed on disk.
+    #expect(
+      !builder.dirtyStore.load(destinationId: destId).scope(.timeline)
+        .pendingAssetIds.isEmpty)
+
+    let manualSummary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .manual, visibility: .userVisible,
+        scope: .timelineFullLibrary, selection: .edited
+      ),
+      endedAt: builder.clock.now(),
+      enqueuedCount: 5, completedCount: 5,
+      failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: .completed
+    )
+    builder.exportRunner.completedRunsSubject.send(manualSummary)
+
+    let cleared = builder.dirtyStore.load(destinationId: destId).scope(.timeline)
+    #expect(cleared.pendingAssetIds.isEmpty)
+    #expect(cleared.pendingFullReconciliation == false)
+  }
+
+  @Test func autoSyncSourcedCompletedSummaryIsFilteredOut() {
+    // The `completedRunsPublisher` fires for every runExport-driven completion
+    // (manual or autoSync). Manager must filter to `.manual` so a re-emission
+    // of an autoSync-source summary doesn't double-dispatch dirty-clearing.
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true))
+    manager.attach(to: builder.environment)
+
+    let destId = safeDestination().id!
+    builder.photos.push(
+      PhotoLibraryPersistentChangeEvent(
+        insertedLocalIdentifiers: ["asset-X"],
+        observedAt: builder.clock.now()
+      ))
+    let beforeIds = builder.dirtyStore.load(destinationId: destId)
+      .scope(.timeline).pendingAssetIds
+
+    let autoSummary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background,
+        scope: .timelineFullLibrary, selection: .edited
+      ),
+      endedAt: builder.clock.now(),
+      enqueuedCount: 1, completedCount: 1,
+      failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: .completed
+    )
+    builder.exportRunner.completedRunsSubject.send(autoSummary)
+
+    let afterIds = builder.dirtyStore.load(destinationId: destId)
+      .scope(.timeline).pendingAssetIds
+    #expect(beforeIds == afterIds)
+  }
+
   // MARK: - Idempotent attach
 
   @Test func attachIsIdempotent() {

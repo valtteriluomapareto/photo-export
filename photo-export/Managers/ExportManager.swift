@@ -128,6 +128,18 @@ final class ExportManager: ObservableObject {
     $isImporting.eraseToAnyPublisher()
   }
 
+  /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
+  /// terminal state. Used by AutoSync to detect manual-run completion (so it
+  /// can clear compatible dirty state per plan §"Dirty State"). Fire-and-forget
+  /// runs initiated via the legacy `startExport*` methods do not flow through
+  /// this publisher — they don't build a context or summary. Phase 4 will
+  /// migrate manual UI actions to `runExport(context:)` so this hook covers
+  /// the complete set of manual completions.
+  private let completedRunsSubject = PassthroughSubject<ExportRunSummary, Never>()
+  var completedRunsPublisher: AnyPublisher<ExportRunSummary, Never> {
+    completedRunsSubject.eraseToAnyPublisher()
+  }
+
   private struct ActiveRunBookkeeping {
     let totalJobsEnqueuedAtStart: Int
     let totalJobsCompletedAtStart: Int
@@ -1000,6 +1012,7 @@ final class ExportManager: ObservableObject {
     activeRunContext = nil
     activeRunBookkeeping = nil
     bookkeeping.continuation.resume(returning: summary)
+    completedRunsSubject.send(summary)
   }
 
   func processQueueIfNeeded() {

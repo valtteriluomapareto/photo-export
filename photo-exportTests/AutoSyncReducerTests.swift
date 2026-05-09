@@ -849,17 +849,7 @@ struct AutoSyncReducerTests {
     state.current = .idle  // Pin current so we can compare against the reducer's output.
 
     let unhandledEvents: [AutoSyncEvent] = [
-      .retryTimerFired,
-      .manualFullExportCompleted(
-        ExportRunSummary(
-          context: ExportRunContext(
-            source: .manual, visibility: .userVisible,
-            scope: .timelineFullLibrary, selection: .edited),
-          endedAt: now,
-          enqueuedCount: 0, completedCount: 0,
-          failedCount: 0, skippedCount: 0,
-          cancelReason: nil, result: .completed
-        )),
+      .retryTimerFired
     ]
 
     for event in unhandledEvents {
@@ -867,5 +857,161 @@ struct AutoSyncReducerTests {
       #expect(next.current == .idle)
       #expect(effects.isEmpty)
     }
+  }
+
+  // MARK: - manualFullExportCompleted (Phase 3)
+
+  /// Builds a manual run summary at `scope` that just completed cleanly.
+  private func manualFullSummary(
+    scope: ExportRunScope,
+    selection: ExportVersionSelection = .edited,
+    result: ExportRunResult = .completed,
+    source: ExportRunSource = .manual
+  ) -> ExportRunSummary {
+    ExportRunSummary(
+      context: ExportRunContext(
+        source: source, visibility: .userVisible,
+        scope: scope, selection: selection),
+      endedAt: now,
+      enqueuedCount: 1, completedCount: 1,
+      failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: result
+    )
+  }
+
+  /// Builds a state with seeded pending-asset dirty work for the given scope so a
+  /// "did the full export clear it?" assertion has something to clear.
+  private func stateWithDirty(
+    in scope: AutoExportLibraryScope,
+    selectedScopes: AutoExportScopeSelection
+  ) -> AutoSyncReducer.State {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.scopeSelection = selectedScopes
+    state.current = .idle
+    let destId = state.destination.id!
+    var dirty = AutoSyncDirtyState.empty
+    var scopeState = dirty.scope(scope)
+    _ = scopeState.recordPendingAssetId("seed-1", costCap: 100)
+    scopeState.pendingFullReconciliation = true
+    dirty.setScope(scope, scopeState)
+    state.dirtyStateByDestination[destId] = dirty
+    return state
+  }
+
+  @Test func manualTimelineFullClearsTimelineDirtyWhenSelected() {
+    let state = stateWithDirty(
+      in: .timeline, selectedScopes: AutoExportScopeSelection(timeline: true))
+    let summary = manualFullSummary(scope: .timelineFullLibrary)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let destId = state.destination.id!
+    let cleared = next.dirtyStateByDestination[destId]?.scope(.timeline)
+    #expect(cleared?.pendingAssetIds.isEmpty == true)
+    #expect(cleared?.pendingFullReconciliation == false)
+    #expect(
+      effects.contains(where: {
+        if case .persistDirtyState(_, let did) = $0, did == destId { return true }
+        return false
+      }))
+  }
+
+  @Test func manualAllAlbumsFullClearsAlbumsDirty() {
+    let state = stateWithDirty(
+      in: .albums, selectedScopes: AutoExportScopeSelection(albums: true))
+    let summary = manualFullSummary(scope: .allAlbumsFull)
+
+    let (next, _) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let cleared = next.dirtyStateByDestination[state.destination.id!]?.scope(.albums)
+    #expect(cleared?.pendingFullReconciliation == false)
+  }
+
+  @Test func manualFavoritesFullClearsFavoritesDirty() {
+    let state = stateWithDirty(
+      in: .favorites, selectedScopes: AutoExportScopeSelection(favorites: true))
+    let summary = manualFullSummary(scope: .favoritesFull)
+
+    let (next, _) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let cleared = next.dirtyStateByDestination[state.destination.id!]?.scope(.favorites)
+    #expect(cleared?.pendingFullReconciliation == false)
+  }
+
+  @Test func manualFullExportFailedDoesNotClearDirty() {
+    let state = stateWithDirty(
+      in: .timeline, selectedScopes: AutoExportScopeSelection(timeline: true))
+    let summary = manualFullSummary(scope: .timelineFullLibrary, result: .failed)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
+    #expect(untouched?.pendingFullReconciliation == true)
+    #expect(effects.isEmpty)
+  }
+
+  @Test func manualFullExportFromAutoSyncSourceDoesNotClearDirty() {
+    // .manualFullExportCompleted carrying an autoSync-sourced summary is a misroute
+    // — should not clear dirty state. (autoSyncRunCompleted is the right path.)
+    let state = stateWithDirty(
+      in: .timeline, selectedScopes: AutoExportScopeSelection(timeline: true))
+    let summary = manualFullSummary(scope: .timelineFullLibrary, source: .autoSync)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
+    #expect(untouched?.pendingFullReconciliation == true)
+    #expect(effects.isEmpty)
+  }
+
+  @Test func manualFullExportSelectionMismatchDoesNotClearDirty() {
+    var state = stateWithDirty(
+      in: .timeline, selectedScopes: AutoExportScopeSelection(timeline: true))
+    state.versionSelection = .editedWithOriginals  // current selection
+    let summary = manualFullSummary(
+      scope: .timelineFullLibrary, selection: .edited)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
+    #expect(untouched?.pendingFullReconciliation == true)
+    #expect(effects.isEmpty)
+  }
+
+  @Test func manualTargetedAssetsRunDoesNotClearDirty() {
+    // Targeted runs only process the listed ids; pending assets *not* in the set
+    // remain pending, so the "full reconciliation clear" rule must not fire.
+    let state = stateWithDirty(
+      in: .timeline, selectedScopes: AutoExportScopeSelection(timeline: true))
+    let summary = manualFullSummary(scope: .timelineAssets(["seed-1"]))
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
+    #expect(untouched?.pendingFullReconciliation == true)
+    #expect(effects.isEmpty)
+  }
+
+  @Test func manualTimelineFullDoesNotClearWhenTimelineNotSelected() {
+    // User is auto-syncing favorites only; a manual *timeline* full export
+    // shouldn't touch the favorites dirty state. (And it can't clear timeline,
+    // since timeline isn't selected.)
+    let state = stateWithDirty(
+      in: .favorites, selectedScopes: AutoExportScopeSelection(favorites: true))
+    let summary = manualFullSummary(scope: .timelineFullLibrary)
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.favorites)
+    #expect(untouched?.pendingFullReconciliation == true)
+    #expect(effects.isEmpty)
   }
 }
