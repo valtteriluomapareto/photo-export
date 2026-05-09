@@ -3,6 +3,7 @@ import SwiftUI
 struct ExportToolbarView: ToolbarContent {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+  @EnvironmentObject private var autoSyncManager: AutoSyncManager
 
   /// Drives the primary action button's label and target. Timeline shows
   /// "Export All"; Collections shows "Export All Albums". The pause/cancel buttons
@@ -12,6 +13,10 @@ struct ExportToolbarView: ToolbarContent {
   var body: some ToolbarContent {
     ToolbarItem(placement: .automatic) {
       destinationIndicator
+    }
+
+    ToolbarItem(placement: .automatic) {
+      AutoSyncStatusPill(state: autoSyncManager.state)
     }
 
     ToolbarItem(placement: .automatic) {

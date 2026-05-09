@@ -337,6 +337,40 @@ struct AutoSyncManagerTests {
     #expect(beforeIds == afterIds)
   }
 
+  // MARK: - runNow (Phase 4)
+
+  @Test func runNowDispatchesImmediateRun() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true))
+    manager.attach(to: builder.environment)
+
+    // Drain the appLaunch run so the manager is back at idle. Otherwise the
+    // run already in flight would suppress runNow's startRun (single-active
+    // gate).
+    builder.clock.advance(by: 10)
+    await Task.yield()
+    await Task.yield()
+    let runsBefore = builder.exportRunner.receivedContexts.count
+    builder.exportRunner.subject.send(.idle)
+    await Task.yield()
+
+    manager.runNow()
+    // userExportNow has 0s debounce. Advance past zero so the timer fires.
+    builder.clock.advance(by: 0.001)
+    await Task.yield()
+    await Task.yield()
+
+    let runsAfter = builder.exportRunner.receivedContexts.count
+    #expect(runsAfter == runsBefore + 1)
+    #expect(builder.exportRunner.receivedContexts.last?.reason == .userExportNow)
+    #expect(builder.exportRunner.receivedContexts.last?.visibility == .background)
+    // (visibility stays .background for now — Slice 1a routes through the
+    // existing trigger path. UI surfacing will adjust if/when needed.)
+  }
+
   // MARK: - Idempotent attach
 
   @Test func attachIsIdempotent() {

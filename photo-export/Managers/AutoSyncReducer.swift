@@ -304,6 +304,17 @@ enum AutoSyncReducer {
         effects.append(.persistDirtyState(dirty, destinationId: destinationId))
       }
 
+    case .runNowRequested:
+      // The user clicked Export Now. Route through the existing
+      // trigger-reason mechanism — `.userExportNow` has a 0s debounce delay,
+      // so the recompute pass below will land in `.scheduled(.userExportNow,
+      // fireAt: now)` and the runner fires the timer on the next tick.
+      // Honors safety + scope + destination + import gates via recompute;
+      // the bypass-disabled behavior the plan specifies for the menu-bar
+      // Export Now is deferred — for Slice 1 the UI only surfaces this
+      // button when `state != .disabled`.
+      triggerReason = .userExportNow
+
     case .destinationDirtyStateLoaded(let destinationId, let dirty):
       // Manager dispatches this on destination-change before
       // `destinationChanged`, so the reducer's `dirtyStateByDestination` cache

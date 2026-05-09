@@ -17,14 +17,12 @@ struct PhotoExportApp: App {
   @StateObject private var exportManager: ExportManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @StateObject private var autoSyncManager: AutoSyncManager
+  /// `@StateObject` because Settings → Auto Export observes `selection` directly
+  /// for checkbox state. The other AutoSync collaborators below stay plain
+  /// `let` — no view subscribes to them.
+  @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
 
-  // AutoSync collaborators retained for the app's lifetime. They are not
-  // `@StateObject` because no view observes them directly — they only need to
-  // outlive `attach(to:)`, which `AutoSyncManager` references through its
-  // captured `AutoSyncEnvironment`. Stored as plain `let` because the
-  // `App` struct itself is created once at process launch.
   private let autoSyncDestinationAdapter: DestinationSnapshotAdapter
-  private let autoSyncScopeStore: UserDefaultsAutoExportScopeStore
   private let autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   private let autoSyncDirtyStateStore: FileBackedAutoSyncDirtyStateStore
   private let autoSyncRetryStateStore: FileBackedAutoSyncRetryStateStore
@@ -83,8 +81,8 @@ struct PhotoExportApp: App {
     _exportManager = StateObject(wrappedValue: em)
     _lifecycleCoordinator = StateObject(wrappedValue: coordinator)
     _autoSyncManager = StateObject(wrappedValue: asm)
+    _autoSyncScopeStore = StateObject(wrappedValue: scopeStore)
     self.autoSyncDestinationAdapter = destinationAdapter
-    self.autoSyncScopeStore = scopeStore
     self.autoSyncPhotoChangeAdapter = photoAdapter
     self.autoSyncDirtyStateStore = dirtyStore
     self.autoSyncRetryStateStore = retryStore
@@ -109,6 +107,7 @@ struct PhotoExportApp: App {
         .environmentObject(exportRecordStore)
         .environmentObject(collectionExportRecordStore)
         .environmentObject(autoSyncManager)
+        .environmentObject(autoSyncScopeStore)
         .task {
           lifecycleCoordinator.attach(
             initial: DestinationIdentitySnapshot(
@@ -155,6 +154,13 @@ struct PhotoExportApp: App {
     }
     .windowResizability(.contentSize)
     .windowStyle(.hiddenTitleBar)
+
+    Settings {
+      AutoExportSettingsView()
+        .environmentObject(autoSyncManager)
+        .environmentObject(autoSyncScopeStore)
+        .environmentObject(exportDestinationManager)
+    }
   }
 
   /// Returns `<App Support>/<bundle-id>/AutoSync/` as the root for AutoSync persistence.

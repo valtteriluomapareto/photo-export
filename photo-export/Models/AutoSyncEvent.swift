@@ -68,4 +68,12 @@ enum AutoSyncEvent: Sendable {
   /// event because the reducer doesn't read it; the manager loads and surfaces
   /// it directly.
   case destinationDirtyStateLoaded(destinationId: String, dirtyState: AutoSyncDirtyState)
+
+  /// User clicked `Export Now`. Routed through the existing
+  /// `.userExportNow` trigger path so the recompute pass schedules a run at
+  /// 0s debounce delay (plan §"Trigger and Debounce Rules" — manual Export Now
+  /// has no debounce after guard checks). UI gates the button on
+  /// `state != .disabled`; the broader "bypass disabled / retry timers"
+  /// behavior the plan specifies for menu-bar Export Now lands later.
+  case runNowRequested
 }

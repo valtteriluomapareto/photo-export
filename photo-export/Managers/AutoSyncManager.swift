@@ -19,6 +19,12 @@ final class AutoSyncManager: ObservableObject {
   /// Persisted per-destination in subsequent slices.
   @Published private(set) var lastRunSummary: ExportRunSummary?
 
+  /// Whether the user has Auto Export enabled. Surfaced separately from `state`
+  /// because the toggle copy stays "on" even when AutoSync is currently
+  /// blocked (e.g. `.blocked(.noScopesSelected)` should still render the
+  /// toggle as on so the user can see what to fix).
+  @Published private(set) var isEnabled: Bool = false
+
   // MARK: - Private state
 
   private let log: Logger
@@ -146,6 +152,9 @@ final class AutoSyncManager: ObservableObject {
     // Load persisted enabled flag and dispatch — this is the trigger for the
     // .appLaunch debounce when destination + scopes are already valid.
     let enabled = environment.userDefaults.bool(forKey: Self.enabledDefaultsKey)
+    if isEnabled != enabled {
+      isEnabled = enabled
+    }
     dispatch(.enabledChanged(enabled))
   }
 
@@ -186,9 +195,21 @@ final class AutoSyncManager: ObservableObject {
     dispatch(.destinationChanged(snapshot))
   }
 
+  /// User clicked Export Now (Settings, menu, status item). Dispatches a
+  /// `.runNowRequested` event; the reducer routes through the
+  /// `.userExportNow` trigger path which uses a 0s debounce. Eligibility
+  /// gates (safety, scope selection, destination available, import inactive)
+  /// still apply; if the run can't start the state will reflect why.
+  func runNow() {
+    dispatch(.runNowRequested)
+  }
+
   /// User toggles Auto Export. Persists the flag and dispatches the event.
   func setEnabled(_ enabled: Bool) {
     environment?.userDefaults.set(enabled, forKey: Self.enabledDefaultsKey)
+    if isEnabled != enabled {
+      isEnabled = enabled
+    }
     dispatch(.enabledChanged(enabled))
   }
 

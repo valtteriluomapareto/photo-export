@@ -11,10 +11,16 @@ import os
 /// not per-destination. Settings UI calls `setSelection(_:)` to write; AutoSync
 /// subscribes to `scopeSelectionPublisher` to react.
 @MainActor
-final class UserDefaultsAutoExportScopeStore: AutoExportScopeProviding {
+final class UserDefaultsAutoExportScopeStore: ObservableObject, AutoExportScopeProviding {
+  /// Current snapshot. Settings UI reads this for checkbox state. `@Published`
+  /// so SwiftUI views observe writes; AutoSyncManager subscribes via
+  /// `scopeSelectionPublisher` (the same upstream — `$selection`) so a single
+  /// `setSelection(_:)` call drives both the UI re-render and the reducer
+  /// dispatch.
+  @Published private(set) var selection: AutoExportScopeSelection
+
   private let userDefaults: UserDefaults
   private let logger: Logger
-  private let subject: CurrentValueSubject<AutoExportScopeSelection, Never>
 
   static let defaultsKey = "AutoSync.scopeSelection"
 
@@ -25,21 +31,15 @@ final class UserDefaultsAutoExportScopeStore: AutoExportScopeProviding {
   ) {
     self.userDefaults = userDefaults
     self.logger = logger
-    self.subject = CurrentValueSubject(
-      Self.load(from: userDefaults, logger: logger))
+    self.selection = Self.load(from: userDefaults, logger: logger)
   }
 
   var scopeSelectionPublisher: AnyPublisher<AutoExportScopeSelection, Never> {
-    subject.eraseToAnyPublisher()
-  }
-
-  /// Current snapshot. Settings UI reads this for checkbox state.
-  var selection: AutoExportScopeSelection {
-    subject.value
+    $selection.eraseToAnyPublisher()
   }
 
   /// Settings UI writes through this. Persists immediately and pushes the new
-  /// value to subscribers.
+  /// value to both UI observers and AutoSyncManager.
   func setSelection(_ selection: AutoExportScopeSelection) {
     do {
       let data = try JSONEncoder().encode(selection)
@@ -49,7 +49,7 @@ final class UserDefaultsAutoExportScopeStore: AutoExportScopeProviding {
         "Failed to encode scope selection: \(error.localizedDescription, privacy: .public)"
       )
     }
-    subject.send(selection)
+    self.selection = selection
   }
 
   private static func load(from userDefaults: UserDefaults, logger: Logger)
