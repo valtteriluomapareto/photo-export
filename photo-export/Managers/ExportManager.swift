@@ -537,24 +537,82 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  /// Starts an export of every user album in the library, walking nested folders.
-  /// Favorites and smart albums are excluded — albums-only, mirroring what the
-  /// Collections sidebar surfaces. Mirrors `startExportAll`'s pattern: serialises
-  /// the per-album enqueues inside one Task so all jobs land in the queue before
-  /// processing kicks in.
+  /// Collections sidebar surfaces. AutoSync passes `selectionOverride` so a scheduled
+  /// run honours the AutoSync version selection regardless of the current UI toggle.
   func startExportAllAlbums(selectionOverride: ExportVersionSelection? = nil) {
+    enqueueBulkAlbumExport(
+      source: .allAlbums,
+      logTag: "startExportAllAlbums",
+      emptyMessage: "No albums to export.",
+      allDoneMessage: "All albums in this destination are already exported.",
+      selectionOverride: selectionOverride
+    )
+  }
+
+  /// Starts an export of every user album under a single folder, recursively. Each
+  /// descendant album resolves to its own `ExportPlacement` exactly as if the user had
+  /// opened the album individually and clicked Export Album — folders are not their own
+  /// placements, they only group children, and `pathComponents` on each album already
+  /// encodes the parent folder hierarchy in the on-disk path.
+  func startExportFolder(folderId: String) {
+    enqueueBulkAlbumExport(
+      source: .folder(folderId: folderId),
+      logTag: "startExportFolder",
+      emptyMessage: "This folder has no albums to export.",
+      allDoneMessage: "All albums in this folder are already exported."
+    )
+  }
+
+  /// Starts an export of an explicit list of user albums by `collectionLocalIdentifier`.
+  /// Drives the multi-select tile flow in `FolderContentView`: the caller computes the
+  /// union of selected album ids (expanding any selected subfolders to their descendant
+  /// albums) and passes the deduplicated list here.
+  func startExportAlbums(collectionIds: [String]) {
+    var seen = Set<String>()
+    let deduped = collectionIds.filter { seen.insert($0).inserted }
+    enqueueBulkAlbumExport(
+      source: .explicitIds(deduped),
+      logTag: "startExportAlbums",
+      emptyMessage: "No albums in selection.",
+      allDoneMessage: "All selected albums are already exported."
+    )
+  }
+
+  /// Where a bulk-album export draws its album-id list from. `.allAlbums` walks the
+  /// whole tree; `.folder` walks one folder's subtree (and short-circuits with a
+  /// "folder no longer exists" message if the id can't be found); `.explicitIds`
+  /// uses the caller-supplied list as-is.
+  private enum BulkAlbumSource {
+    case allAlbums
+    case folder(folderId: String)
+    case explicitIds([String])
+  }
+
+  /// Shared driver for the three bulk-album export entry points
+  /// (`startExportAllAlbums`, `startExportFolder`, `startExportAlbums`). Owns the
+  /// guards, generation tracking, partial-failure recovery, and the messaging
+  /// matrix. Album-id resolution is deferred into the run Task — every source
+  /// dereferences `self.photoLibraryService` from main-actor context, so no
+  /// non-Sendable closure capture crosses an actor boundary.
+  private func enqueueBulkAlbumExport(
+    source: BulkAlbumSource,
+    logTag: String,
+    emptyMessage: String,
+    allDoneMessage: String,
+    selectionOverride: ExportVersionSelection? = nil
+  ) {
     guard !isImporting else {
-      logger.warning("startExportAllAlbums ignored: import in progress")
+      logger.warning("\(logTag, privacy: .public) ignored: import in progress")
       return
     }
     guard canExportCollection else {
       logger.error(
-        "startExportAllAlbums ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
+        "\(logTag, privacy: .public) ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
       )
       return
     }
     guard !isEnqueueingAll else { return }
-    let selection = selectionOverride ?? versionSelection
+    let selectionMode = selectionOverride ?? versionSelection
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -566,15 +624,29 @@ final class ExportManager: ObservableObject {
         return
       }
       do {
-        let tree = try photoLibraryService.fetchCollectionTree()
-        let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
+        let albumIds: [String]
+        switch source {
+        case .allAlbums:
+          let tree = try photoLibraryService.fetchCollectionTree()
+          albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
+        case .folder(let folderId):
+          let tree = try photoLibraryService.fetchCollectionTree()
+          guard let folder = Self.findFolder(folderId: folderId, in: tree) else {
+            self.isEnqueueingAll = false
+            setEmptyRunMessage("That folder no longer exists.")
+            return
+          }
+          albumIds = PhotoCollectionDescriptor.albumLocalIds(under: folder)
+        case .explicitIds(let ids):
+          albumIds = ids
+        }
         var totalEnqueued = 0
         var sawUnauthorized = false
         for collectionId in albumIds {
           let outcome = try await enqueueCollection(
             selection: .album(collectionId: collectionId),
             scope: .album(collectionId: collectionId),
-            selectionMode: selection,
+            selectionMode: selectionMode,
             generation: gen
           )
           guard self.generation == gen else {
@@ -592,110 +664,25 @@ final class ExportManager: ObservableObject {
         }
         self.isEnqueueingAll = false
         if totalEnqueued == 0 && !sawUnauthorized {
-          if albumIds.isEmpty {
-            setEmptyRunMessage("No albums to export.")
-          } else {
-            setEmptyRunMessage("All albums in this destination are already exported.")
-          }
+          setEmptyRunMessage(albumIds.isEmpty ? emptyMessage : allDoneMessage)
         }
         processQueueIfNeeded()
       } catch {
         self.isEnqueueingAll = false
         logger.error(
-          "Failed to enqueue all-albums export: \(String(describing: error), privacy: .public)"
+          "\(logTag, privacy: .public) failed: \(String(describing: error), privacy: .public)"
         )
-        // A throw partway through album-by-album enqueueing can leave earlier
-        // albums' jobs already in `pendingJobs`. Drain whatever was queued and
-        // surface the partial state so the user isn't stuck with a non-empty
-        // queue and no active processor.
+        // A throw partway through the per-album loop can leave earlier albums' jobs
+        // already in `pendingJobs`. Drain whatever was queued and surface the partial
+        // state so the user isn't stuck with a non-empty queue and no active processor.
+        // If nothing was queued, finalize the active run as failed so the UI doesn't
+        // stay in an indeterminate enqueueing state.
         if !pendingJobs.isEmpty {
           setQueueWarningMessage(
             "Couldn't list every album. Continuing with the photos already queued.")
           processQueueIfNeeded()
         } else {
           finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
-      }
-    }
-  }
-
-  /// Starts an export of every user album under a single folder, recursively. Mirrors
-  /// `startExportAllAlbums` but bounded to one folder's subtree. Each descendant album
-  /// resolves to its own `ExportPlacement` exactly as if the user had opened the album
-  /// individually and clicked Export Album — folders are not their own placements, they
-  /// only group children, and `pathComponents` on each album already encodes the parent
-  /// folder hierarchy in the on-disk path.
-  func startExportFolder(folderId: String) {
-    guard !isImporting else {
-      logger.warning("startExportFolder ignored: import in progress")
-      return
-    }
-    guard canExportCollection else {
-      logger.error(
-        "startExportFolder ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
-      )
-      return
-    }
-    guard !isEnqueueingAll else { return }
-    let selection = versionSelection
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    isEnqueueingAll = true
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
-    Task { [weak self] in
-      guard let self, self.generation == gen else {
-        self?.isEnqueueingAll = false
-        return
-      }
-      do {
-        let tree = try photoLibraryService.fetchCollectionTree()
-        guard let folder = Self.findFolder(folderId: folderId, in: tree) else {
-          self.isEnqueueingAll = false
-          setEmptyRunMessage("That folder no longer exists.")
-          return
-        }
-        let albumIds = PhotoCollectionDescriptor.albumLocalIds(under: folder)
-        var totalEnqueued = 0
-        var sawUnauthorized = false
-        for collectionId in albumIds {
-          let outcome = try await enqueueCollection(
-            selection: .album(collectionId: collectionId),
-            scope: .album(collectionId: collectionId),
-            selectionMode: selection,
-            generation: gen
-          )
-          guard self.generation == gen else {
-            self.isEnqueueingAll = false
-            return
-          }
-          switch outcome {
-          case .enqueued(let count):
-            totalEnqueued += count
-          case .alreadyComplete:
-            break
-          case .unauthorized:
-            sawUnauthorized = true
-          }
-        }
-        self.isEnqueueingAll = false
-        if totalEnqueued == 0 && !sawUnauthorized {
-          if albumIds.isEmpty {
-            setEmptyRunMessage("This folder has no albums to export.")
-          } else {
-            setEmptyRunMessage("All albums in this folder are already exported.")
-          }
-        }
-        processQueueIfNeeded()
-      } catch {
-        self.isEnqueueingAll = false
-        logger.error(
-          "Failed to enqueue folder export: \(String(describing: error), privacy: .public)"
-        )
-        if !pendingJobs.isEmpty {
-          setQueueWarningMessage(
-            "Couldn't list every album. Continuing with the photos already queued.")
-          processQueueIfNeeded()
         }
       }
     }

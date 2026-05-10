@@ -280,6 +280,7 @@ private struct CollectionRow: View {
 private struct FolderRow: View {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
 
   let descriptor: PhotoCollectionDescriptor
   let depth: Int
@@ -296,11 +297,7 @@ private struct FolderRow: View {
         .lineLimit(1)
         .truncationMode(.tail)
       Spacer()
-      if let photoCount, photoCount > 0 {
-        Text("\(photoCount)")
-          .foregroundColor(.secondary)
-          .font(.caption)
-      }
+      countBadge
     }
     .help(tooltip)
     .contextMenu {
@@ -317,6 +314,44 @@ private struct FolderRow: View {
           || !exportManager.canExportCollection
       )
     }
+  }
+
+  /// Mirrors `CollectionRow.countBadge` but aggregates across every descendant album so
+  /// a folder summarises its subtree's export progress at a glance. Falls back to a
+  /// plain count text when no live total is available yet (counts load asynchronously).
+  @ViewBuilder
+  private var countBadge: some View {
+    if let photoCount, photoCount > 0, albumCount > 0 {
+      switch CollectionSidebarBadge.state(
+        liveCount: photoCount,
+        exportedRecords: aggregateExportedCount()
+      ) {
+      case .complete:
+        Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
+      case .partial(let exported, let total):
+        Text("\(exported)/\(total)").foregroundColor(.orange).font(.caption)
+      case .notStarted(let total):
+        Text("\(total)").foregroundColor(.secondary).font(.caption)
+      }
+    } else if let photoCount {
+      Text("\(photoCount)").foregroundColor(.secondary).font(.caption)
+    }
+  }
+
+  /// Sum of `summary.exportedCount` across every descendant album's placement. Not
+  /// per-album-clamped — the higher-level `CollectionSidebarBadge.state` clamps the
+  /// final sum against the folder's live total, which catches the
+  /// "stale-records-after-deletion" case at the aggregate level.
+  private func aggregateExportedCount() -> Int {
+    let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: descriptor.children)
+    let placements = collectionExportRecordStore.placements(matching: .album)
+    var sum = 0
+    for id in albumIds {
+      if let p = placements.first(where: { $0.collectionLocalIdentifier == id }) {
+        sum += collectionExportRecordStore.summary(for: p).exportedCount
+      }
+    }
+    return sum
   }
 
   private var tooltip: String {

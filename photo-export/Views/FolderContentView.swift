@@ -39,6 +39,15 @@ struct FolderContentView: View {
   @State private var countsByDescriptorId: [String: Int] = [:]
   @State private var isLoadingCounts: Bool = false
 
+  /// Multi-select state inside the tile grid. Holds child `descriptor.id` values
+  /// (`"album:<localId>"` or `"folder:<localId>"`). Cmd-click toggles a single tile;
+  /// Shift-click extends a range from the anchor; a plain click clears selection and
+  /// navigates. Esc clears the selection without leaving the folder.
+  @State private var selectedChildIds: Set<String> = []
+  @State private var selectionAnchorId: String?
+
+  @StateObject private var modifiers = ModifierFlagsTracker()
+
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(title)
@@ -50,7 +59,7 @@ struct FolderContentView: View {
         summaryView
         Spacer()
         Button(exportButtonTitle) {
-          exportManager.startExportFolder(folderId: folderId)
+          startExport()
         }
         .buttonStyle(.bordered)
         .disabled(!canExport)
@@ -63,7 +72,17 @@ struct FolderContentView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .task(id: folderId + "|\(photoLibraryManager.libraryRevision)") {
       folder = findFolder(folderId: folderId)
+      // Selection is per-folder; clear it whenever the visible folder changes so a
+      // stale anchor from a previous folder doesn't drive Shift-extend in the new one.
+      selectedChildIds.removeAll()
+      selectionAnchorId = nil
       await loadCounts()
+    }
+    .onKeyPress(.escape) {
+      if selectedChildIds.isEmpty { return .ignored }
+      selectedChildIds.removeAll()
+      selectionAnchorId = nil
+      return .handled
     }
   }
 
@@ -91,7 +110,7 @@ struct FolderContentView: View {
       LazyVGrid(columns: columns, spacing: 20) {
         ForEach(folder.children, id: \.id) { child in
           Button {
-            navigate(to: child)
+            handleTap(on: child, in: folder)
           } label: {
             FolderTileView(
               descriptor: child,
@@ -100,6 +119,7 @@ struct FolderContentView: View {
                 ? PhotoCollectionDescriptor.albumLocalIds(under: child).count
                 : 0,
               isFullyExported: child.kind == .album && isAlbumFullyExported(child),
+              isSelected: selectedChildIds.contains(child.id),
               photoLibraryService: photoLibraryService
             )
           }
@@ -124,7 +144,9 @@ struct FolderContentView: View {
   // MARK: - Summary header
 
   private var summaryView: some View {
-    let albumIds = folder.map(PhotoCollectionDescriptor.albumLocalIds(under:)) ?? []
+    let albumIds = hasSelection
+      ? selectedAlbumIds
+      : (folder.map(PhotoCollectionDescriptor.albumLocalIds(under:)) ?? [])
     let albumCount = albumIds.count
     let exported = exportedPhotoCount(albumIds: albumIds)
     let total = totalPhotoCount(albumIds: albumIds)
@@ -151,7 +173,14 @@ struct FolderContentView: View {
   }
 
   private func summaryText(albumCount: Int, exported: Int, total: Int) -> String {
-    let albumPart = albumCount == 1 ? "1 album" : "\(albumCount) albums"
+    let albumPart: String
+    if hasSelection {
+      let tileCount = selectedChildIds.count
+      let tilePart = tileCount == 1 ? "1 selected" : "\(tileCount) selected"
+      albumPart = "\(tilePart) · \(albumCount == 1 ? "1 album" : "\(albumCount) albums")"
+    } else {
+      albumPart = albumCount == 1 ? "1 album" : "\(albumCount) albums"
+    }
     if isLoadingCounts && total == 0 {
       return "\(albumPart) · counting photos…"
     }
@@ -164,6 +193,9 @@ struct FolderContentView: View {
     guard exportDestinationManager.canExportNow else { return false }
     guard exportManager.canExportCollection else { return false }
     guard !exportManager.hasActiveExportWork else { return false }
+    if hasSelection {
+      return !selectedAlbumIds.isEmpty
+    }
     if let folder, PhotoCollectionDescriptor.albumLocalIds(under: folder).isEmpty {
       return false
     }
@@ -171,8 +203,14 @@ struct FolderContentView: View {
   }
 
   private var exportButtonTitle: String {
-    guard let folder else { return "Export Folder" }
-    let count = PhotoCollectionDescriptor.albumLocalIds(under: folder).count
+    let count: Int
+    if hasSelection {
+      count = selectedAlbumIds.count
+    } else if let folder {
+      count = PhotoCollectionDescriptor.albumLocalIds(under: folder).count
+    } else {
+      count = 0
+    }
     if count == 0 { return "Export Folder" }
     return count == 1 ? "Export 1 Album" : "Export \(count) Albums"
   }
@@ -184,10 +222,96 @@ struct FolderContentView: View {
     if !exportManager.canExportCollection {
       return "Collections store is not ready"
     }
+    if hasSelection {
+      if selectedAlbumIds.isEmpty {
+        return "Selected items contain no albums to export"
+      }
+      return "Export every photo in the selected albums that isn't already exported."
+    }
     if let folder, PhotoCollectionDescriptor.albumLocalIds(under: folder).isEmpty {
       return "This folder has no albums to export"
     }
     return "Export every photo in every album under this folder that isn't already exported."
+  }
+
+  private func startExport() {
+    if hasSelection {
+      exportManager.startExportAlbums(collectionIds: selectedAlbumIds)
+    } else {
+      exportManager.startExportFolder(folderId: folderId)
+    }
+  }
+
+  // MARK: - Selection helpers
+
+  private var hasSelection: Bool { !selectedChildIds.isEmpty }
+
+  /// Album local ids covered by the current multi-selection. Selected album tiles
+  /// contribute their own id; selected subfolder tiles contribute every descendant
+  /// album id (mirroring `startExportFolder`'s recursion).
+  private var selectedAlbumIds: [String] {
+    guard let folder, !selectedChildIds.isEmpty else { return [] }
+    var ids: [String] = []
+    var seen = Set<String>()
+    for child in folder.children where selectedChildIds.contains(child.id) {
+      switch child.kind {
+      case .album:
+        if let id = child.localIdentifier, seen.insert(id).inserted {
+          ids.append(id)
+        }
+      case .folder:
+        for id in PhotoCollectionDescriptor.albumLocalIds(under: child)
+        where seen.insert(id).inserted {
+          ids.append(id)
+        }
+      case .favorites:
+        continue
+      }
+    }
+    return ids
+  }
+
+  /// Click dispatch. Cmd toggles, Shift extends a range from the anchor, plain click
+  /// clears any selection and navigates. Range extension uses the visible child order
+  /// (the same order the grid renders) so a Shift-click feels predictable.
+  private func handleTap(on child: PhotoCollectionDescriptor, in folder: PhotoCollectionDescriptor) {
+    if modifiers.command {
+      toggleSelection(of: child)
+    } else if modifiers.shift {
+      extendSelection(to: child, in: folder)
+    } else {
+      selectedChildIds.removeAll()
+      selectionAnchorId = nil
+      navigate(to: child)
+    }
+  }
+
+  private func toggleSelection(of child: PhotoCollectionDescriptor) {
+    if selectedChildIds.contains(child.id) {
+      selectedChildIds.remove(child.id)
+      if selectionAnchorId == child.id { selectionAnchorId = nil }
+    } else {
+      selectedChildIds.insert(child.id)
+      selectionAnchorId = child.id
+    }
+  }
+
+  private func extendSelection(
+    to child: PhotoCollectionDescriptor, in folder: PhotoCollectionDescriptor
+  ) {
+    let order = folder.children.map(\.id)
+    guard let anchor = selectionAnchorId,
+      let anchorIdx = order.firstIndex(of: anchor),
+      let clickedIdx = order.firstIndex(of: child.id)
+    else {
+      // No anchor yet — Shift-click without a prior selection establishes one.
+      selectedChildIds = [child.id]
+      selectionAnchorId = child.id
+      return
+    }
+    let lo = min(anchorIdx, clickedIdx)
+    let hi = max(anchorIdx, clickedIdx)
+    selectedChildIds.formUnion(order[lo...hi])
   }
 
   // MARK: - Aggregate export status

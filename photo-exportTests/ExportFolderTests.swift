@@ -283,4 +283,79 @@ struct ExportFolderTests {
       h.manager.emptyRunMessage == "All albums in this folder are already exported.")
     #expect(h.manager.totalJobsEnqueued == 0)
   }
+
+  // MARK: - startExportAlbums(collectionIds:) (multi-select tile flow)
+
+  /// The plural API enqueues exactly the supplied albums, in order, with no extras.
+  /// This is the entry point the folder content pane's multi-select uses after
+  /// expanding subfolder tiles to their descendant album ids.
+  @Test func startExportAlbumsEnqueuesSuppliedAlbumsOnly() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
+    let albumB = seedAlbum(h.photoLib, localId: "B", ids: ["b1", "b2"])
+    let albumC = seedAlbum(h.photoLib, localId: "C", ids: ["c1"])
+    h.photoLib.collectionTree = [albumA, albumB, albumC]
+
+    h.manager.startExportAlbums(collectionIds: ["A", "B"])
+    await waitUntil(h.manager.totalJobsEnqueued == 3)
+
+    let queuedAssetIds = Set(h.manager.pendingJobs.map(\.assetLocalIdentifier))
+    #expect(queuedAssetIds == ["a1", "b1", "b2"])
+    #expect(!queuedAssetIds.contains("c1"))
+  }
+
+  /// Duplicate ids in the input collapse to a single enqueue per album. The caller
+  /// (the multi-select grid) builds a union of selected album ids + descendant album
+  /// ids of selected subfolders, which can produce duplicates if a subfolder and one
+  /// of its child albums are both selected.
+  @Test func startExportAlbumsDeduplicatesInput() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let album = seedAlbum(h.photoLib, localId: "dup", ids: ["x1", "x2"])
+    h.photoLib.collectionTree = [album]
+
+    h.manager.startExportAlbums(collectionIds: ["dup", "dup", "dup"])
+    await waitUntil(h.manager.totalJobsEnqueued == 2)
+
+    #expect(h.manager.totalJobsEnqueued == 2)
+    let queuedPlacements = Set(h.manager.pendingJobs.map(\.placement.id))
+    #expect(queuedPlacements.count == 1)
+  }
+
+  @Test func startExportAlbumsWithEmptyListSetsEmptyMessage() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    h.manager.startExportAlbums(collectionIds: [])
+    await waitUntil(h.manager.emptyRunMessage != nil)
+
+    #expect(h.manager.emptyRunMessage == "No albums in selection.")
+    #expect(h.manager.totalJobsEnqueued == 0)
+  }
+
+  @Test func startExportAlbumsWhenAllAlreadyDoneSetsAlreadyDoneMessage() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let album = seedAlbum(h.photoLib, localId: "done", ids: ["d1"])
+    h.photoLib.collectionTree = [album]
+    let placement = try ExportPlacementResolver().placement(
+      for: .album(collectionId: "done"),
+      collections: h.photoLib.collectionTree,
+      existingPlacements: []
+    )
+    h.collectionStore.upsertPlacement(placement)
+    h.collectionStore.markVariantExported(
+      assetId: "d1", placement: placement, variant: .original,
+      filename: "d1.HEIC", exportedAt: Date())
+
+    h.manager.startExportAlbums(collectionIds: ["done"])
+    await waitUntil(h.manager.emptyRunMessage != nil)
+
+    #expect(h.manager.emptyRunMessage == "All selected albums are already exported.")
+    #expect(h.manager.totalJobsEnqueued == 0)
+  }
 }

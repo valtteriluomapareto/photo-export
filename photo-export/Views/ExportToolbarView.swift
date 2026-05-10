@@ -6,9 +6,13 @@ struct ExportToolbarView: ToolbarContent {
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
 
   /// Drives the primary action button's label and target. Timeline shows
-  /// "Export All"; Collections shows "Export All Albums". The pause/cancel buttons
+  /// "Export All"; Collections shows "Export All Albums" by default and flips to
+  /// "Export Folder" when the user has a folder selected. The pause/cancel buttons
   /// are shared because the underlying queue is shared.
   let section: LibrarySection
+  /// Current sidebar selection. Used only to detect a folder selection so the
+  /// primary action can route to `startExportFolder(folderId:)` for that folder.
+  let selection: LibrarySelection?
 
   var body: some ToolbarContent {
     ToolbarItem(placement: .automatic) {
@@ -207,14 +211,20 @@ struct ExportToolbarView: ToolbarContent {
     case .timeline:
       exportManager.startExportAll()
     case .collections:
-      exportManager.startExportAllAlbums()
+      if case .folder(let id) = selection {
+        exportManager.startExportFolder(folderId: id)
+      } else {
+        exportManager.startExportAllAlbums()
+      }
     }
   }
 
   private var primaryActionLabel: String {
     switch section {
     case .timeline: return "Export All"
-    case .collections: return "Export All Albums"
+    case .collections:
+      if case .folder = selection { return "Export Folder" }
+      return "Export All Albums"
     }
   }
 
@@ -222,20 +232,32 @@ struct ExportToolbarView: ToolbarContent {
     guard exportDestinationManager.canExportNow else {
       return "Select a writable export folder first"
     }
-    switch (section, exportManager.versionSelection) {
-    case (.timeline, .edited):
+    let isFolderSelection: Bool = {
+      if case .folder = selection { return true }
+      return false
+    }()
+    switch (section, exportManager.versionSelection, isFolderSelection) {
+    case (.timeline, .edited, _):
       return
         "Export every photo in the timeline (year/month) view, in the version Photos shows."
-    case (.timeline, .editedWithOriginals):
+    case (.timeline, .editedWithOriginals, _):
       return
         "Export every photo in the timeline (year/month) view, plus a _orig companion "
         + "for any photo edited in Photos."
-    case (.collections, .edited):
+    case (.collections, .edited, true):
+      return
+        "Export every photo in every album under the selected folder, in the version "
+        + "Photos shows."
+    case (.collections, .editedWithOriginals, true):
+      return
+        "Export every photo in every album under the selected folder, plus a _orig "
+        + "companion for any photo edited in Photos."
+    case (.collections, .edited, false):
       return
         "Export every user album, including albums nested in folders, in the version "
         + "Photos shows. Favorites is excluded — use the Export Favorites button on its "
         + "pane."
-    case (.collections, .editedWithOriginals):
+    case (.collections, .editedWithOriginals, false):
       return
         "Export every user album, including albums nested in folders, plus a _orig "
         + "companion for any photo edited in Photos. Favorites is excluded — use the "

@@ -19,10 +19,13 @@ struct FolderTileView: View {
   let albumCount: Int
   /// `true` when every photo in this album has been exported (album tiles only).
   let isFullyExported: Bool
+  /// `true` when this tile is part of the user's active multi-selection. Drives the
+  /// blue selection ring.
+  let isSelected: Bool
 
   let photoLibraryService: any PhotoLibraryService
 
-  @State private var cover: NSImage?
+  @State private var covers: [NSImage] = []
   @State private var coverState: CoverState = .idle
 
   private enum CoverState {
@@ -39,6 +42,12 @@ struct FolderTileView: View {
         .frame(width: Self.tileSide, height: Self.tileSide)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(alignment: .topTrailing) { exportedBadge }
+        .overlay {
+          if isSelected {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+              .stroke(Color.accentColor, lineWidth: 3)
+          }
+        }
 
       Text(displayTitle)
         .font(.body)
@@ -55,13 +64,19 @@ struct FolderTileView: View {
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityLabel)
-    .accessibilityAddTraits(.isButton)
+    .accessibilityAddTraits(accessibilityTraits)
     .task(id: descriptor.id) {
       // Subfolders never need a cover fetch.
       guard descriptor.kind == .album else { return }
       guard case .idle = coverState else { return }
-      await loadCover()
+      await loadCovers()
     }
+  }
+
+  private var accessibilityTraits: AccessibilityTraits {
+    var traits: AccessibilityTraits = .isButton
+    if isSelected { traits.insert(.isSelected) }
+    return traits
   }
 
   // MARK: - Cover area
@@ -86,13 +101,7 @@ struct FolderTileView: View {
       Rectangle().fill(Color.gray.opacity(0.15))
       switch coverState {
       case .loaded:
-        if let cover {
-          Image(nsImage: cover)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(width: Self.tileSide, height: Self.tileSide)
-            .clipped()
-        }
+        coverGrid
       case .loading, .idle:
         ProgressView().controlSize(.small)
       case .empty:
@@ -103,6 +112,51 @@ struct FolderTileView: View {
         Image(systemName: "exclamationmark.triangle")
           .foregroundStyle(.secondary)
       }
+    }
+  }
+
+  /// 1-up when only one cover is available, 4-up (2x2) when four are available.
+  /// In-between cases (2 or 3 covers) fill remaining slots with a soft tint so the
+  /// composition stays balanced without faking duplicates. Mirrors Photos.app's
+  /// album-tile behaviour.
+  @ViewBuilder
+  private var coverGrid: some View {
+    let displayed = Array(covers.prefix(4))
+    if displayed.count <= 1 {
+      if let single = displayed.first {
+        Image(nsImage: single)
+          .resizable()
+          .aspectRatio(contentMode: .fill)
+          .frame(width: Self.tileSide, height: Self.tileSide)
+          .clipped()
+      }
+    } else {
+      VStack(spacing: 1) {
+        HStack(spacing: 1) {
+          coverCell(at: 0, of: displayed)
+          coverCell(at: 1, of: displayed)
+        }
+        HStack(spacing: 1) {
+          coverCell(at: 2, of: displayed)
+          coverCell(at: 3, of: displayed)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func coverCell(at index: Int, of covers: [NSImage]) -> some View {
+    let cellSide = (Self.tileSide - 1) / 2
+    if index < covers.count {
+      Image(nsImage: covers[index])
+        .resizable()
+        .aspectRatio(contentMode: .fill)
+        .frame(width: cellSide, height: cellSide)
+        .clipped()
+    } else {
+      Rectangle()
+        .fill(Color.secondary.opacity(0.18))
+        .frame(width: cellSide, height: cellSide)
     }
   }
 
@@ -172,31 +226,46 @@ struct FolderTileView: View {
 
   // MARK: - Cover loading
 
-  private func loadCover() async {
+  /// Loads up to four cover thumbnails for an album tile. Renders 1-up if the album has
+  /// a single asset, 4-up otherwise. Thumbnail fetches run in parallel inside a task
+  /// group so the tile doesn't gate on PhotoKit serialising them.
+  ///
+  /// `fetchAssets(in: .album(...))` materialises the full album list, which is
+  /// acceptable for v1 — the tile only builds when the album scrolls into view, and
+  /// the typical user album holds tens to hundreds of photos. A `firstAssets(in:limit:)`
+  /// fast path on `PhotoLibraryService` is the natural follow-up if this proves a
+  /// bottleneck on very large albums.
+  private func loadCovers() async {
     guard let albumId = descriptor.localIdentifier else {
       coverState = .empty
       return
     }
     coverState = .loading
     do {
-      // `fetchAssets(in: .album(...))` materialises the full album list. Acceptable for
-      // v1 — the tile is only built when the album scrolls into view, and the typical
-      // user album holds tens to hundreds of photos. If this proves a bottleneck on
-      // very large albums, a `firstAsset(in:)` fast path on `PhotoLibraryService` is
-      // the natural follow-up.
       let assets = try await photoLibraryService.fetchAssets(
         in: .album(collectionId: albumId), mediaType: nil)
-      guard let first = assets.first else {
+      let coverIds = assets.prefix(4).map(\.id)
+      if coverIds.isEmpty {
         coverState = .empty
         return
       }
-      if let image = await photoLibraryService.loadThumbnail(
-        for: first.id, allowNetwork: true)
-      {
-        cover = image
-        coverState = .loaded
-      } else {
+      let loaded = await withTaskGroup(of: (Int, NSImage?).self) { group in
+        for (index, id) in coverIds.enumerated() {
+          group.addTask {
+            (index, await photoLibraryService.loadThumbnail(for: id, allowNetwork: true))
+          }
+        }
+        var pairs: [(Int, NSImage)] = []
+        for await (index, image) in group {
+          if let image { pairs.append((index, image)) }
+        }
+        return pairs.sorted(by: { $0.0 < $1.0 }).map(\.1)
+      }
+      if loaded.isEmpty {
         coverState = .failed
+      } else {
+        covers = loaded
+        coverState = .loaded
       }
     } catch {
       coverState = .failed
