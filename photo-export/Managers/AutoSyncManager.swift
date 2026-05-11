@@ -438,8 +438,10 @@ final class AutoSyncManager: ObservableObject {
   /// Maps an `ExportPlacement` to the retry-state scope key. Plan §"Retry
   /// and Failure Policy": "Timeline can use a timeline scope key; collection
   /// exports need placement awareness so a failure in one album does not
-  /// suppress a different album or Favorites."
-  private static func retryScopeKey(for placement: ExportPlacement) -> AutoSyncRetryScopeKey {
+  /// suppress a different album or Favorites." `internal` (default) so
+  /// `PhotoExportApp` can construct the eligibility-check closure that
+  /// reads `currentRetryState` for `ExportManager`.
+  static func retryScopeKey(for placement: ExportPlacement) -> AutoSyncRetryScopeKey {
     switch placement.kind {
     case .timeline: return .timeline
     case .favorites: return .favorites

@@ -140,6 +140,17 @@ final class ExportManager: ObservableObject {
     completedRunsSubject.eraseToAnyPublisher()
   }
 
+  /// AutoSync retry-eligibility hook. Closure returns `true` when the
+  /// `(assetId, placement, variant)` is eligible to attempt at `now` — i.e.
+  /// no retry entry exists, or `nextEligibleAt <= now`. Plan §"Retry and
+  /// Failure Policy": "Retry evaluation belongs at enqueue time."
+  ///
+  /// `nil` means "no AutoSync retry policy installed"; all variants are
+  /// eligible. Manual exports use this default — they never gate on the
+  /// AutoSync retry store. Wired by `PhotoExportApp` to read from
+  /// `AutoSyncManager.currentRetryState`.
+  var autoSyncEligibilityCheck: ((String, ExportPlacement, ExportVariant, Date) -> Bool)?
+
   private struct ActiveRunBookkeeping {
     let totalJobsEnqueuedAtStart: Int
     let totalJobsCompletedAtStart: Int
@@ -154,6 +165,11 @@ final class ExportManager: ObservableObject {
     /// category. Mirror of `failedCount` but with full context — count
     /// should equal `failures.count` modulo any legacy sentinel paths.
     var failures: [ExportRunFailureDetail] = []
+    /// Asset count skipped at enqueue time by the AutoSync retry-eligibility
+    /// gate (plan §"Phase 3"): "ineligible variants count as `skippedCount`
+    /// with a retry reason in the run summary." Reported on the summary;
+    /// the per-variant detail is reconstructable from `AutoSyncRetryState`.
+    var skippedCount: Int = 0
   }
   private var activeRunBookkeeping: ActiveRunBookkeeping?
 
@@ -683,6 +699,11 @@ final class ExportManager: ObservableObject {
         !collectionExportRecordStore.isExported(
           asset: asset, placement: placement, selection: selectionMode)
       else { return nil }
+      if skipForAutoSyncRetry(
+        asset: asset, placement: placement, selection: selectionMode)
+      {
+        return nil
+      }
       return ExportJob(
         assetLocalIdentifier: asset.id, placement: placement, selection: selectionMode)
     }
@@ -853,6 +874,9 @@ final class ExportManager: ObservableObject {
       guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
         return nil
       }
+      if skipForAutoSyncRetry(asset: asset, placement: placement, selection: selection) {
+        return nil
+      }
       return ExportJob(
         assetLocalIdentifier: asset.id, placement: placement, selection: selection)
     }
@@ -882,6 +906,9 @@ final class ExportManager: ObservableObject {
         continue
       }
       let placement = ExportPlacement.timeline(year: year, month: m)
+      if skipForAutoSyncRetry(asset: asset, placement: placement, selection: selection) {
+        continue
+      }
       newJobs.append(
         ExportJob(
           assetLocalIdentifier: asset.id, placement: placement, selection: selection))
@@ -1019,7 +1046,7 @@ final class ExportManager: ObservableObject {
       enqueuedCount: max(0, totalJobsEnqueued - bookkeeping.totalJobsEnqueuedAtStart),
       completedCount: max(0, totalJobsCompleted - bookkeeping.totalJobsCompletedAtStart),
       failedCount: bookkeeping.failedCount,
-      skippedCount: 0,
+      skippedCount: bookkeeping.skippedCount,
       cancelReason: cancelReason,
       result: effectiveResult,
       failures: bookkeeping.failures
@@ -1881,6 +1908,31 @@ final class ExportManager: ObservableObject {
   /// Routes a `markVariantFailed` to the right store based on `placement.kind`. In Phase 1,
   /// only `.timeline` paths are reachable in production; `.favorites`/`.album` are wired
   /// for Phase 3's collection-export work but won't be exercised until then.
+  /// AutoSync retry-eligibility gate: returns `true` when the enqueue path
+  /// should *skip* this asset because all required variants are currently
+  /// in retry backoff (or hard-blocked needing user action). Called from
+  /// each of the three enqueue helpers; bumps `skippedCount` as a side
+  /// effect so the call site can simply `if skipForAutoSync(...) { continue }`.
+  /// No-op for manual runs (`activeRunContext?.source != .autoSync`) and
+  /// when the closure isn't installed.
+  private func skipForAutoSyncRetry(
+    asset: AssetDescriptor, placement: ExportPlacement,
+    selection: ExportVersionSelection
+  ) -> Bool {
+    guard activeRunContext?.source == .autoSync,
+      let check = autoSyncEligibilityCheck
+    else { return false }
+    let required = requiredVariants(for: asset, selection: selection)
+    let now = Date()
+    let hasEligible = required.contains { variant in
+      check(asset.id, placement, variant, now)
+    }
+    if !hasEligible {
+      activeRunBookkeeping?.skippedCount += 1
+    }
+    return !hasEligible
+  }
+
   private func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     failure: ExportFailureSignal, at date: Date

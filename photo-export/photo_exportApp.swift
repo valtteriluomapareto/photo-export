@@ -88,6 +88,24 @@ struct PhotoExportApp: App {
     let scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: .standard)
     let clock = SystemAutoSyncClock()
     let asm = AutoSyncManager()
+    // AutoSync retry-eligibility hook for ExportManager. Reads from
+    // AutoSyncManager.currentRetryState — kept up-to-date by the manager
+    // after every .recordRetryFailures effect and on destination change.
+    // Plan §"Retry and Failure Policy": retry evaluation belongs at
+    // enqueue time. `[weak asm]` so the closure doesn't keep the manager
+    // alive past app teardown.
+    em.autoSyncEligibilityCheck = { [weak asm] assetId, placement, variant, now in
+      guard let asm else { return true }
+      let scope = AutoSyncManager.retryScopeKey(for: placement)
+      guard
+        let entry = asm.currentRetryState.entry(
+          scope: scope, assetId: assetId, variant: variant)
+      else { return true }
+      // Hard category (nextEligibleAt == nil) means user-action-required;
+      // not eligible to auto-retry.
+      guard let nextEligibleAt = entry.nextEligibleAt else { return false }
+      return nextEligibleAt <= now
+    }
 
     _exportDestinationManager = StateObject(wrappedValue: edm)
     _photoLibraryManager = StateObject(wrappedValue: plm)

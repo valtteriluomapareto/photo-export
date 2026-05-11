@@ -117,6 +117,82 @@ struct ExportManagerRunExportTests {
     #expect(harness.manager.activeRunContext == nil)
   }
 
+  // MARK: - AutoSync retry-eligibility skip (Phase 3 Slice C)
+
+  /// AutoSync run on a destination where every asset's required variant is
+  /// in retry backoff (eligibility closure returns false for all). Manager
+  /// must skip enqueuing those assets and surface them as `skippedCount`
+  /// rather than letting them churn the queue immediately after they fail.
+  @Test func autoSyncRunSkipsAssetsWithAllVariantsInBackoff() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    // Seed two assets in July 2025.
+    let asset1 = TestAssetFactory.makeAsset(
+      id: "asset-1",
+      creationDate: makeDate(2025, 7, 1))
+    let asset2 = TestAssetFactory.makeAsset(
+      id: "asset-2",
+      creationDate: makeDate(2025, 7, 2))
+    harness.photoLib.assetsByYearMonth["2025-7"] = [asset1, asset2]
+    harness.photoLib.yearCounts = [(year: 2025, count: 2)]
+
+    // Eligibility closure: asset-1 is ineligible (.original variant in
+    // backoff); asset-2 is eligible. The run should enqueue only asset-2.
+    harness.manager.autoSyncEligibilityCheck = { assetId, _, _, _ in
+      assetId != "asset-1"
+    }
+
+    let summary = await harness.manager.runExport(
+      context: ExportRunContext(
+        source: .autoSync,
+        visibility: .background,
+        scope: .timelineFullLibrary,
+        selection: .edited
+      ))
+
+    #expect(summary.skippedCount == 1)
+    // The run completed for asset-2; asset-1 was skipped pre-enqueue.
+    #expect(summary.enqueuedCount == 1)
+  }
+
+  /// Manual runs (`source == .manual`) must never gate on AutoSync retry
+  /// eligibility — that's plan §"Retry": only auto-sync runs honor the
+  /// retry store; a manual export is the user's explicit override.
+  @Test func manualRunIgnoresEligibilityCheck() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "asset-x",
+      creationDate: makeDate(2025, 7, 5))
+    harness.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    harness.photoLib.yearCounts = [(year: 2025, count: 1)]
+
+    // Closure returns false for everything — would skip on autoSync.
+    harness.manager.autoSyncEligibilityCheck = { _, _, _, _ in false }
+
+    let summary = await harness.manager.runExport(
+      context: ExportRunContext(
+        source: .manual,
+        visibility: .userVisible,
+        scope: .timelineFullLibrary,
+        selection: .edited
+      ))
+
+    // Manual run: enqueued despite the closure returning false.
+    #expect(summary.skippedCount == 0)
+    #expect(summary.enqueuedCount == 1)
+  }
+
+  private func makeDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
+    var components = DateComponents()
+    components.year = y
+    components.month = m
+    components.day = d
+    return Calendar.current.date(from: components) ?? Date()
+  }
+
   // MARK: - Targeted scopes (not implemented yet)
 
   @Test func timelineAssetsScopeResolvesFailedForNow() async {
