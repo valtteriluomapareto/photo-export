@@ -28,6 +28,10 @@ env:
 
 jobs:
   build-sign-upload:
+    # Skip the App Store path for pre-release tags (e.g. v1.3.0-beta.1).
+    # App Store Connect rejects hyphen-suffixed CFBundleShortVersionString,
+    # so betas ship through the direct-distribution channel only.
+    if: github.event_name != 'push' || !contains(github.ref, '-')
     runs-on: macos-15
     environment: app-store-release
     steps:

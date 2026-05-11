@@ -198,18 +198,24 @@ struct WhatsNewStateTests {
     // means a release shipped without its catalog entry, so users on
     // the upgrade path see the generic fallback message instead of the
     // release highlights.
+    //
+    // Pre-release suffixes on the bundle (e.g. `1.3.0-beta.1`) collapse
+    // to their base `X.Y.Z` for this check — betas of the same release
+    // share the stable's catalog entry.
     let bundleVersion =
       (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? ""
+    let bundleBase =
+      bundleVersion.split(separator: "-", maxSplits: 1).first.map(String.init) ?? bundleVersion
     let newest = ReleaseNotesCatalog.all
       .map(\.version)
       .max(by: { ReleaseNotesCatalog.compare($0, $1) == .orderedAscending })
     #expect(newest != nil, "ReleaseNotesCatalog.all is empty")
     if let newest {
       let isCurrentOrAhead =
-        ReleaseNotesCatalog.compare(newest, bundleVersion) != .orderedAscending
+        ReleaseNotesCatalog.compare(newest, bundleBase) != .orderedAscending
       #expect(
         isCurrentOrAhead,
-        "Catalog newest entry is \(newest) but bundle is \(bundleVersion). Add a ReleaseNote(version: \"\(bundleVersion)\", …) before shipping."
+        "Catalog newest entry is \(newest) but bundle is \(bundleVersion). Add a ReleaseNote(version: \"\(bundleBase)\", …) before shipping."
       )
     }
   }

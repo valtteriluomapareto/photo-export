@@ -109,6 +109,32 @@ To test the GitHub workflow without creating a release:
 2. Click **Run workflow** from `main` with `dry_run: true`
 3. Download the DMG artifact from the workflow run
 
+## Beta / pre-release tags
+
+For seeding a build to a small group of testers from `main` without committing the version as the public stable, push a pre-release tag instead of a stable one.
+
+```bash
+scripts/bump-version.sh 1.3.0-beta.1
+git push && git push origin v1.3.0-beta.1
+```
+
+The accepted version format is strict semver with an optional pre-release suffix: `X.Y.Z` or `X.Y.Z-<identifier>` (e.g. `1.3.0-beta.1`, `1.3.0-rc.2`). The suffix activates the pre-release path automatically:
+
+- **GitHub Releases** publishes the tag as a **pre-release** (marked unstable, not "Latest"). Testers download the DMG from the Releases page just like a stable build.
+- **App Store Connect** upload is **skipped** — App Store Connect rejects hyphen-suffixed `CFBundleShortVersionString`, so betas ship through the direct-distribution channel only. Use TestFlight separately if you also want an App Store beta.
+- **Catalog check** in `bump-version.sh` looks up the base `X.Y.Z` entry in `ReleaseNotesCatalog.swift`. Betas of the same release share the stable's release notes; you don't need a separate entry per beta.
+
+Beta testers see the catalog's `1.3.0` entry in the What's New sheet (since `1.2.3 < 1.3.0 ≤ 1.3.0-beta.1`). When the stable `1.3.0` ships later, testers on `1.3.0-beta.1` will *not* re-fire the sheet (the comparison treats `1.3.0-beta.1` as newer-than `1.3.0` for the `shouldShow` gate). That's intentional — they've already seen the notes.
+
+To promote a beta to stable, bump again with the bare version and re-tag:
+
+```bash
+scripts/bump-version.sh 1.3.0
+git push && git push origin v1.3.0
+```
+
+The stable tag goes through both channels (GitHub Release + App Store) as usual.
+
 ## Handling App Review rejection
 
 ### Rejection is metadata/policy only (no code change)
