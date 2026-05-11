@@ -213,6 +213,7 @@ struct PhotoExportApp: App {
       .environmentObject(lifecycleCoordinator)
       .environmentObject(loginItemController)
     }
+    .windowResizability(.contentMinSize)
   }
 
   /// Returns `<App Support>/<bundle-id>/AutoSync/` as the root for AutoSync persistence.

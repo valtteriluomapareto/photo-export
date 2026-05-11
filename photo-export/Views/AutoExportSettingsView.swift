@@ -257,10 +257,15 @@ private struct StatusSummaryRow: View {
         .foregroundStyle(iconTint)
       VStack(alignment: .leading, spacing: 2) {
         Text(headline)
-        if let detail {
-          Text(detail)
-            .font(.caption)
-            .foregroundStyle(.secondary)
+        // TimelineView ticks once a second so the .scheduled countdown
+        // ("fires in 9s", "fires in 8s", …) updates without depending on
+        // an external state change to force a re-render.
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+          if let detail = detail(now: ctx.date) {
+            Text(detail)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
         }
       }
     }
@@ -299,10 +304,10 @@ private struct StatusSummaryRow: View {
     }
   }
 
-  private var detail: String? {
+  private func detail(now: Date) -> String? {
     switch state {
     case .scheduled(let reason, let fireAt):
-      let secs = max(0, Int(fireAt.timeIntervalSinceNow.rounded()))
+      let secs = max(0, Int(fireAt.timeIntervalSince(now).rounded()))
       return "\(reason.shortDescription) — fires in \(secs)s"
     case .running(let reason):
       return reason.shortDescription
