@@ -57,10 +57,10 @@ struct AutoSyncMenuBarContent: View {
     switch autoSyncManager.state {
     case .disabled: return "Auto Export is off"
     case .idle: return "Auto Export: up to date"
-    case .scheduled(let reason, _): return "Auto Export: scheduled (\(reason.shortLabel))"
+    case .scheduled(let reason, _): return "Auto Export: scheduled (\(reason.userFacingLabel))"
     case .running: return "Auto Export: running\u{2026}"
-    case .waiting(let reason): return "Auto Export: waiting (\(reason.shortLabel))"
-    case .blocked(let reason): return "Auto Export: blocked (\(reason.shortLabel))"
+    case .waiting(let reason): return "Auto Export: waiting (\(reason.userFacingLabel))"
+    case .blocked(let reason): return "Auto Export: blocked (\(reason.userFacingLabel))"
     }
   }
 
@@ -101,33 +101,6 @@ struct AutoSyncMenuBarLabel: View {
   }
 }
 
-extension AutoSyncReason {
-  fileprivate var shortLabel: String {
-    switch self {
-    case .appLaunch: return "launch"
-    case .destinationSelected: return "destination"
-    case .destinationBecameAvailable: return "reconnected"
-    case .scopeSelectionChanged: return "scope"
-    case .versionSelectionChanged: return "version"
-    case .photosChanged: return "photos"
-    case .photosChangeFallback: return "catch-up"
-    case .userExportNow: return "Export Now"
-    }
-  }
-}
-
-extension AutoSyncBlockedReason {
-  fileprivate var shortLabel: String {
-    switch self {
-    case .photosAccessMissing: return "Photos access"
-    case .limitedPhotosAccess: return "limited access"
-    case .destinationMissing: return "no destination"
-    case .destinationUnavailable: return "drive disconnected"
-    case .destinationUnsafe: return "destination unsafe"
-    case .noScopesSelected: return "no scopes"
-    case .manualExportActive: return "manual export"
-    case .importActive: return "import"
-    case .retryBackoff: return "retry backoff"
-    }
-  }
-}
+// Per-view label extensions removed — surface uses
+// `AutoSyncReason.userFacingLabel` / `AutoSyncBlockedReason.userFacingLabel`
+// directly. See `AutoSyncReason.swift`.

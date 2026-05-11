@@ -68,11 +68,15 @@ struct AutoSyncStatusPill: View {
   private var label: String {
     switch state {
     case .disabled: return "Auto Export off"
-    case .idle: return "Auto Export"
+    case .idle: return "Up to date"
     case .scheduled: return "Scheduled"
     case .running: return "Exporting"
     case .waiting: return "Waiting"
-    case .blocked: return "Action needed"
+    case .blocked(let reason):
+      // Inline the reason so the pill is informative at-a-glance. The
+      // pill's `.lineLimit(1)` truncates if the toolbar is narrow; for
+      // most reasons the label fits comfortably.
+      return "Action needed — \(reason.userFacingLabel)"
     }
   }
 
@@ -82,48 +86,36 @@ struct AutoSyncStatusPill: View {
     case .idle: return "Auto Export is up to date. Click to open settings."
     case .scheduled(let reason, let fireAt):
       let secs = max(0, Int(fireAt.timeIntervalSinceNow.rounded()))
-      return "Run scheduled (\(reason.shortHelpText)) — fires in \(secs)s"
+      return "Run scheduled (\(reason.userFacingLabel)) — fires in \(secs)s"
     case .running(let reason):
-      return "Run in progress (\(reason.shortHelpText))"
+      return "Run in progress (\(reason.userFacingLabel))"
     case .waiting(let reason):
-      return "Waiting: \(reason.shortHelpText)"
+      return "Waiting: \(reason.userFacingLabel)"
     case .blocked(let reason):
-      return "Blocked: \(reason.shortHelpText). Click to open settings."
+      return "Blocked: \(reason.userFacingLabel). Click to open settings."
     }
   }
 
   private var accessibilityLabel: String {
-    "Auto Export status: \(label)"
-  }
-}
-
-extension AutoSyncReason {
-  fileprivate var shortHelpText: String {
-    switch self {
-    case .appLaunch: return "app launch"
-    case .destinationSelected: return "destination selected"
-    case .destinationBecameAvailable: return "drive reconnected"
-    case .scopeSelectionChanged: return "scope changed"
-    case .versionSelectionChanged: return "version changed"
-    case .photosChanged: return "library changed"
-    case .photosChangeFallback: return "library catch-up"
-    case .userExportNow: return "Export Now"
+    // Include the "why" for blocked / waiting states so VoiceOver users
+    // hear the reason inline, not just the generic "Action needed".
+    switch state {
+    case .blocked(let reason):
+      return "Auto Export blocked: \(reason.userFacingLabel)"
+    case .waiting(let reason):
+      return "Auto Export waiting: \(reason.userFacingLabel)"
+    case .running(let reason):
+      return "Auto Export running, \(reason.userFacingLabel)"
+    case .scheduled(let reason, _):
+      return "Auto Export scheduled, \(reason.userFacingLabel)"
+    case .disabled:
+      return "Auto Export is off"
+    case .idle:
+      return "Auto Export idle"
     }
   }
 }
 
-extension AutoSyncBlockedReason {
-  fileprivate var shortHelpText: String {
-    switch self {
-    case .photosAccessMissing: return "Photos access needed"
-    case .limitedPhotosAccess: return "limited Photos access"
-    case .destinationMissing: return "no destination selected"
-    case .destinationUnavailable: return "drive disconnected"
-    case .destinationUnsafe: return "destination needs review"
-    case .noScopesSelected: return "pick what to export"
-    case .manualExportActive: return "manual export running"
-    case .importActive: return "import running"
-    case .retryBackoff: return "retrying soon"
-    }
-  }
-}
+// Per-view label extensions removed — surface uses
+// `AutoSyncReason.userFacingLabel` / `AutoSyncBlockedReason.userFacingLabel`
+// directly. See `AutoSyncReason.swift`.

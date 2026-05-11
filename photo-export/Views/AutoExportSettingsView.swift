@@ -360,9 +360,9 @@ private struct StatusSummaryRow: View {
     case .disabled: return "Auto Export is off"
     case .idle: return "Up to date"
     case .scheduled: return "Run scheduled"
-    case .running: return "Exporting…"
-    case .waiting(let reason): return "Waiting (\(reason.shortDescription))"
-    case .blocked(let reason): return "Blocked (\(reason.shortDescription))"
+    case .running: return "Exporting\u{2026}"
+    case .waiting(let reason): return "Waiting — \(reason.userFacingLabel)"
+    case .blocked(let reason): return "Blocked — \(reason.userFacingLabel)"
     }
   }
 
@@ -370,9 +370,9 @@ private struct StatusSummaryRow: View {
     switch state {
     case .scheduled(let reason, let fireAt):
       let secs = max(0, Int(fireAt.timeIntervalSince(now).rounded()))
-      return "\(reason.shortDescription) — fires in \(secs)s"
+      return "\(reason.userFacingLabel) — fires in \(secs)s"
     case .running(let reason):
-      return reason.shortDescription
+      return reason.userFacingLabel
     default:
       return nil
     }
@@ -411,33 +411,6 @@ private struct LastRunRow: View {
 
 // MARK: - Description helpers
 
-extension AutoSyncBlockedReason {
-  fileprivate var shortDescription: String {
-    switch self {
-    case .photosAccessMissing: return "Photos access needed"
-    case .limitedPhotosAccess: return "limited Photos access"
-    case .destinationMissing: return "no destination"
-    case .destinationUnavailable: return "drive disconnected"
-    case .destinationUnsafe: return "destination unsafe"
-    case .noScopesSelected: return "pick what to export"
-    case .manualExportActive: return "manual export running"
-    case .importActive: return "import running"
-    case .retryBackoff: return "retrying soon"
-    }
-  }
-}
-
-extension AutoSyncReason {
-  fileprivate var shortDescription: String {
-    switch self {
-    case .appLaunch: return "app launch"
-    case .destinationSelected: return "destination selected"
-    case .destinationBecameAvailable: return "drive reconnected"
-    case .scopeSelectionChanged: return "scope changed"
-    case .versionSelectionChanged: return "version changed"
-    case .photosChanged: return "photos changed"
-    case .photosChangeFallback: return "library catch-up"
-    case .userExportNow: return "Export Now"
-    }
-  }
-}
+// Per-view label extensions removed — surface uses
+// `AutoSyncReason.userFacingLabel` / `AutoSyncBlockedReason.userFacingLabel`
+// directly. See `AutoSyncReason.swift`.

@@ -138,14 +138,14 @@ struct ExportToolbarView: ToolbarContent {
         isPresented: $isShowingSupersedeConfirm,
         titleVisibility: .visible
       ) {
-        Button("Run \(primaryActionLabel) Now") {
+        Button("Run \(primaryActionLabel) Now", role: .destructive) {
           exportManager.supersedeForManualRun()
           startManualExport()
         }
         Button("Cancel", role: .cancel) {}
       } message: {
         Text(
-          "Auto Export is currently running. Cancel it and run your manual export instead? Auto Export will resume after the manual run finishes."
+          "Auto Export is currently running. Cancel it and run your manual export instead? Any in-progress file finishes; any remaining queued items stay pending and Auto Export will resume once your manual run completes."
         )
       }
 

@@ -214,8 +214,29 @@ private struct FailureRow: View {
     }
   }
 
+  /// Human-readable description for this failure. Per-category copy mirrors
+  /// the section header so the row reads even when the user can't see the
+  /// section context (VoiceOver linear traversal, narrow window). The
+  /// underlying `errorSignature` is "<domain>:<code>" — useful for log
+  /// hunting but opaque to end-users — exposed under "Show details".
   private var failureMessage: String {
-    "\(entry.entry.errorSignature)"
+    switch entry.entry.category {
+    case .destinationUnavailable: return "Couldn't reach the destination drive."
+    case .destinationPermission:
+      return "The destination drive rejected the write."
+    case .destinationNoSpace:
+      return "The destination drive ran out of space."
+    case .assetMissing:
+      return "The photo couldn't be found in your Photos library."
+    case .resourceMissing:
+      return "The required file inside Photos wasn't available."
+    case .photoKitTransient:
+      return "Photos library was temporarily unavailable."
+    case .iCloudTransient:
+      return "iCloud download or network access failed."
+    case .unknown:
+      return "Couldn't export — \(entry.entry.errorSignature)"
+    }
   }
 
   private var timeFooter: String {

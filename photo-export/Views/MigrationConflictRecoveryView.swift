@@ -5,7 +5,7 @@ import SwiftUI
 /// resolution path is user action, not app cleanup" — this sheet is the
 /// user-action surface.
 ///
-/// MVP recovery offers a single action: **Reconcile from destination**. Runs
+/// MVP recovery offers a single action: **Rebuild Records from Destination**. Runs
 /// Import Existing Backup against the current destination so the
 /// new-id record store is rebuilt from the destination's actual contents,
 /// then GCs the legacy id's app-internal state directories via the lifecycle
@@ -82,15 +82,20 @@ struct MigrationConflictRecoveryView: View {
       VStack(alignment: .leading, spacing: 2) {
         Text("Destination Has Unresolved Issues")
           .font(.headline)
+        Text("Conflict: current vs legacy records for the same destination.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
         if let conflict = lifecycleCoordinator.migrationConflict {
-          Text("Conflict: current vs legacy records for the same destination.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Text(
-            "Current id: \(conflict.newId.prefix(12))…  Legacy id: \(conflict.legacyId.prefix(12))…"
-          )
-          .font(.caption.monospaced())
-          .foregroundStyle(.tertiary)
+          DisclosureGroup("Show diagnostic details") {
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Current id: \(conflict.newId.prefix(12))…")
+              Text("Legacy id: \(conflict.legacyId.prefix(12))…")
+            }
+            .font(.caption.monospaced())
+            .foregroundStyle(.tertiary)
+          }
+          .font(.caption)
+          .padding(.top, 4)
         }
       }
     }
@@ -117,7 +122,7 @@ struct MigrationConflictRecoveryView: View {
       )
       .font(.callout)
 
-      Text("Recommended: **Reconcile from destination**")
+      Text("Recommended: **Rebuild Records from Destination**")
         .font(.callout)
       Text(
         "Scans the destination drive's actual contents, rebuilds the current record store from what's there, then removes the legacy duplicate. Your exported files are not touched."
@@ -199,7 +204,7 @@ struct MigrationConflictRecoveryView: View {
       switch phase {
       case .idle:
         Button("Cancel") { dismiss() }
-        Button("Reconcile from destination") { startReconcile() }
+        Button("Rebuild Records from Destination") { startReconcile() }
           .keyboardShortcut(.defaultAction)
           .disabled(!canReconcile)
       case .reconciling:
