@@ -24,7 +24,7 @@ That's it. Once a destination is selected and at least one category is on, Photo
 
 Three places surface Auto Export status, all reading the same state:
 
-- **Toolbar pill** (small status badge in the main window) — short label like *Up to date*, *Scheduled*, *Exporting*, *Waiting*, or *Action needed — no destination*. Click it to open Settings.
+- **Toolbar pill** (small status badge in the main window) — short label like _Up to date_, _Scheduled_, _Exporting_, _Waiting_, or _Action needed — no destination_. Click it to open Settings.
 - **Menu bar item** — a small icon that's always present while Photo Export is running. Click for a menu with the same status, an enable/disable toggle, and an **Export Now** shortcut. Especially useful when the main window isn't open.
 - **Settings → Auto Export** — a status row with a live countdown when a run is scheduled, plus the last-run summary once the first run finishes.
 
@@ -54,13 +54,13 @@ Other failures need your attention — the destination drive is full, you've rev
 
 Either way you can see everything that's failed in **Settings → Export Issues**, grouped by category:
 
-- *Destination Unavailable* — drive went away mid-run
-- *Destination Permission* — folder is read-only or write access has been revoked
-- *Destination Out of Space* — disk is full
-- *Asset Missing* — photo no longer exists in your library
-- *Resource Unavailable* — Photos couldn't provide the photo's data
-- *Photos Library Transient* — Photos was momentarily unavailable
-- *iCloud / Network* — couldn't download an iCloud-only original
+- _Destination Unavailable_ — drive went away mid-run
+- _Destination Permission_ — folder is read-only or write access has been revoked
+- _Destination Out of Space_ — disk is full
+- _Asset Missing_ — photo no longer exists in your library
+- _Resource Unavailable_ — Photos couldn't provide the photo's data
+- _Photos Library Transient_ — Photos was momentarily unavailable
+- _iCloud / Network_ — couldn't download an iCloud-only original
 
 Each row shows what was being exported, when it last failed, how many attempts have happened, and when the next automatic retry will fire. The **Retry** button next to a row clears that failure from the retry policy and kicks off an immediate run.
 
@@ -78,11 +78,11 @@ Turn on **Open Photo Export at login** (in **Settings → Auto Export → Startu
 
 The first time you enable this, macOS may post a system notification confirming that Photo Export was added to your Login Items. If macOS marks the entry as "waiting for approval," Photo Export will show a button to open System Settings → Login Items where you can flip the switch.
 
-If you're running Photo Export from a non-standard location (e.g. directly from a Downloads folder or from Xcode's build output), the toggle's footer may read *"Move Photo Export into your Applications folder to enable launch at login."* macOS's launch-at-login service only registers apps installed in `/Applications` — move the app there and the toggle works.
+If you're running Photo Export from a non-standard location (e.g. directly from a Downloads folder or from Xcode's build output), the toggle's footer may read _"Move Photo Export into your Applications folder to enable launch at login."_ macOS's launch-at-login service only registers apps installed in `/Applications` — move the app there and the toggle works.
 
 ## What Auto Export doesn't do
 
-To keep the feature predictable, Photo Export is intentional about what's *not* included:
+To keep the feature predictable, Photo Export is intentional about what's _not_ included:
 
 - **It doesn't run when the app is fully quit.** This is intentional — Photo Export is a regular Mac app, not a background service. Use **Open at login** if you want it always running.
 - **It doesn't delete or move files** at the destination — not when you remove a photo from Favorites, not when an asset is deleted from your Photos library, not when you change which categories are selected.
@@ -101,7 +101,7 @@ Before anything else: **Photo Export never deletes, overwrites, or moves files a
 
 After updating, you'll see three new surfaces — even with Auto Export turned off:
 
-- A **small status pill** in the main-window toolbar, between the Destination indicator and Include Originals. Reads *Auto Export off* in a subdued grey until you enable Auto Export. Click any time to open Settings.
+- A **small status pill** in the main-window toolbar, between the Destination indicator and Include Originals. Reads _Auto Export off_ in a subdued grey until you enable Auto Export. Click any time to open Settings.
 - A **menu bar icon** that appears whenever Photo Export is running. Same status info as the pill, plus a quick Enable / Disable toggle and an Export Now shortcut.
 - A **Settings window** (Cmd+, or **Photo Export → Settings…**) with two tabs: Auto Export and Export Issues.
 
@@ -134,9 +134,9 @@ If you're moving from one channel (Mac App Store or GitHub Releases) to the othe
 
 ### Limited Photos library access
 
-If in 1.2.3 you chose **Select Photos** rather than full Photos access, that limited access carries over. The toolbar pill may read *Action needed — limited Photos access* once Auto Export is on; open Settings → Privacy & Security → Photos → Photo Export to grant full access if you want Auto Export to see your whole library, or leave it as is to keep Auto Export scoped to the selected subset.
+If in 1.2.3 you chose **Select Photos** rather than full Photos access, that limited access carries over. The toolbar pill may read _Action needed — limited Photos access_ once Auto Export is on; open Settings → Privacy & Security → Photos → Photo Export to grant full access if you want Auto Export to see your whole library, or leave it as is to keep Auto Export scoped to the selected subset.
 
-### Things that *don't* happen on upgrade
+### Things that _don't_ happen on upgrade
 
 - Photo Export does not start a background scan of your library or destination on upgrade.
 - Auto Export does not turn itself on. You have to enable it explicitly.
@@ -145,8 +145,8 @@ If in 1.2.3 you chose **Select Photos** rather than full Photos access, that lim
 
 ### If something looks wrong after upgrading
 
-- **The pill says *Action needed — destination needs review* and Settings → Auto Export shows the "Destination Has Unresolved Issues" banner.** This is either the migration-conflict path (rare; both old and new record forms exist) or the safety-scan path (Auto Export turned on and pointed at a folder Photo Export hasn't seen before). Both resolve through Settings → Auto Export — click **Resolve…**. Your destination files are not touched either way.
-- **The pill says *Action needed — limited Photos access*.** See the limited-library section above.
+- **The pill says _Action needed — destination needs review_ and Settings → Auto Export shows the "Destination Has Unresolved Issues" banner.** This is either the migration-conflict path (rare; both old and new record forms exist) or the safety-scan path (Auto Export turned on and pointed at a folder Photo Export hasn't seen before). Both resolve through Settings → Auto Export — click **Resolve…**. Your destination files are not touched either way.
+- **The pill says _Action needed — limited Photos access_.** See the limited-library section above.
 - **My manual exports look like they started over from zero.** Open **File → Import Existing Backup…** (Cmd+Shift+I) to rebuild local records from the destination's actual contents. This adopts existing files as already-exported and is the supported recovery path. Files on disk are unaffected.
 
 ## Troubleshooting
