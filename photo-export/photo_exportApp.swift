@@ -47,13 +47,28 @@ struct PhotoExportApp: App {
         collectionStore: cers
       )
     }
+    let autoSyncRoot = Self.autoSyncDirectoryURL()
+    let recordsRoot = ers.storeRootURL
+    let gcLegacy: (String) -> Void = { legacyId in
+      // GC the app-internal directories owned by the legacy destination id.
+      // Per the plan's Safety Invariants, only app-internal state is touched
+      // — user-visible files on the destination drive are not.
+      let recordsLegacyDir = recordsRoot.appendingPathComponent(
+        legacyId, isDirectory: true)
+      try? FileManager.default.removeItem(at: recordsLegacyDir)
+      let autoSyncLegacyDir =
+        autoSyncRoot
+        .appendingPathComponent("destinations", isDirectory: true)
+        .appendingPathComponent(legacyId, isDirectory: true)
+      try? FileManager.default.removeItem(at: autoSyncLegacyDir)
+    }
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { [em] in em.cancelAndClear() },
       interruptForDestinationUnavailable: { [em] in em.interruptForDestinationUnavailable() },
-      configureRecordStores: configure
+      configureRecordStores: configure,
+      gcLegacyState: gcLegacy
     )
 
-    let autoSyncRoot = Self.autoSyncDirectoryURL()
     let destinationsRoot = autoSyncRoot.appendingPathComponent(
       "destinations", isDirectory: true)
     let dirtyStore = FileBackedAutoSyncDirtyStateStore(baseDirectoryURL: destinationsRoot)
@@ -160,6 +175,8 @@ struct PhotoExportApp: App {
         .environmentObject(autoSyncManager)
         .environmentObject(autoSyncScopeStore)
         .environmentObject(exportDestinationManager)
+        .environmentObject(exportManager)
+        .environmentObject(lifecycleCoordinator)
     }
   }
 

@@ -61,6 +61,16 @@ final class AppLifecycleCoordinator: ObservableObject {
   private let cancelActiveWork: () -> Void
   private let interruptForDestinationUnavailable: () -> Void
   private let configureRecordStores: (String?) -> ConfigureRecordStoresResult
+  /// Removes app-internal state directories owned by `legacyId`. Called by
+  /// `clearMigrationConflictAfterReconcile` once the user has chosen to drop
+  /// the legacy records and the destination's current-id records have been
+  /// rebuilt (e.g., via Import Existing Backup). Closure-based to keep the
+  /// coordinator decoupled from the on-disk layout — `PhotoExportApp` wires
+  /// it to delete `<ExportRecords>/<legacyId>/` plus
+  /// `<AutoSync>/destinations/<legacyId>/`. Per the plan's Safety
+  /// Invariants, only app-internal directories are touched here — no
+  /// user-visible files on the destination drive.
+  private let gcLegacyState: (String) -> Void
   private let log: Logger
 
   @Published private(set) var currentDestination: DestinationIdentitySnapshot = .none
@@ -77,12 +87,27 @@ final class AppLifecycleCoordinator: ObservableObject {
     cancelActiveWork: @escaping () -> Void,
     interruptForDestinationUnavailable: @escaping () -> Void,
     configureRecordStores: @escaping (String?) -> ConfigureRecordStoresResult,
+    gcLegacyState: @escaping (String) -> Void = { _ in },
     log: Logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Lifecycle")
   ) {
     self.cancelActiveWork = cancelActiveWork
     self.interruptForDestinationUnavailable = interruptForDestinationUnavailable
     self.configureRecordStores = configureRecordStores
+    self.gcLegacyState = gcLegacyState
     self.log = log
+  }
+
+  /// Called by the recovery UI after the user has reconciled the
+  /// destination's current-id records (e.g., via Import Existing Backup).
+  /// GCs the legacy id's app-internal directories and clears the conflict
+  /// flag. Idempotent — second call with no conflict in flight is a no-op.
+  func clearMigrationConflictAfterReconcile() {
+    guard let conflict = migrationConflict else { return }
+    log.info(
+      "Resolving migration conflict by GC'ing legacy \(conflict.legacyId, privacy: .public); new \(conflict.newId, privacy: .public) remains."
+    )
+    gcLegacyState(conflict.legacyId)
+    migrationConflict = nil
   }
 
   /// Wires up destination-change handling and runs the initial configure for the current

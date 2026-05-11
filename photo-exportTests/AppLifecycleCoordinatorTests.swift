@@ -287,4 +287,43 @@ struct AppLifecycleCoordinatorTests {
     #expect(cancelCount == 1)
     #expect(coordinator.lastConfiguredDestinationId == idB)
   }
+
+  @Test func clearMigrationConflictAfterReconcileGCsLegacyAndClearsFlag() {
+    var gcCalls: [String] = []
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {},
+      interruptForDestinationUnavailable: {},
+      configureRecordStores: { _ in
+        .migrationConflict(newId: "new-A", legacyId: "legacy-B")
+      },
+      gcLegacyState: { legacyId in gcCalls.append(legacyId) }
+    )
+
+    coordinator.apply(destination: Self.snapshot("dest-A"))
+    #expect(
+      coordinator.migrationConflict
+        == MigrationConflictState(newId: "new-A", legacyId: "legacy-B"))
+
+    coordinator.clearMigrationConflictAfterReconcile()
+
+    #expect(gcCalls == ["legacy-B"])
+    #expect(coordinator.migrationConflict == nil)
+  }
+
+  @Test func clearMigrationConflictAfterReconcileIsIdempotent() {
+    var gcCalls: [String] = []
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: {},
+      interruptForDestinationUnavailable: {},
+      configureRecordStores: { _ in .success },
+      gcLegacyState: { legacyId in gcCalls.append(legacyId) }
+    )
+
+    // No conflict in flight — calling the resolver is a no-op.
+    coordinator.clearMigrationConflictAfterReconcile()
+    coordinator.clearMigrationConflictAfterReconcile()
+
+    #expect(gcCalls.isEmpty)
+    #expect(coordinator.migrationConflict == nil)
+  }
 }
