@@ -13,6 +13,11 @@ struct ExportToolbarView: ToolbarContent {
   /// Current sidebar selection. Used only to detect a folder selection so the
   /// primary action can route to `startExportFolder(folderId:)` for that folder.
   let selection: LibrarySelection?
+  /// Recursive album count under the selected folder, if any. `nil` for non-folder
+  /// selections. Used so the primary-action label can read "Export 12 Albums"
+  /// instead of just "Export Folder" — matching the in-pane button's wording so a
+  /// user comparing them doesn't see a mismatch.
+  var folderAlbumCount: Int?
 
   var body: some ToolbarContent {
     ToolbarItem(placement: .automatic) {
@@ -223,7 +228,13 @@ struct ExportToolbarView: ToolbarContent {
     switch section {
     case .timeline: return "Export All"
     case .collections:
-      if case .folder = selection { return "Export Folder" }
+      if case .folder = selection {
+        // Show the album count when known so the toolbar's label tracks the
+        // in-pane button. Falls back to "Export Folder" when the count is
+        // unavailable (e.g. tree not yet cached) rather than misreporting "0".
+        guard let count = folderAlbumCount, count > 0 else { return "Export Folder" }
+        return count == 1 ? "Export 1 Album" : "Export \(count) Albums"
+      }
       return "Export All Albums"
     }
   }

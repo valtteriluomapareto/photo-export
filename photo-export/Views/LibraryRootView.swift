@@ -67,7 +67,8 @@ struct LibraryRootView: View {
       ToolbarItem(placement: .navigation) {
         sectionPicker
       }
-      ExportToolbarView(section: section, selection: selection)
+      ExportToolbarView(
+        section: section, selection: selection, folderAlbumCount: selectedFolderAlbumCount)
     }
     .sheet(isPresented: $isShowingImportSheet) {
       ImportView()
@@ -253,6 +254,18 @@ struct LibraryRootView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+  }
+
+  /// Recursive album count under the currently-selected folder, or `nil` when the
+  /// active selection isn't a folder. Drives the toolbar's primary-action label so
+  /// "Export Folder" can render as "Export N Albums" — matching the in-pane button.
+  private var selectedFolderAlbumCount: Int? {
+    guard case .folder(let folderId) = selection else { return nil }
+    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
+      return nil
+    }
+    return PhotoCollectionDescriptor.albumLocalIds(under: folder).count
   }
 
   /// Looks up the album's display title from the cached collection tree. Falls back to

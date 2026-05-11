@@ -631,9 +631,14 @@ final class ExportManager: ObservableObject {
           albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
         case .folder(let folderId):
           let tree = try photoLibraryService.fetchCollectionTree()
-          guard let folder = Self.findFolder(folderId: folderId, in: tree) else {
+          guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
             self.isEnqueueingAll = false
             setEmptyRunMessage("That folder no longer exists.")
+            // Drain the active run so an awaitable `runExport(context:)` caller
+            // doesn't hang forever waiting for a continuation that never resolves.
+            // No work landed in `pendingJobs`, so `processQueueIfNeeded` will hit
+            // the empty-queue branch and `finalizeActiveRun(.completed, nil)`.
+            processQueueIfNeeded()
             return
           }
           albumIds = PhotoCollectionDescriptor.albumLocalIds(under: folder)
@@ -686,22 +691,6 @@ final class ExportManager: ObservableObject {
         }
       }
     }
-  }
-
-  /// Find a `.folder` descriptor anywhere in the tree by `localIdentifier`. Static so it
-  /// can run inside the detached enqueue Task without capturing self.
-  private static func findFolder(
-    folderId: String, in tree: [PhotoCollectionDescriptor]
-  ) -> PhotoCollectionDescriptor? {
-    for descriptor in tree {
-      if descriptor.kind == .folder, descriptor.localIdentifier == folderId {
-        return descriptor
-      }
-      if let found = findFolder(folderId: folderId, in: descriptor.children) {
-        return found
-      }
-    }
-    return nil
   }
 
   /// Starts an export of a single user album by `collectionLocalIdentifier`.

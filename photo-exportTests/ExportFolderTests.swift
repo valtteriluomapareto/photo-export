@@ -42,6 +42,137 @@ struct ExportFolderTests {
     #expect(PhotoCollectionDescriptor.albumLocalIds(under: album).isEmpty)
   }
 
+  @Test func findFolderLocatesNestedFolderById() {
+    let leaf = PhotoCollectionDescriptor(
+      id: "folder:leaf", localIdentifier: "leaf", title: "Leaf",
+      kind: .folder, pathComponents: ["Outer"], children: [])
+    let outer = PhotoCollectionDescriptor(
+      id: "folder:outer", localIdentifier: "outer", title: "Outer",
+      kind: .folder, pathComponents: [], children: [leaf])
+
+    #expect(PhotoCollectionDescriptor.findFolder(id: "outer", in: [outer])?.title == "Outer")
+    #expect(PhotoCollectionDescriptor.findFolder(id: "leaf", in: [outer])?.title == "Leaf")
+    #expect(PhotoCollectionDescriptor.findFolder(id: "ghost", in: [outer]) == nil)
+  }
+
+  // MARK: - Multi-select expansion (selectedAlbumIds)
+
+  /// Selected album tiles contribute their own id; selected subfolder tiles expand
+  /// to every descendant album. Order follows the parent's children order.
+  @Test func selectedAlbumIdsExpandsSubfoldersDeterministically() {
+    let albumA = PhotoCollectionDescriptor(
+      id: "album:A", localIdentifier: "A", title: "Album-A",
+      kind: .album, pathComponents: [], children: [])
+    let nestedB = PhotoCollectionDescriptor(
+      id: "album:B", localIdentifier: "B", title: "Album-B",
+      kind: .album, pathComponents: ["Sub"], children: [])
+    let nestedC = PhotoCollectionDescriptor(
+      id: "album:C", localIdentifier: "C", title: "Album-C",
+      kind: .album, pathComponents: ["Sub"], children: [])
+    let subFolder = PhotoCollectionDescriptor(
+      id: "folder:Sub", localIdentifier: "Sub", title: "Sub",
+      kind: .folder, pathComponents: [], children: [nestedB, nestedC])
+    let albumD = PhotoCollectionDescriptor(
+      id: "album:D", localIdentifier: "D", title: "Album-D",
+      kind: .album, pathComponents: [], children: [])
+    let parent = PhotoCollectionDescriptor(
+      id: "folder:P", localIdentifier: "P", title: "Parent",
+      kind: .folder, pathComponents: [],
+      children: [albumA, subFolder, albumD])
+
+    // Selecting A + Sub (subfolder) + D: A, then Sub's descendants (B, C), then D.
+    let ids = PhotoCollectionDescriptor.selectedAlbumIds(
+      in: parent, selecting: ["album:A", "folder:Sub", "album:D"])
+    #expect(ids == ["A", "B", "C", "D"])
+  }
+
+  /// Selecting both a subfolder and one of its child albums must not produce
+  /// duplicates. The expansion runs at the parent level, but the test guard is on
+  /// the dedup behaviour itself.
+  @Test func selectedAlbumIdsDedupsWhenSubfolderAndChildBothSelected() {
+    let child = PhotoCollectionDescriptor(
+      id: "album:dup", localIdentifier: "dup", title: "Dup",
+      kind: .album, pathComponents: ["Sub"], children: [])
+    let subFolder = PhotoCollectionDescriptor(
+      id: "folder:Sub", localIdentifier: "Sub", title: "Sub",
+      kind: .folder, pathComponents: [], children: [child])
+    // Note: the child album lives only under the subfolder in this tree. The
+    // selection set still gets de-duped via the `seen` guard inside the helper.
+    let parent = PhotoCollectionDescriptor(
+      id: "folder:P", localIdentifier: "P", title: "Parent",
+      kind: .folder, pathComponents: [], children: [subFolder])
+
+    let ids = PhotoCollectionDescriptor.selectedAlbumIds(
+      in: parent, selecting: ["folder:Sub"])
+    #expect(ids == ["dup"])
+  }
+
+  @Test func selectedAlbumIdsEmptyForEmptySelection() {
+    let album = PhotoCollectionDescriptor(
+      id: "album:A", localIdentifier: "A", title: "A",
+      kind: .album, pathComponents: [], children: [])
+    let parent = PhotoCollectionDescriptor(
+      id: "folder:P", localIdentifier: "P", title: "P",
+      kind: .folder, pathComponents: [], children: [album])
+
+    #expect(PhotoCollectionDescriptor.selectedAlbumIds(in: parent, selecting: []) == [])
+  }
+
+  // MARK: - Range extension (extendedSelection)
+
+  /// Shift-click with an existing anchor extends the selection to cover every tile
+  /// from the anchor to the click, in the parent's child order. Existing Cmd-
+  /// selected tiles outside the range are preserved (Finder-style "additive" range).
+  @Test func extendedSelectionWithAnchorUnionsRangeWithCurrent() {
+    let folder = makeOrderedFolder(["A", "B", "C", "D", "E"])
+
+    let result = PhotoCollectionDescriptor.extendedSelection(
+      from: "B", to: "D", current: ["A", "B"], in: folder)
+
+    #expect(result.ids == ["A", "B", "C", "D"])
+    #expect(result.anchor == "B")
+  }
+
+  /// Shift-click without an anchor (or anchor missing from the children) seeds a
+  /// fresh single-element selection at the target. Matches Finder behaviour.
+  @Test func extendedSelectionWithoutAnchorSeedsTarget() {
+    let folder = makeOrderedFolder(["A", "B", "C"])
+
+    let result = PhotoCollectionDescriptor.extendedSelection(
+      from: nil, to: "B", current: [], in: folder)
+
+    #expect(result.ids == ["B"])
+    #expect(result.anchor == "B")
+  }
+
+  /// Range extension works in both directions — anchor before target or anchor
+  /// after target, the inclusive range is the same.
+  @Test func extendedSelectionRangeIsOrderIndependent() {
+    let folder = makeOrderedFolder(["A", "B", "C", "D", "E"])
+
+    let forward = PhotoCollectionDescriptor.extendedSelection(
+      from: "B", to: "D", current: [], in: folder)
+    let backward = PhotoCollectionDescriptor.extendedSelection(
+      from: "D", to: "B", current: [], in: folder)
+
+    #expect(forward.ids == ["B", "C", "D"])
+    #expect(backward.ids == ["B", "C", "D"])
+  }
+
+  /// Builds a flat parent folder with one child per id (all `.album`), in the
+  /// supplied order. Used for `extendedSelection` tests where the children's
+  /// `kind` is irrelevant — only the `id` ordering matters.
+  private func makeOrderedFolder(_ ids: [String]) -> PhotoCollectionDescriptor {
+    let children = ids.map { id in
+      PhotoCollectionDescriptor(
+        id: id, localIdentifier: id, title: id,
+        kind: .album, pathComponents: [], children: [])
+    }
+    return PhotoCollectionDescriptor(
+      id: "folder:test", localIdentifier: "test", title: "Test",
+      kind: .folder, pathComponents: [], children: children)
+  }
+
   // MARK: - Test harness (parallel to ExportAllAlbumsTests.Harness)
 
   @MainActor
@@ -285,6 +416,12 @@ struct ExportFolderTests {
 
     #expect(h.manager.emptyRunMessage == "That folder no longer exists.")
     #expect(h.manager.totalJobsEnqueued == 0)
+    // The run must wind down even on the "folder not found" early-return — without
+    // this, an awaitable `runExport(context:)` caller would hang on a continuation
+    // that never resolves, because `processQueueIfNeeded` would never fire.
+    await waitUntil(!h.manager.hasActiveExportWork)
+    #expect(!h.manager.hasActiveExportWork)
+    #expect(!h.manager.isEnqueueingAll)
   }
 
   /// All albums under a folder already fully exported → the user-visible message

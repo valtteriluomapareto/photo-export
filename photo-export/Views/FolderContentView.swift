@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Content pane shown when the user selects a folder in the Collections sidebar.
@@ -46,8 +47,6 @@ struct FolderContentView: View {
   @State private var selectedChildIds: Set<String> = []
   @State private var selectionAnchorId: String?
 
-  @StateObject private var modifiers = ModifierFlagsTracker()
-
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(title)
@@ -84,6 +83,19 @@ struct FolderContentView: View {
       selectionAnchorId = nil
       return .handled
     }
+    .onKeyPress(keys: ["a"]) { keyPress in
+      guard keyPress.modifiers.contains(.command) else { return .ignored }
+      selectAllChildren()
+      return .handled
+    }
+  }
+
+  /// Cmd+A: extend the multi-selection to every child tile in the current folder.
+  /// Matches Finder's select-all gesture inside a window.
+  private func selectAllChildren() {
+    guard let folder, !folder.children.isEmpty else { return }
+    selectedChildIds = Set(folder.children.map(\.id))
+    selectionAnchorId = folder.children.first?.id
   }
 
   // MARK: - Body branches
@@ -124,6 +136,7 @@ struct FolderContentView: View {
             )
           }
           .buttonStyle(.plain)
+          .contextMenu { contextMenuItems(for: child) }
         }
       }
       .padding(.top, 4)
@@ -243,25 +256,56 @@ struct FolderContentView: View {
     }
   }
 
-  // MARK: - Selection helpers
+  // MARK: - Context menu (right-click on a tile)
 
-  private var hasSelection: Bool { !selectedChildIds.isEmpty }
+  /// Finder-style right-click semantics: if the user right-clicks a tile that's part
+  /// of the active selection, the action targets the whole selection. If they
+  /// right-click an unselected tile, that tile becomes the selection and the action
+  /// targets it alone. Either way, the visible menu items match what would be
+  /// exported by clicking the toolbar's primary action.
+  @ViewBuilder
+  private func contextMenuItems(for child: PhotoCollectionDescriptor) -> some View {
+    let targetIds = contextMenuTargetIds(for: child)
+    let albumIds = contextMenuAlbumIds(for: child)
+    let label = contextMenuExportLabel(albumCount: albumIds.count, child: child)
+    Button(label) {
+      // Promote the right-clicked tile to the selection if it wasn't already
+      // selected — matches Finder's "right-click selects then acts" behaviour.
+      if !targetIds.isSubset(of: selectedChildIds) {
+        selectedChildIds = targetIds
+        selectionAnchorId = child.id
+      }
+      if albumIds.isEmpty {
+        return
+      }
+      exportManager.startExportAlbums(collectionIds: albumIds)
+    }
+    .disabled(albumIds.isEmpty || !exportManager.canExportCollection)
+  }
 
-  /// Album local ids covered by the current multi-selection. Selected album tiles
-  /// contribute their own id; selected subfolder tiles contribute every descendant
-  /// album id (mirroring `startExportFolder`'s recursion).
-  private var selectedAlbumIds: [String] {
-    guard let folder, !selectedChildIds.isEmpty else { return [] }
+  /// The set of tile ids the right-click action should target. If the clicked tile is
+  /// already in the active selection, the whole selection is the target; otherwise
+  /// the action narrows to just the clicked tile.
+  private func contextMenuTargetIds(for child: PhotoCollectionDescriptor) -> Set<String> {
+    if selectedChildIds.contains(child.id) { return selectedChildIds }
+    return [child.id]
+  }
+
+  /// Album local ids to export for the right-click target set. Subfolder tiles
+  /// expand to their descendant album ids; album tiles contribute their own id.
+  private func contextMenuAlbumIds(for child: PhotoCollectionDescriptor) -> [String] {
+    guard let folder, !folder.children.isEmpty else { return [] }
+    let targets = contextMenuTargetIds(for: child)
     var ids: [String] = []
     var seen = Set<String>()
-    for child in folder.children where selectedChildIds.contains(child.id) {
-      switch child.kind {
+    for descriptor in folder.children where targets.contains(descriptor.id) {
+      switch descriptor.kind {
       case .album:
-        if let id = child.localIdentifier, seen.insert(id).inserted {
+        if let id = descriptor.localIdentifier, seen.insert(id).inserted {
           ids.append(id)
         }
       case .folder:
-        for id in PhotoCollectionDescriptor.albumLocalIds(under: child)
+        for id in PhotoCollectionDescriptor.albumLocalIds(under: descriptor)
         where seen.insert(id).inserted {
           ids.append(id)
         }
@@ -272,14 +316,43 @@ struct FolderContentView: View {
     return ids
   }
 
+  private func contextMenuExportLabel(
+    albumCount: Int, child: PhotoCollectionDescriptor
+  ) -> String {
+    if albumCount == 0 {
+      return child.kind == .folder ? "Export Folder" : "Export Album"
+    }
+    return albumCount == 1 ? "Export 1 Album" : "Export \(albumCount) Albums"
+  }
+
+  // MARK: - Selection helpers
+
+  private var hasSelection: Bool { !selectedChildIds.isEmpty }
+
+  /// Album local ids covered by the current multi-selection. Selected album tiles
+  /// contribute their own id; selected subfolder tiles contribute every descendant
+  /// album id (mirroring `startExportFolder`'s recursion). Pure expansion lives on
+  /// `PhotoCollectionDescriptor.selectedAlbumIds(in:selecting:)`.
+  private var selectedAlbumIds: [String] {
+    guard let folder else { return [] }
+    return PhotoCollectionDescriptor.selectedAlbumIds(in: folder, selecting: selectedChildIds)
+  }
+
   /// Click dispatch. Cmd toggles, Shift extends a range from the anchor, plain click
   /// clears any selection and navigates. Range extension uses the visible child order
   /// (the same order the grid renders) so a Shift-click feels predictable.
+  ///
+  /// Modifier state is read straight from `NSEvent.modifierFlags` at click time rather
+  /// than tracked via a `flagsChanged` monitor. The monitor approach mis-reported `[]`
+  /// when the user Cmd-Tab'd into the app and clicked before releasing Cmd — no
+  /// `flagsChanged` event fires while the app is gaining key focus, so the first click
+  /// would register as a plain navigate.
   private func handleTap(on child: PhotoCollectionDescriptor, in folder: PhotoCollectionDescriptor)
   {
-    if modifiers.command {
+    let modifiers = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    if modifiers.contains(.command) {
       toggleSelection(of: child)
-    } else if modifiers.shift {
+    } else if modifiers.contains(.shift) {
       extendSelection(to: child, in: folder)
     } else {
       selectedChildIds.removeAll()
@@ -301,19 +374,10 @@ struct FolderContentView: View {
   private func extendSelection(
     to child: PhotoCollectionDescriptor, in folder: PhotoCollectionDescriptor
   ) {
-    let order = folder.children.map(\.id)
-    guard let anchor = selectionAnchorId,
-      let anchorIdx = order.firstIndex(of: anchor),
-      let clickedIdx = order.firstIndex(of: child.id)
-    else {
-      // No anchor yet — Shift-click without a prior selection establishes one.
-      selectedChildIds = [child.id]
-      selectionAnchorId = child.id
-      return
-    }
-    let lo = min(anchorIdx, clickedIdx)
-    let hi = max(anchorIdx, clickedIdx)
-    selectedChildIds.formUnion(order[lo...hi])
+    let result = PhotoCollectionDescriptor.extendedSelection(
+      from: selectionAnchorId, to: child.id, current: selectedChildIds, in: folder)
+    selectedChildIds = result.ids
+    selectionAnchorId = result.anchor
   }
 
   // MARK: - Aggregate export status
@@ -379,21 +443,7 @@ struct FolderContentView: View {
 
   private func findFolder(folderId: String) -> PhotoCollectionDescriptor? {
     let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
-    return search(folderId: folderId, in: tree)
-  }
-
-  private func search(folderId: String, in tree: [PhotoCollectionDescriptor])
-    -> PhotoCollectionDescriptor?
-  {
-    for descriptor in tree {
-      if descriptor.kind == .folder, descriptor.localIdentifier == folderId {
-        return descriptor
-      }
-      if let found = search(folderId: folderId, in: descriptor.children) {
-        return found
-      }
-    }
-    return nil
+    return PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
   }
 
   /// Loads photo counts for every descendant album and rolls them up into per-subfolder
