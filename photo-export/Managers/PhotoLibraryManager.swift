@@ -49,6 +49,15 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
   override init() {
     super.init()
+    // Skip PhotoKit registration entirely under XCTest / swift-testing.
+    // Tests run from DerivedData; TCC sees that path as a different
+    // binary than the released app and would surface a fresh permission
+    // prompt even when the user has approved the app in System Settings.
+    // The prompt blocks the test process and there's no automated way
+    // to dismiss it. AutoSync and PhotoLibrary integration tests inject
+    // `FakePhotoLibraryService` / `FakePersistentChangeSource` instead,
+    // so they don't need the real PhotoKit observer.
+    guard !Self.isRunningInTests else { return }
     // Check if Info.plist contains photos usage description
     verifyPhotoLibraryPermissions()
     // Observe library changes to invalidate cache
@@ -57,6 +66,12 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     // Initialize with current authorization status
     authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     isAuthorized = Self.isAuthorizationSufficient(authorizationStatus)
+  }
+
+  /// XCTest and Swift Testing both set `XCTestConfigurationFilePath` in
+  /// the test-host environment. Production launches never have it set.
+  private static var isRunningInTests: Bool {
+    ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
   }
 
   /// Verify that Photos usage description is properly set in Info.plist
