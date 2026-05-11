@@ -148,6 +148,12 @@ final class ExportManager: ObservableObject {
     /// `recordVariantFailed`. Reported as `ExportRunSummary.failedCount`; a non-zero
     /// value also flips a `.completed` queue-drain finalize to `.failed`.
     var failedCount: Int = 0
+    /// Structured per-variant failure detail accumulated during this run.
+    /// AutoSync reads `ExportRunSummary.failures` to record into
+    /// `AutoSyncRetryState`; the Export Issues UI reads it to group by
+    /// category. Mirror of `failedCount` but with full context — count
+    /// should equal `failures.count` modulo any legacy sentinel paths.
+    var failures: [ExportRunFailureDetail] = []
   }
   private var activeRunBookkeeping: ActiveRunBookkeeping?
 
@@ -1015,7 +1021,8 @@ final class ExportManager: ObservableObject {
       failedCount: bookkeeping.failedCount,
       skippedCount: 0,
       cancelReason: cancelReason,
-      result: effectiveResult
+      result: effectiveResult,
+      failures: bookkeeping.failures
     )
     activeRunContext = nil
     activeRunBookkeeping = nil
@@ -1126,7 +1133,7 @@ final class ExportManager: ObservableObject {
         try throwIfCancelledOrStale(gen)
         recordVariantFailed(
           assetId: job.assetLocalIdentifier, placement: job.placement, variant: .original,
-          error: "Asset not found", at: Date())
+          sentinelMessage: "Asset not found", category: .assetMissing, at: Date())
         logger.error(
           "Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")
         return
@@ -1246,7 +1253,7 @@ final class ExportManager: ObservableObject {
           )
           recordVariantFailed(
             assetId: descriptor.id, placement: job.placement, variant: variant,
-            error: error.localizedDescription, at: Date())
+            error: error, at: Date())
           inFlight = nil
         }
       }
@@ -1302,7 +1309,7 @@ final class ExportManager: ObservableObject {
       let failedVariant = inFlight?.variant ?? .original
       recordVariantFailed(
         assetId: job.assetLocalIdentifier, placement: job.placement, variant: failedVariant,
-        error: error.localizedDescription, at: Date())
+        error: error, at: Date())
     }
   }
 
@@ -1351,8 +1358,8 @@ final class ExportManager: ObservableObject {
       case .edited: errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
       }
       recordVariantFailed(
-        assetId: descriptor.id, placement: job.placement, variant: variant, error: errMsg,
-        at: Date())
+        assetId: descriptor.id, placement: job.placement, variant: variant,
+        sentinelMessage: errMsg, category: .resourceMissing, at: Date())
       logger.error(
         "No \(variant.rawValue, privacy: .public) byte source for id: \(descriptor.id, privacy: .public)"
       )
@@ -1685,8 +1692,8 @@ final class ExportManager: ObservableObject {
       // `editedResourceUnavailableMessage` the variant loop recorded.
       recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .edited,
-        error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
-        at: Date())
+        sentinelMessage: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+        category: .resourceMissing, at: Date())
       logger.info(
         "Edited fallback wrote original for id: \(descriptor.id, privacy: .public) stem: \(stem, privacy: .public)"
       )
@@ -1707,7 +1714,7 @@ final class ExportManager: ObservableObject {
       // on the next run because `.original` is now `.failed` (not `.done`).
       recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .original,
-        error: error.localizedDescription, at: Date())
+        error: error, at: Date())
       inFlight = nil
     }
   }
@@ -1876,17 +1883,56 @@ final class ExportManager: ObservableObject {
   /// for Phase 3's collection-export work but won't be exercised until then.
   private func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    error: String, at date: Date
+    failure: ExportFailureSignal, at date: Date
   ) {
     switch placement.kind {
     case .timeline:
       exportRecordStore.markVariantFailed(
-        assetId: assetId, variant: variant, error: error, at: date)
+        assetId: assetId, variant: variant, error: failure.localizedDescription, at: date)
     case .favorites, .album:
       collectionExportRecordStore.markVariantFailed(
-        assetId: assetId, placement: placement, variant: variant, error: error, at: date)
+        assetId: assetId, placement: placement, variant: variant,
+        error: failure.localizedDescription, at: date)
     }
     activeRunBookkeeping?.failedCount += 1
+    activeRunBookkeeping?.failures.append(
+      ExportRunFailureDetail(
+        assetId: assetId,
+        placement: placement,
+        variant: variant,
+        category: failure.category,
+        errorSignature: failure.errorSignature,
+        localizedDescription: failure.localizedDescription,
+        failedAt: date
+      ))
+  }
+
+  /// Backwards-compatible overload — call sites that already have an
+  /// `Error` instance route through here. The classifier extracts the
+  /// `(category, signature, message)` triple.
+  private func recordVariantFailed(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant,
+    error: Error, at date: Date
+  ) {
+    recordVariantFailed(
+      assetId: assetId, placement: placement, variant: variant,
+      failure: AutoSyncFailureCategory.classify(error), at: date)
+  }
+
+  /// Sentinel-message overload — call sites that synthesize a failure
+  /// string with no underlying `Error` (e.g., "Asset not found"). The
+  /// caller declares the intended `category` so retry routing is
+  /// deterministic; the message is used as both the `errorSignature` and
+  /// the user-visible description.
+  private func recordVariantFailed(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant,
+    sentinelMessage: String, category: AutoSyncFailureCategory, at date: Date
+  ) {
+    recordVariantFailed(
+      assetId: assetId, placement: placement, variant: variant,
+      failure: AutoSyncFailureCategory.sentinel(
+        category: category, signature: sentinelMessage, message: sentinelMessage),
+      at: date)
   }
 
   private func recordVariantInProgress(

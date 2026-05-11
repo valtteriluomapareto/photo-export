@@ -313,6 +313,31 @@ final class AutoSyncManager: ObservableObject {
             "Failed to persist per-destination token for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
           )
         }
+
+      case .recordRetryFailures(let failures, let destinationId):
+        // Read-modify-write the retry state for this destination. The
+        // reducer doesn't hold retry state in memory yet (Slice C will
+        // change that when it adds enqueue-time eligibility); for now the
+        // store is the source of truth and we touch it directly.
+        var retry = environment.retryStateStore.load(destinationId: destinationId)
+        for failure in failures {
+          retry.recordFailure(
+            scope: Self.retryScopeKey(for: failure.placement),
+            assetId: failure.assetId,
+            variant: failure.variant,
+            category: failure.category,
+            errorSignature: failure.errorSignature,
+            at: failure.failedAt,
+            nextEligibleAt: nil
+          )
+        }
+        do {
+          try environment.retryStateStore.save(retry, destinationId: destinationId)
+        } catch {
+          log.error(
+            "Failed to persist retry state for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+          )
+        }
       }
     }
   }
@@ -373,6 +398,18 @@ final class AutoSyncManager: ObservableObject {
       case .favorites: return .favoritesFull
       case .albums: return .allAlbumsFull
       }
+    }
+  }
+
+  /// Maps an `ExportPlacement` to the retry-state scope key. Plan §"Retry
+  /// and Failure Policy": "Timeline can use a timeline scope key; collection
+  /// exports need placement awareness so a failure in one album does not
+  /// suppress a different album or Favorites."
+  private static func retryScopeKey(for placement: ExportPlacement) -> AutoSyncRetryScopeKey {
+    switch placement.kind {
+    case .timeline: return .timeline
+    case .favorites: return .favorites
+    case .album: return .album(placementId: placement.id)
     }
   }
 

@@ -42,6 +42,59 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
   let skippedCount: Int
   let cancelReason: ExportCancelReason?
   let result: ExportRunResult
+  /// Per-variant failure detail. Empty for clean runs; populated for runs
+  /// that hit at least one failure. AutoSync's reducer reads this to
+  /// record failures into `AutoSyncRetryState`; the Export Issues UI
+  /// (Phase 4) reads it to group failures for the user. Note that
+  /// `failedCount` is the count of *additions* to this list during the run
+  /// — they should agree, but `failures` carries the structured detail.
+  let failures: [ExportRunFailureDetail]
+
+  init(
+    context: ExportRunContext,
+    endedAt: Date,
+    enqueuedCount: Int,
+    completedCount: Int,
+    failedCount: Int,
+    skippedCount: Int,
+    cancelReason: ExportCancelReason?,
+    result: ExportRunResult,
+    failures: [ExportRunFailureDetail] = []
+  ) {
+    self.context = context
+    self.endedAt = endedAt
+    self.enqueuedCount = enqueuedCount
+    self.completedCount = completedCount
+    self.failedCount = failedCount
+    self.skippedCount = skippedCount
+    self.cancelReason = cancelReason
+    self.result = result
+    self.failures = failures
+  }
+
+  /// Custom decoder so persisted summaries from before the `failures` field
+  /// existed still load — they're treated as having no detail. Without
+  /// this, the JSON-on-disk lastRunSummary written by older builds would
+  /// fail to decode on launch.
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.context = try c.decode(ExportRunContext.self, forKey: .context)
+    self.endedAt = try c.decode(Date.self, forKey: .endedAt)
+    self.enqueuedCount = try c.decode(Int.self, forKey: .enqueuedCount)
+    self.completedCount = try c.decode(Int.self, forKey: .completedCount)
+    self.failedCount = try c.decode(Int.self, forKey: .failedCount)
+    self.skippedCount = try c.decode(Int.self, forKey: .skippedCount)
+    self.cancelReason = try c.decodeIfPresent(
+      ExportCancelReason.self, forKey: .cancelReason)
+    self.result = try c.decode(ExportRunResult.self, forKey: .result)
+    self.failures =
+      (try? c.decode([ExportRunFailureDetail].self, forKey: .failures)) ?? []
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case context, endedAt, enqueuedCount, completedCount, failedCount, skippedCount,
+      cancelReason, result, failures
+  }
 
   var duration: TimeInterval {
     endedAt.timeIntervalSince(context.startedAt)

@@ -999,6 +999,55 @@ struct AutoSyncReducerTests {
     #expect(effects.isEmpty)
   }
 
+  @Test func autoSyncRunCompletedWithFailuresEmitsRecordRetryFailures() {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let destId = state.destination.id!
+    let placement = ExportPlacement.timeline(year: 2025, month: 6)
+    let failure = ExportRunFailureDetail(
+      assetId: "asset-1", placement: placement, variant: .original,
+      category: .iCloudTransient, errorSignature: "NSURLErrorDomain:-1009",
+      localizedDescription: "Not connected to the internet.",
+      failedAt: now)
+    let summary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, reason: .appLaunch,
+        scope: .timelineFullLibrary, selection: .edited),
+      endedAt: now,
+      enqueuedCount: 1, completedCount: 0,
+      failedCount: 1, skippedCount: 0,
+      cancelReason: nil, result: .failed,
+      failures: [failure]
+    )
+
+    let (_, effects) = AutoSyncReducer.reduce(
+      .autoSyncRunCompleted(summary), in: state, now: now)
+
+    #expect(
+      effects.contains(.recordRetryFailures([failure], destinationId: destId)))
+  }
+
+  @Test func autoSyncRunCompletedWithNoFailuresDoesNotEmitRecordRetryFailures() {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let summary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, reason: .appLaunch,
+        scope: .timelineFullLibrary, selection: .edited),
+      endedAt: now,
+      enqueuedCount: 5, completedCount: 5,
+      failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: .completed
+    )
+
+    let (_, effects) = AutoSyncReducer.reduce(
+      .autoSyncRunCompleted(summary), in: state, now: now)
+
+    #expect(
+      !effects.contains(where: {
+        if case .recordRetryFailures = $0 { return true }
+        return false
+      }))
+  }
+
   @Test func autoSyncRunCompletedClearsOnlyTheScopeTheSummaryCovers() {
     // Manager fans out `.autoExport(scopes)` into per-scope full runs and
     // dispatches one autoSyncRunCompleted per scope. A timeline-only summary

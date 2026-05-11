@@ -390,6 +390,48 @@ struct AutoSyncManagerTests {
     // existing trigger path. UI surfacing will adjust if/when needed.)
   }
 
+  // MARK: - Retry-failure persistence (Phase 3 Slice B)
+
+  @Test func recordRetryFailuresEffectWritesToRetryStore() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true))
+    manager.attach(to: builder.environment)
+
+    // Drive a runExport that returns a summary with one failure detail.
+    let destId = safeDestination().id!
+    let placement = ExportPlacement.timeline(year: 2025, month: 6)
+    let failure = ExportRunFailureDetail(
+      assetId: "asset-x", placement: placement, variant: .original,
+      category: .iCloudTransient, errorSignature: "NSURLErrorDomain:-1009",
+      localizedDescription: "Not connected", failedAt: builder.clock.now())
+    builder.exportRunner.nextRunSummary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, reason: .appLaunch,
+        scope: .timelineFullLibrary, selection: .edited),
+      endedAt: builder.clock.now(),
+      enqueuedCount: 1, completedCount: 0,
+      failedCount: 1, skippedCount: 0,
+      cancelReason: nil, result: .failed,
+      failures: [failure]
+    )
+
+    builder.clock.advance(by: 10)
+    // Drive the structured-concurrency scheduler enough times for the
+    // manager's runExport task to: (1) await the runExport, (2) dispatch
+    // autoSyncRunCompleted, (3) run the recordRetryFailures effect handler.
+    for _ in 0..<3 { await Task.yield() }
+
+    let stored = builder.retryStore.load(destinationId: destId)
+    let entry = stored.entry(
+      scope: .timeline, assetId: "asset-x", variant: .original)
+    #expect(entry?.category == .iCloudTransient)
+    #expect(entry?.errorSignature == "NSURLErrorDomain:-1009")
+    #expect(entry?.attemptCount == 1)
+  }
+
   // MARK: - Idempotent attach
 
   @Test func attachIsIdempotent() {

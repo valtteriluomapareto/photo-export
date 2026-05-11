@@ -132,6 +132,14 @@ enum AutoSyncReducer {
       if let destinationId = newState.destination.id {
         effects.append(.persistRunSummary(summary, destinationId: destinationId))
       }
+      if !summary.failures.isEmpty, let destinationId = newState.destination.id {
+        // Route per-variant failures into AutoSyncRetryState so the Issues UI
+        // and (Slice C) the enqueue-time eligibility check can see them.
+        // Slice B records the failure with `nextEligibleAt = nil`; the
+        // backoff schedule lands in Slice C alongside enqueue gating.
+        effects.append(
+          .recordRetryFailures(summary.failures, destinationId: destinationId))
+      }
       if summary.result == .completed,
         let destinationId = newState.destination.id
       {

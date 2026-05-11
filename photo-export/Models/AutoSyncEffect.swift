@@ -54,6 +54,12 @@ enum AutoSyncEffect: Equatable, Sendable {
   /// destination has durably recorded its dirty IDs / full-reconciliation intent for
   /// the change set, per the plan's "advance only after durable record" ordering.
   case advancePersistentChangeToken(Data, destinationId: String)
+
+  /// Record per-variant failure detail into `AutoSyncRetryState` for the
+  /// destination. The runner loads the current state, applies `recordFailure`
+  /// for each detail (with `nextEligibleAt = nil` until Phase 3 Slice C wires
+  /// retry-backoff calculation), and saves. Plan §"Retry and Failure Policy".
+  case recordRetryFailures([ExportRunFailureDetail], destinationId: String)
 }
 
 /// Parameters needed to construct an `ExportRunContext`. The runner adds `runId` and
