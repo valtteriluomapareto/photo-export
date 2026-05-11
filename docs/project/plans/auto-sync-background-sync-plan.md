@@ -87,6 +87,15 @@ The current APIs are not enough for auto-sync as-is:
 - Using `BGTaskScheduler`; the macOS SDK marks the BackgroundTasks scheduler unavailable on macOS.
 - Preventing iCloud downloads or gating on network type. Automatic export is expected to download originals when PhotoKit needs to fetch them.
 
+### Safety Invariants
+
+These are load-bearing rules for the entire app, not just auto-sync. Future features must argue against them explicitly to override.
+
+- **The app does not delete user-visible files.** It does not delete exported files on the destination drive, and it does not mutate the user's Photos library (read-only Photos access enforced by entitlement). This holds for every flow: re-exports use collision-suffixed filenames rather than overwriting, Import is a reconcile-from-destination rebuild rather than a sync-down, cancellation only stops new work, and destination switches never touch the prior destination.
+- **The only files the app removes are internal:** atomic-write `.tmp` siblings before rename to the real filename; JSONL log compaction debris; and per-destination AutoSync metadata files (`dirtyState.json`, `retryState.json`, `lastRunSummary.json`, `lastDurablyRecordedToken.data`) when the user explicitly clears state from settings. None of these are user content.
+- **When destination state blocks app functionality, the resolution path is user action, not app cleanup.** A non-empty destination with no matching records → user confirms "use this destination's contents as-is" via the safety scan UX. A migration conflict between legacy and current ID directories → user picks which records to keep (or runs Import to reconcile from the destination's actual contents) before the app GCs the redundant *internal* directory. The app surfaces the conflict, the user resolves it; the app does not silently choose for them.
+- "Automatically deleting files when an asset is removed from Favorites, removed from an album, or deleted from Photos" (already a Non-Goal above) is a special case of this invariant. It is listed separately because it is the most natural feature a contributor might propose adding; the broader invariant rules out the entire class.
+
 ## Product Behavior
 
 ### User-Facing Model
