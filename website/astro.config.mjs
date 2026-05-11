@@ -44,6 +44,7 @@ export default defineConfig({
 					label: 'Export iCloud Photos to External Drive',
 					slug: 'export-icloud-photos',
 				},
+				{ label: 'Auto Export', slug: 'auto-export' },
 				{ label: 'Features', slug: 'features' },
 				{ label: 'Architecture', slug: 'architecture' },
 				{ label: 'Ideas', slug: 'roadmap' },

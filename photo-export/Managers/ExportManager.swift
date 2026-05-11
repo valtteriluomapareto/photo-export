@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import Photos
 import SwiftUI
@@ -85,6 +86,100 @@ final class ExportManager: ObservableObject {
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
   @Published var importResult: ImportReport?
+
+  // MARK: - Awaitable run lifecycle (auto-sync Phase 0a)
+
+  /// The `ExportRunContext` of the run currently in flight, or `nil` when idle. Set by
+  /// `runExport(context:)`; cleared when the run reaches a terminal state. Callers
+  /// observing this property see exactly one transition `nil → context → nil` per
+  /// awaitable run; no event is emitted for runs started via the existing fire-and-forget
+  /// `start*` methods.
+  @Published private(set) var activeRunContext: ExportRunContext?
+
+  /// Composite run-state observable for AutoSync. Republishes whenever the active
+  /// context, the running flag, or the queue depth changes — so the fire-and-forget
+  /// `start*` methods (which never set `activeRunContext`) still register as
+  /// `isManualActive` while the queue is processing them. Without this, AutoSync
+  /// would attempt to start a background run during a manual toolbar export and
+  /// fight the busy queue.
+  var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
+    Publishers.CombineLatest3($activeRunContext, $isRunning, $queueCount)
+      .map { context, isRunning, queueCount in
+        let manualFireAndForget = context == nil && (isRunning || queueCount > 0)
+        return ExportRunState(
+          activeContext: context,
+          isManualActive: context?.source == .manual || manualFireAndForget,
+          isAutoSyncActive: context?.source == .autoSync
+        )
+      }
+      .removeDuplicates()
+      .eraseToAnyPublisher()
+  }
+
+  /// Combine publisher for `versionSelection` so AutoSync can subscribe to user
+  /// changes (Include Originals toggle). Without this, the reducer would default
+  /// to `.edited` regardless of the user's actual setting.
+  var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> {
+    $versionSelection.eraseToAnyPublisher()
+  }
+
+  /// Combine publisher for the import flag.
+  var isImportingPublisher: AnyPublisher<Bool, Never> {
+    $isImporting.eraseToAnyPublisher()
+  }
+
+  /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
+  /// terminal state. Used by AutoSync to detect manual-run completion (so it
+  /// can clear compatible dirty state per plan §"Dirty State"). Fire-and-forget
+  /// runs initiated via the legacy `startExport*` methods do not flow through
+  /// this publisher — they don't build a context or summary. Phase 4 will
+  /// migrate manual UI actions to `runExport(context:)` so this hook covers
+  /// the complete set of manual completions.
+  private let completedRunsSubject = PassthroughSubject<ExportRunSummary, Never>()
+  var completedRunsPublisher: AnyPublisher<ExportRunSummary, Never> {
+    completedRunsSubject.eraseToAnyPublisher()
+  }
+
+  /// AutoSync retry-eligibility hook. Closure returns `true` when the
+  /// `(assetId, placement, variant)` is eligible to attempt at `now` — i.e.
+  /// no retry entry exists, or `nextEligibleAt <= now`. Plan §"Retry and
+  /// Failure Policy": "Retry evaluation belongs at enqueue time."
+  ///
+  /// `nil` means "no AutoSync retry policy installed"; all variants are
+  /// eligible. Manual exports use this default — they never gate on the
+  /// AutoSync retry store. Wired by `PhotoExportApp` to read from
+  /// `AutoSyncManager.currentRetryState`.
+  ///
+  /// `@MainActor` annotation on the closure type makes the isolation
+  /// explicit at the type level — the production wiring reads from
+  /// `AutoSyncManager.currentRetryState`, which is `@MainActor`-isolated,
+  /// so the closure can only be safely invoked on the main actor. The
+  /// `ExportManager` enqueue paths that call it are already `@MainActor`,
+  /// so this is a no-op at runtime but prevents future off-main callers
+  /// from compiling.
+  var autoSyncEligibilityCheck: (@MainActor (String, ExportPlacement, ExportVariant, Date) -> Bool)?
+
+  private struct ActiveRunBookkeeping {
+    let totalJobsEnqueuedAtStart: Int
+    let totalJobsCompletedAtStart: Int
+    let continuation: CheckedContinuation<ExportRunSummary, Never>
+    /// Variant-failure count accumulated during this run. Bumped from
+    /// `recordVariantFailed`. Reported as `ExportRunSummary.failedCount`; a non-zero
+    /// value also flips a `.completed` queue-drain finalize to `.failed`.
+    var failedCount: Int = 0
+    /// Structured per-variant failure detail accumulated during this run.
+    /// AutoSync reads `ExportRunSummary.failures` to record into
+    /// `AutoSyncRetryState`; the Export Issues UI reads it to group by
+    /// category. Mirror of `failedCount` but with full context — count
+    /// should equal `failures.count` modulo any legacy sentinel paths.
+    var failures: [ExportRunFailureDetail] = []
+    /// Asset count skipped at enqueue time by the AutoSync retry-eligibility
+    /// gate (plan §"Phase 3"): "ineligible variants count as `skippedCount`
+    /// with a retry reason in the run summary." Reported on the summary;
+    /// the per-variant detail is reconstructable from `AutoSyncRetryState`.
+    var skippedCount: Int = 0
+  }
+  private var activeRunBookkeeping: ActiveRunBookkeeping?
 
   /// Whether the export queue is active (has pending/in-flight work).
   var hasActiveExportWork: Bool {
@@ -215,6 +310,18 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  // MARK: - Lifetime contract
+  //
+  // `ExportManager` is owned by `PhotoExportApp` as an `@StateObject` for the entire
+  // app lifetime, so a pending `runExport` continuation effectively cannot outlive the
+  // process. Tests must call `cancelAndClear()` (or `interruptForDestinationUnavailable()`)
+  // during teardown to resolve any active run before the harness drops its reference —
+  // otherwise the `CheckedContinuation` will trap when deallocated unresumed. There is
+  // no `deinit`-side cleanup because reaching @MainActor state from a nonisolated
+  // deinit would require `MainActor.assumeIsolated`, which itself traps off-main, and
+  // resolving the trap with weak references is not possible (continuation is a value
+  // type that cannot be `weak`-referenced).
+
   // MARK: - Public API
   func startExportMonth(year: Int, month: Int) {
     guard !isImporting else {
@@ -300,7 +407,7 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  func startExportAll() {
+  func startExportAll(selectionOverride: ExportVersionSelection? = nil) {
     guard !isImporting else {
       logger.warning("startExportAll ignored: import in progress")
       return
@@ -312,7 +419,9 @@ final class ExportManager: ObservableObject {
       return
     }
     guard !isEnqueueingAll else { return }
-    let selection = versionSelection
+    // selectionOverride lets `runExport(context:)` honor the run context's selection
+    // without mutating the user-visible toolbar `versionSelection`.
+    let selection = selectionOverride ?? versionSelection
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -365,6 +474,8 @@ final class ExportManager: ObservableObject {
           setQueueWarningMessage(
             "Couldn't list every year. Continuing with the photos already queued.")
           processQueueIfNeeded()
+        } else {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
         }
       }
     }
@@ -386,7 +497,7 @@ final class ExportManager: ObservableObject {
   /// placement is the canonical `collections:favorites`. Gated on
   /// `canExportCollection`; the timeline store's state is not consulted (collection and
   /// timeline exports are independent under the disjoint-key-spaces rationale).
-  func startExportFavorites() {
+  func startExportFavorites(selectionOverride: ExportVersionSelection? = nil) {
     guard !isImporting else {
       logger.warning("startExportFavorites ignored: import in progress")
       return
@@ -397,7 +508,7 @@ final class ExportManager: ObservableObject {
       )
       return
     }
-    let selection = versionSelection
+    let selection = selectionOverride ?? versionSelection
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -419,6 +530,9 @@ final class ExportManager: ObservableObject {
         logger.error(
           "Failed to enqueue favorites export: \(String(describing: error), privacy: .public)"
         )
+        if pendingJobs.isEmpty {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
       }
     }
   }
@@ -428,7 +542,7 @@ final class ExportManager: ObservableObject {
   /// Collections sidebar surfaces. Mirrors `startExportAll`'s pattern: serialises
   /// the per-album enqueues inside one Task so all jobs land in the queue before
   /// processing kicks in.
-  func startExportAllAlbums() {
+  func startExportAllAlbums(selectionOverride: ExportVersionSelection? = nil) {
     guard !isImporting else {
       logger.warning("startExportAllAlbums ignored: import in progress")
       return
@@ -440,7 +554,7 @@ final class ExportManager: ObservableObject {
       return
     }
     guard !isEnqueueingAll else { return }
-    let selection = versionSelection
+    let selection = selectionOverride ?? versionSelection
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -498,6 +612,8 @@ final class ExportManager: ObservableObject {
           setQueueWarningMessage(
             "Couldn't list every album. Continuing with the photos already queued.")
           processQueueIfNeeded()
+        } else {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
         }
       }
     }
@@ -591,6 +707,11 @@ final class ExportManager: ObservableObject {
         !collectionExportRecordStore.isExported(
           asset: asset, placement: placement, selection: selectionMode)
       else { return nil }
+      if skipForAutoSyncRetry(
+        asset: asset, placement: placement, selection: selectionMode)
+      {
+        return nil
+      }
       return ExportJob(
         assetLocalIdentifier: asset.id, placement: placement, selection: selectionMode)
     }
@@ -606,14 +727,51 @@ final class ExportManager: ObservableObject {
 
   func cancelAndClear() {
     logger.info("Cancelling current export and clearing queue due to destination change")
+    teardownActiveWork()
+    finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
+  }
+
+  /// User confirmed a manual export while an AutoSync run was active. Plan
+  /// §"Phase 4": "the automatic run is superseded with
+  /// `cancelReason: .supersededByManualRun`. After the manual run finishes,
+  /// the auto-sync reducer re-evaluates and schedules another run if work
+  /// is still pending." Resolves the active run as `.superseded` so AutoSync
+  /// knows not to clear dirty state (the run didn't actually complete).
+  func supersedeForManualRun() {
+    logger.info("Superseding active auto-sync run for manual export")
+    teardownActiveWork()
+    finalizeActiveRun(result: .superseded, cancelReason: .supersededByManualRun)
+  }
+
+  /// Drive-unmount equivalent of `cancelAndClear()`. Stops starting new jobs and clears
+  /// in-memory pending work, but resolves the active run as transient
+  /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. The AutoSync
+  /// state machine treats `.destinationUnavailable` as "resume when the drive comes
+  /// back" rather than "this run failed."
+  ///
+  /// MVP scope: identical cleanup to `cancelAndClear` minus the cancel-reason change.
+  /// Phase 0b adds advisory-lock release; persistence of accumulated dirty state lands
+  /// when AutoSyncManager wires up. An in-flight `PHAssetResourceManager.writeData` may
+  /// still complete or fail because there is no cancellation plumbing for that path —
+  /// the in-flight write will surface as a transient failure on the next
+  /// reconciliation.
+  func interruptForDestinationUnavailable() {
+    logger.info("Interrupting current export — destination unavailable")
+    teardownActiveWork()
+    finalizeActiveRun(result: .interrupted, cancelReason: .destinationUnavailable)
+  }
+
+  /// Common in-memory teardown shared by `cancelAndClear` and
+  /// `interruptForDestinationUnavailable`. Removes any in-progress variant from the
+  /// correct record store, then zeros queue + run + counter state. The call sites differ
+  /// only in their log line and the `finalizeActiveRun` arguments.
+  private func teardownActiveWork() {
     if let inFlightId = currentJobAssetId, let inFlightVariant = currentJobVariant,
       let inFlightPlacement = currentJobPlacement
     {
-      // Route the cleanup to the correct store by `placement.kind`. In Phase 1 only
-      // `.timeline` jobs reach here in production; the `.favorites`/`.album` cases land
-      // when collection exports start in Phase 3. The store-side `removeVariant` is a
-      // no-op when the variant is not `.inProgress`, so the cross-store check that used
-      // to live here is now baked into the store call.
+      // Route the cleanup to the correct store by `placement.kind`. The store-side
+      // `removeVariant` is a no-op when the variant is not `.inProgress`, so the
+      // cross-store check that used to live here is now baked into the store call.
       switch inFlightPlacement.kind {
       case .timeline:
         if exportRecordStore.exportInfo(assetId: inFlightId)?.variants[inFlightVariant]?.status
@@ -655,7 +813,15 @@ final class ExportManager: ObservableObject {
 
   /// Shows a transient message in the toolbar's progress slot for `emptyRunMessageDuration`.
   /// Replaces any previously-shown message and resets the auto-clear timer.
+  ///
+  /// Auto-sync (`.background` visibility) runs suppress this — plan §"Phase 3":
+  /// "auto-sync empty runs update lastRunSummary but do not show toolbar
+  /// empty-run messages." The user-visible surface for those is
+  /// AutoSyncManager.lastRunSummary, rendered in Settings → Auto Export.
   private func setEmptyRunMessage(_ message: String) {
+    if activeRunContext?.visibility == .background {
+      return
+    }
     emptyRunMessage = message
     emptyRunMessageTask?.cancel()
     let duration = Self.emptyRunMessageDuration
@@ -728,6 +894,9 @@ final class ExportManager: ObservableObject {
       guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
         return nil
       }
+      if skipForAutoSyncRetry(asset: asset, placement: placement, selection: selection) {
+        return nil
+      }
       return ExportJob(
         assetLocalIdentifier: asset.id, placement: placement, selection: selection)
     }
@@ -757,6 +926,9 @@ final class ExportManager: ObservableObject {
         continue
       }
       let placement = ExportPlacement.timeline(year: year, month: m)
+      if skipForAutoSyncRetry(asset: asset, placement: placement, selection: selection) {
+        continue
+      }
       newJobs.append(
         ExportJob(
           assetLocalIdentifier: asset.id, placement: placement, selection: selection))
@@ -771,10 +943,166 @@ final class ExportManager: ObservableObject {
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
 
+  /// Runs an export and returns its terminal summary. Wraps the existing fire-and-forget
+  /// `start*` methods with single-active-run ownership: at most one `runExport` is in
+  /// flight per `ExportManager`, and the await resolves when the run reaches a terminal
+  /// state — completed, cancelled, or failed.
+  ///
+  /// MVP scope coverage: `.timelineFullLibrary`, `.favoritesFull`, `.allAlbumsFull` map
+  /// to the existing manual-export entry points. Targeted asset-id scopes
+  /// (`.timelineAssets`, `.favoritesAssets`, `.allAlbumsAssets`) and the umbrella
+  /// `.autoExport` scope land in subsequent Phase 0a slices; for now they resolve
+  /// immediately with `.failed` so callers see a deterministic outcome rather than a
+  /// hang.
+  ///
+  /// **Awaiter behavior under pause**: `pause()` while a `runExport` is active leaves
+  /// the queue parked and the awaitable suspended until either `resume()` drains the
+  /// queue or `cancelAndClear()` / `interruptForDestinationUnavailable()` resolves the
+  /// run. Callers that pause mid-run are responsible for unblocking the awaiter.
+  func runExport(context: ExportRunContext) async -> ExportRunSummary {
+    precondition(
+      activeRunContext == nil,
+      "runExport called while another run is active; ExportManager has at most one active run"
+    )
+    return await withCheckedContinuation {
+      (continuation: CheckedContinuation<ExportRunSummary, Never>) in
+      activeRunContext = context
+
+      // Bookkeeping is captured *after* dispatch because the start* methods call
+      // `resetProgressCounters()` synchronously when the queue is idle. Capturing
+      // before dispatch would snapshot stale totals from a prior run, producing a
+      // negative-clamped delta on the next finalize.
+      //
+      // The fail-fast guards block dispatch when the manager isn't idle. Without
+      // `!hasActiveExportWork`, a fire-and-forget run already in flight would
+      // silently no-op the dispatched `start*` (its `isEnqueueingAll` guard returns
+      // early) and the awaiter would hang forever.
+      switch context.scope {
+      case .timelineFullLibrary:
+        if !isImporting && canExportTimeline && !hasActiveExportWork {
+          startExportAll(selectionOverride: context.selection)
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+        } else {
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      case .favoritesFull:
+        if !isImporting && canExportCollection && !hasActiveExportWork {
+          startExportFavorites(selectionOverride: context.selection)
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+        } else {
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      case .allAlbumsFull:
+        if !isImporting && canExportCollection && !hasActiveExportWork {
+          startExportAllAlbums(selectionOverride: context.selection)
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+        } else {
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      case .timelineAssets, .favoritesAssets, .allAlbumsAssets, .autoExport:
+        // Targeted asset-id and autoExport scopes land in subsequent Phase 0a slices.
+        activeRunBookkeeping = ActiveRunBookkeeping(
+          totalJobsEnqueuedAtStart: totalJobsEnqueued,
+          totalJobsCompletedAtStart: totalJobsCompleted,
+          continuation: continuation
+        )
+        finalizeActiveRun(result: .failed, cancelReason: nil)
+      }
+    }
+  }
+
+  /// Resolves the awaitable run's continuation if one is active. Idempotent — second
+  /// and later calls are no-ops, so existing run-terminal paths can call this without
+  /// worrying about whether they're the first to detect the end. No-op when the run
+  /// was started via the existing fire-and-forget `start*` methods (i.e.,
+  /// `activeRunContext` is nil).
+  private func finalizeActiveRun(
+    result: ExportRunResult,
+    cancelReason: ExportCancelReason?
+  ) {
+    guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
+      return
+    }
+    // A natural queue-drain finalize comes in as `.completed`. If any variants failed
+    // during this run we remap to `.failed` so callers can distinguish a clean run
+    // from one that needs retry-store inspection. Explicit cancel/interrupt paths keep
+    // their incoming result untouched.
+    let effectiveResult: ExportRunResult
+    if result == .completed && bookkeeping.failedCount > 0 {
+      effectiveResult = .failed
+    } else {
+      effectiveResult = result
+    }
+    let summary = ExportRunSummary(
+      context: context,
+      endedAt: Date(),
+      enqueuedCount: max(0, totalJobsEnqueued - bookkeeping.totalJobsEnqueuedAtStart),
+      completedCount: max(0, totalJobsCompleted - bookkeeping.totalJobsCompletedAtStart),
+      failedCount: bookkeeping.failedCount,
+      skippedCount: bookkeeping.skippedCount,
+      cancelReason: cancelReason,
+      result: effectiveResult,
+      failures: bookkeeping.failures
+    )
+    activeRunContext = nil
+    activeRunBookkeeping = nil
+    // Order matters: send the summary on `completedRunsSubject` *before*
+    // resuming the awaiter. AutoSync's manager subscribes to
+    // `completedRunsPublisher` and filters to `source == .manual`, so its
+    // own AutoSync-sourced runs never reach the manual-clear path either
+    // way. But the awaiter dispatches `.autoSyncRunCompleted(summary)`
+    // which is also queued behind the in-flight reducer event — and we
+    // want the subject emission to land first so that any reordering
+    // future-us applies stays self-consistent rather than relying on the
+    // continuation-resume / subject-send order to bend a specific way.
+    completedRunsSubject.send(summary)
+    bookkeeping.continuation.resume(returning: summary)
+  }
+
   func processQueueIfNeeded() {
     guard !isProcessing else { return }
     guard !isPaused else { return }
-    guard !pendingJobs.isEmpty else { return }
+    guard !pendingJobs.isEmpty else {
+      // Nothing to process. If an awaitable run is in flight (e.g. `runExport` for an
+      // already-complete library), the queue-drain hook in `processNext` won't fire
+      // because `processNext` won't run. Finalize here so the awaiter resolves.
+      //
+      // Guard on `!isEnqueueingAll` so a `resume()` during the brief window between
+      // an enqueueing Task starting and adding the first job (queue is empty,
+      // `processQueueIfNeeded` triggered from `resume()`) doesn't prematurely resolve
+      // a run that's still in its enqueue phase.
+      if !isEnqueueingAll {
+        finalizeActiveRun(result: .completed, cancelReason: nil)
+      }
+      return
+    }
     isProcessing = true
     isRunning = true
     processNext()
@@ -797,6 +1125,7 @@ final class ExportManager: ObservableObject {
       currentAssetFilename = nil
       updateQueueCount()
       logger.info("Export queue drained")
+      finalizeActiveRun(result: .completed, cancelReason: nil)
       return
     }
     let job = pendingJobs.removeFirst()
@@ -860,7 +1189,7 @@ final class ExportManager: ObservableObject {
         try throwIfCancelledOrStale(gen)
         recordVariantFailed(
           assetId: job.assetLocalIdentifier, placement: job.placement, variant: .original,
-          error: "Asset not found", at: Date())
+          sentinelMessage: "Asset not found", category: .assetMissing, at: Date())
         logger.error(
           "Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")
         return
@@ -980,7 +1309,7 @@ final class ExportManager: ObservableObject {
           )
           recordVariantFailed(
             assetId: descriptor.id, placement: job.placement, variant: variant,
-            error: error.localizedDescription, at: Date())
+            error: error, at: Date())
           inFlight = nil
         }
       }
@@ -1036,7 +1365,7 @@ final class ExportManager: ObservableObject {
       let failedVariant = inFlight?.variant ?? .original
       recordVariantFailed(
         assetId: job.assetLocalIdentifier, placement: job.placement, variant: failedVariant,
-        error: error.localizedDescription, at: Date())
+        error: error, at: Date())
     }
   }
 
@@ -1085,8 +1414,8 @@ final class ExportManager: ObservableObject {
       case .edited: errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
       }
       recordVariantFailed(
-        assetId: descriptor.id, placement: job.placement, variant: variant, error: errMsg,
-        at: Date())
+        assetId: descriptor.id, placement: job.placement, variant: variant,
+        sentinelMessage: errMsg, category: .resourceMissing, at: Date())
       logger.error(
         "No \(variant.rawValue, privacy: .public) byte source for id: \(descriptor.id, privacy: .public)"
       )
@@ -1419,8 +1748,8 @@ final class ExportManager: ObservableObject {
       // `editedResourceUnavailableMessage` the variant loop recorded.
       recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .edited,
-        error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
-        at: Date())
+        sentinelMessage: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+        category: .resourceMissing, at: Date())
       logger.info(
         "Edited fallback wrote original for id: \(descriptor.id, privacy: .public) stem: \(stem, privacy: .public)"
       )
@@ -1441,7 +1770,7 @@ final class ExportManager: ObservableObject {
       // on the next run because `.original` is now `.failed` (not `.done`).
       recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .original,
-        error: error.localizedDescription, at: Date())
+        error: error, at: Date())
       inFlight = nil
     }
   }
@@ -1608,18 +1937,83 @@ final class ExportManager: ObservableObject {
   /// Routes a `markVariantFailed` to the right store based on `placement.kind`. In Phase 1,
   /// only `.timeline` paths are reachable in production; `.favorites`/`.album` are wired
   /// for Phase 3's collection-export work but won't be exercised until then.
+  /// AutoSync retry-eligibility gate: returns `true` when the enqueue path
+  /// should *skip* this asset because all required variants are currently
+  /// in retry backoff (or hard-blocked needing user action). Called from
+  /// each of the three enqueue helpers; bumps `skippedCount` as a side
+  /// effect so the call site can simply `if skipForAutoSync(...) { continue }`.
+  /// No-op for manual runs (`activeRunContext?.source != .autoSync`) and
+  /// when the closure isn't installed.
+  private func skipForAutoSyncRetry(
+    asset: AssetDescriptor, placement: ExportPlacement,
+    selection: ExportVersionSelection
+  ) -> Bool {
+    guard activeRunContext?.source == .autoSync,
+      let check = autoSyncEligibilityCheck
+    else { return false }
+    let required = requiredVariants(for: asset, selection: selection)
+    let now = Date()
+    let hasEligible = required.contains { variant in
+      check(asset.id, placement, variant, now)
+    }
+    if !hasEligible {
+      activeRunBookkeeping?.skippedCount += 1
+    }
+    return !hasEligible
+  }
+
   private func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    error: String, at date: Date
+    failure: ExportFailureSignal, at date: Date
   ) {
     switch placement.kind {
     case .timeline:
       exportRecordStore.markVariantFailed(
-        assetId: assetId, variant: variant, error: error, at: date)
+        assetId: assetId, variant: variant, error: failure.localizedDescription, at: date)
     case .favorites, .album:
       collectionExportRecordStore.markVariantFailed(
-        assetId: assetId, placement: placement, variant: variant, error: error, at: date)
+        assetId: assetId, placement: placement, variant: variant,
+        error: failure.localizedDescription, at: date)
     }
+    activeRunBookkeeping?.failedCount += 1
+    activeRunBookkeeping?.failures.append(
+      ExportRunFailureDetail(
+        assetId: assetId,
+        placement: placement,
+        variant: variant,
+        category: failure.category,
+        errorSignature: failure.errorSignature,
+        localizedDescription: failure.localizedDescription,
+        failedAt: date
+      ))
+  }
+
+  /// Backwards-compatible overload — call sites that already have an
+  /// `Error` instance route through here. The classifier extracts the
+  /// `(category, signature, message)` triple.
+  private func recordVariantFailed(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant,
+    error: Error, at date: Date
+  ) {
+    recordVariantFailed(
+      assetId: assetId, placement: placement, variant: variant,
+      failure: AutoSyncFailureCategory.classify(error), at: date)
+  }
+
+  /// Sentinel-message overload — call sites that synthesize a failure
+  /// string with no underlying `Error` (e.g., "Asset not found"). The
+  /// caller declares the intended `category` so retry routing is
+  /// deterministic; the message is used as both the `errorSignature` and
+  /// the user-visible description.
+  private func recordVariantFailed(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant,
+    sentinelMessage: String, category: AutoSyncFailureCategory, at date: Date
+  ) {
+    recordVariantFailed(
+      assetId: assetId, placement: placement, variant: variant,
+      failure: AutoSyncFailureCategory.sentinel(
+        category: category, signature: sentinelMessage, message: sentinelMessage),
+      at: date)
   }
 
   private func recordVariantInProgress(

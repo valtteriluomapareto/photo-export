@@ -28,7 +28,7 @@ struct ExportRecordsDirectoryCoordinatorTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let coord = ExportRecordsDirectoryCoordinator(storeRootURL: root)
 
-    let result = coord.prepareDirectory(for: "newId-fresh", legacyId: "legacyId-fresh")
+    let result = coord.prepareDirectory(for: "newId-fresh", legacyIds: ["legacyId-fresh"])
     #expect(throws: Never.self) { try result.get() }
 
     let newDir = root.appendingPathComponent("newId-fresh")
@@ -43,7 +43,7 @@ struct ExportRecordsDirectoryCoordinatorTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let coord = ExportRecordsDirectoryCoordinator(storeRootURL: root)
 
-    let result = coord.prepareDirectory(for: "newId-only", legacyId: nil)
+    let result = coord.prepareDirectory(for: "newId-only", legacyIds: [])
     #expect(throws: Never.self) { try result.get() }
   }
 
@@ -57,7 +57,7 @@ struct ExportRecordsDirectoryCoordinatorTests {
     try writeMarker(in: legacyDir, named: "export-records.json", contents: "snapshot")
 
     let coord = ExportRecordsDirectoryCoordinator(storeRootURL: root)
-    let result = coord.prepareDirectory(for: "newId-A", legacyId: "legacyId-A")
+    let result = coord.prepareDirectory(for: "newId-A", legacyIds: ["legacyId-A"])
     #expect(throws: Never.self) { try result.get() }
 
     let newDir = root.appendingPathComponent("newId-A")
@@ -75,7 +75,7 @@ struct ExportRecordsDirectoryCoordinatorTests {
     try writeMarker(in: newDir, named: "export-records.json", contents: "current")
 
     let coord = ExportRecordsDirectoryCoordinator(storeRootURL: root)
-    let result = coord.prepareDirectory(for: "newId-B", legacyId: nil)
+    let result = coord.prepareDirectory(for: "newId-B", legacyIds: [])
     #expect(throws: Never.self) { try result.get() }
 
     let bytes = try Data(contentsOf: newDir.appendingPathComponent("export-records.json"))
@@ -97,11 +97,11 @@ struct ExportRecordsDirectoryCoordinatorTests {
     // so nothing changes for D2.
     let other = root.appendingPathComponent("newId-D1")
     try writeMarker(in: other, named: "export-records.json")
-    _ = coord.prepareDirectory(for: "newId-D1", legacyId: nil)
+    _ = coord.prepareDirectory(for: "newId-D1", legacyIds: [])
     #expect(FileManager.default.fileExists(atPath: legacyDir.path))
 
     // Months later, user reconnects D2 → coordinator runs against D2's ids → migration happens now.
-    let result = coord.prepareDirectory(for: "newId-D2", legacyId: "legacyId-D2")
+    let result = coord.prepareDirectory(for: "newId-D2", legacyIds: ["legacyId-D2"])
     #expect(throws: Never.self) { try result.get() }
 
     let newDir = root.appendingPathComponent("newId-D2")
@@ -122,7 +122,7 @@ struct ExportRecordsDirectoryCoordinatorTests {
     try writeMarker(in: legacyDir, named: "stale.json")
 
     let coord = ExportRecordsDirectoryCoordinator(storeRootURL: root)
-    let result = coord.prepareDirectory(for: "newId-C", legacyId: "legacyId-C")
+    let result = coord.prepareDirectory(for: "newId-C", legacyIds: ["legacyId-C"])
 
     switch result {
     case .success:
@@ -132,8 +132,87 @@ struct ExportRecordsDirectoryCoordinatorTests {
     }
 
     // Both directories untouched.
-    #expect(FileManager.default.fileExists(atPath: newDir.appendingPathComponent("current.json").path))
-    #expect(FileManager.default.fileExists(atPath: legacyDir.appendingPathComponent("stale.json").path))
+    #expect(
+      FileManager.default.fileExists(atPath: newDir.appendingPathComponent("current.json").path))
+    #expect(
+      FileManager.default.fileExists(atPath: legacyDir.appendingPathComponent("stale.json").path))
+  }
+
+  // MARK: - Multi-legacy migration (auto-sync Phase 0a)
+
+  /// The auto-sync plan introduced a second legacy-id form for low-confidence drives
+  /// (volumeIdentifier-based digest). The coordinator now takes a list of legacy ids and
+  /// renames the *first* existing directory to `<newId>/`.
+  @Test func secondLegacyIdMigratesWhenFirstIsAbsent() throws {
+    let root = try makeStoreRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let secondLegacyDir = root.appendingPathComponent("legacyId-volId")
+    try writeMarker(in: secondLegacyDir, named: "export-records.json", contents: "low-conf")
+
+    let coord = ExportRecordsDirectoryCoordinator(storeRootURL: root)
+    let result = coord.prepareDirectory(
+      for: "newId-low",
+      legacyIds: ["legacyId-bookmark", "legacyId-volId"]
+    )
+    #expect(throws: Never.self) { try result.get() }
+
+    let newDir = root.appendingPathComponent("newId-low")
+    #expect(FileManager.default.fileExists(atPath: newDir.path))
+    #expect(!FileManager.default.fileExists(atPath: secondLegacyDir.path))
+    let migrated = try Data(contentsOf: newDir.appendingPathComponent("export-records.json"))
+    #expect(String(data: migrated, encoding: .utf8) == "low-conf")
+  }
+
+  /// When two legacy ids both exist, the first one in the list wins (priority order). Later
+  /// legacy directories are left in place — they will surface as a `.conflict` on a future
+  /// run if they ever align with a `<newId>` derivation.
+  @Test func firstLegacyIdWinsWhenMultipleExist() throws {
+    let root = try makeStoreRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let priorityDir = root.appendingPathComponent("legacyId-priority")
+    let trailingDir = root.appendingPathComponent("legacyId-trailing")
+    try writeMarker(in: priorityDir, named: "first.json", contents: "priority")
+    try writeMarker(in: trailingDir, named: "first.json", contents: "trailing")
+
+    let coord = ExportRecordsDirectoryCoordinator(storeRootURL: root)
+    let result = coord.prepareDirectory(
+      for: "newId-multi",
+      legacyIds: ["legacyId-priority", "legacyId-trailing"]
+    )
+    #expect(throws: Never.self) { try result.get() }
+
+    let newDir = root.appendingPathComponent("newId-multi")
+    #expect(FileManager.default.fileExists(atPath: newDir.path))
+    #expect(!FileManager.default.fileExists(atPath: priorityDir.path))
+    // Trailing legacy dir is left alone for the user to inspect / clean up.
+    #expect(FileManager.default.fileExists(atPath: trailingDir.path))
+    let migrated = try Data(contentsOf: newDir.appendingPathComponent("first.json"))
+    #expect(String(data: migrated, encoding: .utf8) == "priority")
+  }
+
+  /// When `<newId>/` already exists and ANY legacy directory also exists, the first
+  /// matching legacy id is reported in the conflict.
+  @Test func conflictReportsFirstMatchingLegacyId() throws {
+    let root = try makeStoreRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let newDir = root.appendingPathComponent("newId-conflict")
+    let secondLegacyDir = root.appendingPathComponent("legacyId-second")
+    try writeMarker(in: newDir, named: "current.json")
+    try writeMarker(in: secondLegacyDir, named: "stale.json")
+
+    let coord = ExportRecordsDirectoryCoordinator(storeRootURL: root)
+    let result = coord.prepareDirectory(
+      for: "newId-conflict",
+      legacyIds: ["legacyId-missing", "legacyId-second"]
+    )
+
+    switch result {
+    case .success:
+      Issue.record("Expected conflict")
+    case .failure(let error):
+      #expect(
+        error == .conflict(newId: "newId-conflict", legacyId: "legacyId-second"))
+    }
   }
 
   /// Same id reported as legacy and new — pathological caller. Coordinator should not move a directory
@@ -145,7 +224,7 @@ struct ExportRecordsDirectoryCoordinatorTests {
     try writeMarker(in: dir, named: "export-records.json", contents: "preserved")
 
     let coord = ExportRecordsDirectoryCoordinator(storeRootURL: root)
-    let result = coord.prepareDirectory(for: "same-id", legacyId: "same-id")
+    let result = coord.prepareDirectory(for: "same-id", legacyIds: ["same-id"])
     #expect(throws: Never.self) { try result.get() }
 
     let bytes = try Data(contentsOf: dir.appendingPathComponent("export-records.json"))

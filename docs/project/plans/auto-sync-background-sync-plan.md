@@ -1,7 +1,24 @@
 # Auto-Sync and Background Sync Plan
 
 Date: 2026-05-08
-Status: Proposed (revised 2026-05-08 after architect / HIG / test review)
+Status: In progress (last status update 2026-05-11, fourth snapshot — post-review)
+
+## Implementation Status
+
+Snapshot of where each phase stands. Update alongside the implementation — the table is the contract for "what's done"; the code is the contract for "how it's done."
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| **Phase 0a** Pure Refactor Foundations | ✅ Complete | Awaitable `runExport`, fingerprint identity, lifecycle coordinator, destination loss interruption. |
+| **Phase 0b** Locking and Safety | 🟡 Safety scan in | **Done:** destination safety scan + `unsafeNeedsConfirmation` state + per-destination confirmation store + UI banner / confirm dialog. **Missing:** advisory locking (still gated by the spike — multi-instance behavior remains undefined). |
+| **Phase 0 Test Infrastructure** | ✅ Complete | `TestClock`, fakes for all four AutoSync protocols, in-memory dirty/retry/run-summary/per-destination-token stores. |
+| **Phase 1** Photos Change Tracking | 🟡 Mostly complete | Token storage, `PHPhotoLibraryChangeObserver` adapter, three-way error mapping, dirty state with cost-cap rollover, fallback debounce, storm control all in. **Missing:** "limited-access status copy/state" — reducer has the blocked reasons but nothing dispatches them. |
+| **Phase 2** AutoSync State Machine | ✅ Complete | Reducer + manager + protocols, all six publisher subscriptions, per-destination persistence (dirty / retry / lastRunSummary / lastDurablyRecordedToken). |
+| **Phase 3** Retry and Run Policy | ✅ Complete | **Slice A:** `manualFullExportCompleted` clears compatible dirty. **Slice B:** failure classifier maps `Error` to `AutoSyncFailureCategory`; manager records into `AutoSyncRetryState`. **Slice C:** exponential backoff (30 s → 2 m → 10 m → 1 h → 6 h cap) + enqueue-time eligibility check skips ineligible variants as `skippedCount`. **Manual retry override:** "Retry" button per row in the Export Issues tab clears the entry and dispatches `runNow`. |
+| **Phase 4** UI | 🟡 Substantial progress | **Done:** Settings scene (Auto Export + Export Issues tabs, resizable, live-updating countdown), main-window status pill (always visible, reason inline), menu bar item (`MenuBarExtra`), `runNow()`, migration-conflict recovery sheet, safety-confirmation banner + dialog, `Open at login` (SMAppService), manual-export confirmation sheet (supersedes AutoSync run with `.supersededByManualRun`), manual Retry per failure row, consolidated `userFacingLabel` for status copy, accessibility labels include reason for blocked/waiting/scheduled/running. **Deferred (user choice):** completion/failure notifications (UNUserNotificationCenter), Dock badge. **Still missing:** Ignore action in Issues tab, main-window enable toggle / first-toggle-on hand-off, broader VoiceOver / keyboard-navigation pass for Settings. |
+| **Phase 5** Verification and Docs | 🟡 Partially covered | Reducer-contract tests largely exist via Phase 2 work; Phase 3 added failure-category classifier + retry-state tests; Phase 0b safety-scan + four file-backed-store test suites landed post-review. The structured Phase 5 audit (cross-reason debounce coalescing matrix, precedence between debounced reasons, locking spike outcomes) and the docs/readme refresh haven't been done as a deliberate pass. 665 tests passing in the harness today. |
+
+Branch tips: `auto-sync-phase-0a` (Phase 0a), `auto-sync-phase-2` (adds Phase 1 + 2), `auto-sync-phase-3` (adds Phase 3 Slice A), `auto-sync-phase-4` (cumulative tip — Phase 3 complete + the Phase 4 work so far + Phase 0b safety scan + the post-review fix batches).
 
 ## Summary
 
@@ -69,6 +86,15 @@ The current APIs are not enough for auto-sync as-is:
 - Adding a cloud-backup service or networking.
 - Using `BGTaskScheduler`; the macOS SDK marks the BackgroundTasks scheduler unavailable on macOS.
 - Preventing iCloud downloads or gating on network type. Automatic export is expected to download originals when PhotoKit needs to fetch them.
+
+### Safety Invariants
+
+These are load-bearing rules for the entire app, not just auto-sync. Future features must argue against them explicitly to override.
+
+- **The app does not delete user-visible files.** It does not delete exported files on the destination drive, and it does not mutate the user's Photos library (read-only Photos access enforced by entitlement). This holds for every flow: re-exports use collision-suffixed filenames rather than overwriting, Import is a reconcile-from-destination rebuild rather than a sync-down, cancellation only stops new work, and destination switches never touch the prior destination.
+- **The only files the app removes are internal:** atomic-write `.tmp` siblings before rename to the real filename; JSONL log compaction debris; and per-destination AutoSync metadata files (`dirtyState.json`, `retryState.json`, `lastRunSummary.json`, `lastDurablyRecordedToken.data`) when the user explicitly clears state from settings. None of these are user content.
+- **When destination state blocks app functionality, the resolution path is user action, not app cleanup.** A non-empty destination with no matching records → user confirms "use this destination's contents as-is" via the safety scan UX. A migration conflict between legacy and current ID directories → user picks which records to keep (or runs Import to reconcile from the destination's actual contents) before the app GCs the redundant *internal* directory. The app surfaces the conflict, the user resolves it; the app does not silently choose for them.
+- "Automatically deleting files when an asset is removed from Favorites, removed from an album, or deleted from Photos" (already a Non-Goal above) is a special case of this invariant. It is listed separately because it is the most natural feature a contributor might propose adding; the broader invariant rules out the entire class.
 
 ## Product Behavior
 

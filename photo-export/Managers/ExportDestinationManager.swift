@@ -12,6 +12,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   @Published private(set) var isWritable: Bool = false
   @Published private(set) var statusMessage: String?
   @Published private(set) var destinationId: String?
+  /// Structured form of the same identity carried by `destinationId`. Both are kept in sync —
+  /// `destinationFingerprint?.id == destinationId` always holds *between* mutations. The
+  /// two `@Published` writes are not transactional, so a subscriber to `$destinationFingerprint`
+  /// that reads `destinationId` synchronously may observe a brief moment where the id has not
+  /// yet caught up; downstream code should subscribe to `$destinationFingerprint` and read
+  /// the id via `fingerprint?.id` to avoid the gap. All callers inside this class go through
+  /// `setIdentity(fingerprint:)` so the field-pair stays consistent.
+  @Published private(set) var destinationFingerprint: DestinationFingerprint?
 
   // MARK: - Keys & Logger
   private let userDefaults: UserDefaults
@@ -136,7 +144,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     isAvailable = false
     isWritable = false
     statusMessage = "No export folder selected"
-    destinationId = nil
+    setIdentity(nil)
     stashedLegacyDestinationId = nil
     userDefaults.removeObject(forKey: bookmarkDefaultsKey)
     logger.info("Cleared export destination selection")
@@ -342,44 +350,25 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   /// Derives a stable `destinationId` for a folder URL.
   ///
-  /// The id is `SHA-256(volumeUUID || U+0000 || volumeRelativePath)`. Survives bookmark refresh
-  /// on the same drive **and** rename of the drive (e.g. `/Volumes/MyDrive` →
-  /// `/Volumes/PhotoBackup`) — the path component is taken in the volume's coordinate system,
-  /// not as the absolute mount path. Changes only when the volume is reformatted, the folder is
-  /// moved to a different volume, or the user duplicates the folder via Finder.
+  /// Delegates to `DestinationFingerprint.compute(for:)`. The id is bug-for-bug compatible with
+  /// the pre-Phase-0 derivation: `SHA-256(volumeUUID || U+0000 || volumeRelativePath)` for
+  /// drives with a volume UUID, falling back to `String(describing: volumeIdentifier)` for
+  /// drives without one (low-confidence identity). Survives bookmark refresh on the same drive
+  /// and rename of the drive, since the path component is taken in the volume's coordinate
+  /// system rather than the absolute mount path.
   ///
-  /// Returns `nil` when the volume identifier cannot be read (typically because the drive is
-  /// unmounted). Callers treat this as "destination not yet available" and wait for the volume
-  /// to mount.
+  /// Returns `nil` when no usable identity component can be read (typically because the drive
+  /// is unmounted). Callers treat this as "destination not yet available" and wait for the
+  /// volume to mount.
   static func computeDestinationId(for url: URL) -> String? {
-    let resolved = url.resolvingSymlinksInPath()
-    let keys: Set<URLResourceKey> = [.volumeUUIDStringKey, .volumeIdentifierKey, .volumeURLKey]
-    guard let values = try? resolved.resourceValues(forKeys: keys) else { return nil }
-    let volumeId: String
-    if let uuid = values.volumeUUIDString {
-      volumeId = uuid
-    } else if let identifier = values.volumeIdentifier {
-      // `volumeIdentifier` is `(NSCopying & NSSecureCoding & NSObjectProtocol)?`; its description is
-      // the platform's stable token for the volume.
-      volumeId = String(describing: identifier)
-    } else {
-      return nil
-    }
-    // Strip the volume mount prefix so renaming the drive (`/Volumes/MyDrive` →
-    // `/Volumes/PhotoBackup`) doesn't change the digest. For the boot volume the mount root
-    // is "/" and the relative path equals the absolute path.
-    let canonicalPath = resolved.standardizedFileURL.path
-    let volumeRoot = values.volume?.standardizedFileURL.path ?? ""
-    var relativePath = canonicalPath
-    if !volumeRoot.isEmpty, volumeRoot != "/", canonicalPath.hasPrefix(volumeRoot) {
-      relativePath = String(canonicalPath.dropFirst(volumeRoot.count))
-    }
-    if !relativePath.hasPrefix("/") {
-      relativePath = "/" + relativePath
-    }
-    let combined = volumeId + "\u{0000}" + relativePath
-    let digest = SHA256.hash(data: Data(combined.utf8))
-    return digest.map { String(format: "%02x", $0) }.joined()
+    DestinationFingerprint.compute(for: url)?.fingerprint.id
+  }
+
+  /// Computes the full `DestinationFingerprint` for a folder URL. Used by code paths that need
+  /// identity-confidence and the structured volume/path components in addition to the id.
+  /// Returns `nil` under the same conditions as `computeDestinationId(for:)`.
+  static func computeDestinationFingerprint(for url: URL) -> DestinationFingerprint? {
+    DestinationFingerprint.compute(for: url)?.fingerprint
   }
 
   /// Pre-Phase-0 destination-id derivation: SHA-256 of the security-scoped bookmark bytes.
@@ -405,6 +394,27 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     return Self.legacyDestinationId(from: data)
   }
 
+  /// Sets `destinationFingerprint` and `destinationId` together. Pair-write helper kept
+  /// private so the class's own callers can't desynchronize the two `@Published` properties.
+  /// Note: `@Published` emits one event per write, so subscribers see two emissions per
+  /// call (fingerprint then id); by the time both have fired the pair is consistent. Mid-
+  /// emission reads must use `$destinationFingerprint` and read `fingerprint?.id` rather
+  /// than `destinationId` directly.
+  private func setIdentity(_ fingerprint: DestinationFingerprint?) {
+    destinationFingerprint = fingerprint
+    destinationId = fingerprint?.id
+  }
+
+  /// Pre-Phase-0a low-confidence legacy id for the currently selected folder. Returns the
+  /// volumeIdentifier-based digest the previous code used as the record-store directory name
+  /// for drives without a volume UUID; returns nil for high-confidence drives or when no
+  /// folder is selected. `ExportRecordsDirectoryCoordinator` accepts this as a secondary
+  /// legacy id so existing low-confidence record stores keep working across the upgrade.
+  func currentPreV2LowConfidenceLegacyId() -> String? {
+    guard let url = selectedFolderURL else { return nil }
+    return DestinationFingerprint.preV2LowConfidenceId(for: url)
+  }
+
   private func saveBookmark(for url: URL) -> Bool {
     do {
       let data = try url.bookmarkData(
@@ -424,7 +434,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   private func restoreBookmarkIfAvailable() {
     guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else {
       statusMessage = "No export folder selected"
-      destinationId = nil
+      setIdentity(nil)
       return
     }
     // Capture the legacy hash from the *original* bytes before any stale-bookmark refresh.
@@ -453,7 +463,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       selectedFolderURL = nil
       isAvailable = false
       isWritable = false
-      destinationId = nil
+      setIdentity(nil)
       stashedLegacyDestinationId = nil
     }
   }
@@ -491,13 +501,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       statusMessage = nil
     }
 
-    // Derive the stable destinationId once the volume is reachable. When the drive is
-    // unmounted, volume-resource keys are unreadable; clear the id so the rest of the app
-    // treats the destination as unavailable until the drive comes back.
+    // Derive the stable fingerprint once the volume is reachable. When the drive is
+    // unmounted, volume-resource keys are unreadable; clear both the id and the fingerprint
+    // so the rest of the app treats the destination as unavailable until the drive comes back.
     if isAvailable {
-      destinationId = Self.computeDestinationId(for: url)
+      setIdentity(Self.computeDestinationFingerprint(for: url))
     } else {
-      destinationId = nil
+      setIdentity(nil)
     }
   }
 

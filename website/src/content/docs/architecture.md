@@ -77,6 +77,74 @@ Orchestrates the export queue. Depends on the other three managers.
 - Updates per-variant export records after each successful write; a failed edited variant
   does not roll back a completed original variant
 - Runs the "Import Existing Backup…" flow
+- Awaitable `runExport(context:)` API for AutoSync; an `autoSyncEligibilityCheck`
+  closure consulted at enqueue time skips assets whose retry entries are in
+  backoff (Auto-Sync runs only)
+
+### AutoSyncManager
+
+Orchestrates Auto Export. Wraps a pure `AutoSyncReducer` with a Combine-based
+effect runner so timing-sensitive decisions (debounce, retry backoff, run
+dispatch) are testable without wall-clock waits.
+
+- Pure `reduce(event, state, now) -> (state, [effect])` reducer. Tests assert
+  effect-list equality without executing them.
+- Subscribes to seven publishers on `attach(to:)`: destination snapshot,
+  scope selection, version selection, import state, export run state,
+  completed-run summaries (manual-run completion hook), and PhotoKit
+  persistent changes.
+- Sequential per-scope fan-out for the `.autoExport(scopes)` run shape;
+  cancellable on disable / destination clear so a long multi-scope chain
+  stops at the next await boundary.
+- Per-destination persistence under `<App Support>/<bundleId>/AutoSync/`:
+  dirty-state JSON, retry-state JSON, last run summary, last durably-
+  recorded persistent-change token. Global token at the same parent.
+- Read-modify-write paths for retry state use the manager's in-memory
+  `@Published currentRetryState` as the source of truth for the currently-
+  active destination, so successive mutations (failure recording, manual
+  Retry) compose correctly across a multi-scope fan-out.
+
+### PhotoLibraryPersistentChangeAdapter
+
+Adapts PhotoKit's `PHPhotoLibraryChangeObserver` + `fetchPersistentChanges`
+into the `Result`-typed event stream AutoSync consumes.
+
+- Establishes a baseline on first launch (silent — no event emitted),
+  runs an immediate catch-up fetch on `start()` to surface any changes
+  that landed while the app was quit, then emits one
+  `PhotoLibraryPersistentChangeEvent` per subsequent
+  `photoLibraryDidChange` callback carrying inserted / updated /
+  deleted local identifiers
+- Maps the three documented PhotoKit failure modes (token expired, token
+  invalid, details unavailable) onto the corresponding
+  `PhotoLibraryPersistentChangeFetchError` cases so AutoSync can route each
+  to a bounded full-reconciliation fallback
+- Subscribes to `PhotoLibraryManager.$authorizationStatus` so the observer
+  registers on the first sufficient status, not just at app launch
+- Skipped under XCTest / swift-testing so the test process doesn't trip the
+  Photos-library permission prompt at DerivedData paths
+
+### DestinationSafetyMonitor
+
+Detects the Phase 0b "non-empty destination with no matching records" state
+and surfaces it as `@Published needsSafetyConfirmation`, which
+`DestinationSnapshotAdapter` folds into the
+`DestinationSnapshot.safety` field as `.unsafeNeedsConfirmation`.
+
+- Closure-based directory scan injection so unit tests can drive the
+  monitor without a real `ExportDestinationManager`
+- Stale-generation guard discards late-arriving scan results when the user
+  has already switched destinations
+- Confirmation persists per-destination at
+  `AutoSync/destinations/<id>/safetyRecord.json` so previously-confirmed
+  destinations never re-prompt
+
+### AppLifecycleCoordinator
+
+Owns destination-change handling and the migration-conflict detection
+that surfaces as `.unsafeMigrationConflict`. `gcLegacyState` closure-based
+dependency keeps filesystem layout decisions out of the coordinator and
+in `PhotoExportApp` where the record-store directory roots are known.
 
 ## Supporting Services
 
