@@ -251,7 +251,11 @@ final class AutoSyncManager: ObservableObject {
     guard let environment = environment,
       let destinationId = reducerState.destination.id
     else { return }
-    var retry = environment.retryStateStore.load(destinationId: destinationId)
+    // Mutate the in-memory snapshot, then persist. Avoids a disk-reload
+    // that could miss a concurrent mutation from the
+    // `.recordRetryFailures` effect handler — both paths now operate on
+    // `currentRetryState` so successive mutations compose correctly.
+    var retry = currentRetryState
     retry.removeEntry(scope: scope, assetId: assetId, variant: variant)
     do {
       try environment.retryStateStore.save(retry, destinationId: destinationId)
@@ -384,11 +388,30 @@ final class AutoSyncManager: ObservableObject {
         }
 
       case .recordRetryFailures(let failures, let destinationId):
-        // Read-modify-write the retry state for this destination. The
-        // reducer doesn't hold retry state in memory yet (Slice C will
-        // change that when it adds enqueue-time eligibility); for now the
-        // store is the source of truth and we touch it directly.
-        var retry = environment.retryStateStore.load(destinationId: destinationId)
+        // Two paths:
+        //
+        // (a) Hot path — `destinationId` matches the currently-active
+        //     destination. Use the in-memory `currentRetryState` as the
+        //     source of truth and mutate-then-persist. This closes a
+        //     subtle race where the user pressed Retry in the Issues UI
+        //     between two scope iterations of a multi-scope fan-out: a
+        //     disk-reload here would re-read the user's just-cleared
+        //     entry and re-record the failure on top, silently losing
+        //     the clear. Both paths (this one and `retryFailedVariant`)
+        //     now use the in-memory snapshot, so successive mutations
+        //     compose correctly.
+        //
+        // (b) Cold path — `destinationId` is some other destination
+        //     (user switched between dispatch and effect-run). Disk-
+        //     load is correct here because `currentRetryState` is for
+        //     a different destination; clobbering it with a stale read
+        //     would be wrong. The cold path doesn't touch
+        //     `currentRetryState`.
+        let isHotPath = (reducerState.destination.id == destinationId)
+        var retry =
+          isHotPath
+          ? currentRetryState
+          : environment.retryStateStore.load(destinationId: destinationId)
         for failure in failures {
           let scope = Self.retryScopeKey(for: failure.placement)
           let priorAttempts =
@@ -417,10 +440,7 @@ final class AutoSyncManager: ObservableObject {
             "Failed to persist retry state for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
           )
         }
-        // Push to UI: only if this destination is still the current one
-        // (avoids overwriting a different destination's view if the user
-        // switched between dispatch and effect-run).
-        if reducerState.destination.id == destinationId, currentRetryState != retry {
+        if isHotPath, currentRetryState != retry {
           currentRetryState = retry
         }
       }
