@@ -12,6 +12,7 @@ struct LibraryRootView: View {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @EnvironmentObject private var whatsNewState: WhatsNewState
 
   @State private var section: LibrarySection = .timeline
   @State private var selection: LibrarySelection? = .timelineMonth(
@@ -71,6 +72,22 @@ struct LibraryRootView: View {
     .sheet(isPresented: $isShowingImportSheet) {
       ImportView()
         .environmentObject(exportManager)
+    }
+    // First launch on a new app version shows a brief "What's New" sheet
+    // explaining new UI surfaces and reassuring the user about file safety.
+    // Attached here (not on `ContentView`) so it only renders post-auth /
+    // post-onboarding, when the user is in the main library view. The
+    // sheet's @Published `shouldShow` flips to false on dismiss, so the
+    // binding doesn't re-present.
+    .sheet(
+      isPresented: Binding(
+        get: { whatsNewState.shouldShow },
+        set: { newValue in
+          if !newValue { whatsNewState.markAsSeen() }
+        }
+      )
+    ) {
+      WhatsNewView(state: whatsNewState)
     }
     .onChange(of: selection) { _, newValue in
       // Track the last selection within each section so the segmented switch restores

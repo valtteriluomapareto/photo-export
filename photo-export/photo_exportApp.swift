@@ -22,6 +22,7 @@ struct PhotoExportApp: App {
   /// `let` — no view subscribes to them.
   @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
   @StateObject private var loginItemController: LoginItemController
+  @StateObject private var whatsNewState: WhatsNewState
 
   private let autoSyncDestinationAdapter: DestinationSnapshotAdapter
   private let autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
@@ -127,6 +128,7 @@ struct PhotoExportApp: App {
     _autoSyncManager = StateObject(wrappedValue: asm)
     _autoSyncScopeStore = StateObject(wrappedValue: scopeStore)
     _loginItemController = StateObject(wrappedValue: LoginItemController())
+    _whatsNewState = StateObject(wrappedValue: WhatsNewState())
     _destinationSafetyMonitor = StateObject(wrappedValue: safetyMonitor)
     self.autoSyncDestinationAdapter = destinationAdapter
     self.autoSyncPhotoChangeAdapter = photoAdapter
@@ -154,6 +156,7 @@ struct PhotoExportApp: App {
         .environmentObject(collectionExportRecordStore)
         .environmentObject(autoSyncManager)
         .environmentObject(autoSyncScopeStore)
+        .environmentObject(whatsNewState)
         .task {
           lifecycleCoordinator.attach(
             initial: DestinationIdentitySnapshot(
