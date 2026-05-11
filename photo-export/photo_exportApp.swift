@@ -30,6 +30,7 @@ struct PhotoExportApp: App {
   private let autoSyncRunSummaryStore: FileBackedAutoSyncRunSummaryStore
   private let autoSyncPerDestinationTokenStore: FileBackedAutoSyncPerDestinationTokenStore
   private let autoSyncClock: SystemAutoSyncClock
+  @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
   init() {
     let edm = ExportDestinationManager()
@@ -84,8 +85,17 @@ struct PhotoExportApp: App {
       tokenStore: tokenStore,
       authorizationStatusPublisher: plm.$authorizationStatus.eraseToAnyPublisher()
     )
+    let safetyConfirmationStore = FileBackedDestinationSafetyConfirmationStore(
+      baseDirectoryURL: destinationsRoot)
+    let safetyMonitor = DestinationSafetyMonitor(
+      destinationManager: edm,
+      exportRecordStore: ers,
+      collectionExportRecordStore: cers,
+      confirmationStore: safetyConfirmationStore
+    )
     let destinationAdapter = DestinationSnapshotAdapter(
-      destinationManager: edm, lifecycleCoordinator: coordinator)
+      destinationManager: edm, lifecycleCoordinator: coordinator,
+      safetyMonitor: safetyMonitor)
     let scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: .standard)
     let clock = SystemAutoSyncClock()
     let asm = AutoSyncManager()
@@ -117,6 +127,7 @@ struct PhotoExportApp: App {
     _autoSyncManager = StateObject(wrappedValue: asm)
     _autoSyncScopeStore = StateObject(wrappedValue: scopeStore)
     _loginItemController = StateObject(wrappedValue: LoginItemController())
+    _destinationSafetyMonitor = StateObject(wrappedValue: safetyMonitor)
     self.autoSyncDestinationAdapter = destinationAdapter
     self.autoSyncPhotoChangeAdapter = photoAdapter
     self.autoSyncDirtyStateStore = dirtyStore
@@ -169,6 +180,12 @@ struct PhotoExportApp: App {
           )
           autoSyncManager.attach(to: environment)
           autoSyncPhotoChangeAdapter.start()
+          // Phase 0b: monitor begins observing destination changes and
+          // running the safety scan against the active destination's
+          // contents. Attached after lifecycleCoordinator so the record
+          // stores have been configure(for:)d for the current destination
+          // before the monitor reads their counts.
+          destinationSafetyMonitor.attach()
         }
     }
     .defaultSize(width: 1100, height: 640)
@@ -212,6 +229,7 @@ struct PhotoExportApp: App {
       .environmentObject(exportManager)
       .environmentObject(lifecycleCoordinator)
       .environmentObject(loginItemController)
+      .environmentObject(destinationSafetyMonitor)
     }
     .windowResizability(.contentMinSize)
   }

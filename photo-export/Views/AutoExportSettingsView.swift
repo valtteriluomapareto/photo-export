@@ -13,8 +13,10 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @EnvironmentObject private var loginItemController: LoginItemController
+  @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
 
   @State private var isShowingMigrationRecoverySheet = false
+  @State private var isShowingSafetyConfirm = false
 
   var body: some View {
     Form {
@@ -22,6 +24,13 @@ struct AutoExportSettingsView: View {
         Section {
           MigrationConflictBanner {
             isShowingMigrationRecoverySheet = true
+          }
+          .listRowInsets(EdgeInsets())
+        }
+      } else if safetyMonitor.needsSafetyConfirmation {
+        Section {
+          SafetyConfirmationBanner {
+            isShowingSafetyConfirm = true
           }
           .listRowInsets(EdgeInsets())
         }
@@ -119,6 +128,20 @@ struct AutoExportSettingsView: View {
         .environmentObject(lifecycleCoordinator)
         .environmentObject(exportManagerFromEnvironment)
         .environmentObject(exportDestinationManager)
+    }
+    .confirmationDialog(
+      "Confirm Destination",
+      isPresented: $isShowingSafetyConfirm,
+      titleVisibility: .visible
+    ) {
+      Button("Use This Destination") {
+        safetyMonitor.confirmCurrentDestination()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "The selected destination already contains files, but this app has no record of exporting to it. If those files belong to you and you want Auto Export to add to this folder, confirm. Auto Export will never delete or overwrite existing files."
+      )
     }
   }
 
@@ -229,6 +252,45 @@ private struct MigrationConflictBanner: View {
         HStack {
           Spacer()
           Button("Resolve\u{2026}") { onTap() }
+            .controlSize(.regular)
+        }
+      }
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 12)
+    .background(
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .fill(Color.orange.opacity(0.1))
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(Color.orange.opacity(0.4), lineWidth: 1)
+    )
+    .padding(.horizontal, 12)
+    .padding(.vertical, 6)
+  }
+}
+
+private struct SafetyConfirmationBanner: View {
+  let onTap: () -> Void
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "exclamationmark.shield.fill")
+        .foregroundStyle(.orange)
+        .font(.title3)
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Confirm This Destination")
+          .font(.headline)
+        Text(
+          "The destination folder already contains files. Auto Export needs you to confirm it's your backup before it starts writing."
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        HStack {
+          Spacer()
+          Button("Review\u{2026}") { onTap() }
             .controlSize(.regular)
         }
       }
