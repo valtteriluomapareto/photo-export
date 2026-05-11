@@ -153,19 +153,34 @@ struct ExportFolderTests {
 
     h.photoLib.collectionTree = [target, outsideAlbum]
 
+    // Block the worker on the writer so `pendingJobs` doesn't drain while we
+    // assert on queued state. Without this, `processQueueIfNeeded()` (called at
+    // the end of the enqueue helper) synchronously pulls the first job into
+    // flight, leaving `pendingJobs` short by one.
+    let writerGate = AsyncCheckpoint()
+    h.writer.checkpoint = writerGate
+
     h.manager.startExportFolder(folderId: "Target")
     await waitUntil(h.manager.totalJobsEnqueued == 3)
+    // The worker has pulled one job and is suspended on the writer checkpoint;
+    // wait for that to land so `currentJobAssetId` is populated.
+    await writerGate.waitForEnter(count: 1)
 
     #expect(h.manager.totalJobsEnqueued == 3)
 
     // Verify by queued asset ids: only the inside-folder ids should appear.
+    // Union pendingJobs with the in-flight job to cover the worker-pulled one.
     let queuedAssetIds = Set(h.manager.pendingJobs.map(\.assetLocalIdentifier))
+      .union([h.manager.currentJobAssetId].compactMap { $0 })
     #expect(queuedAssetIds == ["x1", "x2", "x3"])
     #expect(!queuedAssetIds.contains("o1"))
 
     // Every queued placement must be an album.
     let kinds = Set(h.manager.pendingJobs.map { $0.placement.kind })
+      .union([h.manager.currentJobPlacement?.kind].compactMap { $0 })
     #expect(kinds.isSubset(of: [.album]))
+
+    await writerGate.releaseAll()
   }
 
   /// A descendant album must produce the exact same `ExportPlacement` it would have
@@ -190,13 +205,22 @@ struct ExportFolderTests {
       existingPlacements: []
     )
 
+    // Block the worker so the single queued job stays inspectable instead of
+    // being pulled into flight by `processQueueIfNeeded` before we assert.
+    let writerGate = AsyncCheckpoint()
+    h.writer.checkpoint = writerGate
+
     h.manager.startExportFolder(folderId: "2025")
     await waitUntil(h.manager.totalJobsEnqueued == 1)
+    await writerGate.waitForEnter(count: 1)
 
-    let queued = try #require(h.manager.pendingJobs.first)
-    #expect(queued.placement.id == directPlacement.id)
-    #expect(queued.placement.relativePath == directPlacement.relativePath)
-    #expect(queued.placement.kind == .album)
+    // The single job is in-flight on the worker; read from currentJob* slots.
+    let queuedPlacement = try #require(h.manager.currentJobPlacement)
+    #expect(queuedPlacement.id == directPlacement.id)
+    #expect(queuedPlacement.relativePath == directPlacement.relativePath)
+    #expect(queuedPlacement.kind == .album)
+
+    await writerGate.releaseAll()
   }
 
   @Test func emptyFolderSetsNoAlbumsMessage() async throws {
@@ -233,11 +257,21 @@ struct ExportFolderTests {
       kind: .folder, pathComponents: [], children: [inner])
     h.photoLib.collectionTree = [outer]
 
+    // Block the worker so the lone queued job is observable. Without this,
+    // `processQueueIfNeeded` pulls it into flight before the assertion runs.
+    let writerGate = AsyncCheckpoint()
+    h.writer.checkpoint = writerGate
+
     h.manager.startExportFolder(folderId: "Outer")
     await waitUntil(h.manager.totalJobsEnqueued == 1)
+    await writerGate.waitForEnter(count: 1)
 
     #expect(h.manager.totalJobsEnqueued == 1)
-    #expect(h.manager.pendingJobs.first?.assetLocalIdentifier == "l1")
+    let queuedAssetId =
+      h.manager.pendingJobs.first?.assetLocalIdentifier ?? h.manager.currentJobAssetId
+    #expect(queuedAssetId == "l1")
+
+    await writerGate.releaseAll()
   }
 
   @Test func missingFolderSetsExplanatoryMessage() async throws {
@@ -298,12 +332,21 @@ struct ExportFolderTests {
     let albumC = seedAlbum(h.photoLib, localId: "C", ids: ["c1"])
     h.photoLib.collectionTree = [albumA, albumB, albumC]
 
+    // Block the worker so all queued jobs remain inspectable instead of being
+    // partly drained by `processQueueIfNeeded`.
+    let writerGate = AsyncCheckpoint()
+    h.writer.checkpoint = writerGate
+
     h.manager.startExportAlbums(collectionIds: ["A", "B"])
     await waitUntil(h.manager.totalJobsEnqueued == 3)
+    await writerGate.waitForEnter(count: 1)
 
     let queuedAssetIds = Set(h.manager.pendingJobs.map(\.assetLocalIdentifier))
+      .union([h.manager.currentJobAssetId].compactMap { $0 })
     #expect(queuedAssetIds == ["a1", "b1", "b2"])
     #expect(!queuedAssetIds.contains("c1"))
+
+    await writerGate.releaseAll()
   }
 
   /// Duplicate ids in the input collapse to a single enqueue per album. The caller

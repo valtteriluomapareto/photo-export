@@ -32,7 +32,7 @@ struct FolderTileView: View {
     case idle
     case loading
     case loaded
-    case empty   // album has no assets
+    case empty  // album has no assets
     case failed
   }
 
@@ -193,7 +193,7 @@ struct FolderTileView: View {
   private var captionText: String {
     switch descriptor.kind {
     case .album:
-      guard let photoCount else { return " " }   // reserve line height while loading
+      guard let photoCount else { return " " }  // reserve line height while loading
       return photoCount == 1 ? "1 photo" : "\(photoCount) photos"
     case .folder:
       let albums = albumCount == 1 ? "1 album" : "\(albumCount) albums"

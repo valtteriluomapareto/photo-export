@@ -144,7 +144,8 @@ struct FolderContentView: View {
   // MARK: - Summary header
 
   private var summaryView: some View {
-    let albumIds = hasSelection
+    let albumIds =
+      hasSelection
       ? selectedAlbumIds
       : (folder.map(PhotoCollectionDescriptor.albumLocalIds(under:)) ?? [])
     let albumCount = albumIds.count
@@ -274,7 +275,8 @@ struct FolderContentView: View {
   /// Click dispatch. Cmd toggles, Shift extends a range from the anchor, plain click
   /// clears any selection and navigates. Range extension uses the visible child order
   /// (the same order the grid renders) so a Shift-click feels predictable.
-  private func handleTap(on child: PhotoCollectionDescriptor, in folder: PhotoCollectionDescriptor) {
+  private func handleTap(on child: PhotoCollectionDescriptor, in folder: PhotoCollectionDescriptor)
+  {
     if modifiers.command {
       toggleSelection(of: child)
     } else if modifiers.shift {
@@ -325,9 +327,11 @@ struct FolderContentView: View {
     var total = 0
     let albumPlacements = collectionExportRecordStore.placements(matching: .album)
     for id in albumIds {
-      guard let placement = albumPlacements.first(where: {
-        $0.collectionLocalIdentifier == id
-      }) else { continue }
+      guard
+        let placement = albumPlacements.first(where: {
+          $0.collectionLocalIdentifier == id
+        })
+      else { continue }
       let recorded = collectionExportRecordStore.summary(for: placement).exportedCount
       let live = countsByDescriptorId["album:\(id)"] ?? recorded
       total += min(recorded, live)
@@ -415,8 +419,9 @@ struct FolderContentView: View {
       switch descriptor.kind {
       case .album:
         if let id = descriptor.localIdentifier {
-          let n = (try? await photoLibraryManager.cachedCountAssets(
-            in: .album(collectionId: id))) ?? 0
+          let n =
+            (try? await photoLibraryManager.cachedCountAssets(
+              in: .album(collectionId: id))) ?? 0
           counts[descriptor.id] = n
         }
       case .folder:
