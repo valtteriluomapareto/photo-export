@@ -12,6 +12,7 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
+  @EnvironmentObject private var loginItemController: LoginItemController
 
   @State private var isShowingMigrationRecoverySheet = false
 
@@ -82,7 +83,35 @@ struct AutoExportSettingsView: View {
           .font(.caption)
           .foregroundStyle(.secondary)
       }
+
+      Section("Startup") {
+        Toggle(
+          isOn: Binding(
+            get: { loginItemController.status == .enabled },
+            set: { newValue in
+              if newValue {
+                loginItemController.register()
+              } else {
+                loginItemController.unregister()
+              }
+            }
+          )
+        ) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Open Photo Export at login")
+            Text(loginItemFooter)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+        if loginItemController.status == .requiresApproval {
+          Button("Open System Settings\u{2026}") {
+            loginItemController.openSystemLoginItems()
+          }
+        }
+      }
     }
+    .onAppear { loginItemController.refresh() }
     .formStyle(.grouped)
     .frame(minWidth: 460, minHeight: 460)
     .sheet(isPresented: $isShowingMigrationRecoverySheet) {
@@ -133,6 +162,23 @@ struct AutoExportSettingsView: View {
       return false
     case .idle, .scheduled, .waiting:
       return true
+    }
+  }
+
+  private var loginItemFooter: String {
+    switch loginItemController.status {
+    case .enabled:
+      return "Photo Export will start automatically when you log in."
+    case .requiresApproval:
+      return
+        "macOS is waiting for you to confirm in System Settings → Login Items."
+    case .notRegistered:
+      return "Photo Export won't auto-start at login."
+    case .notFound:
+      return
+        "Move Photo Export into your Applications folder to enable launch at login."
+    case .unknown:
+      return "Status unknown — check System Settings → Login Items."
     }
   }
 
