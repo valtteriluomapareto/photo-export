@@ -211,6 +211,20 @@ private struct FailureRow: View {
     formatter.unitsStyle = .short
     let last = formatter.localizedString(
       for: entry.entry.lastFailedAt, relativeTo: Date())
-    return "Last failed \(last)"
+    let retryClause: String
+    if let nextEligibleAt = entry.entry.nextEligibleAt {
+      if nextEligibleAt > Date() {
+        let inWhen = formatter.localizedString(for: nextEligibleAt, relativeTo: Date())
+        retryClause = " · auto-retry \(inWhen)"
+      } else {
+        retryClause = " · eligible to retry now"
+      }
+    } else if entry.entry.category.isAutomaticallyRetryable {
+      // Shouldn't happen — auto-retryable always gets a nextEligibleAt.
+      retryClause = ""
+    } else {
+      retryClause = " · needs action"
+    }
+    return "Last failed \(last)\(retryClause)"
   }
 }

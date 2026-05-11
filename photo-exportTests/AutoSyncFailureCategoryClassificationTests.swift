@@ -88,6 +88,35 @@ struct AutoSyncFailureCategoryClassificationTests {
         == AutoSyncFailureCategory.classify(error2).errorSignature)
   }
 
+  @Test func backoffAttemptOneFiresAfter30Seconds() {
+    let failedAt = Date(timeIntervalSince1970: 1_000_000)
+    let next = AutoSyncFailureCategory.iCloudTransient.nextEligibleAt(
+      attemptCount: 1, from: failedAt)
+    #expect(next == failedAt.addingTimeInterval(30))
+  }
+
+  @Test func backoffEscalatesAcrossAttempts() {
+    let failedAt = Date(timeIntervalSince1970: 1_000_000)
+    let delays: [(Int, TimeInterval)] = [
+      (1, 30), (2, 120), (3, 600), (4, 3600), (5, 21_600), (10, 21_600),
+    ]
+    for (attempt, expectedDelay) in delays {
+      let next = AutoSyncFailureCategory.unknown.nextEligibleAt(
+        attemptCount: attempt, from: failedAt)
+      #expect(next == failedAt.addingTimeInterval(expectedDelay))
+    }
+  }
+
+  @Test func hardCategoriesHaveNoBackoff() {
+    let failedAt = Date()
+    for category in [
+      AutoSyncFailureCategory.destinationPermission, .destinationNoSpace,
+      .assetMissing, .resourceMissing, .destinationUnavailable,
+    ] {
+      #expect(category.nextEligibleAt(attemptCount: 1, from: failedAt) == nil)
+    }
+  }
+
   @Test func sentinelBuildsExplicitSignal() {
     let signal = AutoSyncFailureCategory.sentinel(
       category: .assetMissing, signature: "asset-missing", message: "Asset not found")

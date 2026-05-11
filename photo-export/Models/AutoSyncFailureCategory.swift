@@ -28,4 +28,28 @@ enum AutoSyncFailureCategory: String, Codable, Equatable, CaseIterable, Sendable
       return false
     }
   }
+
+  /// Exponential backoff for auto-retryable categories. Returns the
+  /// wall-clock instant at which the retry policy considers a fresh
+  /// attempt eligible, or `nil` for non-auto-retryable categories — those
+  /// require user action (`destinationPermission`, `destinationNoSpace`,
+  /// `assetMissing`, `resourceMissing`) or a state change
+  /// (`destinationUnavailable` waits for the drive to come back).
+  ///
+  /// Per `(category, signature)` group, attempts back off:
+  ///   1 → 30 s, 2 → 2 m, 3 → 10 m, 4 → 1 h, 5+ → 6 h (cap)
+  /// Conservative — tuned to be polite to iCloud / PhotoKit rate limits
+  /// rather than to recover instantly.
+  func nextEligibleAt(attemptCount: Int, from failedAt: Date) -> Date? {
+    guard isAutomaticallyRetryable else { return nil }
+    let delay: TimeInterval
+    switch attemptCount {
+    case ..<1, 1: delay = 30
+    case 2: delay = 120
+    case 3: delay = 600
+    case 4: delay = 3600
+    default: delay = 21_600  // 6 hours
+    }
+    return failedAt.addingTimeInterval(delay)
+  }
 }

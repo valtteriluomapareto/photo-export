@@ -339,14 +339,24 @@ final class AutoSyncManager: ObservableObject {
         // store is the source of truth and we touch it directly.
         var retry = environment.retryStateStore.load(destinationId: destinationId)
         for failure in failures {
+          let scope = Self.retryScopeKey(for: failure.placement)
+          let priorAttempts =
+            retry.entry(scope: scope, assetId: failure.assetId, variant: failure.variant)?
+            .attemptCount ?? 0
+          // recordFailure increments to `priorAttempts + 1` (when signature
+          // matches) or resets to 1 (signature differs). For backoff
+          // purposes the next-attempt count is `priorAttempts + 1`.
+          let nextAttempt = priorAttempts + 1
+          let nextEligibleAt = failure.category.nextEligibleAt(
+            attemptCount: nextAttempt, from: failure.failedAt)
           retry.recordFailure(
-            scope: Self.retryScopeKey(for: failure.placement),
+            scope: scope,
             assetId: failure.assetId,
             variant: failure.variant,
             category: failure.category,
             errorSignature: failure.errorSignature,
             at: failure.failedAt,
-            nextEligibleAt: nil
+            nextEligibleAt: nextEligibleAt
           )
         }
         do {
