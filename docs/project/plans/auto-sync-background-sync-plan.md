@@ -1,7 +1,7 @@
 # Auto-Sync and Background Sync Plan
 
 Date: 2026-05-08
-Status: In progress (last status update 2026-05-09)
+Status: In progress (last status update 2026-05-11)
 
 ## Implementation Status
 
@@ -9,16 +9,16 @@ Snapshot of where each phase stands. Update alongside the implementation — the
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| **Phase 0a** Pure Refactor Foundations | ✅ Complete | Awaitable `runExport`, fingerprint identity, lifecycle coordinator, destination loss interruption. Branch `auto-sync-phase-0a` pushed. |
-| **Phase 0b** Locking and Safety | ❌ Not started | Gated by the advisory-lock spike. Destination safety scan (`unsafeNeedsConfirmation`) also deferred — currently only `unsafeMigrationConflict` is populated. |
+| **Phase 0a** Pure Refactor Foundations | ✅ Complete | Awaitable `runExport`, fingerprint identity, lifecycle coordinator, destination loss interruption. |
+| **Phase 0b** Locking and Safety | ❌ Not started | Gated by the advisory-lock spike. Destination safety scan (`unsafeNeedsConfirmation`) also deferred — currently only `unsafeMigrationConflict` is populated (with a Phase 4 recovery sheet). |
 | **Phase 0 Test Infrastructure** | ✅ Complete | `TestClock`, fakes for all four AutoSync protocols, in-memory dirty/retry/run-summary/per-destination-token stores. |
 | **Phase 1** Photos Change Tracking | 🟡 Mostly complete | Token storage, `PHPhotoLibraryChangeObserver` adapter, three-way error mapping, dirty state with cost-cap rollover, fallback debounce, storm control all in. **Missing:** "limited-access status copy/state" — reducer has the blocked reasons but nothing dispatches them. |
 | **Phase 2** AutoSync State Machine | ✅ Complete | Reducer + manager + protocols, all six publisher subscriptions, per-destination persistence (dirty / retry / lastRunSummary / lastDurablyRecordedToken). |
-| **Phase 3** Retry and Run Policy | 🟡 Slice A only | **Done:** `manualFullExportCompleted` clears compatible dirty (reducer + dispatch wiring); `retryTimerFired` falls through to recompute. **Missing:** failure-category routing (Slice B), retry-eligibility at enqueue (Slice C), manual retry override. |
-| **Phase 4** UI | 🟡 Slice 1 only | **Done:** Settings → Auto Export tab (enable + scopes + status + Export Now), toolbar status pill, `runNow()` API. **Missing:** menu bar item (NSStatusItem), notifications, Dock badge, Export Issues tab, `Open at login`, first-toggle-on hand-off, manual-export confirmation sheet, VoiceOver labels. |
+| **Phase 3** Retry and Run Policy | ✅ Complete | **Slice A:** `manualFullExportCompleted` clears compatible dirty. **Slice B:** failure classifier maps `Error` to `AutoSyncFailureCategory`; manager records into `AutoSyncRetryState`. **Slice C:** exponential backoff (30 s → 2 m → 10 m → 1 h → 6 h cap) + enqueue-time eligibility check skips ineligible variants as `skippedCount`. Manual retry override (UI affordance) still pending. |
+| **Phase 4** UI | 🟡 Substantial progress | **Done:** Settings scene (Auto Export + Export Issues tabs), main-window status pill, menu bar item (`MenuBarExtra`), `runNow()`, migration-conflict recovery sheet (Reconcile from destination), `Open at login` (SMAppService). **Missing:** completion/failure notifications (UNUserNotificationCenter), Dock badge, manual-export confirmation sheet (needs manual exports routed through `runExport(context:)`), first-toggle-on hand-off, VoiceOver labels, manual retry / ignore actions in Issues tab. |
 | **Phase 5** Verification and Docs | ❌ Not started | Reducer-contract tests largely already exist via Phase 2 work, but the structured Phase 5 audit + docs pass hasn't been done. |
 
-Branch tips: `auto-sync-phase-0a` (Phase 0a), `auto-sync-phase-2` (adds Phase 1 + 2), `auto-sync-phase-3` (adds Phase 3 Slice A), `auto-sync-phase-4` (adds Phase 4 Slice 1; cumulative tip).
+Branch tips: `auto-sync-phase-0a` (Phase 0a), `auto-sync-phase-2` (adds Phase 1 + 2), `auto-sync-phase-3` (adds Phase 3 Slice A), `auto-sync-phase-4` (cumulative tip — Phase 3 Slices A+B+C, all Phase 4 work so far).
 
 ## Summary
 
