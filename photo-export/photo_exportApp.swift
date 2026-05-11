@@ -188,6 +188,15 @@ struct PhotoExportApp: App {
     .windowResizability(.contentSize)
     .windowStyle(.hiddenTitleBar)
 
+    MenuBarExtra {
+      AutoSyncMenuBarContent()
+        .environmentObject(autoSyncManager)
+        .environmentObject(autoSyncScopeStore)
+        .environmentObject(exportDestinationManager)
+    } label: {
+      AutoSyncMenuBarLabel(state: autoSyncManager.state)
+    }
+
     Settings {
       TabView {
         AutoExportSettingsView()
