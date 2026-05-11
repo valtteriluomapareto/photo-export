@@ -39,12 +39,23 @@ final class AutoSyncManager: ObservableObject {
   private var subscriptions: Set<AnyCancellable> = []
   private var debounceTokens: [AutoSyncReason: AutoSyncCancellable] = [:]
   private var retryTimerToken: AutoSyncCancellable?
+  /// Tracks the active per-spec fan-out Task launched by `startRun`. A
+  /// single-active-run gate inside ExportManager already prevents
+  /// concurrent runs, but the *manager-side* fan-out across scopes (for
+  /// `.autoExport(scopes)`) is its own loop. Storing the task lets
+  /// `cancelActiveFanOut` interrupt the chain on disable / destination
+  /// clear / teardown so a long multi-scope run doesn't keep firing
+  /// scopes after the user toggled off Auto Export. `nil` when no
+  /// fan-out is in flight.
+  private var activeRunFanOutTask: Task<Void, Never>?
   private var isAttached = false
   /// Serializes event dispatch — events produced by an effect (e.g. an export run
   /// completing while we're in the middle of a `photosChanged` reduce) must be
   /// queued behind the in-flight event, not interleaved. Plan §"State Reducer":
   /// "Events produced by an effect ... are queued and processed after the current
-  /// event's effects complete."
+  /// event's effects complete." All `dispatch` callers must be on @MainActor;
+  /// effect handlers must not perform synchronous re-entry that escapes
+  /// MainActor.
   private var dispatching = false
   private var queuedEvents: [AutoSyncEvent] = []
 
@@ -209,6 +220,9 @@ final class AutoSyncManager: ObservableObject {
       if !currentRetryState.isEmpty {
         currentRetryState = .empty
       }
+      // Destination went away mid-run — stop the fan-out so subsequent
+      // scopes don't fail-fast against the missing destination.
+      cancelActiveFanOut()
     }
     dispatch(.destinationChanged(snapshot))
   }
@@ -258,6 +272,12 @@ final class AutoSyncManager: ObservableObject {
     environment?.userDefaults.set(enabled, forKey: Self.enabledDefaultsKey)
     if isEnabled != enabled {
       isEnabled = enabled
+    }
+    if !enabled {
+      // Disable while a multi-scope fan-out is mid-chain: stop the chain
+      // at the next await boundary rather than letting it run remaining
+      // scopes the user no longer wants.
+      cancelActiveFanOut()
     }
     dispatch(.enabledChanged(enabled))
   }
@@ -421,6 +441,11 @@ final class AutoSyncManager: ObservableObject {
 
   private func startRun(spec: StartRunSpec) {
     guard let environment else { return }
+    // Cancel any prior fan-out before starting a new one. The reducer's
+    // single-active-run invariants should already prevent overlap, but
+    // belt-and-braces: a misroute would never silently chain two fan-outs.
+    activeRunFanOutTask?.cancel()
+
     // For an `.autoExport(scopes)` spec, fan out to one `runExport` call per
     // enabled scope and dispatch `autoSyncRunCompleted` after each. The
     // reducer clears only the dirty for the scope each summary covers, so
@@ -428,8 +453,10 @@ final class AutoSyncManager: ObservableObject {
     // later scope fails. ExportManager's `runExport` doesn't implement
     // `.autoExport` directly — translating here keeps the runner narrow.
     let runScopes = Self.expand(scope: spec.scope)
-    Task { @MainActor [weak self] in
+    activeRunFanOutTask = Task { @MainActor [weak self] in
+      defer { self?.activeRunFanOutTask = nil }
       for runScope in runScopes {
+        if Task.isCancelled { return }
         let context = ExportRunContext(
           runId: UUID(),
           source: spec.source,
@@ -440,6 +467,9 @@ final class AutoSyncManager: ObservableObject {
           startedAt: environment.clock.now()
         )
         let summary = await environment.exportRunner.runExport(context: context)
+        // Check cancellation again after the await — the user may have
+        // toggled off / switched destinations during the run.
+        guard !Task.isCancelled else { return }
         self?.dispatch(.autoSyncRunCompleted(summary))
         if summary.result != .completed {
           // Stop the chain on the first non-completion so a destination that
@@ -451,6 +481,14 @@ final class AutoSyncManager: ObservableObject {
         }
       }
     }
+  }
+
+  /// Cancel any in-flight fan-out task. Called from disable / destination-
+  /// clear paths so a long multi-scope run stops at the next await boundary
+  /// instead of continuing scopes the user no longer cares about.
+  private func cancelActiveFanOut() {
+    activeRunFanOutTask?.cancel()
+    activeRunFanOutTask = nil
   }
 
   /// Expands an `.autoExport(scopes)` spec scope into per-scope full-scope

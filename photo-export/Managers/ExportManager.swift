@@ -149,7 +149,15 @@ final class ExportManager: ObservableObject {
   /// eligible. Manual exports use this default — they never gate on the
   /// AutoSync retry store. Wired by `PhotoExportApp` to read from
   /// `AutoSyncManager.currentRetryState`.
-  var autoSyncEligibilityCheck: ((String, ExportPlacement, ExportVariant, Date) -> Bool)?
+  ///
+  /// `@MainActor` annotation on the closure type makes the isolation
+  /// explicit at the type level — the production wiring reads from
+  /// `AutoSyncManager.currentRetryState`, which is `@MainActor`-isolated,
+  /// so the closure can only be safely invoked on the main actor. The
+  /// `ExportManager` enqueue paths that call it are already `@MainActor`,
+  /// so this is a no-op at runtime but prevents future off-main callers
+  /// from compiling.
+  var autoSyncEligibilityCheck: (@MainActor (String, ExportPlacement, ExportVariant, Date) -> Bool)?
 
   private struct ActiveRunBookkeeping {
     let totalJobsEnqueuedAtStart: Int
@@ -1065,8 +1073,17 @@ final class ExportManager: ObservableObject {
     )
     activeRunContext = nil
     activeRunBookkeeping = nil
-    bookkeeping.continuation.resume(returning: summary)
+    // Order matters: send the summary on `completedRunsSubject` *before*
+    // resuming the awaiter. AutoSync's manager subscribes to
+    // `completedRunsPublisher` and filters to `source == .manual`, so its
+    // own AutoSync-sourced runs never reach the manual-clear path either
+    // way. But the awaiter dispatches `.autoSyncRunCompleted(summary)`
+    // which is also queued behind the in-flight reducer event — and we
+    // want the subject emission to land first so that any reordering
+    // future-us applies stays self-consistent rather than relying on the
+    // continuation-resume / subject-send order to bend a specific way.
     completedRunsSubject.send(summary)
+    bookkeeping.continuation.resume(returning: summary)
   }
 
   func processQueueIfNeeded() {
