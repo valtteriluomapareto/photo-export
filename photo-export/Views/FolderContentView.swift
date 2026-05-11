@@ -69,6 +69,7 @@ struct FolderContentView: View {
     }
     .padding(.horizontal)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(keyboardShortcutsHost)
     .task(id: folderId + "|\(photoLibraryManager.libraryRevision)") {
       folder = findFolder(folderId: folderId)
       // Selection is per-folder; clear it whenever the visible folder changes so a
@@ -77,25 +78,40 @@ struct FolderContentView: View {
       selectionAnchorId = nil
       await loadCounts()
     }
-    .onKeyPress(.escape) {
-      if selectedChildIds.isEmpty { return .ignored }
-      selectedChildIds.removeAll()
-      selectionAnchorId = nil
-      return .handled
+  }
+
+  /// Hosts Cmd+A and Esc as hidden `Button.keyboardShortcut` so SwiftUI's window-level
+  /// shortcut dispatch picks them up. The prior `.onKeyPress` modifiers required the
+  /// containing view to be focusable — without a `@FocusState` + `.focusable()` chain
+  /// the modifiers never fired. Hidden buttons sidestep that: SwiftUI walks the view
+  /// hierarchy looking for shortcut matches regardless of focus, and `.disabled()`
+  /// gates Esc on the existence of a selection (so it doesn't preempt sheet dismissal).
+  private var keyboardShortcutsHost: some View {
+    Group {
+      Button("Select All") { selectAllChildren() }
+        .keyboardShortcut("a", modifiers: .command)
+      Button("Clear Selection") { clearSelection() }
+        .keyboardShortcut(.escape, modifiers: [])
+        .disabled(selectedChildIds.isEmpty)
     }
-    .onKeyPress(keys: ["a"]) { keyPress in
-      guard keyPress.modifiers.contains(.command) else { return .ignored }
-      selectAllChildren()
-      return .handled
-    }
+    .hidden()
+  }
+
+  private func clearSelection() {
+    selectedChildIds.removeAll()
+    selectionAnchorId = nil
   }
 
   /// Cmd+A: extend the multi-selection to every child tile in the current folder.
-  /// Matches Finder's select-all gesture inside a window.
+  /// Matches Finder's select-all gesture inside a window. Preserves the existing
+  /// anchor (if any) so a follow-up Shift-click extends/contracts from where the
+  /// user was, not from index 0.
   private func selectAllChildren() {
     guard let folder, !folder.children.isEmpty else { return }
     selectedChildIds = Set(folder.children.map(\.id))
-    selectionAnchorId = folder.children.first?.id
+    if selectionAnchorId == nil {
+      selectionAnchorId = folder.children.first?.id
+    }
   }
 
   // MARK: - Body branches
@@ -291,29 +307,13 @@ struct FolderContentView: View {
     return [child.id]
   }
 
-  /// Album local ids to export for the right-click target set. Subfolder tiles
-  /// expand to their descendant album ids; album tiles contribute their own id.
+  /// Album local ids to export for the right-click target set. Delegates to
+  /// `PhotoCollectionDescriptor.selectedAlbumIds(in:selecting:)` so subfolder
+  /// expansion, dedup, and `.favorites` exclusion live in one place.
   private func contextMenuAlbumIds(for child: PhotoCollectionDescriptor) -> [String] {
-    guard let folder, !folder.children.isEmpty else { return [] }
-    let targets = contextMenuTargetIds(for: child)
-    var ids: [String] = []
-    var seen = Set<String>()
-    for descriptor in folder.children where targets.contains(descriptor.id) {
-      switch descriptor.kind {
-      case .album:
-        if let id = descriptor.localIdentifier, seen.insert(id).inserted {
-          ids.append(id)
-        }
-      case .folder:
-        for id in PhotoCollectionDescriptor.albumLocalIds(under: descriptor)
-        where seen.insert(id).inserted {
-          ids.append(id)
-        }
-      case .favorites:
-        continue
-      }
-    }
-    return ids
+    guard let folder else { return [] }
+    return PhotoCollectionDescriptor.selectedAlbumIds(
+      in: folder, selecting: contextMenuTargetIds(for: child))
   }
 
   private func contextMenuExportLabel(

@@ -118,6 +118,90 @@ struct ExportFolderTests {
     #expect(PhotoCollectionDescriptor.selectedAlbumIds(in: parent, selecting: []) == [])
   }
 
+  /// `.favorites` children are skipped by design (Favorites uses its own export
+  /// flow). The helper's `case .favorites: continue` branch is otherwise
+  /// uncovered.
+  @Test func selectedAlbumIdsSkipsFavoritesChild() {
+    let favorites = PhotoCollectionDescriptor(
+      id: "favorites", localIdentifier: nil, title: "Favorites",
+      kind: .favorites, pathComponents: [], children: [])
+    let album = PhotoCollectionDescriptor(
+      id: "album:A", localIdentifier: "A", title: "A",
+      kind: .album, pathComponents: [], children: [])
+    let parent = PhotoCollectionDescriptor(
+      id: "folder:P", localIdentifier: "P", title: "P",
+      kind: .folder, pathComponents: [], children: [favorites, album])
+
+    // Even though Favorites is selected, only the album contributes — Favorites
+    // never produces an album id.
+    let ids = PhotoCollectionDescriptor.selectedAlbumIds(
+      in: parent, selecting: ["favorites", "album:A"])
+    #expect(ids == ["A"])
+  }
+
+  /// An empty parent has nothing to expand regardless of what's selected.
+  @Test func selectedAlbumIdsEmptyForChildlessParent() {
+    let parent = PhotoCollectionDescriptor(
+      id: "folder:empty", localIdentifier: "empty", title: "Empty",
+      kind: .folder, pathComponents: [], children: [])
+    #expect(
+      PhotoCollectionDescriptor.selectedAlbumIds(
+        in: parent, selecting: ["album:nonexistent"]
+      ) == [])
+  }
+
+  /// Shift-click with an anchor that points at an id no longer in the children
+  /// (e.g. the folder mutated underneath us) falls through to the "seed at
+  /// target" branch — same behaviour as a missing anchor.
+  @Test func extendedSelectionDropsStaleAnchor() {
+    let folder = makeOrderedFolder(["A", "B", "C"])
+
+    let result = PhotoCollectionDescriptor.extendedSelection(
+      from: "ghost", to: "B", current: ["A"], in: folder)
+
+    #expect(result.ids == ["B"])
+    #expect(result.anchor == "B")
+  }
+
+  /// Shift-click on a tile that isn't in the children (e.g. concurrent mutation)
+  /// also seeds at the target id rather than throwing — defensive against
+  /// transient inconsistency between the rendered grid and the underlying tree.
+  @Test func extendedSelectionDropsStaleTarget() {
+    let folder = makeOrderedFolder(["A", "B", "C"])
+
+    let result = PhotoCollectionDescriptor.extendedSelection(
+      from: "A", to: "ghost", current: ["A"], in: folder)
+
+    #expect(result.ids == ["ghost"])
+    #expect(result.anchor == "ghost")
+  }
+
+  /// Anchor and target collapse to the same tile: the result is a one-element
+  /// range, anchor preserved.
+  @Test func extendedSelectionAnchorEqualsTarget() {
+    let folder = makeOrderedFolder(["A", "B", "C"])
+
+    let result = PhotoCollectionDescriptor.extendedSelection(
+      from: "B", to: "B", current: [], in: folder)
+
+    #expect(result.ids == ["B"])
+    #expect(result.anchor == "B")
+  }
+
+  /// `current` may contain ids that are no longer in the folder's children (e.g.
+  /// the Cmd-selected set was built against an earlier snapshot). The helper
+  /// must preserve those stale ids via the union — losing them would silently
+  /// drop user-selected tiles.
+  @Test func extendedSelectionPreservesStaleCurrentIds() {
+    let folder = makeOrderedFolder(["A", "B", "C", "D"])
+
+    let result = PhotoCollectionDescriptor.extendedSelection(
+      from: "B", to: "C", current: ["A", "stale-x"], in: folder)
+
+    #expect(result.ids == ["A", "stale-x", "B", "C"])
+    #expect(result.anchor == "B")
+  }
+
   // MARK: - Range extension (extendedSelection)
 
   /// Shift-click with an existing anchor extends the selection to cover every tile
@@ -416,9 +500,15 @@ struct ExportFolderTests {
 
     #expect(h.manager.emptyRunMessage == "That folder no longer exists.")
     #expect(h.manager.totalJobsEnqueued == 0)
-    // The run must wind down even on the "folder not found" early-return — without
-    // this, an awaitable `runExport(context:)` caller would hang on a continuation
-    // that never resolves, because `processQueueIfNeeded` would never fire.
+    // The fire-and-forget early-return must wind down: queue empty, no work flagged.
+    // Note: this test asserts the visible state, not that `processQueueIfNeeded()`
+    // is called. The latter is forward-looking — today `ExportRunScope` has no
+    // folder case, so the awaitable `runExport(context:)` path can't reach this
+    // branch. The processQueueIfNeeded() symmetry with the other early returns in
+    // the helper is what protects the awaitable path *if* `.folderFull(_:)` is
+    // added to `ExportRunScope` in a future slice. The analogous awaitable-
+    // resolves-on-empty case is already covered by
+    // `ExportManagerRunExportTests.allAlbumsFullEmptyResolvesCompleted`.
     await waitUntil(!h.manager.hasActiveExportWork)
     #expect(!h.manager.hasActiveExportWork)
     #expect(!h.manager.isEnqueueingAll)

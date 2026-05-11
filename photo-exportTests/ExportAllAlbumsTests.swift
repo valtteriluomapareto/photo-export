@@ -354,4 +354,32 @@ struct ExportAllAlbumsTests {
 
     await writerGate.releaseAll()
   }
+
+  /// Inverse variant: toggle says `.editedWithOriginals`, override says `.edited`.
+  /// Without this case, the prior test could pass even if `selectionOverride` were
+  /// silently ignored and the toggle were read directly — both would happen to
+  /// equal the same default value. Two opposite-direction tests isolate the
+  /// parameter-threading from a coincidental match.
+  @Test func selectionOverrideWinsOverToggleInBothDirections() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let album = seedAlbum(h.photoLib, localId: "A", ids: ["a1", "a2"])
+    h.photoLib.collectionTree = [album]
+
+    h.manager.versionSelection = .editedWithOriginals
+
+    let writerGate = AsyncCheckpoint()
+    h.writer.checkpoint = writerGate
+
+    h.manager.startExportAllAlbums(selectionOverride: .edited)
+    await waitUntil(h.manager.totalJobsEnqueued == 2)
+    await writerGate.waitForEnter(count: 1)
+
+    let pendingSelections = Set(h.manager.pendingJobs.map(\.selection))
+    #expect(pendingSelections == [.edited])
+    #expect(h.manager.versionSelection == .editedWithOriginals)
+
+    await writerGate.releaseAll()
+  }
 }

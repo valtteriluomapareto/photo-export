@@ -634,10 +634,12 @@ final class ExportManager: ObservableObject {
           guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
             self.isEnqueueingAll = false
             setEmptyRunMessage("That folder no longer exists.")
-            // Drain the active run so an awaitable `runExport(context:)` caller
-            // doesn't hang forever waiting for a continuation that never resolves.
-            // No work landed in `pendingJobs`, so `processQueueIfNeeded` will hit
-            // the empty-queue branch and `finalizeActiveRun(.completed, nil)`.
+            // Symmetric with the other helper exit paths: every other path calls
+            // processQueueIfNeeded() before returning, so any future awaitable
+            // `runExport(context:)` wiring for folder runs gets the queue-drain
+            // finalize for free. Today the folder scope isn't in `ExportRunScope`,
+            // so this is a no-op in practice — but the symmetry is the load-bearing
+            // invariant, not the call's current effect.
             processQueueIfNeeded()
             return
           }
