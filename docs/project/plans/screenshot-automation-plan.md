@@ -54,6 +54,8 @@ The reviewers' decisive finding: eight views inject `@EnvironmentObject private 
 
 **Subclass instead.** `ScreenshotPhotoLibraryService: PhotoLibraryManager` overrides the read methods, returns curated content, and inherits the `@Published` machinery + `ObservableObject` conformance the views already depend on. The existing `XCTestConfigurationFilePath` short-circuit at `PhotoLibraryManager.swift:60-69` is the precedent: it already proves `PhotoLibraryManager` can be constructed without registering PhotoKit observers. Add a parallel guard for screenshot mode.
 
+**Required precondition: drop `final` from `PhotoLibraryManager`.** The class is declared `final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService` at `PhotoLibraryManager.swift:8`. Subclassing is rejected until the keyword is removed. Same-module subclassing means we do **not** need `open` on the methods — `internal` (the Swift default) is sufficient once the class itself is inheritable. This is a deliberate API-surface change: removing `final` invites future subclasses we haven't planned for. The countermeasure is to keep the screenshot subclass the only one and add a comment to that effect on `PhotoLibraryManager`'s declaration.
+
 ```swift
 // PhotoLibraryManager.swift — sibling to isRunningInTests
 private static var isRunningInScreenshotMode: Bool {
@@ -75,16 +77,44 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
     self.authorizationStatus = .authorized
     self.isAuthorized = true
   }
-
-  override func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] { … }
-  override func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws -> [AssetDescriptor] { … }
-  override func loadThumbnail(for asset: AssetDescriptor, targetSize: CGSize) async throws -> NSImage? { … }
-  override func requestFullImage(for asset: AssetDescriptor) async throws -> NSImage? { … }
-  override func countAssets(in scope: PhotoFetchScope) async throws -> Int { … }
-  override func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int { … }
-  // …others as needed; check PhotoLibraryService for the full surface…
+  // …overrides listed below…
 }
 ```
+
+#### Override surface
+
+A previous review draft listed six overrides; the actual surface is larger. `PhotoLibraryService` (`Protocols/PhotoLibraryService.swift`) declares 17 methods that the production `PhotoLibraryManager` implements; the views being captured exercise most of them transitively. **Any method left to inherit from `PhotoLibraryManager` reaches the real Photos library** — which defeats the entire reason for screenshot mode. Override every read method on the protocol, even the ones that look unused, and let the compiler/test runner catch anything missed.
+
+Full override list (signatures match the protocol exactly — read `PhotoLibraryService.swift` lines 12–73 verbatim, not from memory):
+
+```swift
+override func fetchAssets(year: Int, month: Int?, mediaType: PHAssetMediaType?) async throws -> [AssetDescriptor]
+override func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws -> [AssetDescriptor]
+override func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor?
+override func fetchCollectionTree() throws -> [PhotoCollectionDescriptor]
+
+override func countAssets(year: Int, month: Int) throws -> Int
+override func countAssets(year: Int) throws -> Int
+override func countAdjustedAssets(year: Int, month: Int) async throws -> Int
+override func countAdjustedAssets(year: Int) async throws -> Int
+nonisolated override func countAssets(in scope: PhotoFetchScope) async throws -> Int
+nonisolated override func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int
+nonisolated override func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int
+nonisolated override func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int
+
+override func availableYears() throws -> [Int]
+override func availableYearsWithCounts() throws -> [(year: Int, count: Int)]
+
+override func startCachingThumbnails(for assets: [AssetDescriptor])
+override func stopCachingThumbnails(for assets: [AssetDescriptor])
+override func loadThumbnail(for assetId: String, allowNetwork: Bool) async -> NSImage?
+override func loadThumbnailHighQuality(for assetId: String, allowNetwork: Bool) async -> NSImage?
+override func requestFullImage(for assetId: String) async throws -> NSImage  // non-optional!
+```
+
+The four `nonisolated` overrides must keep the keyword — `nonisolated` is part of the contract, not a base-class quirk. The `cachedCount*` variants are also `nonisolated` (`PhotoLibraryService.swift:60-67`).
+
+Caching methods (`startCachingThumbnails` / `stopCachingThumbnails`) can be safe no-ops since the screenshot service returns pre-loaded bundle images and has no PhotoKit cache to prime.
 
 Reviewers also flagged: `FakePhotoLibraryService` (the test fake) **cannot return images** — it uses in-memory `NSImage` dicts that tests pre-populate, not bundle loading. The "reuse vs duplicate" debate is moot — bundle resolution is new code either way. Don't move the test helper into the production target (AGENTS.md: `Protocols/` are test seams; `@testable import` belongs in tests).
 
@@ -171,13 +201,20 @@ if a multi-locale set materialises.
 
 ## Cost estimate
 
-- Phase 1 + 2 (subclass + bundle + curated tree): **~3 hours**, dominated by collecting + cropping
-  stock photos and matching them to plausible album themes.
+- Phase 1 (subclass + 19 method overrides + un-finaling base class): **~3 hours**. Most overrides
+  are short — a `nonisolated` `countAssets(in:)` that returns a hardcoded number is 2 lines —
+  but 19 of them with correct signatures + isolation keywords adds up. Initial estimate of "6
+  overrides" was wrong; auditing the protocol bumped it to 17 protocol methods plus 2
+  `cachedCount*` siblings.
+- Phase 2 (bundle + curated tree + stock photo curation): **~2 hours**, dominated by collecting
+  + cropping stock photos and matching them to plausible album themes.
 - Phase 3 (AppleScript + bash + window sizing): **~1 hour**, longer if the window-frame approach
   fights us.
 - Phase 4 (first manual upload): **~10 minutes**.
 
-Total: **~4 hours** for initial setup, ~10 minutes per submission thereafter.
+Total: **~6 hours** for initial setup, ~10 minutes per submission thereafter. Up from the
+original ~4-hour estimate after a re-review caught the undersized override surface — leaving
+methods to inherit means they reach the real Photos library, which defeats the entire feature.
 
 ## When to revisit
 
