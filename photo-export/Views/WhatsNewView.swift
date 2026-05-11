@@ -79,33 +79,55 @@ struct WhatsNewView: View {
     }
   }
 
+  @ViewBuilder
   private var upgradeContent: some View {
+    if state.isUnknownUpgrade {
+      genericUpgradeContent
+    } else {
+      VStack(alignment: .leading, spacing: 18) {
+        ForEach(state.upgradeNotes, id: \.version) { note in
+          releaseNoteSection(note)
+        }
+      }
+    }
+  }
+
+  private func releaseNoteSection(_ note: ReleaseNote) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      // Per-version header only fires when the user is crossing multiple
+      // releases — a single-release upgrade omits the version-number sub-
+      // headline because the sheet's main title bar already shows it.
+      if state.upgradeNotes.count > 1 {
+        Text("Version \(note.version)")
+          .font(.headline)
+      }
+      Text(.init(note.summary))
+        .font(.callout)
+      ForEach(Array(note.bullets.enumerated()), id: \.offset) { _, b in
+        bullet(b.title, b.body)
+      }
+      if let learnMore = note.learnMore {
+        Text(.init(learnMore))
+          .font(.callout)
+          .padding(.top, 4)
+      }
+    }
+  }
+
+  /// Shown when the user is on a newer bundle version than they've seen
+  /// before, but `ReleaseNotesCatalog` has no entry for their jump.
+  /// Better to surface a generic, accurate message than stale per-
+  /// version copy from an earlier release.
+  private var genericUpgradeContent: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(
-        "This version adds Auto Export and a few new UI surfaces. Your existing backup folder and exported files are untouched."
+        "Photo Export has been updated to version \(state.currentVersion). Your existing backup folder and exported files are untouched."
       )
       .font(.callout)
-      bullet(
-        "Auto Export",
-        "Optional set-it-and-forget-it backup — pick Timeline, Favorites, or Albums in **Settings → Auto Export**. New photos in Apple Photos are added to your destination automatically. Off by default; turn it on whenever you're ready."
-      )
-      bullet(
-        "New status surfaces",
-        "A small **status pill** appears in the main-window toolbar, a **menu bar icon** is always present while the app is running, and the new **Settings window** (Cmd+,) has Auto Export and Export Issues tabs. All show the same state — pick whichever spot is most convenient."
-      )
-      bullet(
-        "Your records carry over",
-        "Photo Export now uses a more stable identifier for destinations. Your existing manual-export history is preserved automatically in almost every case. If you see a **Destination Has Unresolved Issues** banner in Settings → Auto Export (rare — most often when you've installed both the Mac App Store and GitHub builds), click **Resolve…** → **Rebuild Records from Destination**. Your destination files are not touched."
-      )
-      bullet(
-        "Files are still safe",
-        "Photo Export never deletes, overwrites, or moves files at your destination drive — on upgrade or otherwise. If something looks off, your previously-exported photos are still there."
-      )
       Text(
-        "The [Auto Export guide](https://valtteriluomapareto.github.io/photo-export/auto-export/) has the full walkthrough, including an Upgrading section with troubleshooting for the rare cases."
+        "See the [release notes on GitHub](https://github.com/valtteriluomapareto/photo-export/releases) for the highlights, or the [Photo Export documentation site](https://valtteriluomapareto.github.io/photo-export/) for guides on Auto Export and the rest of the app."
       )
       .font(.callout)
-      .padding(.top, 4)
     }
   }
 

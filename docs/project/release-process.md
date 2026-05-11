@@ -12,7 +12,15 @@ Photo Export ships through two channels from the same tag: **GitHub Releases** (
 
 ## Steps
 
-### 1. Bump the version
+### 1. Add a ReleaseNote entry for the new version
+
+Edit `photo-export/Models/ReleaseNotesCatalog.swift` and append a `ReleaseNote(version: …)` for the version about to ship. The entry is what the in-app **What's New** sheet shows to users on first launch after the upgrade — title, summary, bullets, optional Learn-more link.
+
+Forgetting this step is non-fatal: the sheet falls back to a generic "Photo Export has been updated to version X — see release notes on GitHub" message rather than showing stale per-version copy. But the in-app feature is more useful when it's actually maintained.
+
+Keep older entries in the catalog — users skipping multiple releases see the combined set for everything between their last-seen version and the current bundle version.
+
+### 2. Bump the version
 
 ```bash
 scripts/bump-version.sh 1.2.0
@@ -26,7 +34,7 @@ To set the version without committing or tagging:
 scripts/bump-version.sh 1.2.0 --no-tag
 ```
 
-### 2. Push the tag
+### 3. Push the tag
 
 ```bash
 git push && git push origin v1.2.0
@@ -43,13 +51,13 @@ Pushing the `v*` tag triggers the **release-direct** workflow which:
 7. Creates a **draft** GitHub Release with auto-generated notes
 8. Attaches the DMG and SHA-256 checksum to the release
 
-### 3. Review and publish the GitHub Release
+### 4. Review and publish the GitHub Release
 
 1. Go to **Releases** on GitHub
 2. Review the draft release — edit the notes if needed
 3. Click **Publish release**
 
-### 4. Submit to App Store
+### 5. Submit to App Store
 
 The same `v*` tag also triggers `release-app-store.yml`, which archives, signs, and uploads to App Store Connect automatically. Once the build appears in App Store Connect, submit for App Review manually.
 
@@ -70,7 +78,7 @@ xcodebuild archive \
 
 Upload via Xcode Organizer (Distribute App > App Store Connect) or Transporter.
 
-### 5. Verify
+### 6. Verify
 
 **GitHub Release:**
 

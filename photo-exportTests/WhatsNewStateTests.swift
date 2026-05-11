@@ -64,4 +64,71 @@ struct WhatsNewStateTests {
     #expect(state.shouldShow == false)
     #expect(defaults.string(forKey: WhatsNewState.lastSeenVersionKey) == state.currentVersion)
   }
+
+  // MARK: - Release-notes catalog
+
+  private func makeNote(_ version: String) -> ReleaseNote {
+    ReleaseNote(
+      version: version, summary: "Summary for \(version)",
+      bullets: [.init(title: "Title \(version)", body: "Body \(version)")],
+      learnMore: nil)
+  }
+
+  @Test func freshInstallHasEmptyUpgradeNotes() {
+    let defaults = makeDefaults()
+    let state = WhatsNewState(
+      userDefaults: defaults, currentVersion: "1.3.0",
+      catalog: [makeNote("1.3.0")])
+
+    #expect(state.upgradeNotes.isEmpty)
+    #expect(state.isUnknownUpgrade == false)
+  }
+
+  @Test func upgradeWithMatchingCatalogEntryExposesNote() {
+    let defaults = makeDefaults()
+    defaults.set("1.2.3", forKey: WhatsNewState.lastSeenVersionKey)
+    let state = WhatsNewState(
+      userDefaults: defaults, currentVersion: "1.4.0",
+      catalog: [makeNote("1.3.0"), makeNote("1.4.0")])
+
+    #expect(state.upgradeNotes.map(\.version) == ["1.3.0", "1.4.0"])
+    #expect(state.isUnknownUpgrade == false)
+  }
+
+  @Test func upgradeWithoutCatalogEntryFlagsUnknownUpgrade() {
+    let defaults = makeDefaults()
+    defaults.set("1.2.3", forKey: WhatsNewState.lastSeenVersionKey)
+    let state = WhatsNewState(
+      userDefaults: defaults, currentVersion: "1.4.0", catalog: [])
+
+    #expect(state.upgradeNotes.isEmpty)
+    #expect(state.isUnknownUpgrade == true)
+    #expect(state.shouldShow == true)  // generic message path
+  }
+
+  @Test func multiVersionUpgradeReturnsAllNotesInOrder() {
+    let result = ReleaseNotesCatalog.notesForUpgrade(
+      lastSeen: "1.2.3", current: "1.5.0",
+      catalog: [makeNote("1.3.0"), makeNote("1.4.0"), makeNote("1.5.0")])
+
+    #expect(result.map(\.version) == ["1.3.0", "1.4.0", "1.5.0"])
+  }
+
+  @Test func upgradeBoundsExcludeLastSeenAndIncludeCurrent() {
+    let catalog = [makeNote("1.2.0"), makeNote("1.3.0"), makeNote("1.4.0")]
+    let result = ReleaseNotesCatalog.notesForUpgrade(
+      lastSeen: "1.2.0", current: "1.3.0", catalog: catalog)
+
+    #expect(result.map(\.version) == ["1.3.0"])
+  }
+
+  @Test func numericVersionComparisonHandlesMinorAboveNine() {
+    // "1.10.0" must rank above "1.9.0" — naive string compare puts
+    // "1.10.0" below "1.9.0".
+    let catalog = [makeNote("1.9.0"), makeNote("1.10.0")]
+    let result = ReleaseNotesCatalog.notesForUpgrade(
+      lastSeen: "1.9.0", current: "1.10.0", catalog: catalog)
+
+    #expect(result.map(\.version) == ["1.10.0"])
+  }
 }
