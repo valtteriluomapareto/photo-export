@@ -34,7 +34,11 @@ struct WhatsNewView: View {
       footer
     }
     .padding(24)
-    .frame(width: 520, height: 480)
+    // Min-only sizing so a multi-version jump can grow the sheet
+    // vertically instead of pushing everything into a small ScrollView.
+    // Width stays narrow enough to read comfortably; the OS will pick a
+    // reasonable initial height for the content.
+    .frame(minWidth: 520, idealWidth: 520, minHeight: 480)
   }
 
   private var header: some View {
@@ -85,7 +89,10 @@ struct WhatsNewView: View {
       genericUpgradeContent
     } else {
       VStack(alignment: .leading, spacing: 18) {
-        ForEach(state.upgradeNotes, id: \.version) { note in
+        ForEach(Array(state.upgradeNotes.enumerated()), id: \.element.version) { idx, note in
+          if idx > 0 {
+            Divider()
+          }
           releaseNoteSection(note)
         }
       }
@@ -95,11 +102,14 @@ struct WhatsNewView: View {
   private func releaseNoteSection(_ note: ReleaseNote) -> some View {
     VStack(alignment: .leading, spacing: 12) {
       // Per-version header only fires when the user is crossing multiple
-      // releases — a single-release upgrade omits the version-number sub-
-      // headline because the sheet's main title bar already shows it.
+      // releases — a single-release upgrade omits it because the sheet's
+      // main title bar already shows the current version. Rendered at
+      // subheadline weight (not headline) so it doesn't compete with the
+      // sheet's title bar.
       if state.upgradeNotes.count > 1 {
-        Text("Version \(note.version)")
-          .font(.headline)
+        Text("In \(note.version)")
+          .font(.subheadline.bold())
+          .foregroundStyle(.secondary)
       }
       Text(.init(note.summary))
         .font(.callout)

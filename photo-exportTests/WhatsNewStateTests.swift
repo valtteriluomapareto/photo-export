@@ -131,4 +131,86 @@ struct WhatsNewStateTests {
 
     #expect(result.map(\.version) == ["1.10.0"])
   }
+
+  @Test func downgradeDoesNotTriggerTheSheet() {
+    // User installs 1.4.0, dismisses it, then rolls back to 1.3.0. The
+    // older build hasn't introduced anything to highlight; "Photo Export
+    // has been updated to version 1.3.0" would be wrong copy.
+    let defaults = makeDefaults()
+    defaults.set("1.4.0", forKey: WhatsNewState.lastSeenVersionKey)
+    let state = WhatsNewState(
+      userDefaults: defaults, currentVersion: "1.3.0",
+      catalog: [makeNote("1.3.0"), makeNote("1.4.0")])
+
+    #expect(state.shouldShow == false)
+  }
+
+  @Test func firstLaunchInvariantHolds() {
+    // `isFirstLaunch == true` must imply `upgradeNotes.isEmpty` — otherwise
+    // the view would render upgrade content under the "Welcome" title.
+    let defaults = makeDefaults()
+    let state = WhatsNewState(
+      userDefaults: defaults, currentVersion: "5.0.0",
+      catalog: [makeNote("1.0.0"), makeNote("2.0.0"), makeNote("5.0.0")])
+
+    #expect(state.isFirstLaunch == true)
+    #expect(state.upgradeNotes.isEmpty)
+  }
+
+  @Test func markAsSeenRefreshesDerivedState() {
+    // After dismissing, `lastSeenVersion`, `upgradeNotes`, and
+    // `isUnknownUpgrade` should reflect the post-dismissal world — a
+    // subsequent observer reading `state.upgradeNotes` must not see the
+    // pre-dismissal value.
+    let defaults = makeDefaults()
+    defaults.set("1.2.3", forKey: WhatsNewState.lastSeenVersionKey)
+    let state = WhatsNewState(
+      userDefaults: defaults, currentVersion: "1.3.0",
+      catalog: [makeNote("1.3.0")])
+    #expect(state.upgradeNotes.count == 1)
+
+    state.markAsSeen()
+
+    #expect(state.shouldShow == false)
+    #expect(state.lastSeenVersion == "1.3.0")
+    #expect(state.upgradeNotes.isEmpty)
+    #expect(state.isFirstLaunch == false)
+  }
+
+  @Test func lastSeenEqualToCurrentReturnsEmptyNotes() {
+    let result = ReleaseNotesCatalog.notesForUpgrade(
+      lastSeen: "1.3.0", current: "1.3.0",
+      catalog: [makeNote("1.3.0")])
+    #expect(result.isEmpty)
+  }
+
+  @Test func productionCatalogIsCurrentOrAheadOfBundleVersion() {
+    // Guard against forgetting to update the catalog before bumping
+    // MARKETING_VERSION. Two acceptable states:
+    //
+    //   - Catalog's newest entry == bundle version (we've shipped and
+    //     the catalog includes the current build).
+    //   - Catalog's newest entry > bundle version (we've added the
+    //     entry for the upcoming release, before bumping
+    //     MARKETING_VERSION via bump-version.sh).
+    //
+    // The failure case — catalog's newest is older than the bundle —
+    // means a release shipped without its catalog entry, so users on
+    // the upgrade path see the generic fallback message instead of the
+    // release highlights.
+    let bundleVersion =
+      (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? ""
+    let newest = ReleaseNotesCatalog.all
+      .map(\.version)
+      .max(by: { ReleaseNotesCatalog.compare($0, $1) == .orderedAscending })
+    #expect(newest != nil, "ReleaseNotesCatalog.all is empty")
+    if let newest {
+      let isCurrentOrAhead =
+        ReleaseNotesCatalog.compare(newest, bundleVersion) != .orderedAscending
+      #expect(
+        isCurrentOrAhead,
+        "Catalog newest entry is \(newest) but bundle is \(bundleVersion). Add a ReleaseNote(version: \"\(bundleVersion)\", …) before shipping."
+      )
+    }
+  }
 }

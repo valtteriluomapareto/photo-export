@@ -23,7 +23,11 @@ final class WhatsNewState: ObservableObject {
   @Published private(set) var shouldShow: Bool
 
   let currentVersion: String
-  let lastSeenVersion: String?
+  /// Mutable so `markAsSeen()` can refresh the in-memory snapshot to
+  /// match what was just written to `UserDefaults`. Without this any
+  /// future surface that reads `upgradeNotes` or `isUnknownUpgrade`
+  /// *after* dismissal would see stale values.
+  private(set) var lastSeenVersion: String?
 
   /// Per-version `ReleaseNote`s to display in the upgrade flavor of the
   /// sheet, oldest-version first. Empty for fresh installs (those use
@@ -31,8 +35,9 @@ final class WhatsNewState: ObservableObject {
   /// `ReleaseNotesCatalog.all` has no entry covering the user's jump —
   /// in the latter case `WhatsNewView` falls back to a generic
   /// "Photo Export has been updated" message.
-  let upgradeNotes: [ReleaseNote]
+  private(set) var upgradeNotes: [ReleaseNote]
 
+  private let catalog: [ReleaseNote]
   private let userDefaults: UserDefaults
 
   /// `UserDefaults` key under which the most recently dismissed version is
@@ -61,10 +66,26 @@ final class WhatsNewState: ObservableObject {
   ) {
     self.userDefaults = userDefaults
     self.currentVersion = currentVersion
-    self.lastSeenVersion = userDefaults.string(forKey: Self.lastSeenVersionKey)
-    self.shouldShow = (self.lastSeenVersion != self.currentVersion)
+    self.catalog = catalog
+    let stored = userDefaults.string(forKey: Self.lastSeenVersionKey)
+    self.lastSeenVersion = stored
     self.upgradeNotes = ReleaseNotesCatalog.notesForUpgrade(
-      lastSeen: self.lastSeenVersion, current: self.currentVersion, catalog: catalog)
+      lastSeen: stored, current: currentVersion, catalog: catalog)
+    // shouldShow rules:
+    //   - Fresh install (stored == nil): show the welcome flavor.
+    //   - Upgrade (stored < current): show the upgrade flavor.
+    //   - Same version (stored == current): do not show.
+    //   - Downgrade (stored > current): do not show. The user installed an
+    //     older build (TestFlight rollback, sideload, channel swap with
+    //     incompatible state) — the new build hasn't introduced anything
+    //     to highlight, and showing "Photo Export has been updated to
+    //     version X" would be factually wrong.
+    if let stored {
+      self.shouldShow =
+        ReleaseNotesCatalog.compare(stored, currentVersion) == .orderedAscending
+    } else {
+      self.shouldShow = true
+    }
   }
 
   var isFirstLaunch: Bool { lastSeenVersion == nil }
@@ -79,9 +100,14 @@ final class WhatsNewState: ObservableObject {
   }
 
   /// Called from the sheet's "Got It" button. Persists the current version
-  /// so subsequent launches don't re-show until the bundle bumps.
+  /// and updates the in-memory snapshot so all derived state
+  /// (`isFirstLaunch`, `upgradeNotes`, `isUnknownUpgrade`) reflects the
+  /// post-dismissal world.
   func markAsSeen() {
     userDefaults.set(currentVersion, forKey: Self.lastSeenVersionKey)
+    lastSeenVersion = currentVersion
+    upgradeNotes = ReleaseNotesCatalog.notesForUpgrade(
+      lastSeen: currentVersion, current: currentVersion, catalog: catalog)
     if shouldShow { shouldShow = false }
   }
 }

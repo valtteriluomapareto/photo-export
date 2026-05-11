@@ -29,6 +29,37 @@ if [[ ! -f "$PROJECT_FILE" ]]; then
   exit 1
 fi
 
+# Catalog-entry check. The in-app "What's New" sheet reads from
+# `ReleaseNotesCatalog.swift`; if the new version is missing from the
+# catalog, users on the upgrade path see a generic "Photo Export has been
+# updated — see release notes on GitHub" message instead of the
+# release-specific highlights. Not fatal (the sheet still works) but
+# almost always wrong — flag it loudly here so the maintainer notices
+# before pushing the tag.
+CATALOG_FILE="photo-export/Models/ReleaseNotesCatalog.swift"
+if [[ -f "$CATALOG_FILE" ]]; then
+  if ! grep -q "version: \"$NEW_VERSION\"" "$CATALOG_FILE"; then
+    echo ""
+    echo "⚠️  ReleaseNotesCatalog has no entry for $NEW_VERSION."
+    echo "    Users upgrading will see the generic fallback message."
+    echo "    Edit $CATALOG_FILE and append a ReleaseNote(version: \"$NEW_VERSION\", …)"
+    echo "    before pushing the tag. See docs/project/release-process.md step 1."
+    echo ""
+    if [[ -t 0 ]]; then
+      read -r -p "Proceed anyway? [y/N] " REPLY
+      if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+        echo "Aborted. Add the catalog entry, then re-run this script."
+        exit 1
+      fi
+    else
+      echo "(non-interactive shell — pass --skip-catalog-check to suppress, or add the entry)"
+      if [[ "${3:-}" != "--skip-catalog-check" && "$NO_TAG" != "--skip-catalog-check" ]]; then
+        exit 1
+      fi
+    fi
+  fi
+fi
+
 # Read current version
 CURRENT_VERSION=$(grep -m1 'MARKETING_VERSION' "$PROJECT_FILE" | sed 's/.*= *\(.*\);/\1/')
 echo "Current version: $CURRENT_VERSION"
