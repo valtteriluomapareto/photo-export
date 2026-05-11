@@ -58,7 +58,7 @@ Export progress is shown in the toolbar. You can pause, resume, or cancel at any
 
 ### 4. (Optional) Turn on Auto Export
 
-If you want Photo Export to keep your backup folder in sync automatically — adding new photos as they appear in Apple Photos without you clicking Export — open **Photo Export → Settings…** (Cmd+,) and head to the **Auto Export** tab. Enable the toggle and pick at least one scope (Timeline, Favorites, or Albums). For a hands-off setup, also turn on **Open Photo Export at login**.
+If you want Photo Export to keep your backup folder in sync automatically — adding new photos as they appear in Apple Photos without you clicking Export — open **Photo Export → Settings…** (Cmd+,) and head to the **Auto Export** tab. Enable the toggle and pick at least one category to back up (Timeline, Favorites, or Albums). For a hands-off setup, also turn on **Open Photo Export at login**.
 
 The full walkthrough — what triggers a run, how retry works, what the status icons mean — lives in the [Auto Export guide](/photo-export/auto-export/).
 
@@ -72,7 +72,7 @@ The full walkthrough — what triggers a run, how retry works, what the status i
 
 ## Upgrading from an earlier version
 
-If you've been running Photo Export 1.2.3 or earlier, the [Auto Export guide's "Upgrading" section](/photo-export/auto-export/#upgrading-from-photo-export-123-or-earlier) covers what's new in the UI, how your existing export records are migrated under the hood (nothing on your destination drive changes), and what to do if Settings → Auto Export flags a migration conflict after the update.
+If you've been running Photo Export 1.2.3 or earlier: your previously-exported files and Photos library access carry over untouched — Photo Export never deletes, overwrites, or moves files at your destination, on upgrade or otherwise. The [Auto Export guide's "Upgrading" section](/photo-export/auto-export/#upgrading-from-photo-export-123-or-earlier) covers the new UI surfaces, how existing export records migrate automatically, the recovery flow if you see a "Destination Has Unresolved Issues" banner, and the channel-switch flow if you're moving between Mac App Store and GitHub builds.
 
 ## Updates and distribution channels
 

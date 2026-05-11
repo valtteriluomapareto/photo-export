@@ -89,9 +89,10 @@ dispatch) are testable without wall-clock waits.
 
 - Pure `reduce(event, state, now) -> (state, [effect])` reducer. Tests assert
   effect-list equality without executing them.
-- Subscribes to six publishers on `attach(to:)`: destination snapshot,
+- Subscribes to seven publishers on `attach(to:)`: destination snapshot,
   scope selection, version selection, import state, export run state,
-  PhotoKit persistent changes.
+  completed-run summaries (manual-run completion hook), and PhotoKit
+  persistent changes.
 - Sequential per-scope fan-out for the `.autoExport(scopes)` run shape;
   cancellable on disable / destination clear so a long multi-scope chain
   stops at the next await boundary.
@@ -108,9 +109,12 @@ dispatch) are testable without wall-clock waits.
 Adapts PhotoKit's `PHPhotoLibraryChangeObserver` + `fetchPersistentChanges`
 into the `Result`-typed event stream AutoSync consumes.
 
-- Establishes a baseline on first launch, then emits one
-  `PhotoLibraryPersistentChangeEvent` per `photoLibraryDidChange` callback
-  carrying inserted / updated / deleted local identifiers
+- Establishes a baseline on first launch (silent — no event emitted),
+  runs an immediate catch-up fetch on `start()` to surface any changes
+  that landed while the app was quit, then emits one
+  `PhotoLibraryPersistentChangeEvent` per subsequent
+  `photoLibraryDidChange` callback carrying inserted / updated /
+  deleted local identifiers
 - Maps the three documented PhotoKit failure modes (token expired, token
   invalid, details unavailable) onto the corresponding
   `PhotoLibraryPersistentChangeFetchError` cases so AutoSync can route each

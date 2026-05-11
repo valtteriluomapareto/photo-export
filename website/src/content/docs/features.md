@@ -11,12 +11,12 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 
 - Optional **Enable Auto Export** toggle in Settings — off by default
 - Pick what to back up: **Timeline**, **Favorites**, **Albums**, or any combination
-- Runs in the background while Photo Export is open; new photos in Apple Photos are added to your backup automatically with a short debounce
+- Runs automatically while Photo Export is open; new photos in Apple Photos are added to your backup after a short delay
 - **Status surfaces** in three places: a pill in the main-window toolbar, an always-on menu bar item, and Settings → Auto Export
-- **Export Now** in Settings and the menu bar bypasses the debounce
-- **Retry policy** with exponential backoff for transient failures (Photos library momentarily busy, iCloud download failed, etc.); hard failures (destination full, asset missing) need user action
+- **Export Now** in Settings and the menu bar fires a run immediately without waiting
+- **Retry policy** waits longer between each attempt for transient failures (Photos library momentarily busy, iCloud download failed, etc.); hard failures (destination full, asset missing) need user action
 - **Export Issues** tab groups failures by category with a per-row **Retry** button
-- **Open Photo Export at login** (SMAppService) for a "set it and forget it" workflow — the app launches automatically and Auto Export starts watching
+- **Open Photo Export at login** for a set-it-and-forget-it workflow — the app launches with your Mac and Auto Export starts watching
 - **Manual exports always take precedence** — clicking Export All while an automatic run is in flight prompts to supersede the auto run
 - **Safety scan** asks for confirmation when you point Auto Export at a folder that already contains files; the confirmation persists per destination
 
