@@ -98,6 +98,8 @@ xcodebuild \
 
 Optional local tools: `swiftlint`, `swift-format`, `xcpretty`.
 
+Marketing screenshots are captured with `scripts/screenshots/capture.sh`, which launches the app against a curated synthetic Photos library (no personal photos involved) and drives it through key surfaces via AppleScript + `screencapture`. See [`scripts/README.md`](scripts/README.md) for entry points and [`docs/project/plans/screenshot-automation-plan.md`](docs/project/plans/screenshot-automation-plan.md) for design.
+
 ## Contributing
 
 Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for local setup and testing expectations.
