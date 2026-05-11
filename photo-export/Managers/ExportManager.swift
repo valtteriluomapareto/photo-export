@@ -723,6 +723,18 @@ final class ExportManager: ObservableObject {
     finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
   }
 
+  /// User confirmed a manual export while an AutoSync run was active. Plan
+  /// §"Phase 4": "the automatic run is superseded with
+  /// `cancelReason: .supersededByManualRun`. After the manual run finishes,
+  /// the auto-sync reducer re-evaluates and schedules another run if work
+  /// is still pending." Resolves the active run as `.superseded` so AutoSync
+  /// knows not to clear dirty state (the run didn't actually complete).
+  func supersedeForManualRun() {
+    logger.info("Superseding active auto-sync run for manual export")
+    teardownActiveWork()
+    finalizeActiveRun(result: .superseded, cancelReason: .supersededByManualRun)
+  }
+
   /// Drive-unmount equivalent of `cancelAndClear()`. Stops starting new jobs and clears
   /// in-memory pending work, but resolves the active run as transient
   /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. The AutoSync

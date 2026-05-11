@@ -123,22 +123,31 @@ struct ExportToolbarView: ToolbarContent {
 
   // MARK: - Primary Actions
 
+  @State private var isShowingSupersedeConfirm = false
+
   private var primaryActions: some View {
     HStack(alignment: .center, spacing: 8) {
       Button(primaryActionLabel) {
-        switch section {
-        case .timeline:
-          exportManager.startExportAll()
-        case .collections:
-          exportManager.startExportAllAlbums()
-        }
+        handlePrimaryAction()
       }
       .buttonStyle(.borderedProminent)
-      .disabled(
-        !exportDestinationManager.canExportNow || exportManager.isImporting
-          || exportManager.hasActiveExportWork
-      )
+      .disabled(!isPrimaryActionEnabled)
       .help(primaryActionHelpText)
+      .confirmationDialog(
+        "Auto Export is running",
+        isPresented: $isShowingSupersedeConfirm,
+        titleVisibility: .visible
+      ) {
+        Button("Run \(primaryActionLabel) Now") {
+          exportManager.supersedeForManualRun()
+          startManualExport()
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(
+          "Auto Export is currently running. Cancel it and run your manual export instead? Auto Export will resume after the manual run finishes."
+        )
+      }
 
       Button {
         if exportManager.isPaused {
@@ -165,6 +174,41 @@ struct ExportToolbarView: ToolbarContent {
     // Right-most toolbar item: pad twice the inter-item spacing so
     // the cancel button doesn't sit flush against the window edge.
     .padding(.trailing, 32)
+  }
+
+  /// Manual exports stay clickable while an AutoSync run is in flight per
+  /// plan §"Phase 4" ("Keep manual export actions enabled while Auto Export
+  /// is on"). Disabled only when a *manual* run is already going, when
+  /// import is running, or when the destination isn't writable.
+  private var isPrimaryActionEnabled: Bool {
+    guard exportDestinationManager.canExportNow, !exportManager.isImporting else {
+      return false
+    }
+    // hasActiveExportWork = true && activeRunContext?.source == .autoSync
+    // means AutoSync is running — we WANT the button clickable so the
+    // confirmation sheet can fire. Disable only when a non-autoSync run
+    // (fire-and-forget manual or .manual-sourced runExport) is in flight.
+    let manualOrUnknownInFlight =
+      exportManager.hasActiveExportWork
+      && exportManager.activeRunContext?.source != .autoSync
+    return !manualOrUnknownInFlight
+  }
+
+  private func handlePrimaryAction() {
+    if exportManager.activeRunContext?.source == .autoSync {
+      isShowingSupersedeConfirm = true
+    } else {
+      startManualExport()
+    }
+  }
+
+  private func startManualExport() {
+    switch section {
+    case .timeline:
+      exportManager.startExportAll()
+    case .collections:
+      exportManager.startExportAllAlbums()
+    }
   }
 
   private var primaryActionLabel: String {
