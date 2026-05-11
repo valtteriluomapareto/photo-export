@@ -222,6 +222,37 @@ final class AutoSyncManager: ObservableObject {
     dispatch(.runNowRequested)
   }
 
+  /// User clicked Retry on a failure in the Issues tab. Clears the retry
+  /// entry (so it isn't filtered out at enqueue time) and then dispatches
+  /// `runNow` to start an immediate run that picks it up. Plan §"Retry and
+  /// Failure Policy": "Export Issues 'Retry Failed' or a normal manual
+  /// export after disabling Auto Export can override backoff."
+  ///
+  /// The asset will appear in the next run's enqueue because the record
+  /// store still has it as `.failed` for that variant — `isExported`
+  /// returns false, and now the retry-eligibility check returns true.
+  func retryFailedVariant(
+    scope: AutoSyncRetryScopeKey, assetId: String, variant: ExportVariant
+  ) {
+    guard let environment = environment,
+      let destinationId = reducerState.destination.id
+    else { return }
+    var retry = environment.retryStateStore.load(destinationId: destinationId)
+    retry.removeEntry(scope: scope, assetId: assetId, variant: variant)
+    do {
+      try environment.retryStateStore.save(retry, destinationId: destinationId)
+    } catch {
+      log.error(
+        "Failed to persist retry-state cleanup for manual retry: \(error.localizedDescription, privacy: .public)"
+      )
+      return
+    }
+    if currentRetryState != retry {
+      currentRetryState = retry
+    }
+    dispatch(.runNowRequested)
+  }
+
   /// User toggles Auto Export. Persists the flag and dispatches the event.
   func setEnabled(_ enabled: Bool) {
     environment?.userDefaults.set(enabled, forKey: Self.enabledDefaultsKey)

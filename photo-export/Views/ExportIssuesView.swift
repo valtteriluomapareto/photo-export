@@ -48,7 +48,13 @@ struct ExportIssuesView: View {
       ForEach(groupedByCategory, id: \.category) { group in
         Section(header: Self.header(for: group.category, count: group.entries.count)) {
           ForEach(group.entries, id: \.id) { entry in
-            FailureRow(entry: entry)
+            FailureRow(entry: entry) {
+              autoSyncManager.retryFailedVariant(
+                scope: entry.scopeKey,
+                assetId: entry.assetId,
+                variant: entry.variant
+              )
+            }
           }
         }
       }
@@ -160,6 +166,7 @@ struct ExportIssuesView: View {
 
 private struct FailureRow: View {
   let entry: ExportIssuesView.FlatFailure
+  let onRetry: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -187,9 +194,14 @@ private struct FailureRow: View {
       Text(failureMessage)
         .font(.callout)
         .fixedSize(horizontal: false, vertical: true)
-      Text(timeFooter)
-        .font(.caption)
-        .foregroundStyle(.tertiary)
+      HStack {
+        Text(timeFooter)
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+        Spacer()
+        Button("Retry", action: onRetry)
+          .controlSize(.small)
+      }
     }
     .padding(.vertical, 2)
   }
