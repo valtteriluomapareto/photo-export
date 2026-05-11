@@ -26,6 +26,10 @@ struct MigrationConflictRecoveryView: View {
   /// `succeeded` → import completed and the legacy state has been GC'd.
   /// `failed` → import surfaced an error; show retry / cancel.
   @State private var phase: Phase = .idle
+  /// Tracks user-initiated cancel of an in-flight reconcile so the
+  /// `isImporting → false` transition can distinguish "user cancelled"
+  /// (silent dismiss) from "import failed" (red error chrome).
+  @State private var didCancelReconcile = false
 
   private enum Phase: Equatable {
     case idle
@@ -56,8 +60,13 @@ struct MigrationConflictRecoveryView: View {
           unmatched: report.unmatchedCount,
           prunedRecords: report.prunedRecords
         )
+      } else if didCancelReconcile {
+        // User pressed Cancel while reconciling — silent dismiss, not an
+        // error state. Just close the sheet.
+        dismiss()
       } else {
-        // isImporting flipped false without a report — cancelled or failed.
+        // isImporting flipped false without a report and the user did not
+        // press Cancel — treat as failure.
         phase = .failed(message: "Import did not complete. Try again or cancel.")
       }
     }
@@ -195,9 +204,10 @@ struct MigrationConflictRecoveryView: View {
           .disabled(!canReconcile)
       case .reconciling:
         Button("Cancel") {
+          didCancelReconcile = true
           exportManager.cancelImport()
-          // The `onChange` observer will flip us to `.failed` once
-          // `isImporting` settles back to false.
+          // `onChange` observer reads `didCancelReconcile` and dismisses
+          // silently rather than showing the failure chrome.
         }
       case .succeeded:
         Button("Done") { dismiss() }
@@ -212,6 +222,7 @@ struct MigrationConflictRecoveryView: View {
 
   private func startReconcile() {
     guard canReconcile else { return }
+    didCancelReconcile = false
     phase = .reconciling
     exportManager.startImport()
   }

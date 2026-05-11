@@ -118,6 +118,22 @@ final class DestinationSafetyMonitor: ObservableObject {
         // Stale generation — user already switched destinations.
         return
       }
+      // Re-check the synchronous gates against the *post-scan* world. The
+      // record stores can finish loading their JSONL during the slow
+      // filesystem scan; if they did, the destination is no longer
+      // "records empty" and we must not flag it. Same for confirmation:
+      // the user might have confirmed via another path while we waited.
+      if self.confirmationStore.isConfirmed(destinationId: id) {
+        if self.needsSafetyConfirmation { self.needsSafetyConfirmation = false }
+        return
+      }
+      let recordsNowPresent =
+        !self.exportRecordStore.recordsById.isEmpty
+        || !self.collectionExportRecordStore.placements.isEmpty
+      if recordsNowPresent {
+        if self.needsSafetyConfirmation { self.needsSafetyConfirmation = false }
+        return
+      }
       let flag = (presence == .hasUserFiles)
       if self.needsSafetyConfirmation != flag {
         self.needsSafetyConfirmation = flag

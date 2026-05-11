@@ -40,11 +40,8 @@ struct AutoSyncMenuBarContent: View {
 
     Divider()
 
-    Button("Open Auto Export Settings\u{2026}") {
+    Button("Open Settings\u{2026}") {
       openSettings()
-      // Settings opens on the most recently visible tab. We can't deep-link
-      // tabs from here without a custom tab selection state; Settings will
-      // remember the last visited tab.
     }
     .keyboardShortcut(",", modifiers: [.command])
 
@@ -67,10 +64,15 @@ struct AutoSyncMenuBarContent: View {
     }
   }
 
+  /// Menu bar is the click-and-forget surface. Disable Export Now whenever
+  /// the click won't result in a visible run within a few seconds — the
+  /// user has no inline feedback from a menu item that silently queued for
+  /// later. Settings has informative footer copy and can permit Export Now
+  /// in transient `.waiting` states; the menu bar can't, so we restrict.
   private var canRunNow: Bool {
     switch autoSyncManager.state {
-    case .disabled, .blocked, .running: return false
-    case .idle, .scheduled, .waiting: return true
+    case .idle, .scheduled: return true
+    case .disabled, .blocked, .running, .waiting: return false
     }
   }
 }
@@ -85,8 +87,11 @@ struct AutoSyncMenuBarLabel: View {
   }
 
   private var iconName: String {
+    // Avoid the spinning-arrows family for `.disabled` — it reads as
+    // "currently syncing" in the menu bar, which is the opposite of off.
+    // Match the toolbar pill's `circle.slash` for consistency.
     switch state {
-    case .disabled: return "arrow.triangle.2.circlepath"
+    case .disabled: return "circle.slash"
     case .idle: return "checkmark.icloud"
     case .scheduled: return "clock.arrow.2.circlepath"
     case .running: return "arrow.triangle.2.circlepath.icloud"
