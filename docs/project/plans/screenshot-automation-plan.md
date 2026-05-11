@@ -1,16 +1,16 @@
 # Screenshot Automation Plan
 
 Date: 2026-05-11
-Status: Proposed (not started). Revised after multi-agent review (hobbyist / DevOps / Swift architect) — the original plan's XCUITest + Fastlane Deliver pipeline was over-engineered for a quarterly side-project release cadence, and its Phase 2 launch-argument switch as written would not have compiled (eight views use `@EnvironmentObject private var photoLibraryManager: PhotoLibraryManager` — concrete class, not protocol).
+Status: Phase 1 + 3 implemented (subclass + scripts); Phase 2 (curated tree wiring) implemented; bundled stock photos deferred — service falls back to deterministic gradient placeholders until real photos are sourced.
 
 ## Implementation Status
 
 | Phase | Status | Notes |
 |---|---|---|
-| 1. `ScreenshotPhotoLibraryService` (subclass of `PhotoLibraryManager`) | ⏳ Proposed | Curated synthetic tree, bundle-loaded JPEGs, sibling launch-arg escape to the existing test-mode one. |
-| 2. Bundled stock JPEGs + asset wiring | ⏳ Proposed | ~10 photos, ~200 KB each, ~2 MB total. Always compiled in; reachability gated on the launch arg. |
-| 3. AppleScript driver + `screencapture` script | ⏳ Proposed | One bash script + one AppleScript file. No XCUITest. |
-| 4. Manual App Store upload | ⏳ Proposed | Drag-and-drop in App Store Connect web UI. No Fastlane Deliver. |
+| 1. `ScreenshotPhotoLibraryService` (subclass of `PhotoLibraryManager`) | ✅ Done | All 19 `PhotoLibraryService` methods overridden; sibling launch-arg escape (`PhotoLibraryManager.isRunningInScreenshotMode`); `final` dropped from `PhotoLibraryManager` with a doc-comment explaining why. |
+| 2. Bundled stock JPEGs + asset wiring | ⚠️ Partial | Curated tree (Favorites + Iceland 2025 + Family + Hiking + Trips/Iceland + Trips/Norway) wired and selectable; thumbnail resolution tries `Resources/screenshots/<assetId>.jpg` first, falls back to deterministic colored-gradient placeholders so the pipeline works before stock photos are sourced. Add real Unsplash/Pexels CC0 JPEGs under `photo-export/Resources/screenshots/` to upgrade. |
+| 3. AppleScript driver + `screencapture` script | ✅ Done | `scripts/screenshots/capture.sh` + `drive.applescript`. Window position/size via AppleScript (no PyObjC); capture via `screencapture -R x,y,w,h`. |
+| 4. Manual App Store upload | ⏳ Proposed | Drag-and-drop in App Store Connect web UI. No Fastlane Deliver. First submission lives in the maintainer's workflow, not in this repo. |
 
 ## Goals
 

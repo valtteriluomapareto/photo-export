@@ -3,9 +3,14 @@ import Photos
 import SwiftUI
 import os
 
-/// Manages access to the Photos library, including authorization and asset fetching
+/// Manages access to the Photos library, including authorization and asset fetching.
+///
+/// Not `final` only so `ScreenshotPhotoLibraryService` can subclass and replace every
+/// `PhotoLibraryService` method with curated synthetic content for marketing screenshots
+/// (see `docs/project/plans/screenshot-automation-plan.md`). No other subclass should
+/// exist — production launches always instantiate this class directly.
 @MainActor
-final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
+class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// Published properties to track authorization status
   @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
   @Published var isAuthorized: Bool = false
@@ -57,7 +62,15 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     // to dismiss it. AutoSync and PhotoLibrary integration tests inject
     // `FakePhotoLibraryService` / `FakePersistentChangeSource` instead,
     // so they don't need the real PhotoKit observer.
-    guard !Self.isRunningInTests else { return }
+    //
+    // Screenshot mode (`--screenshot-mode` launch arg) gets the same
+    // early-return for a different reason: the subclass serves curated
+    // synthetic content and must not register an observer that would
+    // overwrite it on the next PhotoKit change notification. Test mode
+    // and screenshot mode are sibling guards, not OR'd into one — the
+    // post-conditions differ (test mode wants `isAuthorized = false`,
+    // screenshot mode wants `true`; the subclass sets it post-`super.init`).
+    guard !Self.isRunningInTests, !Self.isRunningInScreenshotMode else { return }
     // Check if Info.plist contains photos usage description
     verifyPhotoLibraryPermissions()
     // Observe library changes to invalidate cache
@@ -72,6 +85,14 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// the test-host environment. Production launches never have it set.
   private static var isRunningInTests: Bool {
     ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+  }
+
+  /// True when the app was launched with `--screenshot-mode`. Used by `init` to
+  /// skip PhotoKit registration so the `ScreenshotPhotoLibraryService` subclass can
+  /// serve curated content without the real library bleeding in. Also read by
+  /// `photo_exportApp.swift` to select which class to instantiate.
+  static var isRunningInScreenshotMode: Bool {
+    ProcessInfo.processInfo.arguments.contains("--screenshot-mode")
   }
 
   /// Verify that Photos usage description is properly set in Info.plist

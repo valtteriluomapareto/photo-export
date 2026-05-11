@@ -35,7 +35,25 @@ struct PhotoExportApp: App {
 
   init() {
     let edm = ExportDestinationManager()
-    let plm = PhotoLibraryManager()
+    // Screenshot mode (`--screenshot-mode` launch arg) swaps the real Photos
+    // backing for a curated synthetic library so marketing screenshots don't
+    // leak the maintainer's personal Photos library. The subclass shape lets
+    // the eight downstream `@EnvironmentObject` sites stay typed against
+    // `PhotoLibraryManager` — see
+    // `docs/project/plans/screenshot-automation-plan.md`.
+    if PhotoLibraryManager.isRunningInScreenshotMode {
+      // ContentView gates on `@AppStorage("hasCompletedOnboarding")`; without
+      // this it would show OnboardingView on a fresh machine and the capture
+      // script would never reach the marketing surfaces. Setting it for the
+      // current launch only — the underlying UserDefaults change persists, but
+      // screenshot mode is only ever used on the maintainer's machine where
+      // the value should already be true anyway.
+      UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+    }
+    let plm: PhotoLibraryManager =
+      PhotoLibraryManager.isRunningInScreenshotMode
+      ? ScreenshotPhotoLibraryService()
+      : PhotoLibraryManager()
     let ers = ExportRecordStore()
     let cers = CollectionExportRecordStore()
     let em = ExportManager(
@@ -189,6 +207,7 @@ struct PhotoExportApp: App {
           // stores have been configure(for:)d for the current destination
           // before the monitor reads their counts.
           destinationSafetyMonitor.attach()
+          applyScreenshotWindowSizeIfRequested()
         }
     }
     .defaultSize(width: 1100, height: 640)
@@ -235,6 +254,37 @@ struct PhotoExportApp: App {
       .environmentObject(destinationSafetyMonitor)
     }
     .windowResizability(.contentMinSize)
+  }
+
+  /// When `--screenshot-mode` includes width/height arguments, resize the main
+  /// window after launch so the capture script can grab a predictable frame. No-op
+  /// in production. Args read once on first appearance; subsequent calls are
+  /// idempotent because the resize is to the same size.
+  @MainActor
+  private func applyScreenshotWindowSizeIfRequested() {
+    guard PhotoLibraryManager.isRunningInScreenshotMode else { return }
+    let args = ProcessInfo.processInfo.arguments
+    func value(for prefix: String) -> CGFloat? {
+      guard
+        let arg = args.first(where: { $0.hasPrefix(prefix) }),
+        let raw = arg.split(separator: "=").last.map(String.init),
+        let n = Double(raw)
+      else { return nil }
+      return CGFloat(n)
+    }
+    guard
+      let width = value(for: "--screenshot-width="),
+      let height = value(for: "--screenshot-height=")
+    else { return }
+    guard let window = NSApplication.shared.windows.first else { return }
+    let screenFrame = window.screen?.visibleFrame ?? .zero
+    let origin = NSPoint(
+      x: screenFrame.midX - width / 2,
+      y: screenFrame.midY - height / 2
+    )
+    window.setFrame(
+      NSRect(origin: origin, size: CGSize(width: width, height: height)),
+      display: true, animate: false)
   }
 
   /// Returns `<App Support>/<bundle-id>/AutoSync/` as the root for AutoSync persistence.
