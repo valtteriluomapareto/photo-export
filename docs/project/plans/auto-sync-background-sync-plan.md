@@ -1,7 +1,7 @@
 # Auto-Sync and Background Sync Plan
 
 Date: 2026-05-08
-Status: In progress (last status update 2026-05-11, second snapshot)
+Status: In progress (last status update 2026-05-11, fourth snapshot — post-review)
 
 ## Implementation Status
 
@@ -14,11 +14,11 @@ Snapshot of where each phase stands. Update alongside the implementation — the
 | **Phase 0 Test Infrastructure** | ✅ Complete | `TestClock`, fakes for all four AutoSync protocols, in-memory dirty/retry/run-summary/per-destination-token stores. |
 | **Phase 1** Photos Change Tracking | 🟡 Mostly complete | Token storage, `PHPhotoLibraryChangeObserver` adapter, three-way error mapping, dirty state with cost-cap rollover, fallback debounce, storm control all in. **Missing:** "limited-access status copy/state" — reducer has the blocked reasons but nothing dispatches them. |
 | **Phase 2** AutoSync State Machine | ✅ Complete | Reducer + manager + protocols, all six publisher subscriptions, per-destination persistence (dirty / retry / lastRunSummary / lastDurablyRecordedToken). |
-| **Phase 3** Retry and Run Policy | ✅ Complete | **Slice A:** `manualFullExportCompleted` clears compatible dirty. **Slice B:** failure classifier maps `Error` to `AutoSyncFailureCategory`; manager records into `AutoSyncRetryState`. **Slice C:** exponential backoff (30 s → 2 m → 10 m → 1 h → 6 h cap) + enqueue-time eligibility check skips ineligible variants as `skippedCount`. Manual retry override (UI affordance) still pending. |
-| **Phase 4** UI | 🟡 Substantial progress | **Done:** Settings scene (Auto Export + Export Issues tabs, resizable, live-updating countdown), main-window status pill (always visible), menu bar item (`MenuBarExtra`), `runNow()`, migration-conflict recovery sheet, safety-confirmation banner + dialog, `Open at login` (SMAppService), manual-export confirmation sheet (supersedes AutoSync run), manual Retry action in Issues tab. **Missing:** completion/failure notifications (UNUserNotificationCenter), Dock badge, Ignore action in Issues tab, first-toggle-on hand-off, VoiceOver labels. |
-| **Phase 5** Verification and Docs | ❌ Not started | Reducer-contract tests largely already exist via Phase 2 work, but the structured Phase 5 audit + docs pass hasn't been done. |
+| **Phase 3** Retry and Run Policy | ✅ Complete | **Slice A:** `manualFullExportCompleted` clears compatible dirty. **Slice B:** failure classifier maps `Error` to `AutoSyncFailureCategory`; manager records into `AutoSyncRetryState`. **Slice C:** exponential backoff (30 s → 2 m → 10 m → 1 h → 6 h cap) + enqueue-time eligibility check skips ineligible variants as `skippedCount`. **Manual retry override:** "Retry" button per row in the Export Issues tab clears the entry and dispatches `runNow`. |
+| **Phase 4** UI | 🟡 Substantial progress | **Done:** Settings scene (Auto Export + Export Issues tabs, resizable, live-updating countdown), main-window status pill (always visible, reason inline), menu bar item (`MenuBarExtra`), `runNow()`, migration-conflict recovery sheet, safety-confirmation banner + dialog, `Open at login` (SMAppService), manual-export confirmation sheet (supersedes AutoSync run with `.supersededByManualRun`), manual Retry per failure row, consolidated `userFacingLabel` for status copy, accessibility labels include reason for blocked/waiting/scheduled/running. **Deferred (user choice):** completion/failure notifications (UNUserNotificationCenter), Dock badge. **Still missing:** Ignore action in Issues tab, main-window enable toggle / first-toggle-on hand-off, broader VoiceOver / keyboard-navigation pass for Settings. |
+| **Phase 5** Verification and Docs | 🟡 Partially covered | Reducer-contract tests largely exist via Phase 2 work; Phase 3 added failure-category classifier + retry-state tests; Phase 0b safety-scan + four file-backed-store test suites landed post-review. The structured Phase 5 audit (cross-reason debounce coalescing matrix, precedence between debounced reasons, locking spike outcomes) and the docs/readme refresh haven't been done as a deliberate pass. 665 tests passing in the harness today. |
 
-Branch tips: `auto-sync-phase-0a` (Phase 0a), `auto-sync-phase-2` (adds Phase 1 + 2), `auto-sync-phase-3` (adds Phase 3 Slice A), `auto-sync-phase-4` (cumulative tip — Phase 3 Slices A+B+C, all Phase 4 work so far).
+Branch tips: `auto-sync-phase-0a` (Phase 0a), `auto-sync-phase-2` (adds Phase 1 + 2), `auto-sync-phase-3` (adds Phase 3 Slice A), `auto-sync-phase-4` (cumulative tip — Phase 3 complete + the Phase 4 work so far + Phase 0b safety scan + the post-review fix batches).
 
 ## Summary
 
