@@ -23,12 +23,22 @@ import os
 final class DestinationSafetyMonitor: ObservableObject {
   @Published private(set) var needsSafetyConfirmation: Bool = false
 
-  private let destinationManager: ExportDestinationManager
+  private let fingerprintPublisher: AnyPublisher<DestinationFingerprint?, Never>
   private let exportRecordStore: ExportRecordStore
   private let collectionExportRecordStore: CollectionExportRecordStore
   private let confirmationStore: any DestinationSafetyConfirmationStore
+  /// Returns true when the destination directory contains user-visible
+  /// files. Closure-based so tests can stub the filesystem walk without
+  /// needing a real scoped-access URL. Production wires this from
+  /// `ExportDestinationManager.beginScopedAccess` +
+  /// `FileManager.contentsOfDirectory`.
+  private let scanDirectory: @MainActor () async -> Bool
   private let log: Logger
 
+  /// Cached most-recent fingerprint observed via the publisher. Used by
+  /// `confirmCurrentDestination()` so the confirm-action path doesn't need
+  /// a separate accessor closure.
+  private var currentFingerprint: DestinationFingerprint?
   /// Tracks the most recent evaluation so a late-arriving scan result for a
   /// stale destination doesn't overwrite the current one. Plain Int suffices
   /// because all writes happen on @MainActor.
@@ -36,18 +46,59 @@ final class DestinationSafetyMonitor: ObservableObject {
   private var observation: AnyCancellable?
 
   init(
-    destinationManager: ExportDestinationManager,
+    fingerprintPublisher: AnyPublisher<DestinationFingerprint?, Never>,
     exportRecordStore: ExportRecordStore,
     collectionExportRecordStore: CollectionExportRecordStore,
     confirmationStore: any DestinationSafetyConfirmationStore,
+    scanDirectory: @MainActor @escaping () async -> Bool,
     log: Logger = Logger(
       subsystem: "com.valtteriluoma.photo-export", category: "DestinationSafety")
   ) {
-    self.destinationManager = destinationManager
+    self.fingerprintPublisher = fingerprintPublisher
     self.exportRecordStore = exportRecordStore
     self.collectionExportRecordStore = collectionExportRecordStore
     self.confirmationStore = confirmationStore
+    self.scanDirectory = scanDirectory
     self.log = log
+  }
+
+  /// Convenience initializer that wires the production scan against
+  /// `ExportDestinationManager.beginScopedAccess()` /
+  /// `FileManager.contentsOfDirectory`. `PhotoExportApp` calls this; tests
+  /// use the designated initializer with a stubbed `scanDirectory`.
+  convenience init(
+    destinationManager: ExportDestinationManager,
+    exportRecordStore: ExportRecordStore,
+    collectionExportRecordStore: CollectionExportRecordStore,
+    confirmationStore: any DestinationSafetyConfirmationStore
+  ) {
+    let log = Logger(
+      subsystem: "com.valtteriluoma.photo-export", category: "DestinationSafety")
+    let scan: @MainActor () async -> Bool = { @MainActor [weak destinationManager] in
+      guard let dm = destinationManager, let scopedURL = dm.beginScopedAccess() else {
+        return false
+      }
+      defer { dm.endScopedAccess(for: scopedURL) }
+      do {
+        let contents = try FileManager.default.contentsOfDirectory(
+          at: scopedURL, includingPropertiesForKeys: nil,
+          options: [.skipsHiddenFiles])
+        return !contents.isEmpty
+      } catch {
+        log.warning(
+          "Safety scan failed at \(scopedURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+        )
+        return false
+      }
+    }
+    self.init(
+      fingerprintPublisher: destinationManager.$destinationFingerprint.eraseToAnyPublisher(),
+      exportRecordStore: exportRecordStore,
+      collectionExportRecordStore: collectionExportRecordStore,
+      confirmationStore: confirmationStore,
+      scanDirectory: scan,
+      log: log
+    )
   }
 
   /// Subscribe to destination changes. Call once from `PhotoExportApp.body`'s
@@ -57,20 +108,19 @@ final class DestinationSafetyMonitor: ObservableObject {
   func attach() {
     guard observation == nil else { return }
     observation =
-      destinationManager.$destinationFingerprint
+      fingerprintPublisher
       .removeDuplicates(by: { $0?.id == $1?.id })
       .receive(on: RunLoop.main)
       .sink { [weak self] fingerprint in
+        self?.currentFingerprint = fingerprint
         self?.evaluate(for: fingerprint)
       }
-    // Initial evaluation against the current fingerprint.
-    evaluate(for: destinationManager.destinationFingerprint)
   }
 
   /// User confirmed the destination's existing contents are theirs. Persist
   /// the confirmation and clear the flag.
   func confirmCurrentDestination() {
-    guard let id = destinationManager.destinationFingerprint?.id else { return }
+    guard let id = currentFingerprint?.id else { return }
     do {
       try confirmationStore.confirm(destinationId: id)
       log.info("User confirmed destination \(id, privacy: .public)")
@@ -113,7 +163,7 @@ final class DestinationSafetyMonitor: ObservableObject {
     // touches an external drive.
     Task { @MainActor [weak self] in
       guard let self else { return }
-      let presence = await self.scanDestinationDirectory()
+      let hasUserFiles = await self.scanDirectory()
       guard self.evaluationGeneration == gen else {
         // Stale generation — user already switched destinations.
         return
@@ -134,38 +184,9 @@ final class DestinationSafetyMonitor: ObservableObject {
         if self.needsSafetyConfirmation { self.needsSafetyConfirmation = false }
         return
       }
-      let flag = (presence == .hasUserFiles)
-      if self.needsSafetyConfirmation != flag {
-        self.needsSafetyConfirmation = flag
+      if self.needsSafetyConfirmation != hasUserFiles {
+        self.needsSafetyConfirmation = hasUserFiles
       }
-    }
-  }
-
-  private enum Presence: Equatable {
-    case empty
-    case hasUserFiles
-  }
-
-  private func scanDestinationDirectory() async -> Presence {
-    guard let scopedURL = destinationManager.beginScopedAccess() else {
-      return .empty
-    }
-    defer { destinationManager.endScopedAccess(for: scopedURL) }
-    do {
-      let contents = try FileManager.default.contentsOfDirectory(
-        at: scopedURL, includingPropertiesForKeys: nil,
-        options: [.skipsHiddenFiles])
-      // `.skipsHiddenFiles` filters `.DS_Store` and similar; if anything
-      // remains, treat as user content.
-      return contents.isEmpty ? .empty : .hasUserFiles
-    } catch {
-      log.warning(
-        "Safety scan failed at \(scopedURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
-      )
-      // On scan failure, don't flag — the user can't act on a transient I/O
-      // error, and AutoSync will still gate on isAvailable / safety
-      // elsewhere if the destination is actually unreadable.
-      return .empty
     }
   }
 }
