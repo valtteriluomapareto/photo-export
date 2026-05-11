@@ -25,6 +25,12 @@ final class AutoSyncManager: ObservableObject {
   /// toggle as on so the user can see what to fix).
   @Published private(set) var isEnabled: Bool = false
 
+  /// Per-destination retry state for the *currently selected* destination.
+  /// Surfaced for the Export Issues UI (Phase 4) and refreshed after every
+  /// `.recordRetryFailures` effect plus on destination change. Empty for a
+  /// brand-new destination or when no destination is selected.
+  @Published private(set) var currentRetryState: AutoSyncRetryState = .empty
+
   // MARK: - Private state
 
   private let log: Logger
@@ -186,11 +192,23 @@ final class AutoSyncManager: ObservableObject {
       // load itself surfaces decode failures in logs at the right moment
       // (destination switch) rather than first time we'd want to use it.
       _ = environment.perDestinationTokenStore.load(destinationId: newId)
-    } else if newId == nil, lastRunSummary != nil {
-      // Destination cleared (drive removed, user de-selected). Drop the stale
-      // summary so the UI doesn't show "last run on Drive A" when no drive is
-      // selected.
-      lastRunSummary = nil
+
+      // Refresh retry state for the new destination so the Issues UI shows
+      // this destination's failures immediately, not the previous one's.
+      let retry = environment.retryStateStore.load(destinationId: newId)
+      if currentRetryState != retry {
+        currentRetryState = retry
+      }
+    } else if newId == nil {
+      if lastRunSummary != nil {
+        // Destination cleared (drive removed, user de-selected). Drop the
+        // stale summary so the UI doesn't show "last run on Drive A" when
+        // no drive is selected.
+        lastRunSummary = nil
+      }
+      if !currentRetryState.isEmpty {
+        currentRetryState = .empty
+      }
     }
     dispatch(.destinationChanged(snapshot))
   }
@@ -337,6 +355,12 @@ final class AutoSyncManager: ObservableObject {
           log.error(
             "Failed to persist retry state for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
           )
+        }
+        // Push to UI: only if this destination is still the current one
+        // (avoids overwriting a different destination's view if the user
+        // switched between dispatch and effect-run).
+        if reducerState.destination.id == destinationId, currentRetryState != retry {
+          currentRetryState = retry
         }
       }
     }

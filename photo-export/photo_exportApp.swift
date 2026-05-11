@@ -171,12 +171,17 @@ struct PhotoExportApp: App {
     .windowStyle(.hiddenTitleBar)
 
     Settings {
-      AutoExportSettingsView()
-        .environmentObject(autoSyncManager)
-        .environmentObject(autoSyncScopeStore)
-        .environmentObject(exportDestinationManager)
-        .environmentObject(exportManager)
-        .environmentObject(lifecycleCoordinator)
+      TabView {
+        AutoExportSettingsView()
+          .tabItem { Label("Auto Export", systemImage: "arrow.triangle.2.circlepath") }
+        ExportIssuesView()
+          .tabItem { Label("Export Issues", systemImage: "exclamationmark.triangle") }
+      }
+      .environmentObject(autoSyncManager)
+      .environmentObject(autoSyncScopeStore)
+      .environmentObject(exportDestinationManager)
+      .environmentObject(exportManager)
+      .environmentObject(lifecycleCoordinator)
     }
   }
 
