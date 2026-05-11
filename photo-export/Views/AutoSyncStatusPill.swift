@@ -5,39 +5,43 @@ import SwiftUI
 /// scheduled, blocked, running, last run." Slice 1c is just the state pill;
 /// last-run summary and failure-summary link land later.
 ///
-/// Hidden when AutoSync is disabled — the toolbar isn't the place to advertise
-/// a feature the user hasn't opted into. Tapping the pill opens Settings →
-/// Auto Export so the user can act on whatever the pill is showing.
+/// Always visible — when AutoSync is off, it renders in a subdued style as
+/// "Auto Export off" so the user has a one-click path back to Settings →
+/// Auto Export after disabling. (The pill was hidden in the initial Slice
+/// 1c; manual testing showed the resulting discovery gap.) Clicking the
+/// pill always opens Settings.
 struct AutoSyncStatusPill: View {
   let state: AutoSyncState
 
   @Environment(\.openSettings) private var openSettings
 
   var body: some View {
-    if case .disabled = state {
-      EmptyView()
-    } else {
-      Button {
-        openSettings()
-      } label: {
-        HStack(spacing: 6) {
-          Image(systemName: iconName)
-            .foregroundStyle(iconTint)
-          Text(label)
-            .font(.callout)
-            .lineLimit(1)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-          RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(.quaternary)
-        )
+    Button {
+      openSettings()
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: iconName)
+          .foregroundStyle(iconTint)
+        Text(label)
+          .font(.callout)
+          .lineLimit(1)
       }
-      .buttonStyle(.plain)
-      .help(helpText)
-      .accessibilityLabel(accessibilityLabel)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 4)
+      .background(
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .fill(.quaternary)
+      )
+      .opacity(isDisabled ? 0.6 : 1.0)
     }
+    .buttonStyle(.plain)
+    .help(helpText)
+    .accessibilityLabel(accessibilityLabel)
+  }
+
+  private var isDisabled: Bool {
+    if case .disabled = state { return true }
+    return false
   }
 
   private var iconName: String {
@@ -74,7 +78,7 @@ struct AutoSyncStatusPill: View {
 
   private var helpText: String {
     switch state {
-    case .disabled: return "Auto Export is off"
+    case .disabled: return "Auto Export is off. Click to open settings."
     case .idle: return "Auto Export is up to date. Click to open settings."
     case .scheduled(let reason, let fireAt):
       let secs = max(0, Int(fireAt.timeIntervalSinceNow.rounded()))
