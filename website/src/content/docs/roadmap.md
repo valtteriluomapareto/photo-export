@@ -5,13 +5,19 @@ description: Ideas for future features and improvements.
 
 Photo Export is intentionally focused. Below are ideas we're considering that would improve reliability, usability, and media support without turning the app into something larger than it needs to be. None of these are committed to a timeline.
 
+## Recently shipped
+
+- **Auto Export** — automatically back up new photos as they appear in Apple Photos, with per-scope (Timeline / Favorites / Albums) selection, retry-with-backoff for transient failures, and an Export Issues view for what didn't go through. See the [Auto Export guide](/photo-export/auto-export/).
+- **Retry failed exports** — every failure in the Export Issues view has a per-row Retry button; auto-retryable categories also re-attempt on their own with exponential backoff.
+
 ## Usability
 
-- **Retry failed exports** — re-attempt individual failures without restarting the entire batch
 - **Media filtering** — filter the library view by photos, videos, or both
-- **Manual refresh and change observation** — keep the library view current when new photos arrive
+- **Manual refresh and change observation in the library view** — Auto Export already reacts to PhotoKit changes; this is about the library view's grid reflecting them while you're browsing
 - **Search and filter** — find assets by name or date within the browser
-- **Accessibility and polish** — improve VoiceOver support and refine the onboarding flow
+- **Accessibility and polish** — broader VoiceOver coverage beyond the Auto Export status pill, and onboarding refinements
+- **Ignore action in Export Issues** — suppress a known-unrecoverable failure (alongside the existing Retry action) so the list stays focused on what's actionable
+- **Completion / failure notifications** — opt-in macOS notifications when an Auto Export run finishes or fails, plus a Dock badge for unresolved issues
 
 ## Reliability and performance
 

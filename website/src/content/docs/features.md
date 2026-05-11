@@ -5,6 +5,21 @@ description: What Photo Export can do today.
 
 Photo Export is a focused macOS app for exporting and tracking Apple Photos backups. These are the core capabilities available today.
 
+## Auto Export
+
+Photo Export can keep an external drive (or any folder) automatically in sync with your Apple Photos library — see the [Auto Export guide](/photo-export/auto-export/) for the full walkthrough.
+
+- Optional **Enable Auto Export** toggle in Settings — off by default
+- Pick what to back up: **Timeline**, **Favorites**, **Albums**, or any combination
+- Runs in the background while Photo Export is open; new photos in Apple Photos are added to your backup automatically with a short debounce
+- **Status surfaces** in three places: a pill in the main-window toolbar, an always-on menu bar item, and Settings → Auto Export
+- **Export Now** in Settings and the menu bar bypasses the debounce
+- **Retry policy** with exponential backoff for transient failures (Photos library momentarily busy, iCloud download failed, etc.); hard failures (destination full, asset missing) need user action
+- **Export Issues** tab groups failures by category with a per-row **Retry** button
+- **Open Photo Export at login** (SMAppService) for a "set it and forget it" workflow — the app launches automatically and Auto Export starts watching
+- **Manual exports always take precedence** — clicking Export All while an automatic run is in flight prompts to supersede the auto run
+- **Safety scan** asks for confirmation when you point Auto Export at a folder that already contains files; the confirmation persists per destination
+
 ## Library browsing
 
 - Two sidebar sections via a Timeline / Collections segmented control

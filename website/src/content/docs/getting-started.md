@@ -56,6 +56,12 @@ A few extras that work in both views:
 
 Export progress is shown in the toolbar. You can pause, resume, or cancel at any time.
 
+### 4. (Optional) Turn on Auto Export
+
+If you want Photo Export to keep your backup folder in sync automatically — adding new photos as they appear in Apple Photos without you clicking Export — open **Photo Export → Settings…** (Cmd+,) and head to the **Auto Export** tab. Enable the toggle and pick at least one scope (Timeline, Favorites, or Albums). For a hands-off setup, also turn on **Open Photo Export at login**.
+
+The full walkthrough — what triggers a run, how retry works, what the status icons mean — lives in the [Auto Export guide](/photo-export/auto-export/).
+
 ### Troubleshooting
 
 - **"Export folder is not reachable"** — Check that the external drive is plugged in and mounted.
@@ -63,6 +69,10 @@ Export progress is shown in the toolbar. You can pause, resume, or cancel at any
 - **Photos permission denied** — Open **System Settings → Privacy & Security → Photos** and enable access for Photo Export.
 - **Export stuck near 100%** — Use **Help → Save Diagnostic Report…** to write a text file listing every photo whose export is in `failed` or `in-progress` state, including the underlying error message. Attach it to a [GitHub issue](https://github.com/valtteriluomapareto/photo-export/issues) so the cause is visible.
 - **Unexpected `_orig` files in my backup** — If Photos can't provide the edited version of an asset (`Edited resource unavailable` in the diagnostic report), the app writes the original file with an `_orig` suffix so you still have a backup of the asset. The diagnostic report flags these assets.
+
+## Upgrading from an earlier version
+
+If you've been running Photo Export 1.2.3 or earlier, the [Auto Export guide's "Upgrading" section](/photo-export/auto-export/#upgrading-from-photo-export-123-or-earlier) covers what's new in the UI, how your existing export records are migrated under the hood (nothing on your destination drive changes), and what to do if Settings → Auto Export flags a migration conflict after the update.
 
 ## Updates and distribution channels
 
