@@ -121,18 +121,6 @@ jobs:
           name: TestResults
           path: TestResults.xcresult
 
-      - name: Convert coverage to LCOV
-        run: |
-          echo "Converting .xcresult to LCOV format..."
-          ./scripts/xccov2lcov.sh TestResults.xcresult lcov.info
-          echo "LCOV file size: $(wc -l < lcov.info) lines"
-
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: lcov.info
-          fail_ci_if_error: false
-
       - name: Build Release
         run: |
           echo "::group::Release build"
