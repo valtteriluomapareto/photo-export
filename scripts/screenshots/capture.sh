@@ -2,25 +2,20 @@
 #
 # scripts/screenshots/capture.sh
 #
-# End-to-end capture pipeline for marketing screenshots:
-#
-#   1. Build the app (Release config, no code signing) with the bundled
-#      screenshot mode wired in.
-#   2. Launch it with `--screenshot-mode --screenshot-width=W --screenshot-height=H`
-#      so it boots the curated `ScreenshotPhotoLibraryService`, resizes the
-#      main window to the requested frame, and publishes the window's
-#      CGWindowID to a temp file (`$TMPDIR/photo-export-screenshot-window-id.txt`).
-#   3. Poll for the window-id file, then capture via `screencapture -l<id>`.
-#      Capture-by-window-id is pixel-exact and works regardless of which
-#      display the window lives on (matters on multi-display setups).
-#   4. Terminate the running instance.
+# End-to-end capture pipeline for marketing screenshots. Builds the app
+# once, then for each "surface" launches the app with a
+# `--screenshot-surface=<key>` arg that lands directly on that view via
+# `LibraryRootView.requestedScreenshotSurface`. Captures the window by
+# CGWindowID, then quits and moves on to the next surface.
 #
 # Outputs go to `screenshots/<WIDTHxHEIGHT>/NN-name.png` relative to the repo
 # root.
 #
 # Usage:
-#   scripts/screenshots/capture.sh                 # 2880x1800 (default)
+#   scripts/screenshots/capture.sh                 # 2880x1800, all surfaces
 #   scripts/screenshots/capture.sh 1440x900        # smaller App Store slot
+#   scripts/screenshots/capture.sh 1440x900 timeline collections-favorites
+#                                                  # capture only the listed surfaces
 #
 # Manual upload after running: drag the PNGs into App Store Connect's web UI,
 # or pass them through scripts/prepare-app-store-screenshot.py if padding is
@@ -29,27 +24,67 @@
 # Required TCC permission (one-time, grant in System Settings → Privacy &
 # Security → Screen Recording):
 #
-#   • The shell host running this script (Terminal.app, iTerm2, Warp, etc.)
-#     needs Screen Recording permission. Without it, `screencapture` exits
-#     non-zero with "could not create image from display".
+#   • The shell host running this script (Terminal.app, iTerm2, Warp,
+#     Ghostty, etc.) needs Screen Recording permission. Without it,
+#     `screencapture` exits non-zero with "could not create image from
+#     display".
 #
-# That's it — no Automation or Accessibility permissions needed. The pipeline
-# used to drive the app via AppleScript + System Events (which would have
-# needed both), but the app now publishes its window frame to a temp file
-# directly, so the script can call `screencapture -R` without AppleScript.
+# That's it — no Automation or Accessibility permissions needed.
 #
 # Designed to be re-runnable — quits any existing instance and clears the
-# output dir.
+# output dir on each invocation.
 
 set -euo pipefail
 
 SIZE="${1:-2880x1800}"
 if [[ ! "$SIZE" =~ ^[0-9]+x[0-9]+$ ]]; then
-  echo "Usage: $0 [WIDTHxHEIGHT]" >&2
+  echo "Usage: $0 [WIDTHxHEIGHT] [surface...]" >&2
   exit 2
 fi
+shift || true
 WIDTH="${SIZE%x*}"
 HEIGHT="${SIZE#*x}"
+
+# Default surface set when none is requested explicitly on the command line.
+# Each entry is "key:NN-filename" — the key matches a case in
+# `LibraryRootView.requestedScreenshotSurface()`, the NN-filename is the
+# output PNG (stable upload order via the NN prefix).
+DEFAULT_SURFACES=(
+  "timeline:01-timeline"
+  "collections-favorites:02-collections-favorites"
+  "collections-album-family:03-collections-album-family"
+  "collections-album-porvoo:04-collections-album-porvoo"
+  "collections-folder-trips:05-collections-folder-trips"
+  "collections-album-london:06-collections-album-london"
+)
+
+# If the user supplied positional args after the size, use those as surface
+# keys (matching the suffix-by-key form) so they can capture a subset for
+# iteration.
+if (($# > 0)); then
+  REQUESTED_SURFACES=()
+  for key in "$@"; do
+    found=""
+    for entry in "${DEFAULT_SURFACES[@]}"; do
+      if [[ "${entry%%:*}" == "$key" ]]; then
+        REQUESTED_SURFACES+=("$entry")
+        found="yes"
+        break
+      fi
+    done
+    if [[ -z "$found" ]]; then
+      echo "Unknown surface: $key" >&2
+      echo "Known surfaces:" >&2
+      for entry in "${DEFAULT_SURFACES[@]}"; do
+        echo "  ${entry%%:*}" >&2
+      done
+      exit 2
+    fi
+  done
+  SURFACES=("${REQUESTED_SURFACES[@]}")
+else
+  SURFACES=("${DEFAULT_SURFACES[@]}")
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
@@ -63,8 +98,6 @@ WINDOW_ID_FILE="${TMPDIR:-/tmp}/photo-export-screenshot-window-id.txt"
 echo "==> Cleaning previous output at $OUT_DIR"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
-# Stale window-id file from a prior run would point at a dead CGWindowID.
-rm -f "$WINDOW_ID_FILE"
 
 echo "==> Building $APP_NAME (Release, no signing)"
 xcodebuild \
@@ -81,55 +114,62 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 3
 fi
 
-# Kill any running instance so we own the window frame reliably.
-echo "==> Terminating any existing instance"
-pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
-# Wait for the binary to actually exit so a stale frame file isn't picked up.
-for _ in 1 2 3 4 5 6; do
-  if ! pgrep -f "${APP_NAME}.*--screenshot-mode" >/dev/null; then break; fi
-  sleep 0.5
+# Capture each surface as its own fresh launch. Per-surface launches avoid
+# state leakage between surfaces (no menu open from a prior surface, no
+# scroll position carryover) and remove the need for any UI scripting.
+for entry in "${SURFACES[@]}"; do
+  KEY="${entry%%:*}"
+  NAME="${entry##*:}"
+  OUT_PATH="$OUT_DIR/${NAME}.png"
+
+  # Stale window-id file from a prior surface would point at the prior
+  # window's CGWindowID.
+  rm -f "$WINDOW_ID_FILE"
+
+  echo
+  echo "==> [$KEY] terminating any existing instance"
+  pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6; do
+    if ! pgrep -f "${APP_NAME}.*--screenshot-mode" >/dev/null; then break; fi
+    sleep 0.5
+  done
+
+  echo "==> [$KEY] launching (${WIDTH}x${HEIGHT})"
+  open "$APP_PATH" --args \
+    --screenshot-mode \
+    "--screenshot-width=$WIDTH" \
+    "--screenshot-height=$HEIGHT" \
+    "--screenshot-surface=$KEY"
+
+  echo "==> [$KEY] waiting for window id"
+  for _ in $(seq 1 20); do
+    if [[ -s "$WINDOW_ID_FILE" ]]; then break; fi
+    sleep 0.5
+  done
+  if [[ ! -s "$WINDOW_ID_FILE" ]]; then
+    echo "Timed out waiting for $WINDOW_ID_FILE on surface $KEY." >&2
+    pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
+    exit 4
+  fi
+  WINDOW_ID="$(cat "$WINDOW_ID_FILE")"
+
+  # Give SwiftUI a moment after the window settles so async thumbnail loads
+  # finish before the capture lands. 1.0s is conservative; 0.5s leaves
+  # gradient placeholders visible on slower hardware.
+  sleep 1.0
+
+  echo "==> [$KEY] capturing → $OUT_PATH (window $WINDOW_ID)"
+  if ! /usr/sbin/screencapture -t png -o "-l${WINDOW_ID}" "$OUT_PATH"; then
+    echo "screencapture failed. Most common cause: Screen Recording permission" >&2
+    echo "not granted to your shell host. Grant in System Settings → Privacy &" >&2
+    echo "Security → Screen Recording, then retry." >&2
+    pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
+    exit 5
+  fi
 done
 
-echo "==> Launching with --screenshot-mode (${WIDTH}x${HEIGHT})"
-open "$APP_PATH" --args \
-  --screenshot-mode \
-  "--screenshot-width=$WIDTH" \
-  "--screenshot-height=$HEIGHT"
-
-# Wait up to 10s for the app to publish its window id. The app writes the
-# file once the window has been sized + positioned and has a stable
-# CGWindowID for screencapture to target.
-echo "==> Waiting for window id"
-for i in $(seq 1 20); do
-  if [[ -s "$WINDOW_ID_FILE" ]]; then break; fi
-  sleep 0.5
-done
-if [[ ! -s "$WINDOW_ID_FILE" ]]; then
-  echo "Timed out waiting for $WINDOW_ID_FILE — the app likely didn't reach screenshot mode." >&2
-  pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
-  exit 4
-fi
-WINDOW_ID="$(cat "$WINDOW_ID_FILE")"
-echo "    window id: $WINDOW_ID"
-
-# Give SwiftUI a brief moment to finish rendering the initial frame after the
-# window is sized — without this, in-progress animation can land in the PNG.
-sleep 0.5
-
-echo "==> Capturing"
-OUT_PATH="$OUT_DIR/01-timeline.png"
-# `-o` suppresses the window's drop shadow so the PNG has a clean edge
-# suitable for App Store / website use. `-l<id>` targets the window
-# regardless of which display it's on.
-if ! /usr/sbin/screencapture -t png -o "-l${WINDOW_ID}" "$OUT_PATH"; then
-  echo "screencapture failed. Most common cause: Screen Recording permission" >&2
-  echo "not granted to your shell host (Terminal / iTerm2 / etc.). Grant in" >&2
-  echo "System Settings → Privacy & Security → Screen Recording, then retry." >&2
-  pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
-  exit 5
-fi
-
-echo "==> Terminating screenshot instance"
+echo
+echo "==> Terminating final screenshot instance"
 pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
 
 if ! ls "$OUT_DIR"/*.png >/dev/null 2>&1; then
@@ -138,6 +178,6 @@ if ! ls "$OUT_DIR"/*.png >/dev/null 2>&1; then
 fi
 
 echo
-echo "Done. Captures landed in:"
+echo "Done. ${#SURFACES[@]} capture(s) landed in:"
 echo "  $OUT_DIR"
 ls -1 "$OUT_DIR"

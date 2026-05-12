@@ -14,19 +14,78 @@ struct LibraryRootView: View {
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var whatsNewState: WhatsNewState
 
-  @State private var section: LibrarySection = .timeline
-  @State private var selection: LibrarySelection? = .timelineMonth(
-    year: Calendar.current.component(.year, from: Date()),
-    month: Calendar.current.component(.month, from: Date())
-  )
+  @State private var section: LibrarySection
+  @State private var selection: LibrarySelection?
 
   /// Last selection per section so flipping the segmented control returns the user to
   /// where they were. Updated whenever `selection` changes within a section.
-  @State private var lastTimelineSelection: LibrarySelection? = .timelineMonth(
-    year: Calendar.current.component(.year, from: Date()),
-    month: Calendar.current.component(.month, from: Date())
-  )
+  @State private var lastTimelineSelection: LibrarySelection?
   @State private var lastCollectionsSelection: LibrarySelection?
+
+  init() {
+    // Honour `--screenshot-surface=<key>` so the capture script can land each
+    // marketing capture on a specific view without UI scripting. In production
+    // launches the arg is absent and the defaults below match the pre-launch-arg
+    // behaviour (Timeline / current month).
+    let surface = Self.requestedScreenshotSurface()
+    let now = Date()
+    let currentYear = Calendar.current.component(.year, from: now)
+    let currentMonth = Calendar.current.component(.month, from: now)
+    let defaultTimeline: LibrarySelection = .timelineMonth(year: currentYear, month: currentMonth)
+    let initialSection = surface?.section ?? .timeline
+    let initialSelection = surface?.selection ?? defaultTimeline
+    _section = State(initialValue: initialSection)
+    _selection = State(initialValue: initialSelection)
+    _lastTimelineSelection = State(
+      initialValue: initialSection == .timeline ? initialSelection : defaultTimeline)
+    _lastCollectionsSelection = State(
+      initialValue: initialSection == .collections ? initialSelection : nil)
+  }
+
+  /// Reads `--screenshot-surface=<key>` from launch args and resolves it to an
+  /// initial `(section, selection)` for screenshot captures. Returns `nil` for
+  /// production launches (no matching arg) so the defaults below apply.
+  ///
+  /// Supported keys:
+  ///   - `timeline`                  : Timeline section, current month
+  ///   - `collections-favorites`     : Collections section, Favorites view
+  ///   - `collections-album-family`  : Collections section, Family album
+  ///   - `collections-album-porvoo`  : Collections section, Porvoo album
+  ///   - `collections-folder-trips`  : Collections section, Trips folder (folder grid)
+  ///   - `collections-album-london`  : Collections section, London album (under Trips)
+  ///   - `collections-album-paris`   : Collections section, Paris album (under Trips)
+  private static func requestedScreenshotSurface() -> (
+    section: LibrarySection, selection: LibrarySelection
+  )? {
+    guard let raw = ProcessInfo.processInfo.arguments.first(where: {
+      $0.hasPrefix("--screenshot-surface=")
+    }) else { return nil }
+    let key = String(raw.split(separator: "=", maxSplits: 1).last ?? "")
+    switch key {
+    case "timeline":
+      let now = Date()
+      return (
+        .timeline,
+        .timelineMonth(
+          year: Calendar.current.component(.year, from: now),
+          month: Calendar.current.component(.month, from: now))
+      )
+    case "collections-favorites":
+      return (.collections, .favorites)
+    case "collections-album-family":
+      return (.collections, .album(collectionId: "family"))
+    case "collections-album-porvoo":
+      return (.collections, .album(collectionId: "porvoo"))
+    case "collections-folder-trips":
+      return (.collections, .folder(collectionId: "trips"))
+    case "collections-album-london":
+      return (.collections, .album(collectionId: "london"))
+    case "collections-album-paris":
+      return (.collections, .album(collectionId: "paris"))
+    default:
+      return nil
+    }
+  }
 
   @State private var selectedAsset: AssetDescriptor?
 
