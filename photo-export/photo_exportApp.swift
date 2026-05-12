@@ -182,25 +182,34 @@ struct PhotoExportApp: App {
             fingerprintPublisher: exportDestinationManager.$destinationFingerprint
               .eraseToAnyPublisher()
           )
-          // Wire AutoSync after the lifecycle coordinator so the
-          // destination snapshot adapter sees the initial migration-conflict
-          // state on first emission. AutoSyncManager.attach is idempotent;
-          // the photo change adapter is a no-op until Photos authorization.
-          let environment = AutoSyncEnvironment(
-            exportRunner: exportManager,
-            destination: autoSyncDestinationAdapter,
-            scopes: autoSyncScopeStore,
-            photos: autoSyncPhotoChangeAdapter,
-            importing: exportManager,
-            dirtyStateStore: autoSyncDirtyStateStore,
-            retryStateStore: autoSyncRetryStateStore,
-            runSummaryStore: autoSyncRunSummaryStore,
-            perDestinationTokenStore: autoSyncPerDestinationTokenStore,
-            clock: autoSyncClock,
-            userDefaults: .standard
-          )
-          autoSyncManager.attach(to: environment)
-          autoSyncPhotoChangeAdapter.start()
+          // Skip the entire AutoSync wiring in screenshot mode. The
+          // `PhotoLibraryPersistentChangeAdapter.start()` call further down
+          // triggers the system Photos permission prompt — `currentChangeToken`
+          // and `register(self)` both touch PhotoKit even though `PhotoLibraryManager`'s
+          // own observer registration is skipped. Screenshot mode is a
+          // marketing-capture mode that doesn't need AutoSync; gate the
+          // attach + start so the run is permission-free.
+          if !PhotoLibraryManager.isRunningInScreenshotMode {
+            // Wire AutoSync after the lifecycle coordinator so the
+            // destination snapshot adapter sees the initial migration-conflict
+            // state on first emission. AutoSyncManager.attach is idempotent;
+            // the photo change adapter is a no-op until Photos authorization.
+            let environment = AutoSyncEnvironment(
+              exportRunner: exportManager,
+              destination: autoSyncDestinationAdapter,
+              scopes: autoSyncScopeStore,
+              photos: autoSyncPhotoChangeAdapter,
+              importing: exportManager,
+              dirtyStateStore: autoSyncDirtyStateStore,
+              retryStateStore: autoSyncRetryStateStore,
+              runSummaryStore: autoSyncRunSummaryStore,
+              perDestinationTokenStore: autoSyncPerDestinationTokenStore,
+              clock: autoSyncClock,
+              userDefaults: .standard
+            )
+            autoSyncManager.attach(to: environment)
+            autoSyncPhotoChangeAdapter.start()
+          }
           // Phase 0b: monitor begins observing destination changes and
           // running the safety scan against the active destination's
           // contents. Attached after lifecycleCoordinator so the record
