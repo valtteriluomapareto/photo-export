@@ -13,12 +13,15 @@ import os
 /// class's `init` skips PhotoKit registration when `isRunningInScreenshotMode` is
 /// true, so no observer fires to overwrite the curated state.
 ///
-/// Thumbnails resolve in two tiers: first a bundled JPEG named after the asset id
-/// under `Resources/screenshots/<assetId>.jpg`; if that's absent (e.g. the
-/// maintainer hasn't curated stock photos yet) the service renders a colored
+/// Thumbnails resolve in two tiers: first a bundled JPEG/PNG/HEIC named after
+/// the asset id (looking at both the bundle root and a `screenshots/`
+/// subdirectory); if no bundled file is found the service renders a colored
 /// gradient placeholder so the app at least renders something usable in every
-/// thumbnail slot. The placeholder colors are deterministic per-asset so reruns
-/// look identical.
+/// thumbnail slot. The bundled set today covers every id used by the curated
+/// tree, so the gradient fallback only fires if a future tree change adds an
+/// id without a corresponding bundled photo. Note: placeholder colors are
+/// computed from `String.hashValue`, which is randomised per process — they
+/// look stable within a single capture run, not across reruns.
 @MainActor
 final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 

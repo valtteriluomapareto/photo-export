@@ -1,16 +1,16 @@
 # Screenshot Automation Plan
 
-Date: 2026-05-11
-Status: Phase 1 + 3 implemented (subclass + scripts); Phase 2 (curated tree wiring) implemented; bundled stock photos deferred — service falls back to deterministic gradient placeholders until real photos are sourced.
+Date: 2026-05-11 (last revised 2026-05-12)
+Status: ✅ Shipped. Marketing screenshots can be captured end-to-end via `scripts/screenshots/capture.sh` — six surfaces today (Timeline, Favorites, Family, Porvoo, Trips folder, London album); adding more is a one-case-in-Swift, one-line-in-bash extension. Bundled photos are user-supplied + AI-generated (see `photo-export/Resources/screenshots/ATTRIBUTION.txt`). Manual App Store upload remains the chosen path; no Fastlane Deliver wiring.
 
 ## Implementation Status
 
 | Phase | Status | Notes |
 |---|---|---|
 | 1. `ScreenshotPhotoLibraryService` (subclass of `PhotoLibraryManager`) | ✅ Done | All 19 `PhotoLibraryService` methods overridden; sibling launch-arg escape (`PhotoLibraryManager.isRunningInScreenshotMode`); `final` dropped from `PhotoLibraryManager` with a doc-comment explaining why. |
-| 2. Bundled stock JPEGs + asset wiring | ⚠️ Partial | Curated tree (Favorites + Iceland 2025 + Family + Hiking + Trips/Iceland + Trips/Norway) wired and selectable; thumbnail resolution tries `Resources/screenshots/<assetId>.jpg` first, falls back to deterministic colored-gradient placeholders so the pipeline works before stock photos are sourced. Add real Unsplash/Pexels CC0 JPEGs under `photo-export/Resources/screenshots/` to upgrade. |
-| 3. AppleScript driver + `screencapture` script | ✅ Done | `scripts/screenshots/capture.sh` + `drive.applescript`. Window position/size via AppleScript (no PyObjC); capture via `screencapture -R x,y,w,h`. |
-| 4. Manual App Store upload | ⏳ Proposed | Drag-and-drop in App Store Connect web UI. No Fastlane Deliver. First submission lives in the maintainer's workflow, not in this repo. |
+| 2. Bundled stock JPEGs + asset wiring | ✅ Done | Curated tree (Favorites + Family + Porvoo + Trips/London + Trips/Paris) wired; 27 real photos bundled. Thumbnail resolution tries `.jpg` / `.jpeg` / `.heic` / `.png` at the bundle root with a `screenshots/` subdirectory fallback. A deterministic colored-gradient placeholder still renders for any asset id whose bundled photo is missing. |
+| 3. Capture script + multi-surface routing | ✅ Done | `scripts/screenshots/capture.sh` builds Release, then per surface: launches the app with `--screenshot-mode --screenshot-surface=<key> --screenshot-width=W --screenshot-height=H`, polls for the `NSWindow.windowNumber` published to `$TMPDIR/photo-export-screenshot-window-id.txt`, captures via `screencapture -t png -o -l<id>`, kills the instance, advances. Window-id targeting is display-agnostic; no AppleScript / System Events / Accessibility required. |
+| 4. Manual App Store upload | ✅ Done — manual workflow | Drag-and-drop in App Store Connect web UI. `scripts/prepare-app-store-screenshot.py` (pre-existing) handles padding to spec sizes when needed. No Fastlane Deliver wiring; revisit if cadence changes per "When to revisit" below. |
 
 ## Goals
 
@@ -146,52 +146,71 @@ Type stays `PhotoLibraryManager` (the subclass is one). Eight `@EnvironmentObjec
   to switch configurations to take screenshots." If the binary bloat becomes a problem later,
   the gate is one line.
 
-### Curated tree
+### Curated tree (as shipped)
 
 ```
-Favorites (5 photos)
-"Iceland 2025"   (top-level album, 4 photos)
-"Family"         (top-level album, 3 photos)
-"Hiking"         (top-level album, 3 photos)
+Favorites           (synthetic — family-1, porvoo-1, london-1, paris-1)
+"Family"            (top-level album, 6 photos)
+"Porvoo"            (top-level album, 7 photos)
 Folder "Trips"
-  ├── "Iceland"  (3 photos)
-  └── "Norway"   (3 photos)
+  ├── "London"      (7 photos)
+  └── "Paris"       (7 photos)
 ```
 
-Asset counts in `countAssets(in:)` can return larger values than the bundle contains — the
-sidebar/toolbar shows "12 / 4,812 exported", and the photo grid only renders what's
-returned from `fetchAssets`. Lie about counts for marketing realism.
+27 photos total. The `Trips` folder is intentional — it gives the screenshot
+capture for the new folder-export feature a meaningful subject (folder grid
+shows two album-tile children with 4-up cover thumbnails and a working
+"Export 2 Albums" toolbar action).
 
-## The capture script
+Asset counts in `countAssets(in:)` could return larger values than the bundle contains
+to inflate the sidebar/toolbar numbers ("4,812 exported") for marketing realism — currently
+they return the actual asset counts. Lie about counts in `countAssets(in:)` if the marketing
+copy wants bigger numbers; the photo grid only renders what `fetchAssets` returns.
 
-`scripts/screenshots/capture.sh`:
+Source attribution for the bundled photos lives in
+`photo-export/Resources/screenshots/ATTRIBUTION.txt` (Porvoo / London / Paris by the
+maintainer; Family AI-generated).
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-mkdir -p screenshots
-xcodebuild -project photo-export.xcodeproj -scheme "photo-export" \
-  -configuration Release -derivedDataPath build/screenshots \
-  CODE_SIGNING_ALLOWED=NO build
-APP_PATH="build/screenshots/Build/Products/Release/Photo Export.app"
-open "$APP_PATH" --args --screenshot-mode --screenshot-width=2880 --screenshot-height=1800
-sleep 2
-osascript scripts/screenshots/drive.applescript
+## The capture pipeline (as shipped)
+
+`scripts/screenshots/capture.sh` is the entrypoint. One build, then per surface:
+launch the app with `--screenshot-mode --screenshot-surface=<key> --screenshot-width=W --screenshot-height=H`,
+poll for `$TMPDIR/photo-export-screenshot-window-id.txt`, capture via
+`screencapture -t png -o -l<window-id>`, kill the instance, advance.
+
+Default surface set (six captures):
+
+```
+01-timeline                   → Timeline, current month
+02-collections-favorites      → Favorites grid
+03-collections-album-family   → Family album
+04-collections-album-porvoo   → Porvoo album
+05-collections-folder-trips   → Trips folder grid (showcases folder export)
+06-collections-album-london   → London album
 ```
 
-`scripts/screenshots/drive.applescript` walks the app through each surface and calls
-`screencapture -l<windowID> -t png screenshots/NN-name.png` between steps. Window ID via
-`tell app "System Events" to get id of window 1 of process "Photo Export"`.
+The script accepts positional arguments to capture a subset:
 
-**Window sizing** is the trickiest bit. Two options:
+```
+scripts/screenshots/capture.sh 1440x900 collections-folder-trips
+```
 
-1. AppleScript sets the window frame after launch
-   (`set bounds of window 1 to {0, 0, 2880, 1800}`).
-2. The app reads `--screenshot-width`/`--screenshot-height` args and applies in `onAppear` on
-   the root window.
+Adding a new surface is two changes: a new `case` in
+`LibraryRootView.requestedScreenshotSurface()` mapping a key to a
+`(section, selection)` tuple, and a new entry in `DEFAULT_SURFACES` in
+`capture.sh`.
 
-Option 2 is more reliable across macOS versions. Start there; fall back to option 1 only if
-the app's window controller resists programmatic sizing.
+**Window sizing**: the app reads `--screenshot-width` / `--screenshot-height` in
+`photo_exportApp.applyScreenshotWindowSizeIfRequested()` and calls
+`NSWindow.setFrame` on first appearance. After the resize settles, it publishes
+`NSWindow.windowNumber` to the temp file the script reads.
+
+**Why window-id capture**: an earlier draft used `screencapture -R x,y,w,h` against
+AppleScript-reported window bounds, which broke on multi-display setups because
+`-R` always targets the main display. Window-id targeting works regardless of
+display, and it eliminates the `tell process` Apple-event chain that needed
+both Automation and Accessibility TCC grants. Net: one permission to grant
+(Screen Recording on the shell host), zero AppleScript.
 
 ## App Store delivery
 
@@ -199,22 +218,26 @@ Drag-and-drop into App Store Connect's web UI. ~90 seconds per submission, ~4 su
 Fastlane Deliver is over-investment at this cadence; revisit only if the cadence picks up or
 if a multi-locale set materialises.
 
-## Cost estimate
+## Actual cost (post-shipping retrospective)
 
-- Phase 1 (subclass + 19 method overrides + un-finaling base class): **~3 hours**. Most overrides
-  are short — a `nonisolated` `countAssets(in:)` that returns a hardcoded number is 2 lines —
-  but 19 of them with correct signatures + isolation keywords adds up. Initial estimate of "6
-  overrides" was wrong; auditing the protocol bumped it to 17 protocol methods plus 2
-  `cachedCount*` siblings.
-- Phase 2 (bundle + curated tree + stock photo curation): **~2 hours**, dominated by collecting
-  + cropping stock photos and matching them to plausible album themes.
-- Phase 3 (AppleScript + bash + window sizing): **~1 hour**, longer if the window-frame approach
-  fights us.
-- Phase 4 (first manual upload): **~10 minutes**.
+The original estimate was ~6 hours. Reality landed closer to a full day of work spread
+across iterations. Costs that the plan undersold:
 
-Total: **~6 hours** for initial setup, ~10 minutes per submission thereafter. Up from the
-original ~4-hour estimate after a re-review caught the undersized override surface — leaving
-methods to inherit means they reach the real Photos library, which defeats the entire feature.
+- AppleScript / TCC rabbit hole. The first capture pipeline drove the app via System Events
+  and needed Automation + Accessibility permissions. The second drove it via AppleScript +
+  `screencapture -R` against window bounds — broken on multi-display setups. Third pivot:
+  app publishes its window-id, script captures by id. Net rewrites: 3.
+- `NSSplitView` divider persistence. SwiftUI's `navigationSplitViewColumnWidth` modifiers
+  were silently overridden by the per-user persisted divider positions. Required a clear in
+  screenshot mode at `photo_exportApp.init`.
+- AutoSync side-effects. `PhotoLibraryPersistentChangeAdapter.start()` calls
+  `library.currentChangeToken` + `library.register(self)`, which trigger the Photos TCC
+  prompt even when the screenshot service overrides everything else. Needed an explicit
+  gate at `photo_exportApp.swift:191-224` to skip the AutoSync wiring entirely in
+  screenshot mode.
+
+Ongoing per-submission cost: ~5 minutes (build is cached; six captures at ~3s each;
+manual drag-and-drop into App Store Connect).
 
 ## When to revisit
 
@@ -227,16 +250,28 @@ Any of these makes the script-based approach hurt enough to justify the original
 
 Until then, the hobbyist version ships.
 
-## Open questions
+## Open questions (post-shipping)
 
-- **Stock photo curation**: keep the curated set under version control or as a separate
-  release artifact? Bundle in the repo is simpler; ~2 MB doesn't move the dial.
-- **Animation in the captures**: the export progress bar animates. The script `sleep`s briefly
-  before `screencapture` — if the bar is mid-animation in the capture it'll look odd. Pause
-  briefly in screenshot mode? Or just accept and recapture if a frame lands badly.
-- **"What's New" sheet on screenshot launch**: it auto-shows on first launch of a new version.
-  In screenshot mode the sheet should either auto-dismiss (so it's not in every screenshot) or
-  be captured deliberately and then dismissed. Drive via AppleScript.
-- **Auto Export menu bar item**: renders outside the app window. Either capture full-screen
-  with `screencapture -t png` (then crop) or live with the menu bar item being an inline
-  screenshot in marketing copy rather than its own automated capture.
+- **Stock photo curation**: bundled in the repo under `photo-export/Resources/screenshots/`.
+  27 photos / ~10 MB. Attribution in `ATTRIBUTION.txt`. Could be `#if DEBUG`-gated if binary
+  size becomes a concern — chose not to gate so the screenshot binary stays bit-identical to
+  the App Store binary modulo the launch arg.
+- **Animation in the captures**: the export progress bar would animate if running. Today's
+  capture surfaces are all idle states (no in-progress export), so this hasn't surfaced.
+  When we add an export-progress capture, will need to either pause the queue mid-capture
+  or accept retake-if-bad.
+- **Auto Export menu bar item**: still unsolved. Renders outside the app window so
+  `screencapture -l<window-id>` can't see it. Either capture the full screen with
+  `screencapture -t png` (then crop), or live with the menu bar item being an inline
+  marketing screenshot rather than a script-captured one. Deferred.
+- **Asset-detail capture**: the timeline capture's detail pane happens to show whichever
+  asset hashes into the selected month. To showcase a specific photo (e.g. an edited photo
+  with `_orig` companion) we'd need a `--screenshot-asset=<id>` arg that pre-selects an
+  asset. Easy follow-up if marketing wants it.
+
+## Resolved questions
+
+- ~~"What's New" sheet on screenshot launch~~ → suppressed in screenshot mode via
+  `WhatsNewState.markAsSeen()` call at app init.
+- ~~Onboarding gate~~ → screenshot mode writes `hasCompletedOnboarding=true` to
+  UserDefaults at app init so the capture never lands on OnboardingView.
