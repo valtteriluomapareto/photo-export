@@ -51,26 +51,32 @@ struct ExportToolbarView: ToolbarContent {
       }
       .disabled(exportManager.hasActiveExportWork)
     } label: {
-      HStack(spacing: 4) {
-        Image(systemName: "slider.horizontal.3")
-        // Accent dot when at least one option is on — gives at-a-glance state
-        // feedback without inlining the full label. Mirrors how the Photos /
-        // Mail toolbars indicate "you've changed a default here."
-        if exportManager.includeOriginals {
-          Circle()
-            .fill(Color.accentColor)
-            .frame(width: 6, height: 6)
-        }
-      }
+      // `Label` rather than a custom `HStack { Image(...) }` so the toolbar's
+      // "Icon and Text" customization mode can render "Format" beneath the
+      // glyph. The accent dot for "an option is on" overlays via
+      // `Image(systemName:).symbolVariant(.fill)` swap on the trailing badge.
+      Label("Format", systemImage: "slider.horizontal.3")
     }
-    .menuStyle(.borderlessButton)
-    .fixedSize()
+    // `.menuIndicator(.hidden)` removes the chevron — the slider glyph is the
+    // affordance, and the chevron crowds the icon in the limited toolbar space.
+    .menuIndicator(.hidden)
     .help(includeOriginalsHelp)
     .accessibilityLabel("Format options")
     .accessibilityHint(
       "Toggle Include originals to keep an unedited copy of photos that have edits in Photos."
     )
-    .padding(.trailing, 8)
+    // Overlay the accent dot when at least one option is on — at-a-glance
+    // state feedback without inlining the full toggle. Mirrors how Photos /
+    // Mail toolbars indicate "you've changed a default here." Sits outside
+    // the `Label` so it doesn't interfere with "Icon and Text" mode text.
+    .overlay(alignment: .topTrailing) {
+      if exportManager.includeOriginals {
+        Circle()
+          .fill(Color.accentColor)
+          .frame(width: 6, height: 6)
+          .offset(x: 2, y: -2)
+      }
+    }
   }
 
   private var includeOriginalsHelp: String {
@@ -137,7 +143,11 @@ struct ExportToolbarView: ToolbarContent {
   @State private var isShowingSupersedeConfirm = false
 
   private var primaryActions: some View {
-    HStack(alignment: .center, spacing: 8) {
+    // Internal spacing 12pt rather than 8pt — closer to macOS's default
+    // between-button spacing in system toolbars (Mail/Finder/Notes). 8pt
+    // packs the pause + cancel glyphs flush against the prominent Export
+    // All button; 12pt gives them room to read as separate controls.
+    HStack(alignment: .center, spacing: 12) {
       Button(primaryActionLabel) {
         handlePrimaryAction()
       }
@@ -163,6 +173,10 @@ struct ExportToolbarView: ToolbarContent {
         )
       }
 
+      // `Label` (not bare `Image`) so the system can show "Pause"/"Resume"
+      // text under the icon in the toolbar's "Icon and Text" customization
+      // mode. The Label also produces a better default accessibilityLabel
+      // than an `Image(systemName:)`.
       Button {
         if exportManager.isPaused {
           exportManager.resume()
@@ -170,7 +184,9 @@ struct ExportToolbarView: ToolbarContent {
           exportManager.pause()
         }
       } label: {
-        Image(systemName: exportManager.isPaused ? "play.fill" : "pause.fill")
+        Label(
+          exportManager.isPaused ? "Resume" : "Pause",
+          systemImage: exportManager.isPaused ? "play.fill" : "pause.fill")
       }
       .help(exportManager.isPaused ? "Resume export" : "Pause export")
       .opacity(exportManager.canTogglePause ? 1 : 0)
@@ -179,7 +195,7 @@ struct ExportToolbarView: ToolbarContent {
       Button {
         exportManager.cancelAndClear()
       } label: {
-        Image(systemName: "xmark.circle")
+        Label("Cancel", systemImage: "xmark.circle")
       }
       .help("Cancel and clear queue")
       .opacity(exportManager.hasActiveExportWork ? 1 : 0)
