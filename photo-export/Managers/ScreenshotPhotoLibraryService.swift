@@ -282,22 +282,24 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   // MARK: - Image resolution
 
-  /// Tier 1: bundled JPEG. Tier 2: rendered gradient placeholder. Cached in
-  /// memory so repeated grid scrolls don't re-render.
+  /// Extensions probed when resolving an asset id to a bundled image. `jpg` is
+  /// listed first because the plan's size budget assumes JPEG for real photos;
+  /// `heic` for direct Apple-format drops; `png` for UI-mock-style assets where
+  /// PNG's lossless compression actually beats JPEG on size + quality. Mixing
+  /// formats per-asset is supported — every extension is tried for every id.
+  private static let bundledImageExtensions = ["jpg", "heic", "png"]
+
+  /// Tier 1: bundled image (jpg / heic / png). Tier 2: rendered gradient
+  /// placeholder. Cached in memory so repeated grid scrolls don't re-render.
   private func image(for assetId: String, size: CGSize) -> NSImage? {
-    if let url = Bundle.main.url(
-      forResource: assetId, withExtension: "jpg",
-      subdirectory: "screenshots"),
-      let img = NSImage(contentsOf: url)
-    {
-      return img
-    }
-    if let url = Bundle.main.url(
-      forResource: assetId, withExtension: "heic",
-      subdirectory: "screenshots"),
-      let img = NSImage(contentsOf: url)
-    {
-      return img
+    for ext in Self.bundledImageExtensions {
+      if let url = Bundle.main.url(
+        forResource: assetId, withExtension: ext,
+        subdirectory: "screenshots"),
+        let img = NSImage(contentsOf: url)
+      {
+        return img
+      }
     }
     let cacheKey = "\(assetId)|\(Int(size.width))x\(Int(size.height))"
     if let cached = placeholderCache[cacheKey] { return cached }
