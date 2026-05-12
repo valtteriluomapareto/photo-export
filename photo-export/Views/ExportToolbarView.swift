@@ -173,33 +173,40 @@ struct ExportToolbarView: ToolbarContent {
         )
       }
 
-      // `Label` (not bare `Image`) so the system can show "Pause"/"Resume"
-      // text under the icon in the toolbar's "Icon and Text" customization
-      // mode. The Label also produces a better default accessibilityLabel
-      // than an `Image(systemName:)`.
-      Button {
-        if exportManager.isPaused {
-          exportManager.resume()
-        } else {
-          exportManager.pause()
+      // Pause + Cancel are conditional: they exist only when there's an
+      // active or pausable export. The previous design used `.opacity(0)` to
+      // reserve toolbar space so the layout wouldn't shift when state changed,
+      // but the toolbar's "Icon and Text" customization mode renders an item's
+      // text caption regardless of opacity — so an invisible Pause icon was
+      // leaving a ghost "Pause" caption underneath Export All. Conditionally
+      // rendering avoids that at the cost of a small reflow when an export
+      // starts (pause/cancel slide in from Export All's right). The reflow is
+      // bounded to the trailing-edge primaryAction position and only happens
+      // on state transitions a user just triggered, so it reads as feedback
+      // rather than jitter.
+      if exportManager.canTogglePause {
+        Button {
+          if exportManager.isPaused {
+            exportManager.resume()
+          } else {
+            exportManager.pause()
+          }
+        } label: {
+          Label(
+            exportManager.isPaused ? "Resume" : "Pause",
+            systemImage: exportManager.isPaused ? "play.fill" : "pause.fill")
         }
-      } label: {
-        Label(
-          exportManager.isPaused ? "Resume" : "Pause",
-          systemImage: exportManager.isPaused ? "play.fill" : "pause.fill")
+        .help(exportManager.isPaused ? "Resume export" : "Pause export")
       }
-      .help(exportManager.isPaused ? "Resume export" : "Pause export")
-      .opacity(exportManager.canTogglePause ? 1 : 0)
-      .disabled(!exportManager.canTogglePause)
 
-      Button {
-        exportManager.cancelAndClear()
-      } label: {
-        Label("Cancel", systemImage: "xmark.circle")
+      if exportManager.hasActiveExportWork {
+        Button {
+          exportManager.cancelAndClear()
+        } label: {
+          Label("Cancel", systemImage: "xmark.circle")
+        }
+        .help("Cancel and clear queue")
       }
-      .help("Cancel and clear queue")
-      .opacity(exportManager.hasActiveExportWork ? 1 : 0)
-      .disabled(!exportManager.hasActiveExportWork)
     }
   }
 
