@@ -29,40 +29,48 @@ struct ExportToolbarView: ToolbarContent {
     }
 
     ToolbarItem(placement: .automatic) {
-      includeOriginalsToggle
+      formatMenu
     }
 
-    ToolbarItem(placement: .automatic) {
+    ToolbarItem(placement: .primaryAction) {
       primaryActions
     }
   }
 
-  // MARK: - Include-originals toggle
+  // MARK: - Format menu
 
-  private var includeOriginalsToggle: some View {
-    // Explicit HStack rather than `Label(...)` so the icon and text always
-    // render side-by-side (mirroring the Destination indicator's layout) and
-    // the toolbar's "Icon Only" customization mode can't strip the label —
-    // both pieces are part of the view content, not adaptive to display mode.
-    Toggle(isOn: $exportManager.includeOriginals) {
-      HStack(alignment: .center, spacing: 6) {
-        Image(
-          systemName: exportManager.includeOriginals
-            ? "doc.on.doc.fill" : "doc.on.doc"
-        )
-        Text("Include originals")
-          .font(.callout)
+  /// Houses export-shape options that were previously inline toolbar items. As
+  /// the toolbar grew, having "Include originals" sit as a peer to the primary
+  /// `Export All` button competed for visual weight against the action that's
+  /// the entire reason this app exists. A `Menu` keeps the affordance one click
+  /// away without eating prime real estate.
+  private var formatMenu: some View {
+    Menu {
+      Toggle(isOn: $exportManager.includeOriginals) {
+        Label("Include originals for edited photos", systemImage: "doc.on.doc")
+      }
+      .disabled(exportManager.hasActiveExportWork)
+    } label: {
+      HStack(spacing: 4) {
+        Image(systemName: "slider.horizontal.3")
+        // Accent dot when at least one option is on — gives at-a-glance state
+        // feedback without inlining the full label. Mirrors how the Photos /
+        // Mail toolbars indicate "you've changed a default here."
+        if exportManager.includeOriginals {
+          Circle()
+            .fill(Color.accentColor)
+            .frame(width: 6, height: 6)
+        }
       }
     }
-    .toggleStyle(.button)
-    .tint(.accentColor)
-    .disabled(exportManager.hasActiveExportWork)
+    .menuStyle(.borderlessButton)
+    .fixedSize()
     .help(includeOriginalsHelp)
-    .accessibilityLabel("Include originals for edited photos")
+    .accessibilityLabel("Format options")
     .accessibilityHint(
-      "Off by default. Turn on to keep original-bytes copies alongside edited photos."
+      "Toggle Include originals to keep an unedited copy of photos that have edits in Photos."
     )
-    .padding(.trailing, 16)
+    .padding(.trailing, 8)
   }
 
   private var includeOriginalsHelp: String {
@@ -83,51 +91,45 @@ struct ExportToolbarView: ToolbarContent {
 
   // MARK: - Destination Indicator
 
+  /// One clickable item: an icon-coloured status glyph plus the destination
+  /// folder name, tap opens the folder picker. The previous design rendered
+  /// four visual elements (drive icon, "Destination" caption, filename,
+  /// standalone "Change…" button) for one job. Consolidation matches the way
+  /// Finder + Mail surface destination/account selectors — single button, full
+  /// path in the tooltip.
   @ViewBuilder
   private var destinationIndicator: some View {
     if let url = exportDestinationManager.selectedFolderURL {
-      HStack(alignment: .center, spacing: 8) {
-        Image(
-          systemName: exportDestinationManager.isAvailable
-            && exportDestinationManager.isWritable
-            ? "externaldrive.fill" : "externaldrive.badge.exclamationmark"
-        )
-        .foregroundColor(
-          exportDestinationManager.isAvailable && exportDestinationManager.isWritable
-            ? .green : .yellow)
-
-        // Two-row label gives this custom toolbar item a visible title that
-        // mirrors what system buttons get for free in "Icon and Text" mode.
-        VStack(alignment: .leading, spacing: 1) {
-          Text("Destination")
-            .font(.caption2)
-            .foregroundColor(.secondary)
+      Button {
+        exportDestinationManager.selectFolder()
+      } label: {
+        HStack(alignment: .center, spacing: 6) {
+          Image(systemName: destinationIconName)
+            .foregroundColor(destinationIconColor)
           Text(url.lastPathComponent)
-            .font(.callout)
             .lineLimit(1)
             .truncationMode(.middle)
-            .help(url.path)
+            .frame(maxWidth: 180, alignment: .leading)
         }
-        .frame(maxWidth: 140, alignment: .leading)
-
-        Button("Change\u{2026}") {
-          exportDestinationManager.selectFolder()
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .fixedSize()
       }
-      // Inter-item spacing: 16pt past the system default. Matches the
-      // trailing padding on `includeOriginalsToggle` so adjacent items
-      // breathe consistently. The right-most item (`primaryActions`)
-      // doubles this for window-edge spacing.
-      .padding(.trailing, 16)
+      .buttonStyle(.bordered)
+      .help("Destination: \(url.path) — click to change")
     } else {
       Button("Select Export Folder\u{2026}") {
         exportDestinationManager.selectFolder()
       }
       .buttonStyle(.bordered)
     }
+  }
+
+  private var destinationIconName: String {
+    exportDestinationManager.isAvailable && exportDestinationManager.isWritable
+      ? "externaldrive.fill" : "externaldrive.badge.exclamationmark"
+  }
+
+  private var destinationIconColor: Color {
+    exportDestinationManager.isAvailable && exportDestinationManager.isWritable
+      ? .green : .yellow
   }
 
   // MARK: - Primary Actions
@@ -140,6 +142,9 @@ struct ExportToolbarView: ToolbarContent {
         handlePrimaryAction()
       }
       .buttonStyle(.borderedProminent)
+      .controlSize(.large)
+      .tint(.accentColor)
+      .keyboardShortcut("e", modifiers: .command)
       .disabled(!isPrimaryActionEnabled)
       .help(primaryActionHelpText)
       .confirmationDialog(
@@ -180,9 +185,6 @@ struct ExportToolbarView: ToolbarContent {
       .opacity(exportManager.hasActiveExportWork ? 1 : 0)
       .disabled(!exportManager.hasActiveExportWork)
     }
-    // Right-most toolbar item: pad twice the inter-item spacing so
-    // the cancel button doesn't sit flush against the window edge.
-    .padding(.trailing, 32)
   }
 
   /// Manual exports stay clickable while an AutoSync run is in flight per

@@ -10,6 +10,14 @@ import SwiftUI
 /// Auto Export after disabling. (The pill was hidden in the initial Slice
 /// 1c; manual testing showed the resulting discovery gap.) Clicking the
 /// pill always opens Settings.
+///
+/// Visual treatment: status icon + label, no border, no fill. The pill used
+/// to render with a `.quaternary` rounded-rectangle background, which gave it
+/// the same visual weight as the action buttons next to it and ate prime
+/// toolbar real estate. The HIG review flagged that as a structural problem —
+/// state indicators should look passive (caption typography, status glyph
+/// only), action triggers get the button chrome. The `.borderless` button
+/// style keeps the click target without the chrome.
 struct AutoSyncStatusPill: View {
   let state: AutoSyncState
 
@@ -19,24 +27,21 @@ struct AutoSyncStatusPill: View {
     Button {
       openSettings()
     } label: {
-      HStack(spacing: 6) {
+      HStack(spacing: 5) {
         Image(systemName: iconName)
           .foregroundStyle(iconTint)
+          .font(.caption)
         Text(label)
-          .font(.callout)
+          .font(.caption)
+          .foregroundStyle(.secondary)
           .lineLimit(1)
       }
-      .padding(.horizontal, 8)
-      .padding(.vertical, 4)
-      .background(
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-          .fill(.quaternary)
-      )
-      .opacity(isDisabled ? 0.6 : 1.0)
+      .opacity(isDisabled ? 0.7 : 1.0)
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.borderless)
     .help(helpText)
     .accessibilityLabel(accessibilityLabel)
+    .accessibilityHint("Opens Auto Export settings")
   }
 
   private var isDisabled: Bool {
