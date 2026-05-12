@@ -21,12 +21,22 @@ enum ReleaseNotesCatalog {
     ReleaseNote(
       version: "1.3.0",
       summary:
-        "This version adds Auto Export and a few new UI surfaces. Your existing backup folder and exported files are untouched.",
+        "This version adds Auto Export, folder-level batch export, a polished toolbar, and a few new UI surfaces. Your existing backup folder and exported files are untouched.",
       bullets: [
         ReleaseNote.Bullet(
           title: "Auto Export",
           body:
             "Optional set-it-and-forget-it backup — pick Timeline, Favorites, or Albums in **Settings → Auto Export**. New photos in Apple Photos are added to your destination automatically. Off by default; turn it on whenever you're ready."
+        ),
+        ReleaseNote.Bullet(
+          title: "Export by folder",
+          body:
+            "Folders in the **Collections** sidebar are now selectable. Pick one and the toolbar's primary action becomes **Export N Albums** — every album under that folder, in one click. Or **Cmd-click** album tiles to pick an explicit subset; the button targets just the selection. Right-click the folder for the same action via context menu."
+        ),
+        ReleaseNote.Bullet(
+          title: "Cleaner toolbar",
+          body:
+            "The **Export All** button is now the visually dominant control (with **⌘E** for the keyboard inclined). The destination indicator is one click — tap the folder name to change it. **Include originals** moved into a Format menu so the toolbar stops competing with itself for attention. The Auto Export status pill is quieter."
         ),
         ReleaseNote.Bullet(
           title: "New status surfaces",
