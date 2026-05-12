@@ -49,6 +49,18 @@ struct PhotoExportApp: App {
       // screenshot mode is only ever used on the maintainer's machine where
       // the value should already be true anyway.
       UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+      // macOS persists `NSSplitView Subview Frames …` divider positions across
+      // launches via `NSWindow.frameAutosaveName`. The persisted values win
+      // over `navigationSplitViewColumnWidth(min:ideal:max:)`, so the maintainer's
+      // prior resize would survive into the capture and the columns would
+      // render at their old narrow widths even when the modifier asks for
+      // wider ideals. Wipe these keys at screenshot-mode launch so the
+      // declarative widths actually apply.
+      let defaults = UserDefaults.standard
+      for key in defaults.dictionaryRepresentation().keys
+      where key.hasPrefix("NSSplitView Subview Frames ") {
+        defaults.removeObject(forKey: key)
+      }
     }
     let plm: PhotoLibraryManager =
       PhotoLibraryManager.isRunningInScreenshotMode
@@ -219,7 +231,11 @@ struct PhotoExportApp: App {
           applyScreenshotWindowSizeIfRequested()
         }
     }
-    .defaultSize(width: 1100, height: 640)
+    // Default sized so the sidebar (~240) + content grid (~560) + detail
+    // (~480) all fit at their ideal widths set in `LibraryRootView.body`.
+    // The user can resize either column past these defaults; new windows
+    // start at this size.
+    .defaultSize(width: 1280, height: 800)
     .commands {
       CommandGroup(replacing: .appInfo) {
         AboutCommand()

@@ -44,7 +44,9 @@ struct LibraryRootView: View {
 
   var body: some View {
     NavigationSplitView(
-      sidebar: { sidebar },
+      sidebar: {
+        sidebar
+      },
       content: {
         // Persistent progress strip sits above the content column only —
         // not above the sidebar, where it would visually attach to the
@@ -125,7 +127,9 @@ struct LibraryRootView: View {
       \.saveDiagnosticReportAction,
       SaveDiagnosticReportAction { saveDiagnosticReport() }
     )
-    .frame(minWidth: 900, minHeight: 600)
+    // Window min must fit: sidebar min (220) + content min (480) + ~300pt
+    // for the detail pane to render a useful asset preview.
+    .frame(minWidth: 1100, minHeight: 700)
     .background(Color(.windowBackgroundColor))
   }
 
@@ -195,16 +199,33 @@ struct LibraryRootView: View {
 
   @ViewBuilder
   private var sidebar: some View {
-    switch section {
-    case .timeline:
-      TimelineSidebarView(selection: $selection, photoLibraryService: photoLibraryManager)
-    case .collections:
-      CollectionsSidebarView(selection: $selection)
+    Group {
+      switch section {
+      case .timeline:
+        TimelineSidebarView(selection: $selection, photoLibraryService: photoLibraryManager)
+      case .collections:
+        CollectionsSidebarView(selection: $selection)
+      }
     }
+    // Sidebar shows "Photos by Year" + album titles without truncation at
+    // ~240pt. Min ≈ ideal so AppKit's persisted NSSplitView dividers can't
+    // collapse the sidebar back to its old narrow default; max caps the
+    // runaway resize so the content grid stays primary.
+    .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 360)
   }
 
   @ViewBuilder
   private var contentArea: some View {
+    contentSwitch
+      // ~520pt fits ~4 thumbnail columns at the 100–160pt adaptive tile
+      // size. Min is just narrower than 3 columns so the grid never
+      // collapses to a single column; max caps so a wide window still
+      // leaves room for the detail pane.
+      .navigationSplitViewColumnWidth(min: 480, ideal: 520, max: 900)
+  }
+
+  @ViewBuilder
+  private var contentSwitch: some View {
     switch selection {
     case .timelineMonth(let year, let month):
       MonthContentView(
