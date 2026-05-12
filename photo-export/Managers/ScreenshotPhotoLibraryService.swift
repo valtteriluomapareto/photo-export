@@ -41,33 +41,44 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   // MARK: - Curated tree
 
-  /// Hand-built tree. Asset counts on the descriptors don't matter — views read
-  /// counts from `countAssets(in:)` / `cachedCountAssets(in:)`, which return
-  /// hardcoded numbers that look plausible in marketing copy.
+  /// Hand-built tree mirroring the bundled stock photos under
+  /// `photo-export/Resources/screenshots/`. Asset counts on the descriptors
+  /// don't matter — views read counts from `countAssets(in:)` /
+  /// `cachedCountAssets(in:)`, which return hardcoded numbers that look
+  /// plausible in marketing copy.
+  ///
+  /// Tree shape:
+  ///   Favorites (synthetic)
+  ///   Family             (top-level album, 6 photos)
+  ///   Porvoo             (top-level album, 7 photos)
+  ///   Trips/             (folder)
+  ///     London           (7 photos)
+  ///     Paris            (7 photos)
+  ///
+  /// The `Trips` folder is intentional — it showcases the folder-export
+  /// feature (Cmd-click multi-select, "Export Folder" action) in marketing
+  /// captures of the Collections surface.
   private static let tree: [PhotoCollectionDescriptor] = {
     let favorites = PhotoCollectionDescriptor(
       id: "favorites", localIdentifier: nil, title: "Favorites",
       kind: .favorites, pathComponents: [], children: [])
-    let iceland = PhotoCollectionDescriptor(
-      id: "album:iceland-2025", localIdentifier: "iceland-2025", title: "Iceland 2025",
-      kind: .album, pathComponents: [], children: [])
     let family = PhotoCollectionDescriptor(
       id: "album:family", localIdentifier: "family", title: "Family",
       kind: .album, pathComponents: [], children: [])
-    let hiking = PhotoCollectionDescriptor(
-      id: "album:hiking", localIdentifier: "hiking", title: "Hiking",
+    let porvoo = PhotoCollectionDescriptor(
+      id: "album:porvoo", localIdentifier: "porvoo", title: "Porvoo",
       kind: .album, pathComponents: [], children: [])
-    let tripsIceland = PhotoCollectionDescriptor(
-      id: "album:trips-iceland", localIdentifier: "trips-iceland", title: "Iceland",
+    let tripsLondon = PhotoCollectionDescriptor(
+      id: "album:trips-london", localIdentifier: "london", title: "London",
       kind: .album, pathComponents: ["Trips"], children: [])
-    let tripsNorway = PhotoCollectionDescriptor(
-      id: "album:trips-norway", localIdentifier: "trips-norway", title: "Norway",
+    let tripsParis = PhotoCollectionDescriptor(
+      id: "album:trips-paris", localIdentifier: "paris", title: "Paris",
       kind: .album, pathComponents: ["Trips"], children: [])
     let trips = PhotoCollectionDescriptor(
       id: "folder:trips", localIdentifier: "trips", title: "Trips",
       kind: .folder, pathComponents: [],
-      children: [tripsIceland, tripsNorway])
-    return [favorites, iceland, family, hiking, trips]
+      children: [tripsLondon, tripsParis])
+    return [favorites, family, porvoo, trips]
   }()
 
   /// Asset-id lists per album. The asset descriptors are constructed lazily so
@@ -75,16 +86,16 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
   /// year/month, so dates anchored to "now" keep the grid populated regardless of
   /// when the screenshots are taken).
   private static let assetIdsByAlbum: [String: [String]] = [
-    "iceland-2025": (1...8).map { "iceland-\($0)" },
     "family": (1...6).map { "family-\($0)" },
-    "hiking": (1...4).map { "hiking-\($0)" },
-    "trips-iceland": (1...3).map { "trips-iceland-\($0)" },
-    "trips-norway": (1...4).map { "trips-norway-\($0)" },
+    "porvoo": (1...7).map { "porvoo-\($0)" },
+    "london": (1...7).map { "london-\($0)" },
+    "paris": (1...7).map { "paris-\($0)" },
   ]
 
-  /// Favorites is a union of selected highlights from the albums above.
+  /// Favorites is a union of selected highlights from the albums above —
+  /// one per album so the Favorites grid surfaces all four themes at a glance.
   private static let favoriteAssetIds: [String] = [
-    "iceland-1", "iceland-2", "family-1", "hiking-1", "trips-iceland-1",
+    "family-1", "porvoo-1", "london-1", "paris-1",
   ]
 
   /// Timeline assets bucketed by year/month. Reuses the same asset ids as the
@@ -282,12 +293,15 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   // MARK: - Image resolution
 
-  /// Extensions probed when resolving an asset id to a bundled image. `jpg` is
-  /// listed first because the plan's size budget assumes JPEG for real photos;
-  /// `heic` for direct Apple-format drops; `png` for UI-mock-style assets where
-  /// PNG's lossless compression actually beats JPEG on size + quality. Mixing
-  /// formats per-asset is supported — every extension is tried for every id.
-  private static let bundledImageExtensions = ["jpg", "heic", "png"]
+  /// Extensions probed when resolving an asset id to a bundled image. `jpg` /
+  /// `jpeg` are listed first because the plan's size budget assumes JPEG for
+  /// real photos (both extensions are common — macOS Preview's "Export As"
+  /// defaults to `.jpeg`, while command-line tools tend toward `.jpg`).
+  /// `heic` for direct Apple-format drops; `png` for UI-mock-style assets
+  /// where PNG's lossless compression actually beats JPEG on size + quality.
+  /// Mixing formats per-asset is supported — every extension is tried for
+  /// every id.
+  private static let bundledImageExtensions = ["jpg", "jpeg", "heic", "png"]
 
   /// Tier 1: bundled image (jpg / heic / png). Tier 2: rendered gradient
   /// placeholder. Cached in memory so repeated grid scrolls don't re-render.
