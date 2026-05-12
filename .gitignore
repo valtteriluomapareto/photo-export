@@ -18,3 +18,4 @@ lcov.info
 website/node_modules/
 website/dist/
 website/.astro/
+screenshots/

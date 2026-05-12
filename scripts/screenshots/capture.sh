@@ -7,10 +7,12 @@
 #   1. Build the app (Release config, no code signing) with the bundled
 #      screenshot mode wired in.
 #   2. Launch it with `--screenshot-mode --screenshot-width=W --screenshot-height=H`
-#      so it boots the curated `ScreenshotPhotoLibraryService` and resizes the
-#      main window to the requested frame.
-#   3. Drive it through every marketing surface via the AppleScript at
-#      `drive.applescript`, calling `screencapture -R x,y,w,h` between steps.
+#      so it boots the curated `ScreenshotPhotoLibraryService`, resizes the
+#      main window to the requested frame, and publishes the window's
+#      CGWindowID to a temp file (`$TMPDIR/photo-export-screenshot-window-id.txt`).
+#   3. Poll for the window-id file, then capture via `screencapture -l<id>`.
+#      Capture-by-window-id is pixel-exact and works regardless of which
+#      display the window lives on (matters on multi-display setups).
 #   4. Terminate the running instance.
 #
 # Outputs go to `screenshots/<WIDTHxHEIGHT>/NN-name.png` relative to the repo
@@ -24,16 +26,17 @@
 # or pass them through scripts/prepare-app-store-screenshot.py if padding is
 # needed for a specific spec size.
 #
-# Required TCC permissions (one-time, grant in System Settings → Privacy & Security):
+# Required TCC permission (one-time, grant in System Settings → Privacy &
+# Security → Screen Recording):
 #
-#   • Automation → Terminal (or your shell host) → Photo Export + System Events
-#     The AppleScript driver sends Apple events to "Photo Export" to read its
-#     window position/size. macOS prompts on first run; the script will time
-#     out (-1712) if denied.
+#   • The shell host running this script (Terminal.app, iTerm2, Warp, etc.)
+#     needs Screen Recording permission. Without it, `screencapture` exits
+#     non-zero with "could not create image from display".
 #
-#   • Screen Recording → Terminal (or your shell host)
-#     `screencapture` requires this on macOS 10.15+. Without it, screencapture
-#     exits non-zero with "could not create image from display".
+# That's it — no Automation or Accessibility permissions needed. The pipeline
+# used to drive the app via AppleScript + System Events (which would have
+# needed both), but the app now publishes its window frame to a temp file
+# directly, so the script can call `screencapture -R` without AppleScript.
 #
 # Designed to be re-runnable — quits any existing instance and clears the
 # output dir.
@@ -55,10 +58,13 @@ OUT_DIR="$REPO_ROOT/screenshots/${SIZE}"
 DERIVED="$REPO_ROOT/build/screenshots"
 APP_NAME="Photo Export"
 APP_PATH="$DERIVED/Build/Products/Release/${APP_NAME}.app"
+WINDOW_ID_FILE="${TMPDIR:-/tmp}/photo-export-screenshot-window-id.txt"
 
 echo "==> Cleaning previous output at $OUT_DIR"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
+# Stale window-id file from a prior run would point at a dead CGWindowID.
+rm -f "$WINDOW_ID_FILE"
 
 echo "==> Building $APP_NAME (Release, no signing)"
 xcodebuild \
@@ -75,12 +81,12 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 3
 fi
 
-# Kill any running instance so we own the window number reliably.
+# Kill any running instance so we own the window frame reliably.
 echo "==> Terminating any existing instance"
-osascript -e 'tell application "Photo Export" to quit' >/dev/null 2>&1 || true
-# Wait for it to actually quit so the new launch is fresh.
-for _ in 1 2 3 4 5; do
-  if ! pgrep -xq "$APP_NAME"; then break; fi
+pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
+# Wait for the binary to actually exit so a stale frame file isn't picked up.
+for _ in 1 2 3 4 5 6; do
+  if ! pgrep -f "${APP_NAME}.*--screenshot-mode" >/dev/null; then break; fi
   sleep 0.5
 done
 
@@ -90,37 +96,45 @@ open "$APP_PATH" --args \
   "--screenshot-width=$WIDTH" \
   "--screenshot-height=$HEIGHT"
 
-# Give the app a moment to materialise the main window before AppleScript pokes
-# at it. Driving too fast races SwiftUI's first frame.
-sleep 2
-
-echo "==> Driving the app and capturing"
-if ! osascript "$REPO_ROOT/scripts/screenshots/drive.applescript" "$OUT_DIR"; then
-  echo
-  echo "AppleScript driver failed. Most common causes:" >&2
-  echo "  • Automation permission not granted to your terminal app for" >&2
-  echo "    'Photo Export' or 'System Events' — System Settings → Privacy &" >&2
-  echo "    Security → Automation." >&2
-  echo "  • Screen Recording permission not granted to your terminal app —" >&2
-  echo "    System Settings → Privacy & Security → Screen Recording." >&2
-  echo "  • A modal prompt is open on the launched app (e.g. Photo Library" >&2
-  echo "    permission). Screenshot mode forces auth = .authorized so the" >&2
-  echo "    prompt shouldn't appear; if it does, file an issue." >&2
-  osascript -e 'tell application "Photo Export" to quit' >/dev/null 2>&1 || true
+# Wait up to 10s for the app to publish its window id. The app writes the
+# file once the window has been sized + positioned and has a stable
+# CGWindowID for screencapture to target.
+echo "==> Waiting for window id"
+for i in $(seq 1 20); do
+  if [[ -s "$WINDOW_ID_FILE" ]]; then break; fi
+  sleep 0.5
+done
+if [[ ! -s "$WINDOW_ID_FILE" ]]; then
+  echo "Timed out waiting for $WINDOW_ID_FILE — the app likely didn't reach screenshot mode." >&2
+  pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
   exit 4
+fi
+WINDOW_ID="$(cat "$WINDOW_ID_FILE")"
+echo "    window id: $WINDOW_ID"
+
+# Give SwiftUI a brief moment to finish rendering the initial frame after the
+# window is sized — without this, in-progress animation can land in the PNG.
+sleep 0.5
+
+echo "==> Capturing"
+OUT_PATH="$OUT_DIR/01-timeline.png"
+# `-o` suppresses the window's drop shadow so the PNG has a clean edge
+# suitable for App Store / website use. `-l<id>` targets the window
+# regardless of which display it's on.
+if ! /usr/sbin/screencapture -t png -o "-l${WINDOW_ID}" "$OUT_PATH"; then
+  echo "screencapture failed. Most common cause: Screen Recording permission" >&2
+  echo "not granted to your shell host (Terminal / iTerm2 / etc.). Grant in" >&2
+  echo "System Settings → Privacy & Security → Screen Recording, then retry." >&2
+  pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
+  exit 5
 fi
 
 echo "==> Terminating screenshot instance"
-osascript -e 'tell application "Photo Export" to quit' >/dev/null 2>&1 || true
+pkill -f "${APP_NAME}.*--screenshot-mode" 2>/dev/null || true
 
-# Sanity-check: we should have at least one PNG; an empty output dir means
-# the driver completed but every capture step failed silently (most likely
-# Screen Recording permission denial — screencapture exits non-zero but the
-# script's `do shell script` propagates that as an AppleScript error, so we
-# should never reach here with an empty dir. Defensive guard regardless.)
 if ! ls "$OUT_DIR"/*.png >/dev/null 2>&1; then
   echo "No screenshots produced; output dir is empty: $OUT_DIR" >&2
-  exit 5
+  exit 6
 fi
 
 echo

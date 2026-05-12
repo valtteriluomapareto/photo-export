@@ -275,7 +275,14 @@ struct PhotoExportApp: App {
     guard
       let width = value(for: "--screenshot-width="),
       let height = value(for: "--screenshot-height=")
-    else { return }
+    else {
+      // No requested size — still publish the window id so the capture
+      // script can grab whatever window the system gives us.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        Self.publishScreenshotWindowID()
+      }
+      return
+    }
     guard let window = NSApplication.shared.windows.first else { return }
     let screenFrame = window.screen?.visibleFrame ?? .zero
     let origin = NSPoint(
@@ -285,6 +292,31 @@ struct PhotoExportApp: App {
     window.setFrame(
       NSRect(origin: origin, size: CGSize(width: width, height: height)),
       display: true, animate: false)
+    // After the resize settles, publish the window's CGWindowID to a
+    // well-known temp file. The capture script reads it and calls
+    // `screencapture -l<windowID>` — pixel-exact, no coordinate math, works
+    // regardless of which display the window lives on (matters on multi-
+    // display setups where a rect-based capture against the wrong screen
+    // would grab the wallpaper). This avoids needing AppleScript / System
+    // Events / Accessibility — only Screen Recording.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+      Self.publishScreenshotWindowID()
+    }
+  }
+
+  /// Writes the main window's CGWindowID to
+  /// `$TMPDIR/photo-export-screenshot-window-id.txt` as a single integer
+  /// line. Removed if no window is available. Called only in screenshot mode.
+  @MainActor
+  private static func publishScreenshotWindowID() {
+    let url = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("photo-export-screenshot-window-id.txt")
+    guard let window = NSApplication.shared.windows.first else {
+      try? FileManager.default.removeItem(at: url)
+      return
+    }
+    let line = String(window.windowNumber)
+    try? line.write(to: url, atomically: true, encoding: .utf8)
   }
 
   /// Returns `<App Support>/<bundle-id>/AutoSync/` as the root for AutoSync persistence.
