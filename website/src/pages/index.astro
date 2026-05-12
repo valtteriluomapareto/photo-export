@@ -180,13 +180,9 @@ const faqData = {
 					later.
 				</FeatureCard>
 				<FeatureCard title="Auto Export" icon="🔄">
-					Optional <a href="auto-export/">set-it-and-forget-it backup</a>: Photo
-					Export can add new photos to your destination as they appear in Apple
-					Photos. Per-scope choice (Timeline / Favorites / Albums), an automatic
-					retry policy for transient failures, and an <strong
-						>Open at login</strong
-					>
-					setting for hands-off operation.
+					Optional <a href="auto-export/">set-it-and-forget-it backup</a>: new
+					photos land in your destination as they appear in Apple Photos. Picks
+					a scope (Timeline / Favorites / Albums) and runs on its own.
 				</FeatureCard>
 				<FeatureCard title="Remembers Your Folder" icon="📁">
 					Your chosen destination folder is remembered across app launches — no
@@ -578,7 +574,12 @@ const faqData = {
 
 	.feature-grid {
 		display: grid;
-		grid-template-columns: repeat(3, 1fr);
+		/* `minmax(0, 1fr)` rather than `1fr` so columns can shrink below
+		   their intrinsic content width. Without it, an unbreakable code
+		   span like `Collections/Albums/Trips/Iceland/` in one card pushes
+		   that column wider and steals space from its neighbours, producing
+		   an asymmetric grid where one column is visibly narrower. */
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 1.25rem;
 	}
 
