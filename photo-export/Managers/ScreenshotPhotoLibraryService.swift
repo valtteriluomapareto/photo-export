@@ -84,36 +84,67 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
     return [favorites, family, porvoo, trips]
   }()
 
+  /// Each album surfaces this many synthetic assets in the grid. The bundled
+  /// photos under `photo-export/Resources/screenshots/` are reused via a modulo
+  /// wrap in `bundledImageName(for:)` so the same 27 files populate 4 × 30
+  /// tiles — a sparse 6-tile grid felt empty in marketing captures.
+  ///
+  /// 30 was picked so each album view scrolls (proves the grid is real, not a
+  /// fixed-size mock) without dragging out unreasonably. At a typical 1440×900
+  /// capture with the content column at ~520pt this is ~4 cols × ~8 rows.
+  private static let assetsPerAlbum = 30
+
   /// Asset-id lists per album. The asset descriptors are constructed lazily so
   /// `creationDate`s can be relative to launch time (the timeline grid groups by
   /// year/month, so dates anchored to "now" keep the grid populated regardless of
   /// when the screenshots are taken).
   private static let assetIdsByAlbum: [String: [String]] = [
-    "family": (1...6).map { "family-\($0)" },
-    "porvoo": (1...7).map { "porvoo-\($0)" },
-    "london": (1...7).map { "london-\($0)" },
-    "paris": (1...7).map { "paris-\($0)" },
+    "family": (1...assetsPerAlbum).map { "family-\($0)" },
+    "porvoo": (1...assetsPerAlbum).map { "porvoo-\($0)" },
+    "london": (1...assetsPerAlbum).map { "london-\($0)" },
+    "paris": (1...assetsPerAlbum).map { "paris-\($0)" },
   ]
 
-  /// Favorites is a union of selected highlights from the albums above —
-  /// one per album so the Favorites grid surfaces all four themes at a glance.
+  /// How many distinct bundled photos exist for each album. The image lookup
+  /// wraps modulo this count so an asset id `<album>-N` resolves to
+  /// `<album>-((N-1) % count + 1)`. When you add or remove bundled photos for
+  /// an album, update this dictionary too.
+  private static let bundledPhotoCountByAlbum: [String: Int] = [
+    "family": 6,
+    "porvoo": 7,
+    "london": 7,
+    "paris": 7,
+  ]
+
+  /// Favorites surfaces ~12 highlights mixed across the four albums so the
+  /// Favorites grid looks plausibly curated (not just one photo per album).
+  /// Three per album, taken from the first three indices so the bundled
+  /// photos that show up here are the maintainer's chosen "hero" shots.
   private static let favoriteAssetIds: [String] = [
-    "family-1", "porvoo-1", "london-1", "paris-1",
+    "family-1", "family-2", "family-3",
+    "porvoo-1", "porvoo-2", "porvoo-3",
+    "london-1", "london-2", "london-3",
+    "paris-1", "paris-2", "paris-3",
   ]
 
   /// Timeline assets bucketed by year/month. Reuses the same asset ids as the
   /// albums so a user clicking through both surfaces sees consistent thumbnails.
   /// Dates anchored to the current calendar year so the timeline tree's
   /// `availableYears` line up with reality.
+  ///
+  /// Album iteration order is sorted by album key so the timeline distribution
+  /// is stable across launches — `Dictionary.values` is unordered, and an
+  /// unordered traversal here would make "which photo lands in May 2026"
+  /// non-deterministic across capture runs.
   private static let timelineAssetsByMonth: [String: [String]] = {
-    // Spread the ~25 album assets across the last 18 months so the timeline year
-    // tree shows multiple year and month entries.
     let calendar = Calendar(identifier: .gregorian)
     let now = Date()
     var byKey: [String: [String]] = [:]
-    let allIds = assetIdsByAlbum.values.flatMap { $0 }
+    let allIds = assetIdsByAlbum.keys.sorted().flatMap { assetIdsByAlbum[$0] ?? [] }
     for (idx, id) in allIds.enumerated() {
-      // Walk back 0..18 months for the ~25 assets.
+      // Spread across the last 18 months so the timeline year tree shows
+      // multiple year and month entries. With ~120 ids and 18 months, every
+      // month gets ~7 photos — a populated grid at every selection.
       let monthsBack = idx % 18
       if let date = calendar.date(byAdding: .month, value: -monthsBack, to: now) {
         let year = calendar.component(.year, from: date)
@@ -306,7 +337,7 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
   /// every id.
   private static let bundledImageExtensions = ["jpg", "jpeg", "heic", "png"]
 
-  /// Tier 1: bundled image (jpg / heic / png). Tier 2: rendered gradient
+  /// Tier 1: bundled image (jpg / jpeg / heic / png). Tier 2: rendered gradient
   /// placeholder. Cached in memory so repeated grid scrolls don't re-render.
   ///
   /// Probes both the bundle root and a `screenshots/` subdirectory. Xcode 16's
@@ -314,15 +345,22 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
   /// by default; older Xcode setups using folder references preserve the
   /// subdirectory. Trying both keeps the lookup working regardless of which
   /// import shape the project ends up with.
+  ///
+  /// The asset id is wrapped via `bundledImageName(for:)` so a `family-23`
+  /// asset id resolves to the bundled `family-5.jpeg` file (because there
+  /// are only 6 bundled family photos and 23 % 6 == 5, then +1 for 1-based
+  /// indexing). This lets 27 bundled photos populate ~120 grid tiles without
+  /// the user noticing repeats unless they look hard.
   private func image(for assetId: String, size: CGSize) -> NSImage? {
+    let resourceName = Self.bundledImageName(for: assetId) ?? assetId
     for ext in Self.bundledImageExtensions {
-      if let url = Bundle.main.url(forResource: assetId, withExtension: ext),
+      if let url = Bundle.main.url(forResource: resourceName, withExtension: ext),
         let img = NSImage(contentsOf: url)
       {
         return img
       }
       if let url = Bundle.main.url(
-        forResource: assetId, withExtension: ext,
+        forResource: resourceName, withExtension: ext,
         subdirectory: "screenshots"),
         let img = NSImage(contentsOf: url)
       {
@@ -334,6 +372,26 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
     let img = Self.renderPlaceholder(for: assetId, size: size)
     placeholderCache[cacheKey] = img
     return img
+  }
+
+  /// Maps an asset id like `family-23` to a bundled filename like `family-5`,
+  /// wrapping the index modulo the per-album bundled-photo count. Returns nil
+  /// when the id doesn't match the `<album>-<int>` shape or the album isn't
+  /// in `bundledPhotoCountByAlbum` — in which case the caller falls back to
+  /// looking up the literal asset id (so a future custom id can still resolve
+  /// to a bundled file named after it directly).
+  private static func bundledImageName(for assetId: String) -> String? {
+    guard let dashIdx = assetId.lastIndex(of: "-") else { return nil }
+    let album = String(assetId[..<dashIdx])
+    let indexStr = String(assetId[assetId.index(after: dashIdx)...])
+    guard
+      let index = Int(indexStr),
+      index >= 1,
+      let bundledCount = bundledPhotoCountByAlbum[album],
+      bundledCount > 0
+    else { return nil }
+    let wrapped = ((index - 1) % bundledCount) + 1
+    return "\(album)-\(wrapped)"
   }
 
   /// Draws a two-color gradient labelled with the asset id. Deterministic per id:
