@@ -291,8 +291,19 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   /// Tier 1: bundled image (jpg / heic / png). Tier 2: rendered gradient
   /// placeholder. Cached in memory so repeated grid scrolls don't re-render.
+  ///
+  /// Probes both the bundle root and a `screenshots/` subdirectory. Xcode 16's
+  /// synchronized groups flatten `Resources/screenshots/*` to the bundle root
+  /// by default; older Xcode setups using folder references preserve the
+  /// subdirectory. Trying both keeps the lookup working regardless of which
+  /// import shape the project ends up with.
   private func image(for assetId: String, size: CGSize) -> NSImage? {
     for ext in Self.bundledImageExtensions {
+      if let url = Bundle.main.url(forResource: assetId, withExtension: ext),
+        let img = NSImage(contentsOf: url)
+      {
+        return img
+      }
       if let url = Bundle.main.url(
         forResource: assetId, withExtension: ext,
         subdirectory: "screenshots"),
