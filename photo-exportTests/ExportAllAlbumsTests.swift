@@ -318,4 +318,68 @@ struct ExportAllAlbumsTests {
       h.manager.emptyRunMessage == "All albums in this destination are already exported.")
     #expect(h.manager.totalJobsEnqueued == 0)
   }
+
+  /// AutoSync passes `selectionOverride` so a scheduled run honours the AutoSync
+  /// version selection regardless of the current UI toggle. The override must
+  /// thread through to every queued `ExportJob.selection`, not just the first.
+  @Test func selectionOverrideThreadsToEveryQueuedJob() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
+    let albumB = seedAlbum(h.photoLib, localId: "B", ids: ["b1"])
+    let albumC = seedAlbum(h.photoLib, localId: "C", ids: ["c1"])
+    h.photoLib.collectionTree = [albumA, albumB, albumC]
+
+    // UI toggle says `.edited`; AutoSync schedules a run with `.editedWithOriginals`.
+    // The queued jobs must reflect the override, not the toggle.
+    h.manager.versionSelection = .edited
+
+    // Gate the worker after it pulls the first job so the remaining two stay in
+    // `pendingJobs` and we can read their `.selection` directly.
+    let writerGate = AsyncCheckpoint()
+    h.writer.checkpoint = writerGate
+
+    h.manager.startExportAllAlbums(selectionOverride: .editedWithOriginals)
+    await waitUntil(h.manager.totalJobsEnqueued == 3)
+    await writerGate.waitForEnter(count: 1)
+
+    // Every still-queued job carries the override selection — proves the
+    // parameter threaded through the helper into the per-album `enqueueCollection`
+    // call, not just into the first.
+    let pendingSelections = Set(h.manager.pendingJobs.map(\.selection))
+    #expect(pendingSelections == [.editedWithOriginals])
+    // UI toggle is unchanged — override is per-run, not a side effect.
+    #expect(h.manager.versionSelection == .edited)
+
+    await writerGate.releaseAll()
+  }
+
+  /// Inverse variant: toggle says `.editedWithOriginals`, override says `.edited`.
+  /// Without this case, the prior test could pass even if `selectionOverride` were
+  /// silently ignored and the toggle were read directly — both would happen to
+  /// equal the same default value. Two opposite-direction tests isolate the
+  /// parameter-threading from a coincidental match.
+  @Test func selectionOverrideWinsOverToggleInBothDirections() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let album = seedAlbum(h.photoLib, localId: "A", ids: ["a1", "a2"])
+    h.photoLib.collectionTree = [album]
+
+    h.manager.versionSelection = .editedWithOriginals
+
+    let writerGate = AsyncCheckpoint()
+    h.writer.checkpoint = writerGate
+
+    h.manager.startExportAllAlbums(selectionOverride: .edited)
+    await waitUntil(h.manager.totalJobsEnqueued == 2)
+    await writerGate.waitForEnter(count: 1)
+
+    let pendingSelections = Set(h.manager.pendingJobs.map(\.selection))
+    #expect(pendingSelections == [.edited])
+    #expect(h.manager.versionSelection == .editedWithOriginals)
+
+    await writerGate.releaseAll()
+  }
 }

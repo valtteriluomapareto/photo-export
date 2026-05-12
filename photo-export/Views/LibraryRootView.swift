@@ -14,19 +14,35 @@ struct LibraryRootView: View {
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var whatsNewState: WhatsNewState
 
-  @State private var section: LibrarySection = .timeline
-  @State private var selection: LibrarySelection? = .timelineMonth(
-    year: Calendar.current.component(.year, from: Date()),
-    month: Calendar.current.component(.month, from: Date())
-  )
+  @State private var section: LibrarySection
+  @State private var selection: LibrarySelection?
 
   /// Last selection per section so flipping the segmented control returns the user to
   /// where they were. Updated whenever `selection` changes within a section.
-  @State private var lastTimelineSelection: LibrarySelection? = .timelineMonth(
-    year: Calendar.current.component(.year, from: Date()),
-    month: Calendar.current.component(.month, from: Date())
-  )
+  @State private var lastTimelineSelection: LibrarySelection?
   @State private var lastCollectionsSelection: LibrarySelection?
+
+  init() {
+    // Honour `--screenshot-surface=<key>` so the capture script can land each
+    // marketing capture on a specific view without UI scripting. In production
+    // launches the resolver returns `nil` and the defaults below match the
+    // pre-launch-arg behaviour (Timeline / current month). The parsing +
+    // mapping lives in `ScreenshotSurfaceResolver` so it's testable without
+    // instantiating SwiftUI views.
+    let surface = ScreenshotSurfaceResolver.resolve()
+    let now = Date()
+    let currentYear = Calendar.current.component(.year, from: now)
+    let currentMonth = Calendar.current.component(.month, from: now)
+    let defaultTimeline: LibrarySelection = .timelineMonth(year: currentYear, month: currentMonth)
+    let initialSection = surface?.section ?? .timeline
+    let initialSelection = surface?.selection ?? defaultTimeline
+    _section = State(initialValue: initialSection)
+    _selection = State(initialValue: initialSelection)
+    _lastTimelineSelection = State(
+      initialValue: initialSection == .timeline ? initialSelection : defaultTimeline)
+    _lastCollectionsSelection = State(
+      initialValue: initialSection == .collections ? initialSelection : nil)
+  }
 
   @State private var selectedAsset: AssetDescriptor?
 
@@ -44,7 +60,9 @@ struct LibraryRootView: View {
 
   var body: some View {
     NavigationSplitView(
-      sidebar: { sidebar },
+      sidebar: {
+        sidebar
+      },
       content: {
         // Persistent progress strip sits above the content column only —
         // not above the sidebar, where it would visually attach to the
@@ -67,7 +85,8 @@ struct LibraryRootView: View {
       ToolbarItem(placement: .navigation) {
         sectionPicker
       }
-      ExportToolbarView(section: section)
+      ExportToolbarView(
+        section: section, selection: selection, folderAlbumCount: selectedFolderAlbumCount)
     }
     .sheet(isPresented: $isShowingImportSheet) {
       ImportView()
@@ -81,7 +100,11 @@ struct LibraryRootView: View {
     // binding doesn't re-present.
     .sheet(
       isPresented: Binding(
-        get: { whatsNewState.shouldShow },
+        get: {
+          // Suppress the What's New sheet in screenshot mode — it would auto-
+          // show on first launch after a version bump and ruin every capture.
+          !PhotoLibraryManager.isRunningInScreenshotMode && whatsNewState.shouldShow
+        },
         set: { newValue in
           if !newValue { whatsNewState.markAsSeen() }
         }
@@ -104,7 +127,7 @@ struct LibraryRootView: View {
         }
       case .collections:
         switch newValue {
-        case .favorites, .album:
+        case .favorites, .album, .folder:
           lastCollectionsSelection = newValue
         case .timelineMonth, .none:
           break  // ignore — only collection-shaped values count for this section
@@ -124,7 +147,9 @@ struct LibraryRootView: View {
       \.saveDiagnosticReportAction,
       SaveDiagnosticReportAction { saveDiagnosticReport() }
     )
-    .frame(minWidth: 900, minHeight: 600)
+    // Window min must fit: sidebar min (220) + content min (480) + ~300pt
+    // for the detail pane to render a useful asset preview.
+    .frame(minWidth: 1100, minHeight: 700)
     .background(Color(.windowBackgroundColor))
   }
 
@@ -194,16 +219,33 @@ struct LibraryRootView: View {
 
   @ViewBuilder
   private var sidebar: some View {
-    switch section {
-    case .timeline:
-      TimelineSidebarView(selection: $selection, photoLibraryService: photoLibraryManager)
-    case .collections:
-      CollectionsSidebarView(selection: $selection)
+    Group {
+      switch section {
+      case .timeline:
+        TimelineSidebarView(selection: $selection, photoLibraryService: photoLibraryManager)
+      case .collections:
+        CollectionsSidebarView(selection: $selection)
+      }
     }
+    // Sidebar shows "Photos by Year" + album titles without truncation at
+    // ~240pt. Min ≈ ideal so AppKit's persisted NSSplitView dividers can't
+    // collapse the sidebar back to its old narrow default; max caps the
+    // runaway resize so the content grid stays primary.
+    .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 360)
   }
 
   @ViewBuilder
   private var contentArea: some View {
+    contentSwitch
+      // ~520pt fits ~4 thumbnail columns at the 100–160pt adaptive tile
+      // size. Min is just narrower than 3 columns so the grid never
+      // collapses to a single column; max caps so a wide window still
+      // leaves room for the detail pane.
+      .navigationSplitViewColumnWidth(min: 480, ideal: 520, max: 900)
+  }
+
+  @ViewBuilder
+  private var contentSwitch: some View {
     switch selection {
     case .timelineMonth(let year, let month):
       MonthContentView(
@@ -233,6 +275,17 @@ struct LibraryRootView: View {
       .environmentObject(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+    case .folder(let collectionId):
+      FolderContentView(
+        folderId: collectionId,
+        title: folderTitle(forCollectionId: collectionId),
+        selection: $selection,
+        selectedAsset: $selectedAsset,
+        photoLibraryService: photoLibraryManager
+      )
+      .environmentObject(photoLibraryManager)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
     case nil:
       VStack {
         Spacer()
@@ -244,22 +297,40 @@ struct LibraryRootView: View {
     }
   }
 
+  /// Recursive album count under the currently-selected folder, or `nil` when the
+  /// active selection isn't a folder. Drives the toolbar's primary-action label so
+  /// "Export Folder" can render as "Export N Albums" — matching the in-pane button.
+  private var selectedFolderAlbumCount: Int? {
+    guard case .folder(let folderId) = selection else { return nil }
+    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
+      return nil
+    }
+    return PhotoCollectionDescriptor.albumLocalIds(under: folder).count
+  }
+
   /// Looks up the album's display title from the cached collection tree. Falls back to
   /// "Album" when the tree hasn't been built yet — the next sidebar fetch will populate
   /// the title via the placement metadata anyway.
   private func albumTitle(forCollectionId id: String) -> String {
     let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
-    return findTitle(forCollectionId: id, in: tree) ?? "Album"
+    return findTitle(kind: .album, id: id, in: tree) ?? "Album"
   }
 
-  private func findTitle(forCollectionId id: String, in tree: [PhotoCollectionDescriptor])
-    -> String?
-  {
+  private func folderTitle(forCollectionId id: String) -> String {
+    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    return findTitle(kind: .folder, id: id, in: tree) ?? "Folder"
+  }
+
+  private func findTitle(
+    kind: PhotoCollectionDescriptor.Kind, id: String,
+    in tree: [PhotoCollectionDescriptor]
+  ) -> String? {
     for descriptor in tree {
-      if descriptor.kind == .album, descriptor.localIdentifier == id {
+      if descriptor.kind == kind, descriptor.localIdentifier == id {
         return descriptor.title
       }
-      if let found = findTitle(forCollectionId: id, in: descriptor.children) {
+      if let found = findTitle(kind: kind, id: id, in: descriptor.children) {
         return found
       }
     }

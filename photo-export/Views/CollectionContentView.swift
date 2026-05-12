@@ -96,6 +96,10 @@ struct CollectionContentView: View {
       return .timeline(year: year, month: month)
     case .favorites: return .favorites
     case .album(let id): return .album(collectionId: id)
+    case .folder:
+      // Unreachable: `LibraryRootView` routes folder selections to `FolderContentView`.
+      // Returning `.favorites` is a safe default that never gets observed.
+      return .favorites
     }
   }
 
@@ -114,6 +118,7 @@ struct CollectionContentView: View {
     case .timelineMonth(let year, let month): return "timeline:\(year)-\(month)"
     case .favorites: return "favorites"
     case .album(let id): return "album:\(id)"
+    case .folder(let id): return "folder:\(id)"  // Unreachable; see `scope`.
     }
   }
 
@@ -129,7 +134,7 @@ struct CollectionContentView: View {
     case .album(let id):
       return collectionExportRecordStore.placements(matching: .album)
         .first(where: { $0.collectionLocalIdentifier == id })
-    case .timelineMonth:
+    case .timelineMonth, .folder:
       return nil
     }
   }
@@ -187,6 +192,7 @@ struct CollectionContentView: View {
     case .favorites: return "Export Favorites"
     case .album: return "Export Album"
     case .timelineMonth: return "Export Month"
+    case .folder: return "Export Folder"  // Unreachable; see `scope`.
     }
   }
 
@@ -208,6 +214,8 @@ struct CollectionContentView: View {
       exportManager.startExportAlbum(collectionId: id)
     case .timelineMonth(let year, let month):
       exportManager.startExportMonth(year: year, month: month)
+    case .folder:
+      break  // Unreachable; see `scope`.
     }
   }
 

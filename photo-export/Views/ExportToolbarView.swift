@@ -6,9 +6,18 @@ struct ExportToolbarView: ToolbarContent {
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
 
   /// Drives the primary action button's label and target. Timeline shows
-  /// "Export All"; Collections shows "Export All Albums". The pause/cancel buttons
+  /// "Export All"; Collections shows "Export All Albums" by default and flips to
+  /// "Export Folder" when the user has a folder selected. The pause/cancel buttons
   /// are shared because the underlying queue is shared.
   let section: LibrarySection
+  /// Current sidebar selection. Used only to detect a folder selection so the
+  /// primary action can route to `startExportFolder(folderId:)` for that folder.
+  let selection: LibrarySelection?
+  /// Recursive album count under the selected folder, if any. `nil` for non-folder
+  /// selections. Used so the primary-action label can read "Export 12 Albums"
+  /// instead of just "Export Folder" — matching the in-pane button's wording so a
+  /// user comparing them doesn't see a mismatch.
+  var folderAlbumCount: Int?
 
   var body: some ToolbarContent {
     ToolbarItem(placement: .automatic) {
@@ -20,40 +29,54 @@ struct ExportToolbarView: ToolbarContent {
     }
 
     ToolbarItem(placement: .automatic) {
-      includeOriginalsToggle
+      formatMenu
     }
 
-    ToolbarItem(placement: .automatic) {
+    ToolbarItem(placement: .primaryAction) {
       primaryActions
     }
   }
 
-  // MARK: - Include-originals toggle
+  // MARK: - Format menu
 
-  private var includeOriginalsToggle: some View {
-    // Explicit HStack rather than `Label(...)` so the icon and text always
-    // render side-by-side (mirroring the Destination indicator's layout) and
-    // the toolbar's "Icon Only" customization mode can't strip the label —
-    // both pieces are part of the view content, not adaptive to display mode.
-    Toggle(isOn: $exportManager.includeOriginals) {
-      HStack(alignment: .center, spacing: 6) {
-        Image(
-          systemName: exportManager.includeOriginals
-            ? "doc.on.doc.fill" : "doc.on.doc"
-        )
-        Text("Include originals")
-          .font(.callout)
+  /// Houses export-shape options that were previously inline toolbar items. As
+  /// the toolbar grew, having "Include originals" sit as a peer to the primary
+  /// `Export All` button competed for visual weight against the action that's
+  /// the entire reason this app exists. A `Menu` keeps the affordance one click
+  /// away without eating prime real estate.
+  private var formatMenu: some View {
+    Menu {
+      Toggle(isOn: $exportManager.includeOriginals) {
+        Label("Include originals for edited photos", systemImage: "doc.on.doc")
+      }
+      .disabled(exportManager.hasActiveExportWork)
+    } label: {
+      // `Label` rather than a custom `HStack { Image(...) }` so the toolbar's
+      // "Icon and Text" customization mode can render "Format" beneath the
+      // glyph. The accent dot for "an option is on" overlays via
+      // `Image(systemName:).symbolVariant(.fill)` swap on the trailing badge.
+      Label("Format", systemImage: "slider.horizontal.3")
+    }
+    // `.menuIndicator(.hidden)` removes the chevron — the slider glyph is the
+    // affordance, and the chevron crowds the icon in the limited toolbar space.
+    .menuIndicator(.hidden)
+    .help(includeOriginalsHelp)
+    .accessibilityLabel("Format options")
+    .accessibilityHint(
+      "Toggle Include originals to keep an unedited copy of photos that have edits in Photos."
+    )
+    // Overlay the accent dot when at least one option is on — at-a-glance
+    // state feedback without inlining the full toggle. Mirrors how Photos /
+    // Mail toolbars indicate "you've changed a default here." Sits outside
+    // the `Label` so it doesn't interfere with "Icon and Text" mode text.
+    .overlay(alignment: .topTrailing) {
+      if exportManager.includeOriginals {
+        Circle()
+          .fill(Color.accentColor)
+          .frame(width: 6, height: 6)
+          .offset(x: 2, y: -2)
       }
     }
-    .toggleStyle(.button)
-    .tint(.accentColor)
-    .disabled(exportManager.hasActiveExportWork)
-    .help(includeOriginalsHelp)
-    .accessibilityLabel("Include originals for edited photos")
-    .accessibilityHint(
-      "Off by default. Turn on to keep original-bytes copies alongside edited photos."
-    )
-    .padding(.trailing, 16)
   }
 
   private var includeOriginalsHelp: String {
@@ -74,45 +97,29 @@ struct ExportToolbarView: ToolbarContent {
 
   // MARK: - Destination Indicator
 
+  /// One clickable item: an icon-coloured status glyph plus the destination
+  /// folder name, tap opens the folder picker. The previous design rendered
+  /// four visual elements (drive icon, "Destination" caption, filename,
+  /// standalone "Change…" button) for one job. Consolidation matches the way
+  /// Finder + Mail surface destination/account selectors — single button, full
+  /// path in the tooltip.
   @ViewBuilder
   private var destinationIndicator: some View {
     if let url = exportDestinationManager.selectedFolderURL {
-      HStack(alignment: .center, spacing: 8) {
-        Image(
-          systemName: exportDestinationManager.isAvailable
-            && exportDestinationManager.isWritable
-            ? "externaldrive.fill" : "externaldrive.badge.exclamationmark"
-        )
-        .foregroundColor(
-          exportDestinationManager.isAvailable && exportDestinationManager.isWritable
-            ? .green : .yellow)
-
-        // Two-row label gives this custom toolbar item a visible title that
-        // mirrors what system buttons get for free in "Icon and Text" mode.
-        VStack(alignment: .leading, spacing: 1) {
-          Text("Destination")
-            .font(.caption2)
-            .foregroundColor(.secondary)
+      Button {
+        exportDestinationManager.selectFolder()
+      } label: {
+        HStack(alignment: .center, spacing: 6) {
+          Image(systemName: destinationIconName)
+            .foregroundColor(destinationIconColor)
           Text(url.lastPathComponent)
-            .font(.callout)
             .lineLimit(1)
             .truncationMode(.middle)
-            .help(url.path)
+            .frame(maxWidth: 180, alignment: .leading)
         }
-        .frame(maxWidth: 140, alignment: .leading)
-
-        Button("Change\u{2026}") {
-          exportDestinationManager.selectFolder()
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .fixedSize()
       }
-      // Inter-item spacing: 16pt past the system default. Matches the
-      // trailing padding on `includeOriginalsToggle` so adjacent items
-      // breathe consistently. The right-most item (`primaryActions`)
-      // doubles this for window-edge spacing.
-      .padding(.trailing, 16)
+      .buttonStyle(.bordered)
+      .help("Destination: \(url.path) — click to change")
     } else {
       Button("Select Export Folder\u{2026}") {
         exportDestinationManager.selectFolder()
@@ -121,16 +128,33 @@ struct ExportToolbarView: ToolbarContent {
     }
   }
 
+  private var destinationIconName: String {
+    exportDestinationManager.isAvailable && exportDestinationManager.isWritable
+      ? "externaldrive.fill" : "externaldrive.badge.exclamationmark"
+  }
+
+  private var destinationIconColor: Color {
+    exportDestinationManager.isAvailable && exportDestinationManager.isWritable
+      ? .green : .yellow
+  }
+
   // MARK: - Primary Actions
 
   @State private var isShowingSupersedeConfirm = false
 
   private var primaryActions: some View {
-    HStack(alignment: .center, spacing: 8) {
+    // Internal spacing 12pt rather than 8pt — closer to macOS's default
+    // between-button spacing in system toolbars (Mail/Finder/Notes). 8pt
+    // packs the pause + cancel glyphs flush against the prominent Export
+    // All button; 12pt gives them room to read as separate controls.
+    HStack(alignment: .center, spacing: 12) {
       Button(primaryActionLabel) {
         handlePrimaryAction()
       }
       .buttonStyle(.borderedProminent)
+      .controlSize(.large)
+      .tint(.accentColor)
+      .keyboardShortcut("e", modifiers: .command)
       .disabled(!isPrimaryActionEnabled)
       .help(primaryActionHelpText)
       .confirmationDialog(
@@ -149,31 +173,41 @@ struct ExportToolbarView: ToolbarContent {
         )
       }
 
-      Button {
-        if exportManager.isPaused {
-          exportManager.resume()
-        } else {
-          exportManager.pause()
+      // Pause + Cancel are conditional: they exist only when there's an
+      // active or pausable export. The previous design used `.opacity(0)` to
+      // reserve toolbar space so the layout wouldn't shift when state changed,
+      // but the toolbar's "Icon and Text" customization mode renders an item's
+      // text caption regardless of opacity — so an invisible Pause icon was
+      // leaving a ghost "Pause" caption underneath Export All. Conditionally
+      // rendering avoids that at the cost of a small reflow when an export
+      // starts (pause/cancel slide in from Export All's right). The reflow is
+      // bounded to the trailing-edge primaryAction position and only happens
+      // on state transitions a user just triggered, so it reads as feedback
+      // rather than jitter.
+      if exportManager.canTogglePause {
+        Button {
+          if exportManager.isPaused {
+            exportManager.resume()
+          } else {
+            exportManager.pause()
+          }
+        } label: {
+          Label(
+            exportManager.isPaused ? "Resume" : "Pause",
+            systemImage: exportManager.isPaused ? "play.fill" : "pause.fill")
         }
-      } label: {
-        Image(systemName: exportManager.isPaused ? "play.fill" : "pause.fill")
+        .help(exportManager.isPaused ? "Resume export" : "Pause export")
       }
-      .help(exportManager.isPaused ? "Resume export" : "Pause export")
-      .opacity(exportManager.canTogglePause ? 1 : 0)
-      .disabled(!exportManager.canTogglePause)
 
-      Button {
-        exportManager.cancelAndClear()
-      } label: {
-        Image(systemName: "xmark.circle")
+      if exportManager.hasActiveExportWork {
+        Button {
+          exportManager.cancelAndClear()
+        } label: {
+          Label("Cancel", systemImage: "xmark.circle")
+        }
+        .help("Cancel and clear queue")
       }
-      .help("Cancel and clear queue")
-      .opacity(exportManager.hasActiveExportWork ? 1 : 0)
-      .disabled(!exportManager.hasActiveExportWork)
     }
-    // Right-most toolbar item: pad twice the inter-item spacing so
-    // the cancel button doesn't sit flush against the window edge.
-    .padding(.trailing, 32)
   }
 
   /// Manual exports stay clickable while an AutoSync run is in flight per
@@ -207,14 +241,26 @@ struct ExportToolbarView: ToolbarContent {
     case .timeline:
       exportManager.startExportAll()
     case .collections:
-      exportManager.startExportAllAlbums()
+      if case .folder(let id) = selection {
+        exportManager.startExportFolder(folderId: id)
+      } else {
+        exportManager.startExportAllAlbums()
+      }
     }
   }
 
   private var primaryActionLabel: String {
     switch section {
     case .timeline: return "Export All"
-    case .collections: return "Export All Albums"
+    case .collections:
+      if case .folder = selection {
+        // Show the album count when known so the toolbar's label tracks the
+        // in-pane button. Falls back to "Export Folder" when the count is
+        // unavailable (e.g. tree not yet cached) rather than misreporting "0".
+        guard let count = folderAlbumCount, count > 0 else { return "Export Folder" }
+        return count == 1 ? "Export 1 Album" : "Export \(count) Albums"
+      }
+      return "Export All Albums"
     }
   }
 
@@ -222,20 +268,32 @@ struct ExportToolbarView: ToolbarContent {
     guard exportDestinationManager.canExportNow else {
       return "Select a writable export folder first"
     }
-    switch (section, exportManager.versionSelection) {
-    case (.timeline, .edited):
+    let isFolderSelection: Bool = {
+      if case .folder = selection { return true }
+      return false
+    }()
+    switch (section, exportManager.versionSelection, isFolderSelection) {
+    case (.timeline, .edited, _):
       return
         "Export every photo in the timeline (year/month) view, in the version Photos shows."
-    case (.timeline, .editedWithOriginals):
+    case (.timeline, .editedWithOriginals, _):
       return
         "Export every photo in the timeline (year/month) view, plus a _orig companion "
         + "for any photo edited in Photos."
-    case (.collections, .edited):
+    case (.collections, .edited, true):
+      return
+        "Export every photo in every album under the selected folder, in the version "
+        + "Photos shows."
+    case (.collections, .editedWithOriginals, true):
+      return
+        "Export every photo in every album under the selected folder, plus a _orig "
+        + "companion for any photo edited in Photos."
+    case (.collections, .edited, false):
       return
         "Export every user album, including albums nested in folders, in the version "
         + "Photos shows. Favorites is excluded — use the Export Favorites button on its "
         + "pane."
-    case (.collections, .editedWithOriginals):
+    case (.collections, .editedWithOriginals, false):
       return
         "Export every user album, including albums nested in folders, plus a _orig "
         + "companion for any photo edited in Photos. Favorites is excluded — use the "

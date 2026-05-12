@@ -4,7 +4,9 @@ import MarketingLayout from '../layouts/MarketingLayout.astro';
 import Hero from '../components/Hero.astro';
 import FeatureCard from '../components/FeatureCard.astro';
 import Footer from '../components/Footer.astro';
-import screenshot from '../assets/photo_export_screenshot.png';
+import screenshotAlbum from '../assets/photo_export_screenshot_album.png';
+import screenshotTimeline from '../assets/photo_export_screenshot_timeline.png';
+import screenshotFolder from '../assets/photo_export_screenshot_folder.png';
 
 const base = import.meta.env.BASE_URL;
 const title = 'Photo Export — Free Mac App to Back Up iCloud & Apple Photos';
@@ -178,13 +180,9 @@ const faqData = {
 					later.
 				</FeatureCard>
 				<FeatureCard title="Auto Export" icon="🔄">
-					Optional <a href="auto-export/">set-it-and-forget-it backup</a>: Photo
-					Export can add new photos to your destination as they appear in Apple
-					Photos. Per-scope choice (Timeline / Favorites / Albums), an automatic
-					retry policy for transient failures, and an <strong
-						>Open at login</strong
-					>
-					setting for hands-off operation.
+					Optional <a href="auto-export/">set-it-and-forget-it backup</a>: new
+					photos land in your destination as they appear in Apple Photos. Picks
+					a scope (Timeline / Favorites / Albums) and runs on its own.
 				</FeatureCard>
 				<FeatureCard title="Remembers Your Folder" icon="📁">
 					Your chosen destination folder is remembered across app launches — no
@@ -247,19 +245,52 @@ const faqData = {
 	<section class="section section-alt" aria-labelledby="screenshots">
 		<div class="container">
 			<h2 id="screenshots">Screenshots</h2>
-			<div class="screenshot-wrapper">
-				<Image
-					src={screenshot}
-					alt="Photo Export app on macOS, showing the year/month sidebar, a thumbnail grid for the selected month, and a full-size photo preview"
-					class="screenshot"
-					widths={[600, 900, 1200]}
-					sizes="(max-width: 768px) 100vw, 900px"
-				/>
-				<p class="screenshot-caption">
-					Timeline view shown above. The sidebar's <strong>Collections</strong>
-					tab lists your Favorites and every album you've created in Photos — pick
-					one and click <strong>Export Album</strong>.
-				</p>
+			<div class="screenshot-gallery">
+				<figure class="screenshot-wrapper">
+					<Image
+						src={screenshotAlbum}
+						alt="Photo Export app showing an album view — sidebar with Favorites and user albums, grid of thumbnails for the selected album, and a full-size photo preview"
+						class="screenshot"
+						widths={[600, 900, 1200]}
+						sizes="(max-width: 768px) 100vw, 900px"
+					/>
+					<figcaption class="screenshot-caption">
+						<strong>Albums.</strong> The <strong>Collections</strong> tab lists your
+						Favorites and every album you've created in Photos. Pick one, preview
+						the contents, and click <strong>Export Album</strong>.
+					</figcaption>
+				</figure>
+
+				<figure class="screenshot-wrapper">
+					<Image
+						src={screenshotTimeline}
+						alt="Photo Export app showing the timeline view — year/month sidebar, thumbnail grid for the selected month, and a full-size photo preview"
+						class="screenshot"
+						widths={[600, 900, 1200]}
+						sizes="(max-width: 768px) 100vw, 900px"
+					/>
+					<figcaption class="screenshot-caption">
+						<strong>Timeline.</strong> Browse by year and month exactly like Apple
+						Photos. Export a single month, an entire year, or your whole library —
+						the destination folder gets a clean
+						<code>YYYY/MM/</code> structure.
+					</figcaption>
+				</figure>
+
+				<figure class="screenshot-wrapper">
+					<Image
+						src={screenshotFolder}
+						alt="Photo Export app showing a Photos folder containing two albums — folder-tile grid with 4-up cover thumbnails per album and an Export 2 Albums action"
+						class="screenshot"
+						widths={[600, 900, 1200]}
+						sizes="(max-width: 768px) 100vw, 900px"
+					/>
+					<figcaption class="screenshot-caption">
+						<strong>Folders.</strong> Select a folder of albums in the sidebar and
+						export every album inside with one click — or Cmd-click tiles to pick
+						an explicit subset.
+					</figcaption>
+				</figure>
 			</div>
 		</div>
 	</section>
@@ -543,7 +574,12 @@ const faqData = {
 
 	.feature-grid {
 		display: grid;
-		grid-template-columns: repeat(3, 1fr);
+		/* `minmax(0, 1fr)` rather than `1fr` so columns can shrink below
+		   their intrinsic content width. Without it, an unbreakable code
+		   span like `Collections/Albums/Trips/Iceland/` in one card pushes
+		   that column wider and steals space from its neighbours, producing
+		   an asymmetric grid where one column is visibly narrower. */
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 1.25rem;
 	}
 
@@ -726,8 +762,15 @@ const faqData = {
 		line-height: 1.6;
 	}
 
+	.screenshot-gallery {
+		display: flex;
+		flex-direction: column;
+		gap: 3rem;
+	}
+
 	.screenshot-wrapper {
 		text-align: center;
+		margin: 0;
 	}
 
 	.screenshot {
@@ -743,6 +786,13 @@ const faqData = {
 		color: var(--site-muted);
 		font-size: 0.95rem;
 		line-height: 1.55;
+	}
+
+	.screenshot-caption code {
+		font-size: 0.9em;
+		background: var(--site-card);
+		padding: 0.1em 0.3em;
+		border-radius: 4px;
 	}
 
 	@media (max-width: 768px) {

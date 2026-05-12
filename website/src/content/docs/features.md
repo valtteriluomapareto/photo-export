@@ -35,6 +35,8 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - One-click export for a single month, a year, or the entire library
 - One-click export for Favorites or any album you've created in Photos, written to `Collections/Favorites/` or `Collections/Albums/<Album>/`
 - One-click batch export of every album (including albums nested in folders) via the **Export All Albums** toolbar button on the Collections tab
+- One-click batch export of every album in a single folder via **Export Folder** — select a folder in the Collections sidebar and the toolbar's primary action targets just that folder's subtree
+- Multi-select album tiles inside a folder with Cmd-click / Shift-click to enqueue an arbitrary subset (selected subfolders expand to their descendant albums)
 - Only copies assets that haven't been exported yet
 - Automatic folder creation in `<year>/<month>/` for the timeline and `Collections/...` for albums and favorites
 - Albums under folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`)

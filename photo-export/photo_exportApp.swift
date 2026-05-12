@@ -35,7 +35,37 @@ struct PhotoExportApp: App {
 
   init() {
     let edm = ExportDestinationManager()
-    let plm = PhotoLibraryManager()
+    // Screenshot mode (`--screenshot-mode` launch arg) swaps the real Photos
+    // backing for a curated synthetic library so marketing screenshots don't
+    // leak the maintainer's personal Photos library. The subclass shape lets
+    // the eight downstream `@EnvironmentObject` sites stay typed against
+    // `PhotoLibraryManager` — see
+    // `docs/project/plans/screenshot-automation-plan.md`.
+    if PhotoLibraryManager.isRunningInScreenshotMode {
+      // ContentView gates on `@AppStorage("hasCompletedOnboarding")`; without
+      // this it would show OnboardingView on a fresh machine and the capture
+      // script would never reach the marketing surfaces. Setting it for the
+      // current launch only — the underlying UserDefaults change persists, but
+      // screenshot mode is only ever used on the maintainer's machine where
+      // the value should already be true anyway.
+      UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+      // macOS persists `NSSplitView Subview Frames …` divider positions across
+      // launches via `NSWindow.frameAutosaveName`. The persisted values win
+      // over `navigationSplitViewColumnWidth(min:ideal:max:)`, so the maintainer's
+      // prior resize would survive into the capture and the columns would
+      // render at their old narrow widths even when the modifier asks for
+      // wider ideals. Wipe these keys at screenshot-mode launch so the
+      // declarative widths actually apply.
+      let defaults = UserDefaults.standard
+      for key in defaults.dictionaryRepresentation().keys
+      where key.hasPrefix("NSSplitView Subview Frames ") {
+        defaults.removeObject(forKey: key)
+      }
+    }
+    let plm: PhotoLibraryManager =
+      PhotoLibraryManager.isRunningInScreenshotMode
+      ? ScreenshotPhotoLibraryService()
+      : PhotoLibraryManager()
     let ers = ExportRecordStore()
     let cers = CollectionExportRecordStore()
     let em = ExportManager(
@@ -164,34 +194,48 @@ struct PhotoExportApp: App {
             fingerprintPublisher: exportDestinationManager.$destinationFingerprint
               .eraseToAnyPublisher()
           )
-          // Wire AutoSync after the lifecycle coordinator so the
-          // destination snapshot adapter sees the initial migration-conflict
-          // state on first emission. AutoSyncManager.attach is idempotent;
-          // the photo change adapter is a no-op until Photos authorization.
-          let environment = AutoSyncEnvironment(
-            exportRunner: exportManager,
-            destination: autoSyncDestinationAdapter,
-            scopes: autoSyncScopeStore,
-            photos: autoSyncPhotoChangeAdapter,
-            importing: exportManager,
-            dirtyStateStore: autoSyncDirtyStateStore,
-            retryStateStore: autoSyncRetryStateStore,
-            runSummaryStore: autoSyncRunSummaryStore,
-            perDestinationTokenStore: autoSyncPerDestinationTokenStore,
-            clock: autoSyncClock,
-            userDefaults: .standard
-          )
-          autoSyncManager.attach(to: environment)
-          autoSyncPhotoChangeAdapter.start()
+          // Skip the entire AutoSync wiring in screenshot mode. The
+          // `PhotoLibraryPersistentChangeAdapter.start()` call further down
+          // triggers the system Photos permission prompt — `currentChangeToken`
+          // and `register(self)` both touch PhotoKit even though `PhotoLibraryManager`'s
+          // own observer registration is skipped. Screenshot mode is a
+          // marketing-capture mode that doesn't need AutoSync; gate the
+          // attach + start so the run is permission-free.
+          if !PhotoLibraryManager.isRunningInScreenshotMode {
+            // Wire AutoSync after the lifecycle coordinator so the
+            // destination snapshot adapter sees the initial migration-conflict
+            // state on first emission. AutoSyncManager.attach is idempotent;
+            // the photo change adapter is a no-op until Photos authorization.
+            let environment = AutoSyncEnvironment(
+              exportRunner: exportManager,
+              destination: autoSyncDestinationAdapter,
+              scopes: autoSyncScopeStore,
+              photos: autoSyncPhotoChangeAdapter,
+              importing: exportManager,
+              dirtyStateStore: autoSyncDirtyStateStore,
+              retryStateStore: autoSyncRetryStateStore,
+              runSummaryStore: autoSyncRunSummaryStore,
+              perDestinationTokenStore: autoSyncPerDestinationTokenStore,
+              clock: autoSyncClock,
+              userDefaults: .standard
+            )
+            autoSyncManager.attach(to: environment)
+            autoSyncPhotoChangeAdapter.start()
+          }
           // Phase 0b: monitor begins observing destination changes and
           // running the safety scan against the active destination's
           // contents. Attached after lifecycleCoordinator so the record
           // stores have been configure(for:)d for the current destination
           // before the monitor reads their counts.
           destinationSafetyMonitor.attach()
+          applyScreenshotWindowSizeIfRequested()
         }
     }
-    .defaultSize(width: 1100, height: 640)
+    // Default sized so the sidebar (~240) + content grid (~560) + detail
+    // (~480) all fit at their ideal widths set in `LibraryRootView.body`.
+    // The user can resize either column past these defaults; new windows
+    // start at this size.
+    .defaultSize(width: 1280, height: 800)
     .commands {
       CommandGroup(replacing: .appInfo) {
         AboutCommand()
@@ -235,6 +279,69 @@ struct PhotoExportApp: App {
       .environmentObject(destinationSafetyMonitor)
     }
     .windowResizability(.contentMinSize)
+  }
+
+  /// When `--screenshot-mode` includes width/height arguments, resize the main
+  /// window after launch so the capture script can grab a predictable frame. No-op
+  /// in production. Args read once on first appearance; subsequent calls are
+  /// idempotent because the resize is to the same size.
+  @MainActor
+  private func applyScreenshotWindowSizeIfRequested() {
+    guard PhotoLibraryManager.isRunningInScreenshotMode else { return }
+    let args = ProcessInfo.processInfo.arguments
+    func value(for prefix: String) -> CGFloat? {
+      guard
+        let arg = args.first(where: { $0.hasPrefix(prefix) }),
+        let raw = arg.split(separator: "=").last.map(String.init),
+        let n = Double(raw)
+      else { return nil }
+      return CGFloat(n)
+    }
+    guard
+      let width = value(for: "--screenshot-width="),
+      let height = value(for: "--screenshot-height=")
+    else {
+      // No requested size — still publish the window id so the capture
+      // script can grab whatever window the system gives us.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        Self.publishScreenshotWindowID()
+      }
+      return
+    }
+    guard let window = NSApplication.shared.windows.first else { return }
+    let screenFrame = window.screen?.visibleFrame ?? .zero
+    let origin = NSPoint(
+      x: screenFrame.midX - width / 2,
+      y: screenFrame.midY - height / 2
+    )
+    window.setFrame(
+      NSRect(origin: origin, size: CGSize(width: width, height: height)),
+      display: true, animate: false)
+    // After the resize settles, publish the window's CGWindowID to a
+    // well-known temp file. The capture script reads it and calls
+    // `screencapture -l<windowID>` — pixel-exact, no coordinate math, works
+    // regardless of which display the window lives on (matters on multi-
+    // display setups where a rect-based capture against the wrong screen
+    // would grab the wallpaper). This avoids needing AppleScript / System
+    // Events / Accessibility — only Screen Recording.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+      Self.publishScreenshotWindowID()
+    }
+  }
+
+  /// Writes the main window's CGWindowID to
+  /// `$TMPDIR/photo-export-screenshot-window-id.txt` as a single integer
+  /// line. Removed if no window is available. Called only in screenshot mode.
+  @MainActor
+  private static func publishScreenshotWindowID() {
+    let url = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent("photo-export-screenshot-window-id.txt")
+    guard let window = NSApplication.shared.windows.first else {
+      try? FileManager.default.removeItem(at: url)
+      return
+    }
+    let line = String(window.windowNumber)
+    try? line.write(to: url, atomically: true, encoding: .utf8)
   }
 
   /// Returns `<App Support>/<bundle-id>/AutoSync/` as the root for AutoSync persistence.

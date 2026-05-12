@@ -74,6 +74,11 @@ code {
 	padding: 0.15rem 0.4rem;
 	border-radius: 4px;
 	font-size: 0.9em;
+	/* Allow long path-like code spans (e.g. `Collections/Albums/Trips/…`)
+	   to break inside the token rather than forcing the containing column
+	   wider in a grid layout. Without this, `minmax(0, 1fr)` columns still
+	   visually swell to fit unbreakable code text. */
+	overflow-wrap: anywhere;
 }
 
 .skip-link {
