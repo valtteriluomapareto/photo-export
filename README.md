@@ -28,6 +28,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 - Preview thumbnails and selected assets
 - Export a month, a year, an album, or the full queue without overwriting existing files
 - Export Favorites or any album you've created in Photos to `Collections/Favorites/` or `Collections/Albums/<Album>/`, individually or via **Export All Albums** in the toolbar. Select a folder in the Collections sidebar to flip the primary action to **Export Folder** (every descendant album), or Cmd/Shift-click album tiles to enqueue an explicit selection
+- Export **iCloud Shared Albums** one at a time to `Collections/Shared Albums/<Album>/`. Apple serves shared photos as downscaled JPEGs only, so Photo Export saves whatever Apple provides — originals aren't available for shared-album assets
 - Choose what to write with the toolbar's **Include originals** toggle. Off (default) exports one file per asset, in the version Photos shows. On adds a `_orig` companion (e.g. `IMG_0001_orig.HEIC`) for any photo or video edited in Photos so you keep a copy of the original bytes alongside the user-visible edit
 - **Auto Export** (opt-in; off by default) keeps a chosen destination automatically in sync with your Photos library: pick Timeline / Favorites / Albums in Settings → Auto Export, and Photo Export adds new photos as they appear in Apple Photos. Surfaced via a toolbar pill, a menu bar item, and a Settings status row. Transient failures retry automatically, waiting longer between each attempt; everything that failed is listed in an Export Issues view with a per-row Retry button. **Open Photo Export at login** provides the simplest set-it-and-forget-it setup. See the [Auto Export guide](https://valtteriluomapareto.github.io/photo-export/auto-export/).
 - Track exported assets per destination so interrupted exports resume safely
@@ -40,7 +41,8 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 
 - Requires **macOS 15.0** or later.
 - **Live Photos** currently export as still images. Paired image + video export is planned.
-- **Albums and Favorites** are supported. Smart albums other than Favorites, and shared albums, are not currently included.
+- **Albums, Favorites, and iCloud Shared Albums** are supported. Smart albums other than Favorites are not currently included.
+- **Shared albums export at reduced quality.** iCloud only serves shared photos as downscaled JPEGs — there's no API to fetch full-resolution originals for an asset that lives only in a shared album. The **Include originals** toggle is a no-op for shared albums (no `_orig` companion is possible).
 - Edited photos export as the version Photos renders for you. Turn on **Include originals** to also keep an `_orig` companion with the original bytes.
 
 ## Requirements

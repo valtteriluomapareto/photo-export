@@ -515,13 +515,7 @@ final class AutoSyncManager: ObservableObject {
   /// runs. Other scope shapes pass through unchanged.
   private static func expand(scope: ExportRunScope) -> [ExportRunScope] {
     guard case .autoExport(let scopes) = scope else { return [scope] }
-    return scopes.enabledScopes.map { libraryScope in
-      switch libraryScope {
-      case .timeline: return .timelineFullLibrary
-      case .favorites: return .favoritesFull
-      case .albums: return .allAlbumsFull
-      }
-    }
+    return scopes.enabledScopes.map(\.fullRunScope)
   }
 
   /// Maps an `ExportPlacement` to the retry-state scope key. Plan §"Retry
@@ -535,6 +529,7 @@ final class AutoSyncManager: ObservableObject {
     case .timeline: return .timeline
     case .favorites: return .favorites
     case .album: return .album(placementId: placement.id)
+    case .sharedAlbum: return .sharedAlbum(placementId: placement.id)
     }
   }
 

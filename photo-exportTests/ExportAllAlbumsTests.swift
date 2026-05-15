@@ -53,6 +53,43 @@ struct ExportAllAlbumsTests {
     #expect(PhotoCollectionDescriptor.albumLocalIds(in: tree).isEmpty)
   }
 
+  /// Shared albums must not leak into the user-album batch — `albumLocalIds`
+  /// is what `startExportAllAlbums` walks, and shared albums are intentionally
+  /// excluded from that batch (they export at reduced quality and need explicit
+  /// opt-in). One-line failure here would silently send shared-album content
+  /// through the "Export All Albums" path.
+  @Test func albumLocalIdsExcludesSharedAlbums() {
+    let user = PhotoCollectionDescriptor(
+      id: "album:user-1", localIdentifier: "user-1", title: "Trip",
+      kind: .album, pathComponents: [], children: [])
+    let shared = PhotoCollectionDescriptor(
+      id: "shared-album:shared-1", localIdentifier: "shared-1", title: "Family",
+      kind: .sharedAlbum, pathComponents: [], children: [])
+    let ids = PhotoCollectionDescriptor.albumLocalIds(in: [user, shared])
+    #expect(ids == ["user-1"])
+  }
+
+  /// `sharedAlbumLocalIds` is a flat top-level filter: it doesn't recurse into
+  /// folders, doesn't match `.album` kind, and returns shared albums in tree
+  /// order. The flat scope is the contract — shared albums don't nest in
+  /// PhotoKit, so any future "recurse through folders" change is a bug.
+  @Test func sharedAlbumLocalIdsReturnsOnlySharedTopLevel() {
+    let user = PhotoCollectionDescriptor(
+      id: "album:user-1", localIdentifier: "user-1", title: "Trip",
+      kind: .album, pathComponents: [], children: [])
+    let folder = PhotoCollectionDescriptor(
+      id: "folder:f", localIdentifier: "f", title: "Folder",
+      kind: .folder, pathComponents: [], children: [user])
+    let s1 = PhotoCollectionDescriptor(
+      id: "shared-album:s1", localIdentifier: "s1", title: "Family",
+      kind: .sharedAlbum, pathComponents: [], children: [])
+    let s2 = PhotoCollectionDescriptor(
+      id: "shared-album:s2", localIdentifier: "s2", title: "Friends",
+      kind: .sharedAlbum, pathComponents: [], children: [])
+    let ids = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: [folder, s1, s2])
+    #expect(ids == ["s1", "s2"])
+  }
+
   // MARK: - Test harness
 
   @MainActor

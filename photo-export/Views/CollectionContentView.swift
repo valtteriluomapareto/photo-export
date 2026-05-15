@@ -36,7 +36,13 @@ struct CollectionContentView: View {
       Text(title)
         .font(.title2)
         .fontWeight(.semibold)
+        .lineLimit(1)
+        .truncationMode(.tail)
         .padding(.top, 8)
+
+      if showsReducedQualityBanner {
+        sharedAlbumBanner
+      }
 
       HStack {
         exportSummaryView
@@ -96,11 +102,70 @@ struct CollectionContentView: View {
       return .timeline(year: year, month: month)
     case .favorites: return .favorites
     case .album(let id): return .album(collectionId: id)
+    case .sharedAlbum(let id): return .sharedAlbum(collectionId: id)
     case .folder:
       // Unreachable: `LibraryRootView` routes folder selections to `FolderContentView`.
       // Returning `.favorites` is a safe default that never gets observed.
       return .favorites
     }
+  }
+
+  /// True when the user is viewing an iCloud shared album. Used for the placement
+  /// lookup and the export button label/route.
+  private var isSharedAlbum: Bool {
+    if case .sharedAlbum = selection { return true }
+    return false
+  }
+
+  /// The reduced-fidelity banner shows only when the user has "Include originals"
+  /// on AND the current scope is a shared album — that's when the toggle's promise
+  /// (a `_orig` companion for edited photos) breaks down, so the warning is
+  /// actionable. With "Include originals" off, the per-asset behaviour for shared
+  /// albums (one downscaled JPEG written) is indistinguishable from non-edited
+  /// owned-library assets, so the banner would be noise. Users who want the full
+  /// caveat in writing still get it from the website's Features page.
+  private var showsReducedQualityBanner: Bool {
+    isSharedAlbum && exportManager.versionSelection == .editedWithOriginals
+  }
+
+  /// Caution-style banner shown above the export controls when the user has
+  /// "Include originals" on AND is viewing a shared album. Visual treatment
+  /// (yellow triangle glyph, warm tinted background, semibold title leading with
+  /// the consequence) matches how Photos / Mail / System Settings surface
+  /// "this option doesn't apply here" caveats — readers should see a caution at
+  /// a glance, not a tip.
+  ///
+  /// Layout constraints stay explicit (`frame(maxWidth: .infinity, alignment:
+  /// .leading)`) and no `fixedSize(...)` / `Spacer` / `firstTextBaseline` chain
+  /// is used, because a prior version of this view triggered a window-chrome
+  /// collapse cascade on macOS via that combination.
+  @ViewBuilder
+  private var sharedAlbumBanner: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .foregroundStyle(.yellow)
+        .padding(.top, 2)
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Shared albums export at reduced quality")
+          .font(.subheadline)
+          .fontWeight(.semibold)
+        Text(
+          "iCloud only serves shared photos as downscaled JPEGs, so Include "
+            + "originals is ignored here. Photo Export saves the best version "
+            + "Apple provides."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(10)
+    .background(Color.yellow.opacity(0.12))
+    .overlay(
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .strokeBorder(Color.yellow.opacity(0.35), lineWidth: 0.5)
+    )
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
   }
 
   /// Re-runs the asset-load `.task` whenever the user picks a different scope. The
@@ -118,6 +183,7 @@ struct CollectionContentView: View {
     case .timelineMonth(let year, let month): return "timeline:\(year)-\(month)"
     case .favorites: return "favorites"
     case .album(let id): return "album:\(id)"
+    case .sharedAlbum(let id): return "shared-album:\(id)"
     case .folder(let id): return "folder:\(id)"  // Unreachable; see `scope`.
     }
   }
@@ -133,6 +199,9 @@ struct CollectionContentView: View {
       return collectionExportRecordStore.placement(id: ExportPlacement.favorites().id)
     case .album(let id):
       return collectionExportRecordStore.placements(matching: .album)
+        .first(where: { $0.collectionLocalIdentifier == id })
+    case .sharedAlbum(let id):
+      return collectionExportRecordStore.placements(matching: .sharedAlbum)
         .first(where: { $0.collectionLocalIdentifier == id })
     case .timelineMonth, .folder:
       return nil
@@ -191,6 +260,7 @@ struct CollectionContentView: View {
     switch selection {
     case .favorites: return "Export Favorites"
     case .album: return "Export Album"
+    case .sharedAlbum: return "Export Shared Album"
     case .timelineMonth: return "Export Month"
     case .folder: return "Export Folder"  // Unreachable; see `scope`.
     }
@@ -212,6 +282,8 @@ struct CollectionContentView: View {
       exportManager.startExportFavorites()
     case .album(let id):
       exportManager.startExportAlbum(collectionId: id)
+    case .sharedAlbum(let id):
+      exportManager.startExportSharedAlbum(collectionId: id)
     case .timelineMonth(let year, let month):
       exportManager.startExportMonth(year: year, month: month)
     case .folder:

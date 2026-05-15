@@ -56,6 +56,7 @@ DEFAULT_SURFACES=(
   "collections-album-porvoo:04-collections-album-porvoo"
   "collections-folder-trips:05-collections-folder-trips"
   "collections-album-london:06-collections-album-london"
+  "collections-shared-album-family-stream:07-collections-shared-album-family-stream"
 )
 
 # If the user supplied positional args after the size, use those as surface

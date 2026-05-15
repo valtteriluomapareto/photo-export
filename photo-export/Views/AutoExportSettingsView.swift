@@ -70,6 +70,17 @@ struct AutoExportSettingsView: View {
           description: "All user-created albums.",
           isOn: scopeBinding(\.albums) { $0.albums = $1 }
         )
+        // iCloud shared albums are opt-in via their own row. The reduced-quality
+        // caveat sits as a tertiary warning line (yellow triangle + caption)
+        // rather than inline with the description, so the visual weight matches
+        // its function — a caution, not just another scope description. Mirrors
+        // the in-pane shared-album banner in `CollectionContentView`.
+        scopeRow(
+          title: "Shared Albums",
+          description: "Albums shared with you via iCloud.",
+          warning: "Reduced quality — Apple only provides downscaled JPEGs.",
+          isOn: scopeBinding(\.sharedAlbums) { $0.sharedAlbums = $1 }
+        )
       }
 
       Section("Status") {
@@ -166,13 +177,34 @@ struct AutoExportSettingsView: View {
     )
   }
 
-  private func scopeRow(title: String, description: String, isOn: Binding<Bool>) -> some View {
+  /// Standard Auto-Export scope toggle row. `warning`, when set, renders a
+  /// tertiary caution line below the description — yellow `exclamationmark.
+  /// triangle.fill` glyph + caption text, matching the visual grammar of the
+  /// in-pane shared-album banner in `CollectionContentView`. Use it for scopes
+  /// where toggling on has a non-obvious quality or privacy cost; leave it
+  /// `nil` for scopes whose row description is the whole story.
+  private func scopeRow(
+    title: String,
+    description: String,
+    warning: String? = nil,
+    isOn: Binding<Bool>
+  ) -> some View {
     Toggle(isOn: isOn) {
-      VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: 4) {
         Text(title)
         Text(description)
           .font(.caption)
           .foregroundStyle(.secondary)
+        if let warning {
+          HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+              .foregroundStyle(.yellow)
+              .font(.caption2)
+            Text(warning)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
       }
     }
   }

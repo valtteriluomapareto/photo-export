@@ -117,6 +117,127 @@ struct ExportManagerRunExportTests {
     #expect(harness.manager.activeRunContext == nil)
   }
 
+  /// Regression for the codex P2 finding: when a bulk-album run throws partway
+  /// through and the partial-queue drain path runs, the summary must report
+  /// `.failed`, not `.completed`. `AutoSyncReducer.coveredScopes` clears dirty
+  /// state only on `.completed` summaries — a `.completed` here would hide the
+  /// albums that the enqueue loop never reached from the next reconciliation.
+  ///
+  /// Reproduction: seed two albums; the second throws on `fetchAssets`. The
+  /// first album's jobs queue, then the second throws, the catch block elects
+  /// to drain the partial queue, and `partialBulkScan` flips the natural
+  /// `.completed` to `.failed` in `finalizeActiveRun`.
+  @Test func allAlbumsFullPartialEnqueueResolvesFailed() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let asset = TestAssetFactory.makeAsset(id: "a1")
+    harness.photoLib.assetsByAlbumLocalId["album-A"] = [asset]
+    harness.photoLib.resourcesByAssetId["a1"] = [
+      TestAssetFactory.makeResource(originalFilename: "a1.HEIC")
+    ]
+    harness.photoLib.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "album:album-A", localIdentifier: "album-A", title: "Album A",
+        kind: .album, pathComponents: [], children: []),
+      PhotoCollectionDescriptor(
+        id: "album:broken-album", localIdentifier: "broken-album",
+        title: "Broken", kind: .album, pathComponents: [], children: []),
+    ]
+    harness.photoLib.fetchAssetsErrorByAlbumId["broken-album"] = NSError(
+      domain: "Test", code: 7, userInfo: [NSLocalizedDescriptionKey: "boom"])
+
+    let summary = await harness.manager.runExport(
+      context: makeContext(scope: .allAlbumsFull))
+
+    #expect(summary.result == .failed)
+    #expect(summary.completedCount >= 1)
+    #expect(harness.manager.activeRunContext == nil)
+  }
+
+  /// `startExportSharedAlbum` is the per-shared-album entry point — fire-and-
+  /// forget, used by the per-pane Export Shared Album button and by the
+  /// reduced-fidelity AutoSync path. It must route the asset through a
+  /// `.sharedAlbum` placement (so the `Collections/Shared Albums/...` path
+  /// is used and the `.singleResource` variant clamp kicks in), not a regular
+  /// `.album` placement. Pin both: a placement of the right kind ends up in
+  /// the collection store, and the on-disk relative path uses the Shared
+  /// Albums root.
+  @Test func startExportSharedAlbumWritesUnderSharedAlbumsRoot() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let asset = TestAssetFactory.makeAsset(id: "s-asset-1")
+    harness.photoLib.assetsBySharedAlbumLocalId["shared-1"] = [asset]
+    harness.photoLib.resourcesByAssetId["s-asset-1"] = [
+      TestAssetFactory.makeResource(originalFilename: "s-asset-1.JPG")
+    ]
+    harness.photoLib.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "shared-album:shared-1", localIdentifier: "shared-1",
+        title: "Family stream", kind: .sharedAlbum, pathComponents: [],
+        children: [])
+    ]
+
+    harness.manager.startExportSharedAlbum(collectionId: "shared-1")
+    await waitUntil(harness.manager.totalJobsCompleted >= 1)
+
+    let placement = harness.collectionStore.placements(matching: .sharedAlbum)
+      .first(where: { $0.collectionLocalIdentifier == "shared-1" })
+    #expect(placement?.kind == .sharedAlbum)
+    #expect(placement?.relativePath == "Collections/Shared Albums/Family stream/")
+    // The user-album bucket must stay empty — a regression where the entry
+    // point routed through `.album` would land the asset in
+    // `Collections/Albums/...` and this assertion would fail.
+    #expect(harness.collectionStore.placements(matching: .album).isEmpty)
+  }
+
+  private func waitUntil(
+    timeout: TimeInterval = 5, _ condition: @autoclosure () -> Bool
+  ) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() && Date() < deadline {
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+  }
+
+  /// Same regression guard as the user-album test above, but exercising the
+  /// `.allSharedAlbumsFull` code path. The two scopes share `enqueueBulkAlbumExport`
+  /// and `finalizeActiveRun`'s `partialBulkScan` check, so a single shared
+  /// regression would affect both — but the AutoSync wiring (clearing
+  /// `.sharedAlbums` dirty state on completed runs) lives on its own branch in
+  /// `AutoSyncReducer.coveredScopes`, and pinning both gives the bug two red
+  /// tests to walk through instead of one.
+  @Test func allSharedAlbumsFullPartialEnqueueResolvesFailed() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let asset = TestAssetFactory.makeAsset(id: "s1")
+    harness.photoLib.assetsBySharedAlbumLocalId["shared-A"] = [asset]
+    harness.photoLib.resourcesByAssetId["s1"] = [
+      TestAssetFactory.makeResource(originalFilename: "s1.HEIC")
+    ]
+    harness.photoLib.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "shared-album:shared-A", localIdentifier: "shared-A",
+        title: "Shared A", kind: .sharedAlbum, pathComponents: [], children: []),
+      PhotoCollectionDescriptor(
+        id: "shared-album:broken-shared", localIdentifier: "broken-shared",
+        title: "Broken Shared", kind: .sharedAlbum, pathComponents: [],
+        children: []),
+    ]
+    harness.photoLib.fetchAssetsErrorByAlbumId["broken-shared"] = NSError(
+      domain: "Test", code: 7,
+      userInfo: [NSLocalizedDescriptionKey: "shared boom"])
+
+    let summary = await harness.manager.runExport(
+      context: makeContext(scope: .allSharedAlbumsFull))
+
+    #expect(summary.result == .failed)
+    #expect(summary.completedCount >= 1)
+    #expect(harness.manager.activeRunContext == nil)
+  }
+
   // MARK: - AutoSync retry-eligibility skip (Phase 3 Slice C)
 
   /// AutoSync run on a destination where every asset's required variant is

@@ -178,6 +178,15 @@ final class ExportManager: ObservableObject {
     /// with a retry reason in the run summary." Reported on the summary;
     /// the per-variant detail is reconstructable from `AutoSyncRetryState`.
     var skippedCount: Int = 0
+    /// Set when a bulk-album enqueue (`enqueueBulkAlbumExport`) threw partway
+    /// through and the catch block elected to drain the partial queue instead
+    /// of cancelling. Without this, the natural queue-drain finalize would
+    /// resolve the run as `.completed` — and `AutoSyncReducer.coveredScopes`
+    /// would then clear the scope's dirty flag, hiding the albums that the
+    /// enqueue loop never reached from the next reconciliation pass. The flag
+    /// flips `finalizeActiveRun`'s `.completed` to `.failed` so the dirty
+    /// state survives and the next change-event-driven debounce retries.
+    var partialBulkScan: Bool = false
   }
   private var activeRunBookkeeping: ActiveRunBookkeeping?
 
@@ -549,6 +558,21 @@ final class ExportManager: ObservableObject {
     )
   }
 
+  /// Batch action for every iCloud shared album. Used by Auto Export's
+  /// `.sharedAlbums` scope and any future "Export All Shared Albums" UI surface.
+  /// Mirrors `startExportAllAlbums` but routes through the `.sharedAlbum` placement
+  /// kind so each batch member writes to `Collections/Shared Albums/<title>/` at
+  /// reduced fidelity (one downscaled JPEG per asset).
+  func startExportAllSharedAlbums(selectionOverride: ExportVersionSelection? = nil) {
+    enqueueBulkAlbumExport(
+      source: .allSharedAlbums,
+      logTag: "startExportAllSharedAlbums",
+      emptyMessage: "No shared albums to export.",
+      allDoneMessage: "All shared albums in this destination are already exported.",
+      selectionOverride: selectionOverride
+    )
+  }
+
   /// Starts an export of every user album under a single folder, recursively. Each
   /// descendant album resolves to its own `ExportPlacement` exactly as if the user had
   /// opened the album individually and clicked Export Album — folders are not their own
@@ -579,13 +603,41 @@ final class ExportManager: ObservableObject {
   }
 
   /// Where a bulk-album export draws its album-id list from. `.allAlbums` walks the
-  /// whole tree; `.folder` walks one folder's subtree (and short-circuits with a
-  /// "folder no longer exists" message if the id can't be found); `.explicitIds`
-  /// uses the caller-supplied list as-is.
+  /// whole tree; `.allSharedAlbums` walks the flat top-level shared-album list;
+  /// `.folder` walks one folder's subtree (and short-circuits with a "folder no
+  /// longer exists" message if the id can't be found); `.explicitIds` uses the
+  /// caller-supplied list as-is.
+  ///
+  /// `placementKind` controls which placement family each batch member resolves
+  /// to. Only `.allSharedAlbums` produces `.sharedAlbum`; folder and explicit-id
+  /// sources are user-album-only by design (folders don't contain shared albums;
+  /// the multi-select UI for shared albums isn't a feature today).
   private enum BulkAlbumSource {
     case allAlbums
+    case allSharedAlbums
     case folder(folderId: String)
     case explicitIds([String])
+
+    var placementKind: ExportPlacement.Kind {
+      switch self {
+      case .allSharedAlbums: return .sharedAlbum
+      case .allAlbums, .folder, .explicitIds: return .album
+      }
+    }
+
+    func selection(for collectionId: String) -> LibrarySelection {
+      switch placementKind {
+      case .sharedAlbum: return .sharedAlbum(collectionId: collectionId)
+      default: return .album(collectionId: collectionId)
+      }
+    }
+
+    func scope(for collectionId: String) -> PhotoFetchScope {
+      switch placementKind {
+      case .sharedAlbum: return .sharedAlbum(collectionId: collectionId)
+      default: return .album(collectionId: collectionId)
+      }
+    }
   }
 
   /// Shared driver for the three bulk-album export entry points
@@ -629,6 +681,9 @@ final class ExportManager: ObservableObject {
         case .allAlbums:
           let tree = try photoLibraryService.fetchCollectionTree()
           albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
+        case .allSharedAlbums:
+          let tree = try photoLibraryService.fetchCollectionTree()
+          albumIds = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree)
         case .folder(let folderId):
           let tree = try photoLibraryService.fetchCollectionTree()
           guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
@@ -651,8 +706,8 @@ final class ExportManager: ObservableObject {
         var sawUnauthorized = false
         for collectionId in albumIds {
           let outcome = try await enqueueCollection(
-            selection: .album(collectionId: collectionId),
-            scope: .album(collectionId: collectionId),
+            selection: source.selection(for: collectionId),
+            scope: source.scope(for: collectionId),
             selectionMode: selectionMode,
             generation: gen
           )
@@ -687,10 +742,61 @@ final class ExportManager: ObservableObject {
         if !pendingJobs.isEmpty {
           setQueueWarningMessage(
             "Couldn't list every album. Continuing with the photos already queued.")
+          // Mark the run as partial so the natural queue-drain finalize
+          // downgrades `.completed` to `.failed` — otherwise an autosync run
+          // would see a clean summary, clear the scope's dirty flag, and skip
+          // the unreached albums until the next library change. No-op for
+          // fire-and-forget runs (bookkeeping is nil).
+          activeRunBookkeeping?.partialBulkScan = true
           processQueueIfNeeded()
         } else {
           finalizeActiveRun(result: .failed, cancelReason: nil)
         }
+      }
+    }
+  }
+
+  /// Starts an export of a single iCloud shared album. Mirrors `startExportAlbum` but
+  /// drives the `.sharedAlbum` enqueue branch so the resolved placement lands under
+  /// `Collections/Shared Albums/`. Shared albums are excluded from "Export All Albums";
+  /// users export them one at a time.
+  func startExportSharedAlbum(collectionId: String) {
+    guard !isImporting else {
+      logger.warning("startExportSharedAlbum ignored: import in progress")
+      return
+    }
+    guard canExportCollection else {
+      logger.error(
+        "startExportSharedAlbum ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
+      )
+      return
+    }
+    let selection = versionSelection
+    clearEmptyRunMessage()
+    clearQueueWarningMessage()
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
+    let gen = generation
+    Task { [weak self] in
+      guard let self, self.generation == gen else { return }
+      do {
+        let outcome = try await enqueueCollection(
+          selection: .sharedAlbum(collectionId: collectionId),
+          scope: .sharedAlbum(collectionId: collectionId),
+          selectionMode: selection,
+          generation: gen
+        )
+        guard self.generation == gen else { return }
+        switch outcome {
+        case .enqueued, .unauthorized:
+          break
+        case .alreadyComplete:
+          setEmptyRunMessage("This shared album is already exported.")
+        }
+        processQueueIfNeeded()
+      } catch {
+        logger.error(
+          "Failed to enqueue shared-album export: \(String(describing: error), privacy: .public)"
+        )
       }
     }
   }
@@ -752,13 +858,14 @@ final class ExportManager: ObservableObject {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return .unauthorized }
 
-    // Resolve the placement. For `.album`, the resolver needs the collection tree to
-    // find the album's display path and any colliding siblings; for `.favorites` the
-    // resolver returns a fixed placement.
+    // Resolve the placement. For `.album` and `.sharedAlbum`, the resolver needs the
+    // collection tree to find the descriptor and any colliding siblings; for
+    // `.favorites` the resolver returns a fixed placement.
     let collections: [PhotoCollectionDescriptor]
-    if case .album = selection {
+    switch selection {
+    case .album, .sharedAlbum:
       collections = try photoLibraryService.fetchCollectionTree()
-    } else {
+    default:
       collections = []
     }
     let existingPlacements = collectionExportRecordStore.placements
@@ -772,8 +879,8 @@ final class ExportManager: ObservableObject {
 
     // Persist the placement metadata so subsequent runs can match on the same
     // (kind, collectionLocalIdentifier, displayPathHash8) triple. `upsertPlacement` is a
-    // no-op for `.timeline` kinds (which the collection store rejects), but we only
-    // ever pass `.favorites` or `.album` here.
+    // no-op for `.timeline` kinds (which the collection store rejects); collection-side
+    // kinds (`.favorites`, `.album`, `.sharedAlbum`) all land here.
     collectionExportRecordStore.upsertPlacement(placement)
 
     let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
@@ -855,7 +962,7 @@ final class ExportManager: ObservableObject {
         {
           exportRecordStore.removeVariant(assetId: inFlightId, variant: inFlightVariant)
         }
-      case .favorites, .album:
+      case .favorites, .album, .sharedAlbum:
         if collectionExportRecordStore.exportInfo(
           assetId: inFlightId, placement: inFlightPlacement)?.variants[inFlightVariant]?.status
           == .inProgress
@@ -1102,7 +1209,24 @@ final class ExportManager: ObservableObject {
           )
           finalizeActiveRun(result: .failed, cancelReason: nil)
         }
-      case .timelineAssets, .favoritesAssets, .allAlbumsAssets, .autoExport:
+      case .allSharedAlbumsFull:
+        if !isImporting && canExportCollection && !hasActiveExportWork {
+          startExportAllSharedAlbums(selectionOverride: context.selection)
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+        } else {
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      case .timelineAssets, .favoritesAssets, .allAlbumsAssets,
+        .allSharedAlbumsAssets, .autoExport:
         // Targeted asset-id and autoExport scopes land in subsequent Phase 0a slices.
         activeRunBookkeeping = ActiveRunBookkeeping(
           totalJobsEnqueuedAtStart: totalJobsEnqueued,
@@ -1126,12 +1250,21 @@ final class ExportManager: ObservableObject {
     guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
       return
     }
-    // A natural queue-drain finalize comes in as `.completed`. If any variants failed
-    // during this run we remap to `.failed` so callers can distinguish a clean run
-    // from one that needs retry-store inspection. Explicit cancel/interrupt paths keep
-    // their incoming result untouched.
+    // A natural queue-drain finalize comes in as `.completed`. Two conditions
+    // demote it to `.failed`:
+    //   1. Any variants failed during this run — callers (AutoSync's retry path,
+    //      Export Issues UI) need to distinguish a clean run from one that needs
+    //      retry-store inspection.
+    //   2. The bulk-enqueue catch block elected to drain a partial queue — the
+    //      unreached albums in the batch never got a chance to enqueue, so a
+    //      `.completed` summary would over-report what the run actually covered
+    //      and `AutoSyncReducer` would clear dirty state for albums that weren't
+    //      reconciled.
+    // Explicit cancel/interrupt paths keep their incoming result untouched.
     let effectiveResult: ExportRunResult
-    if result == .completed && bookkeeping.failedCount > 0 {
+    if result == .completed
+      && (bookkeeping.failedCount > 0 || bookkeeping.partialBulkScan)
+    {
       effectiveResult = .failed
     } else {
       effectiveResult = result
@@ -1306,7 +1439,7 @@ final class ExportManager: ObservableObject {
       switch job.placement.kind {
       case .timeline:
         existingVariants = exportRecordStore.exportInfo(assetId: descriptor.id)?.variants ?? [:]
-      case .favorites, .album:
+      case .favorites, .album, .sharedAlbum:
         existingVariants =
           collectionExportRecordStore.exportInfo(assetId: descriptor.id, placement: job.placement)?
           .variants ?? [:]
@@ -1323,7 +1456,9 @@ final class ExportManager: ObservableObject {
       } else {
         existingRecord = nil
       }
-      let required = requiredVariants(for: descriptor, selection: job.selection)
+      let required = requiredVariants(
+        for: descriptor, selection: job.selection,
+        policy: job.placement.kind.variantPolicy)
       let missing = required.filter { variant in
         existingRecord?.variants[variant]?.status != .done
       }
@@ -1415,7 +1550,7 @@ final class ExportManager: ObservableObject {
           {
             exportRecordStore.removeVariant(assetId: inFlight.assetId, variant: inFlight.variant)
           }
-        case .favorites, .album:
+        case .favorites, .album, .sharedAlbum:
           if collectionExportRecordStore.exportInfo(
             assetId: inFlight.assetId, placement: job.placement)?.variants[inFlight.variant]?
             .status == .inProgress
@@ -1860,7 +1995,7 @@ final class ExportManager: ObservableObject {
     switch placement.kind {
     case .timeline:
       return exportRecordStore.exportInfo(assetId: assetId)?.variants ?? [:]
-    case .favorites, .album:
+    case .favorites, .album, .sharedAlbum:
       return collectionExportRecordStore.exportInfo(
         assetId: assetId, placement: placement)?.variants ?? [:]
     }
@@ -2027,7 +2162,8 @@ final class ExportManager: ObservableObject {
     guard activeRunContext?.source == .autoSync,
       let check = autoSyncEligibilityCheck
     else { return false }
-    let required = requiredVariants(for: asset, selection: selection)
+    let required = requiredVariants(
+      for: asset, selection: selection, policy: placement.kind.variantPolicy)
     let now = Date()
     let hasEligible = required.contains { variant in
       check(asset.id, placement, variant, now)
@@ -2046,7 +2182,7 @@ final class ExportManager: ObservableObject {
     case .timeline:
       exportRecordStore.markVariantFailed(
         assetId: assetId, variant: variant, error: failure.localizedDescription, at: date)
-    case .favorites, .album:
+    case .favorites, .album, .sharedAlbum:
       collectionExportRecordStore.markVariantFailed(
         assetId: assetId, placement: placement, variant: variant,
         error: failure.localizedDescription, at: date)
@@ -2102,7 +2238,7 @@ final class ExportManager: ObservableObject {
       exportRecordStore.markVariantInProgress(
         assetId: assetId, variant: variant,
         year: year, month: month, relPath: relPath, filename: filename)
-    case .favorites, .album:
+    case .favorites, .album, .sharedAlbum:
       collectionExportRecordStore.markVariantInProgress(
         assetId: assetId, placement: placement, variant: variant, filename: filename)
     }
@@ -2119,7 +2255,7 @@ final class ExportManager: ObservableObject {
         assetId: assetId, variant: variant,
         year: year, month: month, relPath: relPath,
         filename: filename, exportedAt: exportedAt)
-    case .favorites, .album:
+    case .favorites, .album, .sharedAlbum:
       collectionExportRecordStore.markVariantExported(
         assetId: assetId, placement: placement, variant: variant,
         filename: filename, exportedAt: exportedAt)

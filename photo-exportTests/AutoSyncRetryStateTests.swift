@@ -12,11 +12,16 @@ struct AutoSyncRetryStateTests {
     #expect(AutoSyncRetryScopeKey.timeline.rawValue == "timeline")
     #expect(AutoSyncRetryScopeKey.favorites.rawValue == "favorites")
     #expect(AutoSyncRetryScopeKey.album(placementId: "abc123").rawValue == "album:abc123")
+    #expect(
+      AutoSyncRetryScopeKey.sharedAlbum(placementId: "abc123").rawValue
+        == "shared-album:abc123")
   }
 
   @Test func scopeKeyRoundTripsThroughRawValue() {
     let original: [AutoSyncRetryScopeKey] = [
-      .timeline, .favorites, .album(placementId: "abc"), .album(placementId: "x:y"),
+      .timeline, .favorites,
+      .album(placementId: "abc"), .album(placementId: "x:y"),
+      .sharedAlbum(placementId: "stream-1"), .sharedAlbum(placementId: "x:y"),
     ]
 
     for key in original {
@@ -27,6 +32,7 @@ struct AutoSyncRetryStateTests {
   @Test func scopeKeyInitRejectsUnknownAndEmptyAlbumIds() {
     #expect(AutoSyncRetryScopeKey(rawValue: "garbage") == nil)
     #expect(AutoSyncRetryScopeKey(rawValue: "album:") == nil)
+    #expect(AutoSyncRetryScopeKey(rawValue: "shared-album:") == nil)
   }
 
   // MARK: - recordFailure

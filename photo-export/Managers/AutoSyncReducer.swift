@@ -203,7 +203,13 @@ enum AutoSyncReducer {
       {
         let changedIds = event.insertedLocalIdentifiers.union(event.updatedLocalIdentifiers)
         let albumsActive = state.scopeSelection.includes(.albums)
-        let albumsRelevantCollectionChange = albumsActive && event.collectionChangesPresent
+        let sharedAlbumsActive = state.scopeSelection.includes(.sharedAlbums)
+        // `collectionChangesPresent` is shared by both album kinds — Photos doesn't
+        // tell us which collection class changed, so any collection-level mutation
+        // (album add/remove/rename, shared-album membership change) bumps the
+        // placement-reconciliation flag on every enabled album-shaped scope.
+        let albumsRelevantCollectionChange =
+          (albumsActive || sharedAlbumsActive) && event.collectionChangesPresent
         // Plan §"Photo Library Changes": "Treat deleted asset IDs as non-export work
         // for MVP." A deleted-only event (no inserts/updates) — and one whose
         // collection-only signal isn't relevant to a selected scope — produces no
@@ -219,7 +225,9 @@ enum AutoSyncReducer {
             for assetId in changedIds {
               scopeState.recordPendingAssetId(assetId, costCap: targetedAssetCostCap)
             }
-            if scope == .albums && event.collectionChangesPresent {
+            if (scope == .albums || scope == .sharedAlbums)
+              && event.collectionChangesPresent
+            {
               scopeState.pendingPlacementReconciliation = true
             }
             dirty.setScope(scope, scopeState)
@@ -296,14 +304,8 @@ enum AutoSyncReducer {
         let destinationId = newState.destination.id
       else { break }
 
-      let coveredScopes: Set<AutoExportLibraryScope>
-      switch summary.context.scope {
-      case .timelineFullLibrary: coveredScopes = [.timeline]
-      case .favoritesFull: coveredScopes = [.favorites]
-      case .allAlbumsFull: coveredScopes = [.albums]
-      case .timelineAssets, .favoritesAssets, .allAlbumsAssets, .autoExport:
-        coveredScopes = []
-      }
+      let coveredScopes: Set<AutoExportLibraryScope> =
+        summary.context.scope.clearableScope.map { [$0] } ?? []
       guard !coveredScopes.isEmpty else { break }
 
       var dirty = newState.dirtyStateByDestination[destinationId] ?? .empty
@@ -421,20 +423,17 @@ enum AutoSyncReducer {
   private static func coveredScopes(
     summary: ExportRunSummary, currentSelection: AutoExportScopeSelection
   ) -> Set<AutoExportLibraryScope> {
-    switch summary.context.scope {
-    case .timelineFullLibrary: return [.timeline]
-    case .favoritesFull: return [.favorites]
-    case .allAlbumsFull: return [.albums]
-    case .autoExport(let scopes):
-      // Intersect with the *current* selection — if the user removed a scope
-      // between dispatch and completion, we don't clear its lingering dirty.
+    // The `.autoExport` umbrella carries its own per-scope selection and is the
+    // one case `ExportRunScope.clearableScope` doesn't handle — it has to
+    // intersect with the *current* selection so a scope the user removed
+    // between dispatch and completion doesn't get its lingering dirty
+    // unexpectedly cleared. Single-scope full-run cases route through the
+    // shared `clearableScope` mapping; targeted-asset cases return `nil` (no
+    // blanket clear).
+    if case .autoExport(let scopes) = summary.context.scope {
       return Set(scopes.enabledScopes).intersection(Set(currentSelection.enabledScopes))
-    case .timelineAssets, .favoritesAssets, .allAlbumsAssets:
-      // Targeted runs don't reconcile a full scope; their bookkeeping
-      // (removing exported asset ids from `pendingAssetIds`) happens via a
-      // different path. Don't blanket-clear.
-      return []
     }
+    return summary.context.scope.clearableScope.map { [$0] } ?? []
   }
 
   private static func environmentAllowsRun(state: State) -> Bool {

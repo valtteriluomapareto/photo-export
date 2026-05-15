@@ -46,18 +46,26 @@ Tracks which assets have been exported per-destination to avoid duplicates and s
 
 ### CollectionExportRecordStore
 
-Sibling store for collection exports (Favorites + user albums). Lives next to
-`ExportRecordStore` on disk under the same per-destination directory but uses its own
-files (`collection-records.json` / `collection-records.jsonl`). The two stores never
-share a key — a `.timeline` placement is rejected at every collection-store API entry
-point — so a corrupt collection store cannot affect timeline progress and vice versa.
+Sibling store for collection exports (Favorites, user albums, and iCloud shared
+albums). Lives next to `ExportRecordStore` on disk under the same per-destination
+directory but uses its own files (`collection-records.json` /
+`collection-records.jsonl`). The two stores never share a key — a `.timeline`
+placement is rejected at every collection-store API entry point — so a corrupt
+collection store cannot affect timeline progress and vice versa.
 
 - Records are keyed by `(placementId, assetId)`; the placement itself is keyed by
   `kind`/`collectionLocalIdentifier`/`displayPathHash8`, so a renamed or moved album
   resolves to a fresh placement on its next export
-- `ExportPlacementResolver` decides the on-disk path under `Collections/Albums/...`,
-  including `_2`/`_3` suffix disambiguation when two distinct albums sanitize to the
-  same folder name under the same parent
+- `ExportPlacementResolver` decides the on-disk path. User albums land under
+  `Collections/Albums/...` (with folder hierarchy and `_2`/`_3` suffix
+  disambiguation when two distinct albums sanitize to the same folder name); shared
+  albums land under `Collections/Shared Albums/...` with the same suffix rules
+  scoped to other shared albums. The disjoint path prefixes mean a user album and
+  a shared album with the same title cannot collide.
+- Shared-album placements set `kind.variantPolicy == .singleResource`, which the
+  pipeline reads to pin `requiredVariants(...)` to `[.original]` — Photos only
+  exposes one downscaled JPEG per shared-album asset, so the edited/original split
+  is meaningless and "Include originals" becomes a no-op for them
 - Same JSONL+snapshot persistence mechanics as the timeline store, including the
   deferred-rename corruption-recovery flow
 
@@ -161,20 +169,20 @@ in `PhotoExportApp` where the record-store directory roots are known.
 
 The main UI lives under `photo-export/Views/` and `photo-export/ViewModels/`.
 
-| Type                     | Responsibility                                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------------------- |
-| `ContentView`            | Top-level router (auth → onboarding → library)                                                  |
-| `LibraryRootView`        | `NavigationSplitView` shell with the Timeline / Collections segmented selector                  |
-| `TimelineSidebarView`    | Year/month tree                                                                                 |
-| `CollectionsSidebarView` | Favorites + user albums and folders, lazy-counted via `cachedCountAssets(in:)`                  |
-| `MonthContentView`       | Thumbnail grid for the selected month                                                           |
-| `CollectionContentView`  | Thumbnail grid for Favorites or a user album, sharing `MonthViewModel` via a scope-based loader |
-| `AssetDetailView`        | Full-size image or video preview                                                                |
-| `ExportToolbarView`      | Export destination and queue controls                                                           |
-| `RecordStoreAlertHost`   | Surfaces a corruption-recovery alert when either record store transitions to `.failed`          |
-| `OnboardingView`         | First-run flow for permissions and destination setup                                            |
-| `ImportView`             | Progress and results for importing an existing backup                                           |
-| `MonthViewModel`         | Cancellation-aware asset loading for any `PhotoFetchScope` (timeline / favorites / album)       |
+| Type                     | Responsibility                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `ContentView`            | Top-level router (auth → onboarding → library)                                                                      |
+| `LibraryRootView`        | `NavigationSplitView` shell with the Timeline / Collections segmented selector                                      |
+| `TimelineSidebarView`    | Year/month tree                                                                                                     |
+| `CollectionsSidebarView` | Favorites, user albums and folders, and a separate Shared Albums section, lazy-counted via `cachedCountAssets(in:)` |
+| `MonthContentView`       | Thumbnail grid for the selected month                                                                               |
+| `CollectionContentView`  | Thumbnail grid for Favorites, a user album, or a shared album, sharing `MonthViewModel` via a scope-based loader    |
+| `AssetDetailView`        | Full-size image or video preview                                                                                    |
+| `ExportToolbarView`      | Export destination and queue controls                                                                               |
+| `RecordStoreAlertHost`   | Surfaces a corruption-recovery alert when either record store transitions to `.failed`                              |
+| `OnboardingView`         | First-run flow for permissions and destination setup                                                                |
+| `ImportView`             | Progress and results for importing an existing backup                                                               |
+| `MonthViewModel`         | Cancellation-aware asset loading for any `PhotoFetchScope` (timeline / favorites / album / shared album)            |
 
 ## Persistence
 

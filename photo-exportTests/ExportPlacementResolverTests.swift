@@ -351,4 +351,153 @@ struct ExportPlacementResolverTests {
         collections: [], existingPlacements: [])
     }
   }
+
+  // MARK: - Shared albums
+
+  /// Helper for `.sharedAlbum` descriptors. PhotoKit doesn't nest shared albums,
+  /// so `pathComponents` is always empty — the helper enforces that contract.
+  private func sharedDescriptor(id: String, title: String) -> PhotoCollectionDescriptor {
+    PhotoCollectionDescriptor(
+      id: "shared-album:\(id)", localIdentifier: id, title: title,
+      kind: .sharedAlbum, pathComponents: [], children: [])
+  }
+
+  /// Shared albums resolve under their own root and carry the `shared-album`
+  /// placement-id prefix, distinct from user albums. The id-format invariant
+  /// (`collections:shared-album:<hash16>:<hash8>`) gates downstream label
+  /// derivation in `ExportIssuesView` and is what `AutoSyncRetryScopeKey`'s
+  /// `init?(rawValue:)` reads to disambiguate buckets.
+  @Test func sharedAlbumResolvesUnderSharedAlbumsRoot() throws {
+    let resolver = makeResolver()
+    let desc = sharedDescriptor(id: "shared-1", title: "Family Trip")
+    let placement = try resolver.placement(
+      for: .sharedAlbum(collectionId: "shared-1"),
+      collections: [desc], existingPlacements: [])
+
+    #expect(placement.kind == .sharedAlbum)
+    #expect(placement.collectionLocalIdentifier == "shared-1")
+    #expect(placement.relativePath == "Collections/Shared Albums/Family Trip/")
+    #expect(placement.displayName == "Family Trip")
+    #expect(placement.id.hasPrefix("collections:shared-album:"))
+    let parts = placement.id.split(separator: ":")
+    #expect(parts.count == 4)
+    #expect(parts[2].count == 16)
+    #expect(parts[3].count == 8)
+  }
+
+  @Test func sharedAlbumSanitizesPathSeparatorsInTitle() throws {
+    let resolver = makeResolver()
+    let desc = sharedDescriptor(id: "shared-2", title: "Trip / 2024")
+    let placement = try resolver.placement(
+      for: .sharedAlbum(collectionId: "shared-2"),
+      collections: [desc], existingPlacements: [])
+    #expect(placement.relativePath == "Collections/Shared Albums/Trip _ 2024/")
+  }
+
+  /// Two shared albums with the same sanitized title collide and disambiguate
+  /// via the lex-sort-on-`collectionLocalIdentifier` tiebreaker. Mirrors the
+  /// album-side `twoAlbumsSameTitleSameFolderGetDistinctPlacements` test.
+  @Test func twoSharedAlbumsSameTitleGetDistinctPaths() throws {
+    let resolver = makeResolver()
+    let alpha = sharedDescriptor(id: "alpha", title: "Trip")
+    let beta = sharedDescriptor(id: "beta", title: "Trip")
+    let collections = [alpha, beta]
+
+    let pAlpha = try resolver.placement(
+      for: .sharedAlbum(collectionId: "alpha"),
+      collections: collections, existingPlacements: [])
+    let pBeta = try resolver.placement(
+      for: .sharedAlbum(collectionId: "beta"),
+      collections: collections, existingPlacements: [])
+
+    #expect(pAlpha.relativePath == "Collections/Shared Albums/Trip/")
+    #expect(pBeta.relativePath == "Collections/Shared Albums/Trip_2/")
+  }
+
+  /// Cross-kind disjointness: a user album titled "Trip" and a shared album
+  /// titled "Trip" cannot collide because they live under different path
+  /// prefixes. This is the invariant that lets `sharedAlbumLeafWithCollisionSuffix`
+  /// limit its sibling search to other `.sharedAlbum` placements only — if a
+  /// future refactor unifies the two trees, this test fails and forces a
+  /// rethink of the collision domain.
+  @Test func sharedAlbumDoesNotCollideWithUserAlbum() throws {
+    let resolver = makeResolver()
+    let user = descriptor(id: "user-1", title: "Trip")
+    let shared = sharedDescriptor(id: "shared-1", title: "Trip")
+    let collections = [user, shared]
+
+    let pUser = try resolver.placement(
+      for: .album(collectionId: "user-1"),
+      collections: collections, existingPlacements: [])
+    let pShared = try resolver.placement(
+      for: .sharedAlbum(collectionId: "shared-1"),
+      collections: collections, existingPlacements: [])
+
+    #expect(pUser.relativePath == "Collections/Albums/Trip/")
+    #expect(pShared.relativePath == "Collections/Shared Albums/Trip/")
+    #expect(pUser.id != pShared.id)
+  }
+
+  /// Missing shared album surfaces the same `albumNotFound` error as a missing
+  /// user album. Callers don't need a parallel error path.
+  @Test func missingSharedAlbumThrowsAlbumNotFound() {
+    let resolver = makeResolver()
+    #expect(
+      throws: ExportPlacementResolver.ResolutionError.albumNotFound(collectionId: "ghost")
+    ) {
+      _ = try resolver.placement(
+        for: .sharedAlbum(collectionId: "ghost"),
+        collections: [], existingPlacements: [])
+    }
+  }
+
+  /// Multiple existing placements that match the same `(kind, collectionId,
+  /// displayPathHash8)` triple — defensive recovery from a buggy past write —
+  /// pick the one with the latest `createdAt`. Mirrors the album-side
+  /// `multipleExistingMatchesPicksLatestCreatedAt` test; without it the
+  /// `resolveSharedAlbum.matches.count > 1` warning branch sits untested.
+  @Test func multipleExistingSharedAlbumMatchesPicksLatestCreatedAt() throws {
+    let resolver = makeResolver()
+    let desc = sharedDescriptor(id: "shared-1", title: "Family")
+    let canonical = try resolver.placement(
+      for: .sharedAlbum(collectionId: "shared-1"),
+      collections: [desc], existingPlacements: [])
+    let older = ExportPlacement(
+      kind: .sharedAlbum, id: canonical.id,
+      displayName: canonical.displayName,
+      collectionLocalIdentifier: "shared-1",
+      relativePath: canonical.relativePath,
+      createdAt: Date(timeIntervalSince1970: 1000))
+    let newer = ExportPlacement(
+      kind: .sharedAlbum, id: canonical.id,
+      displayName: canonical.displayName,
+      collectionLocalIdentifier: "shared-1",
+      relativePath: canonical.relativePath,
+      createdAt: Date(timeIntervalSince1970: 5000))
+
+    let resolved = try resolver.placement(
+      for: .sharedAlbum(collectionId: "shared-1"),
+      collections: [desc], existingPlacements: [older, newer])
+    #expect(resolved.createdAt == newer.createdAt)
+  }
+
+  /// Renaming a shared album produces a new placement id — the `displayPathHash8`
+  /// component changes so the prior placement is no longer matched. The on-disk
+  /// folder for the rename's *new* path is fresh; the old folder stays behind
+  /// for the user to clean up (mirrors album-side rename behaviour).
+  @Test func sharedAlbumRenameProducesNewPlacementId() throws {
+    let resolver = makeResolver()
+    let priorDesc = sharedDescriptor(id: "shared-1", title: "Old Title")
+    let priorPlacement = try resolver.placement(
+      for: .sharedAlbum(collectionId: "shared-1"),
+      collections: [priorDesc], existingPlacements: [])
+
+    let renamed = sharedDescriptor(id: "shared-1", title: "New Title")
+    let newPlacement = try resolver.placement(
+      for: .sharedAlbum(collectionId: "shared-1"),
+      collections: [renamed], existingPlacements: [priorPlacement])
+
+    #expect(newPlacement.id != priorPlacement.id)
+    #expect(newPlacement.relativePath == "Collections/Shared Albums/New Title/")
+  }
 }

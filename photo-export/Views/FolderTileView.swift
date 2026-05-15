@@ -88,9 +88,9 @@ struct FolderTileView: View {
       albumCoverArea
     case .folder:
       subfolderPlaceholder
-    case .favorites:
-      // Unreachable: favorites is rendered as its own sidebar section, never appears
-      // inside a folder. Render the same placeholder as a subfolder for safety.
+    case .favorites, .sharedAlbum:
+      // Unreachable: favorites and shared albums render as their own sidebar sections,
+      // never appear inside a folder. Use the subfolder placeholder defensively.
       subfolderPlaceholder
     }
   }
@@ -201,7 +201,7 @@ struct FolderTileView: View {
         return "\(albums) · \(photoCount) photos"
       }
       return albums
-    case .favorites:
+    case .favorites, .sharedAlbum:
       return " "
     }
   }
@@ -219,7 +219,7 @@ struct FolderTileView: View {
       var parts = ["Folder", displayTitle, "\(albumCount) albums"]
       if let photoCount { parts.append("\(photoCount) photos") }
       return parts.joined(separator: ", ")
-    case .favorites:
+    case .favorites, .sharedAlbum:
       return displayTitle
     }
   }

@@ -241,9 +241,17 @@ struct ExportToolbarView: ToolbarContent {
     case .timeline:
       exportManager.startExportAll()
     case .collections:
-      if case .folder(let id) = selection {
+      switch selection {
+      case .folder(let id):
         exportManager.startExportFolder(folderId: id)
-      } else {
+      case .sharedAlbum(let id):
+        // Shared albums aren't included in `startExportAllAlbums` (their reduced-
+        // fidelity bytes and per-album export action are an opt-in surface). Route
+        // the toolbar primary action to the single-album call so a user staring at
+        // a shared-album pane doesn't see the batch button silently skip what
+        // they're looking at.
+        exportManager.startExportSharedAlbum(collectionId: id)
+      default:
         exportManager.startExportAllAlbums()
       }
     }
@@ -260,6 +268,7 @@ struct ExportToolbarView: ToolbarContent {
         guard let count = folderAlbumCount, count > 0 else { return "Export Folder" }
         return count == 1 ? "Export 1 Album" : "Export \(count) Albums"
       }
+      if case .sharedAlbum = selection { return "Export Shared Album" }
       return "Export All Albums"
     }
   }
@@ -272,6 +281,17 @@ struct ExportToolbarView: ToolbarContent {
       if case .folder = selection { return true }
       return false
     }()
+    let isSharedAlbumSelection: Bool = {
+      if case .sharedAlbum = selection { return true }
+      return false
+    }()
+    if isSharedAlbumSelection {
+      // The "Include originals" toggle is a no-op for shared albums; surface that
+      // here so the version-selection state doesn't read as a contradiction.
+      return
+        "Export every photo in this shared album. iCloud only provides downscaled "
+        + "JPEGs for shared photos; Include originals is ignored."
+    }
     switch (section, exportManager.versionSelection, isFolderSelection) {
     case (.timeline, .edited, _):
       return
@@ -291,13 +311,14 @@ struct ExportToolbarView: ToolbarContent {
     case (.collections, .edited, false):
       return
         "Export every user album, including albums nested in folders, in the version "
-        + "Photos shows. Favorites is excluded — use the Export Favorites button on its "
-        + "pane."
+        + "Photos shows. Favorites and shared albums are excluded — use the Export "
+        + "Favorites or Export Shared Album button on their pane."
     case (.collections, .editedWithOriginals, false):
       return
         "Export every user album, including albums nested in folders, plus a _orig "
-        + "companion for any photo edited in Photos. Favorites is excluded — use the "
-        + "Export Favorites button on its pane."
+        + "companion for any photo edited in Photos. Favorites and shared albums are "
+        + "excluded — use the Export Favorites or Export Shared Album button on their "
+        + "pane."
     }
   }
 

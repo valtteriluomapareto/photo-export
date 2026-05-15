@@ -210,8 +210,24 @@ private struct FailureRow: View {
     switch entry.scopeKey {
     case .timeline: return "Timeline"
     case .favorites: return "Favorites"
-    case .album(let placementId): return "Album: \(placementId.prefix(8))…"
+    case .album(let placementId):
+      return "Album: \(collectionHashPrefix(of: placementId))…"
+    case .sharedAlbum(let placementId):
+      return "Shared Album: \(collectionHashPrefix(of: placementId))…"
     }
+  }
+
+  /// Extracts the 8-character collection-id hash from a collection-placement id
+  /// (format: `collections:<kind>:<hash16>:<hash8>`). Used as a stable short label
+  /// so distinct albums in the failure list are visually distinguishable. Falls
+  /// back to the raw id's first 8 chars when the format is unrecognised (which
+  /// would render the same `collecti…` for every row — a known weakness of the
+  /// fallback, only reachable if a future placement-id format change leaves a
+  /// retry entry in the persisted store under an old shape).
+  private func collectionHashPrefix(of placementId: String) -> Substring {
+    let parts = placementId.split(separator: ":")
+    if parts.count >= 4 { return parts[2].prefix(8) }
+    return placementId.prefix(8)
   }
 
   /// Human-readable description for this failure. Per-category copy mirrors

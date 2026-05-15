@@ -2,36 +2,55 @@ import Foundation
 
 /// Identifies the scope or placement a retry entry is scoped to. Timeline failures share
 /// one bucket; Favorites failures share one bucket; each album has its own bucket keyed
-/// by placement id. The plan requires this segmentation so a failure in one album does
-/// not suppress retries for the same asset in another album, in Favorites, or in
-/// Timeline.
+/// by placement id; shared albums get their own typed case so the rendered UI label and
+/// any future per-kind retry tuning can branch cleanly without inspecting the embedded
+/// placement-id prefix. The plan requires this segmentation so a failure in one album
+/// does not suppress retries for the same asset in another album, in Favorites, in
+/// Timeline, or in a shared album.
 enum AutoSyncRetryScopeKey: Equatable, Hashable, Sendable {
   case timeline
   case favorites
   case album(placementId: String)
+  case sharedAlbum(placementId: String)
 
-  /// String form used as the persisted dictionary key. The `album:` prefix lets callers
-  /// recognize album-scoped entries when iterating the raw map for diagnostics.
+  /// String form used as the persisted dictionary key. The `album:` and
+  /// `shared-album:` prefixes let callers recognize album-scoped entries when
+  /// iterating the raw map for diagnostics. The shared-album prefix is intentionally
+  /// distinct so the `init?(rawValue:)` parser can disambiguate the two.
   var rawValue: String {
     switch self {
     case .timeline: return "timeline"
     case .favorites: return "favorites"
     case .album(let placementId): return "album:\(placementId)"
+    case .sharedAlbum(let placementId): return "shared-album:\(placementId)"
     }
   }
 
   /// Recovers a typed key from a stored raw string. Returns `nil` for unrecognized
   /// formats so callers can skip and log unknown buckets without crashing.
+  ///
+  /// `shared-album:` is checked **before** `album:` because the longer prefix is a
+  /// superset of the shorter — `hasPrefix("album:")` happens to be false for
+  /// `"shared-album:foo"` (different first character) but the explicit ordering
+  /// documents the precedence and survives future prefix renames.
   init?(rawValue: String) {
     switch rawValue {
     case "timeline": self = .timeline
     case "favorites": self = .favorites
     default:
-      let prefix = "album:"
-      guard rawValue.hasPrefix(prefix) else { return nil }
-      let placementId = String(rawValue.dropFirst(prefix.count))
-      guard !placementId.isEmpty else { return nil }
-      self = .album(placementId: placementId)
+      let sharedPrefix = "shared-album:"
+      let albumPrefix = "album:"
+      if rawValue.hasPrefix(sharedPrefix) {
+        let placementId = String(rawValue.dropFirst(sharedPrefix.count))
+        guard !placementId.isEmpty else { return nil }
+        self = .sharedAlbum(placementId: placementId)
+      } else if rawValue.hasPrefix(albumPrefix) {
+        let placementId = String(rawValue.dropFirst(albumPrefix.count))
+        guard !placementId.isEmpty else { return nil }
+        self = .album(placementId: placementId)
+      } else {
+        return nil
+      }
     }
   }
 }

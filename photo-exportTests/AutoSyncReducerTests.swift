@@ -464,6 +464,121 @@ struct AutoSyncReducerTests {
     #expect(dirty?.scope(.timeline).pendingPlacementReconciliation == false)
   }
 
+  /// Same as the `.albums` placement-reconciliation rule, but for shared albums:
+  /// PhotoKit doesn't tell us which album class changed, so any collection-level
+  /// mutation must mark both album-shaped scopes dirty when they're selected.
+  @Test func photosChangedWithCollectionChangesMarksSharedAlbumsForReconciliation() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.scopeSelection = AutoExportScopeSelection(sharedAlbums: true)
+
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: [],
+      collectionChangesPresent: true,
+      observedAt: now
+    )
+
+    let (next, _) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    let destId = state.destination.id!
+    let dirty = next.dirtyStateByDestination[destId]
+    #expect(dirty?.scope(.sharedAlbums).pendingPlacementReconciliation == true)
+  }
+
+  /// An `.autoExport(scopes)` umbrella summary clears dirty for every scope in
+  /// its selection that's *still* enabled in the current state. Regression for
+  /// `AutoSyncReducer.coveredScopes`'s set-intersect on the umbrella case —
+  /// the user could have toggled a scope off between dispatch and completion,
+  /// and the reducer must not blanket-clear scopes the user no longer wants.
+  ///
+  /// Setup: an autoSync run was dispatched with `[timeline, sharedAlbums]`
+  /// selected. Between dispatch and completion the user turned off
+  /// `.sharedAlbums`. The completion event clears `.timeline` dirty (still
+  /// selected) but leaves `.sharedAlbums` dirty (no longer selected — the
+  /// user's intent overrides the past dispatch).
+  @Test func autoExportUmbrellaCompletionIntersectsWithCurrentSelection() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    // Current selection: only .timeline. The dispatched run carried .timeline +
+    // .sharedAlbums.
+    state.scopeSelection = AutoExportScopeSelection(timeline: true)
+    let destId = state.destination.id!
+    var dirty = AutoSyncDirtyState.empty
+    var timelineDirty = ScopeDirtyState()
+    timelineDirty.pendingFullReconciliation = true
+    var sharedDirty = ScopeDirtyState()
+    sharedDirty.pendingFullReconciliation = true
+    dirty.setScope(.timeline, timelineDirty)
+    dirty.setScope(.sharedAlbums, sharedDirty)
+    state.dirtyStateByDestination[destId] = dirty
+
+    let dispatchSelection = AutoExportScopeSelection(
+      timeline: true, sharedAlbums: true)
+    let context = ExportRunContext(
+      source: .autoSync,
+      visibility: .background,
+      scope: .autoExport(dispatchSelection),
+      selection: state.versionSelection,
+      startedAt: now
+    )
+    let summary = ExportRunSummary(
+      context: context, endedAt: now, enqueuedCount: 1, completedCount: 1,
+      failedCount: 0, skippedCount: 0, cancelReason: nil, result: .completed)
+
+    // `autoSyncRunCompleted` is the autoSync-source counterpart of
+    // `manualFullExportCompleted`; both route through the same `coveredScopes`
+    // helper but the autoSync variant is where the umbrella matters in
+    // production.
+    let (next, _) = AutoSyncReducer.reduce(
+      .autoSyncRunCompleted(summary), in: state, now: now)
+    let nextDirty = next.dirtyStateByDestination[destId]
+
+    // .timeline cleared (still selected); .sharedAlbums preserved (user
+    // toggled it off between dispatch and completion).
+    #expect(nextDirty?.scope(.timeline).pendingFullReconciliation == false)
+    #expect(nextDirty?.scope(.sharedAlbums).pendingFullReconciliation == true)
+  }
+
+  /// A completed manual `.allSharedAlbumsFull` run clears the `.sharedAlbums`
+  /// scope's dirty state but leaves `.albums` and other scopes untouched. Regression
+  /// guard for the `coveredScopes` mapping.
+  @Test func manualSharedAlbumsRunClearsSharedAlbumsDirtyOnly() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.scopeSelection = AutoExportScopeSelection(albums: true, sharedAlbums: true)
+    let destId = state.destination.id!
+    var dirty = AutoSyncDirtyState.empty
+    var albumsDirty = ScopeDirtyState()
+    albumsDirty.pendingFullReconciliation = true
+    var sharedDirty = ScopeDirtyState()
+    sharedDirty.pendingFullReconciliation = true
+    dirty.setScope(.albums, albumsDirty)
+    dirty.setScope(.sharedAlbums, sharedDirty)
+    state.dirtyStateByDestination[destId] = dirty
+
+    let context = ExportRunContext(
+      source: .manual,
+      visibility: .userVisible,
+      scope: .allSharedAlbumsFull,
+      selection: state.versionSelection,
+      startedAt: now
+    )
+    let summary = ExportRunSummary(
+      context: context,
+      endedAt: now,
+      enqueuedCount: 1,
+      completedCount: 1,
+      failedCount: 0,
+      skippedCount: 0,
+      cancelReason: nil,
+      result: .completed
+    )
+
+    let (next, _) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let nextDirty = next.dirtyStateByDestination[destId]
+    #expect(nextDirty?.scope(.sharedAlbums).pendingFullReconciliation == false)
+    #expect(nextDirty?.scope(.albums).pendingFullReconciliation == true)
+  }
+
   @Test func photosChangedAdvancesTokenWhenEventCarriesOne() {
     let state = enabledStateWithSafeDestinationAndScope()
     let token = Data([0x01, 0x02, 0x03])

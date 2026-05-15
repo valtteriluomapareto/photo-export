@@ -21,14 +21,31 @@ struct CollectionExportRecordStoreTests {
     ExportPlacement.favorites(createdAt: Date(timeIntervalSince1970: 1_700_000_000))
   }
 
-  private func albumPlacement(id: String = "abc-123") -> ExportPlacement {
+  private func albumPlacement(
+    id: String = "abc-123",
+    placementId: String = "collections:album:hash16:hash8"
+  ) -> ExportPlacement {
     ExportPlacement(
       kind: .album,
-      id: "collections:album:hash16:hash8",
+      id: placementId,
       displayName: "Family/Trip 2024",
       collectionLocalIdentifier: id,
       relativePath: "Collections/Albums/Family/Trip 2024/",
       createdAt: Date(timeIntervalSince1970: 1_700_000_001)
+    )
+  }
+
+  private func sharedAlbumPlacement(
+    id: String = "shared-1",
+    placementId: String = "collections:shared-album:h16:h8"
+  ) -> ExportPlacement {
+    ExportPlacement(
+      kind: .sharedAlbum,
+      id: placementId,
+      displayName: "Family",
+      collectionLocalIdentifier: id,
+      relativePath: "Collections/Shared Albums/Family/",
+      createdAt: Date(timeIntervalSince1970: 1_700_000_003)
     )
   }
 
@@ -623,5 +640,55 @@ struct CollectionExportRecordStoreTests {
     #expect(decoded.collectionLocalIdentifier == original.collectionLocalIdentifier)
     #expect(decoded.relativePath == original.relativePath)
     #expect(decoded.createdAt == original.createdAt)
+  }
+
+  // MARK: - Shared-album placement routing
+
+  /// Shared-album placements pass `accept(_:)` and survive snapshot persistence.
+  /// Pins the gate against a regression that re-narrowed it to user-album +
+  /// favorites (which `.timeline` was originally the sole exclusion against).
+  @Test func sharedAlbumPlacementSurvivesAcceptAndPersistence() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-shared")
+    let placement = sharedAlbumPlacement()
+    store.upsertPlacement(placement)
+    store.flushForTesting()
+
+    #expect(store.placement(id: placement.id)?.kind == .sharedAlbum)
+    #expect(store.placements(matching: .sharedAlbum).count == 1)
+  }
+
+  /// `recordCount(in:)` discriminates user albums from shared albums even when
+  /// the underlying `collectionLocalIdentifier` is identical. The matching is
+  /// `(kind, collectionLocalIdentifier)` — `.album(id:)` must not pick up a
+  /// `.sharedAlbum` placement and vice versa. Same id across both kinds is
+  /// unlikely in production (PhotoKit hands out distinct identifiers per
+  /// collection class), but the invariant is what guards us against a future
+  /// kind-collapse refactor.
+  @Test func recordCountDiscriminatesUserAndSharedByKindNotJustId() throws {
+    let (dir, store) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    store.configure(for: "dest-count")
+
+    let sharedId = "shared-1"
+    let userAlbum = albumPlacement(
+      id: sharedId, placementId: "collections:album:h16:h8")
+    let sharedAlbum = sharedAlbumPlacement(id: sharedId)
+    store.upsertPlacement(userAlbum)
+    store.upsertPlacement(sharedAlbum)
+    store.markVariantExported(
+      assetId: "asset-album", placement: userAlbum, variant: .original,
+      filename: "asset-album.jpg",
+      exportedAt: Date(timeIntervalSince1970: 1_700_000_010))
+    store.markVariantExported(
+      assetId: "asset-shared", placement: sharedAlbum, variant: .original,
+      filename: "asset-shared.jpg",
+      exportedAt: Date(timeIntervalSince1970: 1_700_000_011))
+    store.flushForTesting()
+
+    #expect(store.recordCount(in: .album(collectionLocalId: sharedId)) == 1)
+    #expect(store.recordCount(in: .sharedAlbum(collectionLocalId: sharedId)) == 1)
+    #expect(store.recordCount(in: .any) == 2)
   }
 }
