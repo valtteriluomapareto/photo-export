@@ -276,6 +276,14 @@ final class ExportManager: ObservableObject {
   /// IUO for the same `host: self` cycle as `variantExporter` (see that property above)
   /// — `self` must be fully initialized before the coordinator can hold it as Host.
   private(set) var queueCoordinator: ExportQueueCoordinator!
+
+  /// Owns the Import Existing Backup flow. Phase 5 extraction. `isImporting` and
+  /// `importStage` on this manager are sink-driven mirrors of the coordinator's
+  /// publishers (same shape as the queue coordinator mirrors). `importResult` stays
+  /// writable on the manager because external callers (test code) sometimes reset it
+  /// directly; the coordinator writes through `Host.setImportResult`.
+  private(set) var importCoordinator: ImportCoordinator!
+  private var importCancellables: Set<AnyCancellable> = []
   private var queueCancellables: Set<AnyCancellable> = []
 
   // Forwarders to the coordinator's internal state. Kept on ExportManager so existing
@@ -298,9 +306,10 @@ final class ExportManager: ObservableObject {
   private(set) var currentJobPlacement: ExportPlacement?
   private(set) var generation: Int = 0
   private(set) var isEnqueueingAll: Bool = false
-  /// Handle to the in-flight import Task. Test targets can `await importTask?.value`
-  /// for deterministic completion. Writes stay private to `ExportManager`.
-  private(set) var importTask: Task<Void, Never>?
+  /// Forwarder to the import coordinator's task handle so existing test reads
+  /// (`manager.importTask`) and the `waitForImportCompletion` test helper continue to
+  /// resolve against the same in-flight Task.
+  var importTask: Task<Void, Never>? { importCoordinator?.importTask }
 
   /// Backing store for `versionSelection`. Mirrors the injected-`UserDefaults`
   /// pattern used by `ExportDestinationManager` so tests can hand a per-suite
@@ -385,6 +394,13 @@ final class ExportManager: ObservableObject {
     self.queueCoordinator.$totalJobsCompleted
       .sink { [weak self] in self?.totalJobsCompleted = $0 }
       .store(in: &queueCancellables)
+    self.importCoordinator = ImportCoordinator(host: self)
+    self.importCoordinator.$isImporting
+      .sink { [weak self] in self?.isImporting = $0 }
+      .store(in: &importCancellables)
+    self.importCoordinator.$importStage
+      .sink { [weak self] in self?.importStage = $0 }
+      .store(in: &importCancellables)
   }
 
   // MARK: - Lifetime contract
@@ -1819,208 +1835,30 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Import Existing Backup
 
-  /// Starts the "Import Existing Backup…" flow.
-  /// Scans the current export destination for YYYY/MM/ files, matches them
-  /// against the Photos library, and rebuilds local export records.
+  /// Starts the "Import Existing Backup…" flow. Forwarder to the `ImportCoordinator`.
   func startImport() {
-    guard !isImporting else { return }
-    guard !hasActiveExportWork else {
-      logger.warning("Cannot import while export is active")
-      return
-    }
-    guard let rootURL = exportDestination.selectedFolderURL else {
-      logger.warning("Cannot import: no destination selected")
-      return
-    }
-    // Gate the import on a `.ready` timeline store. Otherwise the scanner would happily
-    // run, the bulkImportRecords call would silently drop every record (its `.ready`
-    // guard short-circuits on `.unconfigured`/`.failed`), and the user would see a
-    // success report with the matched counts despite nothing being persisted. This is
-    // the same hazard `canExportTimeline` guards on the export-start side.
-    guard exportRecordStore.state == .ready else {
-      logger.error(
-        "Cannot import: timeline record store state=\(String(describing: self.exportRecordStore.state), privacy: .public) (need .ready)"
-      )
-      return
-    }
-
-    isImporting = true
-    importStage = .scanningBackupFolder
-    importResult = nil
-
-    let importGen = generation
-
-    importTask = Task { [weak self] in
-      guard let self else { return }
-
-      do {
-        guard let scopedURL = self.exportDestination.beginScopedAccess() else {
-          self.logger.error("Failed to acquire security-scoped access for import")
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-        defer { self.exportDestination.endScopedAccess(for: scopedURL) }
-
-        // Probe the root before any destructive step. `BackupScanner.scanBackupFolder`
-        // swallows root-enumeration failure as `[]`, which would make a transiently
-        // unreadable drive look identical to "the user deleted everything." Reconcile
-        // would then prune every record. Catch that case here and bail without touching
-        // the stores.
-        do {
-          _ = try FileManager.default.contentsOfDirectory(
-            at: rootURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-        } catch {
-          self.logger.error(
-            "Import root unreachable: \(error.localizedDescription, privacy: .public)")
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        self.importStage = .scanningBackupFolder
-        try Task.checkCancellation()
-        let scannedFiles = await Task.detached {
-          BackupScanner.scanBackupFolder(at: rootURL)
-        }.value
-
-        try Task.checkCancellation()
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        // No early return on `scannedFiles.isEmpty` — an empty destination still needs
-        // reconcile so existing records get pruned to match disk truth. The bulk-import
-        // call below is a no-op for an empty matched list.
-
-        self.importStage = .readingPhotosLibrary
-        let matchResult = try await BackupScanner.matchFiles(
-          scannedFiles,
-          photoLibraryService: self.photoLibraryService
-        ) { [weak self] stage in
-          self?.importStage = stage
-        }
-
-        try Task.checkCancellation()
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        self.importStage = .rebuildingLocalState
-
-        let now = Date()
-        var records: [ExportRecord] = []
-        records.reserveCapacity(matchResult.matched.count)
-
-        for matched in matchResult.matched {
-          let descriptor = matched.asset
-          let file = matched.file
-          let year: Int
-          let month: Int
-          if let creationDate = descriptor.creationDate {
-            let calendar = Calendar.current
-            year = calendar.component(.year, from: creationDate)
-            month = calendar.component(.month, from: creationDate)
-          } else {
-            year = file.year
-            month = file.month
-          }
-          let relPath = "\(year)/" + String(format: "%02d", month) + "/"
-
-          let record = ExportRecord(
-            id: descriptor.id,
-            year: year,
-            month: month,
-            relPath: relPath,
-            variants: [
-              matched.variant: ExportVariantRecord(
-                filename: file.filename,
-                status: .done,
-                exportDate: now,
-                lastError: nil
-              )
-            ]
-          )
-          records.append(record)
-        }
-
-        self.exportRecordStore.bulkImportRecords(records)
-
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        // Reconcile both stores after bulkImport so the final state reflects disk
-        // truth at the latest possible moment. Closes the TOCTOU window where a file
-        // present at scan time gets deleted before bulkImport applies it.
-        self.importStage = .reconcilingDiskState
-        try Task.checkCancellation()
-        let timelineSummary = await self.exportRecordStore.reconcileAgainstFilesystem(
-          at: rootURL)
-        try Task.checkCancellation()
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-        let collectionSummary = await self.collectionExportRecordStore
-          .reconcileAgainstFilesystem(at: rootURL)
-        try Task.checkCancellation()
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        let totalPrunedVariants =
-          timelineSummary.prunedVariants + collectionSummary.prunedVariants
-        let totalPrunedRecords =
-          timelineSummary.prunedRecords + collectionSummary.prunedRecords
-
-        self.importResult = ImportReport(
-          matchedCount: matchResult.matched.count,
-          ambiguousCount: matchResult.ambiguous.count,
-          unmatchedCount: matchResult.unmatched.count,
-          totalScanned: scannedFiles.count,
-          prunedVariants: totalPrunedVariants,
-          prunedRecords: totalPrunedRecords
-        )
-
-        self.importStage = .done
-        self.isImporting = false
-
-        self.logger.info(
-          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
-        )
-      } catch is CancellationError {
-        self.logger.info("Import task cancelled")
-        self.isImporting = false
-        self.importStage = nil
-      } catch {
-        self.logger.error(
-          "Import failed: \(error.localizedDescription, privacy: .public)")
-        self.isImporting = false
-        self.importStage = nil
-      }
-    }
+    importCoordinator.startImport()
   }
 
-  /// Cancels an in-progress import.
+  /// Cancels an in-progress import. Forwarder to the `ImportCoordinator`.
   func cancelImport() {
-    guard isImporting else { return }
-    importTask?.cancel()
-    importTask = nil
+    importCoordinator.cancelImport()
+  }
+
+  // MARK: - ImportCoordinator.Host conformance
+
+  /// Bumps the generation counter so any late-completing async work gates out via
+  /// `isCurrent`. Called by the import coordinator's cancel path; in Phase 4b/6 will
+  /// migrate to `ExportQueueCoordinator`.
+  func bumpGeneration() {
     generation += 1
-    isImporting = false
-    importStage = nil
-    importResult = nil
-    logger.info("Import cancelled")
+  }
+
+  /// Writes the import report back to the manager's `@Published` mirror. Kept as a Host
+  /// method (not a sink) because `importResult` is intentionally writable on the
+  /// manager — test code resets it directly between consecutive imports.
+  func setImportResult(_ result: ImportReport?) {
+    importResult = result
   }
 }
 

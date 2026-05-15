@@ -20,3 +20,8 @@ extension ExportManager: VariantExporter.Host {}
 /// generation, drive each job's export work, finalize an awaitable run on drain, and
 /// keep the manager's `currentJob*` UI identifiers in sync with the in-flight job.
 extension ExportManager: ExportQueueCoordinator.Host {}
+
+/// Phase 5: ExportManager hosts `ImportCoordinator` so the import flow can read the
+/// destination + photoLibraryService + record stores, check cancellation generation,
+/// and write `importResult` back to the manager's writable `@Published` mirror.
+extension ExportManager: ImportCoordinator.Host {}
