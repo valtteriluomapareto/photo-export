@@ -310,6 +310,53 @@ struct ExportManagerRunExportTests {
     #expect(summary.enqueuedCount == 1)
   }
 
+  /// Predicate-order integration pin (post-refactor cleanup). The planner unit tests
+  /// pin that `isExported` runs before `shouldSkipForRetry`, but a regression in how
+  /// the manager wires those predicates into the planner could silently defeat that.
+  ///
+  /// Setup: one asset is already `.done` in the record store; AutoSync's eligibility
+  /// closure is installed but should NEVER see this asset (it was filtered by
+  /// `isExported` first). If the order were reversed, `skipForAutoSyncRetry` would
+  /// observe the asset and increment `skippedCount`, inflating AutoSync's "ran but
+  /// found nothing to do" counter for assets that were never going to be queued.
+  @Test func autoSyncRunFilterAlreadyExportedBeforeRetryCheck() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let assetDate = makeDate(2025, 7, 1)
+    let asset = TestAssetFactory.makeAsset(id: "already-done", creationDate: assetDate)
+    harness.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    harness.photoLib.yearCounts = [(year: 2025, count: 1)]
+
+    // Plant a `.done` original so `exportRecordStore.isExported` returns true.
+    harness.store.markVariantExported(
+      assetId: asset.id, variant: .original,
+      year: 2025, month: 7, relPath: "2025/07/",
+      filename: "X.HEIC", exportedAt: Date())
+
+    // The eligibility closure must NOT be called for the already-done asset. Record
+    // every call so the test can assert the gate never saw this asset id.
+    var eligibilityCalls: [String] = []
+    harness.manager.autoSyncEligibilityCheck = { assetId, _, _, _ in
+      eligibilityCalls.append(assetId)
+      return false  // would-be-blocking, but should never run for this asset
+    }
+
+    let summary = await harness.manager.runExport(
+      context: ExportRunContext(
+        source: .autoSync,
+        visibility: .background,
+        scope: .timelineFullLibrary,
+        selection: .edited))
+
+    #expect(!eligibilityCalls.contains("already-done"),
+      "skipForAutoSyncRetry must NOT be called for already-exported assets; got calls: \(eligibilityCalls)")
+    #expect(summary.skippedCount == 0,
+      "already-exported asset must be filtered by isExported, not counted as a retry skip")
+    #expect(summary.enqueuedCount == 0)
+    #expect(summary.result == .completed)
+  }
+
   /// Manual runs (`source == .manual`) must never gate on AutoSync retry
   /// eligibility — that's plan §"Retry": only auto-sync runs honor the
   /// retry store; a manual export is the user's explicit override.

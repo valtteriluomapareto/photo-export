@@ -27,9 +27,8 @@ final class ExportManager: ObservableObject {
     let selection: ExportVersionSelection
 
     /// Year derived from the placement. Defined for timeline jobs; returns `0` for
-    /// `.favorites`/`.album` placements (which are unreachable in Phase 1 production code
-    /// — collection jobs land in Phase 3 along with the `urlForRelativeDirectory` wiring
-    /// that obsoletes year/month for collection sites).
+    /// `.favorites`/`.album`/`.sharedAlbum` placements where year/month is not part of
+    /// the on-disk path (the destination uses `placement.relativePath` directly).
     var year: Int { placement.timelineYearMonth?.year ?? 0 }
     var month: Int { placement.timelineYearMonth?.month ?? 0 }
   }
@@ -226,10 +225,9 @@ final class ExportManager: ObservableObject {
   /// IUO because of the `host: self` cycle: `VariantExporter` is constructed with
   /// `host: self` so it can call back for the cancellation seam, UI-state mutations, and
   /// bookkeeping-aware failure recording — but `self` isn't usable until every stored
-  /// property has a value. Phase 3a's PR description anticipated the IUO would
-  /// disappear when the renderer dependency moved out, but the cycle persists for the
-  /// remaining six Host methods. The IUO retires in Phase 4b/5 when the cancellation
-  /// seam and UI-state mutations migrate to `ExportQueueCoordinator`.
+  /// property has a value. The IUO is assigned at the end of `init` (before init exits)
+  /// and never reassigned thereafter; it retires whenever the Host protocol shrinks
+  /// to zero callbacks that need `self` (a future refactor task — not load-bearing).
   private(set) var variantExporter: VariantExporter!
   let assetResourceWriter: any AssetResourceWriter
   // `var` rather than `let` so we can rebind it at the end of `init` with a
@@ -1109,11 +1107,9 @@ final class ExportManager: ObservableObject {
   /// Scans the month and returns the enqueue outcome. Callers use the outcome to decide
   /// whether to surface the "already exported" toolbar message.
   @discardableResult
-  // Phase 4b will lift the `pendingJobs.append` / `totalJobsEnqueued` /
-  // `queuedCountsByPlacementId` / `updateQueueCount` / `logger.info` /
-  // `EnqueueOutcome` triplet out of the three enqueue* methods into
-  // `ExportQueueCoordinator`. The PhotoKit fetch and the `ExportJobPlanner.plan` call
-  // stay here — only the queue-state mutation moves.
+  // Phase 4b lifted the per-placement queue-counter mutation into
+  // `ExportQueueCoordinator.enqueue`. The three enqueue methods retain only the
+  // PhotoKit fetch + `ExportJobPlanner.plan` call.
   private func enqueueMonth(
     year: Int, month: Int, selection: ExportVersionSelection, generation gen: Int
   ) async throws -> EnqueueOutcome {
@@ -1727,9 +1723,6 @@ final class ExportManager: ObservableObject {
 
   // MARK: Record-mutation routing
 
-  /// Routes a `markVariantFailed` to the right store based on `placement.kind`. In Phase 1,
-  /// only `.timeline` paths are reachable in production; `.favorites`/`.album` are wired
-  /// for Phase 3's collection-export work but won't be exercised until then.
   /// AutoSync retry-eligibility gate: returns `true` when the enqueue path
   /// should *skip* this asset because all required variants are currently
   /// in retry backoff (or hard-blocked needing user action). Called from
@@ -1808,27 +1801,11 @@ final class ExportManager: ObservableObject {
       at: date)
   }
 
-  /// Pure forwarder to `RecordStoreRouter.markVariantInProgress`. Kept for call-site
-  /// stability — same rationale as `currentVariants` above.
-  private func recordVariantInProgress(
-    assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    relPath: String, filename: String?
-  ) {
-    recordStoreRouter.markVariantInProgress(
-      assetId: assetId, placement: placement, variant: variant,
-      relPath: relPath, filename: filename)
-  }
-
-  /// Pure forwarder to `RecordStoreRouter.markVariantExported`. Kept for call-site
-  /// stability — same rationale as `currentVariants` above.
-  private func recordVariantExported(
-    assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    relPath: String, filename: String, exportedAt: Date
-  ) {
-    recordStoreRouter.markVariantExported(
-      assetId: assetId, placement: placement, variant: variant,
-      relPath: relPath, filename: filename, exportedAt: exportedAt)
-  }
+  // `recordVariantInProgress` and `recordVariantExported` previously lived here as pure
+  // forwarders to the router. They became unused once Phase 3a moved the variant write
+  // path into `VariantExporter` (the only caller for both) — `VariantExporter` now
+  // calls `recordStoreRouter.markVariantInProgress` / `.markVariantExported` directly.
+  // Removed in the post-refactor cleanup.
 
   // `splitFilename` and `uniqueFileURL` moved to ExportDestinationResolver
   // (static + instance respectively).

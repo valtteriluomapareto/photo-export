@@ -21,6 +21,14 @@ import Testing
 /// PhotoKit code to relocate) and orthogonal to the regression-gate property the
 /// inheritance contract relies on — pinned here so the larger move can land later
 /// without losing the safety net.
+///
+/// **Known limitation**: this suite enumerates every `PhotoLibraryService` method that
+/// exists today. A NEW method added to the protocol will be inherited from
+/// `PhotoLibraryManager` (production behaviour) unless someone also adds an override
+/// AND a corresponding test here. The gate catches missed overrides on existing
+/// methods, not missed overrides on additions. The composition follow-up (drop the
+/// inheritance entirely) closes this hole structurally; until then, anyone adding a
+/// method to `PhotoLibraryService` should add a test to this suite in the same PR.
 @MainActor
 struct ScreenshotPhotoLibraryServiceOverridesTests {
 
