@@ -100,6 +100,10 @@ struct CollectionContentView: View {
     switch selection {
     case .timelineMonth(let year, let month):
       return .timeline(year: year, month: month)
+    case .timelineYear(let year):
+      // Unreachable: `LibraryRootView` routes year selections to `YearContentView`.
+      // `.timeline(year: month: nil)` is the closest equivalent if it ever lands here.
+      return .timeline(year: year, month: nil)
     case .favorites: return .favorites
     case .album(let id): return .album(collectionId: id)
     case .sharedAlbum(let id): return .sharedAlbum(collectionId: id)
@@ -181,6 +185,7 @@ struct CollectionContentView: View {
   private var scopeKey: String {
     switch selection {
     case .timelineMonth(let year, let month): return "timeline:\(year)-\(month)"
+    case .timelineYear(let year): return "timeline:\(year)"  // Unreachable; see `scope`.
     case .favorites: return "favorites"
     case .album(let id): return "album:\(id)"
     case .sharedAlbum(let id): return "shared-album:\(id)"
@@ -203,7 +208,7 @@ struct CollectionContentView: View {
     case .sharedAlbum(let id):
       return collectionExportRecordStore.placements(matching: .sharedAlbum)
         .first(where: { $0.collectionLocalIdentifier == id })
-    case .timelineMonth, .folder:
+    case .timelineMonth, .timelineYear, .folder:
       return nil
     }
   }
@@ -262,6 +267,7 @@ struct CollectionContentView: View {
     case .album: return "Export Album"
     case .sharedAlbum: return "Export Shared Album"
     case .timelineMonth: return "Export Month"
+    case .timelineYear: return "Export Year"  // Unreachable; see `scope`.
     case .folder: return "Export Folder"  // Unreachable; see `scope`.
     }
   }
@@ -286,6 +292,8 @@ struct CollectionContentView: View {
       exportManager.startExportSharedAlbum(collectionId: id)
     case .timelineMonth(let year, let month):
       exportManager.startExportMonth(year: year, month: month)
+    case .timelineYear(let year):
+      exportManager.startExportYear(year: year)  // Unreachable; see `scope`.
     case .folder:
       break  // Unreachable; see `scope`.
     }

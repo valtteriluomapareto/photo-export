@@ -7,17 +7,22 @@ struct ExportToolbarView: ToolbarContent {
 
   /// Drives the primary action button's label and target. Timeline shows
   /// "Export All"; Collections shows "Export All Albums" by default and flips to
-  /// "Export Folder" when the user has a folder selected. The pause/cancel buttons
-  /// are shared because the underlying queue is shared.
+  /// "Export Folder" or "Export N Items" depending on the multi-selection shape.
+  /// The pause/cancel buttons are shared because the underlying queue is shared.
   let section: LibrarySection
-  /// Current sidebar selection. Used only to detect a folder selection so the
-  /// primary action can route to `startExportFolder(folderId:)` for that folder.
-  let selection: LibrarySelection?
+  /// Current sidebar multi-selection. The toolbar normalizes this into per-section
+  /// dispatch buckets at action time. Empty set → the section's "Export All" path.
+  let selectionSet: Set<LibrarySelection>
+  /// Most-recently-clicked item, surfaced from `LibraryRootView`. Used for the
+  /// single-select fast path (1 item → existing per-kind start methods) so we
+  /// preserve the existing "Export Month" / "Export Album" labels and dispatch.
+  let focusedSelection: LibrarySelection?
   /// Recursive album count under the selected folder, if any. `nil` for non-folder
-  /// selections. Used so the primary-action label can read "Export 12 Albums"
-  /// instead of just "Export Folder" — matching the in-pane button's wording so a
-  /// user comparing them doesn't see a mismatch.
+  /// or multi-item selections. Used so the primary-action label can read
+  /// "Export 12 Albums" instead of just "Export Folder".
   var folderAlbumCount: Int?
+
+  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
 
   var body: some ToolbarContent {
     ToolbarItem(placement: .automatic) {
@@ -239,9 +244,42 @@ struct ExportToolbarView: ToolbarContent {
   private func startManualExport() {
     switch section {
     case .timeline:
-      exportManager.startExportAll()
+      let timelineItems = selectionSet.filter(\.isTimeline)
+      if timelineItems.count >= 2 {
+        let buckets = TimelineSelectionBuckets.normalize(timelineItems)
+        exportManager.startExportTimelineSelection(
+          years: buckets.years, months: buckets.months)
+        return
+      }
+      // 0 or 1 items selected — preserve existing single-select dispatch.
+      switch focusedSelection {
+      case .timelineYear(let year):
+        exportManager.startExportYear(year: year)
+      case .timelineMonth(let year, let month):
+        // With exactly one month selected, "Export All" still reads "Export Month";
+        // calling startExportMonth keeps the existing per-month dispatch + messaging.
+        // When zero is selected, we fall through to startExportAll.
+        if timelineItems.count == 1 {
+          exportManager.startExportMonth(year: year, month: month)
+        } else {
+          exportManager.startExportAll()
+        }
+      default:
+        exportManager.startExportAll()
+      }
     case .collections:
-      switch selection {
+      let collectionItems = selectionSet.filter(\.isCollection)
+      if collectionItems.count >= 2 {
+        let buckets = CollectionsSelectionBuckets.normalize(collectionItems) { folderId in
+          let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+          guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
+          else { return [] }
+          return PhotoCollectionDescriptor.albumLocalIds(under: folder)
+        }
+        exportManager.startExportCollectionsSelection(buckets)
+        return
+      }
+      switch focusedSelection {
       case .folder(let id):
         exportManager.startExportFolder(folderId: id)
       case .sharedAlbum(let id):
@@ -251,6 +289,10 @@ struct ExportToolbarView: ToolbarContent {
         // a shared-album pane doesn't see the batch button silently skip what
         // they're looking at.
         exportManager.startExportSharedAlbum(collectionId: id)
+      case .album(let id) where collectionItems.count == 1:
+        exportManager.startExportAlbum(collectionId: id)
+      case .favorites where collectionItems.count == 1:
+        exportManager.startExportFavorites()
       default:
         exportManager.startExportAllAlbums()
       }
@@ -259,16 +301,40 @@ struct ExportToolbarView: ToolbarContent {
 
   private var primaryActionLabel: String {
     switch section {
-    case .timeline: return "Export All"
+    case .timeline:
+      let timelineItems = selectionSet.filter(\.isTimeline)
+      if timelineItems.count >= 2 {
+        let buckets = TimelineSelectionBuckets.normalize(timelineItems)
+        return "Export \(buckets.count) \(buckets.count == 1 ? "Item" : "Items")"
+      }
+      if case .timelineYear = focusedSelection, timelineItems.count == 1 {
+        return "Export Year"
+      }
+      if case .timelineMonth = focusedSelection, timelineItems.count == 1 {
+        return "Export Month"
+      }
+      return "Export All"
     case .collections:
-      if case .folder = selection {
+      let collectionItems = selectionSet.filter(\.isCollection)
+      if collectionItems.count >= 2 {
+        // Multi-select wins over the per-kind label so the toolbar advertises the
+        // batch action. Folder expansion is deferred to dispatch time.
+        return "Export \(collectionItems.count) Items"
+      }
+      if case .folder = focusedSelection {
         // Show the album count when known so the toolbar's label tracks the
         // in-pane button. Falls back to "Export Folder" when the count is
         // unavailable (e.g. tree not yet cached) rather than misreporting "0".
         guard let count = folderAlbumCount, count > 0 else { return "Export Folder" }
         return count == 1 ? "Export 1 Album" : "Export \(count) Albums"
       }
-      if case .sharedAlbum = selection { return "Export Shared Album" }
+      if case .sharedAlbum = focusedSelection { return "Export Shared Album" }
+      if case .album = focusedSelection, collectionItems.count == 1 {
+        return "Export Album"
+      }
+      if case .favorites = focusedSelection, collectionItems.count == 1 {
+        return "Export Favorites"
+      }
       return "Export All Albums"
     }
   }
@@ -277,12 +343,28 @@ struct ExportToolbarView: ToolbarContent {
     guard exportDestinationManager.canExportNow else {
       return "Select a writable export folder first"
     }
+    let multiCount: Int = {
+      switch section {
+      case .timeline: return selectionSet.filter(\.isTimeline).count
+      case .collections: return selectionSet.filter(\.isCollection).count
+      }
+    }()
+    if multiCount >= 2 {
+      switch section {
+      case .timeline:
+        return
+          "Export every photo across the selected years and months. Years cover their months — selecting a year and a month inside it exports the whole year."
+      case .collections:
+        return
+          "Export every photo in the selected collections. Selected folders are expanded to their nested albums; Favorites and shared albums are included if selected."
+      }
+    }
     let isFolderSelection: Bool = {
-      if case .folder = selection { return true }
+      if case .folder = focusedSelection { return true }
       return false
     }()
     let isSharedAlbumSelection: Bool = {
-      if case .sharedAlbum = selection { return true }
+      if case .sharedAlbum = focusedSelection { return true }
       return false
     }()
     if isSharedAlbumSelection {

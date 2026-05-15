@@ -15,12 +15,19 @@ struct LibraryRootView: View {
   @EnvironmentObject private var whatsNewState: WhatsNewState
 
   @State private var section: LibrarySection
-  @State private var selection: LibrarySelection?
+
+  /// Active multi-select for the current section. Bound into each sidebar via
+  /// `List(selection:)`; `focusedSelection` drives the content pane. The pair is
+  /// updated atomically in `applySelectionChange` so the content pane never lags
+  /// the highlight set.
+  @State private var selectionSet: Set<LibrarySelection> = []
+  @State private var focusedSelection: LibrarySelection?
 
   /// Last selection per section so flipping the segmented control returns the user to
-  /// where they were. Updated whenever `selection` changes within a section.
-  @State private var lastTimelineSelection: LibrarySelection?
-  @State private var lastCollectionsSelection: LibrarySelection?
+  /// where they were — both the highlighted set and which item the content pane was
+  /// showing.
+  @State private var lastTimeline: PersistedSidebarSelection = .empty
+  @State private var lastCollections: PersistedSidebarSelection = .empty
 
   init() {
     // Honour `--screenshot-surface=<key>` so the capture script can land each
@@ -37,11 +44,18 @@ struct LibraryRootView: View {
     let initialSection = surface?.section ?? .timeline
     let initialSelection = surface?.selection ?? defaultTimeline
     _section = State(initialValue: initialSection)
-    _selection = State(initialValue: initialSelection)
-    _lastTimelineSelection = State(
-      initialValue: initialSection == .timeline ? initialSelection : defaultTimeline)
-    _lastCollectionsSelection = State(
-      initialValue: initialSection == .collections ? initialSelection : nil)
+    _selectionSet = State(initialValue: [initialSelection])
+    _focusedSelection = State(initialValue: initialSelection)
+    _lastTimeline = State(
+      initialValue: initialSection == .timeline
+        ? PersistedSidebarSelection(items: [initialSelection], focused: initialSelection)
+        : PersistedSidebarSelection(items: [defaultTimeline], focused: defaultTimeline)
+    )
+    _lastCollections = State(
+      initialValue: initialSection == .collections
+        ? PersistedSidebarSelection(items: [initialSelection], focused: initialSelection)
+        : .empty
+    )
   }
 
   @State private var selectedAsset: AssetDescriptor?
@@ -86,7 +100,10 @@ struct LibraryRootView: View {
         sectionPicker
       }
       ExportToolbarView(
-        section: section, selection: selection, folderAlbumCount: selectedFolderAlbumCount)
+        section: section,
+        selectionSet: selectionSet,
+        focusedSelection: focusedSelection,
+        folderAlbumCount: selectedFolderAlbumCount)
     }
     .sheet(isPresented: $isShowingImportSheet) {
       ImportView()
@@ -112,28 +129,12 @@ struct LibraryRootView: View {
     ) {
       WhatsNewView(state: whatsNewState)
     }
-    .onChange(of: selection) { _, newValue in
-      // Track the last selection within each section so the segmented switch restores
-      // it. Asset selection clears on any section change because the new section's
-      // assets are a different set. Both branches are guarded against `nil` writes
-      // (which can come from the segmented-switch transition itself or from List's
-      // selection model swallowing empty-area clicks): nil should not clobber the
-      // last-known per-section selection — preserving it is exactly the point of
-      // tracking it.
-      switch section {
-      case .timeline:
-        if case .timelineMonth = newValue {
-          lastTimelineSelection = newValue
-        }
-      case .collections:
-        switch newValue {
-        case .favorites, .album, .folder, .sharedAlbum:
-          lastCollectionsSelection = newValue
-        case .timelineMonth, .none:
-          break  // ignore — only collection-shaped values count for this section
-        }
-      }
+    .onChange(of: selectionSet) { oldSet, newSet in
+      applySelectionChange(oldSet: oldSet, newSet: newSet)
+    }
+    .onChange(of: focusedSelection) { _, _ in
       selectedAsset = nil
+      persistLastSelection()
     }
     .focusedSceneValue(
       \.importBackupAction,
@@ -147,6 +148,7 @@ struct LibraryRootView: View {
       \.saveDiagnosticReportAction,
       SaveDiagnosticReportAction { saveDiagnosticReport() }
     )
+    .focusedSceneValue(\.selectAllSidebarItemsAction, sidebarSelectAllAction)
     // Window min must fit: sidebar min (220) + content min (480) + ~300pt
     // for the detail pane to render a useful asset preview.
     .frame(minWidth: 1100, minHeight: 700)
@@ -196,22 +198,70 @@ struct LibraryRootView: View {
     .pickerStyle(.segmented)
     .frame(width: 220)
     .onChange(of: section) { _, newSection in
-      switch newSection {
-      case .timeline:
-        selection =
-          lastTimelineSelection
-          ?? .timelineMonth(
-            year: Calendar.current.component(.year, from: Date()),
-            month: Calendar.current.component(.month, from: Date())
-          )
-      case .collections:
-        // First flip to Collections defaults to Favorites instead of nil. Favorites is
-        // always present (synthetic — no underlying PHAssetCollection required) and the
-        // most common entry point; landing on a blank "Select a collection" pane on the
-        // first switch felt broken to users in review.
-        selection = lastCollectionsSelection ?? .favorites
-      }
+      restoreSelection(forSection: newSection)
       selectedAsset = nil
+    }
+  }
+
+  /// Restores the highlighted set + focus for the freshly-active section. Falls back to
+  /// the section's natural default (current month for timeline, Favorites for
+  /// collections) on first visit. Direct assignment to both pieces of state at once so
+  /// `applySelectionChange` doesn't churn through a transient half-restored value.
+  private func restoreSelection(forSection newSection: LibrarySection) {
+    switch newSection {
+    case .timeline:
+      if !lastTimeline.items.isEmpty {
+        selectionSet = lastTimeline.items
+        focusedSelection = lastTimeline.focused ?? lastTimeline.items.first
+      } else {
+        let now = Date()
+        let defaultSel: LibrarySelection = .timelineMonth(
+          year: Calendar.current.component(.year, from: now),
+          month: Calendar.current.component(.month, from: now)
+        )
+        selectionSet = [defaultSel]
+        focusedSelection = defaultSel
+      }
+    case .collections:
+      // First flip to Collections defaults to Favorites. Favorites is always present
+      // (synthetic — no underlying PHAssetCollection required) and the most common
+      // entry point; landing on a blank "Select a collection" pane on the first
+      // switch felt broken to users in review.
+      if !lastCollections.items.isEmpty {
+        selectionSet = lastCollections.items
+        focusedSelection = lastCollections.focused ?? lastCollections.items.first
+      } else {
+        selectionSet = [.favorites]
+        focusedSelection = .favorites
+      }
+    }
+  }
+
+  /// Applies a sidebar selection change: updates `focusedSelection` based on the
+  /// diff via `SidebarFocusReducer` and persists the per-section last-state. The
+  /// reducer is pure and unit-tested in `SidebarFocusReducerTests`.
+  private func applySelectionChange(
+    oldSet: Set<LibrarySelection>, newSet: Set<LibrarySelection>
+  ) {
+    focusedSelection = SidebarFocusReducer.nextFocus(
+      oldSet: oldSet, newSet: newSet, currentFocus: focusedSelection)
+    persistLastSelection()
+  }
+
+  /// Writes the current `selectionSet`/`focusedSelection` into the per-section slot so
+  /// the segmented control's restore path can return the user to where they were.
+  /// Filters defensively so a cross-shape value (timeline case in the collections slot
+  /// or vice versa) is never persisted.
+  private func persistLastSelection() {
+    switch section {
+    case .timeline:
+      let filtered = selectionSet.filter(\.isTimeline)
+      let focus = (focusedSelection?.isTimeline == true) ? focusedSelection : filtered.first
+      lastTimeline = PersistedSidebarSelection(items: filtered, focused: focus)
+    case .collections:
+      let filtered = selectionSet.filter(\.isCollection)
+      let focus = (focusedSelection?.isCollection == true) ? focusedSelection : filtered.first
+      lastCollections = PersistedSidebarSelection(items: filtered, focused: focus)
     }
   }
 
@@ -222,9 +272,10 @@ struct LibraryRootView: View {
     Group {
       switch section {
       case .timeline:
-        TimelineSidebarView(selection: $selection, photoLibraryService: photoLibraryManager)
+        TimelineSidebarView(
+          selectionSet: $selectionSet, photoLibraryService: photoLibraryManager)
       case .collections:
-        CollectionsSidebarView(selection: $selection)
+        CollectionsSidebarView(selectionSet: $selectionSet)
       }
     }
     // Sidebar shows "Photos by Year" + album titles without truncation at
@@ -246,7 +297,15 @@ struct LibraryRootView: View {
 
   @ViewBuilder
   private var contentSwitch: some View {
-    switch selection {
+    switch focusedSelection {
+    case .timelineYear(let year):
+      YearContentView(
+        year: year, selectedAsset: $selectedAsset,
+        photoLibraryService: photoLibraryManager
+      )
+      .environmentObject(photoLibraryManager)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
     case .timelineMonth(let year, let month):
       MonthContentView(
         year: year, month: month,
@@ -289,7 +348,7 @@ struct LibraryRootView: View {
       FolderContentView(
         folderId: collectionId,
         title: folderTitle(forCollectionId: collectionId),
-        selection: $selection,
+        selection: folderNavigationBinding,
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
@@ -307,11 +366,82 @@ struct LibraryRootView: View {
     }
   }
 
-  /// Recursive album count under the currently-selected folder, or `nil` when the
-  /// active selection isn't a folder. Drives the toolbar's primary-action label so
+  /// Single-selection bridge for `FolderContentView`. The folder pane writes through
+  /// this binding to navigate when the user clicks an album or sub-folder tile;
+  /// replacing both the set and the focus ensures the sidebar's highlight follows.
+  private var folderNavigationBinding: Binding<LibrarySelection?> {
+    Binding(
+      get: { focusedSelection },
+      set: { newValue in
+        if let newValue {
+          selectionSet = [newValue]
+          focusedSelection = newValue
+        } else {
+          selectionSet = []
+          focusedSelection = nil
+        }
+      }
+    )
+  }
+
+  // MARK: - Sidebar Select-All wiring
+
+  /// Action published into the focused-scene chain so the Edit menu's "Select All"
+  /// command can drive the active sidebar. Label is section-aware so the menu reads
+  /// "Select All Years" or "Select All Collections" — discoverability beats
+  /// per-sidebar hidden keyboard hosts (HIG: Cmd+A belongs in the Edit menu).
+  private var sidebarSelectAllAction: SelectAllSidebarItemsAction {
+    switch section {
+    case .timeline:
+      return SelectAllSidebarItemsAction(label: "Select All Years") {
+        selectAllTimelineYears()
+      }
+    case .collections:
+      return SelectAllSidebarItemsAction(label: "Select All Collections") {
+        selectAllVisibleCollections()
+      }
+    }
+  }
+
+  /// Selects every year currently in the timeline sidebar. Mirrors the previous
+  /// hidden-button host that lived in `TimelineSidebarView`; moved up here so the
+  /// Edit menu can drive it without a private sidebar API.
+  private func selectAllTimelineYears() {
+    let years = (try? photoLibraryManager.availableYears()) ?? []
+    let yearItems = Set(years.map { LibrarySelection.timelineYear(year: $0) })
+    let preserved = selectionSet.filter { !$0.isTimeline }
+    selectionSet = yearItems.union(preserved)
+  }
+
+  /// Selects every top-level row currently visible in the Collections sidebar
+  /// (Favorites + top-level albums/folders + shared albums). Doesn't auto-expand
+  /// folders — matches Finder's "select all" scope, which doesn't reach into
+  /// closed disclosure groups.
+  private func selectAllVisibleCollections() {
+    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    var picked: Set<LibrarySelection> = [.favorites]
+    for descriptor in tree {
+      guard let localId = descriptor.localIdentifier else { continue }
+      switch descriptor.kind {
+      case .album: picked.insert(.album(collectionId: localId))
+      case .folder: picked.insert(.folder(collectionId: localId))
+      case .sharedAlbum: picked.insert(.sharedAlbum(collectionId: localId))
+      case .favorites: break
+      }
+    }
+    let preserved = selectionSet.filter { !$0.isCollection }
+    selectionSet = picked.union(preserved)
+  }
+
+  /// Recursive album count under the currently-focused folder when it is the *only*
+  /// item in the selection set. Drives the toolbar's primary-action label so
   /// "Export Folder" can render as "Export N Albums" — matching the in-pane button.
+  /// Returns `nil` for multi-select (the toolbar derives its label from the bucket
+  /// count instead) or when the focus is not a folder.
   private var selectedFolderAlbumCount: Int? {
-    guard case .folder(let folderId) = selection else { return nil }
+    guard selectionSet.count <= 1, case .folder(let folderId) = focusedSelection else {
+      return nil
+    }
     let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
     guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
       return nil
