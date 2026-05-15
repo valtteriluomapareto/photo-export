@@ -15,3 +15,8 @@ extension ExportManager: AutoSyncImportProviding {}
 /// rendered-media bridge. The required methods live on `ExportManager` itself; this is
 /// just the conformance wire-up.
 extension ExportManager: VariantExporter.Host {}
+
+/// Phase 4b: ExportManager hosts `ExportQueueCoordinator` so the coordinator can read
+/// generation, drive each job's export work, finalize an awaitable run on drain, and
+/// keep the manager's `currentJob*` UI identifiers in sync with the in-flight job.
+extension ExportManager: ExportQueueCoordinator.Host {}
