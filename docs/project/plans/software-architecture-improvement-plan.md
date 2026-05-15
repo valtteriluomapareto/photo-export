@@ -2,7 +2,24 @@
 
 Date: 2026-05-15
 Revised: 2026-05-15 (added Cross-Cutting Contracts, Phase 0, and folded in multi-reviewer feedback: tightened Phase 0 spec, rescoped RecordStoreRouter, swapped Phase 2/3, split Phases 2/4/7)
-Status: Proposed
+Status: In progress — Phase 0 and Phase 1 complete; Phases 2–7 pending
+
+## Progress
+
+Snapshot as of 2026-05-15. Update this table each time a phase lands.
+
+| Phase | State | Landed | Notes |
+|---|---|---|---|
+| Phase 0: Characterization | Done | PR #53 | Generation `isCurrent(_:)` seam, AutoSync emission-sequence regression test, cancel-during-render tempfile cleanup test, Swift 6 Sendable audit ([`phase-0-sendable-audit.md`](phase-0-sendable-audit.md)) |
+| Phase 1: Stabilize Export Boundaries | Done | PR #54 (lands with this commit) | `ExportCompletionPolicy` consolidates `satisfiesEditedFallback` + `shouldRunEditedFallback`; `RecordStoreRouter` owns every record-store `switch placement.kind` (reads, writes, cleanup, reuse-source). `ExportManager.swift` shrank 2,543 → 2,401 lines. |
+| Phase 2: Destination Resolution | Pending | — | Smaller and purer than Phase 1; sits in front of Phase 3 and makes that phase cleaner. |
+| Phase 3a: VariantExporter skeleton + static-resource | Pending | — | Conditional value — pays off when a feature touches variant writing (HEIC conversion, new resource types, parallelism). |
+| Phase 3b: Rendered-media path | Pending | — | Bounded by edited-video regression risk; Phase 0 cancel-during-render test is the gate. |
+| Phase 4a: `ExportJobPlanner` (pure) | Pending | — | Defer `ExportRunCoordinator` unless a second consumer materializes. |
+| Phase 4b: `ExportQueueCoordinator` | Pending | — | Generation ownership stays on `ExportManager` until Phase 5. Prereq: pause/resume/cancel state-snapshot test. |
+| Phase 5: `ImportCoordinator` | Pending | — | Closes the generation-ownership transfer; deletes the Phase 0 scaffolding protocol. Prereq: bulk-import idempotency test. |
+| Phase 6: PhotoLibrary composition | Pending | — | Resolves the largest Sendable-audit cluster. Medium-high regression risk — screenshot mode needs explicit "production PhotoKit not active" assertion. |
+| Phase 7a–g: File reorganization | Pending | — | One destination folder per sub-PR, low-cadence merge windows. |
 
 ## Summary
 
