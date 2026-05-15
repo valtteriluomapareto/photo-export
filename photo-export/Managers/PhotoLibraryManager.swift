@@ -773,7 +773,8 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
       anyAlbums.enumerateObjects { collection, _, _ in
         subtypeHistogram[collection.assetCollectionSubtype.rawValue, default: 0] += 1
       }
-      let histogramString = subtypeHistogram
+      let histogramString =
+        subtypeHistogram
         .sorted { $0.key < $1.key }
         .map { "subtype=\($0.key):\($0.value)" }
         .joined(separator: " ")

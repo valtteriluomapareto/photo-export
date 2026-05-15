@@ -10,6 +10,8 @@ enum ExportRunScope: Equatable, Codable, Sendable {
   case favoritesAssets(Set<String>)
   case allAlbumsFull
   case allAlbumsAssets(Set<String>)
+  case allSharedAlbumsFull
+  case allSharedAlbumsAssets(Set<String>)
   case autoExport(AutoExportScopeSelection)
 }
 

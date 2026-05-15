@@ -520,6 +520,7 @@ final class AutoSyncManager: ObservableObject {
       case .timeline: return .timelineFullLibrary
       case .favorites: return .favoritesFull
       case .albums: return .allAlbumsFull
+      case .sharedAlbums: return .allSharedAlbumsFull
       }
     }
   }

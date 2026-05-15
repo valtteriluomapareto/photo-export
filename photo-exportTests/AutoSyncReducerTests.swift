@@ -464,6 +464,68 @@ struct AutoSyncReducerTests {
     #expect(dirty?.scope(.timeline).pendingPlacementReconciliation == false)
   }
 
+  /// Same as the `.albums` placement-reconciliation rule, but for shared albums:
+  /// PhotoKit doesn't tell us which album class changed, so any collection-level
+  /// mutation must mark both album-shaped scopes dirty when they're selected.
+  @Test func photosChangedWithCollectionChangesMarksSharedAlbumsForReconciliation() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.scopeSelection = AutoExportScopeSelection(sharedAlbums: true)
+
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: [],
+      collectionChangesPresent: true,
+      observedAt: now
+    )
+
+    let (next, _) = AutoSyncReducer.reduce(.photosChanged(event), in: state, now: now)
+
+    let destId = state.destination.id!
+    let dirty = next.dirtyStateByDestination[destId]
+    #expect(dirty?.scope(.sharedAlbums).pendingPlacementReconciliation == true)
+  }
+
+  /// A completed manual `.allSharedAlbumsFull` run clears the `.sharedAlbums`
+  /// scope's dirty state but leaves `.albums` and other scopes untouched. Regression
+  /// guard for the `coveredScopes` mapping.
+  @Test func manualSharedAlbumsRunClearsSharedAlbumsDirtyOnly() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.scopeSelection = AutoExportScopeSelection(albums: true, sharedAlbums: true)
+    let destId = state.destination.id!
+    var dirty = AutoSyncDirtyState.empty
+    var albumsDirty = ScopeDirtyState()
+    albumsDirty.pendingFullReconciliation = true
+    var sharedDirty = ScopeDirtyState()
+    sharedDirty.pendingFullReconciliation = true
+    dirty.setScope(.albums, albumsDirty)
+    dirty.setScope(.sharedAlbums, sharedDirty)
+    state.dirtyStateByDestination[destId] = dirty
+
+    let context = ExportRunContext(
+      source: .manual,
+      visibility: .userVisible,
+      scope: .allSharedAlbumsFull,
+      selection: state.versionSelection,
+      startedAt: now
+    )
+    let summary = ExportRunSummary(
+      context: context,
+      endedAt: now,
+      enqueuedCount: 1,
+      completedCount: 1,
+      failedCount: 0,
+      skippedCount: 0,
+      cancelReason: nil,
+      result: .completed
+    )
+
+    let (next, _) = AutoSyncReducer.reduce(
+      .manualFullExportCompleted(summary), in: state, now: now)
+
+    let nextDirty = next.dirtyStateByDestination[destId]
+    #expect(nextDirty?.scope(.sharedAlbums).pendingFullReconciliation == false)
+    #expect(nextDirty?.scope(.albums).pendingFullReconciliation == true)
+  }
+
   @Test func photosChangedAdvancesTokenWhenEventCarriesOne() {
     let state = enabledStateWithSafeDestinationAndScope()
     let token = Data([0x01, 0x02, 0x03])

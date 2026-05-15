@@ -70,6 +70,16 @@ struct AutoExportSettingsView: View {
           description: "All user-created albums.",
           isOn: scopeBinding(\.albums) { $0.albums = $1 }
         )
+        // iCloud shared albums are opt-in via their own row. Description names
+        // the trade-off (reduced quality) so the user picks it eyes-open rather
+        // than discovering after the fact that their backup of a shared album
+        // is a downscaled JPEG.
+        scopeRow(
+          title: "Shared Albums",
+          description: "iCloud shared albums. Reduced quality — Apple only "
+            + "serves downscaled JPEGs.",
+          isOn: scopeBinding(\.sharedAlbums) { $0.sharedAlbums = $1 }
+        )
       }
 
       Section("Status") {

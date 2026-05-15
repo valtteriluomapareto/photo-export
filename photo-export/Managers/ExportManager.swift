@@ -549,6 +549,21 @@ final class ExportManager: ObservableObject {
     )
   }
 
+  /// Batch action for every iCloud shared album. Used by Auto Export's
+  /// `.sharedAlbums` scope and any future "Export All Shared Albums" UI surface.
+  /// Mirrors `startExportAllAlbums` but routes through the `.sharedAlbum` placement
+  /// kind so each batch member writes to `Collections/Shared Albums/<title>/` at
+  /// reduced fidelity (one downscaled JPEG per asset).
+  func startExportAllSharedAlbums(selectionOverride: ExportVersionSelection? = nil) {
+    enqueueBulkAlbumExport(
+      source: .allSharedAlbums,
+      logTag: "startExportAllSharedAlbums",
+      emptyMessage: "No shared albums to export.",
+      allDoneMessage: "All shared albums in this destination are already exported.",
+      selectionOverride: selectionOverride
+    )
+  }
+
   /// Starts an export of every user album under a single folder, recursively. Each
   /// descendant album resolves to its own `ExportPlacement` exactly as if the user had
   /// opened the album individually and clicked Export Album — folders are not their own
@@ -579,11 +594,14 @@ final class ExportManager: ObservableObject {
   }
 
   /// Where a bulk-album export draws its album-id list from. `.allAlbums` walks the
-  /// whole tree; `.folder` walks one folder's subtree (and short-circuits with a
-  /// "folder no longer exists" message if the id can't be found); `.explicitIds`
-  /// uses the caller-supplied list as-is.
+  /// whole tree; `.allSharedAlbums` walks the flat top-level shared-album list;
+  /// `.folder` walks one folder's subtree (and short-circuits with a "folder no
+  /// longer exists" message if the id can't be found); `.explicitIds` uses the
+  /// caller-supplied list as-is and routes through the `.album` selection (the
+  /// multi-select tile flow in `FolderContentView`).
   private enum BulkAlbumSource {
     case allAlbums
+    case allSharedAlbums
     case folder(folderId: String)
     case explicitIds([String])
   }
@@ -625,10 +643,21 @@ final class ExportManager: ObservableObject {
       }
       do {
         let albumIds: [String]
+        // Whether the batch targets user albums (`.album` selection / scope) or
+        // iCloud shared albums (`.sharedAlbum`). Only `.allSharedAlbums` flips this
+        // to `.sharedAlbum`; folder and explicit-id sources are user-album-only by
+        // design (folders don't contain shared albums; the multi-select UI for
+        // shared albums isn't a feature today).
+        let usesSharedAlbumKind: Bool
         switch source {
         case .allAlbums:
           let tree = try photoLibraryService.fetchCollectionTree()
           albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
+          usesSharedAlbumKind = false
+        case .allSharedAlbums:
+          let tree = try photoLibraryService.fetchCollectionTree()
+          albumIds = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree)
+          usesSharedAlbumKind = true
         case .folder(let folderId):
           let tree = try photoLibraryService.fetchCollectionTree()
           guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
@@ -644,15 +673,25 @@ final class ExportManager: ObservableObject {
             return
           }
           albumIds = PhotoCollectionDescriptor.albumLocalIds(under: folder)
+          usesSharedAlbumKind = false
         case .explicitIds(let ids):
           albumIds = ids
+          usesSharedAlbumKind = false
         }
         var totalEnqueued = 0
         var sawUnauthorized = false
         for collectionId in albumIds {
+          let selection: LibrarySelection =
+            usesSharedAlbumKind
+            ? .sharedAlbum(collectionId: collectionId)
+            : .album(collectionId: collectionId)
+          let scope: PhotoFetchScope =
+            usesSharedAlbumKind
+            ? .sharedAlbum(collectionId: collectionId)
+            : .album(collectionId: collectionId)
           let outcome = try await enqueueCollection(
-            selection: .album(collectionId: collectionId),
-            scope: .album(collectionId: collectionId),
+            selection: selection,
+            scope: scope,
             selectionMode: selectionMode,
             generation: gen
           )
@@ -1148,7 +1187,24 @@ final class ExportManager: ObservableObject {
           )
           finalizeActiveRun(result: .failed, cancelReason: nil)
         }
-      case .timelineAssets, .favoritesAssets, .allAlbumsAssets, .autoExport:
+      case .allSharedAlbumsFull:
+        if !isImporting && canExportCollection && !hasActiveExportWork {
+          startExportAllSharedAlbums(selectionOverride: context.selection)
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+        } else {
+          activeRunBookkeeping = ActiveRunBookkeeping(
+            totalJobsEnqueuedAtStart: totalJobsEnqueued,
+            totalJobsCompletedAtStart: totalJobsCompleted,
+            continuation: continuation
+          )
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      case .timelineAssets, .favoritesAssets, .allAlbumsAssets,
+        .allSharedAlbumsAssets, .autoExport:
         // Targeted asset-id and autoExport scopes land in subsequent Phase 0a slices.
         activeRunBookkeeping = ActiveRunBookkeeping(
           totalJobsEnqueuedAtStart: totalJobsEnqueued,
