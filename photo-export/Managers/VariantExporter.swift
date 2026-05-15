@@ -309,7 +309,7 @@ final class VariantExporter {
     }
     if nsError.domain == NSPOSIXErrorDomain {
       switch nsError.code {
-      case Int(ENOENT), Int(EACCES), Int(EPERM):
+      case Int(ENOENT), Int(EACCES):
         return true
       default:
         return false
