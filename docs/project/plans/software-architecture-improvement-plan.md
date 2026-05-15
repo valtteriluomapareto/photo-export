@@ -2,7 +2,7 @@
 
 Date: 2026-05-15
 Revised: 2026-05-15 (added Cross-Cutting Contracts, Phase 0, and folded in multi-reviewer feedback: tightened Phase 0 spec, rescoped RecordStoreRouter, swapped Phase 2/3, split Phases 2/4/7)
-Status: In progress — Phase 0 and Phase 1 complete; Phases 2–7 pending
+Status: Substantially complete on the `architecture-refactor` integration branch. Phases 0–5 done; Phases 6 and 7 delivered in partial scope (composition-refactor + remaining folder moves deferred to follow-ups).
 
 ## Progress
 
@@ -12,14 +12,14 @@ Snapshot as of 2026-05-15. Update this table each time a phase lands.
 |---|---|---|---|
 | Phase 0: Characterization | Done | PR #53 | Generation `isCurrent(_:)` seam, AutoSync emission-sequence regression test, cancel-during-render tempfile cleanup test, Swift 6 Sendable audit ([`phase-0-sendable-audit.md`](phase-0-sendable-audit.md)) |
 | Phase 1: Stabilize Export Boundaries | Done | PR #54 (lands with this commit) | `ExportCompletionPolicy` consolidates `satisfiesEditedFallback` + `shouldRunEditedFallback`; `RecordStoreRouter` owns every record-store `switch placement.kind` (reads, writes, cleanup, reuse-source). `ExportManager.swift` shrank 2,543 → 2,401 lines. |
-| Phase 2: Destination Resolution | Pending | — | Smaller and purer than Phase 1; sits in front of Phase 3 and makes that phase cleaner. |
-| Phase 3a: VariantExporter skeleton + static-resource | Pending | — | Conditional value — pays off when a feature touches variant writing (HEIC conversion, new resource types, parallelism). |
-| Phase 3b: Rendered-media path | Pending | — | Bounded by edited-video regression risk; Phase 0 cancel-during-render test is the gate. |
-| Phase 4a: `ExportJobPlanner` (pure) | Pending | — | Defer `ExportRunCoordinator` unless a second consumer materializes. |
-| Phase 4b: `ExportQueueCoordinator` | Pending | — | Generation ownership stays on `ExportManager` until Phase 5. Prereq: pause/resume/cancel state-snapshot test. |
-| Phase 5: `ImportCoordinator` | Pending | — | Closes the generation-ownership transfer; deletes the Phase 0 scaffolding protocol. Prereq: bulk-import idempotency test. |
-| Phase 6: PhotoLibrary composition | Pending | — | Resolves the largest Sendable-audit cluster. Medium-high regression risk — screenshot mode needs explicit "production PhotoKit not active" assertion. |
-| Phase 7a–g: File reorganization | Pending | — | One destination folder per sub-PR, low-cadence merge windows. |
+| Phase 2: Destination Resolution | Done | PR #55 | `ExportDestinationResolver` (`Sendable struct`) owns URL + filename allocation, paired-stem allocation, `_orig` companion naming, collision suffixing, inherited group stem. Byte-identical to the pre-extraction inline code. |
+| Phase 3a: VariantExporter skeleton + static-resource | Done | PR #56 | `VariantExporter` (`@MainActor final class`) owns the static-resource write path, reuse-source copy, atomic move, timestamps. Rendered media stayed in ExportManager via temporary `Host.renderToTempURL` bridge. |
+| Phase 3b: Rendered-media path | Done | PR #57 | `MediaRenderer` becomes a direct `VariantExporter` dependency; `Host.renderToTempURL` bridge deleted. ExportManager still constructs the renderer for the `renderActivity` callback. |
+| Phase 4a: `ExportJobPlanner` (pure) | Done | PR #58 | Pure `enum` with two static methods turning assets + predicates into `[ExportJob]`. Predicate-order discipline (isExported before retry-gate) preserved. |
+| Phase 4b: `ExportQueueCoordinator` | Done | PR #60 | Queue state (`pendingJobs`, `isProcessing`, `currentTask`, queued counters), drain loop, pause/resume/cancel, and queue published mirrors all move into the coordinator. ExportManager mirrors via sinks for AutoSync compatibility. Generation stays on the manager. |
+| Phase 5: `ImportCoordinator` | Done | PR #61 | Import flow (~190 lines: scanner → matcher → bulkImport → reconcile) moves into coordinator. `importResult` stays writable on the manager via Host callback. Generation transfer deferred to a follow-up. |
+| Phase 6: PhotoLibrary composition | Done (partial) | PR #62 | Override regression-gate test (20 tests covering every `PhotoLibraryService` method) pins the property "Screenshot mode cannot accidentally fall through to production PhotoKit." Full composition refactor (extract `ProductionPhotoLibraryService` peer, drop inheritance, mark `PhotoLibraryManager` `final`) deferred to a follow-up. |
+| Phase 7a–g: File reorganization | Done (partial) | this PR | Moved into `Records/`, `AutoSync/` (with `Stores/` subgroup), `PhotoLibrary/`, and feature-grouped `Views/`. `Destination/`, `Export/`, and `App/` folder moves deferred to keep blast radius bounded. Xcode 15 synchronized groups made the moves Xcode-config-free. |
 
 ## Summary
 
