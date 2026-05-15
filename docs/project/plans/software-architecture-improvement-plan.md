@@ -122,19 +122,19 @@ photo-export/
 
 These three contracts bind every extracted collaborator. Locking them in before Phase 2 prevents downstream phases from each re-litigating the same questions.
 
-### Generation / cancellation ownership
+### Generation / cancellation ownership (status: deferred follow-up)
 
-The eventual owner is `ExportQueueCoordinator` with this surface:
+**Plan target**: `ExportQueueCoordinator` owns `var generation: Int` and exposes:
 
 - `isCurrent(_ gen: Int) -> Bool`
-- `throwIfCancelledOrStale(_ gen: Int) throws` — **reuses the existing private helper name** already at the bottom of `ExportManager.swift`; do not invent a new name.
+- `throwIfCancelledOrStale(_ gen: Int) throws`
 - `bumpGeneration() -> Int`
 
-Until Phase 5 lands (import extraction), `generation` stays on `ExportManager`. Generation ownership *cannot* move to `ExportQueueCoordinator` while `startImport` and the import-completion path still read the same counter — moving it earlier would force `ImportCoordinator` to hold a backwards reference to the queue, which inverts the dependency direction the plan establishes. Phase 4 introduces `ExportQueueCoordinator` but leaves generation reads going through `ExportManager` until Phase 5 closes the import loop.
+**Current state (post-Phase-5)**: `generation` storage stayed on `ExportManager`. Each of the three extracted collaborators (`VariantExporter`, `ExportQueueCoordinator`, `ImportCoordinator`) holds a `Host` protocol with `generation` / `isCurrent` (and, for `ImportCoordinator`, `bumpGeneration`) as a permanent seam back to the manager. The Phase 0 cancellation helpers (`isCurrent(_:)`, `throwIfCancelledOrStale(_:)`) are now `internal` on `ExportManager` rather than `private`. The Host-protocol scaffolding the plan said would be deleted in Phase 5 is in fact load-bearing today.
 
-Phase 0 consolidates the 20+ inline `self.generation == gen` checks scattered across start/queue/run/import paths into the existing `throwIfCancelledOrStale(_:)` plus a new `isCurrent(_:)` companion. `VariantExporter` (Phase 2b) accepts a small protocol exposing both query methods; that protocol is throwaway scaffolding deleted when Phase 5 lands.
+The transfer was deferred from Phase 5 because: (a) the storage move is purely mechanical but touches every inline generation access across queue + import paths, (b) the Host seam preserves the Phase 0 cancellation contract correctly via callbacks, (c) it does not unblock any downstream phase. Tracked as a follow-up (see Deferred Follow-ups section at the bottom of this plan).
 
-**Why this direction:** the coordinator-owned counter is the smallest delta from today's pattern. Adopting `Task.checkCancellation()` would change cooperative-cancellation semantics — a behavior change rather than a refactor. A free-floating `CancellationToken` value type adds an abstraction without removing the coordinator dependency, since the coordinator still needs to invalidate tokens.
+**Why the coordinator-owned counter was still the right target shape:** smallest delta from today's pattern. Adopting `Task.checkCancellation()` alone would change cooperative-cancellation semantics — a behavior change rather than a refactor. A free-floating `CancellationToken` value type adds an abstraction without removing the coordinator dependency, since the coordinator still needs to invalidate tokens.
 
 ### Actor isolation policy
 
@@ -151,7 +151,7 @@ Phase 0 consolidates the 20+ inline `self.generation == gen` checks scattered ac
 
 - `ExportManager+AutoSyncConformance.swift` stays untouched across every phase.
 - `ExportManager` continues to own `@Published` mirrors for `isRunning`, `isImporting`, `importStage`, `versionSelection`, and `activeRunContext`.
-- **Mirror shape: passthrough publisher, not stored `@Published`.** When extracting `ImportCoordinator`, `ExportManager.importStagePublisher` becomes a computed passthrough of `coordinator.$stage`, not a stored mirror updated by sink. This avoids the one-runloop-tick lag and duplicate `objectWillChange` emission that a stored mirror produces. Properties that views read directly (e.g. `ExportManager.importStage`) keep their `@Published` storage but the setter remains within `ExportManager` so subscribers see exactly one source. The same shape applies when `ExportQueueCoordinator` extracts queue state.
+- **Mirror shape (revised during implementation): stored `@Published` driven by Combine sinks from the coordinator.** The plan originally projected a passthrough publisher on `ExportManager`; in implementation, both `ExportQueueCoordinator` and `ImportCoordinator` ended up owning their own `@Published` state which is mirrored onto `ExportManager`'s same-named properties via `.sink { [weak self] self?.x = $0 }` in the manager's `init`. The mirrors fire synchronously on `@MainActor` (both objects are MainActor-isolated; `@Published`'s `willSet` emission is synchronous), so the AutoSync `exportRunStatePublisher` `CombineLatest3` still observes consistent state — a synchrony pin (`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`) covers the cancellation path. The "stored mirror" shape was chosen because (a) the queue/import state was already stored `@Published` on the manager pre-refactor, so a passthrough would have been a wider behavior change, and (b) it preserves the AutoSync source-of-truth on `ExportManager` (matching the conformance file's untouched-across-every-phase invariant).
 - `PhotoLibraryManager` follows the equivalent rule when its production/screenshot service is extracted: forward the injected service's `objectWillChange` so existing `@EnvironmentObject` view bindings (e.g. `TimelineSidebarView`) see no behavior change.
 - The Phase 0 characterization test snapshots the emission sequence on `exportRunStatePublisher`, `isImportingPublisher`, and `completedRunsPublisher`. Re-run after every phase as the regression gate. Test mechanics are specified in Phase 0.
 
@@ -343,11 +343,11 @@ It should own import stages, scanner invocation, import report generation, bulk 
 
 Done when:
 
-- Import state lives in `ImportCoordinator`; `ExportManager.importStage` is a passthrough publisher.
+- Import state lives in `ImportCoordinator`; `ExportManager.importStage` is a sink-driven `@Published` mirror (revised from the original "passthrough publisher" plan — see Cross-Cutting Contracts §AutoSync seam preservation for the rationale).
 - The Phase 5 idempotency test passes.
 - Import tests target `ImportCoordinator` directly without spinning up `ExportManager`.
 - Export queue changes do not require reading import code.
-- `generation` lives in `ExportQueueCoordinator`; the Phase 0 scaffolding protocol is deleted.
+- ~~`generation` lives in `ExportQueueCoordinator`; the Phase 0 scaffolding protocol is deleted.~~ **Deferred** to a follow-up — see Cross-Cutting Contracts §Generation / cancellation ownership and the Deferred Follow-ups section at the bottom of this plan.
 
 ### Phase 6: Clean Photo Library Composition
 
@@ -388,7 +388,7 @@ Re-grep before each sub-PR opens; the list above is a 2026-05-15 snapshot and wi
 Done (Phase 7 overall) when:
 
 - Top-level folders match the target shape closely enough to guide new contributors.
-- `Managers/` no longer exists.
+- ~~`Managers/` no longer exists.~~ **Partial**: `Records/`, `AutoSync/{Stores/}`, `PhotoLibrary/`, and feature-grouped `Views/` are in place. The remaining `Destination/`, `Export/`, and `App/` moves are deferred — see Deferred Follow-ups.
 - `ContentView` and `LibraryRootView` remain routing shells rather than feature containers.
 - All schemes build, all tests pass, screenshot scheme runs successfully.
 - All audited doc references point to current paths.
@@ -443,9 +443,20 @@ xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination '
 
 ## Success Criteria
 
-- `ExportManager` is ≤ 600 lines after Phase 5, reading as orchestration rather than implementation.
+- ~~`ExportManager` is ≤ 600 lines after Phase 5~~ **Not met.** Actual post-Phase-5 line count: ~1,867. The original target underestimated how much surface (Host-protocol witnesses, `@Published` mirrors driven by sinks, the `export(job:gen:)` orchestration body, AutoSync conformance, run-summary bookkeeping, start/cancel/teardown lifecycle) would remain on `ExportManager` once the queue + import coordinators were carved out. The manager now reads as orchestration over the new collaborators, but the line-count budget was unrealistic and is restated below.
+- `ExportManager` reads as orchestration over its collaborators (`VariantExporter`, `ExportQueueCoordinator`, `ImportCoordinator`, `RecordStoreRouter`, `ExportDestinationResolver`, `ExportJobPlanner`, `ExportCompletionPolicy`) — not as the implementation of any single export concern. **Met.**
 - No method body in extracted collaborators exceeds 40 lines without justification.
 - Export planning, queueing, variant writing, destination resolution, import, and record routing can be tested independently.
 - New export placements can be added by touching a small, predictable set of files (`RecordStoreRouter`, `ExportCompletionPolicy`, and one resolver call site).
-- Screenshot mode is selected by dependency composition instead of inheritance behavior.
-- Folder organization communicates ownership to a new contributor before they read implementation details.
+- Screenshot mode is selected by dependency composition instead of inheritance behavior — **partial**: composition refactor deferred; an override-gate regression test pins the property in the interim. See Deferred Follow-ups.
+- Folder organization communicates ownership to a new contributor before they read implementation details — **partial**: `Records/`, `AutoSync/`, `PhotoLibrary/`, and feature-grouped `Views/` are in place; `Destination/`, `Export/`, and `App/` moves deferred.
+
+## Deferred Follow-ups
+
+The architecture refactor (Phases 0–7) landed substantially complete on the `architecture-refactor` integration branch in May 2026 and merged to `main` as a single mega-PR. The following items were explicitly deferred during the refactor and remain open work — each is safe to land independently and none unblocks the others:
+
+1. **PhotoLibrary composition refactor.** Replace `ScreenshotPhotoLibraryService: PhotoLibraryManager` inheritance with composition: extract a `ProductionPhotoLibraryService` peer, drop the inheritance, mark `PhotoLibraryManager` `final`, and have `PhotoLibraryManager` hold an injected `PhotoLibraryService`. Phase 6 of this plan covers the intent; the partial Phase 6 commit (PR #62) added a 20-test override regression gate as an interim safety net. Why deferred: ~973 lines of production PhotoKit code to relocate; orthogonal to all other Phase-7 folder moves; the override gate covers today's risk surface.
+2. **Generation-counter ownership transfer.** Move `var generation: Int` from `ExportManager` into `ExportQueueCoordinator` and delete the `Host.generation` / `Host.isCurrent` / `Host.bumpGeneration` getters that currently exist on the three collaborator Host protocols. Phase 5 of this plan called for this; in implementation, Phase 5 shipped without it because (a) the storage move is purely mechanical but touches every inline generation access across queue + import paths, (b) the Host seam preserves the Phase 0 cancellation contract correctly via callbacks, (c) it does not unblock any downstream phase.
+3. **Remaining Phase 7 folder moves.** `Destination/` (`ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`), `Export/` (`ExportManager`, `ExportQueueCoordinator`, `ExportJobPlanner`, `VariantExporter`, `ImportCoordinator`, `RecordStoreRouter`, `BackupScanner`, plus the helper-policy types), and `App/` (`PhotoExportApp`, future `AppContainer`, `ScreenshotMode`, `Commands`). Phase 7 sub-PR #63 landed `Records/`, `AutoSync/{Stores/}`, `PhotoLibrary/`, and `Views/{Timeline,Collections,Export,Settings,Shared}/`. The deferred moves are low-priority because Xcode 15 filesystem-synchronized groups make the moves Xcode-config-free, so they can land opportunistically with no blast radius beyond `git log --follow` discontinuity.
+
+A tracking GitHub issue captures these three items as checkboxes; the in-source `Host` protocol comments link back to this section.

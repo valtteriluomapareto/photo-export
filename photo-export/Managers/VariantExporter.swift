@@ -17,8 +17,9 @@ import OSLog
 /// `ExportManager` still constructs the renderer (so it can inject the
 /// `renderActivity` callback) but no longer invokes it. The cancellation seam
 /// (`isCurrent` / `throwIfCancelledOrStale`) and the UI-state mutations are routed
-/// through the host per the Cross-Cutting Contracts — those callbacks migrate to
-/// `ExportQueueCoordinator` in Phase 4b/5.
+/// through the host per the Cross-Cutting Contracts — these Host methods are a
+/// permanent seam until the deferred generation-ownership transfer + UI-state
+/// extraction follow-up lands (tracked separately from the original Phase 4b/5).
 @MainActor
 final class VariantExporter {
 
@@ -29,12 +30,14 @@ final class VariantExporter {
   /// filename / variant / render activity), and bookkeeping-aware failure recording.
   @MainActor
   protocol Host: AnyObject {
-    // Cancellation seam — Phase 0 contract. Moves to `ExportQueueCoordinator` in Phase 5
-    // when generation ownership transfers; deleted from this protocol then.
+    // Cancellation seam — Phase 0 contract. Deferred follow-up to ExportQueueCoordinator
+    // once generation-storage moves there (originally projected for Phase 5; tracked
+    // separately now). Until then this is a permanent Host method.
     func isCurrent(_ gen: Int) -> Bool
     func throwIfCancelledOrStale(_ gen: Int) throws
 
-    // UI-state mirrors. Moved to coordinator-driven publishers in a later phase.
+    // UI-state mirrors. Candidate for migration to coordinator-driven publishers
+    // when ExportManager's UI-state surface is itself extracted; not currently scheduled.
     func setCurrentAssetFilename(_ name: String?)
     func setCurrentJobVariant(_ variant: ExportVariant?)
     func clearRenderActivity()

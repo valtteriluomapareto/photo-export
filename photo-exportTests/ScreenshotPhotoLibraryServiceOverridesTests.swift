@@ -121,8 +121,10 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   @Test func countAdjustedAssetsInScopeReturnsCuratedCount() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    _ = try await svc.countAdjustedAssets(in: .favorites)
-    // Returning at all (vs trapping/throwing on a production fetch) proves the override
+    let total = try await svc.countAssets(in: .favorites)
+    let adjusted = try await svc.countAdjustedAssets(in: .favorites)
+    #expect(adjusted == max(0, total / 4),
+      "screenshot adjusted count must follow the curated max(0, total / 4) shape; any other value means the production path ran (which would throw `authorizationDenied` in unit tests)")
   }
 
   @Test func cachedCountAssetsInScopeReturnsCuratedCount() async throws {
@@ -133,7 +135,10 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   @Test func cachedCountAdjustedAssetsInScopeReturnsCuratedCount() async throws {
     let svc = ScreenshotPhotoLibraryService()
-    _ = try await svc.cachedCountAdjustedAssets(in: .favorites)
+    let total = try await svc.countAssets(in: .favorites)
+    let adjusted = try await svc.cachedCountAdjustedAssets(in: .favorites)
+    #expect(adjusted == max(0, total / 4),
+      "cached adjusted count must follow the curated max(0, total / 4) shape; production would throw `authorizationDenied` from `collectionCountCache.count(_:_:)`'s producer")
   }
 
   // MARK: - Asset details
@@ -179,11 +184,21 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     _ = img  // non-throw is the pin
   }
 
+  /// Limitation: production's `start/stopCachingThumbnails(for:)` also no-ops in unit
+  /// tests because `phAssetCache` is empty (it's populated by a prior `fetchAssets` on
+  /// the real Photos library, which never runs here). Removing the override therefore
+  /// would not fail this test — the override exists so the production path never reaches
+  /// `PHCachingImageManager.shared`, which would otherwise be poked on the real system
+  /// at runtime. The composition follow-up closes this hole structurally; until then
+  /// the assertion below pins method presence + call-shape only.
   @Test func startStopCachingThumbnailsAreNoOps() {
     let svc = ScreenshotPhotoLibraryService()
     let asset = TestAssetFactory.makeAsset(id: "family-1")
     svc.startCachingThumbnails(for: [asset])
     svc.stopCachingThumbnails(for: [asset])
+    // Also exercise the empty path so a future override that crashes on empty input fails here.
+    svc.startCachingThumbnails(for: [])
+    svc.stopCachingThumbnails(for: [])
   }
 
   // MARK: - Wiring
