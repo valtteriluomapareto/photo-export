@@ -8,16 +8,16 @@ import OSLog
 /// - In-progress record marking + in-flight tracking handoff.
 /// - Reuse-source copy path (cross-placement clone of an existing `.done` write).
 /// - Byte production: static resources via `AssetResourceWriter`; rendered media via
-///   the `host` in Phase 3a (moves onto the exporter in Phase 3b).
+///   `MediaRenderer` directly (Phase 3b).
 /// - Atomic move of `.tmp` into place + timestamp application.
 /// - Per-variant exported / failed record write.
 ///
-/// Per `docs/project/plans/software-architecture-improvement-plan.md` Phase 3a, the
-/// rendered-media path is invoked through the `host` so `ExportManager` retains its
-/// renderer wiring. Phase 3b moves the rendered-media call onto the exporter and
-/// deletes `Host.renderToTempURL`. The cancellation seam (`isCurrent` /
-/// `throwIfCancelledOrStale`) and the UI-state mutations are routed through the host
-/// per the Cross-Cutting Contracts — those callbacks migrate to
+/// Per `docs/project/plans/software-architecture-improvement-plan.md` Phase 3b, the
+/// rendered-media path is invoked on the exporter's own `mediaRenderer` dependency.
+/// `ExportManager` still constructs the renderer (so it can inject the
+/// `renderActivity` callback) but no longer invokes it. The cancellation seam
+/// (`isCurrent` / `throwIfCancelledOrStale`) and the UI-state mutations are routed
+/// through the host per the Cross-Cutting Contracts — those callbacks migrate to
 /// `ExportQueueCoordinator` in Phase 4b/5.
 @MainActor
 final class VariantExporter {
@@ -26,8 +26,7 @@ final class VariantExporter {
 
   /// Hooks the exporter calls back into `ExportManager` for state it does not own:
   /// generation-aware cancellation checks, MainActor-published UI state (current
-  /// filename / variant / render activity), bookkeeping-aware failure recording, and
-  /// (Phase 3a only) the rendered-media bridge.
+  /// filename / variant / render activity), and bookkeeping-aware failure recording.
   @MainActor
   protocol Host: AnyObject {
     // Cancellation seam — Phase 0 contract. Moves to `ExportQueueCoordinator` in Phase 5
@@ -46,9 +45,6 @@ final class VariantExporter {
     func recordVariantFailed(
       assetId: String, placement: ExportPlacement, variant: ExportVariant,
       sentinelMessage: String, category: AutoSyncFailureCategory, at: Date)
-
-    // Phase 3a rendered-media bridge. Deleted in Phase 3b.
-    func renderToTempURL(request: MediaRenderRequest, tempURL: URL) async throws
   }
 
   // MARK: - Dependencies
@@ -59,6 +55,7 @@ final class VariantExporter {
   private let destinationResolver: ExportDestinationResolver
   private let recordStoreRouter: RecordStoreRouter
   private let assetResourceWriter: any AssetResourceWriter
+  private let mediaRenderer: any MediaRenderer
   private let fileSystem: any FileSystemService
   private let exportDestination: any ExportDestination
 
@@ -67,6 +64,7 @@ final class VariantExporter {
     destinationResolver: ExportDestinationResolver,
     recordStoreRouter: RecordStoreRouter,
     assetResourceWriter: any AssetResourceWriter,
+    mediaRenderer: any MediaRenderer,
     fileSystem: any FileSystemService,
     exportDestination: any ExportDestination
   ) {
@@ -74,6 +72,7 @@ final class VariantExporter {
     self.destinationResolver = destinationResolver
     self.recordStoreRouter = recordStoreRouter
     self.assetResourceWriter = assetResourceWriter
+    self.mediaRenderer = mediaRenderer
     self.fileSystem = fileSystem
     self.exportDestination = exportDestination
   }
@@ -215,10 +214,7 @@ final class VariantExporter {
         // "no static resource" and "render attempted and failed" cases. The original
         // error survives in the log for diagnostics.
         do {
-          // Phase 3a routes through the host so ExportManager retains its renderer
-          // wiring. Phase 3b deletes this hop and calls `mediaRenderer.render` directly.
-          guard let host else { throw CancellationError() }
-          try await host.renderToTempURL(request: request, tempURL: tempURL)
+          try await mediaRenderer.render(request: request, to: tempURL)
         } catch is CancellationError {
           throw CancellationError()
         } catch {
