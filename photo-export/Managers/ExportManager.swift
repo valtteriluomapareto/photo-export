@@ -917,19 +917,13 @@ final class ExportManager: ObservableObject {
 
     let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
     try throwIfCancelledOrStale(gen)
-    let newJobs: [ExportJob] = assets.compactMap { asset in
-      guard
-        !collectionExportRecordStore.isExported(
-          asset: asset, placement: placement, selection: selectionMode)
-      else { return nil }
-      if skipForAutoSyncRetry(
-        asset: asset, placement: placement, selection: selectionMode)
-      {
-        return nil
-      }
-      return ExportJob(
-        assetLocalIdentifier: asset.id, placement: placement, selection: selectionMode)
-    }
+    let newJobs = ExportJobPlanner.plan(
+      assets: assets, placement: placement, selection: selectionMode,
+      isExported: {
+        collectionExportRecordStore.isExported(
+          asset: $0, placement: placement, selection: selectionMode)
+      },
+      shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     pendingJobs.append(contentsOf: newJobs)
     totalJobsEnqueued += newJobs.count
     queuedCountsByPlacementId[placement.id, default: 0] += newJobs.count
@@ -1083,6 +1077,11 @@ final class ExportManager: ObservableObject {
   /// Scans the month and returns the enqueue outcome. Callers use the outcome to decide
   /// whether to surface the "already exported" toolbar message.
   @discardableResult
+  // Phase 4b will lift the `pendingJobs.append` / `totalJobsEnqueued` /
+  // `queuedCountsByPlacementId` / `updateQueueCount` / `logger.info` /
+  // `EnqueueOutcome` triplet out of the three enqueue* methods into
+  // `ExportQueueCoordinator`. The PhotoKit fetch and the `ExportJobPlanner.plan` call
+  // stay here — only the queue-state mutation moves.
   private func enqueueMonth(
     year: Int, month: Int, selection: ExportVersionSelection, generation gen: Int
   ) async throws -> EnqueueOutcome {
@@ -1091,16 +1090,10 @@ final class ExportManager: ObservableObject {
     let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
     let placement = ExportPlacement.timeline(year: year, month: month)
-    let newJobs: [ExportJob] = assets.compactMap { asset in
-      guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
-        return nil
-      }
-      if skipForAutoSyncRetry(asset: asset, placement: placement, selection: selection) {
-        return nil
-      }
-      return ExportJob(
-        assetLocalIdentifier: asset.id, placement: placement, selection: selection)
-    }
+    let newJobs = ExportJobPlanner.plan(
+      assets: assets, placement: placement, selection: selection,
+      isExported: { exportRecordStore.isExported(asset: $0, selection: selection) },
+      shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     pendingJobs.append(contentsOf: newJobs)
     totalJobsEnqueued += newJobs.count
     queuedCountsByPlacementId[placement.id, default: 0] += newJobs.count
@@ -1117,23 +1110,10 @@ final class ExportManager: ObservableObject {
     guard photoLibraryService.isAuthorized else { return .unauthorized }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
     try throwIfCancelledOrStale(gen)
-    let calendar = Calendar.current
-    var newJobs: [ExportJob] = []
-    newJobs.reserveCapacity(assets.count)
-    for asset in assets {
-      guard let created = asset.creationDate else { continue }
-      let m = calendar.component(.month, from: created)
-      guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
-        continue
-      }
-      let placement = ExportPlacement.timeline(year: year, month: m)
-      if skipForAutoSyncRetry(asset: asset, placement: placement, selection: selection) {
-        continue
-      }
-      newJobs.append(
-        ExportJob(
-          assetLocalIdentifier: asset.id, placement: placement, selection: selection))
-    }
+    let newJobs = ExportJobPlanner.planTimelineYear(
+      assets: assets, year: year, selection: selection,
+      isExported: { exportRecordStore.isExported(asset: $0, selection: selection) },
+      shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     pendingJobs.append(contentsOf: newJobs)
     totalJobsEnqueued += newJobs.count
     for job in newJobs {
