@@ -1403,10 +1403,10 @@ final class ExportManager: ObservableObject {
   /// "Cross-Cutting Contracts > Generation / cancellation ownership", this helper is the
   /// seam future `ExportQueueCoordinator` collaborators will hold; collapsing inline
   /// `self.isCurrent(gen)` checks through it makes the Phase 4/5 move mechanical.
-  // `isCurrent` and `throwIfCancelledOrStale` are declared `internal` so the cancellation
-  // seam is visible across the Phase-3 extraction boundary. `VariantExporter.Host` calls
-  // them through the protocol witness; ExportManager still calls them inline at all the
-  // pre-extraction sites.
+  ///
+  /// Declared `internal` (not `private`) so the cancellation seam is visible across the
+  /// Phase-3 extraction boundary: `VariantExporter.Host` calls it through the protocol
+  /// witness, and ExportManager still calls it inline at all the pre-extraction sites.
   func isCurrent(_ gen: Int) -> Bool {
     return generation == gen
   }
@@ -1811,9 +1811,10 @@ final class ExportManager: ObservableObject {
   /// caller declares the intended `category` so retry routing is
   /// deterministic; the message is used as both the `errorSignature` and
   /// the user-visible description.
-  // Declared `internal` so `VariantExporter.Host` can witness this method. The other two
-  // `recordVariantFailed` overloads remain `private` because they are not part of the
-  // Host protocol surface.
+  ///
+  /// Declared `internal` (not `private`) so `VariantExporter.Host` can witness this
+  /// method. The other two `recordVariantFailed` overloads remain `private` because
+  /// they are not part of the Host protocol surface.
   func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     sentinelMessage: String, category: AutoSyncFailureCategory, at date: Date
