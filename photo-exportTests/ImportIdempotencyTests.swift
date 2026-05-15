@@ -109,7 +109,58 @@ struct ImportIdempotencyTests {
     return result
   }
 
-  // MARK: - Test
+  // MARK: - Tests
+
+  /// Pins the import stage-transition sequence: `.scanningBackupFolder` →
+  /// `.readingPhotosLibrary` → `.rebuildingLocalState` → `.reconcilingDiskState` →
+  /// `.done`. Reordering bulkImport vs reconcile, or moving the matcher around the
+  /// scanner, would produce the same final record snapshot on a happy-path fixture
+  /// while breaking the UI's progress story. The idempotency test below would only
+  /// catch reorderings incidentally (e.g. via a different `prunedRecords` count on a
+  /// ghost file); this test pins the contract directly.
+  @Test func importStageSequenceMatchesContract() async throws {
+    let (manager, photoLib, dest, _, storeRoot) = makeTestHarness()
+    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+
+    let stageDate = date(year: 2025, month: 6, day: 15)
+    try plantBackupFile(
+      in: dest, year: 2025, month: 6, filename: "STAGE.JPG", modDate: stageDate)
+    let asset = TestAssetFactory.makeAsset(
+      id: "stage-asset", creationDate: stageDate, mediaType: .image)
+    photoLib.assetsByYearMonth["2025-6"] = [asset]
+    photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "STAGE.JPG")
+    ]
+
+    var seenStages: [BackupScanner.ImportStage] = []
+    let cancellable = manager.$importStage.sink { stage in
+      if let stage { seenStages.append(stage) }
+    }
+    defer { cancellable.cancel() }
+
+    manager.startImport()
+    await manager.waitForImportCompletion()
+
+    // Drop adjacent duplicates: matchFiles emits its own `.readingPhotosLibrary` →
+    // intermediate stages → repeated `.readingPhotosLibrary` pattern. The contract is
+    // about the *transition sequence* across the five named phases, not the raw count.
+    var canonical: [BackupScanner.ImportStage] = []
+    for stage in seenStages where canonical.last != stage {
+      canonical.append(stage)
+    }
+
+    let expected: [BackupScanner.ImportStage] = [
+      .scanningBackupFolder,
+      .readingPhotosLibrary,
+      .rebuildingLocalState,
+      .reconcilingDiskState,
+      .done,
+    ]
+    #expect(canonical == expected,
+      """
+      Import stage-sequence contract violation. Expected: \(expected) Got: \(canonical)
+      """)
+  }
 
   /// Plants three backup files (two that match library assets, one unmatched), imports
   /// once to land the records, snapshots the timeline store, imports again, and asserts
