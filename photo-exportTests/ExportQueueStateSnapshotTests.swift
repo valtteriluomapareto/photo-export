@@ -167,4 +167,41 @@ struct ExportQueueStateSnapshotTests {
       \(canonical.map(\.description).joined(separator: "\n      "))
       """)
   }
+
+  /// Sink-synchrony pin: the coordinator's `@Published` updates must reach the
+  /// manager's mirrors in the same MainActor turn. `@Published` emits on `willSet`
+  /// synchronously, so an immediate read (no `await` between) sees the new value.
+  ///
+  /// If a future Swift-concurrency change deferred sink delivery to the next runloop
+  /// tick, AutoSync would see a transient `(running=true, queueCount>0)` state where
+  /// today there's none — and the canonical-sequence test above would still pass.
+  /// This test asserts synchronous propagation directly.
+  @Test func teardownQueue_synchronouslyClearsManagerMirrors() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    // Force the coordinator into a running state cheaply by enqueueing one job and
+    // gating its writer so the run loop is parked.
+    let asset = TestAssetFactory.makeAsset(id: "sink-sync")
+    h.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    h.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "X.JPG")
+    ]
+    let gate = AsyncCheckpoint()
+    h.writer.checkpoint = gate
+
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await gate.waitForEnter(count: 1)
+    #expect(h.manager.isRunning, "precondition: coordinator should have flipped isRunning")
+
+    // The contract: teardownQueue() mutates the coordinator's @Published synchronously,
+    // sinks fire synchronously, manager mirrors are updated before this call returns.
+    h.manager.queueCoordinator.teardownQueue()
+    #expect(!h.manager.isRunning,
+      "manager.isRunning must reflect coordinator state synchronously after teardownQueue")
+    #expect(!h.manager.isPaused)
+    #expect(h.manager.queueCount == 0)
+
+    await gate.releaseAll()
+  }
 }

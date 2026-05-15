@@ -272,6 +272,9 @@ final class ExportManager: ObservableObject {
   /// are kept in sync with the coordinator's own publishers via sinks established in
   /// `init` — so existing UI bindings and the AutoSync `exportRunStatePublisher` keep
   /// emitting from the same `ExportManager` source.
+  ///
+  /// IUO for the same `host: self` cycle as `variantExporter` (see that property above)
+  /// — `self` must be fully initialized before the coordinator can hold it as Host.
   private(set) var queueCoordinator: ExportQueueCoordinator!
   private var queueCancellables: Set<AnyCancellable> = []
 
