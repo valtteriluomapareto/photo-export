@@ -484,6 +484,59 @@ struct AutoSyncReducerTests {
     #expect(dirty?.scope(.sharedAlbums).pendingPlacementReconciliation == true)
   }
 
+  /// An `.autoExport(scopes)` umbrella summary clears dirty for every scope in
+  /// its selection that's *still* enabled in the current state. Regression for
+  /// `AutoSyncReducer.coveredScopes`'s set-intersect on the umbrella case —
+  /// the user could have toggled a scope off between dispatch and completion,
+  /// and the reducer must not blanket-clear scopes the user no longer wants.
+  ///
+  /// Setup: an autoSync run was dispatched with `[timeline, sharedAlbums]`
+  /// selected. Between dispatch and completion the user turned off
+  /// `.sharedAlbums`. The completion event clears `.timeline` dirty (still
+  /// selected) but leaves `.sharedAlbums` dirty (no longer selected — the
+  /// user's intent overrides the past dispatch).
+  @Test func autoExportUmbrellaCompletionIntersectsWithCurrentSelection() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    // Current selection: only .timeline. The dispatched run carried .timeline +
+    // .sharedAlbums.
+    state.scopeSelection = AutoExportScopeSelection(timeline: true)
+    let destId = state.destination.id!
+    var dirty = AutoSyncDirtyState.empty
+    var timelineDirty = ScopeDirtyState()
+    timelineDirty.pendingFullReconciliation = true
+    var sharedDirty = ScopeDirtyState()
+    sharedDirty.pendingFullReconciliation = true
+    dirty.setScope(.timeline, timelineDirty)
+    dirty.setScope(.sharedAlbums, sharedDirty)
+    state.dirtyStateByDestination[destId] = dirty
+
+    let dispatchSelection = AutoExportScopeSelection(
+      timeline: true, sharedAlbums: true)
+    let context = ExportRunContext(
+      source: .autoSync,
+      visibility: .background,
+      scope: .autoExport(dispatchSelection),
+      selection: state.versionSelection,
+      startedAt: now
+    )
+    let summary = ExportRunSummary(
+      context: context, endedAt: now, enqueuedCount: 1, completedCount: 1,
+      failedCount: 0, skippedCount: 0, cancelReason: nil, result: .completed)
+
+    // `autoSyncRunCompleted` is the autoSync-source counterpart of
+    // `manualFullExportCompleted`; both route through the same `coveredScopes`
+    // helper but the autoSync variant is where the umbrella matters in
+    // production.
+    let (next, _) = AutoSyncReducer.reduce(
+      .autoSyncRunCompleted(summary), in: state, now: now)
+    let nextDirty = next.dirtyStateByDestination[destId]
+
+    // .timeline cleared (still selected); .sharedAlbums preserved (user
+    // toggled it off between dispatch and completion).
+    #expect(nextDirty?.scope(.timeline).pendingFullReconciliation == false)
+    #expect(nextDirty?.scope(.sharedAlbums).pendingFullReconciliation == true)
+  }
+
   /// A completed manual `.allSharedAlbumsFull` run clears the `.sharedAlbums`
   /// scope's dirty state but leaves `.albums` and other scopes untouched. Regression
   /// guard for the `coveredScopes` mapping.

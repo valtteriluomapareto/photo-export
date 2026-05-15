@@ -803,7 +803,13 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// surfaced them as their own section in the sidebar. Earlier versions of this
   /// codebase explicitly dropped shared albums; the comment above the call site
   /// recorded that choice. The README's "Known limitations" was updated alongside.
-  nonisolated fileprivate static func descriptorKind(
+  ///
+  /// `internal` (default) instead of `fileprivate` so the routing — the single
+  /// place that decides which PhotoKit subtypes the app surfaces, and how — is
+  /// directly unit-testable through `@testable import`. Without that test the
+  /// production tree only sees these decisions via `descriptor(from:)` plus a
+  /// canned `PHCollection`, which is harder to instantiate in a unit test.
+  nonisolated static func descriptorKind(
     for subtype: PHAssetCollectionSubtype
   ) -> PhotoCollectionDescriptor.Kind? {
     switch subtype {

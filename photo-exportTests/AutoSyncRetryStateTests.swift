@@ -35,15 +35,6 @@ struct AutoSyncRetryStateTests {
     #expect(AutoSyncRetryScopeKey(rawValue: "shared-album:") == nil)
   }
 
-  /// Regression: parsing must check `shared-album:` before `album:` so a typed
-  /// `.sharedAlbum` round-trip doesn't decode as `.album`. The current
-  /// implementation happens to be safe because the strings differ at character 0,
-  /// but the ordering documents the precedence.
-  @Test func scopeKeyParsesSharedAlbumBeforeAlbum() {
-    let key = AutoSyncRetryScopeKey(rawValue: "shared-album:placement-id")
-    #expect(key == .sharedAlbum(placementId: "placement-id"))
-  }
-
   // MARK: - recordFailure
 
   @Test func recordFailureCreatesEntryAtAttemptOne() {

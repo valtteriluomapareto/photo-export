@@ -181,6 +181,22 @@ final class FakePhotoLibraryService: PhotoLibraryService {
       }
       return assets
     case .sharedAlbum(let collectionId):
+      // Shared albums share the `fetchAssetsErrorByAlbumId` / -checkpoint /
+      // -delay knobs with `.album` — the dict is keyed by collection id, and
+      // PhotoKit-side identifiers don't overlap between the two kinds so a
+      // single map is unambiguous in practice. Same ordering as the `.album`
+      // branch (checkpoint, error, delay) so tests can exercise the bulk
+      // shared-album partial-failure path the same way they do for user
+      // albums.
+      if let checkpoint = fetchAssetsCheckpointByAlbumId[collectionId] {
+        await checkpoint.enter()
+      }
+      if let perAlbumError = fetchAssetsErrorByAlbumId[collectionId] {
+        throw perAlbumError
+      }
+      if let delay = fetchAssetsDelayByAlbumId[collectionId] {
+        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+      }
       let assets = assetsBySharedAlbumLocalId[collectionId] ?? []
       if let mediaType {
         return assets.filter { $0.mediaType == mediaType }

@@ -31,6 +31,25 @@ enum CollectionSidebarBadge {
   }
 }
 
+/// Rendering decision for the "Shared Albums" sidebar section. Extracted from
+/// the view so the four-cell truth table — (`hasSharedAlbums`, `hintDismissed`)
+/// → which subview, if any — is unit-testable without instantiating SwiftUI.
+///
+/// The rule: render the actual albums when there are any; render the discovery
+/// hint when the section is empty but the user hasn't dismissed the explainer
+/// yet; hide the section entirely once they've dismissed it for an empty list.
+enum SharedAlbumsSectionMode: Equatable {
+  case albums
+  case hint
+  case hidden
+
+  static func resolve(hasSharedAlbums: Bool, hintDismissed: Bool) -> Self {
+    if hasSharedAlbums { return .albums }
+    if !hintDismissed { return .hint }
+    return .hidden
+  }
+}
+
 /// Sidebar for the Collections section: a synthetic Favorites entry followed by the
 /// user's albums and folders. Selection is bridged out as a `LibrarySelection` so the
 /// content area can observe it.
@@ -80,22 +99,30 @@ struct CollectionsSidebarView: View {
         }
       }
 
-      // Always render the "Shared Albums" section header when there's anything to
-      // show in it — either the actual shared albums, or the discovery hint for
-      // users who don't have them surfaced yet. The header is what teaches new
-      // users the feature exists; a hint floating without a header reads as an
-      // orphan card. The section is hidden entirely only when both branches go
-      // empty (no albums AND the hint has been dismissed).
-      if !sharedAlbums.isEmpty {
+      // Always render the "Shared Albums" section header when there's anything
+      // to show in it — either the actual shared albums, or the discovery hint
+      // for users who don't have them surfaced yet. The header is what teaches
+      // new users the feature exists; a hint floating without a header reads
+      // as an orphan card. The section is hidden entirely only when both
+      // branches go empty (no albums AND the hint has been dismissed). The
+      // four-cell truth table is encoded in `SharedAlbumsSectionMode.resolve`
+      // so it's unit-testable in isolation from SwiftUI.
+      switch SharedAlbumsSectionMode.resolve(
+        hasSharedAlbums: !sharedAlbums.isEmpty,
+        hintDismissed: sharedAlbumsHintDismissed)
+      {
+      case .albums:
         Section("Shared Albums") {
           ForEach(sharedAlbums, id: \.id) { node in
             descriptorRows(node, depth: 0)
           }
         }
-      } else if !sharedAlbumsHintDismissed {
+      case .hint:
         Section("Shared Albums") {
           sharedAlbumsHintRow
         }
+      case .hidden:
+        EmptyView()
       }
     }
     .navigationTitle("Photo Export")

@@ -114,6 +114,39 @@ struct PhotoLibraryServiceCollectionsTests {
 
   // MARK: - fetchCollectionTree
 
+  // MARK: - descriptorKind subtype routing
+
+  /// The `PHAssetCollectionSubtype → PhotoCollectionDescriptor.Kind` mapping
+  /// in `PhotoLibraryManager.descriptorKind(for:)` is the single source of
+  /// truth for which PhotoKit album subtypes the app surfaces. Pinned here
+  /// rather than indirectly through `descriptor(from:parentPath:)` because
+  /// instantiating a `PHCollection` in a unit test is impractical.
+  ///
+  /// Anything not in this list — smart albums other than Favorites,
+  /// imported albums, legacy Photo Stream, future Apple-added subtypes —
+  /// must return `nil` so the collection tree builder skips it. A future
+  /// regression that, say, surfaced `.albumImported` would silently pull
+  /// in iTunes-synced photos under the user-album section.
+  @Test func descriptorKindMapsAlbumSubtypesCorrectly() {
+    #expect(PhotoLibraryManager.descriptorKind(for: .albumRegular) == .album)
+    #expect(PhotoLibraryManager.descriptorKind(for: .albumSyncedAlbum) == .album)
+    #expect(PhotoLibraryManager.descriptorKind(for: .albumCloudShared) == .sharedAlbum)
+  }
+
+  @Test func descriptorKindReturnsNilForUnsurfacedSubtypes() {
+    // Subtypes the app intentionally drops. `.albumMyPhotoStream` is deprecated;
+    // `.albumImported` covers legacy iTunes-synced libraries; smart-album
+    // subtypes belong to `assetCollectionType == .smartAlbum` rather than
+    // `.album` but the routing function is defensive against being called
+    // with them too.
+    #expect(PhotoLibraryManager.descriptorKind(for: .albumImported) == nil)
+    #expect(PhotoLibraryManager.descriptorKind(for: .albumMyPhotoStream) == nil)
+    #expect(PhotoLibraryManager.descriptorKind(for: .smartAlbumFavorites) == nil)
+    #expect(PhotoLibraryManager.descriptorKind(for: .smartAlbumScreenshots) == nil)
+    #expect(PhotoLibraryManager.descriptorKind(for: .smartAlbumVideos) == nil)
+    #expect(PhotoLibraryManager.descriptorKind(for: .any) == nil)
+  }
+
   @Test func fetchCollectionTreeReturnsCannedTree() throws {
     let svc = FakePhotoLibraryService()
     let tree: [PhotoCollectionDescriptor] = [
