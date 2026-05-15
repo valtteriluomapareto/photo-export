@@ -215,6 +215,10 @@ final class ExportManager: ObservableObject {
   /// (reads, writes, cancellation cleanup, reuse-source lookup). Initialised in `init`
   /// once both stores are bound.
   let recordStoreRouter: RecordStoreRouter
+  /// Owns destination URL and filename decisions: stem allocation, `_orig` companion
+  /// naming, inherited group stem, unique-filename collision suffixing. Initialised in
+  /// `init` against the same `fileSystem` the rest of the pipeline uses.
+  let destinationResolver: ExportDestinationResolver
   let assetResourceWriter: any AssetResourceWriter
   // `var` rather than `let` so we can rebind it at the end of `init` with a
   // callback that captures `self` weakly. Swift forbids referencing `self`
@@ -301,6 +305,7 @@ final class ExportManager: ObservableObject {
       collectionStore: self.collectionExportRecordStore)
     self.assetResourceWriter = assetResourceWriter
     self.fileSystem = fileSystem
+    self.destinationResolver = ExportDestinationResolver(fileSystem: fileSystem)
     // Provisional renderer — gives `self.mediaRenderer` a value so all
     // stored properties are initialised before we capture `self` below.
     if let mediaRenderer {
@@ -1475,7 +1480,7 @@ final class ExportManager: ObservableObject {
       // `.original` file is written at `<stem>_orig.<origExt>`; otherwise at the bare stem.
       let pairOriginalWithSuffix = required.contains(.edited)
 
-      var groupStem = inheritedGroupStem(
+      var groupStem = ExportDestinationResolver.inheritedGroupStem(
         from: existingRecord, descriptor: descriptor, resources: resources)
 
       // Pre-allocate a paired stem when we will write both variants in this run with no
@@ -1488,10 +1493,10 @@ final class ExportManager: ObservableObject {
         let editedProducer = ResourceSelection.selectEditedProducer(
           from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
         if let editedFilename = editedProducer.originalFilename {
-          let baseStem = splitFilename(originalRes.originalFilename).base
+          let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
           let originalExt = (originalRes.originalFilename as NSString).pathExtension
           let editedExt = (editedFilename as NSString).pathExtension
-          groupStem = allocatePairedGroupStem(
+          groupStem = destinationResolver.allocatePairedGroupStem(
             baseStem: baseStem, editedExt: editedExt, originalExt: originalExt, destDir: destDir)
         }
       }
@@ -1620,7 +1625,7 @@ final class ExportManager: ObservableObject {
       return nil
     }
 
-    let (finalURL, chosenStem) = try resolveDestination(
+    let (finalURL, chosenStem) = try destinationResolver.resolveDestination(
       variant: variant,
       descriptor: descriptor,
       originalFilename: originalFilename,
@@ -1771,101 +1776,10 @@ final class ExportManager: ObservableObject {
     return chosenStem
   }
 
-  /// Resolves the final URL and the group stem for a variant. Throws when a paired-stem
-  /// conflict would silently split the pair (step-1 fail-path).
-  ///
-  /// `groupStem` is the chosen pair stem when known: inherited from a prior `.done` record
-  /// for this asset, or pre-allocated by `allocatePairedGroupStem` when both variants are
-  /// being written together. When nil, only one variant is being written for this asset and
-  /// the file lands at the natural stem with `uniqueFileURL` collision handling.
-  ///
-  /// `pairOriginalWithSuffix` is true when this asset's `.original` is paired with an
-  /// `.edited` (current run or prior record) and so should be written at `<stem>_orig`.
-  private func resolveDestination(
-    variant: ExportVariant,
-    descriptor: AssetDescriptor,
-    originalFilename: String,
-    resources: [ResourceDescriptor],
-    destDir: URL,
-    groupStem: String?,
-    pairOriginalWithSuffix: Bool
-  ) throws -> (URL, String) {
-    switch variant {
-    case .original:
-      let origExt = (originalFilename as NSString).pathExtension
-      if let stem = groupStem {
-        let filename = ExportFilenamePolicy.originalFilename(
-          stem: stem, ext: origExt, withSuffix: pairOriginalWithSuffix)
-        let candidate = destDir.appendingPathComponent(filename)
-        if fileSystem.fileExists(atPath: candidate.path) {
-          throw NSError(
-            domain: "Export", code: 5,
-            userInfo: [
-              NSLocalizedDescriptionKey:
-                "Paired original filename already exists on disk: \(candidate.lastPathComponent)"
-            ])
-        }
-        return (candidate, stem)
-      }
-      // Fresh single-variant `.original`: no pairing, use uniqueFileURL collision handling.
-      let (origStem, _) = splitFilename(originalFilename)
-      let finalURL = uniqueFileURL(in: destDir, baseName: origStem, ext: origExt)
-      return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
-
-    case .edited:
-      let editedExt = (originalFilename as NSString).pathExtension
-      if let stem = groupStem {
-        let filename = ExportFilenamePolicy.editedFilename(
-          stem: stem, editedResourceFilename: originalFilename)
-        let (base, ext) = splitFilename(filename)
-        // If the inherited natural stem is already taken (post-edit case where the prior
-        // `.original.done` occupies it), uniqueFileURL splits the pair onto a `(N)`
-        // suffix. This is the documented one-time cost on first re-export after each new
-        // edit.
-        let finalURL = uniqueFileURL(in: destDir, baseName: base, ext: ext)
-        return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
-      }
-      // Fresh single-variant `.edited` (default mode adjusted asset, no prior records).
-      // Use the original-side resource's stem so the edited file lands at e.g.
-      // `IMG_0001.JPG` (matching what Photos.app does for a single-asset export).
-      let baseStem: String
-      if let original = ResourceSelection.selectOriginalResource(
-        from: resources, mediaType: descriptor.mediaType)
-      {
-        baseStem = splitFilename(original.originalFilename).base
-      } else {
-        baseStem = splitFilename(originalFilename).base
-      }
-      let finalURL = uniqueFileURL(in: destDir, baseName: baseStem, ext: editedExt)
-      return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
-    }
-  }
-
-  /// Allocates a stem where both the natural-stem edited target (`<stem>.<editedExt>`) and
-  /// the `_orig` companion target (`<stem>_orig.<originalExt>`) are simultaneously free.
-  /// Bumps the per-pair collision suffix until both slots are available so the pair never
-  /// splits across stems.
-  private func allocatePairedGroupStem(
-    baseStem: String, editedExt: String, originalExt: String, destDir: URL
-  ) -> String {
-    var stem = baseStem
-    var index = 1
-    while index < 10_000 {
-      let editedTarget = destDir.appendingPathComponent(stem)
-        .appendingPathExtension(editedExt)
-      let origTarget = destDir.appendingPathComponent(
-        stem + ExportFilenamePolicy.originalSuffix
-      ).appendingPathExtension(originalExt)
-      if !fileSystem.fileExists(atPath: editedTarget.path)
-        && !fileSystem.fileExists(atPath: origTarget.path)
-      {
-        return stem
-      }
-      stem = "\(baseStem) (\(index))"
-      index += 1
-    }
-    return stem
-  }
+  // Destination resolution (URL + filename allocation, paired-stem allocation, collision
+  // suffixing, inherited group stem) lives on `ExportDestinationResolver`. Callers go
+  // through `self.destinationResolver` or the static helpers
+  // `ExportDestinationResolver.splitFilename` / `ExportDestinationResolver.inheritedGroupStem`.
 
   // MARK: - Edited-unavailable fallback (issue #22)
 
@@ -1900,9 +1814,9 @@ final class ExportManager: ObservableObject {
       )
       return
     }
-    let baseStem = splitFilename(originalRes.originalFilename).base
+    let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
     let originalExt = (originalRes.originalFilename as NSString).pathExtension
-    let stem = allocateUnusedOrigStem(
+    let stem = destinationResolver.allocateUnusedOrigStem(
       baseStem: baseStem, originalExt: originalExt, destDir: destDir)
     do {
       try throwIfCancelledOrStale(gen)
@@ -1963,62 +1877,7 @@ final class ExportManager: ObservableObject {
     recordStoreRouter.variants(forAssetId: assetId, placement: placement)
   }
 
-  /// Finds the smallest `(N)`-suffixed `baseStem` whose `_orig` companion
-  /// slot is free. The fallback only writes the original; the natural-stem
-  /// edited slot is intentionally not checked because we don't know the
-  /// edited extension here, and a future run that succeeds at the edit will
-  /// allocate its own stem.
-  private func allocateUnusedOrigStem(
-    baseStem: String, originalExt: String, destDir: URL
-  ) -> String {
-    var stem = baseStem
-    var index = 1
-    while index < 10_000 {
-      let target = destDir.appendingPathComponent(
-        stem + ExportFilenamePolicy.originalSuffix
-      ).appendingPathExtension(originalExt)
-      if !fileSystem.fileExists(atPath: target.path) { return stem }
-      stem = "\(baseStem) (\(index))"
-      index += 1
-    }
-    return stem
-  }
-
-  /// Recovers the group stem from a prior `.done` variant record so a follow-up run that
-  /// adds the missing variant pairs against the same stem.
-  ///
-  /// `_orig` is both an app companion marker and a string a user can put in an actual
-  /// original filename (e.g. `vacation_orig.JPG`). When the recorded `.original` filename
-  /// exactly equals the asset's current original-side resource filename, treat it as the
-  /// user's natural filename — even when its stem ends with `_orig` — so the asset stays
-  /// pinned to the `vacation_orig` stem and a later edited write becomes
-  /// `vacation_orig (1).<ext>` rather than `vacation.<ext>`.
-  private func inheritedGroupStem(
-    from record: ExportRecord?,
-    descriptor: AssetDescriptor,
-    resources: [ResourceDescriptor]
-  ) -> String? {
-    guard let record else { return nil }
-    if let edited = record.variants[.edited], edited.status == .done,
-      let filename = edited.filename
-    {
-      return splitFilename(filename).base
-    }
-    if let original = record.variants[.original], original.status == .done,
-      let filename = original.filename
-    {
-      let originalResourceFilename = ResourceSelection.selectOriginalResource(
-        from: resources, mediaType: descriptor.mediaType)?.originalFilename
-      if let originalResourceFilename, filename == originalResourceFilename {
-        return splitFilename(filename).base
-      }
-      if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: filename) {
-        return parsed.groupStem
-      }
-      return splitFilename(filename).base
-    }
-    return nil
-  }
+  // `allocateUnusedOrigStem` and `inheritedGroupStem` moved to ExportDestinationResolver.
 
   // MARK: - Helpers
 
@@ -2154,24 +2013,8 @@ final class ExportManager: ObservableObject {
       relPath: relPath, filename: filename, exportedAt: exportedAt)
   }
 
-  func splitFilename(_ filename: String) -> (base: String, ext: String) {
-    let url = URL(fileURLWithPath: filename)
-    let base = url.deletingPathExtension().lastPathComponent
-    let ext = url.pathExtension
-    return (base, ext)
-  }
-
-  func uniqueFileURL(in directory: URL, baseName: String, ext: String) -> URL {
-    var candidate = directory.appendingPathComponent(baseName).appendingPathExtension(ext)
-    var index = 1
-    while fileSystem.fileExists(atPath: candidate.path) {
-      let nextName = "\(baseName) (\(index))"
-      candidate = directory.appendingPathComponent(nextName).appendingPathExtension(ext)
-      index += 1
-      if index > 10_000 { break }
-    }
-    return candidate
-  }
+  // `splitFilename` and `uniqueFileURL` moved to ExportDestinationResolver
+  // (static + instance respectively).
 
   // MARK: - Import Existing Backup
 
