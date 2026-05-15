@@ -64,6 +64,15 @@ struct ExportDestinationResolverTests {
     #expect(r.ext == "png")
   }
 
+  /// `URL(fileURLWithPath:)` strips any preceding path components — `splitFilename` returns
+  /// only the leaf base and extension. Load-bearing because some call sites pass values
+  /// that, in malformed inputs, could contain slashes.
+  @Test func splitFilename_pathStripping_returnsOnlyLeaf() {
+    let r = ExportDestinationResolver.splitFilename("a/b/c.jpg")
+    #expect(r.base == "c")
+    #expect(r.ext == "jpg")
+  }
+
   // MARK: - uniqueFileURL
 
   @Test func uniqueFileURL_noConflict() throws {
@@ -91,6 +100,26 @@ struct ExportDestinationResolverTests {
     }
     let url = resolver.uniqueFileURL(in: dir, baseName: "IMG", ext: "heic")
     #expect(url.lastPathComponent == "IMG (6).heic")
+  }
+
+  /// Loop is capped at 10 000 iterations. On overflow, the function must return the last
+  /// attempted URL rather than spinning forever or trapping. Uses a programmable fake
+  /// filesystem because planting 10 000 real files is wasteful.
+  @Test func uniqueFileURL_capRespected_returnsLastAttemptedURL() {
+    final class AlwaysExists: FileSystemService, @unchecked Sendable {
+      func fileExists(atPath path: String) -> Bool { true }
+      func moveItemAtomically(from src: URL, to dst: URL) throws {}
+      func applyTimestamps(creationDate: Date, to url: URL) {}
+      func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws {}
+      func removeItem(at url: URL) throws {}
+      func copyItem(from src: URL, to dst: URL) throws {}
+    }
+    let resolver = ExportDestinationResolver(fileSystem: AlwaysExists())
+    let dir = URL(fileURLWithPath: "/tmp/cap-test")
+    let url = resolver.uniqueFileURL(in: dir, baseName: "X", ext: "JPG")
+    // Body increments index until 10 001 and breaks; the last candidate it constructed
+    // before the break is "X (10000).JPG".
+    #expect(url.lastPathComponent == "X (10000).JPG")
   }
 
   // MARK: - allocatePairedGroupStem
