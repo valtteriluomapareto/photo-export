@@ -1341,13 +1341,20 @@ final class ExportManager: ObservableObject {
 
   /// Non-throwing companion to `throwIfCancelledOrStale(_:)`. Returns `true` when the
   /// captured generation is still the active one, i.e. the work has not been superseded
-  /// by `bumpGeneration`-equivalent transitions (`cancelAndClear`, `clearPending`,
-  /// `interruptForDestinationUnavailable`, `supersedeForManualRun`). Use this at non-
-  /// throwing checkpoints — typically inside escaping closures that `return` early when
-  /// the run is stale. Per `docs/project/plans/software-architecture-improvement-plan.md`
-  /// "Cross-Cutting Contracts > Generation / cancellation ownership", this helper is the
-  /// seam future `ExportQueueCoordinator` collaborators will hold; collapsing inline
-  /// `self.isCurrent(gen)` checks through it makes the Phase 4/5 move mechanical.
+  /// by `bumpGeneration`-equivalent transitions (`cancelAndClear`,
+  /// `interruptForDestinationUnavailable`, `supersedeForManualRun`, `cancelImport`).
+  /// Note: `clearPending()` only drops queued jobs and does NOT bump generation —
+  /// in-flight work that started before `clearPending` keeps its `gen` and finishes
+  /// normally. The path that *does* cancel mid-flight is `cancelAndClear`. Use this
+  /// helper at non-throwing checkpoints — typically inside escaping closures that
+  /// `return` early when the run is stale. Per
+  /// `docs/project/plans/software-architecture-improvement-plan.md` "Cross-Cutting
+  /// Contracts > Generation / cancellation ownership", this helper is the seam
+  /// `VariantExporter`, `ExportQueueCoordinator`, and `ImportCoordinator` hold via
+  /// their respective `Host` protocols. The plan originally projected the storage of
+  /// `generation` to migrate into `ExportQueueCoordinator` in Phase 5; that transfer
+  /// is deferred to a follow-up and the Host getters are a permanent seam until it
+  /// lands.
   ///
   /// Declared `internal` (not `private`) so the cancellation seam is visible across the
   /// Phase-3 extraction boundary: `VariantExporter.Host` calls it through the protocol

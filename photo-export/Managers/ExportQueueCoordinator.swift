@@ -9,10 +9,12 @@ import OSLog
 /// Per `docs/project/plans/software-architecture-improvement-plan.md` Phase 4b, this is
 /// where `pendingJobs`, `isProcessing`, `currentTask`, `queuedCountsByPlacementId`,
 /// `processQueueIfNeeded`, `processNext`, `updateQueueCount`, `pause`, `resume`, and
-/// `clearPending` move. ExportManager keeps `generation` (transfers in Phase 5), the
-/// `currentJob*` UI identifiers, the per-asset bookkeeping, and the `export(job:gen:)`
-/// body itself — the coordinator drives the loop and calls back via `Host` to run each
-/// job.
+/// `clearPending` live. ExportManager retains `generation`, the `currentJob*` UI
+/// identifiers, the per-asset bookkeeping, and the `export(job:gen:)` body itself — the
+/// coordinator drives the loop and calls back via `Host` to run each job. The plan
+/// originally projected `generation` storage to migrate here in Phase 5; that transfer
+/// is deferred to a follow-up and the Host getters (`generation`, `isCurrent`) are a
+/// permanent seam until it lands.
 ///
 /// `@Published` state on the coordinator is mirrored on ExportManager via sinks so
 /// existing views and the AutoSync `exportRunStatePublisher` keep their stable read
@@ -30,8 +32,8 @@ final class ExportQueueCoordinator: ObservableObject {
   /// jobs.
   @MainActor
   protocol Host: AnyObject {
-    /// Phase 0 cancellation contract. Moves to the coordinator in Phase 5 when import
-    /// extraction closes the generation-ownership loop.
+    /// Phase 0 cancellation contract. Deferred follow-up will move `generation` storage
+    /// into this coordinator; until then these are a permanent seam back to the manager.
     var generation: Int { get }
     func isCurrent(_ gen: Int) -> Bool
 
@@ -147,8 +149,9 @@ final class ExportQueueCoordinator: ObservableObject {
   //         interruptForDestinationUnavailable)
 
   /// Cancels the in-flight `currentTask`, clears every queue counter, drops the queue,
-  /// resets running/paused/processing flags. Does NOT bump generation — that lives on
-  /// ExportManager (Phase 5 transfer).
+  /// resets running/paused/processing flags. Does NOT bump generation — `generation`
+  /// lives on `ExportManager` and is bumped there by the cancellation paths
+  /// (`teardownActiveWork`, `cancelImport`).
   func teardownQueue() {
     currentTask?.cancel()
     currentTask = nil
@@ -235,7 +238,7 @@ final class ExportQueueCoordinator: ObservableObject {
 
   // MARK: - Queue depth
 
-  func updateQueueCount() {
+  private func updateQueueCount() {
     queueCount = pendingJobs.count + (isProcessing ? 1 : 0)
   }
 }

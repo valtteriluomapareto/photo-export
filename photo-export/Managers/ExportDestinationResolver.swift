@@ -154,6 +154,11 @@ struct ExportDestinationResolver: Sendable {
 
   /// Returns a URL whose final path component does not already exist in `directory`.
   /// Appends ` (1)`, ` (2)`, etc. until a free slot is found, capped at 10 000 attempts.
+  ///
+  /// Production callers go through `resolveDestination` — kept `internal` only as a unit
+  /// test seam for `ExportDestinationResolverTests` (no-conflict, sequential conflicts,
+  /// cap respected). Don't widen this surface; new production paths should compose via
+  /// `resolveDestination` instead.
   func uniqueFileURL(in directory: URL, baseName: String, ext: String) -> URL {
     var candidate = directory.appendingPathComponent(baseName).appendingPathExtension(ext)
     var index = 1
