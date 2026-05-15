@@ -339,6 +339,7 @@ final class ExportManager: ObservableObject {
       destinationResolver: self.destinationResolver,
       recordStoreRouter: self.recordStoreRouter,
       assetResourceWriter: self.assetResourceWriter,
+      mediaRenderer: self.mediaRenderer,
       fileSystem: self.fileSystem,
       exportDestination: self.exportDestination)
   }
@@ -1736,12 +1737,9 @@ final class ExportManager: ObservableObject {
     renderActivity = nil
   }
 
-  /// Phase 3a bridge: the renderer still lives on `ExportManager`, so the variant
-  /// exporter calls back through this method to drive it. Phase 3b deletes this and
-  /// hands the renderer dependency directly to `VariantExporter`.
-  func renderToTempURL(request: MediaRenderRequest, tempURL: URL) async throws {
-    try await mediaRenderer.render(request: request, to: tempURL)
-  }
+  // The rendered-media bridge that lived here in Phase 3a is gone — `VariantExporter`
+  // now holds the renderer directly. ExportManager still constructs the renderer (so
+  // it can wire the `renderActivity` callback) but no longer invokes it.
 
   // MARK: Record-mutation routing
 
