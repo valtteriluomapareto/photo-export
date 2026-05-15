@@ -32,6 +32,7 @@ Current process and open work:
 - [`project/release-process.md`](project/release-process.md) — how to cut a release (version bump, tag, publish)
 - [`project/import-existing-backup-plan.md`](project/import-existing-backup-plan.md) — backup-import design notes (Phase 1 implemented)
 - [`project/testing-improvement-plan.md`](project/testing-improvement-plan.md) — test coverage gaps and improvement plan
+- [`project/plans/software-architecture-improvement-plan.md`](project/plans/software-architecture-improvement-plan.md) — proposed code organization and architecture boundary refactor plan
 - [`project/edited-photos-manual-testing-guide.md`](project/edited-photos-manual-testing-guide.md) — manual test script for the edited-photos export modes
 - [`project/plans/auto-sync-background-sync-plan.md`](project/plans/auto-sync-background-sync-plan.md) — proposed auto-sync and background-sync implementation
 - [`project/plans/collections-export-plan.md`](project/plans/collections-export-plan.md) — proposed Favorites and Albums export implementation
