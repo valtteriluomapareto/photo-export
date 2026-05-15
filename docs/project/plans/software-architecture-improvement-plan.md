@@ -1,6 +1,7 @@
 # Software Architecture Improvement Plan
 
 Date: 2026-05-15
+Revised: 2026-05-15 (added Cross-Cutting Contracts, Phase 0, and folded in multi-reviewer feedback: tightened Phase 0 spec, rescoped RecordStoreRouter, swapped Phase 2/3, split Phases 2/4/7)
 Status: Proposed
 
 ## Summary
@@ -100,6 +101,45 @@ photo-export/
 - Keep filesystem mutation behind the existing destination, writer, renderer, and file-service seams.
 - Prefer small file moves after behavior extraction, so diffs stay reviewable.
 
+## Cross-Cutting Contracts
+
+These three contracts bind every extracted collaborator. Locking them in before Phase 2 prevents downstream phases from each re-litigating the same questions.
+
+### Generation / cancellation ownership
+
+The eventual owner is `ExportQueueCoordinator` with this surface:
+
+- `isCurrent(_ gen: Int) -> Bool`
+- `throwIfCancelledOrStale(_ gen: Int) throws` — **reuses the existing private helper name** already at the bottom of `ExportManager.swift`; do not invent a new name.
+- `bumpGeneration() -> Int`
+
+Until Phase 5 lands (import extraction), `generation` stays on `ExportManager`. Generation ownership *cannot* move to `ExportQueueCoordinator` while `startImport` and the import-completion path still read the same counter — moving it earlier would force `ImportCoordinator` to hold a backwards reference to the queue, which inverts the dependency direction the plan establishes. Phase 4 introduces `ExportQueueCoordinator` but leaves generation reads going through `ExportManager` until Phase 5 closes the import loop.
+
+Phase 0 consolidates the 20+ inline `self.generation == gen` checks scattered across start/queue/run/import paths into the existing `throwIfCancelledOrStale(_:)` plus a new `isCurrent(_:)` companion. `VariantExporter` (Phase 2b) accepts a small protocol exposing both query methods; that protocol is throwaway scaffolding deleted when Phase 5 lands.
+
+**Why this direction:** the coordinator-owned counter is the smallest delta from today's pattern. Adopting `Task.checkCancellation()` would change cooperative-cancellation semantics — a behavior change rather than a refactor. A free-floating `CancellationToken` value type adds an abstraction without removing the coordinator dependency, since the coordinator still needs to invalidate tokens.
+
+### Actor isolation policy
+
+- Stateful collaborators are `@MainActor final class`: `VariantExporter`, `ExportQueueCoordinator`, `ImportCoordinator`.
+- Pure policy is plain `struct` or `enum`: `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`. These take values in and return decisions out, no store dependencies.
+- `RecordStoreRouter` is **not** pure — it is a `@MainActor final class` with `ExportRecordStore` and `CollectionExportRecordStore` injected (see Phase 1 for scope).
+- Heavy work (PhotoKit fetches, file I/O, video render) continues to hop off MainActor via `await` on the existing protocol seams (`PhotoLibraryService`, `MediaRenderer`, `AssetResourceWriter`). The refactor introduces no new actor hops.
+- Each extracted class should carry a one-line comment at its top declaring its isolation, so future contributors do not silently make it `nonisolated`.
+- Phase 0 includes a Swift 6 Sendable audit pass on the existing protocol seams (`PhotoLibraryService` `nonisolated async` methods returning `AssetDescriptor`/`PhotoCollectionDescriptor`) so strict-concurrency warnings surface before extraction starts, not during.
+
+**Why this direction:** today's `ExportManager` is implicitly all-MainActor with off-thread work behind `await` on protocol seams, and that pattern is already correct. Promoting `VariantExporter` to an `actor` would force every call site through additional `await` hops and re-order interleavings with `@Published` updates — a threading-model change masquerading as a refactor. A purely `nonisolated` `VariantExporter` is the lightest touch but offers no compiler protection against shared mutable state.
+
+### AutoSync seam preservation
+
+- `ExportManager+AutoSyncConformance.swift` stays untouched across every phase.
+- `ExportManager` continues to own `@Published` mirrors for `isRunning`, `isImporting`, `importStage`, `versionSelection`, and `activeRunContext`.
+- **Mirror shape: passthrough publisher, not stored `@Published`.** When extracting `ImportCoordinator`, `ExportManager.importStagePublisher` becomes a computed passthrough of `coordinator.$stage`, not a stored mirror updated by sink. This avoids the one-runloop-tick lag and duplicate `objectWillChange` emission that a stored mirror produces. Properties that views read directly (e.g. `ExportManager.importStage`) keep their `@Published` storage but the setter remains within `ExportManager` so subscribers see exactly one source. The same shape applies when `ExportQueueCoordinator` extracts queue state.
+- `PhotoLibraryManager` follows the equivalent rule when its production/screenshot service is extracted: forward the injected service's `objectWillChange` so existing `@EnvironmentObject` view bindings (e.g. `TimelineSidebarView`) see no behavior change.
+- The Phase 0 characterization test snapshots the emission sequence on `exportRunStatePublisher`, `isImportingPublisher`, and `completedRunsPublisher`. Re-run after every phase as the regression gate. Test mechanics are specified in Phase 0.
+
+**Why this direction:** the conformance file is 11 lines; preserving it costs nothing. Snapshot-then-refactor-freely is feasible but leaves the AutoSync source-of-truth in flux during Phases 4–5, exactly when it is hardest to debug. An explicit `AutoSyncExportAdapter` is the cleanest long-term shape but couples PhotoExportApp wiring changes to extraction PRs — too much churn at the wrong moment. Adapter extraction can happen later as a tiny follow-up once queue and import live in their own files.
+
 ## Proposed Components
 
 ### App
@@ -158,53 +198,119 @@ If `FolderContentView` keeps accumulating loading and selection behavior, add a 
 
 ## Phased Plan
 
+### Phase 0: Characterization
+
+Land the safety net the rest of the phases lean on. No behavior changes; one small PR (or two, if the AutoSync test infrastructure grows).
+
+**Generation seam.** Add an `isCurrent(_ gen: Int) -> Bool` private helper on `ExportManager` alongside the existing `throwIfCancelledOrStale(_:)`. Route the inline `self.generation == gen` checks through `isCurrent(_:)`. This is the seam Phase 2b collaborators will hold.
+
+**AutoSync emission characterization.** A naive snapshot will flake: `exportRunStatePublisher` is a `CombineLatest3` over three MainActor `@Published` mirrors, and intermediate triples land in unobservable order across `await` hops while `removeDuplicates()` only drops adjacent dupes. The test must use:
+
+- Gated fakes (`FakeAssetResourceWriter`, `FakeMediaRenderer`) that block until released — pattern already proven in `ExportManagerPauseResumeTests.pauseDuringActiveRunStopsQueueAndResumeRestarts`.
+- A `Publishers.zip` (or async-stream) collector subscribed to `exportRunStatePublisher`, `isImportingPublisher`, *and* `completedRunsPublisher` **before** `runExport` is called.
+- Assertions on a canonicalized state-transition sequence (idle → manual-active → idle → importing → idle), not raw frame count or exact triple values.
+
+This is the regression gate that Phases 1–5 re-run unchanged.
+
+**Cancel-during-render tempfile cleanup.** Existing tests (`ExportPipelineTests.writeFailureCleansUpAndMarksFailure`, `moveFailureMarksFailureAndCleansUpTempFile`, `EditedModeExportTests:279`, `ExportManagerVideoRenderTests:248,279`) already cover write-failure and move-failure cleanup. The Phase 0 addition targets the gap: cancellation arriving mid-render or during reuse-source `copyItem`. Inject a cancel via `cancelAndClear()` from the gated fake's wait point; assert no `.tmp` files remain in the destination directory.
+
+**Swift 6 Sendable audit.** Run `xcodebuild ... SWIFT_STRICT_CONCURRENCY=complete build` on the existing target. Catalogue warnings on `PhotoLibraryService` `nonisolated async` methods returning `AssetDescriptor`/`PhotoCollectionDescriptor`. No fixes required in Phase 0; the inventory just informs whether the isolation contract needs revision before Phase 2. Output lives in [`phase-0-sendable-audit.md`](phase-0-sendable-audit.md).
+
+Done when:
+
+- All inline `self.generation == gen` checks route through `isCurrent(_:)` or `throwIfCancelledOrStale(_:)`.
+- The AutoSync canonical-state-transition test passes 100 consecutive local runs with gated fakes.
+- The cancel-during-render tempfile-cleanup test exists and passes.
+- The Sendable warning inventory is in a comment block at the top of the next phase's PR description.
+- No production behavior has changed.
+
 ### Phase 1: Stabilize Export Boundaries
 
 Introduce `RecordStoreRouter` and `ExportCompletionPolicy` without changing `ExportManager`'s public API.
 
-`RecordStoreRouter` should own record mutation routing for timeline, favorites, albums, shared albums, and folders. `ExportCompletionPolicy` should own required variant decisions and completion checks.
+**`RecordStoreRouter` scope (revised).** Owns *every* placement-kind dispatch over the two record stores, not just writes:
+
+- Variant writes (`markVariantExported`, `markVariantInProgress`, `markVariantFailed`).
+- Variant reads (`currentVariants(assetId:placement:)`).
+- Cancellation cleanup paths that remove in-progress records.
+- Reuse-source lookup that probes both stores for an existing `.done` record under another placement.
+
+If reads stay outside the router, the duplication this phase removes will silently come back. The router takes `ExportRecordStore` and `CollectionExportRecordStore` as injected dependencies (or small store protocols if Phase 0's Sendable audit demands it). It is a `@MainActor final class`, not a pure struct.
+
+**`ExportCompletionPolicy` scope.** Required-variant logic, edited-fallback decisions, and "is this asset complete for this placement?" checks. The current code has edited-fallback logic mirrored in *both* stores plus `ExportManager` — this phase *removes* those mirrors and routes both stores through the policy. The policy must not become a third copy.
 
 Done when:
 
-- Repeated `switch placement.kind` record-write blocks are removed from `ExportManager`.
-- Completion and retry decisions call `ExportCompletionPolicy`.
-- Unit tests cover routing and completion rules.
+- All `switch placement.kind` sites in `ExportManager` for record reads, writes, cleanup, and reuse-source probing route through `RecordStoreRouter`.
+- Edited-fallback logic exists only in `ExportCompletionPolicy`; both record stores delegate to it.
+- Unit tests cover routing dispatch (each placement kind → expected store call) and completion rules (required variants, edited fallback, asset-complete checks).
+- The Phase 0 AutoSync emission test still passes unchanged.
 
-### Phase 2: Extract Variant Writing
+### Phase 2: Extract Destination Resolution
 
-Move single-asset, single-variant file export behavior into `VariantExporter`.
-
-This includes resource selection, rendered video export, static resource export, destination temp files, atomic moves, timestamp preservation, cleanup, and per-variant error results.
-
-Done when:
-
-- `ExportManager` no longer directly performs low-level resource writes.
-- Existing edited photo and edited video behavior is covered by tests or existing test fixtures.
-- Temporary-file cleanup is tested for success and failure paths where practical.
-
-### Phase 3: Extract Destination Resolution
+**Reordered to come before variant extraction** — `exportSingleVariant` interleaves destination naming with writing, so extracting the writer first just moves tangled code. Destination resolution is a pure decision and lifts out cleanly; variant writing inherits the cleaner seam.
 
 Move destination URL and filename decisions into `ExportDestinationResolver`.
 
-This should centralize unique filename allocation, paired original/edited stem behavior, `_orig` companion naming, and inherited group-stem rules.
+This centralizes unique filename allocation, paired original/edited stem behavior, `_orig` companion naming, and inherited group-stem rules.
 
 Done when:
 
 - Filename and URL allocation can be tested without queue execution.
 - `ExportFilenamePolicy` remains the low-level naming rule helper.
 - Existing no-overwrite behavior is preserved.
+- The Phase 0 AutoSync emission test still passes unchanged.
 
-### Phase 4: Split Queue Planning From Queue Execution
+### Phase 3: Extract Variant Writing
 
-Introduce `ExportJobPlanner` and `ExportQueueCoordinator`.
+**Split into two PRs** to bound regression risk for edited-video export. Phase 3a is the foundation; Phase 3b carries the rendered-media path that has historically been the most failure-prone area.
 
-`ExportJobPlanner` should produce jobs from selections and retry requests. `ExportQueueCoordinator` should own pending/current job state, pause/resume/cancel, queue counts, and the drain loop.
+#### Phase 3a: `VariantExporter` skeleton + static-resource path
+
+Extract `VariantExporter` with: resource selection, static-resource writing, destination temp files, atomic moves, timestamp preservation, cleanup, and per-variant error results. **Rendered media still routes through `ExportManager` in this PR** via a temporary delegate seam.
 
 Done when:
 
-- Planning tests can verify what gets enqueued without running file exports.
-- Queue tests can verify pause, resume, cancel, and sequential drain behavior without Photos or filesystem work.
-- `ExportManager` reads as a UI-facing facade over planner, queue, runner, and stores.
+- `ExportManager` no longer directly performs static-resource writes.
+- Existing static-resource tests pass unchanged.
+- Phase 0 cancel-during-render tempfile-cleanup test still passes.
+
+#### Phase 3b: Move rendered-media path into `VariantExporter`
+
+Move `MediaRenderer` invocation, edited-video export, and the render-failure cleanup path into `VariantExporter`. Remove the Phase 3a delegate seam.
+
+Done when:
+
+- `ExportManager` no longer references `MediaRenderer` directly.
+- `EditedModeExportTests` and `ExportManagerVideoRenderTests` pass unchanged.
+- The Phase 0 cancel-during-render test still passes; add a render-failure tempfile-cleanup test if not already covered.
+
+### Phase 4: Split Queue Planning From Queue Execution
+
+**Split into two PRs.** Planner is pure and easy to revert in isolation; queue coordinator changes call ordering subtly and benefits from landing alone so any regression bisects cleanly.
+
+**Prerequisite test (add before Phase 4a opens).** A pause/resume/cancel state-snapshot test that records the tuple `(isRunning, isPaused, queueCount, currentTask != nil)` at each transition during a multi-job run. This is the regression gate for Phase 4b that the existing `ExportManagerPauseResumeTests` doesn't quite provide — those tests assert outcomes, not state-machine ordering.
+
+#### Phase 4a: `ExportJobPlanner`
+
+Extract pure planning: turn selections + retry requests into `[ExportJob]`. No state, no queue, no file I/O. `ExportManager` calls the planner then continues to enqueue and drain itself.
+
+Done when:
+
+- Planning tests verify what gets enqueued for each entry point (month, year, all, favorites, album, shared album, folder, retry) without running exports.
+- `ExportManager` enqueue methods become thin wrappers over `planner.plan(...)`.
+
+#### Phase 4b: `ExportQueueCoordinator`
+
+Extract pending/current job state, pause/resume/cancel, queue counts, and the drain loop. **Generation ownership stays on `ExportManager` until Phase 5** (see Cross-Cutting Contracts) — the coordinator queries via the protocol seam introduced in Phase 0.
+
+Defer `ExportRunCoordinator` unless a second consumer materializes during this phase.
+
+Done when:
+
+- Queue tests verify pause, resume, cancel, and sequential drain behavior without Photos or filesystem work.
+- The Phase 4 prerequisite state-snapshot test passes unchanged.
+- `ExportManager` reads as a UI-facing facade over planner, queue, and stores (with import still inline pending Phase 5).
 
 ### Phase 5: Move Import Flow Out Of ExportManager
 
@@ -212,11 +318,19 @@ Create `ImportCoordinator` for Import Existing Backup.
 
 It should own import stages, scanner invocation, import report generation, bulk record import, and both-store reconciliation.
 
+**Generation ownership transfer.** This phase closes the loop opened in Phase 4b. With import out of `ExportManager`, `generation` can move into `ExportQueueCoordinator` and `ImportCoordinator` can take a reference to the queue's `isCurrent(_:)` / `throwIfCancelledOrStale(_:)` surface (or its own counter if the two cancellation domains turn out to be independent — decide during this phase).
+
+**Prerequisite test.** A bulk-import idempotency test: import a fixture, snapshot both record stores, import the same fixture again, assert store state is identical. Phase 5 reorganizes reconciliation and bulk-write code, and this property is currently untested in isolation.
+
+**AutoSync mirror shape.** `ExportManager.importStagePublisher` becomes a passthrough of `coordinator.$stage` per the AutoSync seam contract. `isImporting` follows the same pattern.
+
 Done when:
 
-- Import state is not stored directly in `ExportManager` unless it is only mirrored for UI compatibility.
-- Import tests target `ImportCoordinator`.
+- Import state lives in `ImportCoordinator`; `ExportManager.importStage` is a passthrough publisher.
+- The Phase 5 idempotency test passes.
+- Import tests target `ImportCoordinator` directly without spinning up `ExportManager`.
 - Export queue changes do not require reading import code.
+- `generation` lives in `ExportQueueCoordinator`; the Phase 0 scaffolding protocol is deleted.
 
 ### Phase 6: Clean Photo Library Composition
 
@@ -232,28 +346,50 @@ Done when:
 
 ### Phase 7: Reorganize Files By Feature
 
-After behavior extraction, move files into the target folders.
+**Split per destination folder, not one monolithic move.** `project.pbxproj` conflicts are notoriously unmergeable, and this repo merges multiple PRs per day. A bulk move sitting unmerged for hours guarantees in-flight branches develop pbxproj conflicts that have to be resolved by hand. One PR per destination folder, each merged within hours during a low-cadence window (no in-flight feature branches touching the moved files), rebased not merged against `main`.
 
-Keep moves mechanical and separate from logic changes where possible. Update Xcode project membership and any documentation references in the same change.
+Sub-PR order, smallest-blast-radius first:
 
-Done when:
+1. **Phase 7a: `Records/`** — `ExportRecordStore`, `CollectionExportRecordStore`, `JSONLRecordFile`, `ExportCompletionPolicy`.
+2. **Phase 7b: `Destination/`** — `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationFingerprint`, `DestinationSnapshotAdapter`, `ExportDestinationResolver`.
+3. **Phase 7c: `AutoSync/`** — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, plus the `Stores/` subgroup of file-backed AutoSync stores.
+4. **Phase 7d: `PhotoLibrary/`** — `PhotoLibraryManager`, `ProductionPhotoLibraryService`, `ScreenshotPhotoLibraryService`, `PhotoLibraryPersistentChangeAdapter`.
+5. **Phase 7e: `Export/`** — `ExportManager`, `ExportQueueCoordinator`, `ExportJobPlanner`, `VariantExporter`, `ExportDestinationResolver` (if not landed in 7b), `RecordStoreRouter`, `ImportCoordinator`, the `ExportManager+AutoSyncConformance.swift` adapter.
+6. **Phase 7f: `Views/` regrouping** — `Timeline/`, `Collections/`, `Export/`, `Settings/`, `Shared/` subfolders.
+7. **Phase 7g: `App/`** — `PhotoExportApp`, `AppContainer`, `ScreenshotMode`, `Commands`.
+
+**Doc-drift surface.** Each sub-PR's "Done when" must include updating any doc that references the moved paths. Currently audited references:
+
+- `AGENTS.md` (3 hits to `Managers/`)
+- `website/src/content/docs/architecture.md`
+- `docs/reference/swift-swiftui-best-practices.md`
+- `docs/project/import-existing-backup-plan.md`
+- `docs/project/plans/collections-export-plan.md`
+
+Re-grep before each sub-PR opens; the list above is a 2026-05-15 snapshot and will drift as Phases 1–6 add or remove references.
+
+Done (Phase 7 overall) when:
 
 - Top-level folders match the target shape closely enough to guide new contributors.
-- `Managers/` no longer acts as the default destination for unrelated code.
+- `Managers/` no longer exists.
 - `ContentView` and `LibraryRootView` remain routing shells rather than feature containers.
+- All schemes build, all tests pass, screenshot scheme runs successfully.
+- All audited doc references point to current paths.
 
 ## Suggested Work Order
 
-1. Add pure tests around current completion behavior before extraction.
-2. Add `RecordStoreRouter`.
-3. Add `ExportCompletionPolicy`.
-4. Add `ExportDestinationResolver`.
-5. Add `VariantExporter`.
-6. Add `ExportJobPlanner`.
-7. Add `ExportQueueCoordinator` and, if useful, `ExportRunCoordinator`.
-8. Move import into `ImportCoordinator`.
-9. Replace screenshot inheritance with injected service composition.
-10. Move files into feature folders and clean stale comments.
+1. **Phase 0:** consolidate generation checks through `isCurrent(_:)` / existing `throwIfCancelledOrStale(_:)`; add gated-fake AutoSync canonical-state-transition test (covering `exportRunStatePublisher`, `isImportingPublisher`, `completedRunsPublisher`); add cancel-during-render tempfile-cleanup test; run Swift 6 Sendable audit and catalogue warnings.
+2. **Phase 1:** `RecordStoreRouter` (reads + writes + cleanup + reuse-source) + `ExportCompletionPolicy` (with edited-fallback dedupe from both stores).
+3. **Phase 2:** `ExportDestinationResolver` (destination first, before variant — `exportSingleVariant` is too tangled to extract writer-first).
+4. **Phase 3a:** `VariantExporter` skeleton + static-resource path; rendered media stays in `ExportManager` via temporary delegate seam.
+5. **Phase 3b:** move rendered-media path into `VariantExporter`; remove the delegate seam.
+6. **Phase 4 prep:** add pause/resume/cancel state-snapshot test.
+7. **Phase 4a:** `ExportJobPlanner` (pure).
+8. **Phase 4b:** `ExportQueueCoordinator` (generation stays on `ExportManager`). Defer `ExportRunCoordinator` unless a second consumer materializes.
+9. **Phase 5 prep:** add bulk-import idempotency test.
+10. **Phase 5:** move import into `ImportCoordinator`; transfer generation ownership to `ExportQueueCoordinator`; delete the Phase 0 scaffolding protocol; switch `importStagePublisher` to passthrough shape.
+11. **Phase 6:** replace screenshot inheritance with injected service composition; `PhotoLibraryManager` forwards `objectWillChange` from injected service.
+12. **Phase 7a–g:** move files into feature folders, one destination folder per PR, low-cadence merge windows, doc references updated in the same PR.
 
 ## Testing Strategy
 
@@ -265,6 +401,7 @@ xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination '
 
 - Add focused unit tests for pure policies before changing call sites.
 - Keep integration-style `ExportManager` tests during extraction so UI-facing behavior remains stable.
+- **Re-run the Phase 0 AutoSync canonical-state-transition test, the cancel-during-render tempfile test, and (once added) the pause/resume/cancel snapshot and bulk-import idempotency tests on every phase PR.** These are the regression gates that justify the contract-preservation strategy.
 - Add queue tests with fake services after `ExportQueueCoordinator` exists.
 - Add screenshot-mode tests or assertions that verify the screenshot service is the only active Photo Library backend in screenshot mode.
 - Run SwiftLint and swift-format checks before merging a multi-phase branch.
@@ -273,9 +410,11 @@ xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination '
 
 - Large refactor churn: extract collaborators behind the existing `ExportManager` facade before moving files.
 - Hidden data-format change: keep both stores and `JSONLRecordFile` unchanged unless a separate migration plan exists.
-- Actor isolation regression: keep UI facades `@MainActor`; make extracted policies pure or explicitly isolated.
+- Actor isolation regression: follow the isolation contract in Cross-Cutting Contracts; the Phase 0 Sendable audit surfaces problems before extraction starts.
+- AutoSync seam regression: the Phase 0 canonical-state-transition test is the single regression gate; do not let it flake or be skipped.
 - Screenshot regression: move to injected composition and test that production PhotoKit is not used in screenshot mode.
-- Over-abstraction: only keep extracted types that remove real responsibility from current large files and are testable on their own.
+- Over-abstraction: only keep extracted types that remove real responsibility from current large files and are testable on their own. `ExportRunCoordinator`, `ExportReuseSourceFinder`, and `RecordReconciler` from earlier drafts are explicitly deferred unless a second consumer appears.
+- Phase 7 merge blockage: `project.pbxproj` conflicts are unmergeable, and the repo merges multiple PRs/day. Phase 7 sub-PRs only open during low-cadence windows and merge within hours; rebase, do not merge, against `main`.
 
 ## Non-Goals
 
@@ -287,8 +426,9 @@ xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -destination '
 
 ## Success Criteria
 
-- `ExportManager` is small enough to read as orchestration rather than implementation.
+- `ExportManager` is ≤ 600 lines after Phase 5, reading as orchestration rather than implementation.
+- No method body in extracted collaborators exceeds 40 lines without justification.
 - Export planning, queueing, variant writing, destination resolution, import, and record routing can be tested independently.
-- New export placements can be added by touching a small, predictable set of files.
+- New export placements can be added by touching a small, predictable set of files (`RecordStoreRouter`, `ExportCompletionPolicy`, and one resolver call site).
 - Screenshot mode is selected by dependency composition instead of inheritance behavior.
 - Folder organization communicates ownership to a new contributor before they read implementation details.
