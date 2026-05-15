@@ -138,6 +138,33 @@ struct ExportJobPlannerTests {
     #expect(jobs.map(\.assetLocalIdentifier) == ["b"])
   }
 
+  /// Boundary test: Dec 31 23:30 GMT must derive month=12 with a GMT calendar. The
+  /// planner accepts the calendar as a parameter precisely so the year/month derivation
+  /// is deterministic across machines and CI runners. Without an explicit calendar a
+  /// future refactor that switched to `Calendar(identifier: .gregorian)` with a
+  /// non-GMT timezone could silently shift a late-December asset to January of the
+  /// next year.
+  @Test func planTimelineYear_decemberBoundary_withExplicitGMTCalendar() {
+    var gmt = Calendar(identifier: .gregorian)
+    gmt.timeZone = TimeZone(secondsFromGMT: 0)!
+    var components = DateComponents()
+    components.year = 2025
+    components.month = 12
+    components.day = 31
+    components.hour = 23
+    components.minute = 30
+    let dateInGMT = gmt.date(from: components)!
+
+    let dec31 = asset("dec31", creationDate: dateInGMT)
+    let jobs = ExportJobPlanner.planTimelineYear(
+      assets: [dec31], year: 2025, selection: .edited,
+      isExported: { _ in false },
+      shouldSkipForRetry: { _, _, _ in false },
+      calendar: gmt)
+    #expect(jobs.count == 1)
+    #expect(jobs.first?.placement == ExportPlacement.timeline(year: 2025, month: 12))
+  }
+
   @Test func planTimelineYear_predicateOrder_isExportedFirst() {
     var retryCalls: [String] = []
     let dated = asset("a", creationDate: makeDate(year: 2025, month: 6, day: 1))

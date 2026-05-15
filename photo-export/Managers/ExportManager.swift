@@ -1077,6 +1077,11 @@ final class ExportManager: ObservableObject {
   /// Scans the month and returns the enqueue outcome. Callers use the outcome to decide
   /// whether to surface the "already exported" toolbar message.
   @discardableResult
+  // Phase 4b will lift the `pendingJobs.append` / `totalJobsEnqueued` /
+  // `queuedCountsByPlacementId` / `updateQueueCount` / `logger.info` /
+  // `EnqueueOutcome` triplet out of the three enqueue* methods into
+  // `ExportQueueCoordinator`. The PhotoKit fetch and the `ExportJobPlanner.plan` call
+  // stay here — only the queue-state mutation moves.
   private func enqueueMonth(
     year: Int, month: Int, selection: ExportVersionSelection, generation gen: Int
   ) async throws -> EnqueueOutcome {
