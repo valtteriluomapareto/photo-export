@@ -9,3 +9,9 @@ import Foundation
 /// `AutoSyncEnvironment` without an adapter.
 extension ExportManager: AutoSyncExportRunning {}
 extension ExportManager: AutoSyncImportProviding {}
+
+/// Phase 3a: ExportManager hosts `VariantExporter` so the exporter can call back for
+/// generation checks, UI-state mutations, bookkeeping-aware failure recording, and the
+/// rendered-media bridge. The required methods live on `ExportManager` itself; this is
+/// just the conformance wire-up.
+extension ExportManager: VariantExporter.Host {}
