@@ -38,6 +38,16 @@ final class CollectionExportRecordStore: ObservableObject {
   /// (`ExportVariant.rawValue`) so it round-trips cleanly through standard JSON.
   struct RecordBody: Codable, Sendable, Equatable {
     var variants: [String: ExportVariantRecord]
+
+    /// Strongly-typed projection of `variants` for handing to
+    /// `ExportCompletionPolicy`. Drops any keys that don't decode to a known
+    /// `ExportVariant` — in practice empty, since writers only ever store
+    /// `ExportVariant.rawValue` keys.
+    var typedVariants: [ExportVariant: ExportVariantRecord] {
+      Dictionary(uniqueKeysWithValues: variants.compactMap { key, value in
+        ExportVariant(rawValue: key).map { ($0, value) }
+      })
+    }
   }
 
   /// Top-level snapshot. `placements` is the canonical placement metadata; `records` is
@@ -485,46 +495,21 @@ final class CollectionExportRecordStore: ObservableObject {
     return ScopedExportRecord(placement: placement, assetId: assetId, variants: variantMap)
   }
 
-  /// True when every required variant for `asset` under `selection` is `.done`.
-  ///
-  /// Issue #22 fallback (mirrors `ExportRecordStore.isExported`): an adjusted
-  /// asset asked to export `.edited` is also "exported" when `.edited` is
-  /// `.failed` with the explicit `editedUnavailableOriginalBackedUpMessage`
-  /// sentinel AND `.original` is `.done` (`runEditedFallbackOriginal` writes
-  /// that sentinel only after a successful `<stem>_orig` write).
+  /// True when every required variant for `asset` under `selection` is `.done`, OR the
+  /// asset is covered by the issue #22 edited-fallback case (see
+  /// `ExportCompletionPolicy.satisfiesEditedFallback`). Collection placements derive the
+  /// `VariantPolicy` from `placement.kind` so shared-album single-resource clamping
+  /// applies correctly.
   func isExported(
     asset: AssetDescriptor,
     placement: ExportPlacement,
     selection: ExportVersionSelection
   ) -> Bool {
     guard accept(placement) else { return false }
-    let required = requiredVariants(
-      for: asset, selection: selection, policy: placement.kind.variantPolicy)
     guard let body = recordBodies[placement.id]?[asset.id] else { return false }
-    let allDone = required.allSatisfy { variant in
-      body.variants[variant.rawValue]?.status == .done
-    }
-    if allDone { return true }
-    return Self.satisfiesEditedFallback(body: body, asset: asset, selection: selection)
-  }
-
-  /// Collection-store mirror of `ExportRecordStore.satisfiesEditedFallback`.
-  /// Kept in this store rather than reaching into the timeline-store helper so
-  /// the two stores remain independent (per the disjoint-key-spaces design).
-  /// See the timeline helper for the rationale on keying off the explicit
-  /// `editedUnavailableOriginalBackedUpMessage` sentinel.
-  private static func satisfiesEditedFallback(
-    body: RecordBody, asset: AssetDescriptor, selection: ExportVersionSelection
-  ) -> Bool {
-    guard asset.hasAdjustments, selection == .edited else { return false }
-    guard
-      body.variants[ExportVariant.original.rawValue]?.status == .done,
-      let editedRecord = body.variants[ExportVariant.edited.rawValue],
-      editedRecord.status == .failed,
-      editedRecord.lastError
-        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
-    else { return false }
-    return true
+    return ExportCompletionPolicy.isComplete(
+      variants: body.typedVariants, asset: asset, selection: selection,
+      policy: placement.kind.variantPolicy)
   }
 
   // MARK: - Scoped queries

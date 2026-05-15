@@ -211,6 +211,10 @@ final class ExportManager: ObservableObject {
   let exportDestination: any ExportDestination
   let exportRecordStore: ExportRecordStore
   let collectionExportRecordStore: CollectionExportRecordStore
+  /// Single place that switches on `ExportPlacement.Kind` for record-store dispatch
+  /// (reads, writes, cancellation cleanup, reuse-source lookup). Initialised in `init`
+  /// once both stores are bound.
+  let recordStoreRouter: RecordStoreRouter
   let assetResourceWriter: any AssetResourceWriter
   // `var` rather than `let` so we can rebind it at the end of `init` with a
   // callback that captures `self` weakly. Swift forbids referencing `self`
@@ -292,6 +296,9 @@ final class ExportManager: ObservableObject {
     // an injected one from `photo_exportApp` so both stores share the destination's
     // `<App Support>/<bundleId>/ExportRecords/<destinationId>/` directory.
     self.collectionExportRecordStore = collectionExportRecordStore ?? CollectionExportRecordStore()
+    self.recordStoreRouter = RecordStoreRouter(
+      timelineStore: self.exportRecordStore,
+      collectionStore: self.collectionExportRecordStore)
     self.assetResourceWriter = assetResourceWriter
     self.fileSystem = fileSystem
     // Provisional renderer — gives `self.mediaRenderer` a value so all
@@ -952,25 +959,11 @@ final class ExportManager: ObservableObject {
     if let inFlightId = currentJobAssetId, let inFlightVariant = currentJobVariant,
       let inFlightPlacement = currentJobPlacement
     {
-      // Route the cleanup to the correct store by `placement.kind`. The store-side
-      // `removeVariant` is a no-op when the variant is not `.inProgress`, so the
-      // cross-store check that used to live here is now baked into the store call.
-      switch inFlightPlacement.kind {
-      case .timeline:
-        if exportRecordStore.exportInfo(assetId: inFlightId)?.variants[inFlightVariant]?.status
-          == .inProgress
-        {
-          exportRecordStore.removeVariant(assetId: inFlightId, variant: inFlightVariant)
-        }
-      case .favorites, .album, .sharedAlbum:
-        if collectionExportRecordStore.exportInfo(
-          assetId: inFlightId, placement: inFlightPlacement)?.variants[inFlightVariant]?.status
-          == .inProgress
-        {
-          collectionExportRecordStore.removeVariant(
-            assetId: inFlightId, placement: inFlightPlacement, variant: inFlightVariant)
-        }
-      }
+      // The router's removeInProgressVariant is a no-op when the variant is not
+      // `.inProgress`, so the cross-store check that used to live here is baked into
+      // the dispatch.
+      recordStoreRouter.removeInProgressVariant(
+        assetId: inFlightId, placement: inFlightPlacement, variant: inFlightVariant)
     }
     currentJobAssetId = nil
     currentJobVariant = nil
@@ -1446,18 +1439,11 @@ final class ExportManager: ObservableObject {
 
       // Look up the existing record for the *current placement* (not cross-placement).
       // Timeline jobs read from the timeline store; collection jobs read from the
-      // collection store. The reuse-source copy path (Phase 3.3) consults the *other*
-      // store separately to avoid re-fetching from PhotoKit when an asset is already
-      // exported elsewhere.
-      let existingVariants: [ExportVariant: ExportVariantRecord]
-      switch job.placement.kind {
-      case .timeline:
-        existingVariants = exportRecordStore.exportInfo(assetId: descriptor.id)?.variants ?? [:]
-      case .favorites, .album, .sharedAlbum:
-        existingVariants =
-          collectionExportRecordStore.exportInfo(assetId: descriptor.id, placement: job.placement)?
-          .variants ?? [:]
-      }
+      // collection store; the router selects the right one. The reuse-source copy path
+      // (Phase 3.3) consults the *other* store separately to avoid re-fetching from
+      // PhotoKit when an asset is already exported elsewhere.
+      let existingVariants = recordStoreRouter.variants(
+        forAssetId: descriptor.id, placement: job.placement)
       // Synthesize an `ExportRecord` shape for the existing-stem inheritance logic below
       // (which today only accepts `ExportRecord?`). Collection placements don't have
       // year/month, so we use the placement's relPath directly.
@@ -1545,8 +1531,10 @@ final class ExportManager: ObservableObject {
       // future run can still write the edited file if Photos' state changes.
       // `isExported(asset:selection:)` recognises this pair and stops
       // re-queueing the asset every run.
-      if shouldRunEditedFallback(
-        descriptor: descriptor, job: job, required: required)
+      let currentVariantsForFallback = currentVariants(
+        assetId: descriptor.id, placement: job.placement)
+      if ExportCompletionPolicy.shouldRunEditedFallback(
+        variants: currentVariantsForFallback, required: required)
       {
         await runEditedFallbackOriginal(
           descriptor: descriptor, resources: resources, destDir: destDir,
@@ -1556,23 +1544,8 @@ final class ExportManager: ObservableObject {
       logger.info(
         "Export cancelled for id: \(job.assetLocalIdentifier, privacy: .public)")
       if let inFlight, self.isCurrent(gen) {
-        // Route the cancellation cleanup by the in-flight job's placement kind.
-        switch job.placement.kind {
-        case .timeline:
-          if exportRecordStore.exportInfo(assetId: inFlight.assetId)?.variants[inFlight.variant]?
-            .status == .inProgress
-          {
-            exportRecordStore.removeVariant(assetId: inFlight.assetId, variant: inFlight.variant)
-          }
-        case .favorites, .album, .sharedAlbum:
-          if collectionExportRecordStore.exportInfo(
-            assetId: inFlight.assetId, placement: job.placement)?.variants[inFlight.variant]?
-            .status == .inProgress
-          {
-            collectionExportRecordStore.removeVariant(
-              assetId: inFlight.assetId, placement: job.placement, variant: inFlight.variant)
-          }
-        }
+        recordStoreRouter.removeInProgressVariant(
+          assetId: inFlight.assetId, placement: job.placement, variant: inFlight.variant)
       }
     } catch {
       guard self.isCurrent(gen) else { return }
@@ -1688,7 +1661,7 @@ final class ExportManager: ObservableObject {
     // rendered edit — once a placement has the file, all other placements just
     // clone it.
     var didCopyFromReuseSource = false
-    if let reuse = findReuseSource(
+    if let reuse = recordStoreRouter.findReuseSource(
       assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
       let destinationRoot = exportDestination.selectedFolderURL
     {
@@ -1896,31 +1869,9 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Edited-unavailable fallback (issue #22)
 
-  /// Decides whether to run the original-as-`_orig` fallback after the
-  /// orderedVariants loop. Conditions:
-  /// 1. The user asked for `.edited` only (the include-originals path
-  ///    already writes the original, so no fallback is needed there).
-  /// 2. `.edited` is `.failed` with the *generic*
-  ///    `editedResourceUnavailableMessage` sentinel — that's the signal
-  ///    the variant loop emitted in this run.
-  /// 3. `.edited`'s `lastError` isn't already
-  ///    `editedUnavailableOriginalBackedUpMessage` — that would mean a
-  ///    previous run's fallback already succeeded; nothing to do.
-  ///
-  /// Note we no longer key on the `.original` filename's shape (the
-  /// `_orig` filename pattern collides with real user filenames like
-  /// `vacation_orig.JPG`). The new explicit sentinel is the only signal.
-  private func shouldRunEditedFallback(
-    descriptor: AssetDescriptor, job: ExportJob, required: Set<ExportVariant>
-  ) -> Bool {
-    guard required == [.edited] else { return false }
-    let variants = currentVariants(assetId: descriptor.id, placement: job.placement)
-    guard let editedRecord = variants[.edited],
-      editedRecord.status == .failed,
-      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
-    else { return false }
-    return true
-  }
+  /// The decision logic for running this fallback now lives in
+  /// `ExportCompletionPolicy.shouldRunEditedFallback`. The call site at the end of the
+  /// variant loop (above) reads the current variants once and hands them to the policy.
 
   /// Writes the original variant to a `<stem>_orig.<originalExt>` slot. Used
   /// when the edited variant was unavailable so the user still gets the bytes
@@ -2000,19 +1951,16 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  /// Variants currently recorded for the asset under `placement`, joined from
-  /// whichever store owns this placement kind. Returns `[:]` when no record
-  /// exists.
+  /// Variants currently recorded for the asset under `placement`. Pure forwarder to
+  /// `RecordStoreRouter.variants(forAssetId:placement:)` — kept for call-site stability
+  /// across a refactor that has multiple readers (the variant loop, the cancellation
+  /// path, the fallback policy lookup). Inlining would touch all of them at once and
+  /// obscure the router seam in this PR; the wrapper is on the deletion list for a
+  /// later cleanup phase.
   private func currentVariants(
     assetId: String, placement: ExportPlacement
   ) -> [ExportVariant: ExportVariantRecord] {
-    switch placement.kind {
-    case .timeline:
-      return exportRecordStore.exportInfo(assetId: assetId)?.variants ?? [:]
-    case .favorites, .album, .sharedAlbum:
-      return collectionExportRecordStore.exportInfo(
-        assetId: assetId, placement: placement)?.variants ?? [:]
-    }
+    recordStoreRouter.variants(forAssetId: assetId, placement: placement)
   }
 
   /// Finds the smallest `(N)`-suffixed `baseStem` whose `_orig` companion
@@ -2073,58 +2021,6 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Helpers
-
-  // MARK: Reuse-source lookup
-
-  /// A `(asset, variant)` pair already exported under another placement. The reuse-source
-  /// copy path uses this to copy the existing file rather than re-fetching the asset
-  /// from PhotoKit. On APFS, `FileManager.copyItem` performs copy-on-write so the
-  /// duplicate uses no extra bytes; on non-APFS it's a real copy.
-  private struct ReuseSource {
-    let placement: ExportPlacement
-    let filename: String
-  }
-
-  /// Looks up any existing `.done` record for `(assetId, variant)` across both stores,
-  /// excluding the placement we're currently writing to. Order: timeline first, then
-  /// collection placements (sorted by id for determinism). Returns `nil` if nothing
-  /// reusable exists.
-  ///
-  /// Per `docs/project/plans/collections-export-plan.md` §"Reuse-Source Copy Path", any
-  /// prior `.done` write is acceptable as a source — there's no preference for timeline
-  /// over collection beyond the deterministic search order.
-  private func findReuseSource(
-    assetId: String, variant: ExportVariant, currentPlacement: ExportPlacement
-  ) -> ReuseSource? {
-    // 1) Timeline store (skip if we're currently writing to a timeline placement).
-    if currentPlacement.kind != .timeline {
-      if let record = exportRecordStore.exportInfo(assetId: assetId),
-        let variantRec = record.variants[variant],
-        variantRec.status == .done,
-        let filename = variantRec.filename
-      {
-        let placement = ExportPlacement.timeline(year: record.year, month: record.month)
-        return ReuseSource(placement: placement, filename: filename)
-      }
-    }
-    // 2) Collection placements (sorted for deterministic test behavior).
-    let sortedIds = collectionExportRecordStore.recordBodies.keys.sorted()
-    for placementId in sortedIds {
-      if placementId == currentPlacement.id { continue }
-      guard let placement = collectionExportRecordStore.placement(id: placementId) else {
-        continue
-      }
-      guard
-        let body = collectionExportRecordStore.recordBodies[placementId],
-        let assetBody = body[assetId],
-        let variantRec = assetBody.variants[variant.rawValue],
-        variantRec.status == .done,
-        let filename = variantRec.filename
-      else { continue }
-      return ReuseSource(placement: placement, filename: filename)
-    }
-    return nil
-  }
 
   /// Distinguishes source-side errors (file missing/unreadable — fall back to PhotoKit)
   /// from destination-side errors (out of space, target permission, target volume removed
@@ -2192,15 +2088,9 @@ final class ExportManager: ObservableObject {
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     failure: ExportFailureSignal, at date: Date
   ) {
-    switch placement.kind {
-    case .timeline:
-      exportRecordStore.markVariantFailed(
-        assetId: assetId, variant: variant, error: failure.localizedDescription, at: date)
-    case .favorites, .album, .sharedAlbum:
-      collectionExportRecordStore.markVariantFailed(
-        assetId: assetId, placement: placement, variant: variant,
-        error: failure.localizedDescription, at: date)
-    }
+    recordStoreRouter.markVariantFailed(
+      assetId: assetId, placement: placement, variant: variant,
+      error: failure.localizedDescription, at: date)
     activeRunBookkeeping?.failedCount += 1
     activeRunBookkeeping?.failures.append(
       ExportRunFailureDetail(
@@ -2242,38 +2132,26 @@ final class ExportManager: ObservableObject {
       at: date)
   }
 
+  /// Pure forwarder to `RecordStoreRouter.markVariantInProgress`. Kept for call-site
+  /// stability — same rationale as `currentVariants` above.
   private func recordVariantInProgress(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     relPath: String, filename: String?
   ) {
-    switch placement.kind {
-    case .timeline:
-      let (year, month) = placement.timelineYearMonth ?? (0, 0)
-      exportRecordStore.markVariantInProgress(
-        assetId: assetId, variant: variant,
-        year: year, month: month, relPath: relPath, filename: filename)
-    case .favorites, .album, .sharedAlbum:
-      collectionExportRecordStore.markVariantInProgress(
-        assetId: assetId, placement: placement, variant: variant, filename: filename)
-    }
+    recordStoreRouter.markVariantInProgress(
+      assetId: assetId, placement: placement, variant: variant,
+      relPath: relPath, filename: filename)
   }
 
+  /// Pure forwarder to `RecordStoreRouter.markVariantExported`. Kept for call-site
+  /// stability — same rationale as `currentVariants` above.
   private func recordVariantExported(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     relPath: String, filename: String, exportedAt: Date
   ) {
-    switch placement.kind {
-    case .timeline:
-      let (year, month) = placement.timelineYearMonth ?? (0, 0)
-      exportRecordStore.markVariantExported(
-        assetId: assetId, variant: variant,
-        year: year, month: month, relPath: relPath,
-        filename: filename, exportedAt: exportedAt)
-    case .favorites, .album, .sharedAlbum:
-      collectionExportRecordStore.markVariantExported(
-        assetId: assetId, placement: placement, variant: variant,
-        filename: filename, exportedAt: exportedAt)
-    }
+    recordStoreRouter.markVariantExported(
+      assetId: assetId, placement: placement, variant: variant,
+      relPath: relPath, filename: filename, exportedAt: exportedAt)
   }
 
   func splitFilename(_ filename: String) -> (base: String, ext: String) {
