@@ -1545,8 +1545,10 @@ final class ExportManager: ObservableObject {
       // future run can still write the edited file if Photos' state changes.
       // `isExported(asset:selection:)` recognises this pair and stops
       // re-queueing the asset every run.
-      if shouldRunEditedFallback(
-        descriptor: descriptor, job: job, required: required)
+      let currentVariantsForFallback = currentVariants(
+        assetId: descriptor.id, placement: job.placement)
+      if ExportCompletionPolicy.shouldRunEditedFallback(
+        variants: currentVariantsForFallback, required: required)
       {
         await runEditedFallbackOriginal(
           descriptor: descriptor, resources: resources, destDir: destDir,
@@ -1896,31 +1898,9 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Edited-unavailable fallback (issue #22)
 
-  /// Decides whether to run the original-as-`_orig` fallback after the
-  /// orderedVariants loop. Conditions:
-  /// 1. The user asked for `.edited` only (the include-originals path
-  ///    already writes the original, so no fallback is needed there).
-  /// 2. `.edited` is `.failed` with the *generic*
-  ///    `editedResourceUnavailableMessage` sentinel — that's the signal
-  ///    the variant loop emitted in this run.
-  /// 3. `.edited`'s `lastError` isn't already
-  ///    `editedUnavailableOriginalBackedUpMessage` — that would mean a
-  ///    previous run's fallback already succeeded; nothing to do.
-  ///
-  /// Note we no longer key on the `.original` filename's shape (the
-  /// `_orig` filename pattern collides with real user filenames like
-  /// `vacation_orig.JPG`). The new explicit sentinel is the only signal.
-  private func shouldRunEditedFallback(
-    descriptor: AssetDescriptor, job: ExportJob, required: Set<ExportVariant>
-  ) -> Bool {
-    guard required == [.edited] else { return false }
-    let variants = currentVariants(assetId: descriptor.id, placement: job.placement)
-    guard let editedRecord = variants[.edited],
-      editedRecord.status == .failed,
-      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
-    else { return false }
-    return true
-  }
+  /// The decision logic for running this fallback now lives in
+  /// `ExportCompletionPolicy.shouldRunEditedFallback`. The call site at the end of the
+  /// variant loop (above) reads the current variants once and hands them to the policy.
 
   /// Writes the original variant to a `<stem>_orig.<originalExt>` slot. Used
   /// when the edited variant was unavailable so the user still gets the bytes
