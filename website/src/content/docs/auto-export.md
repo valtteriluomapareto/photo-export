@@ -16,6 +16,7 @@ Open **Photo Export → Settings…** (Cmd+,) and switch to the **Auto Export** 
    - **Timeline** — all photos and videos, organized by year and month.
    - **Favorites** — just the photos you've marked as favorites in Apple Photos.
    - **Albums** — every user album you've created in Photos.
+   - **Shared Albums** — every iCloud shared album. Note: iCloud only provides downscaled JPEGs for shared photos, so the exported files are reduced quality and **Include originals** has no effect on them. See [Shared albums (reduced fidelity)](/photo-export/features/#shared-albums-reduced-fidelity).
 3. (Optional) **Open Photo Export at login** — toggle on if you want the app to start automatically when you log in. Without this, Auto Export only runs when you've opened the app yourself.
 
 That's it. Once a destination is selected and at least one category is on, Photo Export starts watching your library.

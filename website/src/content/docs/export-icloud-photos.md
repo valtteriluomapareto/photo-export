@@ -35,7 +35,7 @@ Click **Choose Folder** and select your external hard drive or any local folder.
 Browse your library two ways via the **Timeline / Collections** segmented control above the sidebar:
 
 - **Timeline** — your library by year and month. Click a month to preview its thumbnails and full-size photos.
-- **Collections** — your **Favorites** plus every album and folder you've created in Photos. Click an album to preview its contents. (Smart albums other than Favorites and shared albums aren't included.)
+- **Collections** — your **Favorites**, every album and folder you've created in Photos, and any **iCloud shared albums** you participate in. Click an album to preview its contents. Shared albums sit in their own sidebar section because they export at reduced quality — see [Shared albums (reduced fidelity)](/photo-export/features/#shared-albums-reduced-fidelity). (Smart albums other than Favorites aren't included.)
 
 Once you've picked a scope, decide what to write:
 
