@@ -1951,9 +1951,12 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  /// Variants currently recorded for the asset under `placement`. Thin wrapper around
-  /// `RecordStoreRouter.variants(forAssetId:placement:)` kept so the existing call sites
-  /// don't need to thread the router's name through.
+  /// Variants currently recorded for the asset under `placement`. Pure forwarder to
+  /// `RecordStoreRouter.variants(forAssetId:placement:)` — kept for call-site stability
+  /// across a refactor that has multiple readers (the variant loop, the cancellation
+  /// path, the fallback policy lookup). Inlining would touch all of them at once and
+  /// obscure the router seam in this PR; the wrapper is on the deletion list for a
+  /// later cleanup phase.
   private func currentVariants(
     assetId: String, placement: ExportPlacement
   ) -> [ExportVariant: ExportVariantRecord] {
@@ -2129,6 +2132,8 @@ final class ExportManager: ObservableObject {
       at: date)
   }
 
+  /// Pure forwarder to `RecordStoreRouter.markVariantInProgress`. Kept for call-site
+  /// stability — same rationale as `currentVariants` above.
   private func recordVariantInProgress(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     relPath: String, filename: String?
@@ -2138,6 +2143,8 @@ final class ExportManager: ObservableObject {
       relPath: relPath, filename: filename)
   }
 
+  /// Pure forwarder to `RecordStoreRouter.markVariantExported`. Kept for call-site
+  /// stability — same rationale as `currentVariants` above.
   private func recordVariantExported(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     relPath: String, filename: String, exportedAt: Date

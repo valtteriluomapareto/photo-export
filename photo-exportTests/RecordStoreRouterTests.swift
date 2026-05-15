@@ -104,6 +104,23 @@ struct RecordStoreRouterTests {
     #expect(h.router.variants(forAssetId: "missing", placement: favorites()).isEmpty)
   }
 
+  // Timeline year/month plumb-through: a non-2025/7 placement must persist its year and
+  // month onto the stored record, not the `(0,0)` fallback the router uses when
+  // `timelineYearMonth` returns nil.
+  @Test func markVariantExported_timelinePreservesYearMonthFromPlacement() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    let placement = timeline(year: 2019, month: 12)
+    h.router.markVariantExported(
+      assetId: "a", placement: placement, variant: .original,
+      relPath: "2019/12/", filename: "X.HEIC", exportedAt: Date())
+
+    let record = h.timeline.exportInfo(assetId: "a")
+    #expect(record?.year == 2019)
+    #expect(record?.month == 12)
+    #expect(record?.relPath == "2019/12/")
+  }
+
   // MARK: - Writes — dispatch coverage
 
   @Test func markVariantInProgress_dispatchesByPlacementKind() {
@@ -211,6 +228,33 @@ struct RecordStoreRouterTests {
     h.router.removeInProgressVariant(
       assetId: "ghost", placement: timeline(), variant: .original)
     // Just expect no crash; no record to assert on.
+  }
+
+  /// `.failed` variants must be preserved across cancellation cleanup. Only `.inProgress`
+  /// gets removed — `.done` and `.failed` survive (existing failures carry retry context
+  /// AutoSync needs and the variant-recovery UI renders).
+  @Test func removeInProgressVariant_preservesFailedVariants() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    // Timeline path
+    h.router.markVariantFailed(
+      assetId: "tlf", placement: timeline(), variant: .original,
+      error: "disk full", at: Date())
+    h.router.removeInProgressVariant(
+      assetId: "tlf", placement: timeline(), variant: .original)
+    #expect(h.timeline.exportInfo(assetId: "tlf")?.variants[.original]?.status == .failed)
+
+    // Collection path
+    let alb = album("alb")
+    h.collection.upsertPlacement(alb)
+    h.router.markVariantFailed(
+      assetId: "cf", placement: alb, variant: .original,
+      error: "asset missing", at: Date())
+    h.router.removeInProgressVariant(
+      assetId: "cf", placement: alb, variant: .original)
+    #expect(h.collection.exportInfo(assetId: "cf", placement: alb)?
+      .variants[.original]?.status == .failed)
   }
 
   // MARK: - Reuse-source lookup
