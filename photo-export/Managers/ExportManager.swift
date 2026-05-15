@@ -178,6 +178,15 @@ final class ExportManager: ObservableObject {
     /// with a retry reason in the run summary." Reported on the summary;
     /// the per-variant detail is reconstructable from `AutoSyncRetryState`.
     var skippedCount: Int = 0
+    /// Set when a bulk-album enqueue (`enqueueBulkAlbumExport`) threw partway
+    /// through and the catch block elected to drain the partial queue instead
+    /// of cancelling. Without this, the natural queue-drain finalize would
+    /// resolve the run as `.completed` — and `AutoSyncReducer.coveredScopes`
+    /// would then clear the scope's dirty flag, hiding the albums that the
+    /// enqueue loop never reached from the next reconciliation pass. The flag
+    /// flips `finalizeActiveRun`'s `.completed` to `.failed` so the dirty
+    /// state survives and the next change-event-driven debounce retries.
+    var partialBulkScan: Bool = false
   }
   private var activeRunBookkeeping: ActiveRunBookkeeping?
 
@@ -597,13 +606,38 @@ final class ExportManager: ObservableObject {
   /// whole tree; `.allSharedAlbums` walks the flat top-level shared-album list;
   /// `.folder` walks one folder's subtree (and short-circuits with a "folder no
   /// longer exists" message if the id can't be found); `.explicitIds` uses the
-  /// caller-supplied list as-is and routes through the `.album` selection (the
-  /// multi-select tile flow in `FolderContentView`).
+  /// caller-supplied list as-is.
+  ///
+  /// `placementKind` controls which placement family each batch member resolves
+  /// to. Only `.allSharedAlbums` produces `.sharedAlbum`; folder and explicit-id
+  /// sources are user-album-only by design (folders don't contain shared albums;
+  /// the multi-select UI for shared albums isn't a feature today).
   private enum BulkAlbumSource {
     case allAlbums
     case allSharedAlbums
     case folder(folderId: String)
     case explicitIds([String])
+
+    var placementKind: ExportPlacement.Kind {
+      switch self {
+      case .allSharedAlbums: return .sharedAlbum
+      case .allAlbums, .folder, .explicitIds: return .album
+      }
+    }
+
+    func selection(for collectionId: String) -> LibrarySelection {
+      switch placementKind {
+      case .sharedAlbum: return .sharedAlbum(collectionId: collectionId)
+      default: return .album(collectionId: collectionId)
+      }
+    }
+
+    func scope(for collectionId: String) -> PhotoFetchScope {
+      switch placementKind {
+      case .sharedAlbum: return .sharedAlbum(collectionId: collectionId)
+      default: return .album(collectionId: collectionId)
+      }
+    }
   }
 
   /// Shared driver for the three bulk-album export entry points
@@ -643,21 +677,13 @@ final class ExportManager: ObservableObject {
       }
       do {
         let albumIds: [String]
-        // Whether the batch targets user albums (`.album` selection / scope) or
-        // iCloud shared albums (`.sharedAlbum`). Only `.allSharedAlbums` flips this
-        // to `.sharedAlbum`; folder and explicit-id sources are user-album-only by
-        // design (folders don't contain shared albums; the multi-select UI for
-        // shared albums isn't a feature today).
-        let usesSharedAlbumKind: Bool
         switch source {
         case .allAlbums:
           let tree = try photoLibraryService.fetchCollectionTree()
           albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
-          usesSharedAlbumKind = false
         case .allSharedAlbums:
           let tree = try photoLibraryService.fetchCollectionTree()
           albumIds = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree)
-          usesSharedAlbumKind = true
         case .folder(let folderId):
           let tree = try photoLibraryService.fetchCollectionTree()
           guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
@@ -673,25 +699,15 @@ final class ExportManager: ObservableObject {
             return
           }
           albumIds = PhotoCollectionDescriptor.albumLocalIds(under: folder)
-          usesSharedAlbumKind = false
         case .explicitIds(let ids):
           albumIds = ids
-          usesSharedAlbumKind = false
         }
         var totalEnqueued = 0
         var sawUnauthorized = false
         for collectionId in albumIds {
-          let selection: LibrarySelection =
-            usesSharedAlbumKind
-            ? .sharedAlbum(collectionId: collectionId)
-            : .album(collectionId: collectionId)
-          let scope: PhotoFetchScope =
-            usesSharedAlbumKind
-            ? .sharedAlbum(collectionId: collectionId)
-            : .album(collectionId: collectionId)
           let outcome = try await enqueueCollection(
-            selection: selection,
-            scope: scope,
+            selection: source.selection(for: collectionId),
+            scope: source.scope(for: collectionId),
             selectionMode: selectionMode,
             generation: gen
           )
@@ -726,6 +742,12 @@ final class ExportManager: ObservableObject {
         if !pendingJobs.isEmpty {
           setQueueWarningMessage(
             "Couldn't list every album. Continuing with the photos already queued.")
+          // Mark the run as partial so the natural queue-drain finalize
+          // downgrades `.completed` to `.failed` — otherwise an autosync run
+          // would see a clean summary, clear the scope's dirty flag, and skip
+          // the unreached albums until the next library change. No-op for
+          // fire-and-forget runs (bookkeeping is nil).
+          activeRunBookkeeping?.partialBulkScan = true
           processQueueIfNeeded()
         } else {
           finalizeActiveRun(result: .failed, cancelReason: nil)
@@ -1228,12 +1250,21 @@ final class ExportManager: ObservableObject {
     guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
       return
     }
-    // A natural queue-drain finalize comes in as `.completed`. If any variants failed
-    // during this run we remap to `.failed` so callers can distinguish a clean run
-    // from one that needs retry-store inspection. Explicit cancel/interrupt paths keep
-    // their incoming result untouched.
+    // A natural queue-drain finalize comes in as `.completed`. Two conditions
+    // demote it to `.failed`:
+    //   1. Any variants failed during this run — callers (AutoSync's retry path,
+    //      Export Issues UI) need to distinguish a clean run from one that needs
+    //      retry-store inspection.
+    //   2. The bulk-enqueue catch block elected to drain a partial queue — the
+    //      unreached albums in the batch never got a chance to enqueue, so a
+    //      `.completed` summary would over-report what the run actually covered
+    //      and `AutoSyncReducer` would clear dirty state for albums that weren't
+    //      reconciled.
+    // Explicit cancel/interrupt paths keep their incoming result untouched.
     let effectiveResult: ExportRunResult
-    if result == .completed && bookkeeping.failedCount > 0 {
+    if result == .completed
+      && (bookkeeping.failedCount > 0 || bookkeeping.partialBulkScan)
+    {
       effectiveResult = .failed
     } else {
       effectiveResult = result

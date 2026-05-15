@@ -304,16 +304,8 @@ enum AutoSyncReducer {
         let destinationId = newState.destination.id
       else { break }
 
-      let coveredScopes: Set<AutoExportLibraryScope>
-      switch summary.context.scope {
-      case .timelineFullLibrary: coveredScopes = [.timeline]
-      case .favoritesFull: coveredScopes = [.favorites]
-      case .allAlbumsFull: coveredScopes = [.albums]
-      case .allSharedAlbumsFull: coveredScopes = [.sharedAlbums]
-      case .timelineAssets, .favoritesAssets, .allAlbumsAssets,
-        .allSharedAlbumsAssets, .autoExport:
-        coveredScopes = []
-      }
+      let coveredScopes: Set<AutoExportLibraryScope> =
+        summary.context.scope.clearableScope.map { [$0] } ?? []
       guard !coveredScopes.isEmpty else { break }
 
       var dirty = newState.dirtyStateByDestination[destinationId] ?? .empty
@@ -431,21 +423,17 @@ enum AutoSyncReducer {
   private static func coveredScopes(
     summary: ExportRunSummary, currentSelection: AutoExportScopeSelection
   ) -> Set<AutoExportLibraryScope> {
-    switch summary.context.scope {
-    case .timelineFullLibrary: return [.timeline]
-    case .favoritesFull: return [.favorites]
-    case .allAlbumsFull: return [.albums]
-    case .allSharedAlbumsFull: return [.sharedAlbums]
-    case .autoExport(let scopes):
-      // Intersect with the *current* selection — if the user removed a scope
-      // between dispatch and completion, we don't clear its lingering dirty.
+    // The `.autoExport` umbrella carries its own per-scope selection and is the
+    // one case `ExportRunScope.clearableScope` doesn't handle — it has to
+    // intersect with the *current* selection so a scope the user removed
+    // between dispatch and completion doesn't get its lingering dirty
+    // unexpectedly cleared. Single-scope full-run cases route through the
+    // shared `clearableScope` mapping; targeted-asset cases return `nil` (no
+    // blanket clear).
+    if case .autoExport(let scopes) = summary.context.scope {
       return Set(scopes.enabledScopes).intersection(Set(currentSelection.enabledScopes))
-    case .timelineAssets, .favoritesAssets, .allAlbumsAssets, .allSharedAlbumsAssets:
-      // Targeted runs don't reconcile a full scope; their bookkeeping
-      // (removing exported asset ids from `pendingAssetIds`) happens via a
-      // different path. Don't blanket-clear.
-      return []
     }
+    return summary.context.scope.clearableScope.map { [$0] } ?? []
   }
 
   private static func environmentAllowsRun(state: State) -> Bool {

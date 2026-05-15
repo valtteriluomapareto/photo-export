@@ -9,6 +9,20 @@ enum AutoExportLibraryScope: String, Codable, CaseIterable, Equatable, Sendable 
   /// JPEGs only). Users opt in to Auto Export for them via their own toggle so
   /// the trade-off is explicit.
   case sharedAlbums
+
+  /// The `ExportRunScope` that fully reconciles this library scope. Single source
+  /// of truth for the `AutoExportLibraryScope → ExportRunScope` mapping —
+  /// `AutoSyncManager.expand(scope:)` reads it, and `ExportRunScope.clearableScope`
+  /// is its inverse. Adding a new library scope is one switch update here plus the
+  /// matching `ExportRunScope` case, instead of three switch sites in lockstep.
+  var fullRunScope: ExportRunScope {
+    switch self {
+    case .timeline: return .timelineFullLibrary
+    case .favorites: return .favoritesFull
+    case .albums: return .allAlbumsFull
+    case .sharedAlbums: return .allSharedAlbumsFull
+    }
+  }
 }
 
 struct AutoExportScopeSelection: Equatable, Codable, Sendable {
@@ -48,13 +62,11 @@ struct AutoExportScopeSelection: Equatable, Codable, Sendable {
     !timeline && !favorites && !albums && !sharedAlbums
   }
 
+  /// Enabled scopes in canonical order. Derived from `AutoExportLibraryScope.allCases`
+  /// so the ordering invariant — and the corresponding `libraryScopeIsCaseIterableInDefinitionOrder`
+  /// test — actually constrains UI iteration and run dispatch.
   var enabledScopes: [AutoExportLibraryScope] {
-    var out: [AutoExportLibraryScope] = []
-    if timeline { out.append(.timeline) }
-    if favorites { out.append(.favorites) }
-    if albums { out.append(.albums) }
-    if sharedAlbums { out.append(.sharedAlbums) }
-    return out
+    AutoExportLibraryScope.allCases.filter { includes($0) }
   }
 
   func includes(_ scope: AutoExportLibraryScope) -> Bool {

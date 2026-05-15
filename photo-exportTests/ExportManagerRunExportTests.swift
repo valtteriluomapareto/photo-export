@@ -117,6 +117,47 @@ struct ExportManagerRunExportTests {
     #expect(harness.manager.activeRunContext == nil)
   }
 
+  /// Regression for the codex P2 finding: when a bulk-album run throws partway
+  /// through and the partial-queue drain path runs, the summary must report
+  /// `.failed`, not `.completed`. `AutoSyncReducer.coveredScopes` clears dirty
+  /// state only on `.completed` summaries — a `.completed` here would hide the
+  /// albums that the enqueue loop never reached from the next reconciliation.
+  ///
+  /// Reproduction: seed two albums; the second throws on `fetchAssets`. The
+  /// first album's jobs queue, then the second throws, the catch block elects
+  /// to drain the partial queue, and `partialBulkScan` flips the natural
+  /// `.completed` to `.failed` in `finalizeActiveRun`.
+  @Test func allAlbumsFullPartialEnqueueResolvesFailed() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let asset = AssetDescriptor(
+      id: "a1", creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      mediaType: .image, pixelWidth: 100, pixelHeight: 100, duration: 0,
+      hasAdjustments: false)
+    harness.photoLib.assetsByAlbumLocalId["album-A"] = [asset]
+    harness.photoLib.resourcesByAssetId["a1"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "a1.HEIC")
+    ]
+    harness.photoLib.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "album:album-A", localIdentifier: "album-A", title: "Album A",
+        kind: .album, pathComponents: [], children: []),
+      PhotoCollectionDescriptor(
+        id: "album:broken-album", localIdentifier: "broken-album",
+        title: "Broken", kind: .album, pathComponents: [], children: []),
+    ]
+    harness.photoLib.fetchAssetsErrorByAlbumId["broken-album"] = NSError(
+      domain: "Test", code: 7, userInfo: [NSLocalizedDescriptionKey: "boom"])
+
+    let summary = await harness.manager.runExport(
+      context: makeContext(scope: .allAlbumsFull))
+
+    #expect(summary.result == .failed)
+    #expect(summary.completedCount >= 1)
+    #expect(harness.manager.activeRunContext == nil)
+  }
+
   // MARK: - AutoSync retry-eligibility skip (Phase 3 Slice C)
 
   /// AutoSync run on a destination where every asset's required variant is
