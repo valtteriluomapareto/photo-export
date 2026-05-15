@@ -11,7 +11,7 @@ Use this document as a checklist when writing code or reviewing PRs.
 - Prefer clear layering:
   - **Views (SwiftUI)**: Stateless UI, render from inputs; no business logic.
   - **ViewModels (ObservableObject)**: State, UI-friendly transformations, side-effects orchestration.
-  - **Managers/Services**: Photos access, export pipeline, file system, logging.
+  - **Records/ AutoSync/ PhotoLibrary/ Managers/**: stateful services and pure helpers split by feature area (record stores; auto-export state machine; PhotoKit access; export pipeline / destination / orchestration).
   - **Models**: Plain value types and domain types.
 - Keep each view in its own file. Avoid multiple large `View` types in one file (e.g., move `MonthView` out of `ContentView.swift`).
 - Make types `final` by default unless subclassing is intended. Mark helpers `private` and prefer `internal` over `public` unless needed.

@@ -37,10 +37,13 @@ UI tests exist in `photo-exportUITests/` but are skipped by default in the share
 
 Source code under `photo-export/` is organized as follows:
 
-- `Managers/` — long-lived stateful services and pure helpers (see breakdown below)
+- `Records/` — record stores (timeline + collection), the shared `JSONLRecordFile` persistence primitive, `RecordStoreRouter` (single placement-kind dispatch), and `ExportCompletionPolicy` (single completion/edited-fallback rule)
+- `AutoSync/` — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, with `AutoSync/Stores/` for the file-backed persistence (dirty state, per-destination tokens, retry state, run summary, scope, photo change token)
+- `PhotoLibrary/` — `PhotoLibraryManager`, `ScreenshotPhotoLibraryService`, `PhotoLibraryPersistentChangeAdapter`, `CollectionCountCache`
+- `Managers/` — remaining stateful services and pure helpers awaiting later phase moves (`ExportManager`, `ExportDestinationManager`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, `BackupScanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ExportJobPlanner`, `ExportDestinationResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`)
 - `Protocols/` — test seams: `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, `ExportDestination`. Add a new protocol here when you need to inject a fake.
 - `Models/` — value types: `AssetDescriptor`, `AssetDetails`, `ExportRecord`, `ExportVariant`, `ExportPlacement`, `LibrarySelection`, `PhotoCollectionDescriptor`
-- `Views/` — SwiftUI views (see list below)
+- `Views/` — SwiftUI views, grouped by feature: `Timeline/`, `Collections/`, `Export/`, `Settings/`, `Shared/`
 - `ViewModels/` — `MonthViewModel`
 - `Helpers/` — small pure utilities (`MonthFormatting`)
 - `Resources/`, `SupportingFiles/`, `Assets.xcassets` — bundle resources, Info.plist, asset catalog
@@ -53,7 +56,7 @@ Source code under `photo-export/` is organized as follows:
 - **CollectionExportRecordStore** — sibling store for Favorites + user-album exports per-destination. Disjoint key space from the timeline store; the two stores cannot corrupt each other. Routed to by `ExportManager` via `placement.kind`.
 - **ExportManager** — orchestrates the export queue (enqueue/pause/cancel/resume). Depends on the other four managers; routes record mutations to the correct store via `ExportPlacement.kind`.
 
-**Other code under `Managers/`:**
+**Other code under `Managers/` / `Records/` / `AutoSync/` / `PhotoLibrary/`:**
 
 - `BackupScanner` — scans an existing backup folder and matches files to Photos assets (used by Import Existing Backup)
 - `ExportFilenamePolicy` — pure rules for `_orig` companion filenames
@@ -123,7 +126,7 @@ Do **not** use Kimi K2.6 (or accept its output unverified) for:
 ## Key Conventions
 
 - Log with `os.Logger` (subsystem `com.valtteriluoma.photo-export`), not `print`.
-- The five UI-injected managers (`PhotoLibraryManager`, `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore`, `ExportDestinationManager`) are `@MainActor`. `JSONLRecordFile` is also `@MainActor` because both composing stores call into it from the main actor and it owns mutable state (`mutationCountSinceCompact`); its IO-queue-bound static helpers are explicitly `nonisolated`. Pure helpers under `Managers/` (`FileIOService`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ResourceSelection`, `ProductionAssetResourceWriter`, `BackupScanner`, `ExportPlacementResolver`, `ExportRecordsDirectoryCoordinator`) are plain types — do not add `@MainActor` reflexively. `CollectionCountCache` is an actor.
+- The five UI-injected managers (`PhotoLibraryManager`, `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore`, `ExportDestinationManager`) are `@MainActor`. `JSONLRecordFile` (under `Records/`) is also `@MainActor` because both composing stores call into it from the main actor and it owns mutable state (`mutationCountSinceCompact`); its IO-queue-bound static helpers are explicitly `nonisolated`. Pure helpers (`FileIOService`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ResourceSelection`, `ProductionAssetResourceWriter`, `BackupScanner`, `ExportPlacementResolver`, `ExportRecordsDirectoryCoordinator`, `ExportCompletionPolicy`, `ExportJobPlanner`, `ExportDestinationResolver`) are plain types — do not add `@MainActor` reflexively. `RecordStoreRouter` is `@MainActor`. `CollectionCountCache` is an actor.
 - Track exports by `PHAsset.localIdentifier`; never overwrite existing files.
 - Use `.task(id:)` for cancellation-aware async loading in views.
 - New code that touches Photos, the filesystem, or the export destination should go through the `Protocols/` seams so it can be unit-tested with fakes.
