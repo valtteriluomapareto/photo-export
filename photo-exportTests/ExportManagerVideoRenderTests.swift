@@ -231,6 +231,44 @@ struct ExportManagerVideoRenderTests {
     #expect(!FileManager.default.fileExists(atPath: candidate.path))
   }
 
+  /// Phase 0 characterization (`docs/project/plans/software-architecture-improvement-plan.md`
+  /// Phase 0 > Cancel-during-render tempfile cleanup): existing tests cover write-failure and
+  /// move-failure cleanup, but no test pins that a cancel arriving while a render is parked
+  /// at the latch leaves the destination directory free of `.tmp` files after the queue
+  /// drains. Asserts that the `defer { removeItem(tempURL) }` cleanup in
+  /// `exportSingleVariant` still runs on the cancellation path — pinning this is what lets
+  /// `VariantExporter` extraction in Phase 3 move the cleanup without silently regressing it.
+  @Test func cancelDuringRenderLeavesNoTempFileInDestination() async throws {
+    let h = makeHarness()
+    defer { h.dest.cleanup() }
+    h.manager.versionSelection = .edited
+
+    let latch = AsyncSemaphore()
+    let entered = AsyncSemaphore()
+    h.renderer.arm(latch: latch)
+    h.renderer.arm(enteredSignal: entered)
+
+    let (asset, resources) = adjustedVideo(
+      id: "cancel-tmp", filename: "IMG_7777.MOV")
+    h.photoLib.assetsByYearMonth["2025-11"] = [asset]
+    h.photoLib.resourcesByAssetId[asset.id] = resources
+
+    h.manager.startExportMonth(year: 2025, month: 11)
+    await entered.wait()
+    h.manager.cancelAndClear()
+    latch.signal()
+    await h.manager.waitForQueueDrained()
+
+    let monthDir = h.dest.rootURL.appendingPathComponent("2025/11")
+    let contents = (try? FileManager.default.contentsOfDirectory(atPath: monthDir.path)) ?? []
+    let tmpFiles = contents.filter { $0.hasSuffix(".tmp") }
+    #expect(
+      tmpFiles.isEmpty,
+      "cancel-during-render must leave no .tmp files in the destination directory; got \(tmpFiles)")
+    let finalCandidate = monthDir.appendingPathComponent("IMG_7777.MOV")
+    #expect(!FileManager.default.fileExists(atPath: finalCandidate.path))
+  }
+
   // MARK: - 7. Stale .tmp from a prior render run is cleared
 
   @Test func staleTempFileFromPriorRenderIsRemovedBeforeWrite() async throws {
