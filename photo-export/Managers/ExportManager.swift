@@ -359,11 +359,11 @@ final class ExportManager: ObservableObject {
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
-      guard let self, self.generation == gen else { return }
+      guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueMonth(
           year: year, month: month, selection: selection, generation: gen)
-        guard self.generation == gen else { return }
+        guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
           break
@@ -396,11 +396,11 @@ final class ExportManager: ObservableObject {
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
-      guard let self, self.generation == gen else { return }
+      guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueYear(
           year: year, selection: selection, generation: gen)
-        guard self.generation == gen else { return }
+        guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
           break
@@ -441,7 +441,7 @@ final class ExportManager: ObservableObject {
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
-      guard let self, self.generation == gen else {
+      guard let self, self.isCurrent(gen) else {
         self?.isEnqueueingAll = false
         return
       }
@@ -452,7 +452,7 @@ final class ExportManager: ObservableObject {
         for year in allYears {
           let outcome = try await enqueueYear(
             year: year, selection: selection, generation: gen)
-          guard self.generation == gen else {
+          guard self.isCurrent(gen) else {
             self.isEnqueueingAll = false
             return
           }
@@ -523,11 +523,11 @@ final class ExportManager: ObservableObject {
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
-      guard let self, self.generation == gen else { return }
+      guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
           selection: .favorites, scope: .favorites, selectionMode: selection, generation: gen)
-        guard self.generation == gen else { return }
+        guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
           break
@@ -671,7 +671,7 @@ final class ExportManager: ObservableObject {
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
-      guard let self, self.generation == gen else {
+      guard let self, self.isCurrent(gen) else {
         self?.isEnqueueingAll = false
         return
       }
@@ -711,7 +711,7 @@ final class ExportManager: ObservableObject {
             selectionMode: selectionMode,
             generation: gen
           )
-          guard self.generation == gen else {
+          guard self.isCurrent(gen) else {
             self.isEnqueueingAll = false
             return
           }
@@ -777,7 +777,7 @@ final class ExportManager: ObservableObject {
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
-      guard let self, self.generation == gen else { return }
+      guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
           selection: .sharedAlbum(collectionId: collectionId),
@@ -785,7 +785,7 @@ final class ExportManager: ObservableObject {
           selectionMode: selection,
           generation: gen
         )
-        guard self.generation == gen else { return }
+        guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
           break
@@ -819,7 +819,7 @@ final class ExportManager: ObservableObject {
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
     Task { [weak self] in
-      guard let self, self.generation == gen else { return }
+      guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
           selection: .album(collectionId: collectionId),
@@ -827,7 +827,7 @@ final class ExportManager: ObservableObject {
           selectionMode: selection,
           generation: gen
         )
-        guard self.generation == gen else { return }
+        guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
           break
@@ -1356,7 +1356,7 @@ final class ExportManager: ObservableObject {
         self?.currentJobAssetId = nil
         self?.currentJobVariant = nil
         self?.currentJobPlacement = nil
-        guard let self, self.generation == currentGen else { return }
+        guard let self, self.isCurrent(currentGen) else { return }
         self.totalJobsCompleted += 1
         self.processNext()
       }
@@ -1383,9 +1383,23 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Export Logic
+
+  /// Non-throwing companion to `throwIfCancelledOrStale(_:)`. Returns `true` when the
+  /// captured generation is still the active one, i.e. the work has not been superseded
+  /// by `bumpGeneration`-equivalent transitions (`cancelAndClear`, `clearPending`,
+  /// `interruptForDestinationUnavailable`, `supersedeForManualRun`). Use this at non-
+  /// throwing checkpoints — typically inside escaping closures that `return` early when
+  /// the run is stale. Per `docs/project/plans/software-architecture-improvement-plan.md`
+  /// "Cross-Cutting Contracts > Generation / cancellation ownership", this helper is the
+  /// seam future `ExportQueueCoordinator` collaborators will hold; collapsing inline
+  /// `self.isCurrent(gen)` checks through it makes the Phase 4/5 move mechanical.
+  private func isCurrent(_ gen: Int) -> Bool {
+    return generation == gen
+  }
+
   private func throwIfCancelledOrStale(_ gen: Int) throws {
     try Task.checkCancellation()
-    guard self.generation == gen else { throw CancellationError() }
+    guard isCurrent(gen) else { throw CancellationError() }
   }
 
   private func export(job: ExportJob, generation gen: Int) async {
@@ -1541,7 +1555,7 @@ final class ExportManager: ObservableObject {
     } catch is CancellationError {
       logger.info(
         "Export cancelled for id: \(job.assetLocalIdentifier, privacy: .public)")
-      if let inFlight, self.generation == gen {
+      if let inFlight, self.isCurrent(gen) {
         // Route the cancellation cleanup by the in-flight job's placement kind.
         switch job.placement.kind {
         case .timeline:
@@ -1561,7 +1575,7 @@ final class ExportManager: ObservableObject {
         }
       }
     } catch {
-      guard self.generation == gen else { return }
+      guard self.isCurrent(gen) else { return }
       logger.error(
         "Export failed for id: \(job.assetLocalIdentifier, privacy: .public) error: \(String(describing: error), privacy: .public)"
       )
@@ -2349,7 +2363,7 @@ final class ExportManager: ObservableObject {
         }.value
 
         try Task.checkCancellation()
-        guard self.generation == importGen else {
+        guard isCurrent(importGen) else {
           self.isImporting = false
           self.importStage = nil
           return
@@ -2368,7 +2382,7 @@ final class ExportManager: ObservableObject {
         }
 
         try Task.checkCancellation()
-        guard self.generation == importGen else {
+        guard isCurrent(importGen) else {
           self.isImporting = false
           self.importStage = nil
           return
@@ -2414,7 +2428,7 @@ final class ExportManager: ObservableObject {
 
         self.exportRecordStore.bulkImportRecords(records)
 
-        guard self.generation == importGen else {
+        guard isCurrent(importGen) else {
           self.isImporting = false
           self.importStage = nil
           return
@@ -2428,7 +2442,7 @@ final class ExportManager: ObservableObject {
         let timelineSummary = await self.exportRecordStore.reconcileAgainstFilesystem(
           at: rootURL)
         try Task.checkCancellation()
-        guard self.generation == importGen else {
+        guard isCurrent(importGen) else {
           self.isImporting = false
           self.importStage = nil
           return
@@ -2436,7 +2450,7 @@ final class ExportManager: ObservableObject {
         let collectionSummary = await self.collectionExportRecordStore
           .reconcileAgainstFilesystem(at: rootURL)
         try Task.checkCancellation()
-        guard self.generation == importGen else {
+        guard isCurrent(importGen) else {
           self.isImporting = false
           self.importStage = nil
           return
