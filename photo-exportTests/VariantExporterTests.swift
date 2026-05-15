@@ -145,6 +145,49 @@ struct VariantExporterTests {
     #expect(h.renderer.renderCalls.first?.request.assetId == "rendered")
   }
 
+  /// Render-failure error translation: a non-cancellation throw from the renderer must
+  /// be re-thrown as `NSError(domain: "Export", code: 9, NSLocalizedDescriptionKey:
+  /// ExportVariantRecovery.editedResourceUnavailableMessage)`. The persisted `lastError`
+  /// shape feeds `AutoSyncFailureCategory.classify`, the issue #22 fallback trigger, and
+  /// the user-visible "could not be exported this time" copy. A future refactor that
+  /// re-threw a different error type with the same localized description would silently
+  /// regress AutoSync retry routing without failing the existing end-to-end tests.
+  @Test func renderFailure_translatedToExportDomainCode9NSError() async {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    h.renderer.renderError = NSError(domain: "Test", code: 42, userInfo: nil)
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "render-err", mediaType: .video, hasAdjustments: true)
+    let resources = [
+      TestAssetFactory.makeResource(type: .video, originalFilename: "VID.MOV")
+    ]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+
+    do {
+      _ = try await h.exporter.exportSingleVariant(
+        variant: .edited, descriptor: asset, resources: resources,
+        destDir: h.destDir, relPath: "2025/07/",
+        job: ExportManager.ExportJob(
+          assetLocalIdentifier: asset.id,
+          placement: .timeline(year: 2025, month: 7),
+          selection: .edited),
+        groupStem: nil, pairOriginalWithSuffix: false,
+        generation: 0, inFlight: &inFlight)
+      Issue.record("Expected throw on render failure")
+    } catch {
+      let nsError = error as NSError
+      #expect(nsError.domain == "Export",
+        "render-failure throw must be NSError domain \"Export\"; got \(nsError.domain)")
+      #expect(nsError.code == 9,
+        "render-failure throw must be NSError code 9; got \(nsError.code)")
+      #expect(nsError.localizedDescription
+        == ExportVariantRecovery.editedResourceUnavailableMessage,
+        "render-failure localizedDescription must be the canonical sentinel; got \(nsError.localizedDescription)")
+    }
+  }
+
   /// "No resource" producer (e.g. video asset with no resources seeded): the exporter
   /// records the failure through `Host.recordVariantFailed` (not through
   /// `RecordStoreRouter.markVariantFailed` directly), so the bookkeeping-aware path

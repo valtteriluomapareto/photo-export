@@ -220,9 +220,16 @@ final class ExportManager: ObservableObject {
   /// `init` against the same `fileSystem` the rest of the pipeline uses.
   let destinationResolver: ExportDestinationResolver
   /// Owns single-variant write path (resource selection, temp/move, reuse-source copy,
-  /// timestamps, record write). Phase 3a routes the rendered-media branch back through
-  /// ExportManager via `VariantExporter.Host`; Phase 3b deletes that bridge. Initialised
-  /// at the end of `init` once all dependencies + `self` are available.
+  /// rendered-media write, timestamps, record write). Initialised at the end of `init`
+  /// once all dependencies + `self` are available.
+  ///
+  /// IUO because of the `host: self` cycle: `VariantExporter` is constructed with
+  /// `host: self` so it can call back for the cancellation seam, UI-state mutations, and
+  /// bookkeeping-aware failure recording — but `self` isn't usable until every stored
+  /// property has a value. Phase 3a's PR description anticipated the IUO would
+  /// disappear when the renderer dependency moved out, but the cycle persists for the
+  /// remaining six Host methods. The IUO retires in Phase 4b/5 when the cancellation
+  /// seam and UI-state mutations migrate to `ExportQueueCoordinator`.
   private(set) var variantExporter: VariantExporter!
   let assetResourceWriter: any AssetResourceWriter
   // `var` rather than `let` so we can rebind it at the end of `init` with a
