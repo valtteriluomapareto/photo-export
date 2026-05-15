@@ -13,9 +13,12 @@ extraction.
 
 ## Inventory
 
-Twelve unique concurrency warnings (after dedup), clustered into five themes.
+Twelve unique concurrency warnings across eleven source locations (after dedup),
+clustered into five themes. `photo-export/Managers/ExportManager.swift:2377:51` is the
+one site that emits two distinct warnings (theme 1 and theme 2), which is why the
+warning count exceeds the location count by one.
 
-### 1. `PhotoLibraryService` is non-Sendable (8 sites)
+### 1. `PhotoLibraryService` is non-Sendable (7 sites, 8 warnings)
 
 The single highest-impact finding. `any PhotoLibraryService` cannot cross actor
 boundaries; every site that captures or passes the service into a non-MainActor context
@@ -23,7 +26,7 @@ warns.
 
 - `photo-export/Managers/BackupScanner.swift:277:56` — `sending value of non-Sendable type 'any PhotoLibraryService'`
 - `photo-export/Managers/BackupScanner.swift:280:46` — `sending 'photoLibraryService' risks causing data races`
-- `photo-export/Managers/ExportManager.swift:2377:51` — `sending 'self.photoLibraryService'` (import path)
+- `photo-export/Managers/ExportManager.swift:2377:51` — `sending 'self.photoLibraryService'` (import path; same line also surfaces theme 2)
 - `photo-export/ViewModels/TimelineSidebarCounts.swift:112:27` — `'service' cannot exit main actor-isolated context`
 - `photo-export/ViewModels/TimelineSidebarCounts.swift:114:30` — same property, different call site
 - `photo-export/Views/FolderTileView.swift:255:27` — `'photoLibraryService' cannot exit main actor-isolated context`

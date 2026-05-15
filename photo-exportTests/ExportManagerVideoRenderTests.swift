@@ -259,6 +259,14 @@ struct ExportManagerVideoRenderTests {
     latch.signal()
     await h.manager.waitForQueueDrained()
 
+    // Pin that the cleanup path actually ran. Without this assertion the test
+    // would pass trivially if a future regression short-circuits cancellation
+    // before the renderer is invoked (no render → no .tmp ever written →
+    // `tmpFiles.isEmpty` is vacuously true).
+    #expect(
+      h.renderer.renderCalls.count == 1,
+      "renderer must have been invoked before cancel landed; got \(h.renderer.renderCalls.count) render calls")
+
     let monthDir = h.dest.rootURL.appendingPathComponent("2025/11")
     let contents = (try? FileManager.default.contentsOfDirectory(atPath: monthDir.path)) ?? []
     let tmpFiles = contents.filter { $0.hasSuffix(".tmp") }
