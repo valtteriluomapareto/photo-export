@@ -50,6 +50,15 @@ struct CollectionsSidebarView: View {
   @State private var expandedFolders: Set<String> = []
   @State private var countsById: [String: Int] = [:]
 
+  /// Persisted dismissal of the "Where are my shared albums?" hint. We can't read
+  /// the Photos.app "Shared Albums" iCloud-sync toggle from a sandboxed app, so
+  /// the hint is shown whenever the targeted shared-album fetch returns zero —
+  /// which collapses two cases (the toggle is off, OR the user genuinely has no
+  /// shared albums). The dismiss button stores the user's intent here so the
+  /// hint doesn't return after they've decided they don't need it.
+  @AppStorage("photoExport.collections.sharedAlbumsHintDismissed")
+  private var sharedAlbumsHintDismissed: Bool = false
+
   var body: some View {
     List(selection: selectionBinding) {
       Section("Favorites") {
@@ -70,11 +79,68 @@ struct CollectionsSidebarView: View {
           }
         }
       }
+
+      // Always render the "Shared Albums" section header when there's anything to
+      // show in it — either the actual shared albums, or the discovery hint for
+      // users who don't have them surfaced yet. The header is what teaches new
+      // users the feature exists; a hint floating without a header reads as an
+      // orphan card. The section is hidden entirely only when both branches go
+      // empty (no albums AND the hint has been dismissed).
+      if !sharedAlbums.isEmpty {
+        Section("Shared Albums") {
+          ForEach(sharedAlbums, id: \.id) { node in
+            descriptorRows(node, depth: 0)
+          }
+        }
+      } else if !sharedAlbumsHintDismissed {
+        Section("Shared Albums") {
+          sharedAlbumsHintRow
+        }
+      }
     }
     .navigationTitle("Photo Export")
     .task(id: photoLibraryManager.libraryRevision) {
       reloadTree()
     }
+  }
+
+  /// Soft hint shown when zero shared albums were returned. We can't tell the user
+  /// "your toggle is off" because PhotoKit returns the same zero-result regardless
+  /// of whether the toggle is off or the user simply has no shared albums. The
+  /// language asks them to check rather than telling them something is wrong, and
+  /// "Don't show again" lets users with no shared albums opt out for good.
+  ///
+  /// The "Open Photos" button drops the user inside Photos.app so they don't have
+  /// to hunt for it; the relevant setting is at Photos → Settings → iCloud →
+  /// Shared Albums.
+  private var sharedAlbumsHintRow: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Image(systemName: "person.2.crop.square.stack")
+          .foregroundStyle(.secondary)
+        Text("Shared albums missing?")
+          .font(.callout)
+          .fontWeight(.semibold)
+      }
+      Text(
+        "If you have iCloud shared albums, enable Photos → Settings → iCloud → \"Shared Albums\" so Photos syncs them down."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+      HStack {
+        Button("Open Photos") {
+          NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Photos.app"))
+        }
+        .controlSize(.small)
+        Spacer()
+        Button("Don't show again") {
+          sharedAlbumsHintDismissed = true
+        }
+        .controlSize(.small)
+      }
+    }
+    .padding(.vertical, 4)
   }
 
   // MARK: - Tree rendering
@@ -93,6 +159,18 @@ struct CollectionsSidebarView: View {
       .task(id: descriptor.id + "|\(photoLibraryManager.libraryRevision)") {
         if let id = descriptor.localIdentifier {
           await loadCount(for: .album(collectionId: id), descriptorId: descriptor.id)
+        }
+      }
+      return AnyView(row)
+    case .sharedAlbum:
+      let row = CollectionRow(
+        descriptor: descriptor, count: countsById[descriptor.id], depth: depth
+      )
+      .tag(LibrarySelection.sharedAlbum(collectionId: descriptor.localIdentifier ?? ""))
+      .task(id: descriptor.id + "|\(photoLibraryManager.libraryRevision)") {
+        if let id = descriptor.localIdentifier {
+          await loadCount(
+            for: .sharedAlbum(collectionId: id), descriptorId: descriptor.id)
         }
       }
       return AnyView(row)
@@ -131,6 +209,16 @@ struct CollectionsSidebarView: View {
     }
   }
 
+  /// Icon glyph + tint per descriptor kind. Shared albums use the system "person.2"
+  /// glyph to telegraph their multi-owner nature (matching Photos.app's sidebar).
+  fileprivate static func iconName(for kind: PhotoCollectionDescriptor.Kind) -> String {
+    switch kind {
+    case .favorites: return "heart.fill"
+    case .sharedAlbum: return "person.2.crop.square.stack"
+    case .album, .folder: return "rectangle.stack"
+    }
+  }
+
   // MARK: - Selection plumbing
 
   /// `List(selection:)` accepts any `Hashable` tag, including `nil`. This binding
@@ -157,8 +245,18 @@ struct CollectionsSidebarView: View {
         pathComponents: [], children: [])
   }
 
+  /// Top-level user albums and folders. Shared albums are partitioned into their own
+  /// section below; Favorites is rendered as its own header at the top.
   private var userCollections: [PhotoCollectionDescriptor] {
-    tree.filter { $0.kind != .favorites }
+    tree.filter { $0.kind == .album || $0.kind == .folder }
+  }
+
+  /// Top-level shared albums (iCloud-shared). PhotoKit doesn't nest them, so this is a
+  /// flat list. `PhotoLibraryManager.fetchCollectionTree` partitions them out so they
+  /// always appear here even though PhotoKit's traversal interleaves them with user
+  /// albums.
+  private var sharedAlbums: [PhotoCollectionDescriptor] {
+    tree.filter { $0.kind == .sharedAlbum }
   }
 
   private func reloadTree() {
@@ -218,7 +316,7 @@ private struct CollectionRow: View {
         // Indent nested albums under folders so the hierarchy reads at a glance.
         Color.clear.frame(width: CGFloat(depth) * 8, height: 1)
       }
-      Image(systemName: descriptor.kind == .favorites ? "heart.fill" : "rectangle.stack")
+      Image(systemName: CollectionsSidebarView.iconName(for: descriptor.kind))
         .foregroundColor(descriptor.kind == .favorites ? .pink : .secondary)
       Text(descriptor.title.isEmpty ? "Untitled" : descriptor.title)
         .lineLimit(1)
@@ -263,6 +361,10 @@ private struct CollectionRow: View {
     case .album:
       guard let id = descriptor.localIdentifier else { return nil }
       return collectionExportRecordStore.placements(matching: .album)
+        .first(where: { $0.collectionLocalIdentifier == id })
+    case .sharedAlbum:
+      guard let id = descriptor.localIdentifier else { return nil }
+      return collectionExportRecordStore.placements(matching: .sharedAlbum)
         .first(where: { $0.collectionLocalIdentifier == id })
     case .folder:
       return nil

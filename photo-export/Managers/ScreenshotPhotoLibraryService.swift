@@ -81,7 +81,18 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
       id: "folder:trips", localIdentifier: "trips", title: "Trips",
       kind: .folder, pathComponents: [],
       children: [tripsLondon, tripsParis])
-    return [favorites, family, porvoo, trips]
+    // Issue #48: surface an iCloud shared album in marketing captures so the
+    // "Shared Albums" sidebar section renders with a populated grid. Reuses
+    // family bundled photos via `assetIdsByAlbum["family-stream"]` — narratively
+    // this is a relative's shared family stream, semantically distinct from the
+    // user's own "Family" album. The descriptor's `kind == .sharedAlbum` is
+    // what routes it into the new sidebar section in
+    // `PhotoLibraryManager.fetchCollectionTree`; the screenshot tree appends it
+    // last so the partition order matches production.
+    let familyStream = PhotoCollectionDescriptor(
+      id: "shared-album:family-stream", localIdentifier: "family-stream",
+      title: "Family stream", kind: .sharedAlbum, pathComponents: [], children: [])
+    return [favorites, family, porvoo, trips, familyStream]
   }()
 
   /// Each album surfaces this many synthetic assets in the grid. The bundled
@@ -103,6 +114,13 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
     "porvoo": (1...assetsPerAlbum).map { "porvoo-\($0)" },
     "london": (1...assetsPerAlbum).map { "london-\($0)" },
     "paris": (1...assetsPerAlbum).map { "paris-\($0)" },
+    // Shared album reuses the `family-N` ids so it shows the same bundled
+    // photos. Narratively this is a relative who's sharing their stream of
+    // family photos; visually it gives the screenshot a populated grid without
+    // sourcing a new image set. `assetIdsByAlbum` is the canonical name in this
+    // file but the dict is also consulted for `.sharedAlbum` scopes (both cases
+    // share the lookup in `fetchAssets(in:)`).
+    "family-stream": (1...assetsPerAlbum).map { "family-\($0)" },
   ]
 
   /// How many distinct bundled photos exist for each album. The image lookup
@@ -234,7 +252,7 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
       return try await fetchAssets(year: year, month: month, mediaType: mediaType)
     case .favorites:
       ids = Self.favoriteAssetIds
-    case .album(let collectionId):
+    case .album(let collectionId), .sharedAlbum(let collectionId):
       ids = Self.assetIdsByAlbum[collectionId] ?? []
     }
     return ids.map(Self.makeDescriptor(id:))
@@ -255,7 +273,7 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
           .reduce(0) { $0 + $1.value.count }
       case .favorites:
         return Self.favoriteAssetIds.count
-      case .album(let collectionId):
+      case .album(let collectionId), .sharedAlbum(let collectionId):
         return Self.assetIdsByAlbum[collectionId]?.count ?? 0
       }
     }.value

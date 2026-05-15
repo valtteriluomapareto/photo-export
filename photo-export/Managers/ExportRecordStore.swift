@@ -346,7 +346,9 @@ final class ExportRecordStore: ObservableObject {
   /// asset is re-queued every run and fails the same way (Photos refuses the
   /// edited resource for that asset), producing the "stuck at 99%" bug.
   func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
-    let required = requiredVariants(for: asset, selection: selection)
+    // Timeline placements always honour the user's selection (no reduced-fidelity
+    // sources on owned-library assets).
+    let required = requiredVariants(for: asset, selection: selection, policy: .standard)
     guard let record = recordsById[asset.id] else { return false }
     if required.allSatisfy({ record.variants[$0]?.status == .done }) { return true }
     return Self.satisfiesEditedFallback(record: record, asset: asset, selection: selection)

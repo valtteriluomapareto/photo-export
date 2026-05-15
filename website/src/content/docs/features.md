@@ -37,6 +37,7 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - One-click batch export of every album (including albums nested in folders) via the **Export All Albums** toolbar button on the Collections tab
 - One-click batch export of every album in a single folder via **Export Folder** — select a folder in the Collections sidebar and the toolbar's primary action targets just that folder's subtree
 - Multi-select album tiles inside a folder with Cmd-click / Shift-click to enqueue an arbitrary subset (selected subfolders expand to their descendant albums)
+- **iCloud Shared Albums** appear in their own Collections sidebar section and export one at a time to `Collections/Shared Albums/<Album>/`. See the [reduced-fidelity note](#shared-albums-reduced-fidelity) below — Apple only serves shared photos as downscaled JPEGs
 - Only copies assets that haven't been exported yet
 - Automatic folder creation in `<year>/<month>/` for the timeline and `Collections/...` for albums and favorites
 - Albums under folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`)
@@ -64,6 +65,19 @@ an edited `.MOV` stays `.MOV`). With **Include originals** on, the companion is 
 keep their original container both times. Photos can change containers (an edited HEIC
 may export as `.JPG` because Photos rendered the edit as JPEG); videos do not get that
 asymmetric rename.
+
+### Shared albums (reduced fidelity)
+
+iCloud shared albums (the kind you create in Photos to share with family or a partner) are surfaced under a "Shared Albums" section in the Collections sidebar. Selecting a shared album shows its photos in the same grid as a user album, and the **Export Shared Album** button on its pane writes everything to `Collections/Shared Albums/<Album>/`.
+
+There's an important caveat that Photo Export can't work around: **iCloud only serves shared-album photos as downscaled JPEGs.** No API exists to fetch the full-resolution originals for an asset that lives only in a shared album. So:
+
+- The exported files are the best version Apple makes available — typically a JPEG well under the original's resolution
+- The **Include originals** toggle is a no-op for shared albums; no `_orig` companion is written
+- A photo that exists in both your library _and_ a shared album gets exported twice — once at full quality under its owned-library scope (`2025/...`, `Collections/Albums/...`), once downscaled under `Collections/Shared Albums/...`. Photo Export uses Photos' own per-asset identifiers, which differ between the two copies, so they're treated as distinct
+- Shared albums are also excluded from the **Export All Albums** batch action — you export them one at a time, which makes the trade-off explicit
+
+The shared-album pane shows an in-app banner with the same warning so the choice is visible at the moment of export.
 
 ## Export destination
 
@@ -108,4 +122,5 @@ asymmetric rename.
 - Timeline exports use the fixed year/month hierarchy; collection exports land under `Collections/Favorites/` and `Collections/Albums/`
 - Exports run sequentially (one asset at a time)
 - Folders in Photos render in the sidebar tree but are not directly exportable — pick the album you want
-- Smart albums other than Favorites and shared albums are not surfaced in the Collections sidebar
+- Smart albums other than Favorites are not surfaced in the Collections sidebar
+- Shared albums are surfaced but export at reduced quality (downscaled JPEGs) — see [Shared albums (reduced fidelity)](#shared-albums-reduced-fidelity) above

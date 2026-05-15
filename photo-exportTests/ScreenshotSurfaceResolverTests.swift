@@ -97,6 +97,13 @@ struct ScreenshotSurfaceResolverTests {
     #expect(result?.selection == .album(collectionId: "paris"))
   }
 
+  @Test func collectionsFamilyStreamSharedAlbumKey() {
+    let result = ScreenshotSurfaceResolver.resolve(
+      from: ["app", "--screenshot-surface=collections-shared-album-family-stream"])
+    #expect(result?.section == .collections)
+    #expect(result?.selection == .sharedAlbum(collectionId: "family-stream"))
+  }
+
   // MARK: - Argument-handling edge cases
 
   /// Multiple `--screenshot-surface=` args take the first one — matches

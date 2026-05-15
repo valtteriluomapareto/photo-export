@@ -21,14 +21,22 @@ enum LibrarySelection: Hashable, Sendable {
   /// single placement — selecting one drives the folder content view, where the export
   /// action enqueues each descendant album to its own existing album placement.
   case folder(collectionId: String)
+  /// iCloud shared album. Lives in its own sidebar section and exports under
+  /// `Collections/Shared Albums/<Album>/` at reduced fidelity (Photos serves a single
+  /// downscaled JPEG per asset).
+  case sharedAlbum(collectionId: String)
 }
 
 /// Photos query scope. Both timeline (per-year, per-month, or all) and collection scopes
-/// (favorites, single album) are expressed here so the same fetch and count APIs can serve
-/// both surfaces.
+/// (favorites, single album, shared album) are expressed here so the same fetch and count
+/// APIs can serve both surfaces.
 enum PhotoFetchScope: Hashable, Sendable {
   /// `month == nil` means "the whole year"; `month != nil` means "this single month".
   case timeline(year: Int, month: Int?)
   case favorites
   case album(collectionId: String)
+  /// iCloud shared album. The asset enumeration is the same `PHAsset.fetchAssets(in:)` as
+  /// `.album`; the kind is split so downstream code (placement resolution, banner
+  /// rendering, originals suppression) can branch on shared vs user albums.
+  case sharedAlbum(collectionId: String)
 }

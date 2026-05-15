@@ -1,10 +1,11 @@
 import Foundation
 
-/// App-owned descriptor for a Photos collection (Favorites, an album, or a folder).
-/// Replaces `PHAssetCollection` / `PHCollectionList` at all non-framework boundaries —
-/// `PhotoLibraryManager` is the only place those PhotoKit types appear in production.
+/// App-owned descriptor for a Photos collection (Favorites, an album, a folder, or an
+/// iCloud shared album). Replaces `PHAssetCollection` / `PHCollectionList` at all
+/// non-framework boundaries — `PhotoLibraryManager` is the only place those PhotoKit
+/// types appear in production.
 ///
-/// Three kinds:
+/// Four kinds:
 /// - `.favorites`: synthetic. There is no underlying `PHAssetCollection`; the contents are
 ///   resolved via a `favorite == YES` predicate. `localIdentifier` is `nil`.
 /// - `.album`: a user-created album. `localIdentifier` is the underlying
@@ -12,11 +13,16 @@ import Foundation
 /// - `.folder`: a user-created folder (a `PHCollectionList`). Folders are not directly
 ///   exportable; they only exist to group children. `localIdentifier` is the underlying
 ///   `PHCollectionList.localIdentifier` and is used solely for tree identity.
+/// - `.sharedAlbum`: an iCloud shared album (`PHAssetCollection` with subtype
+///   `.albumCloudShared`). Surfaced in its own top-level sidebar section because shared
+///   albums don't nest in the user-folder tree and their assets export at reduced
+///   fidelity (single downscaled JPEG resource per asset).
 struct PhotoCollectionDescriptor: Identifiable, Hashable, Sendable {
   enum Kind: String, Codable, Hashable, Sendable {
     case favorites
     case album
     case folder
+    case sharedAlbum
   }
 
   /// Stable identifier used as the SwiftUI `Identifiable` key. For `.album` and `.folder`
@@ -46,8 +52,9 @@ struct PhotoCollectionDescriptor: Identifiable, Hashable, Sendable {
 
 extension PhotoCollectionDescriptor {
   /// Recursively collects `localIdentifier` for every `.album` in the tree, walking
-  /// through `.folder` nodes. `.favorites` is excluded by design — the batch
-  /// "Export All Albums" action covers user albums only.
+  /// through `.folder` nodes. `.favorites` and `.sharedAlbum` are excluded by design —
+  /// the batch "Export All Albums" action covers user albums only; shared albums export
+  /// at reduced fidelity and get their own per-album action.
   static func albumLocalIds(in tree: [PhotoCollectionDescriptor]) -> [String] {
     var ids: [String] = []
     for descriptor in tree {
@@ -56,11 +63,20 @@ extension PhotoCollectionDescriptor {
         if let id = descriptor.localIdentifier { ids.append(id) }
       case .folder:
         ids.append(contentsOf: albumLocalIds(in: descriptor.children))
-      case .favorites:
+      case .favorites, .sharedAlbum:
         continue
       }
     }
     return ids
+  }
+
+  /// Top-level `.sharedAlbum` ids in `tree`. Shared albums never nest, so this is a flat
+  /// filter; the recursion in `albumLocalIds(in:)` doesn't apply.
+  static func sharedAlbumLocalIds(in tree: [PhotoCollectionDescriptor]) -> [String] {
+    tree.compactMap { descriptor in
+      guard descriptor.kind == .sharedAlbum else { return nil }
+      return descriptor.localIdentifier
+    }
   }
 
   /// Album local ids in this descriptor's subtree, recursively. Returns an empty array
@@ -110,7 +126,7 @@ extension PhotoCollectionDescriptor {
         for id in albumLocalIds(under: child) where seen.insert(id).inserted {
           ids.append(id)
         }
-      case .favorites:
+      case .favorites, .sharedAlbum:
         continue
       }
     }

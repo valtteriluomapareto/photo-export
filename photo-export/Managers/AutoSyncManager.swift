@@ -535,6 +535,7 @@ final class AutoSyncManager: ObservableObject {
     case .timeline: return .timeline
     case .favorites: return .favorites
     case .album: return .album(placementId: placement.id)
+    case .sharedAlbum: return .sharedAlbum(placementId: placement.id)
     }
   }
 

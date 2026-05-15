@@ -3,13 +3,17 @@ import Foundation
 /// A single export "slot" — a `(kind, id, relativePath)` triple that records, queue jobs, and
 /// destination directories all key by.
 ///
-/// Three kinds:
+/// Four kinds:
 /// - `.timeline`: per-month folders like `2025/02/`. Synthesized at the boundary from
 ///   `(year, month)`; never persisted as a placement metadata entry on disk (the timeline store
 ///   keeps its existing asset-keyed shape).
 /// - `.favorites`: a single fixed folder `Collections/Favorites/`.
 /// - `.album`: per-album folders under `Collections/Albums/...` with sibling-collision
 ///   disambiguation (`_2`, `_3` suffixes) and rename-detection via `displayPathHash8`.
+/// - `.sharedAlbum`: per-album folders under `Collections/Shared Albums/<title>/`.
+///   Shared albums never nest in folders, so the placement has no parent path
+///   component. Same collision-suffix rules apply for two shared albums with identical
+///   sanitized titles.
 ///
 /// Identity is `id` only. Manual `Hashable`/`Equatable` over `id` (not synthesized over all
 /// fields) so two `ExportPlacement` values with the same `id` but different `createdAt`
@@ -21,6 +25,20 @@ struct ExportPlacement: Codable, Sendable {
     case timeline
     case favorites
     case album
+    case sharedAlbum
+
+    /// Variant-selection policy for this placement kind. Centralises the
+    /// "Photos returns one resource here" branch: shared albums get
+    /// `.singleResource` so `requiredVariants(...)` collapses to `[.original]`
+    /// and "Include originals" is naturally suppressed. Owned-library paths
+    /// (timeline, favorites, user albums) stay on `.standard` and honour the
+    /// user's selection.
+    var variantPolicy: VariantPolicy {
+      switch self {
+      case .sharedAlbum: return .singleResource
+      case .timeline, .favorites, .album: return .standard
+      }
+    }
   }
 
   let kind: Kind
@@ -30,9 +48,9 @@ struct ExportPlacement: Codable, Sendable {
   /// Human-readable label shown in diagnostic logs (and any future rename dialog).
   /// `relativePath` is sanitized and `id` is opaque, so neither is suitable.
   let displayName: String
-  /// `PHAssetCollection.localIdentifier` for `.album` placements. `nil` for `.timeline` (no
-  /// PhotoKit collection) and `.favorites` (synthetic; backed by a `favorite == YES`
-  /// predicate, not a real `PHAssetCollection`).
+  /// `PHAssetCollection.localIdentifier` for `.album` and `.sharedAlbum` placements.
+  /// `nil` for `.timeline` (no PhotoKit collection) and `.favorites` (synthetic; backed
+  /// by a `favorite == YES` predicate, not a real `PHAssetCollection`).
   let collectionLocalIdentifier: String?
   /// Frozen at placement creation. Never recomputed. Used to construct destination URLs and
   /// to read the on-disk record subdirectory for each placement.
@@ -106,12 +124,13 @@ struct ExportRecordKey: Hashable, Sendable {
 }
 
 /// Scope for `CollectionExportRecordStore.recordCount(in:)`. Mirrors the kinds the collection
-/// store accepts (`.favorites`, `.album`); excludes `.timeline` because the collection store
-/// rejects timeline placements at the API boundary.
+/// store accepts (`.favorites`, `.album`, `.sharedAlbum`); excludes `.timeline` because the
+/// collection store rejects timeline placements at the API boundary.
 enum CollectionPlacementScope: Hashable, Sendable {
   case favorites
   case album(collectionLocalId: String)
-  case any  // favorites + albums
+  case sharedAlbum(collectionLocalId: String)
+  case any  // favorites + albums + shared albums
 }
 
 /// In-memory shape callers use to read and upsert collection records. Joins the on-disk

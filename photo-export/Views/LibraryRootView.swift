@@ -127,7 +127,7 @@ struct LibraryRootView: View {
         }
       case .collections:
         switch newValue {
-        case .favorites, .album, .folder:
+        case .favorites, .album, .folder, .sharedAlbum:
           lastCollectionsSelection = newValue
         case .timelineMonth, .none:
           break  // ignore — only collection-shaped values count for this section
@@ -275,6 +275,16 @@ struct LibraryRootView: View {
       .environmentObject(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+    case .sharedAlbum(let collectionId):
+      CollectionContentView(
+        selection: .sharedAlbum(collectionId: collectionId),
+        title: sharedAlbumTitle(forCollectionId: collectionId),
+        selectedAsset: $selectedAsset,
+        photoLibraryService: photoLibraryManager
+      )
+      .environmentObject(photoLibraryManager)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
     case .folder(let collectionId):
       FolderContentView(
         folderId: collectionId,
@@ -320,6 +330,11 @@ struct LibraryRootView: View {
   private func folderTitle(forCollectionId id: String) -> String {
     let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
     return findTitle(kind: .folder, id: id, in: tree) ?? "Folder"
+  }
+
+  private func sharedAlbumTitle(forCollectionId id: String) -> String {
+    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    return findTitle(kind: .sharedAlbum, id: id, in: tree) ?? "Shared Album"
   }
 
   private func findTitle(

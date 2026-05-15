@@ -176,7 +176,9 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
       let phAssets = fetchFavoritesPHAssets(mediaType: mediaType)
       cacheAssets(phAssets)
       return phAssets.map { Self.descriptor(from: $0) }
-    case .album(let collectionLocalId):
+    case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
+      // Shared albums enumerate identically to user albums; the only difference is the
+      // `PHAssetCollection.assetCollectionSubtype` we surfaced in the tree.
       let phAssets = fetchAlbumPHAssets(collectionLocalId: collectionLocalId, mediaType: mediaType)
       cacheAssets(phAssets)
       return phAssets.map { Self.descriptor(from: $0) }
@@ -201,7 +203,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
       case .timeline, .favorites:
         try Task.checkCancellation()
         return PHAsset.fetchAssets(with: opts).count
-      case .album(let collectionLocalId):
+      case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
         try Task.checkCancellation()
         guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId)
         else { return 0 }
@@ -225,6 +227,8 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
       return "favorites\(suffix)"
     case .album(let id):
       return "album:\(id)\(suffix)"
+    case .sharedAlbum(let id):
+      return "shared-album:\(id)\(suffix)"
     }
   }
 
@@ -258,7 +262,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
       case .timeline, .favorites:
         try Task.checkCancellation()
         result = PHAsset.fetchAssets(with: opts)
-      case .album(let collectionLocalId):
+      case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
         try Task.checkCancellation()
         guard let collection = Self.fetchAssetCollection(localIdentifier: collectionLocalId)
         else { return 0 }
@@ -426,9 +430,6 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
             return !was
           })
         else { return }
-        self.logger.debug(
-          "thumbnail fast id: \(assetId, privacy: .public) imageNil: \((image == nil))"
-        )
         continuation.resume(returning: image)
       }
     }
@@ -458,9 +459,6 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
             return !was
           })
         else { return }
-        self.logger.debug(
-          "thumbnail HQ id: \(assetId, privacy: .public) imageNil: \((image == nil))"
-        )
         continuation.resume(returning: image)
       }
     }
@@ -635,8 +633,9 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
       }
     case .favorites:
       opts.predicate = NSPredicate(format: "favorite == YES")
-    case .album:
-      // Album scope is bounded by the PHAssetCollection; no additional predicate.
+    case .album, .sharedAlbum:
+      // Album / shared-album scopes are bounded by the PHAssetCollection; no
+      // additional predicate.
       break
     }
     return opts
@@ -691,7 +690,19 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   private var cachedCollectionTree: [PhotoCollectionDescriptor]?
 
   /// Builds the user's Photos collection tree: a synthetic Favorites entry first, then
-  /// user-created top-level albums and folders (recursively).
+  /// user-created top-level albums and folders (recursively), then any iCloud shared
+  /// albums as flat top-level entries.
+  ///
+  /// Shared albums require a **separate** fetch: `PHCollection.fetchTopLevelUserCollections`
+  /// returns user-created albums and folders only, and excludes iCloud shared albums by
+  /// design even though they share the same `.album` collection type. The second call,
+  /// `PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumCloudShared,
+  /// options: nil)`, surfaces them. Without the second call the "Shared Albums" sidebar
+  /// section would stay empty even when the user has shared albums in Photos.
+  ///
+  /// Both passes route through `descriptor(from:parentPath:)` for consistency, so the
+  /// `descriptorKind(for:)` subtype switch is the single source of truth for which
+  /// collections we surface and how.
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
     guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
     if let cached = cachedCollectionTree { return cached }
@@ -705,59 +716,127 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
         pathComponents: [],
         children: []
       ))
+
+    // Pass 1: user-created albums and folders (top level). Excludes shared albums.
     let topLevel = PHCollection.fetchTopLevelUserCollections(with: nil)
-    var folderQueue: [(PHCollection, [String])] = []
+    var userTopResults: [PhotoCollectionDescriptor] = []
     topLevel.enumerateObjects { collection, _, _ in
-      folderQueue.append((collection, []))
-    }
-    var topResults: [PhotoCollectionDescriptor] = []
-    for (collection, parentPath) in folderQueue {
-      if let descriptor = Self.descriptor(from: collection, parentPath: parentPath) {
-        topResults.append(descriptor)
+      if let descriptor = Self.descriptor(from: collection, parentPath: []) {
+        userTopResults.append(descriptor)
       }
     }
-    tree.append(contentsOf: topResults)
+    tree.append(contentsOf: userTopResults)
+
+    // Pass 2: iCloud shared albums. Returned by a dedicated fetch — they are
+    // intentionally absent from `fetchTopLevelUserCollections`. Shared albums never
+    // nest, so they always land at the top level with `parentPath = []`.
+    //
+    // Logged with raw counts and per-collection (subtype, title) tuples so a user
+    // reporting "I have shared albums in Photos but the sidebar section is empty"
+    // can run Console.app and see whether PhotoKit returned anything at all, and
+    // if so, why a given collection was dropped by `descriptor(from:)`.
+    let sharedFetch = PHAssetCollection.fetchAssetCollections(
+      with: .album, subtype: .albumCloudShared, options: nil)
+    logger.info(
+      "fetchCollectionTree: shared-album fetch returned \(sharedFetch.count) result(s)"
+    )
+    var sharedAlbumResults: [PhotoCollectionDescriptor] = []
+    sharedFetch.enumerateObjects { collection, _, _ in
+      let title = collection.localizedTitle ?? "<nil>"
+      let subtypeRaw = collection.assetCollectionSubtype.rawValue
+      let descriptor = Self.descriptor(from: collection, parentPath: [])
+      if let descriptor {
+        self.logger.info(
+          "fetchCollectionTree: shared-album surfaced title=\(title, privacy: .public) subtype=\(subtypeRaw) kind=\(descriptor.kind.rawValue, privacy: .public)"
+        )
+        sharedAlbumResults.append(descriptor)
+      } else {
+        self.logger.info(
+          "fetchCollectionTree: shared-album dropped title=\(title, privacy: .public) subtype=\(subtypeRaw) — descriptor builder returned nil"
+        )
+      }
+    }
+    tree.append(contentsOf: sharedAlbumResults)
+
+    // Diagnostic: if the targeted shared-album fetch came back empty, do a broad
+    // sweep with `.any` subtype and log everything PhotoKit knows about. This
+    // disambiguates "shared albums exist but PhotoKit classified them under a
+    // subtype I didn't anticipate" (a code bug we need to fix) from "PhotoKit
+    // genuinely has no shared albums" (typically because **Photos.app → Settings
+    // → iCloud → Shared Albums** is disabled, which prevents Photos from
+    // syncing them down to the local library at all). The log line tells the
+    // user which checkbox to look at.
+    if sharedFetch.count == 0 {
+      let anyAlbums = PHAssetCollection.fetchAssetCollections(
+        with: .album, subtype: .any, options: nil)
+      var subtypeHistogram: [Int: Int] = [:]
+      anyAlbums.enumerateObjects { collection, _, _ in
+        subtypeHistogram[collection.assetCollectionSubtype.rawValue, default: 0] += 1
+      }
+      let histogramString = subtypeHistogram
+        .sorted { $0.key < $1.key }
+        .map { "subtype=\($0.key):\($0.value)" }
+        .joined(separator: " ")
+      logger.info(
+        "fetchCollectionTree: no shared albums returned. Broad .album scan found \(anyAlbums.count) collection(s): \(histogramString, privacy: .public). If you have shared albums in Photos.app, check Photos → Settings → iCloud → \"Shared Albums\" is enabled. PHAssetCollectionSubtype.albumCloudShared raw value is 102."
+      )
+    }
+
     cachedCollectionTree = tree
     return tree
   }
 
-  /// Phase 2 surfaces only user-created regular albums in the collection tree. The
-  /// `assetCollectionType == .album` check is **not** sufficient on its own — that type
-  /// includes `.albumCloudShared` (shared albums), `.albumImported` (legacy iTunes
-  /// imports), and `.albumMyPhotoStream` (deprecated). Filter explicitly to user-managed
-  /// albums.
+  /// Routes a `PHAssetCollectionSubtype` to the matching descriptor kind, or `nil` if
+  /// the subtype isn't surfaced. The `assetCollectionType == .album` check at the call
+  /// site is **not** sufficient on its own — that type includes `.albumCloudShared`
+  /// (shared albums), `.albumImported` (legacy iTunes imports), and
+  /// `.albumMyPhotoStream` (deprecated). This switch is the single place that decides
+  /// which subtypes count, and how.
   ///
   /// Smart albums (including the Favorites smart album) have a different
-  /// `assetCollectionType == .smartAlbum`, so they are excluded by the type check above
-  /// and never reach this filter — Favorites is surfaced as a synthetic descriptor in
-  /// `fetchCollectionTree()` instead.
-  nonisolated fileprivate static func isSurfacedAlbumSubtype(
-    _ subtype: PHAssetCollectionSubtype
-  ) -> Bool {
+  /// `assetCollectionType == .smartAlbum`, so they are excluded at the type check
+  /// upstream and never reach this routing — Favorites is surfaced as a synthetic
+  /// descriptor in `fetchCollectionTree()` instead.
+  ///
+  /// Shared albums (`.albumCloudShared`) now route to `.sharedAlbum`. Issue #48
+  /// surfaced them as their own section in the sidebar. Earlier versions of this
+  /// codebase explicitly dropped shared albums; the comment above the call site
+  /// recorded that choice. The README's "Known limitations" was updated alongside.
+  nonisolated fileprivate static func descriptorKind(
+    for subtype: PHAssetCollectionSubtype
+  ) -> PhotoCollectionDescriptor.Kind? {
     switch subtype {
     case .albumRegular, .albumSyncedAlbum:
-      return true
+      return .album
+    case .albumCloudShared:
+      return .sharedAlbum
     default:
-      return false
+      return nil
     }
   }
 
   /// Builds a descriptor for a `PHCollection`. Albums become leaf descriptors; folders
   /// recurse into their children. Returns `nil` for kinds we don't surface (smart albums
-  /// other than Favorites, shared albums, etc).
+  /// other than Favorites, legacy iTunes-synced albums, etc).
+  ///
+  /// Shared albums land at `parentPath = []` because PhotoKit returns them in the same
+  /// `fetchTopLevelUserCollections` enumeration as regular albums but the issue calls for
+  /// them to live in a flat top-level group. The tree-builder partitions them after
+  /// construction.
   fileprivate static func descriptor(from collection: PHCollection, parentPath: [String])
     -> PhotoCollectionDescriptor?
   {
     let title = collection.localizedTitle ?? ""
     if let assetCollection = collection as? PHAssetCollection,
       assetCollection.assetCollectionType == .album,
-      Self.isSurfacedAlbumSubtype(assetCollection.assetCollectionSubtype)
+      let kind = Self.descriptorKind(for: assetCollection.assetCollectionSubtype)
     {
+      let idPrefix: String = (kind == .sharedAlbum) ? "shared-album" : "album"
       return PhotoCollectionDescriptor(
-        id: "album:\(assetCollection.localIdentifier)",
+        id: "\(idPrefix):\(assetCollection.localIdentifier)",
         localIdentifier: assetCollection.localIdentifier,
         title: title,
-        kind: .album,
+        kind: kind,
         pathComponents: parentPath,
         children: []
       )

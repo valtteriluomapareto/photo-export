@@ -433,7 +433,10 @@ struct FolderContentView: View {
       selection = .album(collectionId: child.localIdentifier ?? "")
     case .folder:
       selection = .folder(collectionId: child.localIdentifier ?? "")
-    case .favorites:
+    case .favorites, .sharedAlbum:
+      // Folders only ever contain regular albums and sub-folders; favorites and
+      // shared albums never nest, so these cases are unreachable from the tree but
+      // remain exhaustive for the switch.
       break
     }
     selectedAsset = nil
@@ -481,7 +484,7 @@ struct FolderContentView: View {
           .compactMap { counts["album:\($0)"] }
           .reduce(0, +)
         counts[descriptor.id] = total
-      case .favorites:
+      case .favorites, .sharedAlbum:
         continue
       }
     }

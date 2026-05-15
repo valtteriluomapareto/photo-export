@@ -15,6 +15,11 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   var favoritesAssets: [AssetDescriptor] = []
   /// Canned per-album assets keyed by album localIdentifier.
   var assetsByAlbumLocalId: [String: [AssetDescriptor]] = [:]
+  /// Canned per-shared-album assets keyed by shared-album localIdentifier. Stored
+  /// separately from `assetsByAlbumLocalId` so a test fixture can give the same
+  /// id different contents under the two scopes when needed; in practice most tests
+  /// will only populate one or the other.
+  var assetsBySharedAlbumLocalId: [String: [AssetDescriptor]] = [:]
   /// Canned collection tree returned by `fetchCollectionTree()`. Empty by default.
   var collectionTree: [PhotoCollectionDescriptor] = []
   /// Asset IDs that fetchAssetDescriptor should treat as missing, even if they
@@ -99,6 +104,9 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     for assets in assetsByAlbumLocalId.values {
       if let found = assets.first(where: { $0.id == assetId }) { return found }
     }
+    for assets in assetsBySharedAlbumLocalId.values {
+      if let found = assets.first(where: { $0.id == assetId }) { return found }
+    }
     return nil
   }
 
@@ -172,6 +180,12 @@ final class FakePhotoLibraryService: PhotoLibraryService {
         return assets.filter { $0.mediaType == mediaType }
       }
       return assets
+    case .sharedAlbum(let collectionId):
+      let assets = assetsBySharedAlbumLocalId[collectionId] ?? []
+      if let mediaType {
+        return assets.filter { $0.mediaType == mediaType }
+      }
+      return assets
     }
   }
 
@@ -193,6 +207,8 @@ final class FakePhotoLibraryService: PhotoLibraryService {
         return self.favoritesAssets.count
       case .album(let collectionId):
         return self.assetsByAlbumLocalId[collectionId]?.count ?? 0
+      case .sharedAlbum(let collectionId):
+        return self.assetsBySharedAlbumLocalId[collectionId]?.count ?? 0
       }
     }
   }
@@ -227,6 +243,8 @@ final class FakePhotoLibraryService: PhotoLibraryService {
       return "favorites\(suffix)"
     case .album(let id):
       return "album:\(id)\(suffix)"
+    case .sharedAlbum(let id):
+      return "shared-album:\(id)\(suffix)"
     }
   }
 
@@ -249,6 +267,8 @@ final class FakePhotoLibraryService: PhotoLibraryService {
         assets = self.favoritesAssets
       case .album(let collectionId):
         assets = self.assetsByAlbumLocalId[collectionId] ?? []
+      case .sharedAlbum(let collectionId):
+        assets = self.assetsBySharedAlbumLocalId[collectionId] ?? []
       }
       return assets.reduce(0) { $0 + ($1.hasAdjustments ? 1 : 0) }
     }

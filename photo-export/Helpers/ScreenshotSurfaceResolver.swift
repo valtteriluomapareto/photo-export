@@ -58,6 +58,12 @@ enum ScreenshotSurfaceResolver {
       return Surface(section: .collections, selection: .album(collectionId: "london"))
     case "collections-album-paris":
       return Surface(section: .collections, selection: .album(collectionId: "paris"))
+    case "collections-shared-album-family-stream":
+      // Issue #48: lands on the synthetic "Family stream" shared album from
+      // `ScreenshotPhotoLibraryService.tree` so marketing captures showcase the
+      // new "Shared Albums" sidebar section and the reduced-fidelity banner.
+      return Surface(
+        section: .collections, selection: .sharedAlbum(collectionId: "family-stream"))
     default:
       return nil
     }

@@ -498,7 +498,8 @@ final class CollectionExportRecordStore: ObservableObject {
     selection: ExportVersionSelection
   ) -> Bool {
     guard accept(placement) else { return false }
-    let required = requiredVariants(for: asset, selection: selection)
+    let required = requiredVariants(
+      for: asset, selection: selection, policy: placement.kind.variantPolicy)
     guard let body = recordBodies[placement.id]?[asset.id] else { return false }
     let allDone = required.allSatisfy { variant in
       body.variants[variant.rawValue]?.status == .done
@@ -537,7 +538,13 @@ final class CollectionExportRecordStore: ObservableObject {
       case .favorites: matches = (placement.kind == .favorites)
       case .album(let id):
         matches = (placement.kind == .album && placement.collectionLocalIdentifier == id)
-      case .any: matches = (placement.kind == .favorites || placement.kind == .album)
+      case .sharedAlbum(let id):
+        matches =
+          (placement.kind == .sharedAlbum && placement.collectionLocalIdentifier == id)
+      case .any:
+        matches =
+          (placement.kind == .favorites || placement.kind == .album
+            || placement.kind == .sharedAlbum)
       }
       if matches {
         count += byAsset.count

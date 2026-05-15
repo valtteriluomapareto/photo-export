@@ -17,6 +17,12 @@ import os
 ///   and `displayPathHash8` is the first 8 hex chars of `SHA256(parentPath || U+0000 ||
 ///   title)`. The path-hash makes the id change when the album is renamed or moved
 ///   between folders so the next export resolves to a fresh placement.
+/// - SharedAlbum: `collections:shared-album:<collectionIdHash16>:<displayPathHash8>`.
+///   Same hashing as `.album` but with a distinct prefix, and the path-hash always
+///   evaluates with an empty `parentPath` (shared albums never nest). Collision
+///   resolution is scoped to other shared albums only — the path prefix
+///   (`Collections/Shared Albums/`) disjoint from the `.album` prefix
+///   (`Collections/Albums/`) makes cross-kind collisions impossible.
 ///
 /// Sibling-collision disambiguation (per §"Path Policy → Disambiguation"):
 /// - Two distinct placements that, after sanitization, would have the same full path
@@ -70,6 +76,17 @@ struct ExportPlacementResolver {
         throw ResolutionError.albumNotFound(collectionId: collectionId)
       }
       return resolveAlbum(
+        descriptor: descriptor,
+        collections: collections,
+        existingPlacements: existingPlacements
+      )
+
+    case .sharedAlbum(let collectionId):
+      guard let descriptor = findSharedAlbum(collectionId: collectionId, in: collections)
+      else {
+        throw ResolutionError.albumNotFound(collectionId: collectionId)
+      }
+      return resolveSharedAlbum(
         descriptor: descriptor,
         collections: collections,
         existingPlacements: existingPlacements
@@ -141,6 +158,147 @@ struct ExportPlacementResolver {
       relativePath: relativePath,
       createdAt: now()
     )
+  }
+
+  // MARK: - Shared-album resolution
+
+  /// Shared albums get their own placement-id prefix and an isolated path tree
+  /// (`Collections/Shared Albums/`). Because the prefix is disjoint from the user-album
+  /// prefix, collision resolution only needs to consider other shared albums.
+  ///
+  /// Shared albums never nest — Photos doesn't allow it — so the descriptor's
+  /// `pathComponents` should always be empty. The displayPathHash is still computed
+  /// against it for forward-compat and consistency with `.album`.
+  private func resolveSharedAlbum(
+    descriptor: PhotoCollectionDescriptor,
+    collections: [PhotoCollectionDescriptor],
+    existingPlacements: [ExportPlacement]
+  ) -> ExportPlacement {
+    let collectionId = descriptor.localIdentifier ?? ""
+    let displayPathHash = displayPathHash8(
+      pathComponents: descriptor.pathComponents, title: descriptor.title)
+    let candidateId =
+      "collections:shared-album:\(collectionIdHash16(for: collectionId)):\(displayPathHash)"
+
+    // Step 1: look for an existing placement that matches the exact triple.
+    let matches = existingPlacements.filter {
+      $0.kind == .sharedAlbum && $0.collectionLocalIdentifier == collectionId
+        && $0.id.hasSuffix(":\(displayPathHash)")
+    }
+    if matches.count == 1 {
+      return matches[0]
+    } else if matches.count > 1 {
+      logger.warning(
+        "Found \(matches.count) shared-album placements matching collection \(collectionId, privacy: .public) with displayPathHash \(displayPathHash, privacy: .public); picking latest createdAt"
+      )
+      let latest = matches.max(by: { $0.createdAt < $1.createdAt })!
+      return latest
+    }
+
+    // Step 2: build the candidate path under Shared Albums/ and apply sibling
+    // collision-suffixing against other shared albums only.
+    let sanitizedLeaf = ExportPathPolicy.sanitizeComponent(descriptor.title)
+    let leaf = sharedAlbumLeafWithCollisionSuffix(
+      sanitizedLeaf: sanitizedLeaf,
+      forDescriptor: descriptor,
+      collections: collections,
+      existingPlacements: existingPlacements
+    )
+    let relativePath = "Collections/Shared Albums/\(leaf)/"
+    return ExportPlacement(
+      kind: .sharedAlbum,
+      id: candidateId,
+      displayName: descriptor.title,
+      collectionLocalIdentifier: collectionId,
+      relativePath: relativePath,
+      createdAt: now()
+    )
+  }
+
+  /// Sibling-collision suffix for shared albums. Same shape as `leafWithCollisionSuffix`
+  /// for user albums, but scoped to `.sharedAlbum` only — the path prefix
+  /// (`Collections/Shared Albums/`) means a user album and a shared album with the same
+  /// sanitized title cannot collide.
+  private func sharedAlbumLeafWithCollisionSuffix(
+    sanitizedLeaf: String,
+    forDescriptor descriptor: PhotoCollectionDescriptor,
+    collections: [PhotoCollectionDescriptor],
+    existingPlacements: [ExportPlacement]
+  ) -> String {
+    let existingLeaves =
+      existingPlacements
+      .filter { $0.kind == .sharedAlbum }
+      .compactMap { existing -> String? in
+        let prefix = "Collections/Shared Albums/"
+        guard existing.relativePath.hasPrefix(prefix) else { return nil }
+        var trimmed = String(existing.relativePath.dropFirst(prefix.count))
+        if trimmed.hasSuffix("/") { trimmed.removeLast() }
+        return trimmed.isEmpty ? nil : trimmed
+      }
+
+    let siblingCandidates =
+      collections
+      .filter { $0.kind == .sharedAlbum }
+      .filter { $0.localIdentifier != descriptor.localIdentifier }
+      .filter { other in
+        ExportPathPolicy.sanitizeComponent(other.title) == sanitizedLeaf
+      }
+      .filter { other in
+        let otherHash = displayPathHash8(
+          pathComponents: other.pathComponents, title: other.title)
+        return existingPlacements.first(where: {
+          $0.kind == .sharedAlbum && $0.collectionLocalIdentifier == other.localIdentifier
+            && $0.id.hasSuffix(":\(otherHash)")
+        }) == nil
+      }
+
+    let collidingNewIds: [String] =
+      ([descriptor.localIdentifier ?? ""]
+      + siblingCandidates.compactMap { $0.localIdentifier })
+      .filter { !$0.isEmpty }
+
+    let bareLeafTaken = existingLeaves.contains(sanitizedLeaf)
+    let newSiblings = collidingNewIds.count > 1
+    if !bareLeafTaken && !newSiblings {
+      return sanitizedLeaf
+    }
+
+    let lexSortedNewIds = collidingNewIds.sorted()
+    let myId = descriptor.localIdentifier ?? ""
+    let myIndexAmongNew = lexSortedNewIds.firstIndex(of: myId) ?? 0
+
+    if !bareLeafTaken, myIndexAmongNew == 0 {
+      return sanitizedLeaf
+    }
+
+    let targetSlot = bareLeafTaken ? myIndexAmongNew : (myIndexAmongNew - 1)
+    var slot = 0
+    var n = 2
+    while true {
+      let candidate = "\(sanitizedLeaf)_\(n)"
+      if !existingLeaves.contains(candidate) {
+        if slot == targetSlot { return candidate }
+        slot += 1
+      }
+      n += 1
+      if n > 1000 { return "\(sanitizedLeaf)_\(n)" }
+    }
+  }
+
+  private func findSharedAlbum(
+    collectionId: String, in collections: [PhotoCollectionDescriptor]
+  ) -> PhotoCollectionDescriptor? {
+    for descriptor in collections {
+      if descriptor.kind == .sharedAlbum && descriptor.localIdentifier == collectionId {
+        return descriptor
+      }
+      // Shared albums shouldn't nest under folders, but recurse defensively in case a
+      // future PhotoKit version exposes them differently.
+      if let found = findSharedAlbum(collectionId: collectionId, in: descriptor.children) {
+        return found
+      }
+    }
+    return nil
   }
 
   // MARK: - Sibling-collision logic

@@ -695,6 +695,51 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  /// Starts an export of a single iCloud shared album. Mirrors `startExportAlbum` but
+  /// drives the `.sharedAlbum` enqueue branch so the resolved placement lands under
+  /// `Collections/Shared Albums/`. Shared albums are excluded from "Export All Albums";
+  /// users export them one at a time.
+  func startExportSharedAlbum(collectionId: String) {
+    guard !isImporting else {
+      logger.warning("startExportSharedAlbum ignored: import in progress")
+      return
+    }
+    guard canExportCollection else {
+      logger.error(
+        "startExportSharedAlbum ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
+      )
+      return
+    }
+    let selection = versionSelection
+    clearEmptyRunMessage()
+    clearQueueWarningMessage()
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
+    let gen = generation
+    Task { [weak self] in
+      guard let self, self.generation == gen else { return }
+      do {
+        let outcome = try await enqueueCollection(
+          selection: .sharedAlbum(collectionId: collectionId),
+          scope: .sharedAlbum(collectionId: collectionId),
+          selectionMode: selection,
+          generation: gen
+        )
+        guard self.generation == gen else { return }
+        switch outcome {
+        case .enqueued, .unauthorized:
+          break
+        case .alreadyComplete:
+          setEmptyRunMessage("This shared album is already exported.")
+        }
+        processQueueIfNeeded()
+      } catch {
+        logger.error(
+          "Failed to enqueue shared-album export: \(String(describing: error), privacy: .public)"
+        )
+      }
+    }
+  }
+
   /// Starts an export of a single user album by `collectionLocalIdentifier`.
   func startExportAlbum(collectionId: String) {
     guard !isImporting else {
@@ -752,13 +797,14 @@ final class ExportManager: ObservableObject {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return .unauthorized }
 
-    // Resolve the placement. For `.album`, the resolver needs the collection tree to
-    // find the album's display path and any colliding siblings; for `.favorites` the
-    // resolver returns a fixed placement.
+    // Resolve the placement. For `.album` and `.sharedAlbum`, the resolver needs the
+    // collection tree to find the descriptor and any colliding siblings; for
+    // `.favorites` the resolver returns a fixed placement.
     let collections: [PhotoCollectionDescriptor]
-    if case .album = selection {
+    switch selection {
+    case .album, .sharedAlbum:
       collections = try photoLibraryService.fetchCollectionTree()
-    } else {
+    default:
       collections = []
     }
     let existingPlacements = collectionExportRecordStore.placements
@@ -772,8 +818,8 @@ final class ExportManager: ObservableObject {
 
     // Persist the placement metadata so subsequent runs can match on the same
     // (kind, collectionLocalIdentifier, displayPathHash8) triple. `upsertPlacement` is a
-    // no-op for `.timeline` kinds (which the collection store rejects), but we only
-    // ever pass `.favorites` or `.album` here.
+    // no-op for `.timeline` kinds (which the collection store rejects); collection-side
+    // kinds (`.favorites`, `.album`, `.sharedAlbum`) all land here.
     collectionExportRecordStore.upsertPlacement(placement)
 
     let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
@@ -855,7 +901,7 @@ final class ExportManager: ObservableObject {
         {
           exportRecordStore.removeVariant(assetId: inFlightId, variant: inFlightVariant)
         }
-      case .favorites, .album:
+      case .favorites, .album, .sharedAlbum:
         if collectionExportRecordStore.exportInfo(
           assetId: inFlightId, placement: inFlightPlacement)?.variants[inFlightVariant]?.status
           == .inProgress
@@ -1306,7 +1352,7 @@ final class ExportManager: ObservableObject {
       switch job.placement.kind {
       case .timeline:
         existingVariants = exportRecordStore.exportInfo(assetId: descriptor.id)?.variants ?? [:]
-      case .favorites, .album:
+      case .favorites, .album, .sharedAlbum:
         existingVariants =
           collectionExportRecordStore.exportInfo(assetId: descriptor.id, placement: job.placement)?
           .variants ?? [:]
@@ -1323,7 +1369,9 @@ final class ExportManager: ObservableObject {
       } else {
         existingRecord = nil
       }
-      let required = requiredVariants(for: descriptor, selection: job.selection)
+      let required = requiredVariants(
+        for: descriptor, selection: job.selection,
+        policy: job.placement.kind.variantPolicy)
       let missing = required.filter { variant in
         existingRecord?.variants[variant]?.status != .done
       }
@@ -1415,7 +1463,7 @@ final class ExportManager: ObservableObject {
           {
             exportRecordStore.removeVariant(assetId: inFlight.assetId, variant: inFlight.variant)
           }
-        case .favorites, .album:
+        case .favorites, .album, .sharedAlbum:
           if collectionExportRecordStore.exportInfo(
             assetId: inFlight.assetId, placement: job.placement)?.variants[inFlight.variant]?
             .status == .inProgress
@@ -1860,7 +1908,7 @@ final class ExportManager: ObservableObject {
     switch placement.kind {
     case .timeline:
       return exportRecordStore.exportInfo(assetId: assetId)?.variants ?? [:]
-    case .favorites, .album:
+    case .favorites, .album, .sharedAlbum:
       return collectionExportRecordStore.exportInfo(
         assetId: assetId, placement: placement)?.variants ?? [:]
     }
@@ -2027,7 +2075,8 @@ final class ExportManager: ObservableObject {
     guard activeRunContext?.source == .autoSync,
       let check = autoSyncEligibilityCheck
     else { return false }
-    let required = requiredVariants(for: asset, selection: selection)
+    let required = requiredVariants(
+      for: asset, selection: selection, policy: placement.kind.variantPolicy)
     let now = Date()
     let hasEligible = required.contains { variant in
       check(asset.id, placement, variant, now)
@@ -2046,7 +2095,7 @@ final class ExportManager: ObservableObject {
     case .timeline:
       exportRecordStore.markVariantFailed(
         assetId: assetId, variant: variant, error: failure.localizedDescription, at: date)
-    case .favorites, .album:
+    case .favorites, .album, .sharedAlbum:
       collectionExportRecordStore.markVariantFailed(
         assetId: assetId, placement: placement, variant: variant,
         error: failure.localizedDescription, at: date)
@@ -2102,7 +2151,7 @@ final class ExportManager: ObservableObject {
       exportRecordStore.markVariantInProgress(
         assetId: assetId, variant: variant,
         year: year, month: month, relPath: relPath, filename: filename)
-    case .favorites, .album:
+    case .favorites, .album, .sharedAlbum:
       collectionExportRecordStore.markVariantInProgress(
         assetId: assetId, placement: placement, variant: variant, filename: filename)
     }
@@ -2119,7 +2168,7 @@ final class ExportManager: ObservableObject {
         assetId: assetId, variant: variant,
         year: year, month: month, relPath: relPath,
         filename: filename, exportedAt: exportedAt)
-    case .favorites, .album:
+    case .favorites, .album, .sharedAlbum:
       collectionExportRecordStore.markVariantExported(
         assetId: assetId, placement: placement, variant: variant,
         filename: filename, exportedAt: exportedAt)
