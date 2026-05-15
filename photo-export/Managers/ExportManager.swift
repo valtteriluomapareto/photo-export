@@ -219,6 +219,11 @@ final class ExportManager: ObservableObject {
   /// naming, inherited group stem, unique-filename collision suffixing. Initialised in
   /// `init` against the same `fileSystem` the rest of the pipeline uses.
   let destinationResolver: ExportDestinationResolver
+  /// Owns single-variant write path (resource selection, temp/move, reuse-source copy,
+  /// timestamps, record write). Phase 3a routes the rendered-media branch back through
+  /// ExportManager via `VariantExporter.Host`; Phase 3b deletes that bridge. Initialised
+  /// at the end of `init` once all dependencies + `self` are available.
+  private(set) var variantExporter: VariantExporter!
   let assetResourceWriter: any AssetResourceWriter
   // `var` rather than `let` so we can rebind it at the end of `init` with a
   // callback that captures `self` weakly. Swift forbids referencing `self`
@@ -329,6 +334,13 @@ final class ExportManager: ObservableObject {
         }
       }
     }
+    self.variantExporter = VariantExporter(
+      host: self,
+      destinationResolver: self.destinationResolver,
+      recordStoreRouter: self.recordStoreRouter,
+      assetResourceWriter: self.assetResourceWriter,
+      fileSystem: self.fileSystem,
+      exportDestination: self.exportDestination)
   }
 
   // MARK: - Lifetime contract
@@ -1391,11 +1403,15 @@ final class ExportManager: ObservableObject {
   /// "Cross-Cutting Contracts > Generation / cancellation ownership", this helper is the
   /// seam future `ExportQueueCoordinator` collaborators will hold; collapsing inline
   /// `self.isCurrent(gen)` checks through it makes the Phase 4/5 move mechanical.
-  private func isCurrent(_ gen: Int) -> Bool {
+  ///
+  /// Declared `internal` (not `private`) so the cancellation seam is visible across the
+  /// Phase-3 extraction boundary: `VariantExporter.Host` calls it through the protocol
+  /// witness, and ExportManager still calls it inline at all the pre-extraction sites.
+  func isCurrent(_ gen: Int) -> Bool {
     return generation == gen
   }
 
-  private func throwIfCancelledOrStale(_ gen: Int) throws {
+  func throwIfCancelledOrStale(_ gen: Int) throws {
     try Task.checkCancellation()
     guard isCurrent(gen) else { throw CancellationError() }
   }
@@ -1572,12 +1588,9 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  /// Writes a single variant for an asset. Returns the chosen group stem when the variant's
-  /// filename was materialised (so later variants can pair against it). Returns nil on recoverable
-  /// "no resource" failures that are recorded in-store but do not change the pairing stem.
-  ///
-  /// `groupStem` is either inherited from a prior done variant record for this asset or, within
-  /// the same job, pre-allocated when both variants will be written together.
+  /// Forwarder onto `VariantExporter.exportSingleVariant`. The signature is preserved so
+  /// existing call sites (the variant loop and the edited-fallback path) don't change
+  /// during Phase 3a.
   private func exportSingleVariant(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -1590,190 +1603,11 @@ final class ExportManager: ObservableObject {
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?
   ) async throws -> String? {
-    // Renderer activity must always be cleared on the way out of this
-    // function — including on throw — so a render failure or cancel does
-    // not leave the toolbar showing `(rendering…)` forever.
-    defer { renderActivity = nil }
-
-    let producer: EditedProducer = {
-      switch variant {
-      case .original:
-        if let resource = ResourceSelection.selectOriginalResource(
-          from: resources, mediaType: descriptor.mediaType)
-        {
-          return .resource(resource)
-        }
-        return .none
-      case .edited:
-        return ResourceSelection.selectEditedProducer(
-          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
-      }
-    }()
-
-    guard let originalFilename = producer.originalFilename else {
-      let errMsg: String
-      switch variant {
-      case .original: errMsg = "No exportable resource"
-      case .edited: errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
-      }
-      recordVariantFailed(
-        assetId: descriptor.id, placement: job.placement, variant: variant,
-        sentinelMessage: errMsg, category: .resourceMissing, at: Date())
-      logger.error(
-        "No \(variant.rawValue, privacy: .public) byte source for id: \(descriptor.id, privacy: .public)"
-      )
-      return nil
-    }
-
-    let (finalURL, chosenStem) = try destinationResolver.resolveDestination(
-      variant: variant,
-      descriptor: descriptor,
-      originalFilename: originalFilename,
-      resources: resources,
-      destDir: destDir,
-      groupStem: groupStem,
-      pairOriginalWithSuffix: pairOriginalWithSuffix
-    )
-
-    let tempURL = finalURL.appendingPathExtension("tmp")
-
-    // Clean up any stale .tmp sibling for this target filename. Covers crash leftovers that a
-    // prior defer could not clean up.
-    if fileSystem.fileExists(atPath: tempURL.path) {
-      try? fileSystem.removeItem(at: tempURL)
-    }
-    defer {
-      if fileSystem.fileExists(atPath: tempURL.path) {
-        try? fileSystem.removeItem(at: tempURL)
-      }
-    }
-
-    try throwIfCancelledOrStale(gen)
-    currentAssetFilename = finalURL.lastPathComponent
-    currentJobVariant = variant
-    inFlight = (assetId: descriptor.id, variant: variant)
-    recordVariantInProgress(
-      assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent)
-
-    // Reuse-source copy path (Phase 3.3): if `(asset, variant)` is already exported
-    // under another placement, copy the existing file rather than re-fetching from
-    // PhotoKit. On APFS the copy is a CoW clone (no extra disk usage); on non-APFS
-    // it's a real copy. PhotoKit fallback only on source-side errors (the prior
-    // `.done` record is stale); destination-side errors fail the variant directly
-    // because retrying via PhotoKit would hit the same destination problem. The
-    // copy works regardless of whether the byte source is a static resource or a
-    // rendered edit — once a placement has the file, all other placements just
-    // clone it.
-    var didCopyFromReuseSource = false
-    if let reuse = recordStoreRouter.findReuseSource(
-      assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
-      let destinationRoot = exportDestination.selectedFolderURL
-    {
-      let sourceURL =
-        destinationRoot
-        .appendingPathComponent(reuse.placement.relativePath, isDirectory: true)
-        .appendingPathComponent(reuse.filename)
-      do {
-        try fileSystem.copyItem(from: sourceURL, to: tempURL)
-        didCopyFromReuseSource = true
-        logger.debug(
-          "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(reuse.placement.relativePath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
-        )
-      } catch {
-        if Self.isSourceSideCopyError(error) {
-          // Source missing/unreadable: prior `.done` record is stale. Fall through to
-          // PhotoKit re-export. We do NOT mutate the stale record — that placement's
-          // corruption surfaces on its next export run.
-          logger.warning(
-            "Reuse-source missing for id: \(descriptor.id, privacy: .public) (\(error.localizedDescription, privacy: .public)); falling back to PhotoKit"
-          )
-        } else {
-          // Destination-side error: out of space, permission denied, etc. Don't retry
-          // via PhotoKit — it would hit the same destination problem. Throw so the
-          // caller marks the variant `.failed`.
-          throw error
-        }
-      }
-    }
-    if !didCopyFromReuseSource {
-      switch producer {
-      case .resource(let resource):
-        try await assetResourceWriter.writeResource(
-          resource, forAssetId: descriptor.id, to: tempURL)
-      case .render(let request):
-        // Translate any renderer error (other than cancellation) into the
-        // canonical recoverable failure so the persisted `lastError` is
-        // stable across both "no static resource" and "render attempted
-        // and failed" cases. The original error survives in the log for
-        // diagnostics.
-        do {
-          try await mediaRenderer.render(request: request, to: tempURL)
-        } catch is CancellationError {
-          throw CancellationError()
-        } catch {
-          logger.error(
-            "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
-          )
-          throw NSError(
-            domain: "Export", code: 9,
-            userInfo: [
-              NSLocalizedDescriptionKey:
-                ExportVariantRecovery.editedResourceUnavailableMessage
-            ])
-        }
-      case .none:
-        // Guarded above by `producer.originalFilename` check.
-        preconditionFailure("EditedProducer.none reached the write step")
-      }
-    }
-    // Load-bearing: this checkpoint must run BEFORE the atomic move
-    // below so that a cancel arriving during the render does not leak a
-    // partially-written file into the destination. Reordering this is a
-    // correctness regression — temp cleanup is handled by `defer`, but
-    // only if we throw before the move.
-    try throwIfCancelledOrStale(gen)
-
-    try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<Void, Error>) in
-      DispatchQueue.global(qos: .utility).async { [fileSystem] in
-        do {
-          self.logger.debug(
-            "Move begin: \(tempURL.lastPathComponent, privacy: .public) -> \(finalURL.lastPathComponent, privacy: .public)"
-          )
-          try fileSystem.moveItemAtomically(from: tempURL, to: finalURL)
-          self.logger.debug(
-            "Move done -> \(finalURL.lastPathComponent, privacy: .public)")
-          continuation.resume(returning: ())
-        } catch {
-          self.logger.error("Move failed: \(error.localizedDescription, privacy: .public)")
-          continuation.resume(throwing: error)
-        }
-      }
-    }
-    try throwIfCancelledOrStale(gen)
-
-    if let createdAt = descriptor.creationDate {
-      await withCheckedContinuation { continuation in
-        DispatchQueue.global(qos: .utility).async { [fileSystem] in
-          fileSystem.applyTimestamps(creationDate: createdAt, to: finalURL)
-          self.logger.debug(
-            "Applied timestamps for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
-          )
-          continuation.resume()
-        }
-      }
-      try throwIfCancelledOrStale(gen)
-    }
-
-    recordVariantExported(
-      assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date())
-    inFlight = nil
-    logger.info(
-      "Exported \(finalURL.lastPathComponent, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"
-    )
-    return chosenStem
+    try await variantExporter.exportSingleVariant(
+      variant: variant, descriptor: descriptor, resources: resources,
+      destDir: destDir, relPath: relPath, job: job,
+      groupStem: groupStem, pairOriginalWithSuffix: pairOriginalWithSuffix,
+      generation: gen, inFlight: &inFlight)
   }
 
   // Destination resolution (URL + filename allocation, paired-stem allocation, collision
@@ -1881,35 +1715,32 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Helpers
 
-  /// Distinguishes source-side errors (file missing/unreadable — fall back to PhotoKit)
-  /// from destination-side errors (out of space, target permission, target volume removed
-  /// — fail the variant directly because a PhotoKit retry would hit the same destination
-  /// problem and waste cycles).
-  ///
-  /// `NSFileReadNoPermissionError` belongs in the source-side bucket: the prior
-  /// `.done` file's permissions were changed in Finder (or the volume was remounted
-  /// read-only), so reading it fails — but we can still re-fetch from PhotoKit and
-  /// write a fresh copy at the destination, which the user owns.
-  private static func isSourceSideCopyError(_ error: Error) -> Bool {
-    let nsError = error as NSError
-    if nsError.domain == NSCocoaErrorDomain {
-      switch nsError.code {
-      case NSFileReadNoSuchFileError, NSFileNoSuchFileError, NSFileReadUnknownError,
-        NSFileReadCorruptFileError, NSFileReadNoPermissionError:
-        return true
-      default:
-        return false
-      }
-    }
-    if nsError.domain == NSPOSIXErrorDomain {
-      switch nsError.code {
-      case Int(ENOENT), Int(EACCES):
-        return true
-      default:
-        return false
-      }
-    }
-    return false
+  // `isSourceSideCopyError` moved to `VariantExporter` along with the reuse-source copy
+  // path (Phase 3a).
+
+  // MARK: - VariantExporter.Host conformance
+
+  // Generation seam (`isCurrent` + `throwIfCancelledOrStale`) and the sentinel-message
+  // `recordVariantFailed` overload are already declared above; the protocol witness
+  // table picks them up here.
+
+  func setCurrentAssetFilename(_ name: String?) {
+    currentAssetFilename = name
+  }
+
+  func setCurrentJobVariant(_ variant: ExportVariant?) {
+    currentJobVariant = variant
+  }
+
+  func clearRenderActivity() {
+    renderActivity = nil
+  }
+
+  /// Phase 3a bridge: the renderer still lives on `ExportManager`, so the variant
+  /// exporter calls back through this method to drive it. Phase 3b deletes this and
+  /// hands the renderer dependency directly to `VariantExporter`.
+  func renderToTempURL(request: MediaRenderRequest, tempURL: URL) async throws {
+    try await mediaRenderer.render(request: request, to: tempURL)
   }
 
   // MARK: Record-mutation routing
@@ -1980,7 +1811,11 @@ final class ExportManager: ObservableObject {
   /// caller declares the intended `category` so retry routing is
   /// deterministic; the message is used as both the `errorSignature` and
   /// the user-visible description.
-  private func recordVariantFailed(
+  ///
+  /// Declared `internal` (not `private`) so `VariantExporter.Host` can witness this
+  /// method. The other two `recordVariantFailed` overloads remain `private` because
+  /// they are not part of the Host protocol surface.
+  func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     sentinelMessage: String, category: AutoSyncFailureCategory, at date: Date
   ) {

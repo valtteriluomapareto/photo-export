@@ -72,6 +72,39 @@ struct ExportManagerRunExportTests {
     )
   }
 
+  // MARK: - Bookkeeping integrity
+
+  /// Phase 3a regression gate: `VariantExporter` routes its sentinel-message failure
+  /// recording through `Host.recordVariantFailed`, which is the only path that
+  /// increments `activeRunBookkeeping.failedCount` and appends to
+  /// `activeRunBookkeeping.failures`. If a future change routed past the host (e.g.
+  /// calling `RecordStoreRouter.markVariantFailed` directly), the per-variant record
+  /// would still be written but `ExportRunSummary.failedCount` / `.failures` would
+  /// silently under-count — breaking AutoSync retry routing and the Export Issues UI.
+  ///
+  /// Reproduction: a `.timelineMonth` scope with one asset whose mediaType is `.video`
+  /// has no original-side resource selector match (selectOriginalResource returns nil
+  /// for video without a `.video` resource), so the variant write hits the
+  /// `producer.originalFilename == nil` guard and emits a sentinel-message failure.
+  @Test func sentinelFailurePopulatesRunSummaryBookkeeping() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let asset = TestAssetFactory.makeAsset(id: "no-resource", mediaType: .video)
+    // No resources seeded for the asset — variant write fails on the "no resource" guard.
+    harness.photoLib.favoritesAssets = [asset]
+
+    let summary = await harness.manager.runExport(
+      context: makeContext(scope: .favoritesFull))
+
+    // Per-variant record AND ExportRunSummary bookkeeping must both reflect the failure.
+    #expect(summary.failedCount == 1,
+      "VariantExporter.Host.recordVariantFailed must increment failedCount; got \(summary.failedCount)")
+    #expect(!summary.failures.isEmpty,
+      "summary.failures must contain the per-variant failure detail; got \(summary.failures.count)")
+    #expect(summary.failures.first?.assetId == "no-resource")
+  }
+
   // MARK: - Empty library
 
   /// `runExport` against an empty Photos library resolves immediately with `.completed`
