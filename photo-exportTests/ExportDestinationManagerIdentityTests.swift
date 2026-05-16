@@ -11,6 +11,41 @@ import Testing
 @MainActor
 struct ExportDestinationManagerIdentityTests {
 
+  // MARK: - Screenshot-mode override
+
+  /// `configureForScreenshotMode` is the marketing-capture hook that puts the
+  /// manager into the "destination available + writable" state with a synthetic
+  /// URL. Production launches must never reach this method; the only call site
+  /// is in `photo_exportApp.init` under `isRunningInScreenshotMode`. A
+  /// regression that broke the flag-toggling would silently leak the
+  /// maintainer's real folder name into every screenshot.
+  @Test func configureForScreenshotModeSetsAvailableWritableState() {
+    let manager = ExportDestinationManager(
+      skipRestore: true,
+      userDefaults: UserDefaults(suiteName: "test-screenshot-\(UUID().uuidString)")!
+    )
+
+    manager.configureForScreenshotMode()
+
+    #expect(manager.selectedFolderURL?.lastPathComponent == "Backup Folder")
+    #expect(manager.isAvailable)
+    #expect(manager.isWritable)
+    #expect(manager.canExportNow)
+  }
+
+  /// Custom display name lands in `lastPathComponent` so the toolbar's
+  /// destination indicator renders exactly that text.
+  @Test func configureForScreenshotModeRespectsCustomDisplayName() {
+    let manager = ExportDestinationManager(
+      skipRestore: true,
+      userDefaults: UserDefaults(suiteName: "test-screenshot-\(UUID().uuidString)")!
+    )
+
+    manager.configureForScreenshotMode(displayName: "External Photos")
+
+    #expect(manager.selectedFolderURL?.lastPathComponent == "External Photos")
+  }
+
   // MARK: - Stable derivation
 
   /// Re-deriving against the same folder yields the same id (no per-call randomness).

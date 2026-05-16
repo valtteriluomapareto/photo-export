@@ -34,13 +34,22 @@ struct PhotoExportApp: App {
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
   init() {
-    let edm = ExportDestinationManager()
     // Screenshot mode (`--screenshot-mode` launch arg) swaps the real Photos
     // backing for a curated synthetic library so marketing screenshots don't
     // leak the maintainer's personal Photos library. The subclass shape lets
     // the eight downstream `@EnvironmentObject` sites stay typed against
     // `PhotoLibraryManager` — see
-    // `docs/project/plans/screenshot-automation-plan.md`.
+    // `docs/project/plans/screenshot-automation-plan.md`. The destination
+    // manager gets the same treatment: skip bookmark restoration and override
+    // the displayed folder name so the maintainer's real backup folder name
+    // never leaks into a marketing capture.
+    let edm: ExportDestinationManager
+    if PhotoLibraryManager.isRunningInScreenshotMode {
+      edm = ExportDestinationManager(skipRestore: true)
+      edm.configureForScreenshotMode()
+    } else {
+      edm = ExportDestinationManager()
+    }
     if PhotoLibraryManager.isRunningInScreenshotMode {
       // ContentView gates on `@AppStorage("hasCompletedOnboarding")`; without
       // this it would show OnboardingView on a fresh machine and the capture
