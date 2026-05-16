@@ -34,13 +34,22 @@ struct PhotoExportApp: App {
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
   init() {
-    let edm = ExportDestinationManager()
     // Screenshot mode (`--screenshot-mode` launch arg) swaps the real Photos
     // backing for a curated synthetic library so marketing screenshots don't
     // leak the maintainer's personal Photos library. The subclass shape lets
     // the eight downstream `@EnvironmentObject` sites stay typed against
     // `PhotoLibraryManager` — see
-    // `docs/project/plans/screenshot-automation-plan.md`.
+    // `docs/project/plans/screenshot-automation-plan.md`. The destination
+    // manager gets the same treatment: skip bookmark restoration and override
+    // the displayed folder name so the maintainer's real backup folder name
+    // never leaks into a marketing capture.
+    let edm: ExportDestinationManager
+    if PhotoLibraryManager.isRunningInScreenshotMode {
+      edm = ExportDestinationManager(skipRestore: true)
+      edm.configureForScreenshotMode()
+    } else {
+      edm = ExportDestinationManager()
+    }
     if PhotoLibraryManager.isRunningInScreenshotMode {
       // ContentView gates on `@AppStorage("hasCompletedOnboarding")`; without
       // this it would show OnboardingView on a fresh machine and the capture
@@ -245,6 +254,15 @@ struct PhotoExportApp: App {
       }
       CommandGroup(after: .help) {
         SaveDiagnosticReportCommand()
+      }
+      // Sidebar select-all wired through the standard Edit menu so the shortcut
+      // (Cmd+A) is discoverable. The action's behavior changes per section —
+      // years for Timeline, top-level rows for Collections — and the label
+      // adapts via the published `SelectAllSidebarItemsAction`. Disabled (and
+      // grayed) when no sidebar is focused; macOS's default "Select All" still
+      // fires on text fields and any other first responder that handles it.
+      CommandGroup(after: .pasteboard) {
+        SelectAllSidebarItemsCommand()
       }
     }
 
@@ -484,6 +502,43 @@ private struct SaveDiagnosticReportCommand: View {
     Button("Save Diagnostic Report\u{2026}") {
       action?.callAsFunction()
     }
+    .disabled(action == nil)
+  }
+}
+
+// MARK: - Sidebar Select-All Command
+
+/// Action published by `LibraryRootView` so the Edit menu can drive the sidebar's
+/// "select every visible top-level row" gesture. The label is context-aware
+/// (timeline vs collections) so the Edit menu reads "Select All Years" or
+/// "Select All Collections" depending on which sidebar is active. `nil` means
+/// no sidebar is on-screen and the menu item should be disabled — macOS's
+/// default Edit → Select All still fires on text fields and similar first
+/// responders.
+struct SelectAllSidebarItemsAction {
+  let label: String
+  let callAsFunction: () -> Void
+}
+
+struct SelectAllSidebarItemsActionKey: FocusedValueKey {
+  typealias Value = SelectAllSidebarItemsAction
+}
+
+extension FocusedValues {
+  var selectAllSidebarItemsAction: SelectAllSidebarItemsAction? {
+    get { self[SelectAllSidebarItemsActionKey.self] }
+    set { self[SelectAllSidebarItemsActionKey.self] = newValue }
+  }
+}
+
+private struct SelectAllSidebarItemsCommand: View {
+  @FocusedValue(\.selectAllSidebarItemsAction) private var action
+
+  var body: some View {
+    Button(action?.label ?? "Select All Sidebar Items") {
+      action?.callAsFunction()
+    }
+    .keyboardShortcut("a", modifiers: .command)
     .disabled(action == nil)
   }
 }

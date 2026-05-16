@@ -51,12 +51,14 @@ HEIGHT="${SIZE#*x}"
 # output PNG (stable upload order via the NN prefix).
 DEFAULT_SURFACES=(
   "timeline:01-timeline"
-  "collections-favorites:02-collections-favorites"
-  "collections-album-family:03-collections-album-family"
-  "collections-album-porvoo:04-collections-album-porvoo"
-  "collections-folder-trips:05-collections-folder-trips"
-  "collections-album-london:06-collections-album-london"
-  "collections-shared-album-family-stream:07-collections-shared-album-family-stream"
+  "timeline-multi-select:02-timeline-multi-select"
+  "collections-favorites:03-collections-favorites"
+  "collections-album-family:04-collections-album-family"
+  "collections-album-porvoo:05-collections-album-porvoo"
+  "collections-folder-trips:06-collections-folder-trips"
+  "collections-multi-select:07-collections-multi-select"
+  "collections-album-london:08-collections-album-london"
+  "collections-shared-album-family-stream:09-collections-shared-album-family-stream"
 )
 
 # If the user supplied positional args after the size, use those as surface

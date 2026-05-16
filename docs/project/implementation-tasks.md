@@ -9,7 +9,7 @@ Remaining work items, grouped by area. Move items to GitHub Issues when practica
 
 ## Features
 
-- [ ] Allow user to export a custom selection (multi-select)
+- [x] Allow user to export a custom selection (multi-select) — sidebar Cmd/Shift-click in both Timeline and Collections (issue #46)
 - [ ] Live-update sidebar and grid when Photos library changes — `PHPhotoLibraryChangeObserver` is adopted but only clears the cache; views don't reload automatically
 - [ ] Manual refresh to rescan library on demand
 - [ ] Add video playback in asset detail view — currently shows static image only

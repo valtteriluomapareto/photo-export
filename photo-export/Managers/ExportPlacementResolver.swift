@@ -43,6 +43,10 @@ struct ExportPlacementResolver {
     /// and resolves each descendant album individually. Surfaced as an error so a stray
     /// callsite is loud rather than silently producing a malformed placement.
     case folderNotResolvable(collectionId: String)
+    /// `LibrarySelection.timelineYear(...)` was passed to the resolver. Timeline years
+    /// are not directly placed — `ExportManager.startExportYear(year:)` walks the
+    /// year's assets and produces per-month placements via the synthetic constructor.
+    case timelineYearNotResolvable(year: Int)
   }
 
   private let logger: Logger
@@ -67,6 +71,9 @@ struct ExportPlacementResolver {
     switch selection {
     case .timelineMonth(let year, let month):
       return ExportPlacement.timeline(year: year, month: month, createdAt: now())
+
+    case .timelineYear(let year):
+      throw ResolutionError.timelineYearNotResolvable(year: year)
 
     case .favorites:
       return ExportPlacement.favorites(createdAt: now())

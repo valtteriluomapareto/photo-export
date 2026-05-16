@@ -63,7 +63,10 @@ struct CollectionsSidebarView: View {
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
 
-  @Binding var selection: LibrarySelection?
+  /// Multi-select state bound from `LibraryRootView`. Writes are filtered to
+  /// collection-shaped values so the sidebar can never persist a stray timeline
+  /// tag into the collection state.
+  @Binding var selectionSet: Set<LibrarySelection>
 
   @State private var tree: [PhotoCollectionDescriptor] = []
   @State private var expandedFolders: Set<String> = []
@@ -79,7 +82,7 @@ struct CollectionsSidebarView: View {
   private var sharedAlbumsHintDismissed: Bool = false
 
   var body: some View {
-    List(selection: selectionBinding) {
+    List(selection: collectionSelection) {
       Section("Favorites") {
         CollectionRow(
           descriptor: favoritesDescriptor,
@@ -221,7 +224,10 @@ struct CollectionsSidebarView: View {
         FolderRow(
           descriptor: descriptor, depth: depth,
           albumCount: folderAlbumCount(descriptor),
-          photoCount: countsById[descriptor.id]
+          photoCount: countsById[descriptor.id],
+          isInMultiSelection: isFolderInMultiSelection(descriptor),
+          multiSelectionCount: multiSelectionCount,
+          runMultiExport: runCurrentCollectionsMultiSelectExport
         )
         .tag(LibrarySelection.folder(collectionId: descriptor.localIdentifier ?? ""))
         .task(id: descriptor.id + "|\(photoLibraryManager.libraryRevision)") {
@@ -248,17 +254,18 @@ struct CollectionsSidebarView: View {
 
   // MARK: - Selection plumbing
 
-  /// `List(selection:)` accepts any `Hashable` tag, including `nil`. This binding
-  /// mediates so that ad-hoc nil writes from List (e.g. clicks on empty section
-  /// areas, or transitions during a section flip) don't clobber our last-known
-  /// selection state.
-  private var selectionBinding: Binding<LibrarySelection?> {
+  /// `List(selection:)` accepts a `Set` of the row tag type for multi-select. This
+  /// binding filters writes to collection-shaped values so a stray timeline tag
+  /// (impossible in steady state, but conceivable during a section-flip transition)
+  /// never lands in the collections state. Setting the visible set to empty is
+  /// allowed — matches macOS conventions for empty-area clicks.
+  private var collectionSelection: Binding<Set<LibrarySelection>> {
     Binding(
-      get: { selection },
+      get: { selectionSet.filter(\.isCollection) },
       set: { newValue in
-        if let newValue {
-          selection = newValue
-        }
+        let filtered = newValue.filter(\.isCollection)
+        let preserved = selectionSet.filter { !$0.isCollection }
+        selectionSet = filtered.union(preserved)
       }
     )
   }
@@ -292,6 +299,41 @@ struct CollectionsSidebarView: View {
     } catch {
       tree = []
     }
+  }
+
+  // MARK: - Multi-select context menu plumbing
+
+  /// Number of collection-shaped items in the current selection. Drives the context-menu
+  /// label: when ≥2, a right-clicked row that is part of the selection should advertise
+  /// "Export N Items" instead of the row's own per-kind action so the toolbar and menu
+  /// don't contradict each other (HIG: predictability).
+  fileprivate var multiSelectionCount: Int {
+    selectionSet.filter(\.isCollection).count
+  }
+
+  /// True iff the given folder descriptor is part of a multi-selection (≥2 items),
+  /// itself included. Single-selection on this exact folder falls back to the
+  /// per-row "Export Folder" action because that's the unambiguous case.
+  fileprivate func isFolderInMultiSelection(_ descriptor: PhotoCollectionDescriptor) -> Bool {
+    guard multiSelectionCount >= 2 else { return false }
+    guard let id = descriptor.localIdentifier else { return false }
+    return selectionSet.contains(.folder(collectionId: id))
+  }
+
+  /// Triggered from a folder row's context menu when the row is part of a multi-
+  /// selection. Mirrors the toolbar's collections-branch dispatch: normalize the set
+  /// (expanding folders, deduping, partitioning) and hand to `ExportManager`.
+  fileprivate func runCurrentCollectionsMultiSelectExport() {
+    let items = selectionSet.filter(\.isCollection)
+    let buckets = CollectionsSelectionBuckets.normalize(items) { folderId in
+      let currentTree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+      guard
+        let folder = PhotoCollectionDescriptor.findFolder(
+          id: folderId, in: currentTree)
+      else { return [] }
+      return PhotoCollectionDescriptor.albumLocalIds(under: folder)
+    }
+    exportManager.startExportCollectionsSelection(buckets)
   }
 
   private func loadCount(for scope: PhotoFetchScope, descriptorId: String) async {
@@ -415,6 +457,13 @@ private struct FolderRow: View {
   let depth: Int
   let albumCount: Int
   let photoCount: Int?
+  /// True when this row is part of a ≥2-item selection. The context menu flips to
+  /// the multi-selection action so right-click doesn't contradict the toolbar.
+  let isInMultiSelection: Bool
+  let multiSelectionCount: Int
+  /// Closure that runs the current Collections multi-select export. Owned by
+  /// `CollectionsSidebarView` so it can reach the live `selectionSet` + tree.
+  let runMultiExport: () -> Void
 
   var body: some View {
     HStack(spacing: 8) {
@@ -430,18 +479,32 @@ private struct FolderRow: View {
     }
     .help(tooltip)
     .contextMenu {
-      Button("Export Folder") {
-        if let id = descriptor.localIdentifier {
-          exportManager.startExportFolder(folderId: id)
+      if isInMultiSelection {
+        // Finder-style: right-click on a row in the multi-selection acts on the
+        // whole selection. The toolbar already advertises this action; the menu
+        // matches so the two surfaces never contradict.
+        Button("Export \(multiSelectionCount) Items") {
+          runMultiExport()
         }
+        .disabled(
+          !exportDestinationManager.canExportNow
+            || exportManager.hasActiveExportWork
+            || !exportManager.canExportCollection
+        )
+      } else {
+        Button("Export Folder") {
+          if let id = descriptor.localIdentifier {
+            exportManager.startExportFolder(folderId: id)
+          }
+        }
+        .disabled(
+          descriptor.localIdentifier == nil
+            || albumCount == 0
+            || !exportDestinationManager.canExportNow
+            || exportManager.hasActiveExportWork
+            || !exportManager.canExportCollection
+        )
       }
-      .disabled(
-        descriptor.localIdentifier == nil
-          || albumCount == 0
-          || !exportDestinationManager.canExportNow
-          || exportManager.hasActiveExportWork
-          || !exportManager.canExportCollection
-      )
     }
   }
 

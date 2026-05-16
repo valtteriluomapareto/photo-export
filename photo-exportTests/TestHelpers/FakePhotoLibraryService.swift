@@ -64,6 +64,17 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// Harness teardown must call `await checkpoint.releaseAll()` so a suspended
   /// fetch task can't outlive the test.
   var fetchAssetsCheckpointByAlbumId: [String: AsyncCheckpoint] = [:]
+  /// Per-year error injection. Mirrors `fetchAssetsErrorByAlbumId` but matches on
+  /// the `year` argument of timeline fetches (regardless of whether `month` is set).
+  /// Used to exercise the partial-enqueue failure path in
+  /// `ExportManager.startExportTimelineSelection`.
+  var fetchAssetsErrorByYear: [Int: Error] = [:]
+  /// Per-year release-on-demand checkpoint. When `fetchAssets(year:month:)` is
+  /// called and `year` is in this map, the fake calls `await checkpoint.enter()`
+  /// before evaluating any error/data branches. Tests use this to pin the
+  /// "enqueue loop suspended between years" window open while they exercise
+  /// cancellation or pause.
+  var fetchAssetsCheckpointByYear: [Int: AsyncCheckpoint] = [:]
   var requestFullImageError: Error?
 
   func requestAuthorization() async -> Bool { isAuthorized }
@@ -72,6 +83,10 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     -> [AssetDescriptor]
   {
     fetchAssetsCalls.append((year, month, mediaType))
+    if let checkpoint = fetchAssetsCheckpointByYear[year] {
+      await checkpoint.enter()
+    }
+    if let error = fetchAssetsErrorByYear[year] { throw error }
     if let error = fetchAssetsError { throw error }
 
     if let month {
