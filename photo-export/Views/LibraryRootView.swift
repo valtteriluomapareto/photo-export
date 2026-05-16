@@ -43,17 +43,25 @@ struct LibraryRootView: View {
     let defaultTimeline: LibrarySelection = .timelineMonth(year: currentYear, month: currentMonth)
     let initialSection = surface?.section ?? .timeline
     let initialSelection = surface?.selection ?? defaultTimeline
+    // Multi-select screenshot surfaces ship `additionalSelections` so the
+    // sidebar highlights more than one row at launch. Empty for every
+    // production launch (resolver returns `nil`) and for single-select keys.
+    let initialSet: Set<LibrarySelection> = {
+      var items: Set<LibrarySelection> = [initialSelection]
+      items.formUnion(surface?.additionalSelections ?? [])
+      return items
+    }()
     _section = State(initialValue: initialSection)
-    _selectionSet = State(initialValue: [initialSelection])
+    _selectionSet = State(initialValue: initialSet)
     _focusedSelection = State(initialValue: initialSelection)
     _lastTimeline = State(
       initialValue: initialSection == .timeline
-        ? PersistedSidebarSelection(items: [initialSelection], focused: initialSelection)
+        ? PersistedSidebarSelection(items: initialSet, focused: initialSelection)
         : PersistedSidebarSelection(items: [defaultTimeline], focused: defaultTimeline)
     )
     _lastCollections = State(
       initialValue: initialSection == .collections
-        ? PersistedSidebarSelection(items: [initialSelection], focused: initialSelection)
+        ? PersistedSidebarSelection(items: initialSet, focused: initialSelection)
         : .empty
     )
   }

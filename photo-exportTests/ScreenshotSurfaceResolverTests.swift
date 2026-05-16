@@ -104,6 +104,59 @@ struct ScreenshotSurfaceResolverTests {
     #expect(result?.selection == .sharedAlbum(collectionId: "family-stream"))
   }
 
+  // MARK: - Multi-select surfaces (issue #46)
+
+  /// Timeline multi-select demo: focused current month + the two prior years.
+  /// Tests pin (a) the exact focus + extra set so the marketing capture is
+  /// reproducible across runs, and (b) that the buckets dedup count yields
+  /// "Export 3 Items" in the toolbar (year–month overlap protection).
+  @Test func timelineMultiSelectKey() {
+    let date = Calendar(identifier: .gregorian).date(
+      from: DateComponents(year: 2026, month: 5, day: 16))!
+    let result = ScreenshotSurfaceResolver.resolve(
+      from: ["app", "--screenshot-surface=timeline-multi-select"], now: date)
+    #expect(result?.section == .timeline)
+    #expect(result?.selection == .timelineMonth(year: 2026, month: 5))
+    #expect(
+      result?.additionalSelections == [
+        .timelineYear(year: 2025),
+        .timelineYear(year: 2024),
+      ])
+  }
+
+  /// Collections multi-select demo: focused Family album + Favorites + Porvoo
+  /// + the Trips folder. Four disparate row kinds so the sidebar showcases the
+  /// full selection vocabulary in one screenshot.
+  @Test func collectionsMultiSelectKey() {
+    let result = ScreenshotSurfaceResolver.resolve(
+      from: ["app", "--screenshot-surface=collections-multi-select"])
+    #expect(result?.section == .collections)
+    #expect(result?.selection == .album(collectionId: "family"))
+    #expect(
+      result?.additionalSelections == [
+        .favorites,
+        .album(collectionId: "porvoo"),
+        .folder(collectionId: "trips"),
+      ])
+  }
+
+  /// Default `additionalSelections` is empty for every single-select key —
+  /// guards against a regression that accidentally bleeds the multi-select
+  /// extras into the existing surfaces.
+  @Test func singleSelectSurfacesHaveNoAdditionalSelections() {
+    let keys = [
+      "timeline", "collections-favorites", "collections-album-family",
+      "collections-album-porvoo", "collections-folder-trips",
+      "collections-album-london", "collections-album-paris",
+      "collections-shared-album-family-stream",
+    ]
+    for key in keys {
+      let result = ScreenshotSurfaceResolver.resolve(
+        from: ["app", "--screenshot-surface=\(key)"])
+      #expect(result?.additionalSelections == [], "expected no extras for \(key)")
+    }
+  }
+
   // MARK: - Argument-handling edge cases
 
   /// Multiple `--screenshot-surface=` args take the first one — matches
