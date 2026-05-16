@@ -84,7 +84,7 @@ collection store cannot affect timeline progress and vice versa.
 
 Top-level orchestrator over the export collaborators. Depends on the other three injected managers plus the extracted owners listed below.
 
-- `runExport(context:)` awaitable API for AutoSync; `start*` fire-and-forget methods for the toolbar/menu UI.
+- `runExport(context:)` awaitable API for AutoSync; `start*` fire-and-forget methods for the toolbar/menu UI (`startExportAll`, `startExportYear`, `startExportMonth`, `startExportFavorites`, `startExportAllAlbums`, `startExportAllSharedAlbums`, `startExportTimelineSelection`, `startExportCollectionsSelection`). The two `*Selection` methods are the bulk dispatchers behind sidebar multi-select — they accept normalized buckets and route each item through the existing single-select helpers so dedup against the record store is shared.
 - Owns `generation: Int` (the cancellation seam) plus the published mirrors for `isRunning`, `queueCount`, `totalJobsEnqueued/Completed`, `isImporting`, `importStage` (mirrored from the coordinators via Combine sinks).
 - Persists the user's version selection (`edited` / `editedWithOriginals`) in `UserDefaults` and snapshots it onto each enqueued job.
 - Delegates per-concern work to extracted owners (see below).
@@ -185,8 +185,9 @@ The main UI lives under `photo-export/Views/` and `photo-export/ViewModels/`.
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | `ContentView`            | Top-level router (auth → onboarding → library)                                                                      |
 | `LibraryRootView`        | `NavigationSplitView` shell with the Timeline / Collections segmented selector                                      |
-| `TimelineSidebarView`    | Year/month tree                                                                                                     |
-| `CollectionsSidebarView` | Favorites, user albums and folders, and a separate Shared Albums section, lazy-counted via `cachedCountAssets(in:)` |
+| `TimelineSidebarView`    | Year/month tree with Cmd/Shift-click multi-select; reports selection via `TimelineSelectionBuckets`                 |
+| `CollectionsSidebarView` | Favorites, user albums and folders (with Cmd/Shift-click multi-select), and a separate Shared Albums section, lazy-counted via `cachedCountAssets(in:)` |
+| `YearContentView`        | Content pane shown when a year row is the focused selection (year-level summary + primary action, no asset grid)    |
 | `MonthContentView`       | Thumbnail grid for the selected month                                                                               |
 | `CollectionContentView`  | Thumbnail grid for Favorites, a user album, or a shared album, sharing `MonthViewModel` via a scope-based loader    |
 | `AssetDetailView`        | Full-size image or video preview                                                                                    |
