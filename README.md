@@ -27,6 +27,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
   - **Collections** — Favorites plus your Photos albums and folders
 - Preview thumbnails and selected assets
 - Export a month, a year, an album, or the full queue without overwriting existing files
+- Cmd/Shift-click rows in either sidebar to enqueue a mix in one run (e.g. multiple years on the Timeline, or Favorites + several albums + a folder on Collections). Selected folders expand to their nested albums; a selected year supersedes any individual month in it
 - Export Favorites or any album you've created in Photos to `Collections/Favorites/` or `Collections/Albums/<Album>/`, individually or via **Export All Albums** in the toolbar. Select a folder in the Collections sidebar to flip the primary action to **Export Folder** (every descendant album), or Cmd/Shift-click album tiles to enqueue an explicit selection
 - Export **iCloud Shared Albums** one at a time to `Collections/Shared Albums/<Album>/`. Apple serves shared photos as downscaled JPEGs only, so Photo Export saves whatever Apple provides — originals aren't available for shared-album assets
 - Choose what to write with the toolbar's **Include originals** toggle. Off (default) exports one file per asset, in the version Photos shows. On adds a `_orig` companion (e.g. `IMG_0001_orig.HEIC`) for any photo or video edited in Photos so you keep a copy of the original bytes alongside the user-visible edit

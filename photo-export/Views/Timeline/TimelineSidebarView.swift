@@ -14,21 +14,26 @@ struct TimelineSidebarView: View {
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
 
-  @Binding var selection: LibrarySelection?
+  /// Multi-select state bound from `LibraryRootView`. The binding filter below
+  /// strips non-timeline values defensively so the sidebar can never persist a
+  /// collection-shaped tag into the timeline state.
+  @Binding var selectionSet: Set<LibrarySelection>
 
   @State private var years: [Int] = []
   @State private var expandedYears: Set<Int> = []
   @State private var assetCountsByYear: [Int: Int] = [:]
   @StateObject private var counts: TimelineSidebarCounts
 
-  init(selection: Binding<LibrarySelection?>, photoLibraryService: any PhotoLibraryService) {
-    self._selection = selection
+  init(
+    selectionSet: Binding<Set<LibrarySelection>>, photoLibraryService: any PhotoLibraryService
+  ) {
+    self._selectionSet = selectionSet
     _counts = StateObject(
       wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
   }
 
   var body: some View {
-    List(selection: yearMonthSelection) {
+    List(selection: timelineSelection) {
       Section("Photos by Year") {
         ForEach(years, id: \.self) { year in
           DisclosureGroup(
@@ -59,6 +64,10 @@ struct TimelineSidebarView: View {
               totalCountsByMonth: monthTotals(for: year),
               adjustedCountsByMonth: adjustedMonths(for: year)
             )
+            // Year row is selectable so multi-select can target whole years.
+            // The DisclosureGroup chevron continues to drive expansion; this
+            // tag only controls List's selection model.
+            .tag(LibrarySelection.timelineYear(year: year))
           }
         }
       }
@@ -88,17 +97,23 @@ struct TimelineSidebarView: View {
 
   // MARK: - Selection bridging
 
-  /// `List(selection:)` always wants the same value type as its tags. We bridge
-  /// `Binding<LibrarySelection?>` so that timeline-tagged rows can drive the unified
-  /// selection state without losing the section's last-selected month when the user
-  /// flips the segmented control to Collections and back.
-  private var yearMonthSelection: Binding<LibrarySelection?> {
+  /// `List(selection:)` accepts a `Set` of the row tag type for multi-select. We
+  /// bridge the parent's `selectionSet` and filter writes to only the timeline-shaped
+  /// values so the sidebar can never persist a stray collection-shape into the
+  /// timeline's last-state slot. Setting the set to empty is allowed (e.g. clicking
+  /// a List empty-area) and matches macOS conventions. Cmd+A is wired through the
+  /// Edit menu in `photo_exportApp` rather than via a hidden keyboard host here —
+  /// see `SelectAllSidebarItemsCommand`.
+  private var timelineSelection: Binding<Set<LibrarySelection>> {
     Binding(
-      get: { selection },
+      get: { selectionSet.filter(\.isTimeline) },
       set: { newValue in
-        if let newValue, case .timelineMonth = newValue {
-          selection = newValue
-        }
+        let filtered = newValue.filter(\.isTimeline)
+        // Preserve any non-timeline values that may live in the parent's set during
+        // a section flip transition. In steady state the parent's set is always
+        // section-pure, so this union is a no-op.
+        let preserved = selectionSet.filter { !$0.isTimeline }
+        selectionSet = filtered.union(preserved)
       }
     )
   }
@@ -109,7 +124,9 @@ struct TimelineSidebarView: View {
     guard photoLibraryManager.isAuthorized else { return }
     loadYears()
     var preferredYear: Int?
-    if case .timelineMonth(let year, _) = selection {
+    if let monthSel = selectionSet.first(where: {
+      if case .timelineMonth = $0 { return true } else { return false }
+    }), case .timelineMonth(let year, _) = monthSel {
       expandedYears.insert(year)
       preferredYear = year
     }

@@ -37,6 +37,10 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - One-click batch export of every album (including albums nested in folders) via the **Export All Albums** toolbar button on the Collections tab
 - One-click batch export of every album in a single folder via **Export Folder** — select a folder in the Collections sidebar and the toolbar's primary action targets just that folder's subtree
 - Multi-select album tiles inside a folder with Cmd-click / Shift-click to enqueue an arbitrary subset (selected subfolders expand to their descendant albums)
+- **Multi-select in the sidebar** with Cmd-click / Shift-click to enqueue an arbitrary mix in one run:
+  - Timeline: any combination of years and months. A year covers all its months — selecting a year and a month inside it exports the year.
+  - Collections: any combination of Favorites, albums, folders, and shared albums. Selected folders expand to their nested albums; duplicates dedupe.
+  - **Edit → Select All Years** / **Select All Collections** (⌘A) picks every top-level row in the active sidebar. Right-clicking a folder that's part of a multi-selection acts on the whole selection, matching the toolbar's primary action.
 - **iCloud Shared Albums** appear in their own Collections sidebar section and export one at a time to `Collections/Shared Albums/<Album>/`. See the [reduced-fidelity note](#shared-albums-reduced-fidelity) below — Apple only serves shared photos as downscaled JPEGs
 - Only copies assets that haven't been exported yet
 - Automatic folder creation in `<year>/<month>/` for the timeline and `Collections/...` for albums and favorites

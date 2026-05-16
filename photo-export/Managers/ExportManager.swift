@@ -582,6 +582,97 @@ final class ExportManager: ObservableObject {
     case unauthorized
   }
 
+  /// Multi-select bulk export across an arbitrary mix of years and months on the
+  /// timeline. Caller supplies the normalized buckets from `TimelineSelectionBuckets`
+  /// — year supersedes month-in-same-year is already applied. Each item runs through
+  /// the existing `enqueueYear` / `enqueueMonth` helper so dedup against the record
+  /// store is shared with the single-select paths.
+  func startExportTimelineSelection(
+    years: [Int],
+    months: [TimelineSelectionBuckets.TimelineMonth],
+    selectionOverride: ExportVersionSelection? = nil
+  ) {
+    guard !isImporting else {
+      logger.warning("startExportTimelineSelection ignored: import in progress")
+      return
+    }
+    guard canExportTimeline else {
+      logger.error(
+        "startExportTimelineSelection ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public)"
+      )
+      return
+    }
+    guard !isEnqueueingAll else { return }
+    if years.isEmpty && months.isEmpty {
+      setEmptyRunMessage("No timeline items selected.")
+      return
+    }
+    let selection = selectionOverride ?? versionSelection
+    clearEmptyRunMessage()
+    clearQueueWarningMessage()
+    isEnqueueingAll = true
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
+    let gen = generation
+    Task { [weak self] in
+      guard let self, self.isCurrent(gen) else {
+        self?.isEnqueueingAll = false
+        return
+      }
+      do {
+        var totalEnqueued = 0
+        var sawUnauthorized = false
+        for year in years {
+          let outcome = try await enqueueYear(
+            year: year, selection: selection, generation: gen)
+          guard self.isCurrent(gen) else {
+            self.isEnqueueingAll = false
+            return
+          }
+          switch outcome {
+          case .enqueued(let count): totalEnqueued += count
+          case .alreadyComplete: break
+          case .unauthorized: sawUnauthorized = true
+          }
+        }
+        for m in months {
+          let outcome = try await enqueueMonth(
+            year: m.year, month: m.month, selection: selection, generation: gen)
+          guard self.isCurrent(gen) else {
+            self.isEnqueueingAll = false
+            return
+          }
+          switch outcome {
+          case .enqueued(let count): totalEnqueued += count
+          case .alreadyComplete: break
+          case .unauthorized: sawUnauthorized = true
+          }
+        }
+        self.isEnqueueingAll = false
+        if totalEnqueued == 0 && !sawUnauthorized {
+          setEmptyRunMessage("Everything in the selection is already exported.")
+        }
+        processQueueIfNeeded()
+      } catch {
+        self.isEnqueueingAll = false
+        logger.error(
+          "startExportTimelineSelection failed: \(String(describing: error), privacy: .public)"
+        )
+        if !pendingJobs.isEmpty {
+          setQueueWarningMessage(
+            "Couldn't scan every item in the selection. Continuing with the photos already queued."
+          )
+          // Mirror `enqueueBulkAlbumExport`'s partial-failure bookkeeping so a future
+          // `runExport(context:)` wrapping this dispatcher sees the partial state and
+          // doesn't clear scope dirty flags on the unreached items.
+          activeRunBookkeeping?.partialBulkScan = true
+          processQueueIfNeeded()
+        } else {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      }
+    }
+  }
+
   // MARK: - Collection start methods (Phase 3)
 
   /// Starts an export of the user's Favorites. Routes through the resolver so the
@@ -682,6 +773,115 @@ final class ExportManager: ObservableObject {
       emptyMessage: "No albums in selection.",
       allDoneMessage: "All selected albums are already exported."
     )
+  }
+
+  /// Multi-select bulk export across a mixed Collections sidebar selection. Caller
+  /// supplies the normalized buckets from `CollectionsSelectionBuckets`. Each kind
+  /// (favorites, user albums, shared albums) is enqueued by calling the same
+  /// `enqueueCollection` helper the per-kind start methods use — but all three
+  /// loops run in a *single* Task so the user sees one merged enqueue lifecycle
+  /// and one final `emptyRunMessage` instead of three fire-and-forget Tasks
+  /// racing on the message slot. Partial-failure recovery and generation
+  /// tracking match `enqueueBulkAlbumExport`.
+  func startExportCollectionsSelection(_ buckets: CollectionsSelectionBuckets) {
+    guard !isImporting else {
+      logger.warning("startExportCollectionsSelection ignored: import in progress")
+      return
+    }
+    guard canExportCollection else {
+      logger.error(
+        "startExportCollectionsSelection ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
+      )
+      return
+    }
+    guard !isEnqueueingAll else { return }
+    if buckets.isEmpty {
+      setEmptyRunMessage("No collections selected.")
+      return
+    }
+    let selection = versionSelection
+    clearEmptyRunMessage()
+    clearQueueWarningMessage()
+    isEnqueueingAll = true
+    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
+    let gen = generation
+    Task { [weak self] in
+      guard let self, self.isCurrent(gen) else {
+        self?.isEnqueueingAll = false
+        return
+      }
+      do {
+        var totalEnqueued = 0
+        var sawUnauthorized = false
+
+        if buckets.includesFavorites {
+          let outcome = try await enqueueCollection(
+            selection: .favorites, scope: .favorites,
+            selectionMode: selection, generation: gen)
+          guard self.isCurrent(gen) else {
+            self.isEnqueueingAll = false
+            return
+          }
+          switch outcome {
+          case .enqueued(let count): totalEnqueued += count
+          case .alreadyComplete: break
+          case .unauthorized: sawUnauthorized = true
+          }
+        }
+
+        for albumId in buckets.albumIds {
+          let outcome = try await enqueueCollection(
+            selection: .album(collectionId: albumId),
+            scope: .album(collectionId: albumId),
+            selectionMode: selection, generation: gen)
+          guard self.isCurrent(gen) else {
+            self.isEnqueueingAll = false
+            return
+          }
+          switch outcome {
+          case .enqueued(let count): totalEnqueued += count
+          case .alreadyComplete: break
+          case .unauthorized: sawUnauthorized = true
+          }
+        }
+
+        for sharedId in buckets.sharedAlbumIds {
+          let outcome = try await enqueueCollection(
+            selection: .sharedAlbum(collectionId: sharedId),
+            scope: .sharedAlbum(collectionId: sharedId),
+            selectionMode: selection, generation: gen)
+          guard self.isCurrent(gen) else {
+            self.isEnqueueingAll = false
+            return
+          }
+          switch outcome {
+          case .enqueued(let count): totalEnqueued += count
+          case .alreadyComplete: break
+          case .unauthorized: sawUnauthorized = true
+          }
+        }
+
+        self.isEnqueueingAll = false
+        if totalEnqueued == 0 && !sawUnauthorized {
+          setEmptyRunMessage("Everything in the selection is already exported.")
+        }
+        processQueueIfNeeded()
+      } catch {
+        self.isEnqueueingAll = false
+        logger.error(
+          "startExportCollectionsSelection failed: \(String(describing: error), privacy: .public)"
+        )
+        if !pendingJobs.isEmpty {
+          setQueueWarningMessage(
+            "Couldn't scan every item in the selection. Continuing with the photos already queued."
+          )
+          activeRunBookkeeping?.partialBulkScan = true
+          processQueueIfNeeded()
+        } else {
+          finalizeActiveRun(result: .failed, cancelReason: nil)
+        }
+      }
+    }
   }
 
   /// Where a bulk-album export draws its album-id list from. `.allAlbums` walks the
