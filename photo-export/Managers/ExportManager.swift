@@ -1348,7 +1348,7 @@ final class ExportManager: ObservableObject {
   /// normally. The path that *does* cancel mid-flight is `cancelAndClear`. Use this
   /// helper at non-throwing checkpoints — typically inside escaping closures that
   /// `return` early when the run is stale. Per
-  /// `docs/project/plans/software-architecture-improvement-plan.md` "Cross-Cutting
+  /// `docs/project/archive/software-architecture-improvement-plan.md` "Cross-Cutting
   /// Contracts > Generation / cancellation ownership", this helper is the seam
   /// `VariantExporter`, `ExportQueueCoordinator`, and `ImportCoordinator` hold via
   /// their respective `Host` protocols. The plan originally projected the storage of

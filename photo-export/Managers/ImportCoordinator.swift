@@ -5,7 +5,7 @@ import OSLog
 /// Owns the Import Existing Backup flow: scanner invocation, library matching, bulk
 /// record insertion, both-store reconciliation, and the per-stage progress publishing.
 ///
-/// Per `docs/project/plans/software-architecture-improvement-plan.md` Phase 5, this
+/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 5, this
 /// extraction:
 /// - Moves the ~190-line `startImport` body (and `cancelImport`) out of `ExportManager`.
 /// - Owns the published mirrors `isImporting` + `importStage` directly; ExportManager

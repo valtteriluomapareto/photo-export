@@ -5,14 +5,13 @@ import Testing
 
 @testable import Photo_Export
 
-/// Phase 0 characterization test for the AutoSync seam preservation contract.
+/// Characterization test for the AutoSync seam preservation contract.
 ///
-/// Per `docs/project/plans/software-architecture-improvement-plan.md`
-/// "Cross-Cutting Contracts > AutoSync seam preservation", this is the regression
-/// gate that Phases 1–5 re-run unchanged. The contract: across a manual export
-/// and an import, AutoSync subscribers see the canonical state-transition
-/// sequence `idle → manual-active → idle → importing → idle`, plus exactly one
-/// completion summary for the export.
+/// Per `docs/reference/architecture-conventions.md` §AutoSync seam preservation,
+/// this is the regression gate that pins the AutoSync-observable emission sequence.
+/// The contract: across a manual export and an import, AutoSync subscribers see the
+/// canonical state-transition sequence `idle → manual-active → idle → importing →
+/// idle`, plus exactly one completion summary for the export.
 ///
 /// The test asserts on the canonical sequence (after de-duplicating adjacent
 /// identical states) rather than raw frame count, because

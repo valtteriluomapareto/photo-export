@@ -1,16 +1,12 @@
 # Architecture Conventions
 
-This document is the living reference for the patterns and contracts established by the architecture refactor (Phases 0–7, shipped May 2026). Read it before:
+## Do you need this doc?
 
-- Adding a new export entry point (`start*` method or a `runExport(...)` call site).
-- Adding a new export placement kind, variant, or record store.
-- Extracting a new collaborator out of `ExportManager`.
-- Adding a new `@Published` property that AutoSync (or the toolbar) observes.
-- Changing the cancellation seam or actor isolation of any collaborator.
+**You need to read this if your change touches any of the following:** `ExportManager` or any of its collaborators (`ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`); the AutoSync seam (`ExportManager+AutoSyncConformance.swift` or `exportRunStatePublisher` consumers); the record stores or `RecordStoreRouter`; `ExportPlacement.Kind` or `ExportVariant`; the cancellation contract (`generation`, `isCurrent`, `throwIfCancelledOrStale`); or you're extracting a new collaborator.
 
-The original design rationale lives in [`docs/project/archive/software-architecture-improvement-plan.md`](../project/archive/software-architecture-improvement-plan.md). This file extracts the load-bearing rules from that plan so they survive after the plan is archived.
+**You can skip this if your change is** a typo, a copy tweak, a website edit, a view-only change that doesn't touch the export pipeline, or a new test that doesn't modify the system under test.
 
-For the high-level type map (what each collaborator does), see [`website/src/content/docs/architecture.md`](../../website/src/content/docs/architecture.md) — that page is the friendly entry point. This document covers the *contracts* the types must follow.
+The patterns and contracts below were established by the May 2026 architecture refactor (PR #68; Phases 0–6 + partial 7). The original design rationale lives in [`docs/project/archive/software-architecture-improvement-plan.md`](../project/archive/software-architecture-improvement-plan.md). For the friendly high-level type map, see [`website/src/content/docs/architecture.md`](../../website/src/content/docs/architecture.md). This doc covers the *contracts* — what the types must follow.
 
 ## The architecture in one paragraph
 
@@ -44,16 +40,18 @@ func throwIfCancelledOrStale(_ gen: Int) throws
 
 - `clearPending()` — drops queued jobs only. In-flight work that started before `clearPending` keeps its `gen` and finishes normally. If you need to cancel mid-flight, call `cancelAndClear` instead.
 
-**Collaborator seam**: each extracted collaborator's `Host` protocol exposes `isCurrent(_:)` (and for `ImportCoordinator`, `bumpGeneration()`) as callbacks back to the manager. This is a deferred follow-up — the storage was planned to move into `ExportQueueCoordinator` in Phase 5 but the Host-protocol shape proved load-bearing and the move is tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67).
+**Collaborator seam**: each extracted collaborator's `Host` protocol exposes `isCurrent(_:)` (and for `ImportCoordinator`, `bumpGeneration()`) as callbacks back to the manager. This is a deferred follow-up — the storage was projected to move into `ExportQueueCoordinator` in a later phase but the Host-protocol shape proved load-bearing during implementation and the move is tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) item 2.
 
 ### 2. Actor isolation policy
 
 | Type kind | Isolation | Examples |
 | --- | --- | --- |
-| Stateful collaborator with `@Published` state | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, `RecordStoreRouter`, `PhotoLibraryManager`, `JSONLRecordFile` |
-| Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection` |
+| `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager`, `ExportRecordStore`, `CollectionExportRecordStore` |
+| Main-actor collaborator without `@Published` (mutates shared state from MainActor only) | `@MainActor final class` | `VariantExporter`, `RecordStoreRouter`, `JSONLRecordFile` |
+| Main-actor inheritance host (non-final pending the inheritance-drop in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) item 1) | `@MainActor class` | `PhotoLibraryManager`, `ScreenshotPhotoLibraryService` |
+| Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `BackupScanner`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` |
 | Concurrent state holder | `actor` | `CollectionCountCache` |
-| Heavy work that must hop off MainActor | `nonisolated async` on protocol seam | `PhotoLibraryService`, `MediaRenderer`, `AssetResourceWriter`, `FileSystemService` |
+| Heavy work that must hop off MainActor | `nonisolated async` selectively on protocol-conforming methods | `PhotoLibraryService` (selectively `nonisolated` count methods), `MediaRenderer`, `AssetResourceWriter`, `FileSystemService` |
 
 Rules:
 
@@ -63,19 +61,27 @@ Rules:
 
 ### 3. AutoSync seam preservation
 
-**Invariant**: `ExportManager+AutoSyncConformance.swift` stays untouched. AutoSync reads the manager via the conformance file's declared properties; if you need a new bit of state AutoSync should see, add it to the manager (or sink it from a coordinator onto the manager — see below), then expose it through the conformance.
+**Invariant**: `ExportManager+AutoSyncConformance.swift` is a thin wire-up file — only `extension ExportManager: …Host {}` conformances and explanatory docstrings, no implementation bodies. The file gains new conformances when collaborators are extracted (Phases 3a/4b/5 each added one), but it should never carry method bodies. AutoSync reads the manager via the conformance file's declared protocols; if you need a new bit of state AutoSync should see, add it to the manager (or sink it from a coordinator onto the manager — see below), then expose it through the conformance.
 
-**Publisher surface**:
+**Publisher surface** (real shape from `ExportManager.swift`):
 
 ```swift
 var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
   Publishers.CombineLatest3($activeRunContext, $isRunning, $queueCount)
-    .map { ExportRunState(activeRunContext: $0, isRunning: $1, queueCount: $2) }
+    .map { context, isRunning, queueCount in
+      let manualFireAndForget = context == nil && (isRunning || queueCount > 0)
+      return ExportRunState(
+        activeContext: context,
+        isManualActive: context?.source == .manual || manualFireAndForget,
+        isAutoSyncActive: context?.source == .autoSync
+      )
+    }
+    .removeDuplicates()
     .eraseToAnyPublisher()
 }
 ```
 
-The `CombineLatest3` over `($activeRunContext, $isRunning, $queueCount)` is the AutoSync contract. Adding new state to the triple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
+The `CombineLatest3` over `($activeRunContext, $isRunning, $queueCount)` is the AutoSync contract. The `manualFireAndForget` branch is what makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. Adding new state to the triple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
 
 **Mirror pattern** (when state lives on a coordinator but AutoSync needs to see it via the manager):
 
@@ -84,20 +90,26 @@ The `CombineLatest3` over `($activeRunContext, $isRunning, $queueCount)` is the 
 @Published private(set) var isRunning: Bool = false
 @Published private(set) var queueCount: Int = 0
 
-// On ExportManager.init, after collaborators are wired up:
+// On ExportManager.init, after collaborators are wired up. Each coordinator
+// has its own cancellable set (`queueCancellables`, `importCancellables`) so
+// a coordinator can be torn down or rewired independently.
 queueCoordinator.$isRunning
   .sink { [weak self] in self?.isRunning = $0 }
-  .store(in: &cancellables)
+  .store(in: &queueCancellables)
 queueCoordinator.$queueCount
   .sink { [weak self] in self?.queueCount = $0 }
-  .store(in: &cancellables)
+  .store(in: &queueCancellables)
 ```
 
-Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so the AutoSync `CombineLatest3` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async, that test fails.
+Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so the AutoSync `CombineLatest3` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
 
 ## Host protocol pattern
 
-When you extract a new collaborator from `ExportManager`, expose what you need from the manager via a narrow `Host` protocol declared on the collaborator. Example from [`ExportQueueCoordinator.swift`](../../photo-export/Managers/ExportQueueCoordinator.swift):
+> **Subject to revision when [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) item 2 lands.** The cancellation-seam half of each Host protocol (`generation` / `isCurrent` / `bumpGeneration`) goes away when `generation` storage moves into `ExportQueueCoordinator`. The non-cancellation Host methods are stable.
+
+When you extract a new collaborator from `ExportManager`, expose what you need from the manager via a narrow `@MainActor` `Host` protocol declared on the collaborator. The `@MainActor` annotation on the protocol itself is load-bearing — a non-MainActor Host would force `await` at every call site and break the mirror-sinks synchrony.
+
+Example from [`ExportQueueCoordinator.swift`](../../photo-export/Managers/ExportQueueCoordinator.swift):
 
 ```swift
 @MainActor
@@ -121,25 +133,27 @@ final class ExportQueueCoordinator: ObservableObject {
 }
 ```
 
-On `ExportManager`, the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after `super.init` / `self` is available:
+On `ExportManager` (which is `final class ExportManager: ObservableObject` — no superclass), the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after all stored properties are initialized so `self` is available to pass as `host`:
 
 ```swift
 private(set) var queueCoordinator: ExportQueueCoordinator!
 
 init(...) {
-  // ...store dependencies...
-  super.init()
+  // ...assign all stored dependencies first...
+  self.photoLibraryManager = photoLibraryManager  // etc.
+
+  // Now self is available — wire the collaborators.
   queueCoordinator = ExportQueueCoordinator(host: self)
-  // ...wire sinks, etc.
+  // ...wire sinks into queueCancellables / importCancellables, etc.
 }
 ```
 
-The conformance is in a small extension file ([`ExportManager+AutoSyncConformance.swift`](../../photo-export/Managers/ExportManager+AutoSyncConformance.swift)) — empty declaration, just makes the manager conform to the Host protocols.
+The manager owns the coordinator strongly (IUO storage, not `weak`); only the back-reference from coordinator to manager is `weak`. Construction order matters — collaborators that read each other's state must be wired before sinks fire. The conformance is in a small extension file ([`ExportManager+AutoSyncConformance.swift`](../../photo-export/Managers/ExportManager+AutoSyncConformance.swift)) holding only `extension ExportManager: …Host {}` lines — every method the protocol requires is already on `ExportManager` directly, so the conformances have empty bodies.
 
 Rules:
 
 - Keep the Host protocol *narrow* — only the seam the collaborator actually needs. Adding methods later is cheap; pruning surface area later is hard.
-- `weak var host: Host?` (avoid retain cycles).
+- `@MainActor protocol Host: AnyObject` on the protocol itself; `private weak var host: Host?` on the collaborator (avoid retain cycles).
 - Document each Host method's intent in the protocol's docstring. The collaborator's class doc lists which methods are temporary (will move when a deferred follow-up lands) versus permanent.
 - The collaborator's `@Published` state is *its own* — do not duplicate it on the manager. Use the mirror pattern (above) if AutoSync or views need the same property name on the manager.
 
@@ -157,62 +171,42 @@ private func resetProgressCounters() { queueCoordinator.resetProgressCounters() 
 Rules:
 
 - **Read-only forwarders are fine.** They let existing call sites (and future features written against the old `ExportManager` API) keep working without rewrites. The sidebar multi-select feature merged from `main` integrated cleanly thanks to these forwarders.
-- **Do not write through to coordinator-owned state from `ExportManager` directly.** Mutating `queueCoordinator.pendingJobs` from outside the coordinator breaks the Host-protocol invariant. Go through a method the coordinator publishes.
-- **Do not add new `@Published` properties to `ExportManager` for state that conceptually lives on a coordinator.** Add the `@Published` to the coordinator and sink it onto the manager via the mirror pattern.
+- **Avoid writing through to coordinator-owned state from `ExportManager` directly** unless the coordinator deliberately exposes a setter. Mutating `queueCoordinator.pendingJobs` from outside the coordinator breaks the Host-protocol invariant; go through a method the coordinator publishes.
+- **Avoid adding new `@Published` properties to `ExportManager` for state that conceptually lives on a coordinator.** Add the `@Published` to the coordinator and sink it onto the manager via the mirror pattern. (Exception: state that AutoSync observes via `exportRunStatePublisher` may need to live on the manager so the publisher composes — see §AutoSync seam preservation.)
 
 ## Canonical `start*` entry-point shape
 
-Every fire-and-forget export entry point on `ExportManager` follows this shape. Use it as a template when adding a new one. Source: [`ExportManager.swift`](../../photo-export/Managers/ExportManager.swift) `startExportMonth` (the simplest of the family).
+Every fire-and-forget export entry point on `ExportManager` follows the same skeleton. Source of truth: `startExportMonth` in [`ExportManager.swift`](../../photo-export/Managers/ExportManager.swift) — copy that method as a starting point rather than rewriting from this skeleton.
 
-```swift
-func startExportMonth(year: Int, month: Int) {
-  // 1. Block-on-conflict guards (synchronous, return early).
-  guard !isImporting else {
-    logger.warning("startExportMonth ignored: import in progress")
-    return
-  }
-  guard canExportTimeline else {
-    logger.error("startExportMonth ignored: timeline store state=...")
-    return
-  }
+```text
+func startExportX(...) {
+  // 1. Block-on-conflict guards (synchronous, return early on each).
+  //    Typical conflicts: import in progress; store not in .ready;
+  //    bulk-enqueue already in flight (`isEnqueueingAll`).
 
   // 2. Snapshot user-mutable state synchronously.
-  let selection = versionSelection
+  //    `let selection = versionSelection` — picker flips after this point
+  //    must not change the run.
 
-  // 3. Clear any prior UI messages.
-  clearEmptyRunMessage()
-  clearQueueWarningMessage()
+  // 3. Clear any prior UI messages (empty-run, queue-warning).
 
   // 4. Reset progress counters ONLY when the queue is truly idle.
-  //    "Paused with pending jobs" satisfies !isRunning && !isProcessing but is NOT idle —
+  //    Idle = `!isRunning && !isProcessing && pendingJobs.isEmpty`.
+  //    "Paused with pending jobs" satisfies the first two but is NOT idle —
   //    resetting there detaches done/total from pendingJobs.count.
-  if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
 
   // 5. Capture generation synchronously before the first await.
-  let gen = generation
+  //    `let gen = generation`
 
-  // 6. Fire-and-forget Task that re-checks isCurrent at every hop.
-  Task { [weak self] in
-    guard let self, self.isCurrent(gen) else { return }
-    do {
-      let outcome = try await enqueueMonth(
-        year: year, month: month, selection: selection, generation: gen)
-      guard self.isCurrent(gen) else { return }
-      switch outcome {
-      case .enqueued, .unauthorized:
-        break
-      case .alreadyComplete:
-        setEmptyRunMessage("This month is already exported.")
-      }
-      processQueueIfNeeded()
-    } catch {
-      logger.error("Failed to enqueue month export: ...")
-    }
-  }
+  // 6. Fire-and-forget Task with [weak self] re-checking isCurrent(gen)
+  //    after every await. Route the actual enqueueing through an existing
+  //    `enqueueX(... generation:)` helper (so record-store dispatch + dedup
+  //    are shared with the single-select paths). Call `processQueueIfNeeded()`
+  //    on success; log + bail on throw.
 }
 ```
 
-Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`) follow the same shape but loop over multiple `enqueueX(...)` calls and set `isEnqueueingAll = true` for the duration; the post-merge consolidation of the bulk-loop body is tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) item 5.
+Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`) follow the same shape but loop over multiple `enqueueX(...)` calls and set `isEnqueueingAll = true` for the duration. Consolidating the bulk-loop body across the six members of the `start*` family is tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) item 5.
 
 ## Regression gates
 
@@ -223,8 +217,8 @@ These tests are wired so they fire when a load-bearing invariant breaks. Do not 
 | [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) | The emission sequence on `exportRunStatePublisher`, `isImportingPublisher`, or `completedRunsPublisher` changes | Audit. Re-record snapshots only after confirming the new sequence is what AutoSync should see. |
 | [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) | A coordinator → manager mirror becomes async (`.receive(on:)`, `.async`, etc.) | Re-add the synchronous sink. The AutoSync `CombineLatest3` depends on synchrony for consistent reads. |
 | `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions` | Pause/resume/cancel transitions on `isRunning`/`queueCount`/`isPaused` change | Audit; this is the toolbar's contract. |
-| [`ScreenshotPhotoLibraryServiceOverridesTests`](../../photo-exportTests/ScreenshotPhotoLibraryServiceOverridesTests.swift) | A `PhotoLibraryService` method is added without a matching `ScreenshotPhotoLibraryService` override | Add the override on the screenshot service AND a new test in this file in the same PR. The structural fix (drop inheritance entirely) is a deferred follow-up. |
-| [`ImportIdempotencyTests`](../../photo-exportTests/ImportIdempotencyTests.swift) | The import flow loses idempotency on retry | Audit. Two consecutive `bulkImport(records:)` calls must not double-write. |
+| [`ScreenshotPhotoLibraryServiceOverridesTests`](../../photo-exportTests/ScreenshotPhotoLibraryServiceOverridesTests.swift) | A change to a *currently-overridden* `PhotoLibraryService` method silently routes to production behavior in screenshot mode | The 20 tests pin every existing override. **Known limitation** (documented in the test file's own header): a *newly-added* `PhotoLibraryService` method does not auto-fail this gate — it silently inherits production. When you add a method to `PhotoLibraryService`, add the screenshot override AND a new test here in the same PR. The structural fix (drop the inheritance, [#67](https://github.com/valtteriluomapareto/photo-export/issues/67) item 1) closes this hole. |
+| [`ImportIdempotencyTests`](../../photo-exportTests/ImportIdempotencyTests.swift) | The import flow loses idempotency on retry | Audit. Two consecutive `startImport()` runs over the same backup tree must not double-write records. |
 | `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` | The `isExported` predicate runs *after* the retry-gate (instead of before) | Restore the order. `isExported` must run first so already-done assets are not blocked by the retry-gate. |
 
 ## Extension recipes
@@ -238,14 +232,14 @@ These tests are wired so they fire when a load-bearing invariant breaks. Do not 
 
 ### Adding a new export placement kind
 
-Touch points:
+`ExportPlacement.Kind` is a closed enum — the compiler will guide you to every switch that needs to handle the new case. Touch points:
 
-1. **`ExportPlacement.Kind`** ([Models](../../photo-export/Models/ExportPlacement.swift)) — add the case.
-2. **`RecordStoreRouter`** ([Records](../../photo-export/Records/RecordStoreRouter.swift)) — extend each placement-kind `switch` (reads, writes, cancellation cleanup, reuse-source probe). All four switches must handle the new case; the closed enum will force you to.
+1. **`ExportPlacement.Kind`** ([Models](../../photo-export/Models/ExportPlacement.swift)) — add the case. The `variantPolicy` switch on `Kind` itself (same file) also needs to handle the new case — required-variants policy lives there.
+2. **`RecordStoreRouter`** ([Records](../../photo-export/Records/RecordStoreRouter.swift)) — every `switch placement.kind` in the router must handle the new case (today there are six: `variants`, `markVariantInProgress`, `markVariantExported`, `markVariantFailed`, `removeInProgressVariant`, plus the reuse-source probe). The closed enum will force you to update each one.
 3. **`ExportCompletionPolicy`** ([Records](../../photo-export/Records/ExportCompletionPolicy.swift)) — handle the new kind in `requiredVariants`, edited-fallback, and asset-complete checks.
-4. **One resolver call site** (the place that constructs an `ExportPlacement` for this kind from a `LibrarySelection`). Typically `ExportPlacementResolver` or directly inside a `startExport*` entry point.
+4. **`ExportPlacementResolver`** and any **`startExport*` entry point** that constructs an `ExportPlacement` for this kind from a `LibrarySelection`. If the new kind also needs a UI route, add corresponding cases to `LibrarySelection` and `PhotoFetchScope`.
 
-The `placement.kind` switch is *not* duplicated across `ExportManager` anymore — Phase 1 centralised it into `RecordStoreRouter`. If you find yourself writing `switch placement.kind` outside the router or the policy, you are probably bypassing a seam.
+The `placement.kind` switch is *not* duplicated across `ExportManager` anymore — Phase 1 centralized it into `RecordStoreRouter`. If you find yourself writing `switch placement.kind` outside the router or the policy, you are probably bypassing a seam.
 
 ### Adding a new variant
 
@@ -253,7 +247,7 @@ The `placement.kind` switch is *not* duplicated across `ExportManager` anymore �
 
 1. **`ExportVariant`** — add the case.
 2. **`VariantExporter`** ([Managers](../../photo-export/Managers/VariantExporter.swift)) — handle it in the per-variant write switch.
-3. **`ResourceSelection`** ([Managers](../../photo-export/Managers/ResourceSelection.swift)) — decide how the new variant selects bytes (`.resource | .render | .none` enum). New media kinds change `ResourceSelection`, not the call sites.
+3. **`ResourceSelection.selectEditedProducer`** ([Managers](../../photo-export/Managers/ResourceSelection.swift)) — decide how the new variant selects bytes. The function returns an `EditedProducer` enum (`.resource | .render | .none`); extend that enum if the new variant needs a third byte source. New media kinds change `ResourceSelection`, not the call sites.
 4. **`ExportFilenamePolicy`** — decide the suffix shape (`_orig`, plain, etc.).
 5. **`ExportCompletionPolicy`** — add the variant to `requiredVariants` where applicable.
 
@@ -279,9 +273,9 @@ The refactor shipped with three deliberate deferrals tracked in [issue #67](http
 
 1. **PhotoLibrary composition refactor** — drop `ScreenshotPhotoLibraryService: PhotoLibraryManager` inheritance. Today protected by the 20-test override gate.
 2. **Generation-counter ownership transfer** — move `var generation: Int` storage from `ExportManager` into `ExportQueueCoordinator` and delete the Host-protocol getters.
-3. **Remaining Phase 7 folder moves** — `Destination/`, `Export/`, `App/` not yet created. New code should land in its eventual feature folder anyway (e.g., a new destination type goes alongside `ExportDestinationManager` — the future `Destination/` parent matters less than the conventions in this doc).
+3. **Remaining Phase 7 folder moves** — `Destination/`, `Export/`, `App/` not yet created. Until they exist, new code goes alongside semantically related code in `Managers/` (e.g., a new destination type goes next to `ExportDestinationManager`); the folder split is a follow-up, not a precondition for new work.
 
-A second wave of follow-ups (items 4–5 in the same issue) covers AutoSync seam test growth and bulk-loop helper consolidation. Pick any up off the issue if you want to land one as an independent PR.
+A second wave of follow-ups (items 4–5 in the same issue) covers AutoSync seam test growth and bulk-loop helper consolidation. Pick any of these off the issue if you want to land one as an independent PR.
 
 ## Where to ask
 

@@ -12,7 +12,7 @@ import OSLog
 /// - Atomic move of `.tmp` into place + timestamp application.
 /// - Per-variant exported / failed record write.
 ///
-/// Per `docs/project/plans/software-architecture-improvement-plan.md` Phase 3b, the
+/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 3b, the
 /// rendered-media path is invoked on the exporter's own `mediaRenderer` dependency.
 /// `ExportManager` still constructs the renderer (so it can inject the
 /// `renderActivity` callback) but no longer invokes it. The cancellation seam

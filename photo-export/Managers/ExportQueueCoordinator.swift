@@ -6,7 +6,7 @@ import OSLog
 /// per-placement queue counters, and the published mirrors for queue depth + total
 /// counters.
 ///
-/// Per `docs/project/plans/software-architecture-improvement-plan.md` Phase 4b, this is
+/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 4b, this is
 /// where `pendingJobs`, `isProcessing`, `currentTask`, `queuedCountsByPlacementId`,
 /// `processQueueIfNeeded`, `processNext`, `updateQueueCount`, `pause`, `resume`, and
 /// `clearPending` live. ExportManager retains `generation`, the `currentJob*` UI

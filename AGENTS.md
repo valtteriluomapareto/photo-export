@@ -50,10 +50,10 @@ Source code under `photo-export/` is organized as follows:
 
 The `Managers/` folder is mixed today (a deferred Phase 7 follow-up tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) will split it into `Destination/`, `Export/`, `App/`). Until then, classify by role:
 
-- **Façade**: `ExportManager` (+ `ExportManager+AutoSyncConformance.swift` — never edit this conformance file).
+- **Façade**: `ExportManager` (+ `ExportManager+AutoSyncConformance.swift` — that file only carries `extension ExportManager: …Host {}` lines and explanatory docstrings; never add method bodies there).
 - **Host-driven collaborators of `ExportManager`** (`@MainActor final class`): `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`. Each holds a narrow `Host` protocol back to the manager for the cancellation seam and a few UI-state mutations.
-- **Pure helpers / policy** (plain `struct` or `enum`, `Sendable` where it crosses tasks): `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ExportDestinationResolver`, `ResourceSelection`, `ExportRecordsDirectoryCoordinator`.
-- **Other stateful services** (`@MainActor` ObservableObjects, top-level or injected): `ExportDestinationManager`, `BackupScanner`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`.
+- **Pure helpers / policy** (plain `struct` or `enum`, `Sendable` where it crosses tasks): `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ExportDestinationResolver`, `ResourceSelection`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`.
+- **Other `@MainActor` stateful services** (ObservableObjects or wire-ups, top-level or injected): `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`.
 
 **App entry point** (`photo_exportApp.swift`): creates five `@StateObject` dependencies and injects them as `@EnvironmentObject` into the view hierarchy:
 
@@ -93,30 +93,13 @@ Short rationales for choices a fresh reader will reasonably question. Each is a 
 - **Edited video export goes through `PHImageManager.requestExportSession` + `AVAssetExportSession`, not `PHAssetResource`.** PhotoKit does not pre-render edited videos as static resources, so resource enumeration finds nothing and the render path is the only way to materialise the user-visible bytes.
 - **Byte-source dispatch lives in `ResourceSelection.selectEditedProducer` as a single enum** (`.resource | .render | .none`). `ExportManager` switches on that and never inlines media-kind-specific branches. Widening the render path to a new media kind is an enum-extension change in one place rather than a new boolean scattered through the pipeline.
 
-## Cross-Cutting Contracts (read before changing ExportManager)
+## Cross-Cutting Contracts
 
-Three contracts bind every collaborator. Break one and you break either cancellation safety, the threading model, or the AutoSync seam. The canonical reference is [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md); summary:
+Three contracts bind every collaborator (cancellation seam, actor isolation policy, AutoSync seam preservation), plus the Host-protocol pattern for extracted collaborators and a list of six regression-gate tests. **Canonical reference:** [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) — read it before changing `ExportManager` or anything AutoSync observes. Single-sentence summary of each contract so you don't have to follow the link to know whether you need to:
 
-- **Cancellation contract.** `var generation: Int` lives on `ExportManager`. Every async task captures `let gen = generation` synchronously before the first `await`, then uses `[weak self]` + `guard self.isCurrent(gen) else { return }` at every checkpoint (or `try throwIfCancelledOrStale(gen)` on throwing paths). `cancelAndClear`, `interruptForDestinationUnavailable`, `supersedeForManualRun`, and `cancelImport` bump generation. `clearPending` does **not**.
-- **Actor isolation policy.** `@MainActor final class` for stateful collaborators with `@Published` state. Plain `struct`/`enum` for pure helpers. `actor` only when concurrent access is the actual requirement. Pure helpers stay value-typed — do not add `@MainActor` reflexively.
-- **AutoSync seam preservation.** `ExportManager+AutoSyncConformance.swift` is never edited. `exportRunStatePublisher = CombineLatest3($activeRunContext, $isRunning, $queueCount)`. New coordinator-owned state is mirrored onto `ExportManager` via synchronous `.sink { [weak self] in self?.x = $0 }` in init — never `.receive(on:)` or async hops.
-
-### Regression gates
-
-If you trip one of these, audit before re-recording. They protect contracts that have already been violated once.
-
-- `AutoSyncSeamCharacterizationTests` — fires when the AutoSync emission sequence (`exportRunStatePublisher`, `isImportingPublisher`, `completedRunsPublisher`) changes. Re-record snapshots only after verifying the new sequence is correct.
-- `ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors` — fires when a coordinator → manager mirror becomes async. The AutoSync `CombineLatest3` depends on synchrony. Re-add the synchronous sink.
-- `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions` — fires when pause/resume/cancel `isRunning`/`queueCount`/`isPaused` transitions change. This is the toolbar's contract.
-- `ScreenshotPhotoLibraryServiceOverridesTests` — fires when a `PhotoLibraryService` method is added without a `ScreenshotPhotoLibraryService` override. Add both the override AND a new test in this file in the same PR.
-- `ImportIdempotencyTests` — fires when the import flow loses idempotency on retry.
-- `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` — fires when the `isExported` predicate runs *after* the retry-gate. Restore the order: `isExported` must run first.
-
-### Host-protocol pattern
-
-Each extracted `@MainActor` collaborator (`VariantExporter`, `ExportQueueCoordinator`, `ImportCoordinator`) holds a narrow `Host` protocol pointing back to `ExportManager` for the cancellation seam plus a few UI-state mutations. The manager stores each collaborator as an implicitly-unwrapped optional and assigns `host: self` after `super.init`. Empty conformance lives in `ExportManager+AutoSyncConformance.swift` (which also handles the AutoSync conformances).
-
-When extracting a new collaborator: keep its `Host` protocol *narrow* (only the seam it actually needs), use `weak var host: Host?`, do not duplicate the collaborator's `@Published` state on `ExportManager` — use the sink-mirror pattern.
+- **Cancellation:** capture `let gen = generation` synchronously before the first `await` in any export task; re-check `isCurrent(gen)` after every hop. `clearPending` is the only conflict method that doesn't bump generation.
+- **Actor isolation:** `@MainActor final class` for stateful collaborators; plain `struct`/`enum` for pure helpers (don't reflexively add `@MainActor`); `actor` only when concurrent access is the real requirement.
+- **AutoSync seam:** `ExportManager+AutoSyncConformance.swift` only holds protocol conformance lines (no bodies). Coordinator → manager mirrors are synchronous `.sink` — never `.receive(on:)` or `MainActor.run`.
 
 ## Documentation Layout
 

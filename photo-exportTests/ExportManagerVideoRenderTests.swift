@@ -231,7 +231,7 @@ struct ExportManagerVideoRenderTests {
     #expect(!FileManager.default.fileExists(atPath: candidate.path))
   }
 
-  /// Phase 0 characterization (`docs/project/plans/software-architecture-improvement-plan.md`
+  /// Phase 0 characterization (`docs/project/archive/software-architecture-improvement-plan.md`
   /// Phase 0 > Cancel-during-render tempfile cleanup): existing tests cover write-failure and
   /// move-failure cleanup, but no test pins that a cancel arriving while a render is parked
   /// at the latch leaves the destination directory free of `.tmp` files after the queue

@@ -74,7 +74,7 @@ The pipeline is split across several collaborators. The list below pairs each ro
 - **Incremental export**
   - Records keyed by `PHAsset.localIdentifier` (timeline) or `(placementId, assetId)` (collections), split across `ExportRecordStore` and `CollectionExportRecordStore`. Dispatch goes through `RecordStoreRouter` — do not re-inline the placement switch.
   - "Already exported" / "edited fallback" / "asset complete" rules live in `ExportCompletionPolicy`.
-  - On launch, partial-write reconciliation runs in `ExportManager`'s startup path (`startupReconcile`); record-store loading is in the stores themselves.
+  - On launch, the record stores reload from their JSONL+snapshot files via `ExportRecordStore.configure(...)` / `CollectionExportRecordStore.configure(...)`; partial-write recovery is delegated to `JSONLRecordFile`'s reader (which tolerates an incomplete final line) rather than a separate manager-level reconciliation step.
 - **Resilience**
   - Per-variant temp file → atomic move to final location: `VariantExporter`.
   - Stale `.tmp` cleanup on export start: same.
