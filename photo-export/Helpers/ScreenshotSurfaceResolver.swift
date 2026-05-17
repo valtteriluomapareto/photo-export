@@ -14,11 +14,30 @@ import Foundation
 /// default screen.
 enum ScreenshotSurfaceResolver {
 
-  /// Resolved screenshot landing. Both fields together drive
-  /// `LibraryRootView`'s initial `@State`.
+  /// Resolved screenshot landing. `section` and `selection` together drive
+  /// `LibraryRootView`'s initial `@State`. `additionalSelections` adds extra
+  /// sidebar rows to the highlight set for multi-select demo surfaces — empty
+  /// for single-select keys, which is the default and keeps the production
+  /// fall-through (no `--screenshot-surface=` arg → `nil`) untouched.
   struct Surface: Equatable {
     let section: LibrarySection
+    /// Focused selection. Drives the content pane; appears in the multi-select
+    /// set together with `additionalSelections`.
     let selection: LibrarySelection
+    /// Extra rows to highlight in the sidebar alongside `selection`. The full
+    /// initial set is `Set([selection] + additionalSelections)`. Empty for the
+    /// single-select surfaces.
+    let additionalSelections: [LibrarySelection]
+
+    init(
+      section: LibrarySection,
+      selection: LibrarySelection,
+      additionalSelections: [LibrarySelection] = []
+    ) {
+      self.section = section
+      self.selection = selection
+      self.additionalSelections = additionalSelections
+    }
   }
 
   /// Reads `--screenshot-surface=<key>` from `arguments` and resolves to a
@@ -64,6 +83,39 @@ enum ScreenshotSurfaceResolver {
       // new "Shared Albums" sidebar section and the reduced-fidelity banner.
       return Surface(
         section: .collections, selection: .sharedAlbum(collectionId: "family-stream"))
+    case "timeline-multi-select":
+      // Issue #46 multi-select feature: highlights two prior years + a month in
+      // the current year so the sidebar shows three rows selected and the
+      // toolbar reads "Export 3 Items". Focus on the current month so the
+      // content pane renders MonthContentView's populated grid (the most
+      // photogenic preview for a marketing capture).
+      let cal = Calendar(identifier: .gregorian)
+      let currentYear = cal.component(.year, from: now)
+      let currentMonth = cal.component(.month, from: now)
+      return Surface(
+        section: .timeline,
+        selection: .timelineMonth(year: currentYear, month: currentMonth),
+        additionalSelections: [
+          .timelineYear(year: currentYear - 1),
+          .timelineYear(year: currentYear - 2),
+        ]
+      )
+    case "collections-multi-select":
+      // Issue #46 multi-select feature: Favorites + two albums + a folder, four
+      // disparate row kinds highlighted in the sidebar. Focus on the Family
+      // album so the content pane renders a populated thumbnail grid; the
+      // toolbar's primary action reads "Export 4 Items". `Trips` folder
+      // demonstrates that folders dedup-expand to their contained albums at
+      // dispatch time without the sidebar reproducing the expansion.
+      return Surface(
+        section: .collections,
+        selection: .album(collectionId: "family"),
+        additionalSelections: [
+          .favorites,
+          .album(collectionId: "porvoo"),
+          .folder(collectionId: "trips"),
+        ]
+      )
     default:
       return nil
     }

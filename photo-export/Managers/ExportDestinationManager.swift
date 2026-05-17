@@ -119,6 +119,31 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   // MARK: - Public API
+
+  /// Marketing-screenshot helper: puts the manager into the "destination
+  /// available and writable" state with a synthetic URL whose
+  /// `lastPathComponent` is the only piece the toolbar's destination indicator
+  /// reads. Never called in production launches —
+  /// `photo_exportApp.init` gates this on
+  /// `PhotoLibraryManager.isRunningInScreenshotMode`. Pair with
+  /// `init(skipRestore: true)` so the user's real bookmark doesn't show up
+  /// briefly before this override lands.
+  ///
+  /// The path prefix is junk on purpose: a real folder is not required, the
+  /// safety scan and any other consumers of `selectedFolderURL.path` should
+  /// treat the destination as empty (no actual files to enumerate). The
+  /// destination identity is set to `nil` so the record stores stay
+  /// unconfigured — screenshot launches never write export records.
+  func configureForScreenshotMode(displayName: String = "Backup Folder") {
+    let url = URL(
+      fileURLWithPath: "/private/var/photo-export-screenshot-mode/\(displayName)",
+      isDirectory: true)
+    selectedFolderURL = url
+    isAvailable = true
+    isWritable = true
+    statusMessage = nil
+  }
+
   func selectFolder() {
     let panel = NSOpenPanel()
     panel.title = "Choose Export Folder"
