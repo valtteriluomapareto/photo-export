@@ -4,7 +4,7 @@ import Foundation
 /// list of assets through two skip predicates (already-exported, AutoSync retry gate)
 /// and returns the corresponding `ExportManager.ExportJob` list.
 ///
-/// Per `docs/project/plans/software-architecture-improvement-plan.md` Phase 4a, the
+/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 4a, the
 /// planner is a pure `enum` (no state, no IO). Callers fetch assets from PhotoKit and
 /// query record-store state via injected closures; the planner only decides whether to
 /// emit a job. `ExportManager.enqueueMonth` / `.enqueueYear` / `.enqueueCollection`

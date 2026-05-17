@@ -2,6 +2,19 @@
 
 Remaining work items, grouped by area. Move items to GitHub Issues when practical.
 
+## Architecture follow-ups
+
+Tracked as checkboxes in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67). All three are deliberate deferrals from the May 2026 architecture refactor; each is safe to land independently.
+
+- [ ] **PhotoLibrary composition refactor** — drop `ScreenshotPhotoLibraryService: PhotoLibraryManager` inheritance, extract a `ProductionPhotoLibraryService` peer, mark `PhotoLibraryManager` `final` with an injected `PhotoLibraryService`. ~973 lines of PhotoKit code. Today protected by `ScreenshotPhotoLibraryServiceOverridesTests` (20 tests).
+- [ ] **Generation-counter ownership transfer** — move `var generation: Int` storage from `ExportManager` into `ExportQueueCoordinator` and delete the `Host.generation` / `Host.isCurrent` / `Host.bumpGeneration` getters on the three collaborator Host protocols. Mechanical storage move + Host-method deletion.
+- [ ] **Remaining Phase 7 folder moves** — `Destination/`, `Export/`, `App/` not yet created. Filesystem-synchronized groups make moves Xcode-config-free; can land opportunistically.
+- [ ] **AutoSync seam coverage during `isEnqueueingAll` window** — `exportRunStatePublisher` does not currently include `isEnqueueingAll`. Add a characterization test and decide whether the bulk-enqueue window should be observable as `manualActive`.
+- [ ] **Consolidate the `start*` family with a shared bulk-loop helper** — best landed together with the AutoSync seam fix above.
+- [ ] **Regression-gate symbol-existence guard in CI** — `docs/reference/architecture-conventions.md` hardcodes six test names. A rename today silently rots the doc. Add a `scripts/ci/check-regression-gates.sh` (~15 lines of shell) that greps the test files for each documented test symbol and fails CI if any is missing. Highest drift-protection ROI; flagged by the PR #71 review.
+
+See [`docs/reference/architecture-conventions.md`](../reference/architecture-conventions.md) for the contracts these items extend.
+
 ## UI
 
 - [ ] Add filter control for media type (photos/videos) — backend supports `mediaType` parameter, needs UI toggle

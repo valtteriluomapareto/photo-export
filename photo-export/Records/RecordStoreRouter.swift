@@ -5,11 +5,12 @@ import Foundation
 /// (favorites, albums, shared albums). Replaces eight inline `switch placement.kind`
 /// blocks that previously lived in `ExportManager`.
 ///
-/// Per `docs/project/plans/software-architecture-improvement-plan.md` Phase 1, the router
-/// owns every kind of dispatch — reads, writes, cancellation cleanup, and reuse-source
-/// lookup — so a new placement kind only requires touching the cases here, not eight
-/// disparate sites in `ExportManager`. The router is **not** pure: it carries injected
-/// references to both stores and is `@MainActor` to match the stores' isolation.
+/// The router owns every kind of dispatch — reads, writes, cancellation cleanup, and
+/// reuse-source lookup — so a new placement kind only requires touching the cases here,
+/// not eight disparate sites in `ExportManager`. The router is **not** pure: it carries
+/// injected references to both stores and is `@MainActor` to match the stores' isolation.
+/// Contracts and extension recipe live in `docs/reference/architecture-conventions.md`
+/// §Adding a new export placement kind.
 @MainActor
 final class RecordStoreRouter {
 

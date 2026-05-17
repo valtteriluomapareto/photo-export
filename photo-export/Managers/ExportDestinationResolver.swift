@@ -6,7 +6,7 @@ import Foundation
 /// prior records, unique-filename collision suffixing, and the natural-vs-`_orig`
 /// disambiguation that defends against user filenames that happen to end with `_orig`.
 ///
-/// Per `docs/project/plans/software-architecture-improvement-plan.md` Phase 2, the
+/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 2, the
 /// resolver replaces the inline private methods that lived on `ExportManager`
 /// (`resolveDestination`, `allocatePairedGroupStem`, `allocateUnusedOrigStem`,
 /// `inheritedGroupStem`, `splitFilename`, `uniqueFileURL`). The low-level naming-rule
