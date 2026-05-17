@@ -95,13 +95,15 @@ struct ExportShapeLifecycleGoldenTests {
 
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "JPG", destDir: dir)
-    #expect(stem == "IMG_0001")
+    #expect(stem == "IMG_0001", "fresh paired allocation must keep the base stem")
 
     let (originalURL, originalStem) = try resolver.resolveDestination(
       variant: .original, descriptor: asset,
       originalFilename: "IMG_0001.JPG", resources: resources,
       destDir: dir, groupStem: stem, pairOriginalWithSuffix: true)
-    #expect(originalURL.lastPathComponent == "IMG_0001_orig.JPG")
+    #expect(
+      originalURL.lastPathComponent == "IMG_0001_orig.JPG",
+      "paired-original must land at <stem>_orig.<origExt> — `_orig` suffix is the companion marker")
     #expect(originalStem == "IMG_0001")
     plantFile(at: originalURL)
 
@@ -109,7 +111,9 @@ struct ExportShapeLifecycleGoldenTests {
       variant: .edited, descriptor: asset,
       originalFilename: "IMG_0001.HEIC", resources: resources,
       destDir: dir, groupStem: stem, pairOriginalWithSuffix: true)
-    #expect(editedURL.lastPathComponent == "IMG_0001.HEIC")
+    #expect(
+      editedURL.lastPathComponent == "IMG_0001.HEIC",
+      "paired-edited must land at the natural stem; a different name leaves the user with orphaned `_orig.JPG`")
     #expect(editedStem == "IMG_0001")
   }
 
@@ -142,7 +146,7 @@ struct ExportShapeLifecycleGoldenTests {
 
     let inherited = ExportDestinationResolver.inheritedGroupStem(
       from: record, descriptor: asset, resources: resources)
-    #expect(inherited == "IMG_0001")
+    #expect(inherited == "IMG_0001", "inherited stem must come from the edited record's filename")
 
     // Re-export the edited variant only (Photos detected an adjustment
     // change). Original is unchanged.
@@ -150,7 +154,9 @@ struct ExportShapeLifecycleGoldenTests {
       variant: .edited, descriptor: asset,
       originalFilename: "IMG_0001.HEIC", resources: resources,
       destDir: dir, groupStem: inherited, pairOriginalWithSuffix: false)
-    #expect(newEditedURL.lastPathComponent == "IMG_0001 (1).HEIC")
+    #expect(
+      newEditedURL.lastPathComponent == "IMG_0001 (1).HEIC",
+      "re-edit must bump to ` (1)` suffix; changing this shape (e.g. `-1`, `_v2`) creates duplicates for every existing user")
     #expect(newEditedStem == "IMG_0001 (1)")
   }
 
@@ -163,42 +169,84 @@ struct ExportShapeLifecycleGoldenTests {
   /// `inheritedGroupStem` uses to treat it as the user's natural name and
   /// keep the `_orig` in the stem.
   ///
-  /// If this breaks, an existing user's `vacation_orig.JPG` becomes orphaned
-  /// — the next re-export thinks the stem is `vacation` and writes a fresh
-  /// pair at `vacation.JPG` / `vacation_orig.JPG`, doubling their disk usage
-  /// and creating user-visible duplicates.
-  @Test func userOrigSuffixedFilenamePreservedAsGroupStem() throws {
-    let asset = makeAsset(hasAdjustments: false)
+  /// This test walks the full chain: prior record → inherited stem →
+  /// `resolveDestination` for a fresh edited variant. The composed result
+  /// must land at `vacation_orig (1).HEIC` (the edited natural-stem
+  /// collides with the existing `vacation_orig.JPG` on disk, hence the
+  /// `(1)` suffix). If any link in the chain breaks, the existing user's
+  /// `vacation_orig.JPG` becomes orphaned and the re-export creates a
+  /// duplicate at `vacation.JPG` / `vacation_orig.JPG`.
+  @Test func userOrigSuffixedFilenamePreservedAsGroupStemAndComposes() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let asset = makeAsset(hasAdjustments: true)
     let resources = [makePhotoResource("vacation_orig.JPG")]
 
+    // Prior export wrote the user's original to disk.
+    plantFile(at: dir.appendingPathComponent("vacation_orig.JPG"))
     let record = priorRecord(originalFilename: "vacation_orig.JPG")
 
     let inherited = ExportDestinationResolver.inheritedGroupStem(
       from: record, descriptor: asset, resources: resources)
-    #expect(inherited == "vacation_orig")
+    #expect(
+      inherited == "vacation_orig",
+      "user-named `_orig` filename must be preserved as the group stem; stripping it orphans the existing `vacation_orig.JPG`")
+
+    // User later applies a Photos edit. Resolve the edited variant against
+    // the inherited stem.
+    let (editedURL, _) = try resolver.resolveDestination(
+      variant: .edited, descriptor: asset,
+      originalFilename: "vacation_orig.JPG", resources: resources,
+      destDir: dir, groupStem: inherited, pairOriginalWithSuffix: false)
+    #expect(
+      editedURL.lastPathComponent == "vacation_orig (1).JPG",
+      "edited variant must land at `<userOrigStem> (1).<ext>`; landing at `vacation.<ext>` orphans `vacation_orig.JPG`")
   }
 
   // MARK: - Scenario D — app-companion `_orig` stripped
 
-  /// Same prior-record shape as Scenario C, but the asset's current original
-  /// resource is `vacation.JPG` — meaning the recorded `vacation_orig.JPG`
-  /// **does NOT** match the resource filename. That's the cue this was an
-  /// app-written companion (the original variant of a paired export), so
-  /// `inheritedGroupStem` strips the `_orig` and returns `vacation`.
+  /// Same prior-record shape as Scenario C, but the asset's current
+  /// original resource is `vacation.JPG` — meaning the recorded
+  /// `vacation_orig.JPG` does NOT match the resource filename. That's the
+  /// cue this was an app-written companion (the original variant of a
+  /// paired export), so `inheritedGroupStem` strips the `_orig` and returns
+  /// `vacation`.
   ///
-  /// The disambiguation between this scenario and Scenario C is load-bearing
-  /// for backward compat — flip it and either every user `vacation_orig.JPG`
-  /// becomes orphaned (Scenario C breaks) or every app-paired re-export
-  /// loses its pair (Scenario D breaks).
-  @Test func appCompanionOrigSuffixStrippedFromInheritedStem() throws {
+  /// This test walks the full chain: prior `.original.done = vacation_orig.JPG`
+  /// → inherited stem `vacation` → `resolveDestination` for a fresh edited
+  /// variant → file lands at `vacation.HEIC` (the natural-stem pair slot).
+  ///
+  /// The disambiguation between this scenario and Scenario C is
+  /// load-bearing for backward compat — flip the `if filename ==
+  /// originalResourceFilename` check at `ExportDestinationResolver.swift`
+  /// `inheritedGroupStem` and either every user `vacation_orig.JPG` becomes
+  /// orphaned (C breaks) or every app-paired re-export loses its pair (D
+  /// breaks).
+  @Test func appCompanionOrigSuffixStrippedAndComposes() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
     let asset = makeAsset(hasAdjustments: true)
     let resources = [makePhotoResource("vacation.JPG")]
 
+    // Prior export wrote a paired original as `vacation_orig.JPG`.
+    plantFile(at: dir.appendingPathComponent("vacation_orig.JPG"))
     let record = priorRecord(originalFilename: "vacation_orig.JPG")
 
     let inherited = ExportDestinationResolver.inheritedGroupStem(
       from: record, descriptor: asset, resources: resources)
-    #expect(inherited == "vacation")
+    #expect(
+      inherited == "vacation",
+      "app-written `_orig` companion stem must be stripped to recover the natural stem")
+
+    // User later applies a Photos edit. The edited variant pairs with the
+    // existing `_orig` companion at the natural stem.
+    let (editedURL, _) = try resolver.resolveDestination(
+      variant: .edited, descriptor: asset,
+      originalFilename: "vacation.HEIC", resources: resources,
+      destDir: dir, groupStem: inherited, pairOriginalWithSuffix: false)
+    #expect(
+      editedURL.lastPathComponent == "vacation.HEIC",
+      "edited variant must pair with the existing `_orig` companion at the natural stem; any other shape splits the pair across stems")
   }
 
   // MARK: - Scenario E — single-original fresh export, no pairing
@@ -219,7 +267,9 @@ struct ExportShapeLifecycleGoldenTests {
       variant: .original, descriptor: asset,
       originalFilename: "IMG_0002.JPG", resources: resources,
       destDir: dir, groupStem: nil, pairOriginalWithSuffix: false)
-    #expect(url.lastPathComponent == "IMG_0002.JPG")
+    #expect(
+      url.lastPathComponent == "IMG_0002.JPG",
+      "fresh single-original must land at the natural filename — no default suffix")
     #expect(stem == "IMG_0002")
   }
 
@@ -242,7 +292,9 @@ struct ExportShapeLifecycleGoldenTests {
       variant: .original, descriptor: asset,
       originalFilename: "IMG_0002.JPG", resources: resources,
       destDir: dir, groupStem: nil, pairOriginalWithSuffix: false)
-    #expect(url.lastPathComponent == "IMG_0002 (1).JPG")
+    #expect(
+      url.lastPathComponent == "IMG_0002 (1).JPG",
+      "collision must bump to ` (1)` suffix; any other shape (`-1`, `_v2`) creates duplicates on every existing user's next run")
     #expect(stem == "IMG_0002 (1)")
   }
 }

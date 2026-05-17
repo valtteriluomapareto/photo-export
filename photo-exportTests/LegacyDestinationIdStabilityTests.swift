@@ -58,28 +58,21 @@ struct LegacyDestinationIdStabilityTests {
       "Hash of canonical 0-255 byte sequence drifted — pre-migration directories will be orphaned")
   }
 
-  /// Hex encoding must be lowercase. The migration directory-name match is
-  /// byte-equal; an uppercase regression silently misses every existing
-  /// `<oldId>/` directory on disk.
-  @Test func hexEncodingIsLowercase() {
-    let id = ExportDestinationManager.legacyDestinationId(from: Data("abc".utf8))
+  // The lowercase, length, and determinism properties are implicitly pinned
+  // by the three concrete hash vectors above — any drift in encoding case,
+  // digest size, or function purity changes at least one of those expected
+  // values. Standalone tests for each property were redundant and have been
+  // dropped per the PR review.
+
+  /// Single-byte input. Bytes < 0x10 are the sharpest test for a hex
+  /// formatter regression (`%02x` → `%2x` would drop the leading zero on
+  /// these). The two canonical vectors above are multi-byte and would
+  /// miss the bug; this catches it.
+  @Test func singleLowByteIsZeroPadded() {
+    let id = ExportDestinationManager.legacyDestinationId(from: Data([0x05]))
+    // SHA-256 of the single byte 0x05.
     #expect(
-      id == id.lowercased(),
-      "Hex encoding must stay lowercase — directory names on disk are lowercase")
-  }
-
-  /// Output is always 64 chars (32 bytes × 2 hex chars). Catches a future
-  /// switch to a different digest size.
-  @Test func outputIsExactly64HexChars() {
-    let id = ExportDestinationManager.legacyDestinationId(from: Data("abc".utf8))
-    #expect(id.count == 64, "SHA-256 hex output must be 64 characters")
-  }
-
-  /// Same input → same output, every call. Pure function pin.
-  @Test func sameInputYieldsSameOutput() {
-    let bytes = Data((0..<128).map { UInt8($0) })
-    let first = ExportDestinationManager.legacyDestinationId(from: bytes)
-    let second = ExportDestinationManager.legacyDestinationId(from: bytes)
-    #expect(first == second)
+      id == "e77b9a9ae9e30b0dbdb6f510a264ef9de781501d7b6b92ae89eb059c5ab743db",
+      "single-byte hash drifted — likely a hex format-string regression dropping the zero-pad on bytes < 0x10")
   }
 }
