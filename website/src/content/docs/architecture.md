@@ -181,21 +181,21 @@ in `PhotoExportApp` where the record-store directory roots are known.
 
 The main UI lives under `photo-export/Views/` and `photo-export/ViewModels/`.
 
-| Type                     | Responsibility                                                                                                      |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `ContentView`            | Top-level router (auth → onboarding → library)                                                                      |
-| `LibraryRootView`        | `NavigationSplitView` shell with the Timeline / Collections segmented selector                                      |
-| `TimelineSidebarView`    | Year/month tree with Cmd/Shift-click multi-select; reports selection via `TimelineSelectionBuckets`                 |
+| Type                     | Responsibility                                                                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ContentView`            | Top-level router (auth → onboarding → library)                                                                                                          |
+| `LibraryRootView`        | `NavigationSplitView` shell with the Timeline / Collections segmented selector                                                                          |
+| `TimelineSidebarView`    | Year/month tree with Cmd/Shift-click multi-select; reports selection via `TimelineSelectionBuckets`                                                     |
 | `CollectionsSidebarView` | Favorites, user albums and folders (with Cmd/Shift-click multi-select), and a separate Shared Albums section, lazy-counted via `cachedCountAssets(in:)` |
-| `YearContentView`        | Content pane shown when a year row is the focused selection (year-level summary + primary action, no asset grid)    |
-| `MonthContentView`       | Thumbnail grid for the selected month                                                                               |
-| `CollectionContentView`  | Thumbnail grid for Favorites, a user album, or a shared album, sharing `MonthViewModel` via a scope-based loader    |
-| `AssetDetailView`        | Full-size image or video preview                                                                                    |
-| `ExportToolbarView`      | Export destination and queue controls                                                                               |
-| `RecordStoreAlertHost`   | Surfaces a corruption-recovery alert when either record store transitions to `.failed`                              |
-| `OnboardingView`         | First-run flow for permissions and destination setup                                                                |
-| `ImportView`             | Progress and results for importing an existing backup                                                               |
-| `MonthViewModel`         | Cancellation-aware asset loading for any `PhotoFetchScope` (timeline / favorites / album / shared album)            |
+| `YearContentView`        | Content pane shown when a year row is the focused selection (year-level summary + primary action, no asset grid)                                        |
+| `MonthContentView`       | Thumbnail grid for the selected month                                                                                                                   |
+| `CollectionContentView`  | Thumbnail grid for Favorites, a user album, or a shared album, sharing `MonthViewModel` via a scope-based loader                                        |
+| `AssetDetailView`        | Full-size image or video preview                                                                                                                        |
+| `ExportToolbarView`      | Export destination and queue controls                                                                                                                   |
+| `RecordStoreAlertHost`   | Surfaces a corruption-recovery alert when either record store transitions to `.failed`                                                                  |
+| `OnboardingView`         | First-run flow for permissions and destination setup                                                                                                    |
+| `ImportView`             | Progress and results for importing an existing backup                                                                                                   |
+| `MonthViewModel`         | Cancellation-aware asset loading for any `PhotoFetchScope` (timeline / favorites / album / shared album)                                                |
 
 ## Persistence
 
