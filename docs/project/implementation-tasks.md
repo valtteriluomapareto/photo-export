@@ -2,6 +2,18 @@
 
 Remaining work items, grouped by area. Move items to GitHub Issues when practical.
 
+## Architecture follow-ups
+
+Tracked as checkboxes in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67). All three are deliberate deferrals from the May 2026 architecture refactor; each is safe to land independently.
+
+- [ ] **PhotoLibrary composition refactor** — drop `ScreenshotPhotoLibraryService: PhotoLibraryManager` inheritance, extract a `ProductionPhotoLibraryService` peer, mark `PhotoLibraryManager` `final` with an injected `PhotoLibraryService`. ~973 lines of PhotoKit code. Today protected by `ScreenshotPhotoLibraryServiceOverridesTests` (20 tests).
+- [ ] **Generation-counter ownership transfer** — move `var generation: Int` storage from `ExportManager` into `ExportQueueCoordinator` and delete the `Host.generation` / `Host.isCurrent` / `Host.bumpGeneration` getters on the three collaborator Host protocols. Mechanical storage move + Host-method deletion.
+- [ ] **Remaining Phase 7 folder moves** — `Destination/`, `Export/`, `App/` not yet created. Filesystem-synchronized groups make moves Xcode-config-free; can land opportunistically.
+- [ ] **AutoSync seam coverage during `isEnqueueingAll` window** — `exportRunStatePublisher` does not currently include `isEnqueueingAll`. Add a characterization test and decide whether the bulk-enqueue window should be observable as `manualActive`.
+- [ ] **Consolidate the `start*` family with a shared bulk-loop helper** — best landed together with the AutoSync seam fix above.
+
+See [`docs/reference/architecture-conventions.md`](../reference/architecture-conventions.md) for the contracts these items extend.
+
 ## UI
 
 - [ ] Add filter control for media type (photos/videos) — backend supports `mediaType` parameter, needs UI toggle

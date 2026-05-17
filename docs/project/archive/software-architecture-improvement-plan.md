@@ -2,7 +2,9 @@
 
 Date: 2026-05-15
 Revised: 2026-05-15 (added Cross-Cutting Contracts, Phase 0, and folded in multi-reviewer feedback: tightened Phase 0 spec, rescoped RecordStoreRouter, swapped Phase 2/3, split Phases 2/4/7)
-Status: Substantially complete on the `architecture-refactor` integration branch. Phases 0–5 done; Phases 6 and 7 delivered in partial scope (composition-refactor + remaining folder moves deferred to follow-ups).
+Archived: 2026-05-17. Status: shipped. Phases 0–5 done; Phases 6 and 7 delivered in partial scope (composition-refactor + remaining folder moves deferred to follow-ups tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67)).
+
+> **Reader note**: this plan is preserved as a decision record. The **living** reference for the contracts and patterns this plan established is [`docs/reference/architecture-conventions.md`](../../reference/architecture-conventions.md) — read that file when developing new features. This plan is useful for understanding *why* the contracts have the shape they do.
 
 ## Progress
 

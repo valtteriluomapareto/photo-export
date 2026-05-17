@@ -33,28 +33,35 @@ UI tests exist in `photo-exportUITests/` but are skipped by default in the share
 
 ## Architecture
 
-**Pattern:** SwiftUI + Managers. Views are thin; logic lives in Managers and ViewModels.
+**Pattern:** SwiftUI + a single façade (`ExportManager`) over focused, `@MainActor` collaborators. Views are thin; orchestration lives on `ExportManager`; per-concern work is delegated. See [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) for the load-bearing contracts (cancellation seam, actor isolation policy, AutoSync seam preservation) — read it before touching `ExportManager`, the queue, or anything AutoSync observes.
 
 Source code under `photo-export/` is organized as follows:
 
 - `Records/` — record stores (timeline + collection), the shared `JSONLRecordFile` persistence primitive, `RecordStoreRouter` (single placement-kind dispatch), and `ExportCompletionPolicy` (single completion/edited-fallback rule)
 - `AutoSync/` — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, with `AutoSync/Stores/` for the file-backed persistence (dirty state, per-destination tokens, retry state, run summary, scope, photo change token)
 - `PhotoLibrary/` — `PhotoLibraryManager`, `ScreenshotPhotoLibraryService`, `PhotoLibraryPersistentChangeAdapter`, `CollectionCountCache`
-- `Managers/` — remaining stateful services and pure helpers awaiting later phase moves (`ExportManager`, `ExportDestinationManager`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, `BackupScanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ExportJobPlanner`, `ExportDestinationResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`)
-- `Protocols/` — test seams: `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, `ExportDestination`. Add a new protocol here when you need to inject a fake.
+- `Managers/` — see categorization below
+- `Protocols/` — test seams: `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, `ExportDestination`, `MediaRenderer`. Add a new protocol here when you need to inject a fake.
 - `Models/` — value types: `AssetDescriptor`, `AssetDetails`, `ExportRecord`, `ExportVariant`, `ExportPlacement`, `LibrarySelection`, `PhotoCollectionDescriptor`
 - `Views/` — SwiftUI views, grouped by feature: `Timeline/`, `Collections/`, `Export/`, `Settings/`, `Shared/`
 - `ViewModels/` — `MonthViewModel`
-- `Helpers/` — small pure utilities (`MonthFormatting`)
+- `Helpers/` — small pure utilities (`MonthFormatting`, `ScreenshotSurfaceResolver`)
 - `Resources/`, `SupportingFiles/`, `Assets.xcassets` — bundle resources, Info.plist, asset catalog
+
+The `Managers/` folder is mixed today (a deferred Phase 7 follow-up tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) will split it into `Destination/`, `Export/`, `App/`). Until then, classify by role:
+
+- **Façade**: `ExportManager` (+ `ExportManager+AutoSyncConformance.swift` — never edit this conformance file).
+- **Host-driven collaborators of `ExportManager`** (`@MainActor final class`): `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`. Each holds a narrow `Host` protocol back to the manager for the cancellation seam and a few UI-state mutations.
+- **Pure helpers / policy** (plain `struct` or `enum`, `Sendable` where it crosses tasks): `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ExportDestinationResolver`, `ResourceSelection`, `ExportRecordsDirectoryCoordinator`.
+- **Other stateful services** (`@MainActor` ObservableObjects, top-level or injected): `ExportDestinationManager`, `BackupScanner`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`.
 
 **App entry point** (`photo_exportApp.swift`): creates five `@StateObject` dependencies and injects them as `@EnvironmentObject` into the view hierarchy:
 
 - **PhotoLibraryManager** — Photos framework authorization and asset fetching (thumbnails, full-size images). Uses `PHCachingImageManager`.
 - **ExportDestinationManager** — manages the chosen export destination folder (security-scoped bookmarks).
 - **ExportRecordStore** — tracks timeline (year/month) exports per-destination. Reconfigures when destination changes.
-- **CollectionExportRecordStore** — sibling store for Favorites + user-album exports per-destination. Disjoint key space from the timeline store; the two stores cannot corrupt each other. Routed to by `ExportManager` via `placement.kind`.
-- **ExportManager** — orchestrates the export queue (enqueue/pause/cancel/resume). Depends on the other four managers; routes record mutations to the correct store via `ExportPlacement.kind`.
+- **CollectionExportRecordStore** — sibling store for Favorites + user-album exports per-destination. Disjoint key space from the timeline store; the two stores cannot corrupt each other. Routed to by `ExportManager` via `RecordStoreRouter`.
+- **ExportManager** — public façade for export work. Owns `generation` (the cancellation seam), `activeRunContext`, `versionSelection`, and the `@Published` mirrors AutoSync observes. Delegates queue mechanics to `ExportQueueCoordinator`, per-variant writes to `VariantExporter`, the Import Existing Backup flow to `ImportCoordinator`, record-store dispatch to `RecordStoreRouter`, and completion logic to `ExportCompletionPolicy`. New `start*` entry points belong here and follow the canonical shape (see [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Canonical `start*` entry-point shape).
 
 **Other code under `Managers/` / `Records/` / `AutoSync/` / `PhotoLibrary/`:**
 
@@ -82,9 +89,34 @@ Short rationales for choices a fresh reader will reasonably question. Each is a 
 - **`JSONLRecordFile` is `@MainActor`, not an `actor`.** Both composing stores are themselves `@MainActor` because they're `ObservableObject`s with `@Published` properties that the SwiftUI view tree observes. Making `JSONLRecordFile` an `actor` would force every callsite into `await` for state that is already main-bound, with no thread-safety gain. The persistence work that has to leave the main actor (snapshot encode + file IO) is dispatched to `ioQueue` from inside `append(_:currentSnapshot:)`; the helpers it calls (`writeSnapshotAndTruncate`, `appendLogLine`, `fsyncDirectory`) are `nonisolated` so the dispatch closure can call them without re-entering the actor.
 - **`LibrarySelection` and `PhotoFetchScope` are separate types.** The two have overlapping cases (`favorites`, `album`, `timelineMonth`/`timeline`) but model different things: `LibrarySelection` is UI state ("what is the user looking at?") and `PhotoFetchScope` is a Photos query ("what assets should we fetch?"). Today the two are mostly redundant — every selection maps 1:1 to a scope. The split exists to anchor the boundary for future UI-only states (a header row, an empty-state placeholder) that wouldn't have a corresponding fetch.
 - **`libraryRevision` is a payloadless `@Published` counter.** It exists solely to break SwiftUI view-update equality so `.task(id:)` re-runs after a `photoLibraryDidChange` callback. The counter is bumped inside `invalidateCache()` and observed by `CollectionsSidebarView` (per-album count refresh) but **not** by `CollectionContentView`'s asset grid — observing it there caused the grid to blank on every unrelated Photos.app edit. If a future view adds `.task(id: photoLibraryManager.libraryRevision)`, audit whether the cost (full re-load on any library change) is justified for that view.
-- **Routing record mutations via `placement.kind`.** `ExportManager` keeps two store references and dispatches every record write (`recordVariantInProgress`/`Exported`/`Failed`/`removeVariant`) on a `switch placement.kind`. The dispatch is duplicated in `cancelAndClear` and the run-loop catch block. A single `RecordStore` protocol that both stores conform to would centralize the routing — but the two stores' APIs are intentionally different shapes (`assetId` vs `(placementId, assetId)`), so an LCM protocol would either be sparse or force the timeline store to carry placement awareness it doesn't need. The cost of the duplicated `switch` blocks is bounded by `ExportPlacement.Kind` having three cases and being closed.
+- **Routing record mutations via `RecordStoreRouter`.** Every record read/write/cleanup/reuse-source-probe goes through `Records/RecordStoreRouter.swift`, which switches on `placement.kind` in one place. A new placement kind requires extending the four switches in `RecordStoreRouter` plus the `ExportPlacement.Kind` enum and `ExportCompletionPolicy` (see [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Adding a new export placement kind). Do not re-inline the dispatch into `ExportManager`. A single `RecordStore` protocol that both stores conform to would centralize the routing further — but the two stores' APIs are intentionally different shapes (`assetId` vs `(placementId, assetId)`), so an LCM protocol would either be sparse or force the timeline store to carry placement awareness it doesn't need.
 - **Edited video export goes through `PHImageManager.requestExportSession` + `AVAssetExportSession`, not `PHAssetResource`.** PhotoKit does not pre-render edited videos as static resources, so resource enumeration finds nothing and the render path is the only way to materialise the user-visible bytes.
 - **Byte-source dispatch lives in `ResourceSelection.selectEditedProducer` as a single enum** (`.resource | .render | .none`). `ExportManager` switches on that and never inlines media-kind-specific branches. Widening the render path to a new media kind is an enum-extension change in one place rather than a new boolean scattered through the pipeline.
+
+## Cross-Cutting Contracts (read before changing ExportManager)
+
+Three contracts bind every collaborator. Break one and you break either cancellation safety, the threading model, or the AutoSync seam. The canonical reference is [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md); summary:
+
+- **Cancellation contract.** `var generation: Int` lives on `ExportManager`. Every async task captures `let gen = generation` synchronously before the first `await`, then uses `[weak self]` + `guard self.isCurrent(gen) else { return }` at every checkpoint (or `try throwIfCancelledOrStale(gen)` on throwing paths). `cancelAndClear`, `interruptForDestinationUnavailable`, `supersedeForManualRun`, and `cancelImport` bump generation. `clearPending` does **not**.
+- **Actor isolation policy.** `@MainActor final class` for stateful collaborators with `@Published` state. Plain `struct`/`enum` for pure helpers. `actor` only when concurrent access is the actual requirement. Pure helpers stay value-typed — do not add `@MainActor` reflexively.
+- **AutoSync seam preservation.** `ExportManager+AutoSyncConformance.swift` is never edited. `exportRunStatePublisher = CombineLatest3($activeRunContext, $isRunning, $queueCount)`. New coordinator-owned state is mirrored onto `ExportManager` via synchronous `.sink { [weak self] in self?.x = $0 }` in init — never `.receive(on:)` or async hops.
+
+### Regression gates
+
+If you trip one of these, audit before re-recording. They protect contracts that have already been violated once.
+
+- `AutoSyncSeamCharacterizationTests` — fires when the AutoSync emission sequence (`exportRunStatePublisher`, `isImportingPublisher`, `completedRunsPublisher`) changes. Re-record snapshots only after verifying the new sequence is correct.
+- `ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors` — fires when a coordinator → manager mirror becomes async. The AutoSync `CombineLatest3` depends on synchrony. Re-add the synchronous sink.
+- `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions` — fires when pause/resume/cancel `isRunning`/`queueCount`/`isPaused` transitions change. This is the toolbar's contract.
+- `ScreenshotPhotoLibraryServiceOverridesTests` — fires when a `PhotoLibraryService` method is added without a `ScreenshotPhotoLibraryService` override. Add both the override AND a new test in this file in the same PR.
+- `ImportIdempotencyTests` — fires when the import flow loses idempotency on retry.
+- `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` — fires when the `isExported` predicate runs *after* the retry-gate. Restore the order: `isExported` must run first.
+
+### Host-protocol pattern
+
+Each extracted `@MainActor` collaborator (`VariantExporter`, `ExportQueueCoordinator`, `ImportCoordinator`) holds a narrow `Host` protocol pointing back to `ExportManager` for the cancellation seam plus a few UI-state mutations. The manager stores each collaborator as an implicitly-unwrapped optional and assigns `host: self` after `super.init`. Empty conformance lives in `ExportManager+AutoSyncConformance.swift` (which also handles the AutoSync conformances).
+
+When extracting a new collaborator: keep its `Host` protocol *narrow* (only the seam it actually needs), use `weak var host: Host?`, do not duplicate the collaborator's `@Published` state on `ExportManager` — use the sink-mirror pattern.
 
 ## Documentation Layout
 
@@ -126,9 +158,9 @@ Do **not** use Kimi K2.6 (or accept its output unverified) for:
 ## Key Conventions
 
 - Log with `os.Logger` (subsystem `com.valtteriluoma.photo-export`), not `print`.
-- The five UI-injected managers (`PhotoLibraryManager`, `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore`, `ExportDestinationManager`) are `@MainActor`. `JSONLRecordFile` (under `Records/`) is also `@MainActor` because both composing stores call into it from the main actor and it owns mutable state (`mutationCountSinceCompact`); its IO-queue-bound static helpers are explicitly `nonisolated`. Pure helpers (`FileIOService`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ResourceSelection`, `ProductionAssetResourceWriter`, `BackupScanner`, `ExportPlacementResolver`, `ExportRecordsDirectoryCoordinator`, `ExportCompletionPolicy`, `ExportJobPlanner`, `ExportDestinationResolver`) are plain types — do not add `@MainActor` reflexively. `RecordStoreRouter` is `@MainActor`. `CollectionCountCache` is an actor.
+- The five UI-injected managers (`PhotoLibraryManager`, `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore`, `ExportDestinationManager`) are `@MainActor`. The Host-driven collaborators of `ExportManager` (`ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`) are `@MainActor final class`. `JSONLRecordFile` (under `Records/`) is also `@MainActor` because both composing stores call into it from the main actor and it owns mutable state (`mutationCountSinceCompact`); its IO-queue-bound static helpers are explicitly `nonisolated`. `RecordStoreRouter` is `@MainActor`. `CollectionCountCache` is an actor. Pure helpers (`FileIOService`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ResourceSelection`, `ProductionAssetResourceWriter`, `BackupScanner`, `ExportPlacementResolver`, `ExportRecordsDirectoryCoordinator`, `ExportCompletionPolicy`, `ExportJobPlanner`, `ExportDestinationResolver`) are plain types — do not add `@MainActor` reflexively. Full isolation policy: [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Actor isolation policy.
 - Track exports by `PHAsset.localIdentifier`; never overwrite existing files.
-- Use `.task(id:)` for cancellation-aware async loading in views.
+- Use `.task(id:)` for cancellation-aware async loading in **views** (Swift Task cancellation). For **`ExportManager` background work**, the cancellation model is different — it uses the cooperative `generation` seam (`isCurrent(_:)` / `throwIfCancelledOrStale(_:)`), not `Task.checkCancellation()`. See [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Cancellation contract.
 - New code that touches Photos, the filesystem, or the export destination should go through the `Protocols/` seams so it can be unit-tested with fakes.
 - SwiftLint config (`.swiftlint.yml`): line length 140, several rules disabled (see file). CI runs `--strict`.
 - swift-format config (`.swift-format.json`): 4-space indentation, 120-char line length.

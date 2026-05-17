@@ -9,14 +9,16 @@ Use this document as a checklist when writing code or reviewing PRs.
 ## 1) Architecture & Project Structure
 
 - Prefer clear layering:
-  - **Views (SwiftUI)**: Stateless UI, render from inputs; no business logic.
-  - **ViewModels (ObservableObject)**: State, UI-friendly transformations, side-effects orchestration.
-  - **Records/ AutoSync/ PhotoLibrary/ Managers/**: stateful services and pure helpers split by feature area (record stores; auto-export state machine; PhotoKit access; export pipeline / destination / orchestration).
+  - **Views (SwiftUI)**: Stateless UI, render from inputs; no business logic. Grouped by feature in `Views/{Timeline,Collections,Export,Settings,Shared}/`.
+  - **ViewModels (ObservableObject)**: State, UI-friendly transformations, side-effects orchestration (`MonthViewModel`).
+  - **`Records/` / `AutoSync/` / `PhotoLibrary/`**: stateful services split by feature area (record stores + routing; auto-export state machine + file-backed stores; PhotoKit access).
+  - **`Managers/`**: mixed today — façade (`ExportManager`), its Host-driven collaborators (`ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`), pure helpers (`ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ExportDestinationResolver`, `ResourceSelection`), and other stateful services (`ExportDestinationManager`, `BackupScanner`, `LoginItemController`, etc.). A deferred Phase 7 follow-up (issue #67) splits this into `Destination/`, `Export/`, `App/`.
   - **Models**: Plain value types and domain types.
-- Keep each view in its own file. Avoid multiple large `View` types in one file (e.g., move `MonthView` out of `ContentView.swift`).
+- Keep each view in its own file. Avoid multiple large `View` types in one file.
 - Make types `final` by default unless subclassing is intended. Mark helpers `private` and prefer `internal` over `public` unless needed.
-- Prefer protocol-driven boundaries for testability. The app uses `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, and `ExportDestination` protocols (see `photo-export/Protocols/`).
+- Prefer protocol-driven boundaries for testability. The app uses `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, `ExportDestination`, and `MediaRenderer` protocols (see `photo-export/Protocols/`). Inside the module, `ExportManager`'s collaborators bind to it via narrow `Host` protocols (`VariantExporter.Host`, `ExportQueueCoordinator.Host`, `ImportCoordinator.Host`) — this is how an extracted collaborator points back at the façade without taking a hard dependency on `ExportManager`.
 - Use app-owned value types (`AssetDescriptor`, `ResourceDescriptor`) at non-framework boundaries instead of passing `PHAsset`/`PHAssetResource` directly.
+- For the contracts that bind `ExportManager` and its collaborators (cancellation seam, actor isolation, AutoSync seam preservation), see [`architecture-conventions.md`](architecture-conventions.md).
 
 ---
 
@@ -64,20 +66,27 @@ final class LibraryViewModel: ObservableObject {
 
 ## 4) Export Pipeline (Robustness Checklist)
 
-- Pre-flight checks:
-  - Verify destination root exists and is writable; clearly surface errors if not.
-  - Validate path length and sanitize names (non-ASCII, reserved characters). Never overwrite existing files; generate unique names.
-- Incremental export:
-  - Maintain an export log or database keyed by `PHAsset.localIdentifier` with status: pending, in-progress, done, failed.
-  - On launch, reconcile the log with the filesystem; clean up partial files.
-- Resilience:
-  - Write to a temporary file then atomically move to final location after success.
-  - On interruption/crash, leave the system in a recoverable state and resume next launch.
-- Error isolation:
-  - Skip corrupt/unsupported assets, record the error, and continue.
-- Concurrency:
-  - Use a bounded task queue (e.g., `AsyncSemaphore`) to export in limited parallelism.
-  - Prefer backpressure-aware design; avoid loading all assets in memory.
+The pipeline is split across several collaborators. The list below pairs each robustness concern with the type that owns it — touch *that* type when extending the relevant behavior.
+
+- **Pre-flight checks**
+  - Destination availability: `ExportDestinationManager` + `DestinationSafetyMonitor`.
+  - Filename / path sanitization: `ExportFilenamePolicy`, `ExportPathPolicy`. Never overwrite existing files — collision suffixing lives in `ExportDestinationResolver.uniqueFileURL`.
+- **Incremental export**
+  - Records keyed by `PHAsset.localIdentifier` (timeline) or `(placementId, assetId)` (collections), split across `ExportRecordStore` and `CollectionExportRecordStore`. Dispatch goes through `RecordStoreRouter` — do not re-inline the placement switch.
+  - "Already exported" / "edited fallback" / "asset complete" rules live in `ExportCompletionPolicy`.
+  - On launch, partial-write reconciliation runs in `ExportManager`'s startup path (`startupReconcile`); record-store loading is in the stores themselves.
+- **Resilience**
+  - Per-variant temp file → atomic move to final location: `VariantExporter`.
+  - Stale `.tmp` cleanup on export start: same.
+  - On interruption, the cancellation seam (`generation`) supersedes any in-flight work; new generations start fresh.
+- **Error isolation**
+  - Per-variant failure recorded via `RecordStoreRouter.recordVariantFailed`, asset run continues.
+  - Edited-variant failure does not roll back a completed original variant (the asymmetry is intentional — see `ExportCompletionPolicy`).
+- **Concurrency**
+  - Sequential drain: `ExportQueueCoordinator` runs one job at a time. Bounded parallelism (2–3 workers) is on the open-tasks list — see [`docs/project/implementation-tasks.md`](../project/implementation-tasks.md) §Performance.
+  - Per-variant heavy work (resource fetch, render, file I/O) hops off MainActor via `await` on the existing protocol seams (`PhotoLibraryService`, `MediaRenderer`, `AssetResourceWriter`, `FileSystemService`).
+- **Cancellation cooperatively**
+  - `ExportManager.generation` is the seam. Every async hop captures `let gen = generation` synchronously, re-checks `isCurrent(gen)` after each `await`. See [`architecture-conventions.md`](architecture-conventions.md) §Cancellation contract.
 
 ---
 
