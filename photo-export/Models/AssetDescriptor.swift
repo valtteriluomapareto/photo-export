@@ -43,12 +43,20 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
     self.originalUTI = originalUTI
   }
 
-  /// True when the asset's original byte source is HEIC. Drives the HEIC→JPEG
-  /// conversion feature's "should we synthesize a JPEG `.edited` variant?"
-  /// decision. Tolerant of unknown UTI — returns false rather than mis-firing.
+  /// True when the asset's original byte source is HEIC or HEIF. Drives the
+  /// HEIC→JPEG conversion feature's "should we synthesize a JPEG `.edited`
+  /// variant?" decision.
+  ///
+  /// Matches `public.heif` alongside `public.heic` because some iPhone captures
+  /// (depth-effect, multi-image sequences) come back from PhotoKit as the HEIF
+  /// container UTI rather than the more common HEIC one. `BackupScanner` already
+  /// treats both extensions as the same format family, and `CIContext` reads
+  /// both transparently, so the conversion path doesn't care which container
+  /// we got. Tolerant of unknown UTI — returns false rather than mis-firing.
   var isHEICOriginal: Bool {
     guard let originalUTI else { return false }
-    return originalUTI.lowercased() == "public.heic"
+    let normalized = originalUTI.lowercased()
+    return normalized == "public.heic" || normalized == "public.heif"
   }
 }
 

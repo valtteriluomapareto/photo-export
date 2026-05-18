@@ -1054,11 +1054,21 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
   /// PHAsset's `uniformTypeIdentifier` is exposed via undocumented KVC — it's
   /// the cheapest reliable way to detect format without iterating
-  /// `PHAssetResource.assetResources(for:)`. Used in production by many
-  /// long-shipping apps and stable through current macOS versions, but defend
-  /// against KVC returning nil or non-String in case the property is renamed
-  /// or removed: `originalUTI: nil` falls back to "treat as non-HEIC" which
-  /// matches the conversion-off default.
+  /// `PHAssetResource.assetResources(for:)`. Same shape as the existing
+  /// `resource.value(forKey: "fileSize")` call used for
+  /// `ResourceDescriptor.fileSize` (issue #32) — stable in practice through
+  /// current macOS versions, but defended against KVC returning nil or
+  /// non-String in case the property is renamed or removed: `originalUTI: nil`
+  /// falls back to "treat as non-HEIC" which matches the conversion-off
+  /// default.
+  ///
+  /// **Must be called from the main actor.** PHAsset KVC thread-safety is not
+  /// documented; in practice every PhotoKit call in this manager originates
+  /// from `@MainActor`-isolated contexts, so we don't race against PhotoKit's
+  /// own queues. If a future `nonisolated` fetch path needs to build
+  /// descriptors, either add a main-actor hop or switch to
+  /// `PHAssetResource.assetResources(for:).first?.uniformTypeIdentifier` at
+  /// the (one PhotoKit call per resource) cost.
   private static func originalUTI(for asset: PHAsset) -> String? {
     asset.value(forKey: "uniformTypeIdentifier") as? String
   }
