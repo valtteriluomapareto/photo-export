@@ -78,6 +78,15 @@ jobs:
           swift-format lint --recursive photo-export
           echo "swift-format lint passed."
 
+      - name: Check regression-gate symbols
+        run: |
+          echo "::group::Regression-gate symbol check"
+          echo "Verifying that the six tests documented in"
+          echo "docs/reference/architecture-conventions.md §Regression gates"
+          echo "still exist under their documented names."
+          ./scripts/ci/check-regression-gates.sh
+          echo "::endgroup::"
+
       - name: Build Debug
         run: |
           echo "::group::Debug build"
