@@ -19,6 +19,39 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.4.0",
+      summary:
+        "Auto Export gets iCloud Shared Albums, the sidebar gets multi-select, the timeline year view gets a proper overview, and Auto Export keeps up better in long iCloud-sync sessions. Your existing backup folder and exported files are untouched.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "iCloud Shared Albums",
+          body:
+            "Albums shared with you via iCloud now appear in the **Collections** sidebar and can be exported. Caveat: Apple only provides downscaled JPEGs for shared-album photos, so quality is reduced compared to your own photos. Fixes [#48](https://github.com/valtteriluomapareto/photo-export/issues/48)."
+        ),
+        ReleaseNote.Bullet(
+          title: "Multi-select in the sidebar",
+          body:
+            "**Cmd-click** to toggle, **Shift-click** to extend a range. Pick years and months in the Timeline sidebar, or albums and folders in the Collections sidebar; the toolbar's Export action targets your selection. Fixes [#46](https://github.com/valtteriluomapareto/photo-export/issues/46)."
+        ),
+        ReleaseNote.Bullet(
+          title: "Year overview shows month tiles",
+          body:
+            "Selecting a year in the **Timeline** sidebar now opens a Photos.app-style grid of month tiles — four cover thumbnails per month, a green checkmark when fully exported, click to drill in."
+        ),
+        ReleaseNote.Bullet(
+          title: "Auto Export keeps up in long iCloud-sync sessions",
+          body:
+            "Photo Export now checks iCloud for new photos every 15 minutes (and immediately when you switch back to the app), so newly synced photos get picked up even when Photos.app isn't running. A new **Last updated** line in **Settings → Auto Export** shows when the check last ran. Fixes [#69](https://github.com/valtteriluomapareto/photo-export/issues/69)."
+        ),
+        ReleaseNote.Bullet(
+          title: "Auto Export UX polish",
+          body:
+            "Pressing **Cancel** during an export now disables Auto Export (it used to restart 30 seconds later). And the in-pane **Export Year / Month / Folder / Album** buttons now show the same \"Auto Export is running\" supersede dialog the toolbar's ⌘E does, instead of silently piling work onto the auto-queue."
+        ),
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.3.0",
       summary:
         "This version adds Auto Export, folder-level batch export, a polished toolbar, and a few new UI surfaces. Your existing backup folder and exported files are untouched.",

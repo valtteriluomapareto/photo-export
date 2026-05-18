@@ -17,7 +17,7 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - **Retry policy** waits longer between each attempt for transient failures (Photos library momentarily busy, iCloud download failed, etc.); hard failures (destination full, asset missing) need user action
 - **Export Issues** tab groups failures by category with a per-row **Retry** button
 - **Open Photo Export at login** for a set-it-and-forget-it workflow — the app launches with your Mac and Auto Export starts watching
-- **Manual exports always take precedence** — clicking Export All while an automatic run is in flight prompts to supersede the auto run
+- **Manual exports always take precedence** — clicking any Export button (toolbar **Export All** or an in-pane **Export Year / Month / Folder / Album**) while an automatic run is in flight prompts to supersede the auto run
 - **Safety scan** asks for confirmation when you point Auto Export at a folder that already contains files; the confirmation persists per destination
 
 ## Library browsing
@@ -26,6 +26,7 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
   - **Timeline**: year/month tree with asset counts and per-month export status
   - **Collections**: Favorites plus the user's albums and folders, grouped by Photos hierarchy
 - Export status indicators at both year and month level (not started, in progress with percentage, fully exported with checkmark)
+- **Year overview** — selecting a year in the Timeline sidebar opens a Photos.app-style grid of month tiles (four cover thumbnails per month, a green checkmark when fully exported). Click a tile to drill into that month.
 - Fast thumbnail grid with in-memory caching
 - Full-size preview for any selected photo or video
 - Detail panel showing original filename, creation date, dimensions, file size, media type, and export status

@@ -27,7 +27,7 @@ Three places surface Auto Export status, all reading the same state:
 
 - **Toolbar pill** (small status badge in the main window) — short label like _Up to date_, _Scheduled_, _Exporting_, _Waiting_, or _Action needed — no destination_. Click it to open Settings.
 - **Menu bar item** — a small icon that's always present while Photo Export is running. Click for a menu with the same status, an enable/disable toggle, and an **Export Now** shortcut. Especially useful when the main window isn't open.
-- **Settings → Auto Export** — a status row with a live countdown when a run is scheduled, plus the last-run summary once the first run finishes.
+- **Settings → Auto Export** — a status row with a live countdown when a run is scheduled, plus the last-run summary once the first run finishes. A **Last updated** line shows when Photo Export last checked iCloud for new photos — it ages on its own so you can tell at a glance whether the background-check loop is alive.
 
 ## What triggers a run
 
@@ -37,6 +37,7 @@ You don't kick Auto Export manually for normal usage. A run starts on its own wh
 - The destination drive becomes available again after being unplugged.
 - Photos reports new or edited photos in your library.
 - You change which categories are selected, or toggle **Include originals**.
+- A **periodic safety-net check** (every ~15 minutes) and an **on-app-active check** (whenever you switch back to Photo Export) catch newly-synced iCloud photos that macOS didn't otherwise notify Photo Export about. This matters most in long-running sessions where Photos.app isn't open — iCloud's change notifications to third-party apps can lag by tens of minutes in that case.
 
 Photo Export waits a short while after each trigger before actually starting — so it doesn't fire mid-import or mid-edit. The wait is about 30 seconds for Photos library changes (the most common trigger), 10 seconds for app launch, 2–3 seconds for the smaller triggers, and up to 2 minutes for the rare "Photos catch-up" recovery path.
 
@@ -45,7 +46,11 @@ If you want to run a backup right now without waiting:
 - **Settings → Auto Export → Export Now**, or
 - **Menu bar icon → Export Now** (Cmd+Shift+E). The menu bar's Export Now is greyed out unless Auto Export is idle or already scheduled — use the Settings button in other states.
 
-Manual exports (the toolbar **Export All / Export Favorites / Export Album** buttons) still work the same way they always have. If you click one while Auto Export is in the middle of a run, Photo Export asks whether to cancel the automatic run and start your manual one instead. Anything that was queued by the automatic run stays pending and Auto Export picks it up after your manual run finishes.
+Manual exports (any **Export Year / Month / Folder / Album** button, in the toolbar or in a content pane) still work the same way they always have. If you click one while Auto Export is in the middle of a run, Photo Export asks whether to cancel the automatic run and start your manual one instead. Anything that was queued by the automatic run stays pending and Auto Export picks it up after your manual run finishes.
+
+## Stopping a run
+
+The toolbar's **Cancel** button stops the current export and also **turns Auto Export off** so it doesn't restart itself a few seconds later. The reasoning: pressing Cancel during an automatic run usually means "stop, don't keep going" — not "pause for 30 seconds." Re-enable Auto Export from **Settings → Auto Export** whenever you're ready to resume the watch.
 
 ## Failed exports and retry
 
