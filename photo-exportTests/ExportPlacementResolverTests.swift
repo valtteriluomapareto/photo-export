@@ -3,7 +3,7 @@ import Testing
 
 @testable import Photo_Export
 
-/// Cases from `docs/project/plans/collections-export-plan.md` §"Testing Plan → Placement
+/// Cases from `docs/project/archive/collections-export-plan.md` §"Testing Plan → Placement
 /// resolver". The resolver is the only code that maps a `LibrarySelection` to an
 /// `ExportPlacement` for collection-side selections, so its determinism and collision
 /// behavior are the only thing that keeps the on-disk paths stable across PhotoKit

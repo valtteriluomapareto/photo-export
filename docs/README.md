@@ -32,10 +32,8 @@ Current process and open work:
 - [`project/release-process.md`](project/release-process.md) — how to cut a release (version bump, tag, publish)
 - [`project/import-existing-backup-plan.md`](project/import-existing-backup-plan.md) — backup-import design notes (Phase 1 implemented)
 - [`project/testing-improvement-plan.md`](project/testing-improvement-plan.md) — test coverage gaps and improvement plan
-- [`project/edited-photos-manual-testing-guide.md`](project/edited-photos-manual-testing-guide.md) — manual test script for the edited-photos export modes
 - [`project/plans/auto-sync-background-sync-plan.md`](project/plans/auto-sync-background-sync-plan.md) — proposed auto-sync and background-sync implementation
-- [`project/plans/collections-export-plan.md`](project/plans/collections-export-plan.md) — proposed Favorites and Albums export implementation
-- [`project/plans/screenshot-automation-plan.md`](project/plans/screenshot-automation-plan.md) — proposed automated App Store / website screenshot capture using a synthetic Photos library
+- [`project/plans/auto-sync-phase-0a-simplicity-followups.md`](project/plans/auto-sync-phase-0a-simplicity-followups.md) — simplicity review notes to revisit when AutoSyncManager work resumes
 
 ## Maintainer notes — archive
 
@@ -49,6 +47,10 @@ Completed or superseded plans, kept as decision records:
 - [`project/archive/support-edited-photos-export-plan.md`](project/archive/support-edited-photos-export-plan.md) — original three-mode edited-photos design (superseded)
 - [`project/archive/edited-photos-p2-followups-plan.md`](project/archive/edited-photos-p2-followups-plan.md) — P2 polish layer on top of the original design (superseded)
 - [`project/archive/edited-photos-modes-redesign-plan.md`](project/archive/edited-photos-modes-redesign-plan.md) — current two-mode redesign (shipped in 1.1.0)
+- [`project/archive/edited-photos-manual-testing-guide.md`](project/archive/edited-photos-manual-testing-guide.md) — manual test script for the edited-photos export modes (sibling of the redesign plan above)
+- [`project/archive/collections-export-plan.md`](project/archive/collections-export-plan.md) — Favorites and Albums export (shipped; the `enableCollections` build flag was flipped on and then removed)
+- [`project/archive/collections-export-manual-testing-guide.md`](project/archive/collections-export-manual-testing-guide.md) — manual test script for the Collections feature (sibling of the plan above)
+- [`project/archive/screenshot-automation-plan.md`](project/archive/screenshot-automation-plan.md) — automated marketing-screenshot capture via a synthetic Photos library (shipped; entry point is `scripts/screenshots/capture.sh`)
 
 ## Reference material
 

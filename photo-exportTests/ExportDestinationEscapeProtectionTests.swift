@@ -5,7 +5,7 @@ import Testing
 
 /// Phase 3.1 of the collections-export plan adds `urlForRelativeDirectory` to
 /// `ExportDestination` with destination-side escape protection. Per
-/// `docs/project/plans/collections-export-plan.md` §"Export Destination", rejected
+/// `docs/project/archive/collections-export-plan.md` §"Export Destination", rejected
 /// inputs include absolute paths, `..` segments, paths whose canonical resolution lands
 /// outside the export root, paths where a non-directory exists at an intermediate
 /// component, and paths exceeding the platform path length.

@@ -41,7 +41,7 @@ struct PhotoExportApp: App {
     // leak the maintainer's personal Photos library. The subclass shape lets
     // the eight downstream `@EnvironmentObject` sites stay typed against
     // `PhotoLibraryManager` — see
-    // `docs/project/plans/screenshot-automation-plan.md`. The destination
+    // `docs/project/archive/screenshot-automation-plan.md`. The destination
     // manager gets the same treatment: skip bookmark restoration and override
     // the displayed folder name so the maintainer's real backup folder name
     // never leaks into a marketing capture.
