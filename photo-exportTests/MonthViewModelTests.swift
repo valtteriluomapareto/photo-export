@@ -368,6 +368,88 @@ struct MonthViewModelTests {
       "stale May refresh must not clobber June after navigation")
   }
 
+  /// Regression: when iCloud lands a new photo, `photoLibraryDidChange` fires
+  /// the moment the asset's metadata is available, but PhotoKit's local
+  /// thumbnail cache may still be empty for a moment. `refresh(for:)` must
+  /// fetch the new asset's thumbnail with `allowNetwork: true` so the tile
+  /// fills in immediately; otherwise the asset lands in `failedThumbnailIds`
+  /// and the HQ upgrade — gated on that set — can't rescue it, leaving the
+  /// user staring at a "Retry" tile until they navigate away and back.
+  @Test func refreshUsesNetworkForNewlyArrivedAsset() async throws {
+    let svc = FakePhotoLibraryService()
+    let existing = makeAsset(id: "existing")
+    svc.assetsByYearMonth["2025-6"] = [existing]
+    svc.thumbnailsByAssetId[existing.id] = dummyImage()
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .timeline(year: 2025, month: 6))
+    await drainBackgroundWork()
+
+    // Fresh iCloud arrival: thumbnail exists in PhotoKit but the local cache is
+    // cold, so an `allowNetwork: false` call would return nil and stamp the
+    // asset as failed.
+    let fresh = makeAsset(id: "fresh-from-icloud")
+    svc.assetsByYearMonth["2025-6"] = [existing, fresh]
+    svc.thumbnailsByAssetId[fresh.id] = dummyImage()
+    svc.thumbnailRequiresNetwork = [fresh.id]
+    svc.loadThumbnailCalls.removeAll()
+
+    await vm.refresh(for: .timeline(year: 2025, month: 6))
+    await drainBackgroundWork()
+
+    #expect(vm.assets.map(\.id) == ["existing", "fresh-from-icloud"])
+    #expect(
+      vm.thumbnailsById[fresh.id] != nil,
+      "newly-arrived asset must get its thumbnail without manual retry")
+    #expect(!vm.failedThumbnailIds.contains(fresh.id))
+    // The added asset was fetched with allowNetwork: true. The existing asset is
+    // already in `thumbnailsById` so the loop skips it — no second probe.
+    let freshCall = svc.loadThumbnailCalls.first { $0.assetId == fresh.id }
+    #expect(freshCall?.allowNetwork == true, "added-asset path must allow network")
+  }
+
+  /// User-reported regression: PhotoKit's `fastFormat` thumbnail request can return
+  /// `PHPhotosError` 3303 ("no resource found matching image request spec") for
+  /// assets that have just synced from iCloud — the asset's metadata is present but
+  /// no fast-format render has been built yet. `highQualityFormat` uses a different
+  /// pipeline and *does* return an image. The view model must therefore run the HQ
+  /// upgrade even when the fast probe failed, and clear `failedThumbnailIds` when
+  /// HQ succeeds, so the user doesn't have to click "Retry."
+  @Test func hqUpgradeRescuesFastFormatFailureForFreshAsset() async throws {
+    let svc = FakePhotoLibraryService()
+    let existing = makeAsset(id: "existing")
+    svc.assetsByYearMonth["2025-6"] = [existing]
+    svc.thumbnailsByAssetId[existing.id] = dummyImage()
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .timeline(year: 2025, month: 6))
+    await drainBackgroundWork()
+
+    // Fresh arrival: PhotoKit has NO fast-format render (thumbnailsByAssetId
+    // empty) but DOES have an HQ-format render available. This is the case the
+    // user reported on the PR — Retry tile in the grid until they navigate away.
+    let fresh = makeAsset(id: "fresh")
+    svc.assetsByYearMonth["2025-6"] = [existing, fresh]
+    svc.hqThumbnailsByAssetId[fresh.id] = dummyImage()
+    // Intentionally NO svc.thumbnailsByAssetId[fresh.id] — fast format fails.
+
+    await vm.refresh(for: .timeline(year: 2025, month: 6))
+    await drainBackgroundWork()
+
+    #expect(vm.assets.map(\.id) == ["existing", "fresh"])
+    #expect(
+      vm.thumbnailsById[fresh.id] != nil,
+      "HQ upgrade must rescue the fresh asset after fast failed")
+    #expect(
+      !vm.failedThumbnailIds.contains(fresh.id),
+      "failed flag must be cleared once HQ provides a thumbnail")
+    if case .loaded = vm.thumbnailState(for: fresh) {
+      // good
+    } else {
+      Issue.record("fresh asset should render as .loaded after HQ rescue")
+    }
+  }
+
   // MARK: - Wrapper: loadAssets(forYear:month:)
 
   /// The legacy wrapper `loadAssets(forYear:month:)` simply delegates to

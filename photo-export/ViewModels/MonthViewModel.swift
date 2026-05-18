@@ -178,7 +178,16 @@ final class MonthViewModel: ObservableObject {
       // `loadAndStoreThumbnail` (checked via the dict here) and
       // `upgradeThumbnailToHighQuality` (its own guard on `highQualityIds`) keep the
       // loop cheap when most assets are unchanged.
+      //
+      // Newly-added assets are likely fresh from iCloud — PhotoKit fires
+      // `photoLibraryDidChange` once the asset's metadata lands, but the local
+      // thumbnail cache may still be empty for a moment. Allow the network for the
+      // added set so the tile fills in immediately; without it the asset would land
+      // in `failedThumbnailIds` (and the HQ upgrade is gated on that set, so it
+      // wouldn't rescue it either — the user would see a "Retry" tile until they
+      // navigated away and back).
       hqUpgradeTask?.cancel()
+      let addedIds = Set(added.map(\.id))
       hqUpgradeTask = Task { [weak self] in
         guard let self else { return }
         for asset in newAssets {
@@ -186,7 +195,8 @@ final class MonthViewModel: ObservableObject {
           if self.thumbnailsById[asset.id] == nil,
             !self.failedThumbnailIds.contains(asset.id)
           {
-            await self.loadAndStoreThumbnail(for: asset.id)
+            await self.loadAndStoreThumbnail(
+              for: asset.id, allowNetwork: addedIds.contains(asset.id))
           }
         }
         for asset in newAssets {
@@ -219,12 +229,17 @@ final class MonthViewModel: ObservableObject {
 
   func retryThumbnail(for assetId: String) {
     failedThumbnailIds.remove(assetId)
+    highQualityIds.remove(assetId)
     Task { [weak self] in
       guard let self else { return }
-      await self.loadAndStoreThumbnail(for: assetId)
-      if self.thumbnailsById[assetId] != nil {
-        await self.upgradeThumbnailToHighQuality(for: assetId)
-      }
+      // Explicit user retry — allow the network so a still-syncing iCloud asset
+      // can fetch its thumbnail, and run the HQ upgrade unconditionally (not
+      // gated on whether fast succeeded). The fast pipeline can return
+      // `PHPhotosError` 3303 for freshly-arrived iCloud assets while HQ returns
+      // a valid render; treating retry as "try everything" means the user only
+      // needs to click once.
+      await self.loadAndStoreThumbnail(for: assetId, allowNetwork: true)
+      await self.upgradeThumbnailToHighQuality(for: assetId)
     }
   }
 
@@ -236,9 +251,13 @@ final class MonthViewModel: ObservableObject {
     isExportRunning = running
   }
 
-  private func loadAndStoreThumbnail(for assetId: String) async {
+  /// Initial-load and second-batch fast-thumbnail fetch. Defaults to `allowNetwork:
+  /// false` so the local cache is hit instantly; callers pass `true` when the asset
+  /// likely needs an iCloud round-trip (refresh's newly-added set, an explicit user
+  /// retry).
+  private func loadAndStoreThumbnail(for assetId: String, allowNetwork: Bool = false) async {
     if let thumb = await photoLibraryService.loadThumbnail(
-      for: assetId, allowNetwork: false)
+      for: assetId, allowNetwork: allowNetwork)
     {
       thumbnailsById[assetId] = thumb
     } else {
@@ -246,14 +265,20 @@ final class MonthViewModel: ObservableObject {
     }
   }
 
+  /// Upgrade an asset's thumbnail to high quality. Runs even when the fast probe
+  /// previously failed (`failedThumbnailIds` contains it) — PhotoKit's fast/HQ
+  /// pipelines are independent, and freshly-arrived iCloud assets routinely fail
+  /// `fastFormat` with `PHPhotosError` 3303 while `highQualityFormat` returns a
+  /// valid render. Clearing `failedThumbnailIds` on success makes the grid drop the
+  /// "Retry" tile silently once HQ rescues it.
   private func upgradeThumbnailToHighQuality(for assetId: String) async {
     guard !highQualityIds.contains(assetId) else { return }
-    guard !failedThumbnailIds.contains(assetId) else { return }
     if let hqThumb = await photoLibraryService.loadThumbnailHighQuality(
       for: assetId, allowNetwork: !isExportRunning)
     {
       thumbnailsById[assetId] = hqThumb
       highQualityIds.insert(assetId)
+      failedThumbnailIds.remove(assetId)
     }
   }
 }

@@ -406,13 +406,19 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
       contentMode: .aspectFill, options: options)
   }
 
-  /// Load thumbnail for an asset (fast/degraded version only, for initial grid population)
+  /// Load thumbnail for an asset (fast/degraded version only, for initial grid
+  /// population). `allowNetwork` controls whether PhotoKit may go to iCloud if a fast
+  /// format isn't cached locally — historically this was hardcoded to `false`, which
+  /// stranded freshly-arrived iCloud assets with no rendered thumbnail (`PHPhotosError`
+  /// 3303 "no resource found matching image request spec") even when the caller
+  /// explicitly opted into the network. The `MonthViewModel.refresh(for:)` path and
+  /// `retryThumbnail(for:)` both pass `true` for that reason.
   func loadThumbnail(for assetId: String, allowNetwork: Bool = true) async -> NSImage? {
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
     return await withCheckedContinuation { continuation in
       let options = PHImageRequestOptions()
       options.deliveryMode = .fastFormat
-      options.isNetworkAccessAllowed = false
+      options.isNetworkAccessAllowed = allowNetwork
       options.resizeMode = .fast
 
       let resumed = OSAllocatedUnfairLock(initialState: false)
