@@ -1047,8 +1047,20 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       pixelWidth: asset.pixelWidth,
       pixelHeight: asset.pixelHeight,
       duration: asset.duration,
-      hasAdjustments: asset.hasAdjustments
+      hasAdjustments: asset.hasAdjustments,
+      originalUTI: Self.originalUTI(for: asset)
     )
+  }
+
+  /// PHAsset's `uniformTypeIdentifier` is exposed via undocumented KVC — it's
+  /// the cheapest reliable way to detect format without iterating
+  /// `PHAssetResource.assetResources(for:)`. Used in production by many
+  /// long-shipping apps and stable through current macOS versions, but defend
+  /// against KVC returning nil or non-String in case the property is renamed
+  /// or removed: `originalUTI: nil` falls back to "treat as non-HEIC" which
+  /// matches the conversion-off default.
+  private static func originalUTI(for asset: PHAsset) -> String? {
+    asset.value(forKey: "uniformTypeIdentifier") as? String
   }
 }
 

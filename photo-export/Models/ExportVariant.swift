@@ -36,20 +36,32 @@ enum VariantPolicy: Sendable {
 /// to `.standard` and silently bypass the single-resource clamp for a shared-album
 /// placement. Timeline and collection-side paths pass it explicitly; both ergonomic
 /// (`.standard` is a one-token literal) and safe.
+///
+/// `convertHEICToJPEG` (issue #47) widens the `.edited` requirement to include
+/// HEIC-original assets. When the toggle is on, an unedited HEIC counts as
+/// "requires `.edited`" because the export pipeline synthesizes a JPEG via
+/// `EditedProducer.convertHEIC`. Default `false` keeps every existing caller's
+/// behavior unchanged.
 func requiredVariants(
   for asset: AssetDescriptor,
   selection: ExportVersionSelection,
-  policy: VariantPolicy
+  policy: VariantPolicy,
+  convertHEICToJPEG: Bool = false
 ) -> Set<ExportVariant> {
   switch policy {
   case .singleResource:
+    // Shared-album placements expose a single downscaled byte source per asset
+    // (already a JPEG), so the HEIC→JPEG toggle has nothing to act on.
     return [.original]
   case .standard:
+    // HEIC + toggle ⇒ behave as if adjusted: `.edited` is the JPEG synthesis,
+    // `.editedWithOriginals` additionally keeps the HEIC `.original`.
+    let effectivelyAdjusted = asset.hasAdjustments || (convertHEICToJPEG && asset.isHEICOriginal)
     switch selection {
     case .edited:
-      return asset.hasAdjustments ? [.edited] : [.original]
+      return effectivelyAdjusted ? [.edited] : [.original]
     case .editedWithOriginals:
-      return asset.hasAdjustments ? [.original, .edited] : [.original]
+      return effectivelyAdjusted ? [.original, .edited] : [.original]
     }
   }
 }

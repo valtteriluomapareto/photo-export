@@ -13,6 +13,43 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
   /// Whether Photos has edits on this asset. Used to decide whether an edited
   /// export is even applicable for the asset.
   let hasAdjustments: Bool
+  /// Uniform Type Identifier of the asset's original byte source (`"public.heic"`,
+  /// `"public.jpeg"`, `"public.png"`, etc.). `nil` when PhotoKit doesn't expose
+  /// it for this asset (rare — defensively nil-checked since the underlying API
+  /// is undocumented and could regress on a future macOS).
+  ///
+  /// Used by the HEIC→JPEG conversion feature (issue #47) to decide whether an
+  /// asset's exports should include a synthesized JPEG `.edited` variant. Treat
+  /// `nil` as "not HEIC" — the default conversion-off behavior matches.
+  let originalUTI: String?
+
+  init(
+    id: String,
+    creationDate: Date?,
+    mediaType: PHAssetMediaType,
+    pixelWidth: Int,
+    pixelHeight: Int,
+    duration: TimeInterval,
+    hasAdjustments: Bool,
+    originalUTI: String? = nil
+  ) {
+    self.id = id
+    self.creationDate = creationDate
+    self.mediaType = mediaType
+    self.pixelWidth = pixelWidth
+    self.pixelHeight = pixelHeight
+    self.duration = duration
+    self.hasAdjustments = hasAdjustments
+    self.originalUTI = originalUTI
+  }
+
+  /// True when the asset's original byte source is HEIC. Drives the HEIC→JPEG
+  /// conversion feature's "should we synthesize a JPEG `.edited` variant?"
+  /// decision. Tolerant of unknown UTI — returns false rather than mis-firing.
+  var isHEICOriginal: Bool {
+    guard let originalUTI else { return false }
+    return originalUTI.lowercased() == "public.heic"
+  }
 }
 
 /// App-owned value type that replaces PHAssetResource in the export path.
