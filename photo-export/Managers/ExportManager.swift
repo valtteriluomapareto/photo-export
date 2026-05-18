@@ -96,15 +96,19 @@ final class ExportManager: ObservableObject {
   @Published private(set) var activeRunContext: ExportRunContext?
 
   /// Composite run-state observable for AutoSync. Republishes whenever the active
-  /// context, the running flag, or the queue depth changes — so the fire-and-forget
-  /// `start*` methods (which never set `activeRunContext`) still register as
-  /// `isManualActive` while the queue is processing them. Without this, AutoSync
-  /// would attempt to start a background run during a manual toolbar export and
-  /// fight the busy queue.
+  /// context, the running flag, the queue depth, or the bulk-enqueue flag changes
+  /// — so the fire-and-forget `start*` methods (which never set `activeRunContext`)
+  /// still register as `isManualActive` while the queue is processing them OR
+  /// while the bulk dispatcher is mid-enqueue but hasn't appended its first job
+  /// yet. Without `isEnqueueingAll` in the tuple, AutoSync could observe `.idle`
+  /// during the window between `isEnqueueingAll = true` and the first
+  /// `pendingJobs.append`, and race to start its own background run on top of a
+  /// user-initiated bulk export. See issue #67 item 4a.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
-    Publishers.CombineLatest3($activeRunContext, $isRunning, $queueCount)
-      .map { context, isRunning, queueCount in
-        let manualFireAndForget = context == nil && (isRunning || queueCount > 0)
+    Publishers.CombineLatest4($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)
+      .map { context, isRunning, queueCount, isEnqueueingAll in
+        let manualFireAndForget =
+          context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
         return ExportRunState(
           activeContext: context,
           isManualActive: context?.source == .manual || manualFireAndForget,
@@ -307,7 +311,12 @@ final class ExportManager: ObservableObject {
   /// publishing it adds a UI observer without touching the AutoSync seam.
   @Published private(set) var currentJobPlacement: ExportPlacement?
   private(set) var generation: Int = 0
-  private(set) var isEnqueueingAll: Bool = false
+  /// `@Published` so AutoSync's `exportRunStatePublisher` can include the
+  /// bulk-enqueue window (after the dispatcher flips this true but before the
+  /// first job lands in `pendingJobs`) in its idle/active decision. Issue #67
+  /// item 4a — without this, AutoSync would race to start a background run
+  /// during the multi-select / Export-All dispatcher's mid-enqueue window.
+  @Published private(set) var isEnqueueingAll: Bool = false
   /// Forwarder to the import coordinator's task handle so existing test reads
   /// (`manager.importTask`) and the `waitForImportCompletion` test helper continue to
   /// resolve against the same in-flight Task.
@@ -526,54 +535,22 @@ final class ExportManager: ObservableObject {
     // should cancel first.
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
-    Task { [weak self] in
-      guard let self, self.isCurrent(gen) else {
-        self?.isEnqueueingAll = false
-        return
+    runBulkExportTask(
+      generation: gen,
+      logTag: "startExportAll",
+      emptyDoneMessage: { "Everything in this destination is already exported." },
+      partialScanWarning: {
+        "Couldn't list every year. Continuing with the photos already queued."
+      },
+      body: { [weak self] in
+        guard let self else { return .stale }
+        let allYears = try self.photoLibraryService.availableYears()
+        let result = try await self.runBulkEnqueueLoop(items: allYears, generation: gen) { year in
+          try await self.enqueueYear(year: year, selection: selection, generation: gen)
+        }
+        return result.completed ? .completed(result.totals) : .stale
       }
-      do {
-        let allYears = try photoLibraryService.availableYears()
-        var totalEnqueued = 0
-        var sawUnauthorized = false
-        for year in allYears {
-          let outcome = try await enqueueYear(
-            year: year, selection: selection, generation: gen)
-          guard self.isCurrent(gen) else {
-            self.isEnqueueingAll = false
-            return
-          }
-          switch outcome {
-          case .enqueued(let count):
-            totalEnqueued += count
-          case .alreadyComplete:
-            break
-          case .unauthorized:
-            sawUnauthorized = true
-          }
-        }
-        self.isEnqueueingAll = false
-        if totalEnqueued == 0 && !sawUnauthorized {
-          setEmptyRunMessage("Everything in this destination is already exported.")
-        }
-        processQueueIfNeeded()
-      } catch {
-        self.isEnqueueingAll = false
-        logger.error(
-          "Failed to enqueue export-all: \(String(describing: error), privacy: .public)"
-        )
-        // A throw partway through year-by-year enqueueing can leave earlier years'
-        // jobs already in `pendingJobs`. Drain whatever was queued and surface the
-        // partial state so the user isn't stuck with a non-empty queue and no
-        // active processor.
-        if !pendingJobs.isEmpty {
-          setQueueWarningMessage(
-            "Couldn't list every year. Continuing with the photos already queued.")
-          processQueueIfNeeded()
-        } else {
-          finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
-      }
-    }
+    )
   }
 
   /// Outcome of an enqueue scan over a month, year, or library. Either real work was
@@ -617,64 +594,28 @@ final class ExportManager: ObservableObject {
     isEnqueueingAll = true
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
-    Task { [weak self] in
-      guard let self, self.isCurrent(gen) else {
-        self?.isEnqueueingAll = false
-        return
-      }
-      do {
-        var totalEnqueued = 0
-        var sawUnauthorized = false
-        for year in years {
-          let outcome = try await enqueueYear(
-            year: year, selection: selection, generation: gen)
-          guard self.isCurrent(gen) else {
-            self.isEnqueueingAll = false
-            return
-          }
-          switch outcome {
-          case .enqueued(let count): totalEnqueued += count
-          case .alreadyComplete: break
-          case .unauthorized: sawUnauthorized = true
-          }
+    runBulkExportTask(
+      generation: gen,
+      logTag: "startExportTimelineSelection",
+      emptyDoneMessage: { "Everything in the selection is already exported." },
+      partialScanWarning: {
+        "Couldn't scan every item in the selection. Continuing with the photos already queued."
+      },
+      body: { [weak self] in
+        guard let self else { return .stale }
+        let yearsResult = try await self.runBulkEnqueueLoop(items: years, generation: gen) { year in
+          try await self.enqueueYear(year: year, selection: selection, generation: gen)
         }
-        for m in months {
-          let outcome = try await enqueueMonth(
+        guard yearsResult.completed else { return .stale }
+        let monthsResult = try await self.runBulkEnqueueLoop(
+          items: months, generation: gen, startingFrom: yearsResult.totals
+        ) { m in
+          try await self.enqueueMonth(
             year: m.year, month: m.month, selection: selection, generation: gen)
-          guard self.isCurrent(gen) else {
-            self.isEnqueueingAll = false
-            return
-          }
-          switch outcome {
-          case .enqueued(let count): totalEnqueued += count
-          case .alreadyComplete: break
-          case .unauthorized: sawUnauthorized = true
-          }
         }
-        self.isEnqueueingAll = false
-        if totalEnqueued == 0 && !sawUnauthorized {
-          setEmptyRunMessage("Everything in the selection is already exported.")
-        }
-        processQueueIfNeeded()
-      } catch {
-        self.isEnqueueingAll = false
-        logger.error(
-          "startExportTimelineSelection failed: \(String(describing: error), privacy: .public)"
-        )
-        if !pendingJobs.isEmpty {
-          setQueueWarningMessage(
-            "Couldn't scan every item in the selection. Continuing with the photos already queued."
-          )
-          // Mirror `enqueueBulkAlbumExport`'s partial-failure bookkeeping so a future
-          // `runExport(context:)` wrapping this dispatcher sees the partial state and
-          // doesn't clear scope dirty flags on the unreached items.
-          activeRunBookkeeping?.partialBulkScan = true
-          processQueueIfNeeded()
-        } else {
-          finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
+        return monthsResult.completed ? .completed(monthsResult.totals) : .stale
       }
-    }
+    )
   }
 
   // MARK: - Collection start methods (Phase 3)
@@ -809,83 +750,159 @@ final class ExportManager: ObservableObject {
     isEnqueueingAll = true
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
+    runBulkExportTask(
+      generation: gen,
+      logTag: "startExportCollectionsSelection",
+      emptyDoneMessage: { "Everything in the selection is already exported." },
+      partialScanWarning: {
+        "Couldn't scan every item in the selection. Continuing with the photos already queued."
+      },
+      body: { [weak self] in
+        guard let self else { return .stale }
+        // Favorites — modelled as a 0-or-1 element pass so the helper handles
+        // the cancellation check + outcome merge identically to the other passes.
+        let favorites: [Bool] = buckets.includesFavorites ? [true] : []
+        let favResult = try await self.runBulkEnqueueLoop(
+          items: favorites, generation: gen
+        ) { _ in
+          try await self.enqueueCollection(
+            selection: .favorites, scope: .favorites,
+            selectionMode: selection, generation: gen)
+        }
+        guard favResult.completed else { return .stale }
+        let albumsResult = try await self.runBulkEnqueueLoop(
+          items: buckets.albumIds, generation: gen, startingFrom: favResult.totals
+        ) { albumId in
+          try await self.enqueueCollection(
+            selection: .album(collectionId: albumId),
+            scope: .album(collectionId: albumId),
+            selectionMode: selection, generation: gen)
+        }
+        guard albumsResult.completed else { return .stale }
+        let sharedResult = try await self.runBulkEnqueueLoop(
+          items: buckets.sharedAlbumIds, generation: gen, startingFrom: albumsResult.totals
+        ) { sharedId in
+          try await self.enqueueCollection(
+            selection: .sharedAlbum(collectionId: sharedId),
+            scope: .sharedAlbum(collectionId: sharedId),
+            selectionMode: selection, generation: gen)
+        }
+        return sharedResult.completed ? .completed(sharedResult.totals) : .stale
+      }
+    )
+  }
+
+  /// Accumulates the result of one or more `runBulkEnqueueLoop` passes so the
+  /// outer `runBulkExportTask` can decide whether to surface an "already done"
+  /// message after a clean run. `sawUnauthorized` is sticky — once any iteration
+  /// reports it, suppress the empty-run message because the user genuinely
+  /// can't tell whether all their items are done or simply unreachable.
+  private struct BulkExportTotals: Equatable {
+    var totalEnqueued: Int = 0
+    var sawUnauthorized: Bool = false
+  }
+
+  /// Outcome of a bulk-export body. `.completed(totals)` triggers the helper's
+  /// empty/done message dispatch on zero-enqueue, then `processQueueIfNeeded()`.
+  /// `.completedWithCustomMessage` is for bodies that have set their own user
+  /// message (e.g. `enqueueBulkAlbumExport`'s "folder no longer exists" branch)
+  /// — the helper skips the message dispatch but still runs the queue. `.stale`
+  /// short-circuits without finalizing because a generation check failed
+  /// mid-body and a `cancelAndClear` (or equivalent) has already finalized
+  /// whatever run was in flight.
+  private enum BulkExportOutcome {
+    case completed(BulkExportTotals)
+    case completedWithCustomMessage
+    case stale
+  }
+
+  /// Owns the bulk-export Task scaffolding every multi-item dispatcher
+  /// (`startExportAll`, `startExportTimelineSelection`,
+  /// `startExportCollectionsSelection`, `enqueueBulkAlbumExport`) was
+  /// duplicating: the `Task { [weak self] in }` wrapper, the
+  /// `isEnqueueingAll = false` teardown on every exit path, the success
+  /// finalize (empty/done message + `processQueueIfNeeded()`), and the
+  /// partial-failure recovery on throw (queue warning + `partialBulkScan` +
+  /// drain if any jobs already queued; otherwise finalize as failed).
+  ///
+  /// Callers supply just (a) the bulk-loop body that does the enqueue work
+  /// and returns `BulkExportOutcome`, (b) the empty/done message factory used
+  /// when nothing was enqueued, and (c) the partial-scan warning factory used
+  /// when the body throws after partial progress. Issue #67 item 5.
+  ///
+  /// Cancellation is the body's responsibility: capture `gen`, call
+  /// `isCurrent(gen)` after every `await`, return `.stale` if a check fails.
+  /// The helper's outer guard catches staleness *before* the body runs.
+  private func runBulkExportTask(
+    generation gen: Int,
+    logTag: String,
+    emptyDoneMessage: @escaping @MainActor () -> String,
+    partialScanWarning: @escaping @MainActor () -> String,
+    body: @escaping @MainActor () async throws -> BulkExportOutcome
+  ) {
     Task { [weak self] in
       guard let self, self.isCurrent(gen) else {
         self?.isEnqueueingAll = false
         return
       }
       do {
-        var totalEnqueued = 0
-        var sawUnauthorized = false
-
-        if buckets.includesFavorites {
-          let outcome = try await enqueueCollection(
-            selection: .favorites, scope: .favorites,
-            selectionMode: selection, generation: gen)
-          guard self.isCurrent(gen) else {
-            self.isEnqueueingAll = false
-            return
+        let outcome = try await body()
+        switch outcome {
+        case .stale:
+          self.isEnqueueingAll = false
+        case .completed(let totals):
+          self.isEnqueueingAll = false
+          if totals.totalEnqueued == 0 && !totals.sawUnauthorized {
+            self.setEmptyRunMessage(emptyDoneMessage())
           }
-          switch outcome {
-          case .enqueued(let count): totalEnqueued += count
-          case .alreadyComplete: break
-          case .unauthorized: sawUnauthorized = true
-          }
+          self.processQueueIfNeeded()
+        case .completedWithCustomMessage:
+          self.isEnqueueingAll = false
+          self.processQueueIfNeeded()
         }
-
-        for albumId in buckets.albumIds {
-          let outcome = try await enqueueCollection(
-            selection: .album(collectionId: albumId),
-            scope: .album(collectionId: albumId),
-            selectionMode: selection, generation: gen)
-          guard self.isCurrent(gen) else {
-            self.isEnqueueingAll = false
-            return
-          }
-          switch outcome {
-          case .enqueued(let count): totalEnqueued += count
-          case .alreadyComplete: break
-          case .unauthorized: sawUnauthorized = true
-          }
-        }
-
-        for sharedId in buckets.sharedAlbumIds {
-          let outcome = try await enqueueCollection(
-            selection: .sharedAlbum(collectionId: sharedId),
-            scope: .sharedAlbum(collectionId: sharedId),
-            selectionMode: selection, generation: gen)
-          guard self.isCurrent(gen) else {
-            self.isEnqueueingAll = false
-            return
-          }
-          switch outcome {
-          case .enqueued(let count): totalEnqueued += count
-          case .alreadyComplete: break
-          case .unauthorized: sawUnauthorized = true
-          }
-        }
-
-        self.isEnqueueingAll = false
-        if totalEnqueued == 0 && !sawUnauthorized {
-          setEmptyRunMessage("Everything in the selection is already exported.")
-        }
-        processQueueIfNeeded()
       } catch {
         self.isEnqueueingAll = false
-        logger.error(
-          "startExportCollectionsSelection failed: \(String(describing: error), privacy: .public)"
+        self.logger.error(
+          "\(logTag, privacy: .public) failed: \(String(describing: error), privacy: .public)"
         )
-        if !pendingJobs.isEmpty {
-          setQueueWarningMessage(
-            "Couldn't scan every item in the selection. Continuing with the photos already queued."
-          )
-          activeRunBookkeeping?.partialBulkScan = true
-          processQueueIfNeeded()
+        // Partial-failure recovery: if any jobs already landed in the queue,
+        // drain them and surface a warning + flag the run as `partialBulkScan`
+        // so AutoSync's dirty-flag bookkeeping survives the partial scan.
+        // Otherwise finalize the active run (if any) as failed.
+        if !self.pendingJobs.isEmpty {
+          self.setQueueWarningMessage(partialScanWarning())
+          self.activeRunBookkeeping?.partialBulkScan = true
+          self.processQueueIfNeeded()
         } else {
-          finalizeActiveRun(result: .failed, cancelReason: nil)
+          self.finalizeActiveRun(result: .failed, cancelReason: nil)
         }
       }
     }
+  }
+
+  /// Drives one homogeneous enqueue loop with generation-aware cancellation.
+  /// Each iteration calls `enqueue(item)` and merges the result into the
+  /// returned totals. `completed == false` means the loop bailed early on a
+  /// stale `isCurrent(gen)` check; the caller should propagate as
+  /// `BulkExportOutcome.stale`. Multi-bucket dispatchers chain multiple
+  /// passes by feeding the prior pass's totals into `startingFrom`.
+  private func runBulkEnqueueLoop<Item>(
+    items: [Item],
+    generation gen: Int,
+    startingFrom seed: BulkExportTotals = .init(),
+    enqueue: (Item) async throws -> EnqueueOutcome
+  ) async throws -> (totals: BulkExportTotals, completed: Bool) {
+    var totals = seed
+    for item in items {
+      let outcome = try await enqueue(item)
+      guard isCurrent(gen) else { return (totals, false) }
+      switch outcome {
+      case .enqueued(let count): totals.totalEnqueued += count
+      case .alreadyComplete: break
+      case .unauthorized: totals.sawUnauthorized = true
+      }
+    }
+    return (totals, true)
   }
 
   /// Where a bulk-album export draws its album-id list from. `.allAlbums` walks the
@@ -956,90 +973,57 @@ final class ExportManager: ObservableObject {
     isEnqueueingAll = true
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
-    Task { [weak self] in
-      guard let self, self.isCurrent(gen) else {
-        self?.isEnqueueingAll = false
-        return
-      }
-      do {
+    runBulkExportTask(
+      generation: gen,
+      logTag: logTag,
+      // Body owns the empty/done message because the variant depends on whether
+      // any albums were *resolved* (`emptyMessage`) vs all resolved are already
+      // done (`allDoneMessage`) — a distinction the helper can't see from
+      // `BulkExportTotals` alone.
+      emptyDoneMessage: { "" },
+      partialScanWarning: {
+        "Couldn't list every album. Continuing with the photos already queued."
+      },
+      body: { [weak self] in
+        guard let self else { return .stale }
         let albumIds: [String]
         switch source {
         case .allAlbums:
-          let tree = try photoLibraryService.fetchCollectionTree()
+          let tree = try self.photoLibraryService.fetchCollectionTree()
           albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
         case .allSharedAlbums:
-          let tree = try photoLibraryService.fetchCollectionTree()
+          let tree = try self.photoLibraryService.fetchCollectionTree()
           albumIds = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree)
         case .folder(let folderId):
-          let tree = try photoLibraryService.fetchCollectionTree()
+          let tree = try self.photoLibraryService.fetchCollectionTree()
           guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
-            self.isEnqueueingAll = false
-            setEmptyRunMessage("That folder no longer exists.")
-            // Symmetric with the other helper exit paths: every other path calls
-            // processQueueIfNeeded() before returning, so any future awaitable
-            // `runExport(context:)` wiring for folder runs gets the queue-drain
-            // finalize for free. Today the folder scope isn't in `ExportRunScope`,
-            // so this is a no-op in practice — but the symmetry is the load-bearing
-            // invariant, not the call's current effect.
-            processQueueIfNeeded()
-            return
+            // Folder vanished between guard-pass and lookup. Surface the
+            // dedicated message and signal the helper to skip its empty/done
+            // dispatch. Symmetric with the other body exits: any future
+            // awaitable `runExport(context:)` wiring for folder runs still
+            // gets the `processQueueIfNeeded()` finalize via the helper.
+            self.setEmptyRunMessage("That folder no longer exists.")
+            return .completedWithCustomMessage
           }
           albumIds = PhotoCollectionDescriptor.albumLocalIds(under: folder)
         case .explicitIds(let ids):
           albumIds = ids
         }
-        var totalEnqueued = 0
-        var sawUnauthorized = false
-        for collectionId in albumIds {
-          let outcome = try await enqueueCollection(
-            selection: source.selection(for: collectionId),
-            scope: source.scope(for: collectionId),
+        let result = try await self.runBulkEnqueueLoop(items: albumIds, generation: gen) { id in
+          try await self.enqueueCollection(
+            selection: source.selection(for: id),
+            scope: source.scope(for: id),
             selectionMode: selectionMode,
             generation: gen
           )
-          guard self.isCurrent(gen) else {
-            self.isEnqueueingAll = false
-            return
-          }
-          switch outcome {
-          case .enqueued(let count):
-            totalEnqueued += count
-          case .alreadyComplete:
-            break
-          case .unauthorized:
-            sawUnauthorized = true
-          }
         }
-        self.isEnqueueingAll = false
-        if totalEnqueued == 0 && !sawUnauthorized {
-          setEmptyRunMessage(albumIds.isEmpty ? emptyMessage : allDoneMessage)
+        guard result.completed else { return .stale }
+        if result.totals.totalEnqueued == 0 && !result.totals.sawUnauthorized {
+          self.setEmptyRunMessage(albumIds.isEmpty ? emptyMessage : allDoneMessage)
         }
-        processQueueIfNeeded()
-      } catch {
-        self.isEnqueueingAll = false
-        logger.error(
-          "\(logTag, privacy: .public) failed: \(String(describing: error), privacy: .public)"
-        )
-        // A throw partway through the per-album loop can leave earlier albums' jobs
-        // already in `pendingJobs`. Drain whatever was queued and surface the partial
-        // state so the user isn't stuck with a non-empty queue and no active processor.
-        // If nothing was queued, finalize the active run as failed so the UI doesn't
-        // stay in an indeterminate enqueueing state.
-        if !pendingJobs.isEmpty {
-          setQueueWarningMessage(
-            "Couldn't list every album. Continuing with the photos already queued.")
-          // Mark the run as partial so the natural queue-drain finalize
-          // downgrades `.completed` to `.failed` — otherwise an autosync run
-          // would see a clean summary, clear the scope's dirty flag, and skip
-          // the unreached albums until the next library change. No-op for
-          // fire-and-forget runs (bookkeeping is nil).
-          activeRunBookkeeping?.partialBulkScan = true
-          processQueueIfNeeded()
-        } else {
-          finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
+        return .completedWithCustomMessage
       }
-    }
+    )
   }
 
   /// Starts an export of a single iCloud shared album. Mirrors `startExportAlbum` but

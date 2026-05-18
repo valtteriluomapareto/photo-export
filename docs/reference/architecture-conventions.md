@@ -67,9 +67,10 @@ Rules:
 
 ```swift
 var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
-  Publishers.CombineLatest3($activeRunContext, $isRunning, $queueCount)
-    .map { context, isRunning, queueCount in
-      let manualFireAndForget = context == nil && (isRunning || queueCount > 0)
+  Publishers.CombineLatest4($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)
+    .map { context, isRunning, queueCount, isEnqueueingAll in
+      let manualFireAndForget =
+        context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
       return ExportRunState(
         activeContext: context,
         isManualActive: context?.source == .manual || manualFireAndForget,
@@ -81,7 +82,7 @@ var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
 }
 ```
 
-The `CombineLatest3` over `($activeRunContext, $isRunning, $queueCount)` is the AutoSync contract. The `manualFireAndForget` branch is what makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. Adding new state to the triple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
+The `CombineLatest4` over `($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)` is the AutoSync contract. The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isEnqueueingAll` participates so the bulk-enqueue window (after the dispatcher flips it true but before the first job lands in `pendingJobs`) is observable as busy too (issue #67 item 4a). Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
 
 **Mirror pattern** (when state lives on a coordinator but AutoSync needs to see it via the manager):
 
@@ -206,7 +207,7 @@ func startExportX(...) {
 }
 ```
 
-Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`) follow the same shape but loop over multiple `enqueueX(...)` calls and set `isEnqueueingAll = true` for the duration. Consolidating the bulk-loop body across the six members of the `start*` family is tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) item 5.
+Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`, plus the shared `enqueueBulkAlbumExport` driver behind `startExportAllAlbums` / `startExportAllSharedAlbums` / `startExportFolder` / `startExportAlbums`) follow the same shape but loop over multiple `enqueueX(...)` calls and set `isEnqueueingAll = true` for the duration. The four outer-Task scaffoldings share a private helper, `runBulkExportTask(...)`, which owns the `Task { [weak self] in }` wrapping, the `isEnqueueingAll = false` teardown on every exit path, the success finalize, and the partial-failure recovery on throw. The inner per-item loop shares `runBulkEnqueueLoop(...)` so multi-bucket dispatchers (years + months for timeline; favorites + albums + shared for collections) can chain passes while accumulating into a single `BulkExportTotals`.
 
 ## Regression gates
 

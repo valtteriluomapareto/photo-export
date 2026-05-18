@@ -410,6 +410,141 @@ struct SidebarMultiSelectTests {
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 
+  // MARK: - Issue #67 item 4 follow-ups
+
+  /// Item 4b: cancellation parity with the timeline path
+  /// (`cancelMidTimelineSelectionLoopResetsState`). The collections dispatcher
+  /// has three buckets (favorites → albums → shared); cancelling between any
+  /// two buckets must reset `isEnqueueingAll`, leave the queue idle, and bump
+  /// the generation so a re-dispatch can run cleanly.
+  @Test func cancelMidCollectionsSelectionBetweenBucketsResetsState() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    // Favorites: one asset; album A: one asset. Gate album A's fetch so we can
+    // cancel after favorites is done but before the album loop completes.
+    h.photoLib.favoritesAssets = [makeAsset(id: "fav-1", year: 2026, month: 3)]
+    h.photoLib.resourcesByAssetId["fav-1"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "fav-1.HEIC")
+    ]
+    let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["alb-A1"])
+    h.photoLib.collectionTree = [albumA]
+    let fetchGate = AsyncCheckpoint()
+    h.photoLib.fetchAssetsCheckpointByAlbumId["A"] = fetchGate
+
+    let genBefore = h.manager.generation
+
+    let buckets = CollectionsSelectionBuckets.normalize(
+      [.favorites, .album(collectionId: "A")]
+    ) { _ in [] }
+    h.manager.startExportCollectionsSelection(buckets)
+
+    // Wait until the loop is suspended on album A's asset fetch — favorites
+    // already enqueued. After this point the next `isCurrent(gen)` check
+    // would return false if we cancel.
+    await fetchGate.waitForEnter(count: 1)
+    #expect(h.manager.isEnqueueingAll)
+
+    h.manager.cancelAndClear()
+    await fetchGate.releaseAll()
+
+    await waitUntil(!h.manager.isEnqueueingAll)
+    #expect(!h.manager.isEnqueueingAll)
+    #expect(h.manager.pendingJobs.isEmpty)
+    #expect(h.manager.generation > genBefore)
+  }
+
+  /// Item 4c: the predicate-order pin. `enqueueYear/Month/Collection` apply
+  /// `isExported` *before* the AutoSync retry-eligibility gate; if a future
+  /// refactor inlined a retry-gate check at the dispatcher entry point ahead
+  /// of `isExported`, an already-exported asset would route through the gate
+  /// and the eligibility-check counter would grow. This test pins the
+  /// short-circuit: with all assets already exported (proved by running the
+  /// dispatcher once, then re-dispatching), the eligibility check must never
+  /// fire for the second run.
+  @Test func multiSelectDispatcherHonorsAutoSyncEligibilityCheck() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    // Seed one album with one asset.
+    let album = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
+    h.photoLib.collectionTree = [album]
+
+    let buckets = CollectionsSelectionBuckets.normalize(
+      [.album(collectionId: "A")]
+    ) { _ in [] }
+
+    // First run: actually export. Drives `enqueueCollection` → variant write
+    // → record store mark-exported, so the second run sees the asset as done.
+    h.manager.startExportCollectionsSelection(buckets)
+    await waitUntil(h.manager.totalJobsCompleted == 1 && !h.manager.isEnqueueingAll)
+    #expect(h.manager.totalJobsCompleted == 1)
+
+    // Install an eligibility check that records calls. The closure is
+    // `@MainActor`-isolated by type so the counter can be a plain Int.
+    final class CallCounter { var count = 0 }
+    let counter = CallCounter()
+    h.manager.autoSyncEligibilityCheck = { _, _, _, _ in
+      counter.count += 1
+      return false
+    }
+
+    h.manager.startExportCollectionsSelection(buckets)
+    await waitUntil(!h.manager.isEnqueueingAll)
+
+    // After the second dispatch on an idle queue, `resetProgressCounters()`
+    // wipes both counters back to zero. The load-bearing assertions are that
+    // *no new work was queued* and *the eligibility check was never
+    // consulted* — together they prove `enqueueCollection`'s `isExported`
+    // short-circuit ran before any retry-gate could.
+    #expect(h.manager.pendingJobs.isEmpty, "no jobs queued for already-exported assets")
+    #expect(h.manager.totalJobsEnqueued == 0)
+    #expect(
+      counter.count == 0,
+      """
+      Eligibility check must not fire for an already-exported asset: \
+      `isExported` short-circuits inside `enqueueCollection` before the \
+      retry-gate. A non-zero count means the predicate order regressed.
+      """)
+  }
+
+  /// Item 4d: the queue-coordinator route assertion. The multi-select
+  /// dispatchers were verified before this PR by terminal counters
+  /// (`totalJobsEnqueued` / `totalJobsCompleted`) but never by the queue
+  /// coordinator's own `isRunning` publisher — which is the contract AutoSync
+  /// observes via the manager's mirror. This test pins that the dispatcher's
+  /// jobs do flow through `ExportQueueCoordinator` (and so the mirror sinks
+  /// fire as expected).
+  @Test func multiSelectEnqueueRoutesThroughQueueCoordinator() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    h.photoLib.assetsByYearMonth["2026-3"] = [makeAsset(id: "a1", year: 2026, month: 3)]
+    h.photoLib.resourcesByAssetId["a1"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "a1.HEIC")
+    ]
+
+    let writeGate = AsyncCheckpoint()
+    h.writer.checkpoint = writeGate
+
+    #expect(!h.manager.queueCoordinator.isRunning, "queue idle before dispatch")
+    #expect(!h.manager.isRunning, "manager mirror idle before dispatch")
+
+    h.manager.startExportTimelineSelection(years: [2026], months: [])
+    await writeGate.waitForEnter(count: 1)
+
+    // The coordinator is processing the job; the manager's mirror sink has
+    // flipped in lockstep (the synchrony of the sink is itself a regression
+    // gate — see `ExportQueueStateSnapshotTests`).
+    #expect(h.manager.queueCoordinator.isRunning, "queue running mid-job")
+    #expect(h.manager.isRunning, "manager mirror running mid-job")
+
+    await writeGate.releaseAll()
+    await waitUntil(!h.manager.queueCoordinator.isRunning)
+    #expect(!h.manager.queueCoordinator.isRunning, "queue idle after drain")
+    #expect(!h.manager.isRunning, "manager mirror idle after drain")
+  }
+
   // MARK: - Test harness (mirrors ExportAllAlbumsTests)
 
   @MainActor
