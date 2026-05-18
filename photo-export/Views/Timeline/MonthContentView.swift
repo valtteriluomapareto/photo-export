@@ -2,24 +2,60 @@ import AppKit
 import Photos
 import SwiftUI
 
-struct MonthContentView: View {
+/// Asset-grid pane for a single (year, month). Intentionally does *not* hold
+/// `ExportManager` as `@EnvironmentObject` — that would subscribe the body (and
+/// therefore the `LazyVGrid` re-evaluation) to every `ExportManager.objectWillChange`
+/// emission, of which there are several per job during a run (sink'd `queueCount`,
+/// activeRunContext transitions, etc.). Instead the parent (`LibraryRootView`)
+/// reads the few fields we need from its own subscription and passes them in as
+/// plain values, plus a closure for the Export Month action.
+///
+/// **Equatable + `.equatable()` at the call site** is load-bearing. `LibraryRootView`
+/// still subscribes to `ExportManager` (it reads other fields), so its `body`
+/// re-evaluates on every manager emission and constructs a *new* `MonthContentView`
+/// value each time — the `onExportMonth` closure is a fresh allocation per render.
+/// Without the explicit `Equatable` conformance below, SwiftUI's struct-diff would
+/// see the new closure as a "changed" property and re-evaluate this body anyway.
+/// The conformance compares only the value fields that actually affect rendering
+/// (`year`, `month`, `versionSelection`, `isExportRunning`, the bound asset id);
+/// the closure and the binding wrapper are excluded so SwiftUI short-circuits the
+/// LazyVGrid re-evaluation when those rendering inputs are unchanged.
+struct MonthContentView: View, Equatable {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   @StateObject private var viewModel: MonthViewModel
 
   let year: Int
   let month: Int
+  /// Active version selection (`.edited` vs `.editedWithOriginals`). Passed in by the
+  /// parent so this view doesn't have to subscribe to `ExportManager`. Changes rarely
+  /// (the user toggles "Include Originals") — the parent's body re-render fan-in is
+  /// fine.
+  let versionSelection: ExportVersionSelection
+  /// Mirrored from `ExportManager.isRunning` by the parent. Drives the view model's
+  /// HQ-thumbnail-network suppression while an export is active.
+  let isExportRunning: Bool
+  /// Closure that triggers the "Export Month" action. Owned by the parent so we can
+  /// avoid touching `ExportManager` here.
+  let onExportMonth: () -> Void
   @Binding var selectedAsset: AssetDescriptor?
 
   init(
-    year: Int, month: Int, selectedAsset: Binding<AssetDescriptor?>,
+    year: Int,
+    month: Int,
+    versionSelection: ExportVersionSelection,
+    isExportRunning: Bool,
+    onExportMonth: @escaping () -> Void,
+    selectedAsset: Binding<AssetDescriptor?>,
     photoLibraryService: any PhotoLibraryService
   ) {
     self.year = year
     self.month = month
+    self.versionSelection = versionSelection
+    self.isExportRunning = isExportRunning
+    self.onExportMonth = onExportMonth
     self._selectedAsset = selectedAsset
     _viewModel = StateObject(
       wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
@@ -37,8 +73,8 @@ struct MonthContentView: View {
       HStack {
         exportSummaryView
         Spacer()
-        Button("Export Month") {
-          exportManager.startExportMonth(year: year, month: month)
+        AutoSyncAwareExportButton("Export Month") {
+          onExportMonth()
         }
         .buttonStyle(.bordered)
         .disabled(!exportDestinationManager.canExportNow)
@@ -61,7 +97,7 @@ struct MonthContentView: View {
               state: viewModel.thumbnailState(for: asset),
               isSelected: asset.id == selectedAsset?.id,
               isExported: exportRecordStore.isExported(
-                asset: asset, selection: exportManager.versionSelection),
+                asset: asset, selection: versionSelection),
               onRetry: { viewModel.retryThumbnail(for: asset.id) }
             )
             .frame(width: 120, height: 120)
@@ -85,7 +121,7 @@ struct MonthContentView: View {
         selectedAsset = initialAsset
       }
     }
-    .onChange(of: exportManager.isRunning) { _, newValue in
+    .onChange(of: isExportRunning) { _, newValue in
       viewModel.setExportRunning(newValue)
     }
     // Photos library mutations (most commonly iCloud sync landing newly synced assets,
@@ -120,7 +156,7 @@ struct MonthContentView: View {
 
   private var exportSummaryView: some View {
     let summary = exportRecordStore.monthSummary(
-      assets: viewModel.assets, selection: exportManager.versionSelection)
+      assets: viewModel.assets, selection: versionSelection)
     return HStack(spacing: 8) {
       switch summary.status {
       case .complete:
@@ -150,4 +186,20 @@ struct MonthContentView: View {
     .font(.subheadline)
   }
 
+  // MARK: - Equatable
+
+  /// Compares only the value fields that affect rendering. Skips:
+  /// - `onExportMonth` — a freshly-allocated closure per parent render that's
+  ///   semantically identical (always `exportManager.startExportMonth(year:month:)`).
+  /// - `selectedAsset` wrapper itself — compare the bound asset id directly so a
+  ///   new `Binding<AssetDescriptor?>` instance per render doesn't defeat the diff.
+  /// - `photoLibraryService` — injected once at init; identity is stable per
+  ///   `LibraryRootView` lifetime.
+  static func == (lhs: MonthContentView, rhs: MonthContentView) -> Bool {
+    lhs.year == rhs.year
+      && lhs.month == rhs.month
+      && lhs.versionSelection == rhs.versionSelection
+      && lhs.isExportRunning == rhs.isExportRunning
+      && lhs.selectedAsset?.id == rhs.selectedAsset?.id
+  }
 }

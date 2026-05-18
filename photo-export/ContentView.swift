@@ -163,6 +163,11 @@ struct YearRow: View {
 struct MonthRow: View {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  /// Reads `currentJobPlacement` from the live-progress observable rather than the
+  /// manager, so the per-job placement mutations don't ripple through every view
+  /// holding `ExportManager` as `@EnvironmentObject`. `MonthRow` still observes
+  /// `ExportManager` for `versionSelection` / `queuedCount(…)`.
+  @EnvironmentObject private var progressState: ExportProgressState
 
   let year: Int
   let month: Int
@@ -180,7 +185,7 @@ struct MonthRow: View {
     // as visual clutter (macOS Finder / Mail sidebars use a single global indicator plus
     // quiet per-item status), and the global progress bar already advertises that work
     // is happening.
-    let inFlight = exportManager.currentJobPlacement?.timelineYearMonth
+    let inFlight = progressState.currentJobPlacement?.timelineYearMonth
     let isActive = inFlight?.year == year && inFlight?.month == month
     return HStack(spacing: 8) {
       Text(MonthFormatting.name(for: month))

@@ -73,6 +73,19 @@ struct ExportManagerHelperTests {
   /// An unconfigured timeline store blocks `startExportMonth`. Without the gate,
   /// the pipeline would write files to disk while every `markVariant*` call silently
   /// no-ops because the store's `state != .ready`.
+  // MARK: - manualExportShouldConfirmSupersede
+
+  /// Idle manager → no supersede confirmation needed; actions dispatch directly.
+  /// The autoSync/manual-source cases are intentionally exercised via
+  /// `AutoSyncReducerTests` and the toolbar's integration paths rather than
+  /// hand-rolled runExport orchestration here — those tests already cover the
+  /// active-run branches via the reducer's `ExportRunState` plumbing.
+  @Test func manualExportShouldConfirmSupersedeIsFalseWhenIdle() {
+    let (mgr, _) = makeManager()
+    #expect(mgr.activeRunContext == nil)
+    #expect(mgr.manualExportShouldConfirmSupersede == false)
+  }
+
   @Test func startExportMonthShortCircuitsWhenTimelineNotReady() {
     let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)
