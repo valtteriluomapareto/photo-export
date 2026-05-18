@@ -15,7 +15,7 @@ struct ProductionImageConverterTests {
 
   /// Build a tiny HEIC file in a temp dir and round-trip it through the
   /// converter, asserting the output is a valid JPEG.
-  @Test func convertsHEICToJPEGAndProducesValidJPEG() throws {
+  @Test func convertsHEICToJPEGAndProducesValidJPEG() async throws {
     let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
       "ProductionImageConverterTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(
@@ -27,7 +27,7 @@ struct ProductionImageConverterTests {
     try writeHEICFixture(to: heicURL)
 
     let converter = ProductionImageConverter()
-    try converter.convertHEIC(at: heicURL, to: jpegURL, quality: 0.85)
+    try await converter.convertHEIC(at: heicURL, to: jpegURL, quality: 0.85)
 
     #expect(FileManager.default.fileExists(atPath: jpegURL.path))
 
@@ -39,7 +39,9 @@ struct ProductionImageConverterTests {
 
   /// The `quality` parameter is clamped to `[0.0, 1.0]`. Passing an out-of-range
   /// value (negative, > 1) shouldn't trip CoreImage; the converter normalises.
-  @Test func clampsQualityOutOfRange() throws {
+  /// Pins the protocol contract — values outside the range are documented as
+  /// clamped, not errored.
+  @Test func clampsQualityOutOfRange() async throws {
     let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
       "ProductionImageConverterTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -50,25 +52,25 @@ struct ProductionImageConverterTests {
 
     let converter = ProductionImageConverter()
     // Both outside [0,1] — converter clamps, doesn't throw.
-    try converter.convertHEIC(
+    try await converter.convertHEIC(
       at: heicURL, to: tempDir.appendingPathComponent("high.jpg"), quality: 1.5)
-    try converter.convertHEIC(
+    try await converter.convertHEIC(
       at: heicURL, to: tempDir.appendingPathComponent("neg.jpg"), quality: -0.2)
   }
 
   /// Source file that doesn't exist (or isn't a valid image) throws.
-  @Test func throwsWhenSourceMissing() {
+  @Test func throwsWhenSourceMissing() async throws {
     let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
       "ProductionImageConverterTests-\(UUID().uuidString)", isDirectory: true)
-    try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: tempDir) }
 
     let bogus = tempDir.appendingPathComponent("nonexistent.heic")
     let dest = tempDir.appendingPathComponent("dest.jpg")
 
     let converter = ProductionImageConverter()
-    #expect(throws: (any Error).self) {
-      try converter.convertHEIC(at: bogus, to: dest, quality: 0.85)
+    await #expect(throws: (any Error).self) {
+      try await converter.convertHEIC(at: bogus, to: dest, quality: 0.85)
     }
   }
 

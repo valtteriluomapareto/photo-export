@@ -21,18 +21,25 @@ final class FakeImageConverter: ImageConverter, @unchecked Sendable {
     return _convertCalls
   }
 
+  // Configuration is set on the main actor before the harness is constructed.
+  // Not protected by `lock` — matches the discipline-via-doc-comment pattern
+  // used by `FakeAssetResourceWriter` / `FakeMediaRenderer`.
+
   /// Error injection — when non-nil, the converter throws this on every call.
   var convertError: Error?
 
-  /// When `true` (the default), the fake writes a known JPEG signature
-  /// (`0xFF 0xD8 0xFF 0xE0`) followed by some test bytes at `destURL`. Callers
-  /// that need to assert against the on-disk file (e.g. atomic-move tests)
-  /// can read the file and verify the JPEG magic. Setting this to `false`
-  /// skips the write and is useful for harnesses that only need the call
-  /// record.
+  /// When `true` (the default), the fake writes a JPEG signature byte payload
+  /// to `destURL`. The bytes start with the JPEG SOI marker (`0xFF 0xD8 0xFF
+  /// 0xE0`) so a consumer that only checks "looks like a JPEG" passes, but
+  /// the bytes are NOT a parseable JPEG (no APP0 length, no EOI marker, no
+  /// pixel data). Today the only consumer that reads the file is
+  /// `FileManager.moveItem(atomically:)` in `VariantExporter`, which never
+  /// decodes — if a future test path tries to actually parse the fake's
+  /// output via ImageIO it will fail and the fake should be upgraded to emit
+  /// a real 1×1 JPEG via `CGImageDestination`.
   var shouldCreateFile: Bool = true
 
-  func convertHEIC(at sourceURL: URL, to destURL: URL, quality: Double) throws {
+  func convertHEIC(at sourceURL: URL, to destURL: URL, quality: Double) async throws {
     lock.lock()
     _convertCalls.append(
       ConvertCall(sourceURL: sourceURL, destURL: destURL, quality: quality))
@@ -40,8 +47,6 @@ final class FakeImageConverter: ImageConverter, @unchecked Sendable {
 
     if let error = convertError { throw error }
     if shouldCreateFile {
-      // JPEG SOI + APP0 marker — enough that `Data(contentsOf:)` round-trips
-      // identifiably as JPEG without needing a real CoreImage encode.
       let jpegSignature: [UInt8] = [0xFF, 0xD8, 0xFF, 0xE0]
       let payload = Data(jpegSignature) + Data("FAKE-JPEG-CONTENT".utf8)
       FileManager.default.createFile(atPath: destURL.path, contents: payload)
