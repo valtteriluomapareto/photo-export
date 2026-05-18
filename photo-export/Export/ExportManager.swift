@@ -144,6 +144,14 @@ final class ExportManager: ObservableObject {
     $versionSelection.eraseToAnyPublisher()
   }
 
+  /// Combine publisher for `convertHEICToJPEG` (issue #47). AutoSync subscribes
+  /// so flipping the toggle re-triggers a debounced evaluation — HEIC assets
+  /// previously skipped as "already exported" become eligible once
+  /// `requiredVariants` widens to include `.edited`.
+  var convertHEICToJPEGPublisher: AnyPublisher<Bool, Never> {
+    $convertHEICToJPEG.eraseToAnyPublisher()
+  }
+
   /// Combine publisher for the import flag.
   var isImportingPublisher: AnyPublisher<Bool, Never> {
     $isImporting.eraseToAnyPublisher()
