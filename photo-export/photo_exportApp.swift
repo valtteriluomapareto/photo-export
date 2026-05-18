@@ -265,7 +265,10 @@ struct PhotoExportApp: App {
         ImportBackupCommand()
       }
       CommandGroup(after: .help) {
-        SaveDiagnosticReportCommand()
+        SaveDiagnosticReportCommand(
+          timelineStore: exportRecordStore,
+          collectionStore: collectionExportRecordStore,
+          destinationManager: exportDestinationManager)
       }
       // Sidebar select-all wired through the standard Edit menu so the shortcut
       // (Cmd+A) is discoverable. The action's behavior changes per section —
@@ -493,29 +496,64 @@ private struct ImportBackupCommand: View {
 
 // MARK: - Save Diagnostic Report Command
 
-struct SaveDiagnosticReportAction {
-  let callAsFunction: () -> Void
-}
-
-struct SaveDiagnosticReportActionKey: FocusedValueKey {
-  typealias Value = SaveDiagnosticReportAction
-}
-
-extension FocusedValues {
-  var saveDiagnosticReportAction: SaveDiagnosticReportAction? {
-    get { self[SaveDiagnosticReportActionKey.self] }
-    set { self[SaveDiagnosticReportActionKey.self] = newValue }
-  }
-}
-
+/// Help-menu item. Owns its dependencies directly so the menu item stays
+/// enabled regardless of which scene is focused — previously this lived
+/// behind a `@FocusedValue` published from `LibraryRootView`, which made
+/// the menu item grey out when the user opened Settings, opened About, or
+/// closed the main window. Diagnostic reports don't need the library
+/// window — just the three stores below and a save panel.
+@MainActor
 private struct SaveDiagnosticReportCommand: View {
-  @FocusedValue(\.saveDiagnosticReportAction) private var action
+  let timelineStore: ExportRecordStore
+  let collectionStore: CollectionExportRecordStore
+  let destinationManager: ExportDestinationManager
 
   var body: some View {
     Button("Save Diagnostic Report\u{2026}") {
-      action?.callAsFunction()
+      SaveDiagnosticReportCommand.saveDiagnosticReport(
+        timelineStore: timelineStore,
+        collectionStore: collectionStore,
+        destinationManager: destinationManager)
     }
-    .disabled(action == nil)
+  }
+
+  /// Build the report from the current store snapshots and prompt for a save
+  /// location. `nonisolated` would be nice for symmetry with `DiagnosticReporter`,
+  /// but `NSSavePanel.runModal()` must run on the main thread and the stores
+  /// are `@MainActor`.
+  fileprivate static func saveDiagnosticReport(
+    timelineStore: ExportRecordStore,
+    collectionStore: CollectionExportRecordStore,
+    destinationManager: ExportDestinationManager
+  ) {
+    let info = Bundle.main.infoDictionary
+    let appVersion = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+    let buildNumber = (info?["CFBundleVersion"] as? String) ?? "?"
+    let reporter = DiagnosticReporter(
+      timelineStore: timelineStore,
+      collectionStore: collectionStore,
+      destinationId: destinationManager.destinationId,
+      appVersion: appVersion,
+      buildNumber: buildNumber
+    )
+    let report = reporter.makeReport()
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.plainText]
+    let stamp = ISO8601DateFormatter().string(from: Date())
+      .replacingOccurrences(of: ":", with: "-")
+    panel.nameFieldStringValue = "photo-export-diagnostic-\(stamp).txt"
+    panel.canCreateDirectories = true
+    panel.title = "Save Diagnostic Report"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    do {
+      try report.write(to: url, atomically: true, encoding: .utf8)
+    } catch {
+      let alert = NSAlert()
+      alert.messageText = "Could not save diagnostic report"
+      alert.informativeText = error.localizedDescription
+      alert.alertStyle = .warning
+      alert.runModal()
+    }
   }
 }
 

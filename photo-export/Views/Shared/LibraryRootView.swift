@@ -152,48 +152,11 @@ struct LibraryRootView: View {
           exportManager.startImport()
         } : nil
     )
-    .focusedSceneValue(
-      \.saveDiagnosticReportAction,
-      SaveDiagnosticReportAction { saveDiagnosticReport() }
-    )
     .focusedSceneValue(\.selectAllSidebarItemsAction, sidebarSelectAllAction)
     // Window min must fit: sidebar min (220) + content min (480) + ~300pt
     // for the detail pane to render a useful asset preview.
     .frame(minWidth: 1100, minHeight: 700)
     .background(Color(.windowBackgroundColor))
-  }
-
-  // MARK: - Diagnostic report
-
-  private func saveDiagnosticReport() {
-    let info = Bundle.main.infoDictionary
-    let appVersion = (info?["CFBundleShortVersionString"] as? String) ?? "?"
-    let buildNumber = (info?["CFBundleVersion"] as? String) ?? "?"
-    let reporter = DiagnosticReporter(
-      timelineStore: exportRecordStore,
-      collectionStore: collectionExportRecordStore,
-      destinationId: exportDestinationManager.destinationId,
-      appVersion: appVersion,
-      buildNumber: buildNumber
-    )
-    let report = reporter.makeReport()
-    let panel = NSSavePanel()
-    panel.allowedContentTypes = [.plainText]
-    let stamp = ISO8601DateFormatter().string(from: Date())
-      .replacingOccurrences(of: ":", with: "-")
-    panel.nameFieldStringValue = "photo-export-diagnostic-\(stamp).txt"
-    panel.canCreateDirectories = true
-    panel.title = "Save Diagnostic Report"
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    do {
-      try report.write(to: url, atomically: true, encoding: .utf8)
-    } catch {
-      let alert = NSAlert()
-      alert.messageText = "Could not save diagnostic report"
-      alert.informativeText = error.localizedDescription
-      alert.alertStyle = .warning
-      alert.runModal()
-    }
   }
 
   // MARK: - Section picker
