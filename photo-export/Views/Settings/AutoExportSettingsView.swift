@@ -84,12 +84,18 @@ struct AutoExportSettingsView: View {
         )
       }
 
-      Section("Status") {
+      Section {
         StatusSummaryRow(state: autoSyncManager.state)
+        LastReconciledRow(timestamp: photoChangeAdapter.lastSuccessfulReconciliation)
         if let summary = autoSyncManager.lastRunSummary {
           LastRunRow(summary: summary)
         }
-        LastReconciledRow(timestamp: photoChangeAdapter.lastSuccessfulReconciliation)
+      } header: {
+        Text("Status")
+      } footer: {
+        Text("Photo Export periodically checks for new photos and refreshes automatically.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
 
       Section {
@@ -444,33 +450,39 @@ private struct LastRunRow: View {
 }
 
 /// Shows when the safety-net reconcile last consulted PhotoKit. Trust signal for
-/// the issue #69 fix: if the user opens Settings hours into a long iCloud-sync
+/// the issue #69 fix: if the user opens Settings deep into a long iCloud-sync
 /// session and the line still reads "a few minutes ago," they know the
-/// background-check loop is alive. `nil` (the very-first-launch case, before any
-/// reconcile has completed) renders as a dim "Never" — meaningful enough that we
-/// don't hide the row entirely, since hiding it makes a freshly-launched user
-/// think the feature doesn't exist.
+/// background-check loop is alive.
+///
+/// Wrapped in `TimelineView(.periodic)` so the relative-time string updates on
+/// its own between reconciles (otherwise the row would freeze at the time of
+/// the most recent update and only refresh when something else re-rendered the
+/// Form). The first reconcile fires within milliseconds of `start()` so the
+/// `Checking…` state is essentially a startup placeholder.
 private struct LastReconciledRow: View {
   let timestamp: Date?
 
+  /// Single shared formatter — `RelativeDateTimeFormatter` is non-trivial to
+  /// construct and the value is identical for every render of this row.
+  private static let formatter: RelativeDateTimeFormatter = {
+    let f = RelativeDateTimeFormatter()
+    f.unitsStyle = .short
+    return f
+  }()
+
   var body: some View {
-    HStack(spacing: 8) {
-      Image(systemName: "icloud")
-        .foregroundStyle(.secondary)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(label)
-        Text("Photo Export checks for new iCloud photos automatically.")
-          .font(.caption)
+    TimelineView(.periodic(from: .now, by: 30)) { context in
+      HStack(spacing: 8) {
+        Image(systemName: "arrow.clockwise")
           .foregroundStyle(.secondary)
+        Text(label(now: context.date))
       }
     }
   }
 
-  private var label: String {
-    guard let timestamp else { return "Last checked iCloud: never" }
-    let formatter = RelativeDateTimeFormatter()
-    formatter.unitsStyle = .short
-    return "Last checked iCloud \(formatter.localizedString(for: timestamp, relativeTo: Date()))"
+  private func label(now: Date) -> String {
+    guard let timestamp else { return "Checking\u{2026}" }
+    return "Last updated \(Self.formatter.localizedString(for: timestamp, relativeTo: now))"
   }
 }
 

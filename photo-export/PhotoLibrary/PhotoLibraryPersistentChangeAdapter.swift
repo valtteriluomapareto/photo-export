@@ -102,37 +102,52 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
     self.scheduler = ReconciliationScheduler(
       clock: clock, interval: reconcileInterval
     ) { [weak self] in
-      self?.fetchAndEmit()
+      self?.fetchAndEmit(trigger: .safetyNet)
     }
   }
 
   /// Register with PhotoKit and run an immediate catch-up fetch for any
   /// changes that landed since the last persisted token. Idempotent — safe to
-  /// call multiple times. When access is not yet sufficient, subscribes to
-  /// the authorization-status publisher and self-starts on the first
-  /// sufficient value, so the user granting access from inside the app
-  /// activates observation without an explicit re-call.
+  /// call multiple times. Subscribes to the authorization-status publisher
+  /// and reacts to *both* transitions: insufficient → sufficient registers
+  /// and arms the safety-net reconcile; sufficient → insufficient tears down
+  /// the scheduler and unregisters from PhotoKit so the 15-minute timer
+  /// doesn't keep calling `fetchPersistentChanges` on a now-revoked library
+  /// (issue #69 follow-up).
   func start() {
-    guard !registered else { return }
     if PhotoLibraryManager.isAuthorizationSufficient(authorizationStatus) {
       registerAndCatchUp()
-      return
+    } else {
+      logger.debug("Photo library not authorized yet; deferring registration")
     }
-    logger.debug("Photo library not authorized yet; deferring registration")
     if authorizationSubscription == nil, let publisher = authorizationStatusPublisher {
       authorizationSubscription = publisher.sink { [weak self] status in
         dispatchPrecondition(condition: .onQueue(.main))
         MainActor.assumeIsolated {
-          guard let self, !self.registered,
-            PhotoLibraryManager.isAuthorizationSufficient(status)
-          else { return }
-          self.registerAndCatchUp()
-          // One-shot: stop listening once we've registered.
-          self.authorizationSubscription?.cancel()
-          self.authorizationSubscription = nil
+          self?.handleAuthorizationChange(status)
         }
       }
     }
+  }
+
+  private func handleAuthorizationChange(_ status: PHAuthorizationStatus) {
+    let sufficient = PhotoLibraryManager.isAuthorizationSufficient(status)
+    if sufficient, !registered {
+      registerAndCatchUp()
+    } else if !sufficient, registered {
+      tearDownPhotoKitObservation()
+    }
+  }
+
+  /// Stop the safety-net timer and unregister the change observer without
+  /// dropping the authorization subscription — a re-grant should restore
+  /// both. Separate from `stop()` (which is the full tear-down used by
+  /// tests). Idempotent.
+  private func tearDownPhotoKitObservation() {
+    scheduler?.stop()
+    guard registered else { return }
+    library.unregisterChangeObserver(self)
+    registered = false
   }
 
   /// Unregister from PhotoKit. Idempotent. Tests call this on tear-down; the
@@ -150,7 +165,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   private func registerAndCatchUp() {
     library.register(self)
     registered = true
-    fetchAndEmit()
+    fetchAndEmit(trigger: .startup)
     // Arm the safety-net reconcile *after* the initial catch-up: the catch-up
     // already covers anything that landed pre-launch, and starting the
     // scheduler later means the first periodic fire is `interval` seconds away
@@ -162,8 +177,28 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
 
   nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
     Task { @MainActor [weak self] in
-      self?.fetchAndEmit()
+      self?.fetchAndEmit(trigger: .observer)
     }
+  }
+
+  /// Why `fetchAndEmit` is called. Distinguishes the *normal* PhotoKit observer
+  /// path (which already triggers `PhotoLibraryManager.photoLibraryDidChange` →
+  /// `invalidateCache()` independently) from the *safety-net* paths added for
+  /// issue #69 (startup catch-up, 15-min timer, become-active). On the observer
+  /// path the UI side has already been woken; firing
+  /// `onPotentialLibraryChange` again would double-invalidate the manager's
+  /// caches and bump `libraryRevision` twice per real event.
+  private enum ReconcileTrigger {
+    /// `photoLibraryDidChange` callback from PhotoKit. The manager has its own
+    /// observer for the same notification — don't double-wake the UI.
+    case observer
+    /// Initial catch-up at `start()`. Manager hasn't observed anything yet
+    /// for the missed range, so the bridge should fire.
+    case startup
+    /// Periodic timer or become-active notification (both routed through
+    /// `ReconciliationScheduler`). The whole point of these triggers is that
+    /// PhotoKit's observer was silent — bridge to wake the UI.
+    case safetyNet
   }
 
   // MARK: - Private
@@ -171,7 +206,13 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// Fetches changes since the last token, emits a single outcome, and
   /// advances the persisted token. On first run with no token, captures
   /// `currentChangeToken` as the silent baseline.
-  private func fetchAndEmit() {
+  ///
+  /// `trigger` controls whether the UI bridge fires on success-with-changes
+  /// — see `ReconcileTrigger`. On the `.observer` path the manager has
+  /// already invalidated its caches via its own `photoLibraryDidChange`
+  /// callback, so this method skips the bridge to avoid double-bumping
+  /// `libraryRevision`.
+  private func fetchAndEmit(trigger: ReconcileTrigger) {
     let baseline: PHPersistentChangeToken
     if let token = lastToken {
       baseline = token
@@ -243,12 +284,13 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
       tokenStore.save(newestToken)
       lastSuccessfulReconciliation = Date()
       subject.send(.success(event))
-      // Nudge the UI side iff the reconcile turned up actual changes. AutoSync
-      // already received the event via `subject`; this callback is the
-      // independent wake-up for `PhotoLibraryManager.libraryRevision` so the
-      // grid/sidebar refresh alongside without requiring a separate PhotoKit
-      // observer in the manager (issue #69).
-      if !inserted.isEmpty || !updated.isEmpty || !deleted.isEmpty || collectionChangesPresent {
+      // UI-side bridge: only fires on the safety-net paths (`.startup`,
+      // `.safetyNet`). On the `.observer` path the manager has already
+      // invalidated its caches via its own change-observer callback — a second
+      // invalidation would double-bump `libraryRevision`, trigger two
+      // `MonthViewModel.refresh(for:)` runs back-to-back per real event, and
+      // generally amplify work without changing outcomes.
+      if trigger != .observer, event.requiresUIWake {
         onPotentialLibraryChange?()
       }
     } catch {
