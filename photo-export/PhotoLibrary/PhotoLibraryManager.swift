@@ -445,7 +445,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   // MARK: - Thumbnail Management (PhotoLibraryService)
 
   func startCachingThumbnails(for assets: [AssetDescriptor]) {
-    if let s = overrideService { s.startCachingThumbnails(for: assets); return }
+    if let s = overrideService {
+      s.startCachingThumbnails(for: assets)
+      return
+    }
     // Use cached PHAssets (populated by the preceding fetchAssets call)
     let phAssets = assets.compactMap { phAssetCache[$0.id] }
     guard !phAssets.isEmpty else { return }
@@ -459,7 +462,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   func stopCachingThumbnails(for assets: [AssetDescriptor]) {
-    if let s = overrideService { s.stopCachingThumbnails(for: assets); return }
+    if let s = overrideService {
+      s.stopCachingThumbnails(for: assets)
+      return
+    }
     let phAssets = assets.compactMap { phAssetCache[$0.id] }
     guard !phAssets.isEmpty else { return }
     let options = PHImageRequestOptions()

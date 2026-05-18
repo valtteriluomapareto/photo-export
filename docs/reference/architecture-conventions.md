@@ -18,7 +18,7 @@ These three contracts bind every collaborator. Break one and you break either th
 
 ### 1. Cancellation contract
 
-**Storage**: `var generation: Int` lives on `ExportQueueCoordinator` (see [`ExportQueueCoordinator.swift`](../../photo-export/Managers/ExportQueueCoordinator.swift) — search for `private(set) var generation`). `ExportManager` exposes a computed `var generation: Int { queueCoordinator.generation }` forwarder for test reads and in-module convenience.
+**Storage**: `var generation: Int` lives on `ExportQueueCoordinator` (see [`ExportQueueCoordinator.swift`](../../photo-export/Export/ExportQueueCoordinator.swift) — search for `private(set) var generation`). `ExportManager` exposes a computed `var generation: Int { queueCoordinator.generation }` forwarder for test reads and in-module convenience.
 
 **Helpers** (all on `ExportQueueCoordinator`; `ExportManager` exposes thin forwarders for the dispatcher call sites):
 
@@ -111,7 +111,7 @@ Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so th
 
 When you extract a new collaborator from `ExportManager`, expose what you need from the manager via a narrow `@MainActor` `Host` protocol declared on the collaborator. The `@MainActor` annotation on the protocol itself is load-bearing — a non-MainActor Host would force `await` at every call site and break the mirror-sinks synchrony.
 
-Example from [`ExportQueueCoordinator.swift`](../../photo-export/Managers/ExportQueueCoordinator.swift):
+Example from [`ExportQueueCoordinator.swift`](../../photo-export/Export/ExportQueueCoordinator.swift):
 
 ```swift
 @MainActor
@@ -150,7 +150,7 @@ init(...) {
 }
 ```
 
-The manager owns the coordinator strongly (IUO storage, not `weak`); only the back-reference from coordinator to manager is `weak`. Construction order matters — collaborators that read each other's state must be wired before sinks fire. The conformance is in a small extension file ([`ExportManager+AutoSyncConformance.swift`](../../photo-export/Managers/ExportManager+AutoSyncConformance.swift)) holding only `extension ExportManager: …Host {}` lines — every method the protocol requires is already on `ExportManager` directly, so the conformances have empty bodies.
+The manager owns the coordinator strongly (IUO storage, not `weak`); only the back-reference from coordinator to manager is `weak`. Construction order matters — collaborators that read each other's state must be wired before sinks fire. The conformance is in a small extension file ([`ExportManager+AutoSyncConformance.swift`](../../photo-export/Export/ExportManager+AutoSyncConformance.swift)) holding only `extension ExportManager: …Host {}` lines — every method the protocol requires is already on `ExportManager` directly, so the conformances have empty bodies.
 
 Rules:
 
@@ -178,7 +178,7 @@ Rules:
 
 ## Canonical `start*` entry-point shape
 
-Every fire-and-forget export entry point on `ExportManager` follows the same skeleton. Source of truth: `startExportMonth` in [`ExportManager.swift`](../../photo-export/Managers/ExportManager.swift) — copy that method as a starting point rather than rewriting from this skeleton.
+Every fire-and-forget export entry point on `ExportManager` follows the same skeleton. Source of truth: `startExportMonth` in [`ExportManager.swift`](../../photo-export/Export/ExportManager.swift) — copy that method as a starting point rather than rewriting from this skeleton.
 
 ```text
 func startExportX(...) {
@@ -248,8 +248,8 @@ The `placement.kind` switch is *not* duplicated across `ExportManager` anymore �
 `ExportVariant` is a closed enum. Adding a case forces compile errors at every switch that handles variants — work through them:
 
 1. **`ExportVariant`** — add the case.
-2. **`VariantExporter`** ([Managers](../../photo-export/Managers/VariantExporter.swift)) — handle it in the per-variant write switch.
-3. **`ResourceSelection.selectEditedProducer`** ([Managers](../../photo-export/Managers/ResourceSelection.swift)) — decide how the new variant selects bytes. The function returns an `EditedProducer` enum (`.resource | .render | .none`); extend that enum if the new variant needs a third byte source. New media kinds change `ResourceSelection`, not the call sites.
+2. **`VariantExporter`** ([Export](../../photo-export/Export/VariantExporter.swift)) — handle it in the per-variant write switch.
+3. **`ResourceSelection.selectEditedProducer`** ([Export](../../photo-export/Export/ResourceSelection.swift)) — decide how the new variant selects bytes. The function returns an `EditedProducer` enum (`.resource | .render | .none`); extend that enum if the new variant needs a third byte source. New media kinds change `ResourceSelection`, not the call sites.
 4. **`ExportFilenamePolicy`** — decide the suffix shape (`_orig`, plain, etc.).
 5. **`ExportCompletionPolicy`** — add the variant to `requiredVariants` where applicable.
 
@@ -275,7 +275,7 @@ The refactor shipped with three deliberate deferrals tracked in [issue #67](http
 
 1. ~~**PhotoLibrary composition refactor**~~ — landed (issue #67 item 1, May 2026): `PhotoLibraryManager` is `final`, holds an optional `overrideService`, and forwards every `PhotoLibraryService` method to it when set. `ScreenshotPhotoLibraryService` is a standalone conformance — no inheritance — so newly-added protocol methods are caught at compile time. The override-gate test stays as a behavioral pin against curated-content regressions.
 2. ~~**Generation-counter ownership transfer**~~ — landed: `var generation: Int` now lives on `ExportQueueCoordinator`; `VariantExporter` and `ImportCoordinator` hold a direct reference for the seam.
-3. **Remaining Phase 7 folder moves** — `Destination/`, `Export/`, `App/` not yet created. Until they exist, new code goes alongside semantically related code in `Managers/` (e.g., a new destination type goes next to `ExportDestinationManager`); the folder split is a follow-up, not a precondition for new work.
+3. ~~**Remaining Phase 7 folder moves**~~ — landed (issue #67 item 3, May 2026): `Destination/`, `Export/`, and `App/` exist; `Managers/` has been removed. The non-test source layout now matches the architecture-doc descriptions one-to-one.
 
 A second wave of follow-ups landed with item 4 (AutoSync seam test growth) and item 5 (`start*` bulk-loop helper consolidation). Item 6 (CI regression-gate symbol guard) is also done.
 

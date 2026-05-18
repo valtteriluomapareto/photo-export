@@ -37,10 +37,12 @@ UI tests exist in `photo-exportUITests/` but are skipped by default in the share
 
 Source code under `photo-export/` is organized as follows:
 
+- `App/` — app entry point (`photo_exportApp.swift`) plus lifecycle/process-level services: `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
+- `Export/` — the export façade and its collaborators: `ExportManager`, `ExportManager+AutoSyncConformance`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, plus the helper-policy types (`ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`)
+- `Destination/` — destination concerns: `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`
 - `Records/` — record stores (timeline + collection), the shared `JSONLRecordFile` persistence primitive, `RecordStoreRouter` (single placement-kind dispatch), and `ExportCompletionPolicy` (single completion/edited-fallback rule)
 - `AutoSync/` — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, with `AutoSync/Stores/` for the file-backed persistence (dirty state, per-destination tokens, retry state, run summary, scope, photo change token)
 - `PhotoLibrary/` — `PhotoLibraryManager`, `ScreenshotPhotoLibraryService`, `PhotoLibraryPersistentChangeAdapter`, `CollectionCountCache`
-- `Managers/` — see categorization below
 - `Protocols/` — test seams: `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, `ExportDestination`, `MediaRenderer`. Add a new protocol here when you need to inject a fake.
 - `Models/` — value types: `AssetDescriptor`, `AssetDetails`, `ExportRecord`, `ExportVariant`, `ExportPlacement`, `LibrarySelection`, `PhotoCollectionDescriptor`
 - `Views/` — SwiftUI views, grouped by feature: `Timeline/`, `Collections/`, `Export/`, `Settings/`, `Shared/`
@@ -48,14 +50,15 @@ Source code under `photo-export/` is organized as follows:
 - `Helpers/` — small pure utilities (`MonthFormatting`, `ScreenshotSurfaceResolver`)
 - `Resources/`, `SupportingFiles/`, `Assets.xcassets` — bundle resources, Info.plist, asset catalog
 
-The `Managers/` folder is mixed today (a deferred Phase 7 follow-up tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) will split it into `Destination/`, `Export/`, `App/`). Until then, classify by role:
+The Phase-7 folder split (issue #67 item 3) landed in May 2026, replacing the previous `Managers/` catch-all with the role-based `App/` / `Export/` / `Destination/` triad above. Classify new code by role:
 
-- **Façade**: `ExportManager` (+ `ExportManager+AutoSyncConformance.swift` — that file only carries `extension ExportManager: …Host {}` lines and explanatory docstrings; never add method bodies there).
-- **Host-driven collaborators of `ExportManager`** (`@MainActor final class`): `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`. Each holds a narrow `Host` protocol back to the manager for the cancellation seam and a few UI-state mutations.
-- **Pure helpers / policy** (plain `struct` or `enum`, `Sendable` where it crosses tasks): `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ExportDestinationResolver`, `ResourceSelection`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`.
-- **Other `@MainActor` stateful services** (ObservableObjects or wire-ups, top-level or injected): `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`.
+- **Façade**: `ExportManager` (+ `ExportManager+AutoSyncConformance.swift` — that file only carries `extension ExportManager: …Host {}` lines and explanatory docstrings; never add method bodies there). In `Export/`.
+- **Host-driven collaborators of `ExportManager`** (`@MainActor final class`, in `Export/`): `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`. Each holds a narrow `Host` protocol back to the manager for a few UI-state mutations; the cancellation seam routes through the queue coordinator directly (issue #67 item 2).
+- **Pure helpers / policy** (plain `struct` or `enum`, `Sendable` where it crosses tasks): `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver` (in `Export/`); `ExportDestinationResolver` (in `Destination/`); `ResourceSelection`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` (in `Export/`).
+- **Destination services** (`@MainActor`, in `Destination/`): `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`.
+- **App-level services** (`@MainActor`, in `App/`): `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`.
 
-**App entry point** (`photo_exportApp.swift`): creates five `@StateObject` dependencies and injects them as `@EnvironmentObject` into the view hierarchy:
+**App entry point** (`App/photo_exportApp.swift`): creates five `@StateObject` dependencies and injects them as `@EnvironmentObject` into the view hierarchy:
 
 - **PhotoLibraryManager** — Photos framework authorization and asset fetching (thumbnails, full-size images). Uses `PHCachingImageManager`.
 - **ExportDestinationManager** — manages the chosen export destination folder (security-scoped bookmarks).
@@ -63,7 +66,7 @@ The `Managers/` folder is mixed today (a deferred Phase 7 follow-up tracked in [
 - **CollectionExportRecordStore** — sibling store for Favorites + user-album exports per-destination. Disjoint key space from the timeline store; the two stores cannot corrupt each other. Routed to by `ExportManager` via `RecordStoreRouter`.
 - **ExportManager** — public façade for export work. Owns `generation` (the cancellation seam), `activeRunContext`, `versionSelection`, and the `@Published` mirrors AutoSync observes. Delegates queue mechanics to `ExportQueueCoordinator`, per-variant writes to `VariantExporter`, the Import Existing Backup flow to `ImportCoordinator`, record-store dispatch to `RecordStoreRouter`, and completion logic to `ExportCompletionPolicy`. New `start*` entry points belong here and follow the canonical shape (see [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Canonical `start*` entry-point shape).
 
-**Other code under `Managers/` / `Records/` / `AutoSync/` / `PhotoLibrary/`:**
+**Other code under `Export/` / `Records/` / `AutoSync/` / `PhotoLibrary/`:**
 
 - `BackupScanner` — scans an existing backup folder and matches files to Photos assets (used by Import Existing Backup)
 - `ExportFilenamePolicy` — pure rules for `_orig` companion filenames
