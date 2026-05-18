@@ -30,16 +30,39 @@ import os
 /// schedules a `photosChangeFallback` debounce in response.
 @MainActor
 final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangeProviding,
-  PHPhotoLibraryChangeObserver
+  PHPhotoLibraryChangeObserver, ObservableObject
 {
+  /// Default cadence for the safety-net reconcile timer. macOS's
+  /// `photoLibraryDidChange` callback can be silent for tens of minutes when
+  /// Photos.app isn't running and iCloud syncs in the background (issue #69);
+  /// fifteen minutes is short enough that a user who Cmd-tabs away for a
+  /// coffee comes back to a fresh state, long enough that the periodic
+  /// `fetchPersistentChanges` call is a rounding error on energy use.
+  /// `nonisolated` so it's usable as a default-parameter value at non-actor
+  /// call sites.
+  nonisolated static let defaultReconcileInterval: TimeInterval = 15 * 60
+
   private let library: PHPhotoLibrary
   private let tokenStore: GlobalPhotoChangeTokenStore
   private let logger: Logger
   private let authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never>?
   private let subject = PassthroughSubject<PhotoLibraryChangeOutcome, Never>()
+  /// Notifies an external collaborator (production: `PhotoLibraryManager`) when a
+  /// reconcile turned up actual changes, so the UI side can invalidate its caches
+  /// and bump `libraryRevision`. AutoSync's own subscription is unaffected — it
+  /// receives every successful event via `changes`. Optional because most tests
+  /// don't need to observe the UI bridge.
+  private let onPotentialLibraryChange: (@MainActor () -> Void)?
   private var lastToken: PHPersistentChangeToken?
   private var registered = false
   private var authorizationSubscription: AnyCancellable?
+  private var scheduler: ReconciliationScheduler?
+
+  /// Timestamp of the most recent successful `fetchPersistentChanges` call,
+  /// whether or not it turned up changes. Drives the "Last checked iCloud …"
+  /// line in Settings → Auto Export so the user can see the safety-net
+  /// reconcile is alive.
+  @Published private(set) var lastSuccessfulReconciliation: Date?
 
   var authorizationStatus: PHAuthorizationStatus {
     PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -54,19 +77,33 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// `start()`-ed during `.notDetermined` would stay un-registered until the
   /// next launch. `nil` is acceptable in tests where the fake never observes
   /// auth state; production wires `PhotoLibraryManager.$authorizationStatus`.
+  ///
+  /// `clock` and `reconcileInterval` drive the periodic safety-net reconcile
+  /// (issue #69). `onPotentialLibraryChange` is invoked after any reconcile
+  /// that turned up actual changes so the UI side can wake alongside AutoSync;
+  /// production wires it to `PhotoLibraryManager.invalidateCache()`.
   init(
     library: PHPhotoLibrary = .shared(),
     tokenStore: GlobalPhotoChangeTokenStore,
     authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never>? = nil,
+    clock: AutoSyncClock,
+    reconcileInterval: TimeInterval = PhotoLibraryPersistentChangeAdapter.defaultReconcileInterval,
+    onPotentialLibraryChange: (@MainActor () -> Void)? = nil,
     logger: Logger = Logger(
       subsystem: "com.valtteriluoma.photo-export", category: "PhotoLibraryChanges")
   ) {
     self.library = library
     self.tokenStore = tokenStore
     self.authorizationStatusPublisher = authorizationStatusPublisher
+    self.onPotentialLibraryChange = onPotentialLibraryChange
     self.logger = logger
     self.lastToken = tokenStore.load()
     super.init()
+    self.scheduler = ReconciliationScheduler(
+      clock: clock, interval: reconcileInterval
+    ) { [weak self] in
+      self?.fetchAndEmit()
+    }
   }
 
   /// Register with PhotoKit and run an immediate catch-up fetch for any
@@ -104,6 +141,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   func stop() {
     authorizationSubscription?.cancel()
     authorizationSubscription = nil
+    scheduler?.stop()
     guard registered else { return }
     library.unregisterChangeObserver(self)
     registered = false
@@ -113,6 +151,11 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
     library.register(self)
     registered = true
     fetchAndEmit()
+    // Arm the safety-net reconcile *after* the initial catch-up: the catch-up
+    // already covers anything that landed pre-launch, and starting the
+    // scheduler later means the first periodic fire is `interval` seconds away
+    // rather than running back-to-back with the catch-up.
+    scheduler?.start()
   }
 
   // MARK: - PHPhotoLibraryChangeObserver
@@ -136,6 +179,10 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
       let current = library.currentChangeToken
       lastToken = current
       tokenStore.save(current)
+      // First-time baseline capture is still a successful reconcile from the
+      // user's perspective: we successfully consulted PhotoKit and confirmed
+      // there's nothing new to act on yet.
+      lastSuccessfulReconciliation = Date()
       return
     }
 
@@ -194,7 +241,16 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
 
       lastToken = newestToken
       tokenStore.save(newestToken)
+      lastSuccessfulReconciliation = Date()
       subject.send(.success(event))
+      // Nudge the UI side iff the reconcile turned up actual changes. AutoSync
+      // already received the event via `subject`; this callback is the
+      // independent wake-up for `PhotoLibraryManager.libraryRevision` so the
+      // grid/sidebar refresh alongside without requiring a separate PhotoKit
+      // observer in the manager (issue #69).
+      if !inserted.isEmpty || !updated.isEmpty || !deleted.isEmpty || collectionChangesPresent {
+        onPotentialLibraryChange?()
+      }
     } catch {
       let mapped = mapFetchError(error)
       logger.error(

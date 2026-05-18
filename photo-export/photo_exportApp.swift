@@ -25,7 +25,9 @@ struct PhotoExportApp: App {
   @StateObject private var whatsNewState: WhatsNewState
 
   private let autoSyncDestinationAdapter: DestinationSnapshotAdapter
-  private let autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+  /// `@StateObject` because Settings → Auto Export observes
+  /// `lastSuccessfulReconciliation` for the "Last checked iCloud …" line.
+  @StateObject private var autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   private let autoSyncDirtyStateStore: FileBackedAutoSyncDirtyStateStore
   private let autoSyncRetryStateStore: FileBackedAutoSyncRetryStateStore
   private let autoSyncRunSummaryStore: FileBackedAutoSyncRunSummaryStore
@@ -121,9 +123,18 @@ struct PhotoExportApp: App {
       baseDirectoryURL: destinationsRoot)
     let tokenStore = GlobalPhotoChangeTokenStore(
       fileURL: autoSyncRoot.appendingPathComponent("photo-library-change-token.data"))
+    // One clock shared between the photo-change adapter and AutoSync so test
+    // doubles can advance time consistently across both subsystems if needed.
+    let clock = SystemAutoSyncClock()
+    // The bridge callback wakes `PhotoLibraryManager` whenever the safety-net
+    // reconcile turns up changes that PhotoKit's normal observer missed — so
+    // the timeline grid and sidebar counts refresh alongside AutoSync. `[weak
+    // plm]` to avoid pinning the manager past App teardown.
     let photoAdapter = PhotoLibraryPersistentChangeAdapter(
       tokenStore: tokenStore,
-      authorizationStatusPublisher: plm.$authorizationStatus.eraseToAnyPublisher()
+      authorizationStatusPublisher: plm.$authorizationStatus.eraseToAnyPublisher(),
+      clock: clock,
+      onPotentialLibraryChange: { [weak plm] in plm?.invalidateCache() }
     )
     let safetyConfirmationStore = FileBackedDestinationSafetyConfirmationStore(
       baseDirectoryURL: destinationsRoot)
@@ -137,7 +148,6 @@ struct PhotoExportApp: App {
       destinationManager: edm, lifecycleCoordinator: coordinator,
       safetyMonitor: safetyMonitor)
     let scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: .standard)
-    let clock = SystemAutoSyncClock()
     let asm = AutoSyncManager()
     // AutoSync retry-eligibility hook for ExportManager. Reads from
     // AutoSyncManager.currentRetryState — kept up-to-date by the manager
@@ -170,7 +180,7 @@ struct PhotoExportApp: App {
     _whatsNewState = StateObject(wrappedValue: WhatsNewState())
     _destinationSafetyMonitor = StateObject(wrappedValue: safetyMonitor)
     self.autoSyncDestinationAdapter = destinationAdapter
-    self.autoSyncPhotoChangeAdapter = photoAdapter
+    _autoSyncPhotoChangeAdapter = StateObject(wrappedValue: photoAdapter)
     self.autoSyncDirtyStateStore = dirtyStore
     self.autoSyncRetryStateStore = retryStore
     self.autoSyncRunSummaryStore = runSummaryStore
@@ -195,6 +205,7 @@ struct PhotoExportApp: App {
         .environmentObject(collectionExportRecordStore)
         .environmentObject(autoSyncManager)
         .environmentObject(autoSyncScopeStore)
+        .environmentObject(autoSyncPhotoChangeAdapter)
         .environmentObject(whatsNewState)
         .task {
           lifecycleCoordinator.attach(
@@ -295,6 +306,7 @@ struct PhotoExportApp: App {
       .environmentObject(lifecycleCoordinator)
       .environmentObject(loginItemController)
       .environmentObject(destinationSafetyMonitor)
+      .environmentObject(autoSyncPhotoChangeAdapter)
     }
     .windowResizability(.contentMinSize)
   }

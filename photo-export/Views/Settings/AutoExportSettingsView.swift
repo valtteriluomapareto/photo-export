@@ -14,6 +14,7 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @EnvironmentObject private var loginItemController: LoginItemController
   @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
+  @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
 
   @State private var isShowingMigrationRecoverySheet = false
   @State private var isShowingSafetyConfirm = false
@@ -88,6 +89,7 @@ struct AutoExportSettingsView: View {
         if let summary = autoSyncManager.lastRunSummary {
           LastRunRow(summary: summary)
         }
+        LastReconciledRow(timestamp: photoChangeAdapter.lastSuccessfulReconciliation)
       }
 
       Section {
@@ -438,6 +440,37 @@ private struct LastRunRow: View {
     let failedSuffix = summary.failedCount > 0 ? ", \(summary.failedCount) failed" : ""
     let resultSuffix = summary.result == .completed ? "" : " (\(summary.result.rawValue))"
     return counts + failedSuffix + resultSuffix
+  }
+}
+
+/// Shows when the safety-net reconcile last consulted PhotoKit. Trust signal for
+/// the issue #69 fix: if the user opens Settings hours into a long iCloud-sync
+/// session and the line still reads "a few minutes ago," they know the
+/// background-check loop is alive. `nil` (the very-first-launch case, before any
+/// reconcile has completed) renders as a dim "Never" — meaningful enough that we
+/// don't hide the row entirely, since hiding it makes a freshly-launched user
+/// think the feature doesn't exist.
+private struct LastReconciledRow: View {
+  let timestamp: Date?
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: "icloud")
+        .foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(label)
+        Text("Photo Export checks for new iCloud photos automatically.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private var label: String {
+    guard let timestamp else { return "Last checked iCloud: never" }
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .short
+    return "Last checked iCloud \(formatter.localizedString(for: timestamp, relativeTo: Date()))"
   }
 }
 
