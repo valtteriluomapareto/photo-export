@@ -301,7 +301,11 @@ final class ExportManager: ObservableObject {
   /// matching placement. Used by both the `cancelAndClear` and run-loop catch-block
   /// cleanup paths to route the `removeVariant` call to the correct store via
   /// `placement.kind`.
-  private(set) var currentJobPlacement: ExportPlacement?
+  ///
+  /// `@Published` so the timeline sidebar's `MonthRow` can light up its spinner only on
+  /// the row that owns the in-flight job. AutoSync does not observe this field, so
+  /// publishing it adds a UI observer without touching the AutoSync seam.
+  @Published private(set) var currentJobPlacement: ExportPlacement?
   private(set) var generation: Int = 0
   private(set) var isEnqueueingAll: Bool = false
   /// Forwarder to the import coordinator's task handle so existing test reads
