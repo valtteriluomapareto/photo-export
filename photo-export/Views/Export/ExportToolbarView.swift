@@ -244,7 +244,7 @@ struct ExportToolbarView: ToolbarContent {
   }
 
   private func handlePrimaryAction() {
-    if exportManager.activeRunContext?.source == .autoSync {
+    if exportManager.manualExportShouldConfirmSupersede {
       isShowingSupersedeConfirm = true
     } else {
       startManualExport()

@@ -198,6 +198,15 @@ final class ExportManager: ObservableObject {
     isRunning || queueCount > 0
   }
 
+  /// `true` when a manual export action (Export Year, Export Month, Export Folder,
+  /// Export Album, toolbar Cmd+E) should present the "Auto Export is running"
+  /// supersede confirmation instead of dispatching immediately. The toolbar primary
+  /// action and the in-pane `AutoSyncAwareExportButton`s both consult this so they
+  /// behave consistently.
+  var manualExportShouldConfirmSupersede: Bool {
+    activeRunContext?.source == .autoSync
+  }
+
   // MARK: - Dependencies
   private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Export")
   let photoLibraryService: any PhotoLibraryService

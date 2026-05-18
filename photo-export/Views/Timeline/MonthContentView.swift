@@ -73,7 +73,7 @@ struct MonthContentView: View, Equatable {
       HStack {
         exportSummaryView
         Spacer()
-        Button("Export Month") {
+        AutoSyncAwareExportButton("Export Month") {
           onExportMonth()
         }
         .buttonStyle(.bordered)
