@@ -4,14 +4,14 @@ Remaining work items, grouped by area. Move items to GitHub Issues when practica
 
 ## Architecture follow-ups
 
-Tracked as checkboxes in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67). All three are deliberate deferrals from the May 2026 architecture refactor; each is safe to land independently.
+Tracked as checkboxes in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67). The May 2026 refactor's six items mostly landed via PRs #75 and #76; the residual cleanup is below.
 
-- [ ] **PhotoLibrary composition refactor** — drop `ScreenshotPhotoLibraryService: PhotoLibraryManager` inheritance, extract a `ProductionPhotoLibraryService` peer, mark `PhotoLibraryManager` `final` with an injected `PhotoLibraryService`. ~973 lines of PhotoKit code. Today protected by `ScreenshotPhotoLibraryServiceOverridesTests` (20 tests).
-- [ ] **Generation-counter ownership transfer** — move `var generation: Int` storage from `ExportManager` into `ExportQueueCoordinator` and delete the `Host.generation` / `Host.isCurrent` / `Host.bumpGeneration` getters on the three collaborator Host protocols. Mechanical storage move + Host-method deletion.
-- [ ] **Remaining Phase 7 folder moves** — `Destination/`, `Export/`, `App/` not yet created. Filesystem-synchronized groups make moves Xcode-config-free; can land opportunistically.
-- [ ] **AutoSync seam coverage during `isEnqueueingAll` window** — `exportRunStatePublisher` does not currently include `isEnqueueingAll`. Add a characterization test and decide whether the bulk-enqueue window should be observable as `manualActive`.
-- [ ] **Consolidate the `start*` family with a shared bulk-loop helper** — best landed together with the AutoSync seam fix above.
-- [ ] **Regression-gate symbol-existence guard in CI** — `docs/reference/architecture-conventions.md` hardcodes six test names. A rename today silently rots the doc. Add a `scripts/ci/check-regression-gates.sh` (~15 lines of shell) that greps the test files for each documented test symbol and fails CI if any is missing. Highest drift-protection ROI; flagged by the PR #71 review.
+- [x] **PhotoLibrary composition refactor** — landed (PR #76). Inheritance dropped, `PhotoLibraryManager` is `final` with an optional `overrideService`, `ScreenshotPhotoLibraryService` is a standalone peer. The full ~970-line extraction of a `ProductionPhotoLibraryService` peer was deferred — tracked separately as a residual cleanup so the per-method early-return forwarders on `PhotoLibraryManager` can eventually be deleted in favor of a thin forwarding façade. File a fresh issue when ready to pick this up.
+- [x] **Generation-counter ownership transfer** — landed (PR #76). `var generation` lives on `ExportQueueCoordinator`; `VariantExporter` and `ImportCoordinator` hold a direct weak reference; `Host.generation` / `Host.isCurrent` / `Host.bumpGeneration` getters are deleted.
+- [x] **Remaining Phase 7 folder moves** — landed (PR #76). `App/`, `Destination/`, `Export/` exist; `Managers/` is gone. `RecordStoreRouter` stays in `Records/` (defensible per the records-coupling rationale; revisit if a future change wants it co-located with `ExportManager`).
+- [x] **AutoSync seam coverage during `isEnqueueingAll` window** — landed (PR #76). `exportRunStatePublisher` is now `CombineLatest4` over `($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)`; the bulk-enqueue window registers as `manualActive`. New regression test in `AutoSyncSeamCharacterizationTests`.
+- [x] **Consolidate the `start*` family with a shared bulk-loop helper** — landed (PR #76). `runBulkExportTask` + `runBulkEnqueueLoop` shared by `startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`, and `enqueueBulkAlbumExport`.
+- [x] **Regression-gate symbol-existence guard in CI** — landed (PR #75). `scripts/ci/check-regression-gates.sh` greps the test files for each documented gate symbol and fails CI if any is missing.
 
 See [`docs/reference/architecture-conventions.md`](../reference/architecture-conventions.md) for the contracts these items extend.
 

@@ -199,28 +199,29 @@ struct AutoSyncSeamCharacterizationTests {
   /// — must register as `manualActive` so AutoSync does not race to start its
   /// own background run on top of a user-initiated multi-select bulk export.
   ///
-  /// Without `isEnqueueingAll` in the publisher tuple, this test would
-  /// observe the dispatcher synchronously, find no `manualActive` emission in
-  /// the gap before the first job lands, and either flake or silently regress
-  /// to `[idle, manualActive, idle]` only because the queue eventually
-  /// flipped `isRunning`. Gating the writer keeps the `manualActive` state
-  /// long enough that the assertion would also have caught a regression that
-  /// dropped `isEnqueueingAll` back out of the tuple.
+  /// The test gates the *enqueue-time PhotoKit fetch* (not the writer) so
+  /// when the assertion runs, `pendingJobs.isEmpty`, `isRunning == false`,
+  /// `queueCount == 0`, and `isEnqueueingAll == true`. The publisher must
+  /// have emitted `.manualActive` *purely* on `isEnqueueingAll`. If a future
+  /// regression dropped `isEnqueueingAll` from the CombineLatest tuple, the
+  /// publisher would still be `.idle` here — no other observable property
+  /// has flipped yet — and the assertion below fails. Gating the writer
+  /// instead would not catch the regression (the coordinator's `isRunning`
+  /// would carry the `manualActive` emission on its own).
   @Test func autoSyncSeam_multiSelectTimelineDispatcherIsManualActive() async throws {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
 
-    // One asset in 2026-03; year 2026 is the only year selected so the bulk
-    // enqueue loop is short but does pass through `isEnqueueingAll`.
+    // One asset in 2026-03; the dispatcher iterates [2026] and calls
+    // enqueueYear → photoLibraryService.fetchAssets(year: 2026, month: nil),
+    // which the fake routes through `fetchAssetsCheckpointByYear[2026]`.
     let asset = TestAssetFactory.makeAsset(id: "a1")
     harness.photoLib.assetsByYearMonth["2026-3"] = [asset]
     harness.photoLib.resourcesByAssetId["a1"] = [
       TestAssetFactory.makeResource(originalFilename: "a1.HEIC")
     ]
-    // Gate the writer so the active state lingers long enough for the
-    // subscriber to observe `manualActive` on the publisher.
-    let writeGate = AsyncCheckpoint()
-    harness.writer.checkpoint = writeGate
+    let fetchGate = AsyncCheckpoint()
+    harness.photoLib.fetchAssetsCheckpointByYear[2026] = fetchGate
 
     var runStateEmissions: [ExportRunState] = []
     let cancellable = harness.manager.exportRunStatePublisher.sink {
@@ -229,11 +230,35 @@ struct AutoSyncSeamCharacterizationTests {
     defer { cancellable.cancel() }
 
     harness.manager.startExportTimelineSelection(years: [2026], months: [])
-    await writeGate.waitForEnter(count: 1)
-    await writeGate.releaseAll()
+    await fetchGate.waitForEnter(count: 1)
 
-    // Poll until the manager has fully returned to idle. The dispatcher is
-    // fire-and-forget, so there is no awaitable handle to drive directly.
+    // Mid-enqueue: pending=0, isRunning=false, queueCount=0, isEnqueueingAll=true.
+    // The publisher must already have emitted `.manualActive` from
+    // `isEnqueueingAll` alone — no other input has flipped.
+    #expect(
+      harness.manager.pendingJobs.isEmpty,
+      "test sanity: dispatcher must be suspended before any job lands")
+    #expect(
+      !harness.manager.isRunning,
+      "test sanity: queue must not yet be running")
+    #expect(
+      harness.manager.isEnqueueingAll,
+      "test sanity: the dispatcher's mid-enqueue flag must be set")
+    let midGate = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
+    #expect(
+      midGate == [.idle, .manualActive],
+      """
+      AutoSync seam contract violation: while the multi-select timeline \
+      dispatcher is suspended inside the enqueue fetch (pending=0, \
+      isRunning=false, queueCount=0), the publisher must already be in \
+      `manualActive` because `isEnqueueingAll` participates in \
+      CombineLatest4. Got: \(midGate). If `isEnqueueingAll` is no longer in \
+      `exportRunStatePublisher`'s tuple, restore it (issue #67 item 4a).
+      """
+    )
+
+    // Drain. Final canonical sequence is the full export lifecycle.
+    await fetchGate.releaseAll()
     let deadline = Date().addingTimeInterval(10)
     while (harness.manager.isRunning || harness.manager.isEnqueueingAll
       || harness.manager.queueCount > 0) && Date() < deadline
@@ -244,13 +269,6 @@ struct AutoSyncSeamCharacterizationTests {
     let canonical = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
     #expect(
       canonical == [.idle, .manualActive, .idle],
-      """
-      AutoSync seam contract violation: a fire-and-forget multi-select \
-      timeline dispatcher must transition through `manualActive` so AutoSync \
-      sees the bulk-enqueue window as busy. Got: \(canonical). If \
-      `isEnqueueingAll` is no longer in `exportRunStatePublisher`'s \
-      CombineLatest, restore it (issue #67 item 4a).
-      """
-    )
+      "Full canonical sequence after drain: \(canonical)")
   }
 }

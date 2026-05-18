@@ -12,7 +12,9 @@ Use this document as a checklist when writing code or reviewing PRs.
   - **Views (SwiftUI)**: Stateless UI, render from inputs; no business logic. Grouped by feature in `Views/{Timeline,Collections,Export,Settings,Shared}/`.
   - **ViewModels (ObservableObject)**: State, UI-friendly transformations, side-effects orchestration (`MonthViewModel`).
   - **`Records/` / `AutoSync/` / `PhotoLibrary/`**: stateful services split by feature area (record stores + routing; auto-export state machine + file-backed stores; PhotoKit access).
-  - **`Managers/`**: mixed today — façade (`ExportManager`), its Host-driven collaborators (`ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`), pure helpers (`ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ExportDestinationResolver`, `ResourceSelection`), and other stateful services (`ExportDestinationManager`, `BackupScanner`, `LoginItemController`, etc.). A deferred Phase 7 follow-up (issue #67) splits this into `Destination/`, `Export/`, `App/`.
+  - **`Export/`**: the façade (`ExportManager`) plus its Host-driven collaborators (`ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`) and the export-pipeline helper-policy types (`ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, etc.).
+  - **`Destination/`**: destination concerns (`ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`).
+  - **`App/`**: entry point + lifecycle/process-level services (`photo_exportApp`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`).
   - **Models**: Plain value types and domain types.
 - Keep each view in its own file. Avoid multiple large `View` types in one file.
 - Make types `final` by default unless subclassing is intended. Mark helpers `private` and prefer `internal` over `public` unless needed.

@@ -188,22 +188,21 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   // MARK: - Wiring
 
-  /// Single-source-of-truth check mirroring the `photo_exportApp` injection: in
-  /// screenshot mode the wrapping `PhotoLibraryManager` holds an injected
-  /// `ScreenshotPhotoLibraryService` as its `overrideService`. In production the
-  /// override is nil and the manager runs its built-in PhotoKit code. With the
-  /// inheritance removed (issue #67 item 1), these are peer types — the
-  /// composition wiring is what reaches the curated service from the UI.
-  @Test func appWiringSelectsScreenshotServiceInScreenshotMode() {
-    let production = PhotoLibraryManager()
+  /// Mirrors the `photo_exportApp` injection: in screenshot mode the wrapping
+  /// `PhotoLibraryManager` holds an injected `ScreenshotPhotoLibraryService`
+  /// as its `overrideService`, and forwards every `PhotoLibraryService`
+  /// method to it. Without the wrapper, the UI's
+  /// `@EnvironmentObject var photoLibraryManager: PhotoLibraryManager` would
+  /// not reach the curated content.
+  ///
+  /// The load-bearing assertion is that the wrapper's auth state mirrors the
+  /// override's. The peer-types property (`PhotoLibraryManager` is `final`,
+  /// `ScreenshotPhotoLibraryService` does not inherit) is enforced at compile
+  /// time — there's no runtime check that adds value.
+  @Test func appWiringMirrorsOverrideServiceAuthState() {
     let screenshotService = ScreenshotPhotoLibraryService()
     let wrapped = PhotoLibraryManager(overrideService: screenshotService)
 
-    // Production manager has no override and is its own production
-    // implementation; wrapping the screenshot service makes the manager forward
-    // every PhotoLibraryService method to it.
-    #expect(production.authorizationStatus != .authorized || production.isAuthorized,
-      "production manager state is whatever PhotoKit reports; sanity check only")
     #expect(wrapped.isAuthorized == true,
       "wrapped manager mirrors the override's auth state")
     #expect(wrapped.authorizationStatus == .authorized,

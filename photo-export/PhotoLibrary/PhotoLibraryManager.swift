@@ -5,7 +5,7 @@ import os
 
 /// Manages access to the Photos library, including authorization and asset fetching.
 ///
-/// `final` since issue #67 item 2 — `ScreenshotPhotoLibraryService` no longer inherits;
+/// `final` since issue #67 item 1 — `ScreenshotPhotoLibraryService` no longer inherits;
 /// it's a standalone `PhotoLibraryService` conformance, and this class accepts an
 /// optional `overrideService` at init that every `PhotoLibraryService` method forwards
 /// to when set. The structural fix closes the "new protocol method silently inherits
@@ -55,7 +55,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// every `PhotoLibraryService` method. Set at init time and never mutated. The
   /// screenshot run injects `ScreenshotPhotoLibraryService` here so the curated content
   /// reaches the UI without `ScreenshotPhotoLibraryService` having to inherit from
-  /// this class (issue #67 item 2). `nil` for the production app launch.
+  /// this class (issue #67 item 1). `nil` for the production app launch.
   ///
   /// `nonisolated(unsafe)` so the `nonisolated` PhotoLibraryService methods
   /// (`countAssets(in:)`, `countAdjustedAssets(in:)`, `cachedCountAssets(in:)`,

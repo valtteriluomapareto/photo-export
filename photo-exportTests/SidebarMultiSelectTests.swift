@@ -454,58 +454,82 @@ struct SidebarMultiSelectTests {
     #expect(h.manager.generation > genBefore)
   }
 
-  /// Item 4c: the predicate-order pin. `enqueueYear/Month/Collection` apply
-  /// `isExported` *before* the AutoSync retry-eligibility gate; if a future
-  /// refactor inlined a retry-gate check at the dispatcher entry point ahead
-  /// of `isExported`, an already-exported asset would route through the gate
-  /// and the eligibility-check counter would grow. This test pins the
-  /// short-circuit: with all assets already exported (proved by running the
-  /// dispatcher once, then re-dispatching), the eligibility check must never
-  /// fire for the second run.
-  @Test func multiSelectDispatcherHonorsAutoSyncEligibilityCheck() async throws {
+  /// Item 4c: pins that the multi-select collections dispatcher delegates
+  /// per-bucket to `enqueueCollection` (the bridge into `ExportJobPlanner`).
+  /// Each bucket's distinct `placement.kind` landing in the queue proves the
+  /// dispatcher reached `enqueueCollection` for that bucket — a future
+  /// regression that added a dispatcher-level pre-filter ahead of
+  /// `enqueueCollection`, or that bypassed it for some buckets, would leave
+  /// a kind missing.
+  ///
+  /// The load-bearing *predicate-order* invariant (isExported before the
+  /// retry gate) is unit-tested directly on the planner — see
+  /// `ExportJobPlannerTests.plan_predicateOrder_isExportedRunsBeforeRetryGate`
+  /// and its `.planTimelineYear_predicateOrder_isExportedFirst` sibling. The
+  /// dispatcher itself doesn't run the predicates; it routes through the
+  /// `enqueueCollection` helper which calls the planner. This test pins the
+  /// routing the planner test depends on.
+  ///
+  /// (The issue's prescribed name `multiSelectDispatcherHonorsAutoSyncEligibilityCheck`
+  /// would have been tautological under fire-and-forget: `skipForAutoSyncRetry`
+  /// early-exits on `activeRunContext?.source != .autoSync`, and the
+  /// multi-select dispatcher never sets a run context. So an eligibility
+  /// counter would stay at zero whether or not the planner's order is
+  /// correct, and the assertion would not pin the contract. The routing
+  /// check here is the strongest dispatcher-level property available.)
+  @Test func multiSelectCollectionsDispatcherDelegatesPerBucketToEnqueueCollection() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
-    // Seed one album with one asset.
-    let album = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
-    h.photoLib.collectionTree = [album]
+    // One asset per bucket: favorites, a top-level album, a top-level shared
+    // album. Each must produce a distinct `placement.kind` in the queue.
+    h.photoLib.favoritesAssets = [makeAsset(id: "fav-1")]
+    h.photoLib.resourcesByAssetId["fav-1"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "fav-1.HEIC")
+    ]
+    let album = seedAlbum(h.photoLib, localId: "A", ids: ["alb-1"])
+    // Shared albums are seeded into a SEPARATE fake dict
+    // (`assetsBySharedAlbumLocalId`) — using `assetsByAlbumLocalId` would
+    // leave the `.sharedAlbum` scope's fetch returning an empty list and
+    // silently dropping the bucket.
+    h.photoLib.assetsBySharedAlbumLocalId["S"] = [makeAsset(id: "shr-1")]
+    h.photoLib.resourcesByAssetId["shr-1"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "shr-1.HEIC")
+    ]
+    let shared = PhotoCollectionDescriptor(
+      id: "shared-album:S", localIdentifier: "S", title: "Shared",
+      kind: .sharedAlbum, pathComponents: [], children: [])
+    h.photoLib.collectionTree = [album, shared]
+
+    // Gate the writer so all three jobs accumulate (one in-flight, two
+    // pending) for a clean kind-distribution snapshot.
+    let writeGate = AsyncCheckpoint()
+    h.writer.checkpoint = writeGate
 
     let buckets = CollectionsSelectionBuckets.normalize(
-      [.album(collectionId: "A")]
+      [.favorites, .album(collectionId: "A"), .sharedAlbum(collectionId: "S")]
     ) { _ in [] }
-
-    // First run: actually export. Drives `enqueueCollection` → variant write
-    // → record store mark-exported, so the second run sees the asset as done.
     h.manager.startExportCollectionsSelection(buckets)
-    await waitUntil(h.manager.totalJobsCompleted == 1 && !h.manager.isEnqueueingAll)
-    #expect(h.manager.totalJobsCompleted == 1)
 
-    // Install an eligibility check that records calls. The closure is
-    // `@MainActor`-isolated by type so the counter can be a plain Int.
-    final class CallCounter { var count = 0 }
-    let counter = CallCounter()
-    h.manager.autoSyncEligibilityCheck = { _, _, _, _ in
-      counter.count += 1
-      return false
-    }
+    await writeGate.waitForEnter(count: 1)
 
-    h.manager.startExportCollectionsSelection(buckets)
-    await waitUntil(!h.manager.isEnqueueingAll)
-
-    // After the second dispatch on an idle queue, `resetProgressCounters()`
-    // wipes both counters back to zero. The load-bearing assertions are that
-    // *no new work was queued* and *the eligibility check was never
-    // consulted* — together they prove `enqueueCollection`'s `isExported`
-    // short-circuit ran before any retry-gate could.
-    #expect(h.manager.pendingJobs.isEmpty, "no jobs queued for already-exported assets")
-    #expect(h.manager.totalJobsEnqueued == 0)
+    // One job is in flight, the other two wait in pendingJobs. The union of
+    // their kinds must be exactly the three bucket kinds the dispatcher was
+    // asked to handle.
+    let inFlightKind = h.manager.currentJobPlacement.map { [$0.kind] } ?? []
+    let pendingKinds = h.manager.pendingJobs.map { $0.placement.kind }
+    let observedKinds = Set(pendingKinds + inFlightKind)
     #expect(
-      counter.count == 0,
+      observedKinds == Set([.favorites, .album, .sharedAlbum]),
       """
-      Eligibility check must not fire for an already-exported asset: \
-      `isExported` short-circuits inside `enqueueCollection` before the \
-      retry-gate. A non-zero count means the predicate order regressed.
-      """)
+      Multi-select collections dispatcher must delegate per-bucket to \
+      `enqueueCollection` (bridges into `ExportJobPlanner`). Each bucket \
+      must produce its placement kind in the queue. Observed: \(observedKinds).
+      """
+    )
+
+    await writeGate.releaseAll()
+    await waitUntil(h.manager.totalJobsCompleted == 3)
   }
 
   /// Item 4d: the queue-coordinator route assertion. The multi-select

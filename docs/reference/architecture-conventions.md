@@ -10,7 +10,7 @@ The patterns and contracts below were established by the May 2026 architecture r
 
 ## The architecture in one paragraph
 
-`ExportManager` is the façade. It owns the export-run lifecycle, the cancellation seam (`generation`), the AutoSync-observable `@Published` properties, and `UserDefaults`-backed user choices (`versionSelection`). Real work is delegated to extracted collaborators: `ExportQueueCoordinator` runs the drain loop and owns queue state; `VariantExporter` writes each variant; `ImportCoordinator` runs the Import Existing Backup flow; `ExportDestinationResolver` allocates filenames; `ExportJobPlanner` plans jobs; `RecordStoreRouter` dispatches record reads/writes by placement kind; `ExportCompletionPolicy` decides what counts as "done". Each `@MainActor` collaborator holds a `Host` protocol that points back to the manager for the cancellation seam and a few UI-state mutations the manager still owns.
+`ExportManager` is the façade. It owns the export-run lifecycle, the AutoSync-observable `@Published` properties, and `UserDefaults`-backed user choices (`versionSelection`). Real work is delegated to extracted collaborators: `ExportQueueCoordinator` runs the drain loop, owns queue state, and owns the Phase-0 cancellation seam (`generation`, `isCurrent`, `throwIfCancelledOrStale`, `bumpGeneration`); `VariantExporter` writes each variant; `ImportCoordinator` runs the Import Existing Backup flow; `ExportDestinationResolver` allocates filenames; `ExportJobPlanner` plans jobs; `RecordStoreRouter` dispatches record reads/writes by placement kind; `ExportCompletionPolicy` decides what counts as "done". `VariantExporter` and `ImportCoordinator` hold a direct weak reference to `ExportQueueCoordinator` for the seam; each collaborator also holds a narrow `Host` protocol back to the manager for the remaining UI-state mutations.
 
 ## Cross-cutting contracts
 
@@ -103,7 +103,7 @@ queueCoordinator.$queueCount
   .store(in: &queueCancellables)
 ```
 
-Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so the AutoSync `CombineLatest3` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
+Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
 
 ## Host protocol pattern
 
@@ -118,8 +118,6 @@ Example from [`ExportQueueCoordinator.swift`](../../photo-export/Export/ExportQu
 final class ExportQueueCoordinator: ObservableObject {
   @MainActor
   protocol Host: AnyObject {
-    var generation: Int { get }
-    func isCurrent(_ gen: Int) -> Bool
     var isEnqueueingAll: Bool { get }
     func performExport(job: ExportManager.ExportJob, generation: Int) async
     func didDrainQueue()
@@ -217,7 +215,7 @@ These tests are wired so they fire when a load-bearing invariant breaks. Do not 
 | Test | Fires when… | What to do |
 | --- | --- | --- |
 | [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) | The emission sequence on `exportRunStatePublisher`, `isImportingPublisher`, or `completedRunsPublisher` changes | Audit. Re-record snapshots only after confirming the new sequence is what AutoSync should see. |
-| [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) | A coordinator → manager mirror becomes async (`.receive(on:)`, `.async`, etc.) | Re-add the synchronous sink. The AutoSync `CombineLatest3` depends on synchrony for consistent reads. |
+| [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) | A coordinator → manager mirror becomes async (`.receive(on:)`, `.async`, etc.) | Re-add the synchronous sink. The AutoSync `CombineLatest4` depends on synchrony for consistent reads. |
 | `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions` | Pause/resume/cancel transitions on `isRunning`/`queueCount`/`isPaused` change | Audit; this is the toolbar's contract. |
 | [`ScreenshotPhotoLibraryServiceOverridesTests`](../../photo-exportTests/ScreenshotPhotoLibraryServiceOverridesTests.swift) | A `PhotoLibraryService` method on `ScreenshotPhotoLibraryService` returns production-PhotoKit-shaped empties instead of curated synthetic data | The tests pin every method's curated output. The "newly-added method silently inherits production" hole that prompted this gate's original wording is closed structurally — `ScreenshotPhotoLibraryService` is a peer conformance (no inheritance) since issue #67 item 1, so a new protocol method fails to compile until it has a real implementation. |
 | [`ImportIdempotencyTests`](../../photo-exportTests/ImportIdempotencyTests.swift) | The import flow loses idempotency on retry | Audit. Two consecutive `startImport()` runs over the same backup tree must not double-write records. |
