@@ -217,6 +217,37 @@ struct AutoSyncReducerTests {
     #expect(effects.isEmpty)
   }
 
+  // MARK: - convertHEICToJPEGChanged (issue #47)
+
+  /// Flipping the toggle reschedules AutoSync at the same 2s debounce as
+  /// `versionSelectionChanged`. Without this, AutoSync would sit idle on
+  /// the user's toggle flip until the next photos-change / app-launch.
+  @Test func convertHEICToJPEGChangeSchedulesDebounce() {
+    let state = enabledStateWithSafeDestinationAndScope()
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .convertHEICToJPEGChanged(true), in: state, now: now)
+
+    let fireAt = now.addingTimeInterval(2)
+    #expect(next.convertHEICToJPEG == true)
+    #expect(next.current == .scheduled(reason: .convertHEICToJPEGChanged, fireAt: fireAt))
+    #expect(effects == [.scheduleDebounce(.convertHEICToJPEGChanged, fireAt: fireAt)])
+  }
+
+  /// Idempotent flips (toggle landing back on the value it was already at —
+  /// e.g. rapid double-click on the toolbar) must not reschedule.
+  @Test func convertHEICToJPEGUnchangedIsNoOp() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.convertHEICToJPEG = true
+    state.current = .idle
+
+    let (next, effects) = AutoSyncReducer.reduce(
+      .convertHEICToJPEGChanged(true), in: state, now: now)
+
+    #expect(next.current == .idle)
+    #expect(effects.isEmpty)
+  }
+
   // MARK: - debounceFired → running → idle
 
   @Test func debounceFiredFromScheduledStartsRun() {

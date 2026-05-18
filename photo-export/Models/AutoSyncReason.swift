@@ -17,6 +17,11 @@ enum AutoSyncReason: String, Codable, Equatable, Sendable {
   case destinationBecameAvailable
   case scopeSelectionChanged
   case versionSelectionChanged
+  /// User toggled `Convert HEIC to JPEG` (issue #47). Re-triggers AutoSync
+  /// because the toggle changes which assets count as exported
+  /// (HEIC originals widen `requiredVariants` to include `.edited`), so
+  /// previously-skipped HEIC assets become eligible mid-run-window.
+  case convertHEICToJPEGChanged
   case photosChanged
   /// Fallback when the persistent-change token was expired/invalid/details-unavailable; a
   /// bounded full reconciliation runs after the 2-minute quiet window.
@@ -36,6 +41,7 @@ enum AutoSyncReason: String, Codable, Equatable, Sendable {
     case .destinationBecameAvailable: return "drive reconnected"
     case .scopeSelectionChanged: return "scope changed"
     case .versionSelectionChanged: return "version changed"
+    case .convertHEICToJPEGChanged: return "HEIC conversion changed"
     case .photosChanged: return "library changed"
     case .photosChangeFallback: return "library catch-up"
     case .userExportNow: return "Export Now"

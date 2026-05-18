@@ -18,6 +18,11 @@ protocol AutoSyncExportRunning: AnyObject {
   /// AutoSync needs this to honor the user's selection in background runs.
   var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> { get }
 
+  /// Stream of the user's `Convert HEIC to JPEG` toggle (issue #47). AutoSync
+  /// re-evaluates eligibility on flip because the toggle widens
+  /// `requiredVariants` for HEIC originals.
+  var convertHEICToJPEGPublisher: AnyPublisher<Bool, Never> { get }
+
   /// Awaitable run entry point. Caller (typically AutoSyncManager) constructs the
   /// `ExportRunContext` (incl. UUID + startedAt) and awaits the terminal summary.
   func runExport(context: ExportRunContext) async -> ExportRunSummary

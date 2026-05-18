@@ -138,6 +138,21 @@ final class AutoSyncManager: ObservableObject {
       }
       .store(in: &subscriptions)
 
+    // Issue #47: the HEIC→JPEG toggle changes which assets count as
+    // exported, so AutoSync re-evaluates at the same 2s debounce as
+    // `versionSelection`. Without this subscription, AutoSync would sit
+    // idle until the next photos-change or app-launch trigger after a
+    // user flipped the toggle.
+    environment.exportRunner.convertHEICToJPEGPublisher
+      .removeDuplicates()
+      .sink { [weak self] value in
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          self?.dispatch(.convertHEICToJPEGChanged(value))
+        }
+      }
+      .store(in: &subscriptions)
+
     // Manual-run completion hook for plan §"Dirty State" clear rule. AutoSync-
     // sourced summaries are routed through the `runExport`-await return path
     // inside `startRun`; filtering here to `.manual` avoids dispatching
