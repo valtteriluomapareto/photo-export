@@ -1699,7 +1699,8 @@ final class ExportManager: ObservableObject {
           from: resources, mediaType: descriptor.mediaType)
       {
         let editedProducer = ResourceSelection.selectEditedProducer(
-          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
+          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
+          convertHEICToJPEG: convertHEICToJPEG)
         if let editedFilename = editedProducer.originalFilename {
           let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
           let originalExt = (originalRes.originalFilename as NSString).pathExtension

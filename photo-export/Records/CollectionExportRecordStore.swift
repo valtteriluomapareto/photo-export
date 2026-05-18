@@ -147,7 +147,11 @@ final class CollectionExportRecordStore: ObservableObject {
   /// `isExported(asset:placement:selection:)` so collection-grid view callers
   /// see the right answers without threading the toggle through every
   /// `@EnvironmentObject` site. Issue #47.
-  var convertHEICToJPEG: Bool = false
+  ///
+  /// `@Published` (rather than plain stored) so `@EnvironmentObject` views
+  /// re-render when the toggle flips. See `ExportRecordStore`'s sibling
+  /// docstring; the same reasoning applies to collection placements.
+  @Published var convertHEICToJPEG: Bool = false
   private var notifyWorkItem: DispatchWorkItem?
 
   private let fileManager = FileManager.default

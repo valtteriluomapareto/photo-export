@@ -82,7 +82,15 @@ final class ExportRecordStore: ObservableObject {
   /// `@EnvironmentObject` callers see the right answers without having to
   /// thread the toggle through five call sites (timeline grid, year tiles,
   /// sidebar badges, content-pane summary, etc.). Issue #47.
-  var convertHEICToJPEG: Bool = false
+  ///
+  /// `@Published` so views with `@EnvironmentObject private var
+  /// exportRecordStore: ExportRecordStore` re-render when the toggle flips.
+  /// `MonthContentView` is `Equatable` over a stable value set and is not
+  /// otherwise re-evaluated on toggle changes, so without the publish here
+  /// "exported" thumbnail badges would stay stale until the next mutation.
+  /// Change rate is zero outside user-toggle clicks, so no render-storm
+  /// concern.
+  @Published var convertHEICToJPEG: Bool = false
   private var notifyWorkItem: DispatchWorkItem?
 
   private let fileManager = FileManager.default
