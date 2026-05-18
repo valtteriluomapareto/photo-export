@@ -11,7 +11,8 @@ enum TestAssetFactory {
     pixelWidth: Int = 4032,
     pixelHeight: Int = 3024,
     duration: TimeInterval = 0,
-    hasAdjustments: Bool = false
+    hasAdjustments: Bool = false,
+    originalUTI: String? = nil
   ) -> AssetDescriptor {
     AssetDescriptor(
       id: id,
@@ -20,7 +21,8 @@ enum TestAssetFactory {
       pixelWidth: pixelWidth,
       pixelHeight: pixelHeight,
       duration: duration,
-      hasAdjustments: hasAdjustments
+      hasAdjustments: hasAdjustments,
+      originalUTI: originalUTI
     )
   }
 
