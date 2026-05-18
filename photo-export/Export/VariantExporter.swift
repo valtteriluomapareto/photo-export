@@ -57,6 +57,10 @@ final class VariantExporter {
   private let recordStoreRouter: RecordStoreRouter
   private let assetResourceWriter: any AssetResourceWriter
   private let mediaRenderer: any MediaRenderer
+  /// HEIC→JPEG converter used by the `EditedProducer.convertHEIC` write arm
+  /// (issue #47). Held here so the write-step extension lands in a subsequent
+  /// sub-PR without re-threading dependencies.
+  private let imageConverter: any ImageConverter
   private let fileSystem: any FileSystemService
   private let exportDestination: any ExportDestination
 
@@ -67,6 +71,7 @@ final class VariantExporter {
     recordStoreRouter: RecordStoreRouter,
     assetResourceWriter: any AssetResourceWriter,
     mediaRenderer: any MediaRenderer,
+    imageConverter: any ImageConverter,
     fileSystem: any FileSystemService,
     exportDestination: any ExportDestination
   ) {
@@ -76,6 +81,7 @@ final class VariantExporter {
     self.recordStoreRouter = recordStoreRouter
     self.assetResourceWriter = assetResourceWriter
     self.mediaRenderer = mediaRenderer
+    self.imageConverter = imageConverter
     self.fileSystem = fileSystem
     self.exportDestination = exportDestination
   }
