@@ -1,7 +1,7 @@
 # Collections Export Plan
 
 Date: 2026-04-30
-Status: In progress (sibling collection-records store; no migration; album rename and album sidecar deferred)
+Status: ✅ Shipped — archived as a decision record. All four phases landed; the `AppFlags.enableCollections` build-time gate was flipped to `true` for Phase 4 and removed in the cleanup commit that followed. Album rename and the `_album.json` membership sidecar remain deliberately deferred (see the "Goals" / "Non-Goals" sections below).
 
 ## Implementation Status
 

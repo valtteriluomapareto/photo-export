@@ -4,7 +4,7 @@ import Testing
 
 @testable import Photo_Export
 
-/// Plan §"Cross-store independence" (`docs/project/plans/collections-export-plan.md`):
+/// Plan §"Cross-store independence" (`docs/project/archive/collections-export-plan.md`):
 /// the timeline and collection record stores share no key space. A failure on one side
 /// must never mutate state on the other for the same asset, and a corrupt collection
 /// store must not block timeline export operations (and vice versa). These tests prove

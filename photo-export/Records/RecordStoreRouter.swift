@@ -129,7 +129,7 @@ final class RecordStoreRouter {
   /// collection placements sorted by id (for deterministic test behavior). Returns nil if
   /// nothing reusable exists.
   ///
-  /// Per `docs/project/plans/collections-export-plan.md` §"Reuse-Source Copy Path", any
+  /// Per `docs/project/archive/collections-export-plan.md` §"Reuse-Source Copy Path", any
   /// prior `.done` write is acceptable as a source — there's no preference for timeline
   /// over collection beyond the deterministic search order.
   func findReuseSource(

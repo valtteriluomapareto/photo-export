@@ -3,7 +3,7 @@ import Foundation
 /// Per-record-store load state. Both `ExportRecordStore` (timeline) and
 /// `CollectionExportRecordStore` (favorites + albums) publish their own state.
 ///
-/// Per `docs/project/plans/collections-export-plan.md` §"Recovery on Corruption":
+/// Per `docs/project/archive/collections-export-plan.md` §"Recovery on Corruption":
 /// - `.unconfigured` — `configure(for:)` has not been called with a destination id yet,
 ///   or it was called with `nil`. Reads return empty; writes silently no-op.
 /// - `.ready` — snapshot decoded cleanly (or was absent); log replay succeeded. The store
