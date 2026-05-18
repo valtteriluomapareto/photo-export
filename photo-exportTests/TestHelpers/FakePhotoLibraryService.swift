@@ -313,8 +313,22 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     stopCachingCalls.append(assets)
   }
 
+  /// Asset ids whose thumbnail is "still syncing from iCloud" — the local cache is
+  /// empty and only an `allowNetwork: true` call can produce the image. Lets tests
+  /// reproduce the freshly-arrived-from-iCloud case where
+  /// `photoLibraryDidChange` has fired but PhotoKit hasn't cached the thumbnail
+  /// bytes locally yet.
+  var thumbnailRequiresNetwork: Set<String> = []
+
+  /// `(assetId, allowNetwork)` records of every `loadThumbnail` call, in order.
+  var loadThumbnailCalls: [(assetId: String, allowNetwork: Bool)] = []
+
   func loadThumbnail(for assetId: String, allowNetwork: Bool) async -> NSImage? {
-    thumbnailsByAssetId[assetId]
+    loadThumbnailCalls.append((assetId, allowNetwork))
+    if thumbnailRequiresNetwork.contains(assetId), !allowNetwork {
+      return nil
+    }
+    return thumbnailsByAssetId[assetId]
   }
 
   func loadThumbnailHighQuality(for assetId: String, allowNetwork: Bool) async -> NSImage? {

@@ -27,6 +27,7 @@ struct FolderTileView: View {
 
   @State private var covers: [NSImage] = []
   @State private var coverState: CoverState = .idle
+  @State private var isHovering: Bool = false
 
   private enum CoverState {
     case idle
@@ -51,7 +52,6 @@ struct FolderTileView: View {
 
       Text(displayTitle)
         .font(.body)
-        .fontWeight(.medium)
         .lineLimit(1)
         .truncationMode(.tail)
         .frame(width: Self.tileSide, alignment: .leading)
@@ -62,6 +62,9 @@ struct FolderTileView: View {
         .lineLimit(1)
         .frame(width: Self.tileSide, alignment: .leading)
     }
+    .scaleEffect(isHovering ? 1.02 : 1.0)
+    .animation(.easeInOut(duration: 0.12), value: isHovering)
+    .onHover { isHovering = $0 }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityLabel)
     .accessibilityAddTraits(accessibilityTraits)
@@ -111,6 +114,7 @@ struct FolderTileView: View {
       case .failed:
         Image(systemName: "exclamationmark.triangle")
           .foregroundStyle(.secondary)
+          .help("Couldn't load preview")
       }
     }
   }
@@ -170,13 +174,18 @@ struct FolderTileView: View {
     }
   }
 
+  /// Fully-exported badge. Palette rendering puts the white check inside a green disc
+  /// — the symbol is its own backing so we don't need a flat white plate underneath
+  /// (which read as a foreign sticker, especially in Dark Mode). A subtle shadow keeps
+  /// the green readable on light covers.
   @ViewBuilder
   private var exportedBadge: some View {
     if descriptor.kind == .album, isFullyExported {
       Image(systemName: "checkmark.circle.fill")
-        .foregroundStyle(.green)
-        .background(Circle().fill(Color.white).padding(2))
+        .symbolRenderingMode(.palette)
+        .foregroundStyle(.white, .green)
         .font(.title3)
+        .shadow(color: Color.black.opacity(0.25), radius: 1.5, y: 0.5)
         .padding(6)
         .accessibilityHidden(true)
     }
@@ -227,8 +236,11 @@ struct FolderTileView: View {
   // MARK: - Cover loading
 
   /// Loads up to four cover thumbnails for an album tile. Renders 1-up if the album has
-  /// a single asset, 4-up otherwise. Thumbnail fetches run in parallel inside a task
-  /// group so the tile doesn't gate on PhotoKit serialising them.
+  /// a single asset, 4-up otherwise. Thumbnail fetches dispatch into a `TaskGroup`; the
+  /// underlying `loadThumbnail` is `@MainActor`-isolated so the calls serialise on the
+  /// main actor, but each await yields the runloop and PhotoKit can prefetch in the
+  /// background — fast enough in practice that the simpler structure beats threading a
+  /// detached fetch through the service seam.
   ///
   /// `fetchAssets(in: .album(...))` materialises the full album list, which is
   /// acceptable for v1 — the tile only builds when the album scrolls into view, and
@@ -244,6 +256,7 @@ struct FolderTileView: View {
     do {
       let assets = try await photoLibraryService.fetchAssets(
         in: .album(collectionId: albumId), mediaType: nil)
+      try Task.checkCancellation()
       let coverIds = assets.prefix(4).map(\.id)
       if coverIds.isEmpty {
         coverState = .empty
@@ -261,12 +274,15 @@ struct FolderTileView: View {
         }
         return pairs.sorted(by: { $0.0 < $1.0 }).map(\.1)
       }
+      try Task.checkCancellation()
       if loaded.isEmpty {
         coverState = .failed
       } else {
         covers = loaded
         coverState = .loaded
       }
+    } catch is CancellationError {
+      // Don't change state on cancellation — the replacement task will publish its own.
     } catch {
       coverState = .failed
     }

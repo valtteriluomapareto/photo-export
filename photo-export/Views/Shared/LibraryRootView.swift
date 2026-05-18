@@ -308,7 +308,9 @@ struct LibraryRootView: View {
     switch focusedSelection {
     case .timelineYear(let year):
       YearContentView(
-        year: year, selectedAsset: $selectedAsset,
+        year: year,
+        selection: folderNavigationBinding,
+        selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
       .environmentObject(photoLibraryManager)

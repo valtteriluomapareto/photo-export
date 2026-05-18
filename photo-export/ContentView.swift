@@ -175,13 +175,24 @@ struct MonthRow: View {
       year: year, month: month, totalCount: total, adjustedCount: adjusted,
       selection: selection)
     let queued = exportManager.queuedCount(year: year, month: month)
+    // Only the row owning the currently-in-flight job spins. Other rows with queued work
+    // show just the "N left" text — a spinner on every queued row of a Year export reads
+    // as visual clutter (macOS Finder / Mail sidebars use a single global indicator plus
+    // quiet per-item status), and the global progress bar already advertises that work
+    // is happening.
+    let inFlight = exportManager.currentJobPlacement?.timelineYearMonth
+    let isActive = inFlight?.year == year && inFlight?.month == month
     return HStack(spacing: 8) {
       Text(MonthFormatting.name(for: month))
       Spacer()
       if queued > 0 {
-        ProgressView()
-          .scaleEffect(0.5)
-          .frame(width: 16, height: 16)
+        if isActive {
+          // `.controlSize(.mini)` renders the spinner at the right pixel size as a
+          // vector; the previous `scaleEffect(0.5).frame(width:16, height:16)`
+          // pattern scaled the rasterised default and produced a fuzzy indicator.
+          ProgressView()
+            .controlSize(.mini)
+        }
         Text("\(queued) left")
           .font(.caption2)
           .foregroundColor(.orange)
