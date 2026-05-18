@@ -25,7 +25,9 @@ struct PhotoExportApp: App {
   @StateObject private var whatsNewState: WhatsNewState
 
   private let autoSyncDestinationAdapter: DestinationSnapshotAdapter
-  private let autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+  /// `@StateObject` because Settings → Auto Export observes
+  /// `lastSuccessfulReconciliation` for the "Last checked iCloud …" line.
+  @StateObject private var autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   private let autoSyncDirtyStateStore: FileBackedAutoSyncDirtyStateStore
   private let autoSyncRetryStateStore: FileBackedAutoSyncRetryStateStore
   private let autoSyncRunSummaryStore: FileBackedAutoSyncRunSummaryStore
@@ -127,9 +129,18 @@ struct PhotoExportApp: App {
       baseDirectoryURL: destinationsRoot)
     let tokenStore = GlobalPhotoChangeTokenStore(
       fileURL: autoSyncRoot.appendingPathComponent("photo-library-change-token.data"))
+    // One clock shared between the photo-change adapter and AutoSync so test
+    // doubles can advance time consistently across both subsystems if needed.
+    let clock = SystemAutoSyncClock()
+    // The bridge callback wakes `PhotoLibraryManager` whenever the safety-net
+    // reconcile turns up changes that PhotoKit's normal observer missed — so
+    // the timeline grid and sidebar counts refresh alongside AutoSync. `[weak
+    // plm]` to avoid pinning the manager past App teardown.
     let photoAdapter = PhotoLibraryPersistentChangeAdapter(
       tokenStore: tokenStore,
-      authorizationStatusPublisher: plm.$authorizationStatus.eraseToAnyPublisher()
+      authorizationStatusPublisher: plm.$authorizationStatus.eraseToAnyPublisher(),
+      clock: clock,
+      onPotentialLibraryChange: { [weak plm] in plm?.invalidateCache() }
     )
     let safetyConfirmationStore = FileBackedDestinationSafetyConfirmationStore(
       baseDirectoryURL: destinationsRoot)
@@ -143,7 +154,6 @@ struct PhotoExportApp: App {
       destinationManager: edm, lifecycleCoordinator: coordinator,
       safetyMonitor: safetyMonitor)
     let scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: .standard)
-    let clock = SystemAutoSyncClock()
     let asm = AutoSyncManager()
     // AutoSync retry-eligibility hook for ExportManager. Reads from
     // AutoSyncManager.currentRetryState — kept up-to-date by the manager
@@ -176,7 +186,7 @@ struct PhotoExportApp: App {
     _whatsNewState = StateObject(wrappedValue: WhatsNewState())
     _destinationSafetyMonitor = StateObject(wrappedValue: safetyMonitor)
     self.autoSyncDestinationAdapter = destinationAdapter
-    self.autoSyncPhotoChangeAdapter = photoAdapter
+    _autoSyncPhotoChangeAdapter = StateObject(wrappedValue: photoAdapter)
     self.autoSyncDirtyStateStore = dirtyStore
     self.autoSyncRetryStateStore = retryStore
     self.autoSyncRunSummaryStore = runSummaryStore
@@ -201,6 +211,8 @@ struct PhotoExportApp: App {
         .environmentObject(collectionExportRecordStore)
         .environmentObject(autoSyncManager)
         .environmentObject(autoSyncScopeStore)
+        .environmentObject(autoSyncPhotoChangeAdapter)
+        .environmentObject(exportManager.progressState)
         .environmentObject(whatsNewState)
         .task {
           lifecycleCoordinator.attach(
@@ -259,7 +271,10 @@ struct PhotoExportApp: App {
         ImportBackupCommand()
       }
       CommandGroup(after: .help) {
-        SaveDiagnosticReportCommand()
+        SaveDiagnosticReportCommand(
+          timelineStore: exportRecordStore,
+          collectionStore: collectionExportRecordStore,
+          destinationManager: exportDestinationManager)
       }
       // Sidebar select-all wired through the standard Edit menu so the shortcut
       // (Cmd+A) is discoverable. The action's behavior changes per section —
@@ -301,6 +316,7 @@ struct PhotoExportApp: App {
       .environmentObject(lifecycleCoordinator)
       .environmentObject(loginItemController)
       .environmentObject(destinationSafetyMonitor)
+      .environmentObject(autoSyncPhotoChangeAdapter)
     }
     .windowResizability(.contentMinSize)
   }
@@ -486,29 +502,64 @@ private struct ImportBackupCommand: View {
 
 // MARK: - Save Diagnostic Report Command
 
-struct SaveDiagnosticReportAction {
-  let callAsFunction: () -> Void
-}
-
-struct SaveDiagnosticReportActionKey: FocusedValueKey {
-  typealias Value = SaveDiagnosticReportAction
-}
-
-extension FocusedValues {
-  var saveDiagnosticReportAction: SaveDiagnosticReportAction? {
-    get { self[SaveDiagnosticReportActionKey.self] }
-    set { self[SaveDiagnosticReportActionKey.self] = newValue }
-  }
-}
-
+/// Help-menu item. Owns its dependencies directly so the menu item stays
+/// enabled regardless of which scene is focused — previously this lived
+/// behind a `@FocusedValue` published from `LibraryRootView`, which made
+/// the menu item grey out when the user opened Settings, opened About, or
+/// closed the main window. Diagnostic reports don't need the library
+/// window — just the three stores below and a save panel.
+@MainActor
 private struct SaveDiagnosticReportCommand: View {
-  @FocusedValue(\.saveDiagnosticReportAction) private var action
+  let timelineStore: ExportRecordStore
+  let collectionStore: CollectionExportRecordStore
+  let destinationManager: ExportDestinationManager
 
   var body: some View {
     Button("Save Diagnostic Report\u{2026}") {
-      action?.callAsFunction()
+      SaveDiagnosticReportCommand.saveDiagnosticReport(
+        timelineStore: timelineStore,
+        collectionStore: collectionStore,
+        destinationManager: destinationManager)
     }
-    .disabled(action == nil)
+  }
+
+  /// Build the report from the current store snapshots and prompt for a save
+  /// location. `nonisolated` would be nice for symmetry with `DiagnosticReporter`,
+  /// but `NSSavePanel.runModal()` must run on the main thread and the stores
+  /// are `@MainActor`.
+  fileprivate static func saveDiagnosticReport(
+    timelineStore: ExportRecordStore,
+    collectionStore: CollectionExportRecordStore,
+    destinationManager: ExportDestinationManager
+  ) {
+    let info = Bundle.main.infoDictionary
+    let appVersion = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+    let buildNumber = (info?["CFBundleVersion"] as? String) ?? "?"
+    let reporter = DiagnosticReporter(
+      timelineStore: timelineStore,
+      collectionStore: collectionStore,
+      destinationId: destinationManager.destinationId,
+      appVersion: appVersion,
+      buildNumber: buildNumber
+    )
+    let report = reporter.makeReport()
+    let panel = NSSavePanel()
+    panel.allowedContentTypes = [.plainText]
+    let stamp = ISO8601DateFormatter().string(from: Date())
+      .replacingOccurrences(of: ":", with: "-")
+    panel.nameFieldStringValue = "photo-export-diagnostic-\(stamp).txt"
+    panel.canCreateDirectories = true
+    panel.title = "Save Diagnostic Report"
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    do {
+      try report.write(to: url, atomically: true, encoding: .utf8)
+    } catch {
+      let alert = NSAlert()
+      alert.messageText = "Could not save diagnostic report"
+      alert.informativeText = error.localizedDescription
+      alert.alertStyle = .warning
+      alert.runModal()
+    }
   }
 }
 

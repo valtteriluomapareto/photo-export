@@ -676,8 +676,11 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     return asset
   }
 
-  /// Clears the entire PHAsset cache (called on library changes).
-  private func invalidateCache() {
+  /// Clears the entire PHAsset cache (called on library changes). Non-private so
+  /// `PhotoLibraryPersistentChangeAdapter` can wake the UI side after a
+  /// safety-net reconcile turns up changes that PhotoKit's normal
+  /// `photoLibraryDidChange` callback missed (issue #69).
+  func invalidateCache() {
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil

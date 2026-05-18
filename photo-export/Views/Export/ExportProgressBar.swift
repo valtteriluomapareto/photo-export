@@ -17,23 +17,28 @@ import SwiftUI
 /// keeps its full real estate when the queue is idle.
 struct ExportProgressBar: View {
   @EnvironmentObject private var exportManager: ExportManager
+  /// Read frequently-mutating progress state from a dedicated observable so the
+  /// per-asset filename / per-job counter updates don't fan out as
+  /// `ExportManager.objectWillChange` storms across every observing view (sidebar,
+  /// year/month grids, etc.). See `ExportProgressState` for the rationale.
+  @EnvironmentObject private var progressState: ExportProgressState
 
   var body: some View {
     Group {
-      if exportManager.totalJobsEnqueued > 0 {
+      if progressState.totalJobsEnqueued > 0 {
         VStack(alignment: .leading, spacing: 0) {
-          if let warning = exportManager.queueWarningMessage {
+          if let warning = progressState.queueWarningMessage {
             queueWarningBanner(message: warning)
           }
           progressContent
         }
-      } else if let message = exportManager.emptyRunMessage {
+      } else if let message = progressState.emptyRunMessage {
         emptyRunBanner(message: message)
       }
     }
-    .animation(.default, value: exportManager.totalJobsEnqueued > 0)
-    .animation(.default, value: exportManager.emptyRunMessage)
-    .animation(.default, value: exportManager.queueWarningMessage)
+    .animation(.default, value: progressState.totalJobsEnqueued > 0)
+    .animation(.default, value: progressState.emptyRunMessage)
+    .animation(.default, value: progressState.queueWarningMessage)
   }
 
   /// Persistent warning rendered above the progress strip when an enqueue partially
@@ -64,8 +69,8 @@ struct ExportProgressBar: View {
   // MARK: - Active progress
 
   private var progressContent: some View {
-    let total = exportManager.totalJobsEnqueued
-    let done = exportManager.totalJobsCompleted
+    let total = progressState.totalJobsEnqueued
+    let done = progressState.totalJobsCompleted
     let fraction = total > 0 ? Double(done) / Double(total) : 0
 
     return HStack(alignment: .center, spacing: 12) {
@@ -100,7 +105,7 @@ struct ExportProgressBar: View {
   /// stays visible when the filename middle-truncates.
   private var currentAssetLabel: some View {
     HStack(alignment: .center, spacing: 4) {
-      Text(exportManager.currentAssetFilename ?? "")
+      Text(progressState.currentAssetFilename ?? "")
         .font(.caption)
         .foregroundColor(.secondary)
         .lineLimit(1)
@@ -117,7 +122,7 @@ struct ExportProgressBar: View {
   }
 
   private var renderActivityHint: String? {
-    switch exportManager.renderActivity {
+    switch progressState.renderActivity {
     case .none: return nil
     case .downloading: return "(downloading…)"
     case .rendering: return "(rendering…)"
@@ -125,8 +130,8 @@ struct ExportProgressBar: View {
   }
 
   private var accessibilityCurrentAssetLabel: String {
-    let filename = exportManager.currentAssetFilename ?? ""
-    switch exportManager.renderActivity {
+    let filename = progressState.currentAssetFilename ?? ""
+    switch progressState.renderActivity {
     case .none:
       return filename.isEmpty ? "" : "Currently exporting \(filename)"
     case .downloading:

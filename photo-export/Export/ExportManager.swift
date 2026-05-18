@@ -37,29 +37,23 @@ final class ExportManager: ObservableObject {
   @Published private(set) var isRunning: Bool = false
   @Published private(set) var queueCount: Int = 0
   @Published private(set) var isPaused: Bool = false
-  @Published private(set) var totalJobsEnqueued: Int = 0
-  @Published private(set) var totalJobsCompleted: Int = 0
-  @Published private(set) var currentAssetFilename: String?
 
-  /// Active render activity for the asset currently in flight. Surfaces in
-  /// the toolbar so a long edited-video render does not look like a hang.
-  /// `nil` whenever no render is active (the default for static-resource
-  /// writes).
-  @Published private(set) var renderActivity: RenderActivity?
+  /// Frequently-mutating progress-bar state lives here so the per-asset filename and
+  /// per-job counter updates don't trigger `ExportManager.objectWillChange` storms.
+  /// See `ExportProgressState` for the rationale and tests-still-pass forwarders below.
+  let progressState = ExportProgressState()
 
-  /// Transient toolbar feedback for the case where the user clicked Export Month / Year /
-  /// All against an already-complete library (zero new jobs enqueued). Cleared on any new
-  /// `startExport*` call, version-selection change, `cancelAndClear`, or after
-  /// `Self.emptyRunMessageDuration`.
-  @Published private(set) var emptyRunMessage: String?
+  /// Forwarders to `progressState`. Read-only at the manager surface so callers that
+  /// always treated these as `private(set)` continue to compile; internal writes go
+  /// through `progressState.foo = …` directly.
+  var totalJobsEnqueued: Int { progressState.totalJobsEnqueued }
+  var totalJobsCompleted: Int { progressState.totalJobsCompleted }
+  var currentAssetFilename: String? { progressState.currentAssetFilename }
+  var renderActivity: RenderActivity? { progressState.renderActivity }
+  var emptyRunMessage: String? { progressState.emptyRunMessage }
+  var queueWarningMessage: String? { progressState.queueWarningMessage }
+
   private var emptyRunMessageTask: Task<Void, Never>?
-
-  /// Persistent warning attached to *active* queue work — for example, "couldn't list every
-  /// album, continuing with what was queued." Rendered alongside the progress bar so the
-  /// user sees both the partial run AND the reason it's partial. Distinct from
-  /// `emptyRunMessage` because that one only renders when the queue is empty. Cleared on
-  /// every new `startExport*` call and on `cancelAndClear`.
-  @Published private(set) var queueWarningMessage: String?
 
   /// Which variants the pipeline writes for each asset. Persisted to `UserDefaults` so the
   /// choice survives restart and stays globally consistent regardless of destination.
@@ -208,6 +202,15 @@ final class ExportManager: ObservableObject {
     isRunning || queueCount > 0
   }
 
+  /// `true` when a manual export action (Export Year, Export Month, Export Folder,
+  /// Export Album, toolbar Cmd+E) should present the "Auto Export is running"
+  /// supersede confirmation instead of dispatching immediately. The toolbar primary
+  /// action and the in-pane `AutoSyncAwareExportButton`s both consult this so they
+  /// behave consistently.
+  var manualExportShouldConfirmSupersede: Bool {
+    activeRunContext?.source == .autoSync
+  }
+
   // MARK: - Dependencies
   private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Export")
   let photoLibraryService: any PhotoLibraryService
@@ -306,10 +309,18 @@ final class ExportManager: ObservableObject {
   /// cleanup paths to route the `removeVariant` call to the correct store via
   /// `placement.kind`.
   ///
-  /// `@Published` so the timeline sidebar's `MonthRow` can light up its spinner only on
-  /// the row that owns the in-flight job. AutoSync does not observe this field, so
-  /// publishing it adds a UI observer without touching the AutoSync seam.
-  @Published private(set) var currentJobPlacement: ExportPlacement?
+  /// The observable storage lives on `progressState` so that the per-job mutation
+  /// (set on job start, cleared on job end — twice per asset) doesn't fan out as
+  /// `ExportManager.objectWillChange` to every view holding the manager. The only
+  /// SwiftUI reader is `MonthRow`'s in-flight spinner; it subscribes to
+  /// `ExportProgressState` directly. This forwarder keeps internal write sites in
+  /// the manager unchanged. `private(set)` preserves the pre-extraction surface —
+  /// only the manager (and a `setCurrentJob` / `clearCurrentJobIdentifiers` it
+  /// owns) may mutate the in-flight placement.
+  private(set) var currentJobPlacement: ExportPlacement? {
+    get { progressState.currentJobPlacement }
+    set { progressState.currentJobPlacement = newValue }
+  }
   /// Forwarder to `queueCoordinator.generation`. The Phase-0 cancellation storage
   /// moved to `ExportQueueCoordinator` in issue #67 item 2; this computed property
   /// preserves `manager.generation` as a stable read surface for tests and
@@ -377,7 +388,7 @@ final class ExportManager: ObservableObject {
     if mediaRenderer == nil {
       self.mediaRenderer = ProductionMediaRenderer { @Sendable [weak self] activity in
         Task { @MainActor [weak self] in
-          self?.renderActivity = activity
+          self?.progressState.renderActivity = activity
         }
       }
     }
@@ -409,10 +420,10 @@ final class ExportManager: ObservableObject {
       .sink { [weak self] in self?.queueCount = $0 }
       .store(in: &queueCancellables)
     self.queueCoordinator.$totalJobsEnqueued
-      .sink { [weak self] in self?.totalJobsEnqueued = $0 }
+      .sink { [weak self] in self?.progressState.totalJobsEnqueued = $0 }
       .store(in: &queueCancellables)
     self.queueCoordinator.$totalJobsCompleted
-      .sink { [weak self] in self?.totalJobsCompleted = $0 }
+      .sink { [weak self] in self?.progressState.totalJobsCompleted = $0 }
       .store(in: &queueCancellables)
     self.importCoordinator = ImportCoordinator(host: self, queueCoordinator: self.queueCoordinator)
     self.importCoordinator.$isImporting
@@ -1235,7 +1246,7 @@ final class ExportManager: ObservableObject {
     queueCoordinator.teardownQueue()
     queueCoordinator.resetProgressCounters()
     isEnqueueingAll = false
-    currentAssetFilename = nil
+    progressState.currentAssetFilename = nil
     clearEmptyRunMessage()
     clearQueueWarningMessage()
   }
@@ -1253,14 +1264,14 @@ final class ExportManager: ObservableObject {
     if activeRunContext?.visibility == .background {
       return
     }
-    emptyRunMessage = message
+    progressState.emptyRunMessage = message
     emptyRunMessageTask?.cancel()
     let duration = Self.emptyRunMessageDuration
     emptyRunMessageTask = Task { [weak self] in
       try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
       guard !Task.isCancelled else { return }
       await MainActor.run { [weak self] in
-        self?.emptyRunMessage = nil
+        self?.progressState.emptyRunMessage = nil
         self?.emptyRunMessageTask = nil
       }
     }
@@ -1269,7 +1280,7 @@ final class ExportManager: ObservableObject {
   /// Clears the empty-run message immediately. Called by every code path that invalidates
   /// it: any new `startExport*`, version-selection change, `cancelAndClear`.
   private func clearEmptyRunMessage() {
-    emptyRunMessage = nil
+    progressState.emptyRunMessage = nil
     emptyRunMessageTask?.cancel()
     emptyRunMessageTask = nil
   }
@@ -1279,11 +1290,11 @@ final class ExportManager: ObservableObject {
   /// itself is not auto-expiring — it persists until the queue it describes drains or the
   /// user kicks off something new.
   private func clearQueueWarningMessage() {
-    queueWarningMessage = nil
+    progressState.queueWarningMessage = nil
   }
 
   private func setQueueWarningMessage(_ message: String) {
-    queueWarningMessage = message
+    progressState.queueWarningMessage = message
   }
 
   func pause() {
@@ -1531,7 +1542,7 @@ final class ExportManager: ObservableObject {
 
   private func resetProgressCounters() {
     queueCoordinator.resetProgressCounters()
-    currentAssetFilename = nil
+    progressState.currentAssetFilename = nil
   }
 
   // MARK: - Export Logic
@@ -1868,7 +1879,7 @@ final class ExportManager: ObservableObject {
   // table picks them up here.
 
   func setCurrentAssetFilename(_ name: String?) {
-    currentAssetFilename = name
+    progressState.currentAssetFilename = name
   }
 
   func setCurrentJobVariant(_ variant: ExportVariant?) {
@@ -1876,7 +1887,7 @@ final class ExportManager: ObservableObject {
   }
 
   func clearRenderActivity() {
-    renderActivity = nil
+    progressState.renderActivity = nil
   }
 
   // The rendered-media bridge that lived here in Phase 3a is gone — `VariantExporter`
@@ -1916,7 +1927,7 @@ final class ExportManager: ObservableObject {
     currentJobAssetId = nil
     currentJobVariant = nil
     currentJobPlacement = nil
-    currentAssetFilename = nil
+    progressState.currentAssetFilename = nil
   }
 
   // MARK: Record-mutation routing

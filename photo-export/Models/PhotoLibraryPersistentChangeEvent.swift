@@ -41,6 +41,18 @@ struct PhotoLibraryPersistentChangeEvent: Equatable, Sendable {
     !insertedLocalIdentifiers.isEmpty || !updatedLocalIdentifiers.isEmpty
       || !deletedLocalIdentifiers.isEmpty
   }
+
+  /// True when this event reports any mutation — asset additions/updates/deletions or
+  /// collection-level changes — that should wake the UI side via
+  /// `PhotoLibraryManager.invalidateCache()`. Intentionally coarse: an album rename
+  /// with zero asset deltas counts, because the sidebar's collection tree, per-album
+  /// counts, and folder-tile counts all reflect collection state. The cost is paid
+  /// anyway by the manager's own `photoLibraryDidChange` callback on the normal
+  /// observer path — this property only matters on the safety-net reconcile paths
+  /// where that observer was silent.
+  var requiresUIWake: Bool {
+    hasAssetChanges || collectionChangesPresent
+  }
 }
 
 /// Failure modes from `PHPhotoLibrary.fetchPersistentChanges(since:)`. Routed individually so

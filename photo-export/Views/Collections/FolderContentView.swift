@@ -57,7 +57,7 @@ struct FolderContentView: View {
       HStack(alignment: .center, spacing: 12) {
         summaryView
         Spacer()
-        Button(exportButtonTitle) {
+        AutoSyncAwareExportButton(exportButtonTitle) {
           startExport()
         }
         .buttonStyle(.bordered)

@@ -47,7 +47,7 @@ struct CollectionContentView: View {
       HStack {
         exportSummaryView
         Spacer()
-        Button(exportButtonTitle) {
+        AutoSyncAwareExportButton(exportButtonTitle) {
           startExport()
         }
         .buttonStyle(.bordered)

@@ -437,10 +437,18 @@ enum AutoSyncReducer {
   }
 
   private static func environmentAllowsRun(state: State) -> Bool {
+    // `!isAutoSyncActive` closes a race exposed by issue-#69-era manual testing:
+    // a debounce that fires while a multi-scope AutoSync fan-out is mid-flight
+    // (e.g. scope #1 finished, scope #2's `runExport` is suspended) would
+    // otherwise emit a fresh `.startRun` and trip
+    // `ExportManager.runExport`'s single-active-run precondition. The fan-out's
+    // own `await runExport` is already keeping `activeRunContext != nil`; we
+    // must not start a second concurrent run.
     state.enabled && !state.importActive && !state.scopeSelection.isEmpty
       && state.destination.id != nil && state.destination.isAvailable
       && state.destination.safety == .safe
       && !state.exportRunState.isManualActive
+      && !state.exportRunState.isAutoSyncActive
   }
 
   /// Maps the reducer's input environment plus the previous state and the optional
