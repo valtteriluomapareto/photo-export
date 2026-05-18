@@ -152,6 +152,152 @@ struct ResourceSelectionTests {
     #expect(EditedProducer.render(request).originalFilename == "IMG_1234.MOV")
   }
 
+  // MARK: - HEIC→JPEG conversion (issue #47)
+  //
+  // Eight cases cover the toggle × edited-resource × original-resource matrix
+  // for the .image branch. Video controls follow.
+
+  /// Toggle OFF, JPEG edited resource present: existing `.resource` path.
+  @Test func editedProducerToggleOffPicksEditedJPEG() {
+    let r = resources([(.fullSizePhoto, "edit.JPG"), (.photo, "orig.HEIC")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: true),
+      convertHEICToJPEG: false)
+    if case .resource(let res) = producer {
+      #expect(res.originalFilename == "edit.JPG")
+    } else {
+      Issue.record("expected .resource, got \(producer)")
+    }
+  }
+
+  /// Toggle OFF, edited HEIC resource: returns it as `.resource` (current
+  /// behavior — Photos served HEIC for an edited asset; we write the HEIC).
+  @Test func editedProducerToggleOffWritesEditedHEICAsResource() {
+    let r = resources([(.fullSizePhoto, "edit.HEIC")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: true),
+      convertHEICToJPEG: false)
+    if case .resource(let res) = producer {
+      #expect(res.originalFilename == "edit.HEIC")
+    } else {
+      Issue.record("expected .resource, got \(producer)")
+    }
+  }
+
+  /// Toggle OFF, only HEIC original (unedited): no edited variant.
+  @Test func editedProducerToggleOffUneditedHEICReturnsNone() {
+    let r = resources([(.photo, "IMG_0001.HEIC")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: false),
+      convertHEICToJPEG: false)
+    #expect(producer == .none)
+  }
+
+  /// Toggle ON, edited HEIC resource present: convert it. Edited HEIC beats
+  /// the original even though `.photo` is also HEIC — synthesizing one JPEG,
+  /// not two.
+  @Test func editedProducerToggleOnEditedHEICConvertsTheEditedResource() {
+    let r = resources([
+      (.fullSizePhoto, "IMG_0001.HEIC"),
+      (.photo, "IMG_0001.HEIC"),
+    ])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: true),
+      convertHEICToJPEG: true)
+    if case .convertHEIC(let req) = producer {
+      #expect(req.assetId == "asset-id")
+      #expect(req.sourceResource.type == .fullSizePhoto)
+      #expect(req.originalFilename == "IMG_0001.JPG")
+    } else {
+      Issue.record("expected .convertHEIC, got \(producer)")
+    }
+  }
+
+  /// Toggle ON, unedited HEIC original: convert it.
+  @Test func editedProducerToggleOnUneditedHEICConvertsTheOriginal() {
+    let r = resources([(.photo, "IMG_0001.HEIC")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: false),
+      convertHEICToJPEG: true)
+    if case .convertHEIC(let req) = producer {
+      #expect(req.sourceResource.type == .photo)
+      #expect(req.originalFilename == "IMG_0001.JPG")
+    } else {
+      Issue.record("expected .convertHEIC, got \(producer)")
+    }
+  }
+
+  /// Toggle ON, JPEG edited resource (Photos rendered the edit as JPEG):
+  /// behaves like toggle off — no synthesis needed.
+  @Test func editedProducerToggleOnJPEGEditFallsThrough() {
+    let r = resources([(.fullSizePhoto, "edit.JPG"), (.photo, "orig.HEIC")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: true),
+      convertHEICToJPEG: true)
+    if case .resource(let res) = producer {
+      #expect(res.originalFilename == "edit.JPG")
+    } else {
+      Issue.record("expected .resource, got \(producer)")
+    }
+  }
+
+  /// Toggle ON, unedited non-HEIC original (JPG, PNG, etc.): no synthesis;
+  /// the user's "Include originals" off case naturally produces no `.edited`
+  /// variant (because `requiredVariants` returns `[.original]` for unedited
+  /// non-HEIC assets — see issue #47 PR-1 commit).
+  @Test func editedProducerToggleOnUneditedJPEGReturnsNone() {
+    let r = resources([(.photo, "IMG_0001.JPG")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: false),
+      convertHEICToJPEG: true)
+    #expect(producer == .none)
+  }
+
+  /// Toggle ON applies to HEIF as well (depth-effect / multi-image captures
+  /// come back as HEIF rather than HEIC).
+  @Test func editedProducerToggleOnHEIFAlsoConverts() {
+    let r = resources([(.photo, "IMG_0001.HEIF")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: false),
+      convertHEICToJPEG: true)
+    if case .convertHEIC(let req) = producer {
+      #expect(req.originalFilename == "IMG_0001.JPG")
+    } else {
+      Issue.record("expected .convertHEIC, got \(producer)")
+    }
+  }
+
+  /// Video assets are unaffected by the toggle — the conversion path is
+  /// image-only.
+  @Test func editedProducerToggleOnDoesNotAffectVideo() {
+    let r = resources([(.video, "MOV_0001.MOV")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .video, descriptor: descriptor(mediaType: .video, hasAdjustments: true),
+      convertHEICToJPEG: true)
+    if case .render(let req) = producer {
+      #expect(req.originalFilename == "MOV_0001.MOV")
+    } else {
+      Issue.record("expected .render, got \(producer)")
+    }
+  }
+
+  // MARK: - ConvertHEICRequest filename derivation
+
+  @Test func jpegFilenameReplacesHEICExtensionWithUppercaseJPG() {
+    #expect(ResourceSelection.jpegFilename(replacingExtensionOf: "IMG_0001.HEIC") == "IMG_0001.JPG")
+    #expect(ResourceSelection.jpegFilename(replacingExtensionOf: "IMG_0001.heic") == "IMG_0001.JPG")
+    #expect(ResourceSelection.jpegFilename(replacingExtensionOf: "IMG_0001.HEIF") == "IMG_0001.JPG")
+  }
+
+  @Test func producerOriginalFilenameMirrorsConvertHEICRequest() {
+    let producer = EditedProducer.convertHEIC(
+      ConvertHEICRequest(
+        assetId: "x",
+        sourceResource: ResourceDescriptor(type: .photo, originalFilename: "IMG_0001.HEIC"),
+        originalFilename: "IMG_0001.JPG"))
+    #expect(producer.originalFilename == "IMG_0001.JPG")
+  }
+
   @Test func producerOriginalFilenameNilForNone() {
     #expect(EditedProducer.none.originalFilename == nil)
   }
