@@ -6,7 +6,7 @@ import Foundation
 /// `ExportRecordStore` and `CollectionExportRecordStore` (the literal "Collection-store
 /// mirror" labelled there) plus the `shouldRunEditedFallback` run-time decision that lived
 /// on `ExportManager`. Per
-/// `docs/project/plans/software-architecture-improvement-plan.md` Phase 1, this policy is
+/// `docs/project/archive/software-architecture-improvement-plan.md` Phase 1, this policy is
 /// the single source: both record stores delegate; `ExportManager` calls it. The policy
 /// holds no state and depends on no store; callers extract the variant dictionary first
 /// and pass it in.

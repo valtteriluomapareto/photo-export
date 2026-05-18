@@ -27,9 +27,8 @@ final class ExportManager: ObservableObject {
     let selection: ExportVersionSelection
 
     /// Year derived from the placement. Defined for timeline jobs; returns `0` for
-    /// `.favorites`/`.album` placements (which are unreachable in Phase 1 production code
-    /// — collection jobs land in Phase 3 along with the `urlForRelativeDirectory` wiring
-    /// that obsoletes year/month for collection sites).
+    /// `.favorites`/`.album`/`.sharedAlbum` placements where year/month is not part of
+    /// the on-disk path (the destination uses `placement.relativePath` directly).
     var year: Int { placement.timelineYearMonth?.year ?? 0 }
     var month: Int { placement.timelineYearMonth?.month ?? 0 }
   }
@@ -215,6 +214,21 @@ final class ExportManager: ObservableObject {
   /// (reads, writes, cancellation cleanup, reuse-source lookup). Initialised in `init`
   /// once both stores are bound.
   let recordStoreRouter: RecordStoreRouter
+  /// Owns destination URL and filename decisions: stem allocation, `_orig` companion
+  /// naming, inherited group stem, unique-filename collision suffixing. Initialised in
+  /// `init` against the same `fileSystem` the rest of the pipeline uses.
+  let destinationResolver: ExportDestinationResolver
+  /// Owns single-variant write path (resource selection, temp/move, reuse-source copy,
+  /// rendered-media write, timestamps, record write). Initialised at the end of `init`
+  /// once all dependencies + `self` are available.
+  ///
+  /// IUO because of the `host: self` cycle: `VariantExporter` is constructed with
+  /// `host: self` so it can call back for the cancellation seam, UI-state mutations, and
+  /// bookkeeping-aware failure recording — but `self` isn't usable until every stored
+  /// property has a value. The IUO is assigned at the end of `init` (before init exits)
+  /// and never reassigned thereafter; it retires whenever the Host protocol shrinks
+  /// to zero callbacks that need `self` (a future refactor task — not load-bearing).
+  private(set) var variantExporter: VariantExporter!
   let assetResourceWriter: any AssetResourceWriter
   // `var` rather than `let` so we can rebind it at the end of `init` with a
   // callback that captures `self` weakly. Swift forbids referencing `self`
@@ -247,13 +261,38 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Internals
-  private(set) var pendingJobs: [ExportJob] = []
-  private var isProcessing: Bool = false
-  /// Handle to the in-flight per-job export Task. Same-module readers (the test
-  /// target via `@testable import`) can `await currentTask?.value` to wait for
-  /// real completion instead of polling wall-clock time. Writes stay private to
-  /// `ExportManager`.
-  private(set) var currentTask: Task<Void, Never>?
+
+  /// Owns `pendingJobs`, `isProcessing`, `currentTask`, the per-placement queue
+  /// counters, and the drain loop. ExportManager forwards reads via computed properties
+  /// below (for call-site stability) and forwards control calls (`pause`, `resume`,
+  /// `clearPending`, `processQueueIfNeeded`). The @Published mirrors on this manager
+  /// (`isRunning`, `isPaused`, `queueCount`, `totalJobsEnqueued`, `totalJobsCompleted`)
+  /// are kept in sync with the coordinator's own publishers via sinks established in
+  /// `init` — so existing UI bindings and the AutoSync `exportRunStatePublisher` keep
+  /// emitting from the same `ExportManager` source.
+  ///
+  /// IUO for the same `host: self` cycle as `variantExporter` (see that property above)
+  /// — `self` must be fully initialized before the coordinator can hold it as Host.
+  private(set) var queueCoordinator: ExportQueueCoordinator!
+
+  /// Owns the Import Existing Backup flow. Phase 5 extraction. `isImporting` and
+  /// `importStage` on this manager are sink-driven mirrors of the coordinator's
+  /// publishers (same shape as the queue coordinator mirrors). `importResult` stays
+  /// writable on the manager because external callers (test code) sometimes reset it
+  /// directly; the coordinator writes through `Host.setImportResult`.
+  private(set) var importCoordinator: ImportCoordinator!
+  private var importCancellables: Set<AnyCancellable> = []
+  private var queueCancellables: Set<AnyCancellable> = []
+
+  // Forwarders to the coordinator's internal state. Kept on ExportManager so existing
+  // test reads (`manager.pendingJobs`, `manager.currentTask`,
+  // `manager.queuedCountsByPlacementId`) and the "fresh-start condition" check in the
+  // `start*` methods (`!isProcessing`) don't have to thread through `queueCoordinator`.
+  var pendingJobs: [ExportJob] { queueCoordinator.pendingJobs }
+  var currentTask: Task<Void, Never>? { queueCoordinator.currentTask }
+  var queuedCountsByPlacementId: [String: Int] { queueCoordinator.queuedCountsByPlacementId }
+  var isProcessing: Bool { queueCoordinator.isProcessing }
+
   private(set) var currentJobAssetId: String?
   private(set) var currentJobVariant: ExportVariant?
   /// The placement of the job currently in flight. Set in `processNext()` *before*
@@ -265,10 +304,10 @@ final class ExportManager: ObservableObject {
   private(set) var currentJobPlacement: ExportPlacement?
   private(set) var generation: Int = 0
   private(set) var isEnqueueingAll: Bool = false
-  private(set) var queuedCountsByPlacementId: [String: Int] = [:]
-  /// Handle to the in-flight import Task. Test targets can `await importTask?.value`
-  /// for deterministic completion. Writes stay private to `ExportManager`.
-  private(set) var importTask: Task<Void, Never>?
+  /// Forwarder to the import coordinator's task handle so existing test reads
+  /// (`manager.importTask`) and the `waitForImportCompletion` test helper continue to
+  /// resolve against the same in-flight Task.
+  var importTask: Task<Void, Never>? { importCoordinator?.importTask }
 
   /// Backing store for `versionSelection`. Mirrors the injected-`UserDefaults`
   /// pattern used by `ExportDestinationManager` so tests can hand a per-suite
@@ -301,6 +340,7 @@ final class ExportManager: ObservableObject {
       collectionStore: self.collectionExportRecordStore)
     self.assetResourceWriter = assetResourceWriter
     self.fileSystem = fileSystem
+    self.destinationResolver = ExportDestinationResolver(fileSystem: fileSystem)
     // Provisional renderer — gives `self.mediaRenderer` a value so all
     // stored properties are initialised before we capture `self` below.
     if let mediaRenderer {
@@ -324,6 +364,41 @@ final class ExportManager: ObservableObject {
         }
       }
     }
+    self.variantExporter = VariantExporter(
+      host: self,
+      destinationResolver: self.destinationResolver,
+      recordStoreRouter: self.recordStoreRouter,
+      assetResourceWriter: self.assetResourceWriter,
+      mediaRenderer: self.mediaRenderer,
+      fileSystem: self.fileSystem,
+      exportDestination: self.exportDestination)
+    self.queueCoordinator = ExportQueueCoordinator(host: self)
+    // Mirror the coordinator's published queue state onto ExportManager so existing
+    // `manager.isRunning` / `.queueCount` / etc. readers and the AutoSync
+    // `exportRunStatePublisher` keep emitting from the same source. Sinks fire
+    // synchronously on the `@MainActor` since both objects are MainActor-bound.
+    self.queueCoordinator.$isRunning
+      .sink { [weak self] in self?.isRunning = $0 }
+      .store(in: &queueCancellables)
+    self.queueCoordinator.$isPaused
+      .sink { [weak self] in self?.isPaused = $0 }
+      .store(in: &queueCancellables)
+    self.queueCoordinator.$queueCount
+      .sink { [weak self] in self?.queueCount = $0 }
+      .store(in: &queueCancellables)
+    self.queueCoordinator.$totalJobsEnqueued
+      .sink { [weak self] in self?.totalJobsEnqueued = $0 }
+      .store(in: &queueCancellables)
+    self.queueCoordinator.$totalJobsCompleted
+      .sink { [weak self] in self?.totalJobsCompleted = $0 }
+      .store(in: &queueCancellables)
+    self.importCoordinator = ImportCoordinator(host: self)
+    self.importCoordinator.$isImporting
+      .sink { [weak self] in self?.isImporting = $0 }
+      .store(in: &importCancellables)
+    self.importCoordinator.$importStage
+      .sink { [weak self] in self?.importStage = $0 }
+      .store(in: &importCancellables)
   }
 
   // MARK: - Lifetime contract
@@ -1092,23 +1167,14 @@ final class ExportManager: ObservableObject {
 
     let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
     try throwIfCancelledOrStale(gen)
-    let newJobs: [ExportJob] = assets.compactMap { asset in
-      guard
-        !collectionExportRecordStore.isExported(
-          asset: asset, placement: placement, selection: selectionMode)
-      else { return nil }
-      if skipForAutoSyncRetry(
-        asset: asset, placement: placement, selection: selectionMode)
-      {
-        return nil
-      }
-      return ExportJob(
-        assetLocalIdentifier: asset.id, placement: placement, selection: selectionMode)
-    }
-    pendingJobs.append(contentsOf: newJobs)
-    totalJobsEnqueued += newJobs.count
-    queuedCountsByPlacementId[placement.id, default: 0] += newJobs.count
-    updateQueueCount()
+    let newJobs = ExportJobPlanner.plan(
+      assets: assets, placement: placement, selection: selectionMode,
+      isExported: {
+        collectionExportRecordStore.isExported(
+          asset: $0, placement: placement, selection: selectionMode)
+      },
+      shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
+    queueCoordinator.enqueue(newJobs)
     logger.info(
       "Enqueued \(newJobs.count) assets for export to \(placement.relativePath, privacy: .public)"
     )
@@ -1169,20 +1235,12 @@ final class ExportManager: ObservableObject {
     currentJobVariant = nil
     currentJobPlacement = nil
     generation += 1
-    pendingJobs.removeAll()
-    queuedCountsByPlacementId.removeAll()
-    currentTask?.cancel()
-    currentTask = nil
-    isProcessing = false
-    isRunning = false
-    isPaused = false
+    queueCoordinator.teardownQueue()
+    queueCoordinator.resetProgressCounters()
     isEnqueueingAll = false
-    totalJobsEnqueued = 0
-    totalJobsCompleted = 0
     currentAssetFilename = nil
     clearEmptyRunMessage()
     clearQueueWarningMessage()
-    updateQueueCount()
   }
 
   // MARK: - Empty-run message
@@ -1233,24 +1291,15 @@ final class ExportManager: ObservableObject {
 
   func pause() {
     guard canTogglePause else { return }
-    isPaused = true
-    logger.info("Export queue paused")
+    queueCoordinator.pause()
   }
 
   func resume() {
-    guard isPaused else { return }
-    isPaused = false
-    logger.info("Export queue resumed")
-    processQueueIfNeeded()
+    queueCoordinator.resume()
   }
 
   func clearPending() {
-    let removed = pendingJobs.count
-    pendingJobs.removeAll()
-    queuedCountsByPlacementId.removeAll()
-    totalJobsEnqueued = max(0, totalJobsEnqueued - removed)
-    updateQueueCount()
-    logger.info("Cleared \(removed) pending export jobs")
+    _ = queueCoordinator.clearPending()
   }
 
   // MARK: - Queue Handling
@@ -1258,6 +1307,9 @@ final class ExportManager: ObservableObject {
   /// Scans the month and returns the enqueue outcome. Callers use the outcome to decide
   /// whether to surface the "already exported" toolbar message.
   @discardableResult
+  // Phase 4b lifted the per-placement queue-counter mutation into
+  // `ExportQueueCoordinator.enqueue`. The three enqueue methods retain only the
+  // PhotoKit fetch + `ExportJobPlanner.plan` call.
   private func enqueueMonth(
     year: Int, month: Int, selection: ExportVersionSelection, generation gen: Int
   ) async throws -> EnqueueOutcome {
@@ -1266,20 +1318,11 @@ final class ExportManager: ObservableObject {
     let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
     let placement = ExportPlacement.timeline(year: year, month: month)
-    let newJobs: [ExportJob] = assets.compactMap { asset in
-      guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
-        return nil
-      }
-      if skipForAutoSyncRetry(asset: asset, placement: placement, selection: selection) {
-        return nil
-      }
-      return ExportJob(
-        assetLocalIdentifier: asset.id, placement: placement, selection: selection)
-    }
-    pendingJobs.append(contentsOf: newJobs)
-    totalJobsEnqueued += newJobs.count
-    queuedCountsByPlacementId[placement.id, default: 0] += newJobs.count
-    updateQueueCount()
+    let newJobs = ExportJobPlanner.plan(
+      assets: assets, placement: placement, selection: selection,
+      isExported: { exportRecordStore.isExported(asset: $0, selection: selection) },
+      shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
+    queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
@@ -1292,29 +1335,11 @@ final class ExportManager: ObservableObject {
     guard photoLibraryService.isAuthorized else { return .unauthorized }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
     try throwIfCancelledOrStale(gen)
-    let calendar = Calendar.current
-    var newJobs: [ExportJob] = []
-    newJobs.reserveCapacity(assets.count)
-    for asset in assets {
-      guard let created = asset.creationDate else { continue }
-      let m = calendar.component(.month, from: created)
-      guard !exportRecordStore.isExported(asset: asset, selection: selection) else {
-        continue
-      }
-      let placement = ExportPlacement.timeline(year: year, month: m)
-      if skipForAutoSyncRetry(asset: asset, placement: placement, selection: selection) {
-        continue
-      }
-      newJobs.append(
-        ExportJob(
-          assetLocalIdentifier: asset.id, placement: placement, selection: selection))
-    }
-    pendingJobs.append(contentsOf: newJobs)
-    totalJobsEnqueued += newJobs.count
-    for job in newJobs {
-      queuedCountsByPlacementId[job.placement.id, default: 0] += 1
-    }
-    updateQueueCount()
+    let newJobs = ExportJobPlanner.planTimelineYear(
+      assets: assets, year: year, selection: selection,
+      isExported: { exportRecordStore.isExported(asset: $0, selection: selection) },
+      shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
+    queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
@@ -1488,109 +1513,57 @@ final class ExportManager: ObservableObject {
     bookkeeping.continuation.resume(returning: summary)
   }
 
+  /// Forwarder onto the coordinator. Kept as a public method on ExportManager because
+  /// existing call sites (`startExport*`, the bulk-album finalize paths, `resume()`)
+  /// invoke it by name.
   func processQueueIfNeeded() {
-    guard !isProcessing else { return }
-    guard !isPaused else { return }
-    guard !pendingJobs.isEmpty else {
-      // Nothing to process. If an awaitable run is in flight (e.g. `runExport` for an
-      // already-complete library), the queue-drain hook in `processNext` won't fire
-      // because `processNext` won't run. Finalize here so the awaiter resolves.
-      //
-      // Guard on `!isEnqueueingAll` so a `resume()` during the brief window between
-      // an enqueueing Task starting and adding the first job (queue is empty,
-      // `processQueueIfNeeded` triggered from `resume()`) doesn't prematurely resolve
-      // a run that's still in its enqueue phase.
-      if !isEnqueueingAll {
-        finalizeActiveRun(result: .completed, cancelReason: nil)
-      }
-      return
-    }
-    isProcessing = true
-    isRunning = true
-    processNext()
+    queueCoordinator.processQueueIfNeeded()
   }
 
-  private func processNext() {
-    if isPaused {
-      isProcessing = false
-      isRunning = false
-      updateQueueCount()
-      logger.info("Queue paused; not starting next job")
-      return
-    }
-    guard !pendingJobs.isEmpty else {
-      isProcessing = false
-      isRunning = false
-      currentJobAssetId = nil
-      currentJobVariant = nil
-      currentJobPlacement = nil
-      currentAssetFilename = nil
-      updateQueueCount()
-      logger.info("Export queue drained")
-      finalizeActiveRun(result: .completed, cancelReason: nil)
-      return
-    }
-    let job = pendingJobs.removeFirst()
-    let key = job.placement.id
-    queuedCountsByPlacementId[key, default: 1] -= 1
-    if queuedCountsByPlacementId[key, default: 0] <= 0 {
-      queuedCountsByPlacementId.removeValue(forKey: key)
-    }
-    // Set placement *before* assetId per the plan's ordering rule (any cancellation that
-    // observes assetId must also see the matching placement).
-    currentJobPlacement = job.placement
-    currentJobAssetId = job.assetLocalIdentifier
-    currentJobVariant = nil
-    updateQueueCount()
-    let currentGen = generation
-    currentTask = Task { [weak self] in
-      await self?.export(job: job, generation: currentGen)
-      await MainActor.run { [weak self] in
-        self?.currentJobAssetId = nil
-        self?.currentJobVariant = nil
-        self?.currentJobPlacement = nil
-        guard let self, self.isCurrent(currentGen) else { return }
-        self.totalJobsCompleted += 1
-        self.processNext()
-      }
-    }
-  }
+  // The drain loop body (`processNext`) and `updateQueueCount` have moved to
+  // `ExportQueueCoordinator`. The manager keeps `queuedCount(year:month:)` because it
+  // wraps placement-id resolution.
 
   /// Reads the queue depth for `(year, month)` by resolving the synthetic timeline
   /// placement id and looking it up in the placement-keyed dict. Existing call sites use
   /// `(year, month)` and stay unchanged.
   func queuedCount(year: Int, month: Int) -> Int {
     let placementId = ExportPlacement.timeline(year: year, month: month).id
-    return queuedCountsByPlacementId[placementId, default: 0]
+    return queueCoordinator.queuedCount(placementId: placementId)
   }
 
   private func resetProgressCounters() {
-    totalJobsEnqueued = 0
-    totalJobsCompleted = 0
+    queueCoordinator.resetProgressCounters()
     currentAssetFilename = nil
-    queuedCountsByPlacementId.removeAll()
-  }
-
-  private func updateQueueCount() {
-    queueCount = pendingJobs.count + (isProcessing ? 1 : 0)
   }
 
   // MARK: - Export Logic
 
   /// Non-throwing companion to `throwIfCancelledOrStale(_:)`. Returns `true` when the
   /// captured generation is still the active one, i.e. the work has not been superseded
-  /// by `bumpGeneration`-equivalent transitions (`cancelAndClear`, `clearPending`,
-  /// `interruptForDestinationUnavailable`, `supersedeForManualRun`). Use this at non-
-  /// throwing checkpoints — typically inside escaping closures that `return` early when
-  /// the run is stale. Per `docs/project/plans/software-architecture-improvement-plan.md`
-  /// "Cross-Cutting Contracts > Generation / cancellation ownership", this helper is the
-  /// seam future `ExportQueueCoordinator` collaborators will hold; collapsing inline
-  /// `self.isCurrent(gen)` checks through it makes the Phase 4/5 move mechanical.
-  private func isCurrent(_ gen: Int) -> Bool {
+  /// by `bumpGeneration`-equivalent transitions (`cancelAndClear`,
+  /// `interruptForDestinationUnavailable`, `supersedeForManualRun`, `cancelImport`).
+  /// Note: `clearPending()` only drops queued jobs and does NOT bump generation —
+  /// in-flight work that started before `clearPending` keeps its `gen` and finishes
+  /// normally. The path that *does* cancel mid-flight is `cancelAndClear`. Use this
+  /// helper at non-throwing checkpoints — typically inside escaping closures that
+  /// `return` early when the run is stale. Per
+  /// `docs/project/archive/software-architecture-improvement-plan.md` "Cross-Cutting
+  /// Contracts > Generation / cancellation ownership", this helper is the seam
+  /// `VariantExporter`, `ExportQueueCoordinator`, and `ImportCoordinator` hold via
+  /// their respective `Host` protocols. The plan originally projected the storage of
+  /// `generation` to migrate into `ExportQueueCoordinator` in Phase 5; that transfer
+  /// is deferred to a follow-up and the Host getters are a permanent seam until it
+  /// lands.
+  ///
+  /// Declared `internal` (not `private`) so the cancellation seam is visible across the
+  /// Phase-3 extraction boundary: `VariantExporter.Host` calls it through the protocol
+  /// witness, and ExportManager still calls it inline at all the pre-extraction sites.
+  func isCurrent(_ gen: Int) -> Bool {
     return generation == gen
   }
 
-  private func throwIfCancelledOrStale(_ gen: Int) throws {
+  func throwIfCancelledOrStale(_ gen: Int) throws {
     try Task.checkCancellation()
     guard isCurrent(gen) else { throw CancellationError() }
   }
@@ -1675,7 +1648,7 @@ final class ExportManager: ObservableObject {
       // `.original` file is written at `<stem>_orig.<origExt>`; otherwise at the bare stem.
       let pairOriginalWithSuffix = required.contains(.edited)
 
-      var groupStem = inheritedGroupStem(
+      var groupStem = ExportDestinationResolver.inheritedGroupStem(
         from: existingRecord, descriptor: descriptor, resources: resources)
 
       // Pre-allocate a paired stem when we will write both variants in this run with no
@@ -1688,10 +1661,10 @@ final class ExportManager: ObservableObject {
         let editedProducer = ResourceSelection.selectEditedProducer(
           from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
         if let editedFilename = editedProducer.originalFilename {
-          let baseStem = splitFilename(originalRes.originalFilename).base
+          let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
           let originalExt = (originalRes.originalFilename as NSString).pathExtension
           let editedExt = (editedFilename as NSString).pathExtension
-          groupStem = allocatePairedGroupStem(
+          groupStem = destinationResolver.allocatePairedGroupStem(
             baseStem: baseStem, editedExt: editedExt, originalExt: originalExt, destDir: destDir)
         }
       }
@@ -1767,12 +1740,9 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  /// Writes a single variant for an asset. Returns the chosen group stem when the variant's
-  /// filename was materialised (so later variants can pair against it). Returns nil on recoverable
-  /// "no resource" failures that are recorded in-store but do not change the pairing stem.
-  ///
-  /// `groupStem` is either inherited from a prior done variant record for this asset or, within
-  /// the same job, pre-allocated when both variants will be written together.
+  /// Forwarder onto `VariantExporter.exportSingleVariant`. The signature is preserved so
+  /// existing call sites (the variant loop and the edited-fallback path) don't change
+  /// during Phase 3a.
   private func exportSingleVariant(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -1785,287 +1755,17 @@ final class ExportManager: ObservableObject {
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?
   ) async throws -> String? {
-    // Renderer activity must always be cleared on the way out of this
-    // function — including on throw — so a render failure or cancel does
-    // not leave the toolbar showing `(rendering…)` forever.
-    defer { renderActivity = nil }
-
-    let producer: EditedProducer = {
-      switch variant {
-      case .original:
-        if let resource = ResourceSelection.selectOriginalResource(
-          from: resources, mediaType: descriptor.mediaType)
-        {
-          return .resource(resource)
-        }
-        return .none
-      case .edited:
-        return ResourceSelection.selectEditedProducer(
-          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
-      }
-    }()
-
-    guard let originalFilename = producer.originalFilename else {
-      let errMsg: String
-      switch variant {
-      case .original: errMsg = "No exportable resource"
-      case .edited: errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
-      }
-      recordVariantFailed(
-        assetId: descriptor.id, placement: job.placement, variant: variant,
-        sentinelMessage: errMsg, category: .resourceMissing, at: Date())
-      logger.error(
-        "No \(variant.rawValue, privacy: .public) byte source for id: \(descriptor.id, privacy: .public)"
-      )
-      return nil
-    }
-
-    let (finalURL, chosenStem) = try resolveDestination(
-      variant: variant,
-      descriptor: descriptor,
-      originalFilename: originalFilename,
-      resources: resources,
-      destDir: destDir,
-      groupStem: groupStem,
-      pairOriginalWithSuffix: pairOriginalWithSuffix
-    )
-
-    let tempURL = finalURL.appendingPathExtension("tmp")
-
-    // Clean up any stale .tmp sibling for this target filename. Covers crash leftovers that a
-    // prior defer could not clean up.
-    if fileSystem.fileExists(atPath: tempURL.path) {
-      try? fileSystem.removeItem(at: tempURL)
-    }
-    defer {
-      if fileSystem.fileExists(atPath: tempURL.path) {
-        try? fileSystem.removeItem(at: tempURL)
-      }
-    }
-
-    try throwIfCancelledOrStale(gen)
-    currentAssetFilename = finalURL.lastPathComponent
-    currentJobVariant = variant
-    inFlight = (assetId: descriptor.id, variant: variant)
-    recordVariantInProgress(
-      assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent)
-
-    // Reuse-source copy path (Phase 3.3): if `(asset, variant)` is already exported
-    // under another placement, copy the existing file rather than re-fetching from
-    // PhotoKit. On APFS the copy is a CoW clone (no extra disk usage); on non-APFS
-    // it's a real copy. PhotoKit fallback only on source-side errors (the prior
-    // `.done` record is stale); destination-side errors fail the variant directly
-    // because retrying via PhotoKit would hit the same destination problem. The
-    // copy works regardless of whether the byte source is a static resource or a
-    // rendered edit — once a placement has the file, all other placements just
-    // clone it.
-    var didCopyFromReuseSource = false
-    if let reuse = recordStoreRouter.findReuseSource(
-      assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
-      let destinationRoot = exportDestination.selectedFolderURL
-    {
-      let sourceURL =
-        destinationRoot
-        .appendingPathComponent(reuse.placement.relativePath, isDirectory: true)
-        .appendingPathComponent(reuse.filename)
-      do {
-        try fileSystem.copyItem(from: sourceURL, to: tempURL)
-        didCopyFromReuseSource = true
-        logger.debug(
-          "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(reuse.placement.relativePath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
-        )
-      } catch {
-        if Self.isSourceSideCopyError(error) {
-          // Source missing/unreadable: prior `.done` record is stale. Fall through to
-          // PhotoKit re-export. We do NOT mutate the stale record — that placement's
-          // corruption surfaces on its next export run.
-          logger.warning(
-            "Reuse-source missing for id: \(descriptor.id, privacy: .public) (\(error.localizedDescription, privacy: .public)); falling back to PhotoKit"
-          )
-        } else {
-          // Destination-side error: out of space, permission denied, etc. Don't retry
-          // via PhotoKit — it would hit the same destination problem. Throw so the
-          // caller marks the variant `.failed`.
-          throw error
-        }
-      }
-    }
-    if !didCopyFromReuseSource {
-      switch producer {
-      case .resource(let resource):
-        try await assetResourceWriter.writeResource(
-          resource, forAssetId: descriptor.id, to: tempURL)
-      case .render(let request):
-        // Translate any renderer error (other than cancellation) into the
-        // canonical recoverable failure so the persisted `lastError` is
-        // stable across both "no static resource" and "render attempted
-        // and failed" cases. The original error survives in the log for
-        // diagnostics.
-        do {
-          try await mediaRenderer.render(request: request, to: tempURL)
-        } catch is CancellationError {
-          throw CancellationError()
-        } catch {
-          logger.error(
-            "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
-          )
-          throw NSError(
-            domain: "Export", code: 9,
-            userInfo: [
-              NSLocalizedDescriptionKey:
-                ExportVariantRecovery.editedResourceUnavailableMessage
-            ])
-        }
-      case .none:
-        // Guarded above by `producer.originalFilename` check.
-        preconditionFailure("EditedProducer.none reached the write step")
-      }
-    }
-    // Load-bearing: this checkpoint must run BEFORE the atomic move
-    // below so that a cancel arriving during the render does not leak a
-    // partially-written file into the destination. Reordering this is a
-    // correctness regression — temp cleanup is handled by `defer`, but
-    // only if we throw before the move.
-    try throwIfCancelledOrStale(gen)
-
-    try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<Void, Error>) in
-      DispatchQueue.global(qos: .utility).async { [fileSystem] in
-        do {
-          self.logger.debug(
-            "Move begin: \(tempURL.lastPathComponent, privacy: .public) -> \(finalURL.lastPathComponent, privacy: .public)"
-          )
-          try fileSystem.moveItemAtomically(from: tempURL, to: finalURL)
-          self.logger.debug(
-            "Move done -> \(finalURL.lastPathComponent, privacy: .public)")
-          continuation.resume(returning: ())
-        } catch {
-          self.logger.error("Move failed: \(error.localizedDescription, privacy: .public)")
-          continuation.resume(throwing: error)
-        }
-      }
-    }
-    try throwIfCancelledOrStale(gen)
-
-    if let createdAt = descriptor.creationDate {
-      await withCheckedContinuation { continuation in
-        DispatchQueue.global(qos: .utility).async { [fileSystem] in
-          fileSystem.applyTimestamps(creationDate: createdAt, to: finalURL)
-          self.logger.debug(
-            "Applied timestamps for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
-          )
-          continuation.resume()
-        }
-      }
-      try throwIfCancelledOrStale(gen)
-    }
-
-    recordVariantExported(
-      assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date())
-    inFlight = nil
-    logger.info(
-      "Exported \(finalURL.lastPathComponent, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"
-    )
-    return chosenStem
+    try await variantExporter.exportSingleVariant(
+      variant: variant, descriptor: descriptor, resources: resources,
+      destDir: destDir, relPath: relPath, job: job,
+      groupStem: groupStem, pairOriginalWithSuffix: pairOriginalWithSuffix,
+      generation: gen, inFlight: &inFlight)
   }
 
-  /// Resolves the final URL and the group stem for a variant. Throws when a paired-stem
-  /// conflict would silently split the pair (step-1 fail-path).
-  ///
-  /// `groupStem` is the chosen pair stem when known: inherited from a prior `.done` record
-  /// for this asset, or pre-allocated by `allocatePairedGroupStem` when both variants are
-  /// being written together. When nil, only one variant is being written for this asset and
-  /// the file lands at the natural stem with `uniqueFileURL` collision handling.
-  ///
-  /// `pairOriginalWithSuffix` is true when this asset's `.original` is paired with an
-  /// `.edited` (current run or prior record) and so should be written at `<stem>_orig`.
-  private func resolveDestination(
-    variant: ExportVariant,
-    descriptor: AssetDescriptor,
-    originalFilename: String,
-    resources: [ResourceDescriptor],
-    destDir: URL,
-    groupStem: String?,
-    pairOriginalWithSuffix: Bool
-  ) throws -> (URL, String) {
-    switch variant {
-    case .original:
-      let origExt = (originalFilename as NSString).pathExtension
-      if let stem = groupStem {
-        let filename = ExportFilenamePolicy.originalFilename(
-          stem: stem, ext: origExt, withSuffix: pairOriginalWithSuffix)
-        let candidate = destDir.appendingPathComponent(filename)
-        if fileSystem.fileExists(atPath: candidate.path) {
-          throw NSError(
-            domain: "Export", code: 5,
-            userInfo: [
-              NSLocalizedDescriptionKey:
-                "Paired original filename already exists on disk: \(candidate.lastPathComponent)"
-            ])
-        }
-        return (candidate, stem)
-      }
-      // Fresh single-variant `.original`: no pairing, use uniqueFileURL collision handling.
-      let (origStem, _) = splitFilename(originalFilename)
-      let finalURL = uniqueFileURL(in: destDir, baseName: origStem, ext: origExt)
-      return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
-
-    case .edited:
-      let editedExt = (originalFilename as NSString).pathExtension
-      if let stem = groupStem {
-        let filename = ExportFilenamePolicy.editedFilename(
-          stem: stem, editedResourceFilename: originalFilename)
-        let (base, ext) = splitFilename(filename)
-        // If the inherited natural stem is already taken (post-edit case where the prior
-        // `.original.done` occupies it), uniqueFileURL splits the pair onto a `(N)`
-        // suffix. This is the documented one-time cost on first re-export after each new
-        // edit.
-        let finalURL = uniqueFileURL(in: destDir, baseName: base, ext: ext)
-        return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
-      }
-      // Fresh single-variant `.edited` (default mode adjusted asset, no prior records).
-      // Use the original-side resource's stem so the edited file lands at e.g.
-      // `IMG_0001.JPG` (matching what Photos.app does for a single-asset export).
-      let baseStem: String
-      if let original = ResourceSelection.selectOriginalResource(
-        from: resources, mediaType: descriptor.mediaType)
-      {
-        baseStem = splitFilename(original.originalFilename).base
-      } else {
-        baseStem = splitFilename(originalFilename).base
-      }
-      let finalURL = uniqueFileURL(in: destDir, baseName: baseStem, ext: editedExt)
-      return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
-    }
-  }
-
-  /// Allocates a stem where both the natural-stem edited target (`<stem>.<editedExt>`) and
-  /// the `_orig` companion target (`<stem>_orig.<originalExt>`) are simultaneously free.
-  /// Bumps the per-pair collision suffix until both slots are available so the pair never
-  /// splits across stems.
-  private func allocatePairedGroupStem(
-    baseStem: String, editedExt: String, originalExt: String, destDir: URL
-  ) -> String {
-    var stem = baseStem
-    var index = 1
-    while index < 10_000 {
-      let editedTarget = destDir.appendingPathComponent(stem)
-        .appendingPathExtension(editedExt)
-      let origTarget = destDir.appendingPathComponent(
-        stem + ExportFilenamePolicy.originalSuffix
-      ).appendingPathExtension(originalExt)
-      if !fileSystem.fileExists(atPath: editedTarget.path)
-        && !fileSystem.fileExists(atPath: origTarget.path)
-      {
-        return stem
-      }
-      stem = "\(baseStem) (\(index))"
-      index += 1
-    }
-    return stem
-  }
+  // Destination resolution (URL + filename allocation, paired-stem allocation, collision
+  // suffixing, inherited group stem) lives on `ExportDestinationResolver`. Callers go
+  // through `self.destinationResolver` or the static helpers
+  // `ExportDestinationResolver.splitFilename` / `ExportDestinationResolver.inheritedGroupStem`.
 
   // MARK: - Edited-unavailable fallback (issue #22)
 
@@ -2100,9 +1800,9 @@ final class ExportManager: ObservableObject {
       )
       return
     }
-    let baseStem = splitFilename(originalRes.originalFilename).base
+    let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
     let originalExt = (originalRes.originalFilename as NSString).pathExtension
-    let stem = allocateUnusedOrigStem(
+    let stem = destinationResolver.allocateUnusedOrigStem(
       baseStem: baseStem, originalExt: originalExt, destDir: destDir)
     do {
       try throwIfCancelledOrStale(gen)
@@ -2163,101 +1863,73 @@ final class ExportManager: ObservableObject {
     recordStoreRouter.variants(forAssetId: assetId, placement: placement)
   }
 
-  /// Finds the smallest `(N)`-suffixed `baseStem` whose `_orig` companion
-  /// slot is free. The fallback only writes the original; the natural-stem
-  /// edited slot is intentionally not checked because we don't know the
-  /// edited extension here, and a future run that succeeds at the edit will
-  /// allocate its own stem.
-  private func allocateUnusedOrigStem(
-    baseStem: String, originalExt: String, destDir: URL
-  ) -> String {
-    var stem = baseStem
-    var index = 1
-    while index < 10_000 {
-      let target = destDir.appendingPathComponent(
-        stem + ExportFilenamePolicy.originalSuffix
-      ).appendingPathExtension(originalExt)
-      if !fileSystem.fileExists(atPath: target.path) { return stem }
-      stem = "\(baseStem) (\(index))"
-      index += 1
-    }
-    return stem
-  }
-
-  /// Recovers the group stem from a prior `.done` variant record so a follow-up run that
-  /// adds the missing variant pairs against the same stem.
-  ///
-  /// `_orig` is both an app companion marker and a string a user can put in an actual
-  /// original filename (e.g. `vacation_orig.JPG`). When the recorded `.original` filename
-  /// exactly equals the asset's current original-side resource filename, treat it as the
-  /// user's natural filename — even when its stem ends with `_orig` — so the asset stays
-  /// pinned to the `vacation_orig` stem and a later edited write becomes
-  /// `vacation_orig (1).<ext>` rather than `vacation.<ext>`.
-  private func inheritedGroupStem(
-    from record: ExportRecord?,
-    descriptor: AssetDescriptor,
-    resources: [ResourceDescriptor]
-  ) -> String? {
-    guard let record else { return nil }
-    if let edited = record.variants[.edited], edited.status == .done,
-      let filename = edited.filename
-    {
-      return splitFilename(filename).base
-    }
-    if let original = record.variants[.original], original.status == .done,
-      let filename = original.filename
-    {
-      let originalResourceFilename = ResourceSelection.selectOriginalResource(
-        from: resources, mediaType: descriptor.mediaType)?.originalFilename
-      if let originalResourceFilename, filename == originalResourceFilename {
-        return splitFilename(filename).base
-      }
-      if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: filename) {
-        return parsed.groupStem
-      }
-      return splitFilename(filename).base
-    }
-    return nil
-  }
+  // `allocateUnusedOrigStem` and `inheritedGroupStem` moved to ExportDestinationResolver.
 
   // MARK: - Helpers
 
-  /// Distinguishes source-side errors (file missing/unreadable — fall back to PhotoKit)
-  /// from destination-side errors (out of space, target permission, target volume removed
-  /// — fail the variant directly because a PhotoKit retry would hit the same destination
-  /// problem and waste cycles).
-  ///
-  /// `NSFileReadNoPermissionError` belongs in the source-side bucket: the prior
-  /// `.done` file's permissions were changed in Finder (or the volume was remounted
-  /// read-only), so reading it fails — but we can still re-fetch from PhotoKit and
-  /// write a fresh copy at the destination, which the user owns.
-  private static func isSourceSideCopyError(_ error: Error) -> Bool {
-    let nsError = error as NSError
-    if nsError.domain == NSCocoaErrorDomain {
-      switch nsError.code {
-      case NSFileReadNoSuchFileError, NSFileNoSuchFileError, NSFileReadUnknownError,
-        NSFileReadCorruptFileError, NSFileReadNoPermissionError:
-        return true
-      default:
-        return false
-      }
-    }
-    if nsError.domain == NSPOSIXErrorDomain {
-      switch nsError.code {
-      case Int(ENOENT), Int(EACCES):
-        return true
-      default:
-        return false
-      }
-    }
-    return false
+  // `isSourceSideCopyError` moved to `VariantExporter` along with the reuse-source copy
+  // path (Phase 3a).
+
+  // MARK: - VariantExporter.Host conformance
+
+  // Generation seam (`isCurrent` + `throwIfCancelledOrStale`) and the sentinel-message
+  // `recordVariantFailed` overload are already declared above; the protocol witness
+  // table picks them up here.
+
+  func setCurrentAssetFilename(_ name: String?) {
+    currentAssetFilename = name
+  }
+
+  func setCurrentJobVariant(_ variant: ExportVariant?) {
+    currentJobVariant = variant
+  }
+
+  func clearRenderActivity() {
+    renderActivity = nil
+  }
+
+  // The rendered-media bridge that lived here in Phase 3a is gone — `VariantExporter`
+  // now holds the renderer directly. ExportManager still constructs the renderer (so
+  // it can wire the `renderActivity` callback) but no longer invokes it.
+
+  // MARK: - ExportQueueCoordinator.Host conformance
+
+  /// `generation` and `isCurrent(_:)` are already declared above; the protocol witness
+  /// picks them up here. `isEnqueueingAll` is the existing stored property.
+
+  /// Drives the per-job export pipeline on behalf of the coordinator. Wraps the
+  /// existing `export(job:gen:)` body so the coordinator's drain loop doesn't need to
+  /// know about it.
+  func performExport(job: ExportJob, generation gen: Int) async {
+    await export(job: job, generation: gen)
+  }
+
+  /// Called by the coordinator's drain loop on the "queue empty after a job ran" edge.
+  /// Mirrors the pre-Phase-4b `processNext` empty-branch finalize.
+  func didDrainQueue() {
+    logger.info("Export queue drained")
+    finalizeActiveRun(result: .completed, cancelReason: nil)
+  }
+
+  /// Set placement BEFORE assetId per the plan's ordering rule — any cancellation
+  /// cleanup that observes `currentJobAssetId` must also see the matching
+  /// `currentJobPlacement`. Reset `currentJobVariant` because the variant write hasn't
+  /// started yet.
+  func setCurrentJob(_ job: ExportJob) {
+    currentJobPlacement = job.placement
+    currentJobAssetId = job.assetLocalIdentifier
+    currentJobVariant = nil
+  }
+
+  func clearCurrentJobIdentifiers() {
+    currentJobAssetId = nil
+    currentJobVariant = nil
+    currentJobPlacement = nil
+    currentAssetFilename = nil
   }
 
   // MARK: Record-mutation routing
 
-  /// Routes a `markVariantFailed` to the right store based on `placement.kind`. In Phase 1,
-  /// only `.timeline` paths are reachable in production; `.favorites`/`.album` are wired
-  /// for Phase 3's collection-export work but won't be exercised until then.
   /// AutoSync retry-eligibility gate: returns `true` when the enqueue path
   /// should *skip* this asset because all required variants are currently
   /// in retry backoff (or hard-blocked needing user action). Called from
@@ -2321,7 +1993,11 @@ final class ExportManager: ObservableObject {
   /// caller declares the intended `category` so retry routing is
   /// deterministic; the message is used as both the `errorSignature` and
   /// the user-visible description.
-  private func recordVariantFailed(
+  ///
+  /// Declared `internal` (not `private`) so `VariantExporter.Host` can witness this
+  /// method. The other two `recordVariantFailed` overloads remain `private` because
+  /// they are not part of the Host protocol surface.
+  func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     sentinelMessage: String, category: AutoSyncFailureCategory, at date: Date
   ) {
@@ -2332,251 +2008,41 @@ final class ExportManager: ObservableObject {
       at: date)
   }
 
-  /// Pure forwarder to `RecordStoreRouter.markVariantInProgress`. Kept for call-site
-  /// stability — same rationale as `currentVariants` above.
-  private func recordVariantInProgress(
-    assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    relPath: String, filename: String?
-  ) {
-    recordStoreRouter.markVariantInProgress(
-      assetId: assetId, placement: placement, variant: variant,
-      relPath: relPath, filename: filename)
-  }
+  // `recordVariantInProgress` and `recordVariantExported` previously lived here as pure
+  // forwarders to the router. They became unused once Phase 3a moved the variant write
+  // path into `VariantExporter` (the only caller for both) — `VariantExporter` now
+  // calls `recordStoreRouter.markVariantInProgress` / `.markVariantExported` directly.
+  // Removed in the post-refactor cleanup.
 
-  /// Pure forwarder to `RecordStoreRouter.markVariantExported`. Kept for call-site
-  /// stability — same rationale as `currentVariants` above.
-  private func recordVariantExported(
-    assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    relPath: String, filename: String, exportedAt: Date
-  ) {
-    recordStoreRouter.markVariantExported(
-      assetId: assetId, placement: placement, variant: variant,
-      relPath: relPath, filename: filename, exportedAt: exportedAt)
-  }
-
-  func splitFilename(_ filename: String) -> (base: String, ext: String) {
-    let url = URL(fileURLWithPath: filename)
-    let base = url.deletingPathExtension().lastPathComponent
-    let ext = url.pathExtension
-    return (base, ext)
-  }
-
-  func uniqueFileURL(in directory: URL, baseName: String, ext: String) -> URL {
-    var candidate = directory.appendingPathComponent(baseName).appendingPathExtension(ext)
-    var index = 1
-    while fileSystem.fileExists(atPath: candidate.path) {
-      let nextName = "\(baseName) (\(index))"
-      candidate = directory.appendingPathComponent(nextName).appendingPathExtension(ext)
-      index += 1
-      if index > 10_000 { break }
-    }
-    return candidate
-  }
+  // `splitFilename` and `uniqueFileURL` moved to ExportDestinationResolver
+  // (static + instance respectively).
 
   // MARK: - Import Existing Backup
 
-  /// Starts the "Import Existing Backup…" flow.
-  /// Scans the current export destination for YYYY/MM/ files, matches them
-  /// against the Photos library, and rebuilds local export records.
+  /// Starts the "Import Existing Backup…" flow. Forwarder to the `ImportCoordinator`.
   func startImport() {
-    guard !isImporting else { return }
-    guard !hasActiveExportWork else {
-      logger.warning("Cannot import while export is active")
-      return
-    }
-    guard let rootURL = exportDestination.selectedFolderURL else {
-      logger.warning("Cannot import: no destination selected")
-      return
-    }
-    // Gate the import on a `.ready` timeline store. Otherwise the scanner would happily
-    // run, the bulkImportRecords call would silently drop every record (its `.ready`
-    // guard short-circuits on `.unconfigured`/`.failed`), and the user would see a
-    // success report with the matched counts despite nothing being persisted. This is
-    // the same hazard `canExportTimeline` guards on the export-start side.
-    guard exportRecordStore.state == .ready else {
-      logger.error(
-        "Cannot import: timeline record store state=\(String(describing: self.exportRecordStore.state), privacy: .public) (need .ready)"
-      )
-      return
-    }
-
-    isImporting = true
-    importStage = .scanningBackupFolder
-    importResult = nil
-
-    let importGen = generation
-
-    importTask = Task { [weak self] in
-      guard let self else { return }
-
-      do {
-        guard let scopedURL = self.exportDestination.beginScopedAccess() else {
-          self.logger.error("Failed to acquire security-scoped access for import")
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-        defer { self.exportDestination.endScopedAccess(for: scopedURL) }
-
-        // Probe the root before any destructive step. `BackupScanner.scanBackupFolder`
-        // swallows root-enumeration failure as `[]`, which would make a transiently
-        // unreadable drive look identical to "the user deleted everything." Reconcile
-        // would then prune every record. Catch that case here and bail without touching
-        // the stores.
-        do {
-          _ = try FileManager.default.contentsOfDirectory(
-            at: rootURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-        } catch {
-          self.logger.error(
-            "Import root unreachable: \(error.localizedDescription, privacy: .public)")
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        self.importStage = .scanningBackupFolder
-        try Task.checkCancellation()
-        let scannedFiles = await Task.detached {
-          BackupScanner.scanBackupFolder(at: rootURL)
-        }.value
-
-        try Task.checkCancellation()
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        // No early return on `scannedFiles.isEmpty` — an empty destination still needs
-        // reconcile so existing records get pruned to match disk truth. The bulk-import
-        // call below is a no-op for an empty matched list.
-
-        self.importStage = .readingPhotosLibrary
-        let matchResult = try await BackupScanner.matchFiles(
-          scannedFiles,
-          photoLibraryService: self.photoLibraryService
-        ) { [weak self] stage in
-          self?.importStage = stage
-        }
-
-        try Task.checkCancellation()
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        self.importStage = .rebuildingLocalState
-
-        let now = Date()
-        var records: [ExportRecord] = []
-        records.reserveCapacity(matchResult.matched.count)
-
-        for matched in matchResult.matched {
-          let descriptor = matched.asset
-          let file = matched.file
-          let year: Int
-          let month: Int
-          if let creationDate = descriptor.creationDate {
-            let calendar = Calendar.current
-            year = calendar.component(.year, from: creationDate)
-            month = calendar.component(.month, from: creationDate)
-          } else {
-            year = file.year
-            month = file.month
-          }
-          let relPath = "\(year)/" + String(format: "%02d", month) + "/"
-
-          let record = ExportRecord(
-            id: descriptor.id,
-            year: year,
-            month: month,
-            relPath: relPath,
-            variants: [
-              matched.variant: ExportVariantRecord(
-                filename: file.filename,
-                status: .done,
-                exportDate: now,
-                lastError: nil
-              )
-            ]
-          )
-          records.append(record)
-        }
-
-        self.exportRecordStore.bulkImportRecords(records)
-
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        // Reconcile both stores after bulkImport so the final state reflects disk
-        // truth at the latest possible moment. Closes the TOCTOU window where a file
-        // present at scan time gets deleted before bulkImport applies it.
-        self.importStage = .reconcilingDiskState
-        try Task.checkCancellation()
-        let timelineSummary = await self.exportRecordStore.reconcileAgainstFilesystem(
-          at: rootURL)
-        try Task.checkCancellation()
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-        let collectionSummary = await self.collectionExportRecordStore
-          .reconcileAgainstFilesystem(at: rootURL)
-        try Task.checkCancellation()
-        guard isCurrent(importGen) else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
-
-        let totalPrunedVariants =
-          timelineSummary.prunedVariants + collectionSummary.prunedVariants
-        let totalPrunedRecords =
-          timelineSummary.prunedRecords + collectionSummary.prunedRecords
-
-        self.importResult = ImportReport(
-          matchedCount: matchResult.matched.count,
-          ambiguousCount: matchResult.ambiguous.count,
-          unmatchedCount: matchResult.unmatched.count,
-          totalScanned: scannedFiles.count,
-          prunedVariants: totalPrunedVariants,
-          prunedRecords: totalPrunedRecords
-        )
-
-        self.importStage = .done
-        self.isImporting = false
-
-        self.logger.info(
-          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
-        )
-      } catch is CancellationError {
-        self.logger.info("Import task cancelled")
-        self.isImporting = false
-        self.importStage = nil
-      } catch {
-        self.logger.error(
-          "Import failed: \(error.localizedDescription, privacy: .public)")
-        self.isImporting = false
-        self.importStage = nil
-      }
-    }
+    importCoordinator.startImport()
   }
 
-  /// Cancels an in-progress import.
+  /// Cancels an in-progress import. Forwarder to the `ImportCoordinator`.
   func cancelImport() {
-    guard isImporting else { return }
-    importTask?.cancel()
-    importTask = nil
+    importCoordinator.cancelImport()
+  }
+
+  // MARK: - ImportCoordinator.Host conformance
+
+  /// Bumps the generation counter so any late-completing async work gates out via
+  /// `isCurrent`. Called by the import coordinator's cancel path; in Phase 4b/6 will
+  /// migrate to `ExportQueueCoordinator`.
+  func bumpGeneration() {
     generation += 1
-    isImporting = false
-    importStage = nil
-    importResult = nil
-    logger.info("Import cancelled")
+  }
+
+  /// Writes the import report back to the manager's `@Published` mirror. Kept as a Host
+  /// method (not a sink) because `importResult` is intentionally writable on the
+  /// manager — test code resets it directly between consecutive imports.
+  func setImportResult(_ result: ImportReport?) {
+    importResult = result
   }
 }
 

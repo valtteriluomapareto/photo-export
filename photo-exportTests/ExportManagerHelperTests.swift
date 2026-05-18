@@ -21,84 +21,8 @@ struct ExportManagerHelperTests {
     return (manager, recordStore)
   }
 
-  // MARK: - splitFilename
-
-  @Test func testSplitFilenameBasic() {
-    let (mgr, _) = makeManager()
-    let result = mgr.splitFilename("IMG_0001.JPG")
-    #expect(result.base == "IMG_0001")
-    #expect(result.ext == "JPG")
-  }
-
-  @Test func testSplitFilenameMultipleDots() {
-    let (mgr, _) = makeManager()
-    let result = mgr.splitFilename("my.photo.file.heic")
-    #expect(result.base == "my.photo.file")
-    #expect(result.ext == "heic")
-  }
-
-  @Test func testSplitFilenameNoExtension() {
-    let (mgr, _) = makeManager()
-    let result = mgr.splitFilename("README")
-    #expect(result.base == "README")
-    #expect(result.ext == "")
-  }
-
-  @Test func testSplitFilenameWithSpaces() {
-    let (mgr, _) = makeManager()
-    let result = mgr.splitFilename("My Photo (1).png")
-    #expect(result.base == "My Photo (1)")
-    #expect(result.ext == "png")
-  }
-
-  // MARK: - uniqueFileURL
-
-  @Test func testUniqueFileURLNoConflict() throws {
-    let (mgr, _) = makeManager()
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: dir) }
-
-    let url = mgr.uniqueFileURL(in: dir, baseName: "photo", ext: "jpg")
-    #expect(url.lastPathComponent == "photo.jpg")
-  }
-
-  @Test func testUniqueFileURLWithConflicts() throws {
-    let (mgr, _) = makeManager()
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: dir) }
-
-    // Create conflicting files
-    FileManager.default.createFile(
-      atPath: dir.appendingPathComponent("photo.jpg").path, contents: nil)
-    FileManager.default.createFile(
-      atPath: dir.appendingPathComponent("photo (1).jpg").path, contents: nil)
-
-    let url = mgr.uniqueFileURL(in: dir, baseName: "photo", ext: "jpg")
-    #expect(url.lastPathComponent == "photo (2).jpg")
-  }
-
-  @Test func testUniqueFileURLSequentialConflicts() throws {
-    let (mgr, _) = makeManager()
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: dir) }
-
-    // Create a run of conflicts
-    FileManager.default.createFile(
-      atPath: dir.appendingPathComponent("IMG.heic").path, contents: nil)
-    for i in 1...5 {
-      FileManager.default.createFile(
-        atPath: dir.appendingPathComponent("IMG (\(i)).heic").path, contents: nil)
-    }
-
-    let url = mgr.uniqueFileURL(in: dir, baseName: "IMG", ext: "heic")
-    #expect(url.lastPathComponent == "IMG (6).heic")
-  }
+  // `splitFilename` and `uniqueFileURL` helper tests moved to
+  // `ExportDestinationResolverTests` along with the underlying code.
 
   // MARK: - Queue counter state
 

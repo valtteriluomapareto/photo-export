@@ -65,10 +65,28 @@ npm run dev
 - Use `os.Logger` for production logging.
 - Preserve the no-overwrite export behavior and the `PHAsset.localIdentifier` tracking model.
 
-Reference material:
+## Developing new features
 
-- Architecture and style notes: [`docs/reference/swift-swiftui-best-practices.md`](docs/reference/swift-swiftui-best-practices.md)
-- Persistence details: [`docs/reference/persistence-store.md`](docs/reference/persistence-store.md)
+The app's export pipeline went through a multi-phase architecture refactor in May 2026 that established three cross-cutting contracts (cancellation, actor isolation, AutoSync seam) plus a Host-protocol pattern for `ExportManager`'s collaborators. Before adding a new export entry point, placement kind, variant, collaborator, or `@Published` property AutoSync should observe:
+
+1. Read [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) — the canonical home for the contracts, the canonical `start*` entry-point shape, and the "to add a new X, touch these files" recipes.
+2. If your change touches the queue, AutoSync surface, record stores, or the screenshot photo library service, the following **regression-gate tests** must pass *without re-recording* unless you have explicitly audited the new behavior:
+   - `AutoSyncSeamCharacterizationTests` — pins the AutoSync emission sequence.
+   - `ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors` — pins synchronous coordinator→manager mirrors.
+   - `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions` — pins toolbar state transitions.
+   - `ScreenshotPhotoLibraryServiceOverridesTests` — pins screenshot-mode override coverage.
+   - `ImportIdempotencyTests` — pins import idempotency.
+3. New collaborator extracted from `ExportManager`? Use the Host-protocol pattern documented in the conventions file (narrow protocol, IUO init, weak host, synchronous mirror sinks). Do not duplicate `@Published` state on the manager.
+
+The deeper architecture map (what each type does) lives at [`website/src/content/docs/architecture.md`](website/src/content/docs/architecture.md). For agent-specific quick reference (build commands, design decisions, conventions), [`AGENTS.md`](AGENTS.md) is the richest single source — humans are welcome to read it too.
+
+## Reference material
+
+- **Architecture conventions** (cancellation, actor isolation, AutoSync seam, Host/forwarder patterns, regression gates, extension recipes): [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md)
+- **Architecture map** (what each type does, friendly version): [`website/src/content/docs/architecture.md`](website/src/content/docs/architecture.md)
+- **Style and Swift/SwiftUI patterns**: [`docs/reference/swift-swiftui-best-practices.md`](docs/reference/swift-swiftui-best-practices.md)
+- **Persistence details**: [`docs/reference/persistence-store.md`](docs/reference/persistence-store.md)
+- **Agent quick reference** (also useful for humans): [`AGENTS.md`](AGENTS.md)
 
 ## Documentation Ownership
 

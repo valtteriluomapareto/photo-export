@@ -72,6 +72,39 @@ struct ExportManagerRunExportTests {
     )
   }
 
+  // MARK: - Bookkeeping integrity
+
+  /// Phase 3a regression gate: `VariantExporter` routes its sentinel-message failure
+  /// recording through `Host.recordVariantFailed`, which is the only path that
+  /// increments `activeRunBookkeeping.failedCount` and appends to
+  /// `activeRunBookkeeping.failures`. If a future change routed past the host (e.g.
+  /// calling `RecordStoreRouter.markVariantFailed` directly), the per-variant record
+  /// would still be written but `ExportRunSummary.failedCount` / `.failures` would
+  /// silently under-count — breaking AutoSync retry routing and the Export Issues UI.
+  ///
+  /// Reproduction: a `.timelineMonth` scope with one asset whose mediaType is `.video`
+  /// has no original-side resource selector match (selectOriginalResource returns nil
+  /// for video without a `.video` resource), so the variant write hits the
+  /// `producer.originalFilename == nil` guard and emits a sentinel-message failure.
+  @Test func sentinelFailurePopulatesRunSummaryBookkeeping() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let asset = TestAssetFactory.makeAsset(id: "no-resource", mediaType: .video)
+    // No resources seeded for the asset — variant write fails on the "no resource" guard.
+    harness.photoLib.favoritesAssets = [asset]
+
+    let summary = await harness.manager.runExport(
+      context: makeContext(scope: .favoritesFull))
+
+    // Per-variant record AND ExportRunSummary bookkeeping must both reflect the failure.
+    #expect(summary.failedCount == 1,
+      "VariantExporter.Host.recordVariantFailed must increment failedCount; got \(summary.failedCount)")
+    #expect(!summary.failures.isEmpty,
+      "summary.failures must contain the per-variant failure detail; got \(summary.failures.count)")
+    #expect(summary.failures.first?.assetId == "no-resource")
+  }
+
   // MARK: - Empty library
 
   /// `runExport` against an empty Photos library resolves immediately with `.completed`
@@ -275,6 +308,53 @@ struct ExportManagerRunExportTests {
     #expect(summary.skippedCount == 1)
     // The run completed for asset-2; asset-1 was skipped pre-enqueue.
     #expect(summary.enqueuedCount == 1)
+  }
+
+  /// Predicate-order integration pin (post-refactor cleanup). The planner unit tests
+  /// pin that `isExported` runs before `shouldSkipForRetry`, but a regression in how
+  /// the manager wires those predicates into the planner could silently defeat that.
+  ///
+  /// Setup: one asset is already `.done` in the record store; AutoSync's eligibility
+  /// closure is installed but should NEVER see this asset (it was filtered by
+  /// `isExported` first). If the order were reversed, `skipForAutoSyncRetry` would
+  /// observe the asset and increment `skippedCount`, inflating AutoSync's "ran but
+  /// found nothing to do" counter for assets that were never going to be queued.
+  @Test func autoSyncRunFilterAlreadyExportedBeforeRetryCheck() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let assetDate = makeDate(2025, 7, 1)
+    let asset = TestAssetFactory.makeAsset(id: "already-done", creationDate: assetDate)
+    harness.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    harness.photoLib.yearCounts = [(year: 2025, count: 1)]
+
+    // Plant a `.done` original so `exportRecordStore.isExported` returns true.
+    harness.store.markVariantExported(
+      assetId: asset.id, variant: .original,
+      year: 2025, month: 7, relPath: "2025/07/",
+      filename: "X.HEIC", exportedAt: Date())
+
+    // The eligibility closure must NOT be called for the already-done asset. Record
+    // every call so the test can assert the gate never saw this asset id.
+    var eligibilityCalls: [String] = []
+    harness.manager.autoSyncEligibilityCheck = { assetId, _, _, _ in
+      eligibilityCalls.append(assetId)
+      return false  // would-be-blocking, but should never run for this asset
+    }
+
+    let summary = await harness.manager.runExport(
+      context: ExportRunContext(
+        source: .autoSync,
+        visibility: .background,
+        scope: .timelineFullLibrary,
+        selection: .edited))
+
+    #expect(!eligibilityCalls.contains("already-done"),
+      "skipForAutoSyncRetry must NOT be called for already-exported assets; got calls: \(eligibilityCalls)")
+    #expect(summary.skippedCount == 0,
+      "already-exported asset must be filtered by isExported, not counted as a retry skip")
+    #expect(summary.enqueuedCount == 0)
+    #expect(summary.result == .completed)
   }
 
   /// Manual runs (`source == .manual`) must never gate on AutoSync retry

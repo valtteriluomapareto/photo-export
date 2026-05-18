@@ -9,9 +9,20 @@ Photo Export follows a small **SwiftUI + Managers** architecture. Views stay rel
 
 [`photo_exportApp.swift`](https://github.com/valtteriluomapareto/photo-export/blob/main/photo-export/photo_exportApp.swift) creates the shared app state and injects it into the view tree with `@EnvironmentObject`.
 
+## Folder layout
+
+Long-lived stateful services and pure helpers are split by feature area under `photo-export/`:
+
+- `Records/` — `ExportRecordStore`, `CollectionExportRecordStore`, `JSONLRecordFile`, `RecordStoreRouter` (single placement-kind dispatch), `ExportCompletionPolicy` (single edited-fallback/required-variant rule)
+- `AutoSync/` — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, with `AutoSync/Stores/` for file-backed persistence (dirty state, per-destination tokens, retry state, run summary, scope, global photo-change token)
+- `PhotoLibrary/` — `PhotoLibraryManager`, `ScreenshotPhotoLibraryService`, `PhotoLibraryPersistentChangeAdapter`, `CollectionCountCache`
+- `Managers/` — remaining stateful services awaiting later moves: `ExportManager`, `ExportDestinationManager`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, `BackupScanner`, `ExportJobPlanner`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `ResourceSelection`, `FileIOService`, plus `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
+- `Protocols/`, `Models/`, `ViewModels/`, `Helpers/`, `Resources/`
+- `Views/` regrouped by feature: `Timeline/`, `Collections/`, `Export/`, `Settings/`, `Shared/`
+
 ## Managers
 
-Most long-lived state lives in manager types under `photo-export/Managers/`.
+The major UI-facing managers retain their original names:
 
 ### PhotoLibraryManager
 
@@ -71,23 +82,24 @@ collection store cannot affect timeline progress and vice versa.
 
 ### ExportManager
 
-Orchestrates the export queue. Depends on the other three managers.
+Top-level orchestrator over the export collaborators. Depends on the other three injected managers plus the extracted owners listed below.
 
-- Enqueue/pause/cancel/resume operations
-- Persists the user's version selection (`edited` / `editedWithOriginals`) in
-  `UserDefaults` and snapshots it onto each enqueued job
-- Sequential export pipeline; each job writes every variant required for the asset under
-  the active selection
-- `ExportFilenamePolicy` decides the `_orig` companion filename shape; `ResourceSelection`
-  picks between original-side and edited-side `PHAssetResource`s
-- Atomic writes: per-variant temp file → move to final location, with stale `.tmp`
-  cleanup at export start
-- Updates per-variant export records after each successful write; a failed edited variant
-  does not roll back a completed original variant
-- Runs the "Import Existing Backup…" flow
-- Awaitable `runExport(context:)` API for AutoSync; an `autoSyncEligibilityCheck`
-  closure consulted at enqueue time skips assets whose retry entries are in
-  backoff (Auto-Sync runs only)
+- `runExport(context:)` awaitable API for AutoSync; `start*` fire-and-forget methods for the toolbar/menu UI (`startExportAll`, `startExportYear`, `startExportMonth`, `startExportFavorites`, `startExportAllAlbums`, `startExportAllSharedAlbums`, `startExportTimelineSelection`, `startExportCollectionsSelection`). The two `*Selection` methods are the bulk dispatchers behind sidebar multi-select — they accept normalized buckets and route each item through the existing single-select helpers so dedup against the record store is shared.
+- Owns `generation: Int` (the cancellation seam) plus the published mirrors for `isRunning`, `queueCount`, `totalJobsEnqueued/Completed`, `isImporting`, `importStage` (mirrored from the coordinators via Combine sinks).
+- Persists the user's version selection (`edited` / `editedWithOriginals`) in `UserDefaults` and snapshots it onto each enqueued job.
+- Delegates per-concern work to extracted owners (see below).
+
+### Export-pipeline owners (extracted from `ExportManager` during the architecture refactor)
+
+- **`ExportJobPlanner`** (pure `enum`, `Managers/ExportJobPlanner.swift`) — turns assets + skip predicates into `[ExportJob]`. Owns the `isExported` → `shouldSkipForRetry` predicate-order discipline.
+- **`ExportQueueCoordinator`** (`@MainActor final class`, `Managers/ExportQueueCoordinator.swift`) — owns `pendingJobs`, `isProcessing`, `currentTask`, queue counters, pause/resume/cancel, and the drain loop. Publishes queue state which `ExportManager` mirrors.
+- **`VariantExporter`** (`@MainActor final class`, `Managers/VariantExporter.swift`) — per-variant write path: resource selection, destination temp setup, reuse-source copy, atomic move, timestamps, per-variant exported/failed record write.
+- **`ImportCoordinator`** (`@MainActor final class`, `Managers/ImportCoordinator.swift`) — entire scanner → matcher → bulkImport → reconcile flow for the Import Existing Backup feature.
+- **`ExportDestinationResolver`** (`Sendable struct`, `Managers/ExportDestinationResolver.swift`) — destination URL + filename allocator: stem allocation, `_orig` companion naming, inherited group stem from prior records, unique-filename collision suffixing.
+- **`RecordStoreRouter`** (`@MainActor final class`, `Records/RecordStoreRouter.swift`) — single placement-kind dispatch over the timeline and collection record stores (reads, writes, cancellation cleanup, reuse-source probe).
+- **`ExportCompletionPolicy`** (pure `enum`, `Records/ExportCompletionPolicy.swift`) — required-variant logic + edited-fallback decisions + asset-complete checks.
+
+`ExportFilenamePolicy` decides the `_orig` companion filename shape; `ResourceSelection` picks between original-side and edited-side `PHAssetResource`s. Atomic writes via per-variant temp file → move to final location, with stale `.tmp` cleanup at export start. Per-variant records are updated after each successful write; a failed edited variant does not roll back a completed original variant.
 
 ### AutoSyncManager
 
@@ -169,20 +181,21 @@ in `PhotoExportApp` where the record-store directory roots are known.
 
 The main UI lives under `photo-export/Views/` and `photo-export/ViewModels/`.
 
-| Type                     | Responsibility                                                                                                      |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `ContentView`            | Top-level router (auth → onboarding → library)                                                                      |
-| `LibraryRootView`        | `NavigationSplitView` shell with the Timeline / Collections segmented selector                                      |
-| `TimelineSidebarView`    | Year/month tree                                                                                                     |
-| `CollectionsSidebarView` | Favorites, user albums and folders, and a separate Shared Albums section, lazy-counted via `cachedCountAssets(in:)` |
-| `MonthContentView`       | Thumbnail grid for the selected month                                                                               |
-| `CollectionContentView`  | Thumbnail grid for Favorites, a user album, or a shared album, sharing `MonthViewModel` via a scope-based loader    |
-| `AssetDetailView`        | Full-size image or video preview                                                                                    |
-| `ExportToolbarView`      | Export destination and queue controls                                                                               |
-| `RecordStoreAlertHost`   | Surfaces a corruption-recovery alert when either record store transitions to `.failed`                              |
-| `OnboardingView`         | First-run flow for permissions and destination setup                                                                |
-| `ImportView`             | Progress and results for importing an existing backup                                                               |
-| `MonthViewModel`         | Cancellation-aware asset loading for any `PhotoFetchScope` (timeline / favorites / album / shared album)            |
+| Type                     | Responsibility                                                                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ContentView`            | Top-level router (auth → onboarding → library)                                                                                                          |
+| `LibraryRootView`        | `NavigationSplitView` shell with the Timeline / Collections segmented selector                                                                          |
+| `TimelineSidebarView`    | Year/month tree with Cmd/Shift-click multi-select; reports selection via `TimelineSelectionBuckets`                                                     |
+| `CollectionsSidebarView` | Favorites, user albums and folders (with Cmd/Shift-click multi-select), and a separate Shared Albums section, lazy-counted via `cachedCountAssets(in:)` |
+| `YearContentView`        | Content pane shown when a year row is the focused selection (year-level summary + primary action, no asset grid)                                        |
+| `MonthContentView`       | Thumbnail grid for the selected month                                                                                                                   |
+| `CollectionContentView`  | Thumbnail grid for Favorites, a user album, or a shared album, sharing `MonthViewModel` via a scope-based loader                                        |
+| `AssetDetailView`        | Full-size image or video preview                                                                                                                        |
+| `ExportToolbarView`      | Export destination and queue controls                                                                                                                   |
+| `RecordStoreAlertHost`   | Surfaces a corruption-recovery alert when either record store transitions to `.failed`                                                                  |
+| `OnboardingView`         | First-run flow for permissions and destination setup                                                                                                    |
+| `ImportView`             | Progress and results for importing an existing backup                                                                                                   |
+| `MonthViewModel`         | Cancellation-aware asset loading for any `PhotoFetchScope` (timeline / favorites / album / shared album)                                                |
 
 ## Persistence
 
