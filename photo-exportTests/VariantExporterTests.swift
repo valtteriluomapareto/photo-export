@@ -90,6 +90,7 @@ struct VariantExporterTests {
       recordStoreRouter: router,
       assetResourceWriter: writer,
       mediaRenderer: renderer,
+      imageConverter: FakeImageConverter(),
       fileSystem: fileSystem,
       exportDestination: dest)
     return Harness(exporter: exporter, host: host, writer: writer, renderer: renderer,

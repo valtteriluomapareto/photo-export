@@ -246,6 +246,10 @@ final class ExportManager: ObservableObject {
   // DO NOT change this back to `let` without re-examining the closure
   // capture in `init` — the rebind is the whole point.
   private(set) var mediaRenderer: any MediaRenderer
+  /// Seam for the HEIC→JPEG conversion path (issue #47). `VariantExporter` invokes
+  /// it through this reference. Defaults to `ProductionImageConverter` (a thin
+  /// CoreImage wrapper); tests inject `FakeImageConverter`.
+  let imageConverter: any ImageConverter
   let fileSystem: any FileSystemService
 
   /// True when the **timeline** store is ready to accept writes. Timeline `startExport*`
@@ -351,6 +355,7 @@ final class ExportManager: ObservableObject {
     collectionExportRecordStore: CollectionExportRecordStore? = nil,
     assetResourceWriter: any AssetResourceWriter = ProductionAssetResourceWriter(),
     mediaRenderer: (any MediaRenderer)? = nil,
+    imageConverter: any ImageConverter = ProductionImageConverter(),
     fileSystem: any FileSystemService = FileIOService(),
     userDefaults: UserDefaults = .standard
   ) {
@@ -367,6 +372,7 @@ final class ExportManager: ObservableObject {
       timelineStore: self.exportRecordStore,
       collectionStore: self.collectionExportRecordStore)
     self.assetResourceWriter = assetResourceWriter
+    self.imageConverter = imageConverter
     self.fileSystem = fileSystem
     self.destinationResolver = ExportDestinationResolver(fileSystem: fileSystem)
     // Provisional renderer — gives `self.mediaRenderer` a value so all
@@ -404,6 +410,7 @@ final class ExportManager: ObservableObject {
       recordStoreRouter: self.recordStoreRouter,
       assetResourceWriter: self.assetResourceWriter,
       mediaRenderer: self.mediaRenderer,
+      imageConverter: self.imageConverter,
       fileSystem: self.fileSystem,
       exportDestination: self.exportDestination)
     // Mirror the coordinator's published queue state onto ExportManager so existing
