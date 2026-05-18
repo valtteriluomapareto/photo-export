@@ -55,6 +55,13 @@ struct ExportToolbarView: ToolbarContent {
         Label("Include originals for edited photos", systemImage: "doc.on.doc")
       }
       .disabled(exportManager.hasActiveExportWork)
+      Toggle(isOn: $exportManager.convertHEICToJPEG) {
+        Label("Convert HEIC to JPEG", systemImage: "arrow.left.arrow.right")
+      }
+      .disabled(exportManager.hasActiveExportWork)
+      // No `.help(...)` here: macOS SwiftUI `Menu` does not surface per-
+      // item tooltips. The deferred-semantics caveat lives in
+      // `formatHelp` (menu-trigger tooltip) instead.
     } label: {
       // `Label` rather than a custom `HStack { Image(...) }` so the toolbar's
       // "Icon and Text" customization mode can render "Format" beneath the
@@ -65,17 +72,18 @@ struct ExportToolbarView: ToolbarContent {
     // `.menuIndicator(.hidden)` removes the chevron — the slider glyph is the
     // affordance, and the chevron crowds the icon in the limited toolbar space.
     .menuIndicator(.hidden)
-    .help(includeOriginalsHelp)
+    .help(formatHelp)
     .accessibilityLabel("Format options")
     .accessibilityHint(
-      "Toggle Include originals to keep an unedited copy of photos that have edits in Photos."
+      "Toggle Include originals to keep an unedited copy of photos that have edits in Photos. "
+        + "Toggle Convert HEIC to JPEG to re-encode HEIC captures on export."
     )
     // Overlay the accent dot when at least one option is on — at-a-glance
     // state feedback without inlining the full toggle. Mirrors how Photos /
     // Mail toolbars indicate "you've changed a default here." Sits outside
     // the `Label` so it doesn't interfere with "Icon and Text" mode text.
     .overlay(alignment: .topTrailing) {
-      if exportManager.includeOriginals {
+      if exportManager.includeOriginals || exportManager.convertHEICToJPEG {
         Circle()
           .fill(Color.accentColor)
           .frame(width: 6, height: 6)
@@ -84,20 +92,33 @@ struct ExportToolbarView: ToolbarContent {
     }
   }
 
-  private var includeOriginalsHelp: String {
+  private var formatHelp: String {
     if exportManager.hasActiveExportWork {
       return "Available after the current export finishes."
     }
+    let includeOriginalsLine: String
     switch exportManager.versionSelection {
     case .edited:
-      return
+      includeOriginalsLine =
         "Each photo is exported once, in the version Photos shows. "
-        + "Turn on to also keep an original-bytes copy alongside edited photos."
+        + "Turn on Include originals to also keep an original-bytes copy alongside edited photos."
     case .editedWithOriginals:
-      return
+      includeOriginalsLine =
         "Edited photos export both the user-visible version and a _orig companion "
         + "with the original bytes."
     }
+    let convertLine: String
+    if exportManager.convertHEICToJPEG {
+      convertLine =
+        "HEIC captures are re-encoded as JPEG on export. "
+        + "Applies to new exports — re-run an Export action to convert existing HEICs. "
+        + "Non-HEIC photos are unaffected."
+    } else {
+      convertLine =
+        "HEIC captures keep their original format on export. "
+        + "Non-HEIC photos are unaffected."
+    }
+    return includeOriginalsLine + "\n" + convertLine
   }
 
   // MARK: - Destination Indicator
