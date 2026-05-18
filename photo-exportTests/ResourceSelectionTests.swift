@@ -227,6 +227,34 @@ struct ResourceSelectionTests {
     }
   }
 
+  /// Toggle ON, edited HEIC + non-HEIC original (cross-imported library
+  /// entries): still converts the edit. The original's format doesn't
+  /// affect the synthesis decision once an edited resource is in play.
+  @Test func editedProducerToggleOnEditedHEICWithNonHEICOriginalConvertsTheEdit() {
+    let r = resources([(.fullSizePhoto, "edit.HEIC"), (.photo, "orig.JPG")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: true),
+      convertHEICToJPEG: true)
+    if case .convertHEIC(let req) = producer {
+      #expect(req.sourceResource.type == .fullSizePhoto)
+      #expect(req.originalFilename == "edit.JPG")
+    } else {
+      Issue.record("expected .convertHEIC, got \(producer)")
+    }
+  }
+
+  /// Toggle ON, **adjusted** asset with HEIC original but no `.fullSizePhoto`
+  /// — rare iCloud-mid-edit state. Must NOT silently treat the HEIC original
+  /// as the edit and ship pre-edit bytes; falls through to `.none` so the
+  /// existing `editedResourceUnavailableMessage` recovery handles it later.
+  @Test func editedProducerToggleOnAdjustedHEICWithoutEditedResourceReturnsNone() {
+    let r = resources([(.photo, "IMG_0001.HEIC")])
+    let producer = ResourceSelection.selectEditedProducer(
+      from: r, mediaType: .image, descriptor: descriptor(hasAdjustments: true),
+      convertHEICToJPEG: true)
+    #expect(producer == .none)
+  }
+
   /// Toggle ON, JPEG edited resource (Photos rendered the edit as JPEG):
   /// behaves like toggle off — no synthesis needed.
   @Test func editedProducerToggleOnJPEGEditFallsThrough() {

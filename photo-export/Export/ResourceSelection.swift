@@ -92,8 +92,16 @@ enum ResourceSelection {
       //   1. Edited resource exists AND it's HEIC → convert the edit. Happens
       //      when Photos served HEIC for an adjusted asset (rare; most edits
       //      are rendered to JPEG by Photos.app itself).
-      //   2. No edited resource, original is HEIC → convert the original.
-      //      The common case: an unedited iPhone HEIC capture.
+      //   2. Unedited HEIC original, no edited resource → convert the original.
+      //      The common case: an unedited iPhone HEIC capture. The
+      //      `!hasAdjustments` gate is load-bearing — without it, the rare
+      //      "asset has adjustments but Photos hasn't materialized the
+      //      `.fullSizePhoto` yet" state (mid-edit, out-of-sync iCloud) would
+      //      silently treat the original HEIC as the edit and ship the user's
+      //      pre-edit bytes as if they were the edited version. That state is
+      //      a recoverable failure today (the pipeline records
+      //      `editedResourceUnavailableMessage` and retries later); leave it
+      //      alone so the user doesn't lose edits to the conversion path.
       //   3. Edited resource exists AND it's already JPEG → fall through to
       //      the existing `.resource(.fullSizePhoto)` path. Photos already
       //      did the conversion for us; synthesizing again from the HEIC
@@ -107,7 +115,7 @@ enum ResourceSelection {
               originalFilename: jpegFilename(replacingExtensionOf: editedHEIC.originalFilename)
             ))
         }
-        if editedResource == nil,
+        if editedResource == nil, !descriptor.hasAdjustments,
           let originalHEIC = resources.first(where: {
             $0.type == .photo && isHEICResource($0)
           })
@@ -120,7 +128,9 @@ enum ResourceSelection {
             ))
         }
         // Fall through: non-HEIC originals + non-HEIC edits already produce
-        // JPEG via PhotoKit; no synthesis needed.
+        // JPEG via PhotoKit; no synthesis needed. The "adjusted but no edited
+        // resource yet" state also falls through to the existing
+        // editedResourceUnavailable recovery, per case 2's gate above.
       }
       if let resource = editedResource {
         return .resource(resource)
@@ -153,10 +163,12 @@ enum ResourceSelection {
     }
   }
 
-  /// Filename-extension match for HEIC / HEIF byte sources. Mirrors the UTI
-  /// detection on `AssetDescriptor.isHEICOriginal` — the extension is what
-  /// PhotoKit reports for the resource, and is the same predicate the
-  /// `BackupScanner` uses elsewhere.
+  /// Filename-extension match for HEIC / HEIF byte sources. Resource-level
+  /// detection (extension-based) is independent of the asset-level UTI on
+  /// `AssetDescriptor.isHEICOriginal`; both predicates accept the same
+  /// `.heic` / `.heif` aliases so they agree in practice, but the inputs
+  /// differ (filename here, UTI there). Same extension list `BackupScanner`
+  /// recognizes as image originals.
   static func isHEICResource(_ resource: ResourceDescriptor) -> Bool {
     let ext = (resource.originalFilename as NSString).pathExtension.lowercased()
     return ext == "heic" || ext == "heif"
