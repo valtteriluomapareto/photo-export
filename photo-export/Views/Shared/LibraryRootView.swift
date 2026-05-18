@@ -317,11 +317,22 @@ struct LibraryRootView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .timelineMonth(let year, let month):
+      // Pass `versionSelection` and `isExportRunning` down as values rather than
+      // letting `MonthContentView` subscribe to `ExportManager` directly. The
+      // manager fires `objectWillChange` per export job (queueCount sink, etc.);
+      // `.equatable()` on a value-comparing `MonthContentView` then short-circuits
+      // the LazyVGrid re-evaluation when the rendering inputs are unchanged. Without
+      // `.equatable()` the freshly-allocated `onExportMonth` closure per render
+      // would defeat SwiftUI's structural diff.
       MonthContentView(
         year: year, month: month,
+        versionSelection: exportManager.versionSelection,
+        isExportRunning: exportManager.isRunning,
+        onExportMonth: { exportManager.startExportMonth(year: year, month: month) },
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
+      .equatable()
       .environmentObject(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 

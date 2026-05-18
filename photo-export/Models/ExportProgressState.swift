@@ -1,22 +1,23 @@
 import Foundation
 
-/// Frequently-mutating progress-bar state, split off from `ExportManager` so the
-/// per-asset filename / per-job counter updates don't fan out as
-/// `ExportManager.objectWillChange` storms.
+/// Frequently-mutating per-job / per-variant state, split off from `ExportManager`
+/// so that each progress update doesn't fan out as an `ExportManager.objectWillChange`
+/// storm to every view holding the manager as `@EnvironmentObject`.
 ///
 /// Why this exists: during a typical run, `currentAssetFilename`, `renderActivity`,
-/// and `totalJobsCompleted` change several times per asset. When they lived on
-/// `ExportManager`, every change fired the manager's `objectWillChange`, which
-/// `@EnvironmentObject` then propagated to every observing view —
+/// `totalJobsCompleted`, and `currentJobPlacement` all change several times per
+/// asset. When they lived on `ExportManager`, every change fired the manager's
+/// `objectWillChange`, which propagated to every observing view —
 /// `LibraryRootView`, `TimelineSidebarView` (and its `MonthRow`s), `YearContentView`
 /// (with its `isMonthFullyExported` per-tile computation), `MonthContentView`. The
 /// per-view body re-evaluation was cheap individually but added up while the user
 /// was scrolling the asset grid: ~5 cascades per asset turned into visible jank.
 ///
-/// `ExportProgressBar` is the only consumer, so isolating it on a dedicated
-/// observable means the manager's `objectWillChange` no longer fires for any of
-/// these fields. AutoSync's seam is preserved — it subscribes to
-/// `$activeRunContext / $isRunning / $queueCount`, none of which move here.
+/// The fields here are read only by `ExportProgressBar` (counters / filename /
+/// render activity / messages) and `MonthRow` (`currentJobPlacement` for the
+/// in-flight spinner). AutoSync's seam is preserved — it subscribes to
+/// `$activeRunContext / $isRunning / $queueCount` on `ExportManager`, none of
+/// which move here.
 ///
 /// Tests that read `manager.totalJobsEnqueued` etc. continue to compile because
 /// `ExportManager` keeps read-only computed forwarders.
@@ -41,4 +42,11 @@ final class ExportProgressState: ObservableObject {
   /// bar. Distinct from `emptyRunMessage`, which only renders when the queue is
   /// empty.
   @Published var queueWarningMessage: String?
+
+  /// Placement of the job currently in flight. Lives here (not on `ExportManager`)
+  /// because it mutates twice per asset — once at `setCurrentJob`, once at
+  /// `clearCurrentJobIdentifiers`. The only reader is `MonthRow`, which lights up
+  /// its `ProgressView` for the row owning the in-flight job. AutoSync does not
+  /// subscribe to it.
+  @Published var currentJobPlacement: ExportPlacement?
 }

@@ -296,10 +296,18 @@ final class ExportManager: ObservableObject {
   /// cleanup paths to route the `removeVariant` call to the correct store via
   /// `placement.kind`.
   ///
-  /// `@Published` so the timeline sidebar's `MonthRow` can light up its spinner only on
-  /// the row that owns the in-flight job. AutoSync does not observe this field, so
-  /// publishing it adds a UI observer without touching the AutoSync seam.
-  @Published private(set) var currentJobPlacement: ExportPlacement?
+  /// The observable storage lives on `progressState` so that the per-job mutation
+  /// (set on job start, cleared on job end — twice per asset) doesn't fan out as
+  /// `ExportManager.objectWillChange` to every view holding the manager. The only
+  /// SwiftUI reader is `MonthRow`'s in-flight spinner; it subscribes to
+  /// `ExportProgressState` directly. This forwarder keeps internal write sites in
+  /// the manager unchanged. `private(set)` preserves the pre-extraction surface —
+  /// only the manager (and a `setCurrentJob` / `clearCurrentJobIdentifiers` it
+  /// owns) may mutate the in-flight placement.
+  private(set) var currentJobPlacement: ExportPlacement? {
+    get { progressState.currentJobPlacement }
+    set { progressState.currentJobPlacement = newValue }
+  }
   private(set) var generation: Int = 0
   private(set) var isEnqueueingAll: Bool = false
   /// Forwarder to the import coordinator's task handle so existing test reads
