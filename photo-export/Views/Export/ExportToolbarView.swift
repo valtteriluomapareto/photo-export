@@ -206,11 +206,21 @@ struct ExportToolbarView: ToolbarContent {
 
       if exportManager.hasActiveExportWork {
         Button {
+          // Cancel ⇒ disable Auto Export. Without this, AutoSync's debounce
+          // re-fires within ~30s of a cancelled run (it sees dirty state
+          // surviving the cancel and re-schedules), so "Cancel" felt to the
+          // user like "pause for 30 seconds." Treating Cancel as "stop, and
+          // don't restart automatically" matches the button's plain-language
+          // meaning. The user can re-enable Auto Export from Settings.
+          autoSyncManager.setEnabled(false)
           exportManager.cancelAndClear()
         } label: {
           Label("Cancel", systemImage: "xmark.circle")
         }
-        .help("Cancel and clear queue")
+        .help(
+          autoSyncManager.isEnabled
+            ? "Cancel and clear queue. Also turns Auto Export off."
+            : "Cancel and clear queue")
       }
     }
   }
