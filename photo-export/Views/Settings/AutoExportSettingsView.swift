@@ -14,6 +14,7 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @EnvironmentObject private var loginItemController: LoginItemController
   @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
+  @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
 
   @State private var isShowingMigrationRecoverySheet = false
   @State private var isShowingSafetyConfirm = false
@@ -83,11 +84,18 @@ struct AutoExportSettingsView: View {
         )
       }
 
-      Section("Status") {
+      Section {
         StatusSummaryRow(state: autoSyncManager.state)
+        LastReconciledRow(timestamp: photoChangeAdapter.lastSuccessfulReconciliation)
         if let summary = autoSyncManager.lastRunSummary {
           LastRunRow(summary: summary)
         }
+      } header: {
+        Text("Status")
+      } footer: {
+        Text("Photo Export periodically checks for new photos and refreshes automatically.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
 
       Section {
@@ -438,6 +446,43 @@ private struct LastRunRow: View {
     let failedSuffix = summary.failedCount > 0 ? ", \(summary.failedCount) failed" : ""
     let resultSuffix = summary.result == .completed ? "" : " (\(summary.result.rawValue))"
     return counts + failedSuffix + resultSuffix
+  }
+}
+
+/// Shows when the safety-net reconcile last consulted PhotoKit. Trust signal for
+/// the issue #69 fix: if the user opens Settings deep into a long iCloud-sync
+/// session and the line still reads "a few minutes ago," they know the
+/// background-check loop is alive.
+///
+/// Wrapped in `TimelineView(.periodic)` so the relative-time string updates on
+/// its own between reconciles (otherwise the row would freeze at the time of
+/// the most recent update and only refresh when something else re-rendered the
+/// Form). The first reconcile fires within milliseconds of `start()` so the
+/// `Checking…` state is essentially a startup placeholder.
+private struct LastReconciledRow: View {
+  let timestamp: Date?
+
+  /// Single shared formatter — `RelativeDateTimeFormatter` is non-trivial to
+  /// construct and the value is identical for every render of this row.
+  private static let formatter: RelativeDateTimeFormatter = {
+    let f = RelativeDateTimeFormatter()
+    f.unitsStyle = .short
+    return f
+  }()
+
+  var body: some View {
+    TimelineView(.periodic(from: .now, by: 30)) { context in
+      HStack(spacing: 8) {
+        Image(systemName: "arrow.clockwise")
+          .foregroundStyle(.secondary)
+        Text(label(now: context.date))
+      }
+    }
+  }
+
+  private func label(now: Date) -> String {
+    guard let timestamp else { return "Checking\u{2026}" }
+    return "Last updated \(Self.formatter.localizedString(for: timestamp, relativeTo: now))"
   }
 }
 

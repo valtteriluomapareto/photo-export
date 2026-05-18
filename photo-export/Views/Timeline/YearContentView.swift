@@ -50,7 +50,7 @@ struct YearContentView: View {
       HStack {
         summaryView
         Spacer()
-        Button("Export Year") {
+        AutoSyncAwareExportButton("Export Year") {
           exportManager.startExportYear(year: year)
         }
         .buttonStyle(.bordered)

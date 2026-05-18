@@ -773,6 +773,32 @@ struct AutoSyncReducerTests {
       }))
   }
 
+  /// Regression for the issue-#69-era crash: a multi-scope AutoSync fan-out
+  /// holds `activeRunContext` across scopes. The work-preservation hook can
+  /// land the reducer back in `.scheduled` while scope #2's `runExport` is
+  /// still suspended (its `activeRunContext` is set). A subsequent
+  /// `debounceFired` must NOT emit `.startRun` in that window — doing so trips
+  /// `ExportManager.runExport`'s "at most one active run" precondition. The
+  /// gate is `environmentAllowsRun` checking `!isAutoSyncActive`.
+  @Test func autoSyncRunInFlightBlocksDebounceFiredFromStartingNewRun() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    let autoSyncContext = ExportRunContext(
+      source: .autoSync, visibility: .background,
+      scope: .favoritesFull, selection: .edited)
+    state.exportRunState = ExportRunState(
+      activeContext: autoSyncContext, isManualActive: false, isAutoSyncActive: true)
+    state.current = .scheduled(reason: .photosChanged, fireAt: now.addingTimeInterval(30))
+
+    let (_, effects) = AutoSyncReducer.reduce(
+      .debounceFired(.photosChanged), in: state, now: now.addingTimeInterval(30))
+
+    #expect(
+      !effects.contains(where: { effect in
+        if case .startRun = effect { return true } else { return false }
+      }),
+      "debounceFired while an AutoSync run is in flight must not start a second run")
+  }
+
   /// When a manual export starts, AutoSync transitions to `.waiting(.manualExportActive)`
   /// and any active debounce is cancelled.
   @Test func manualExportActiveTransitionsToWaiting() {
