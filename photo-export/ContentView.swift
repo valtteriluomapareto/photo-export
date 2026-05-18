@@ -180,17 +180,18 @@ struct MonthRow: View {
     // as visual clutter (macOS Finder / Mail sidebars use a single global indicator plus
     // quiet per-item status), and the global progress bar already advertises that work
     // is happening.
-    let isActive =
-      exportManager.currentJobPlacement?.timelineYearMonth.map { $0 == (year, month) }
-      ?? false
+    let inFlight = exportManager.currentJobPlacement?.timelineYearMonth
+    let isActive = inFlight?.year == year && inFlight?.month == month
     return HStack(spacing: 8) {
       Text(MonthFormatting.name(for: month))
       Spacer()
       if queued > 0 {
         if isActive {
+          // `.controlSize(.mini)` renders the spinner at the right pixel size as a
+          // vector; the previous `scaleEffect(0.5).frame(width:16, height:16)`
+          // pattern scaled the rasterised default and produced a fuzzy indicator.
           ProgressView()
-            .scaleEffect(0.5)
-            .frame(width: 16, height: 16)
+            .controlSize(.mini)
         }
         Text("\(queued) left")
           .font(.caption2)

@@ -39,8 +39,11 @@ struct YearContentView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
+      // `.title` (heavier than `MonthContentView`'s `.title2`) leans into Photos.app's
+      // pattern of giving Years deck-level prominence: the year is a *container* of
+      // twelve months, not a peer of a single one.
       Text(String(year))
-        .font(.title2)
+        .font(.title)
         .fontWeight(.semibold)
         .padding(.top, 8)
 
@@ -97,10 +100,11 @@ struct YearContentView: View {
       // Either counts haven't landed yet or this year has no photos. The
       // sidebar can only reach `YearContentView` for years that
       // `availableYearsWithCounts()` returned, so the steady-state branch is
-      // "loading" rather than "empty year".
+      // "loading" rather than "empty year". Labelled `ProgressView` matches
+      // `FolderContentView`'s equivalent state.
       VStack {
         Spacer()
-        ProgressView().controlSize(.small)
+        ProgressView("Loading months…").controlSize(.small)
         Spacer()
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -108,9 +112,11 @@ struct YearContentView: View {
       ScrollView {
         let columns = [
           GridItem(
-            .adaptive(minimum: MonthTileView.tileSide, maximum: MonthTileView.tileSide + 16),
-            spacing: 16, alignment: .top)
+            .adaptive(minimum: MonthTileView.tileSide, maximum: MonthTileView.tileSide + 20),
+            spacing: 20, alignment: .top)
         ]
+        // Symmetric row/column spacing (20pt) and symmetric vertical padding (12pt
+        // top/bottom) — earlier asymmetry read as inadvertent.
         LazyVGrid(columns: columns, spacing: 20) {
           ForEach(months, id: \.self) { month in
             Button {
@@ -127,8 +133,7 @@ struct YearContentView: View {
             .buttonStyle(.plain)
           }
         }
-        .padding(.top, 4)
-        .padding(.bottom, 16)
+        .padding(.vertical, 12)
       }
     }
   }

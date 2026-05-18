@@ -3,7 +3,9 @@ import SwiftUI
 
 /// A single tile in `YearContentView`'s grid. Mirrors `FolderTileView`'s visual rhythm
 /// (rounded cover area, 4-up cover grid, title, caption, fully-exported badge) so the
-/// year-by-month overview reads the same as the Collections folder overview.
+/// year-by-month overview reads the same as the Collections folder overview, but uses a
+/// larger tile because a year always holds exactly twelve children — far fewer than a
+/// folder typically does — so we can afford the additional cover area.
 ///
 /// Covers are loaded lazily via `.task` so a year with 12 months only fetches covers for
 /// the tiles that scroll into view (`LazyVGrid` semantics). Each tile requests the four
@@ -11,9 +13,10 @@ import SwiftUI
 /// `PhotoLibraryService.fetchAssets(year:month:)`, which is the same API the year/month
 /// content panes use.
 struct MonthTileView: View {
-  /// Side length of the tile's image area. Matches `FolderTileView.tileSide` so the two
-  /// surfaces feel like one design.
-  static let tileSide: CGFloat = FolderTileView.tileSide
+  /// Side length of the tile's image area. Larger than `FolderTileView.tileSide` (144)
+  /// because the year overview has a fixed cardinality of 12 children — there's
+  /// breathing room to give each cover more real estate without the grid feeling sparse.
+  static let tileSide: CGFloat = 180
 
   let year: Int
   let month: Int
@@ -28,6 +31,7 @@ struct MonthTileView: View {
 
   @State private var covers: [NSImage] = []
   @State private var coverState: CoverState = .idle
+  @State private var isHovering: Bool = false
 
   private enum CoverState {
     case idle
@@ -41,12 +45,11 @@ struct MonthTileView: View {
     VStack(alignment: .leading, spacing: 6) {
       coverArea
         .frame(width: Self.tileSide, height: Self.tileSide)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(alignment: .topTrailing) { exportedBadge }
 
       Text(MonthFormatting.name(for: month))
         .font(.body)
-        .fontWeight(.medium)
         .lineLimit(1)
         .truncationMode(.tail)
         .frame(width: Self.tileSide, alignment: .leading)
@@ -57,9 +60,14 @@ struct MonthTileView: View {
         .lineLimit(1)
         .frame(width: Self.tileSide, alignment: .leading)
     }
+    .scaleEffect(isHovering ? 1.02 : 1.0)
+    .animation(.easeInOut(duration: 0.12), value: isHovering)
+    .onHover { isHovering = $0 }
     .accessibilityElement(children: .combine)
     .accessibilityLabel(accessibilityLabel)
-    .accessibilityAddTraits(.isButton)
+    .accessibilityHint("Opens the month's photos")
+    // Note: the wrapping `Button` in `YearContentView` already supplies `.isButton`,
+    // so the trait isn't repeated here.
     .task(id: "\(year)-\(month)") {
       await loadCovers()
     }
@@ -83,6 +91,7 @@ struct MonthTileView: View {
       case .failed:
         Image(systemName: "exclamationmark.triangle")
           .foregroundStyle(.secondary)
+          .help("Couldn't load preview")
       }
     }
   }
@@ -128,13 +137,18 @@ struct MonthTileView: View {
     }
   }
 
+  /// Fully-exported badge. Uses palette rendering (white check inside a green disc) so
+  /// the glyph sits cleanly on top of any thumbnail content without a separate flat
+  /// white plate behind it — that plate read as a foreign sticker and was particularly
+  /// loud in Dark Mode. A subtle shadow keeps the green readable over light covers.
   @ViewBuilder
   private var exportedBadge: some View {
     if isFullyExported {
       Image(systemName: "checkmark.circle.fill")
-        .foregroundStyle(.green)
-        .background(Circle().fill(Color.white).padding(2))
+        .symbolRenderingMode(.palette)
+        .foregroundStyle(.white, .green)
         .font(.title3)
+        .shadow(color: Color.black.opacity(0.25), radius: 1.5, y: 0.5)
         .padding(6)
         .accessibilityHidden(true)
     }
@@ -159,8 +173,11 @@ struct MonthTileView: View {
   // MARK: - Cover loading
 
   /// Loads up to four cover thumbnails for the month. Renders 1-up if the month has a
-  /// single asset, 4-up otherwise. Thumbnail fetches run in parallel inside a task group
-  /// so the tile doesn't gate on PhotoKit serialising them.
+  /// single asset, 4-up otherwise. Thumbnail fetches dispatch into a `TaskGroup`; the
+  /// underlying `loadThumbnail` is `@MainActor`-isolated so the calls serialise on the
+  /// main actor, but each await yields the runloop and PhotoKit can prefetch in the
+  /// background — fast enough in practice that the simpler structure beats threading a
+  /// detached fetch through the service seam.
   ///
   /// `fetchAssets(in: .timeline(year:month:))` materialises the full month list, which is
   /// acceptable for v1 — the tile only builds when the year view is shown, and a typical
@@ -178,6 +195,10 @@ struct MonthTileView: View {
     do {
       let assets = try await photoLibraryService.fetchAssets(
         in: .timeline(year: year, month: month), mediaType: nil)
+      // The previous task (different year/month) may have already been cancelled by
+      // SwiftUI's .task(id:) lifecycle, but its `await` could still resume and write
+      // state for a tile that's no longer visible. Bail before publishing.
+      try Task.checkCancellation()
       let coverIds = assets.prefix(4).map(\.id)
       if coverIds.isEmpty {
         coverState = .empty
@@ -195,12 +216,16 @@ struct MonthTileView: View {
         }
         return pairs.sorted(by: { $0.0 < $1.0 }).map(\.1)
       }
+      try Task.checkCancellation()
       if loaded.isEmpty {
         coverState = .failed
       } else {
         covers = loaded
         coverState = .loaded
       }
+    } catch is CancellationError {
+      // Don't change state on cancellation — the new task that replaced us will
+      // publish its own state from `covers = []` and `coverState = .loading`.
     } catch {
       coverState = .failed
     }

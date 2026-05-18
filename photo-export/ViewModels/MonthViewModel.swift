@@ -29,6 +29,13 @@ final class MonthViewModel: ObservableObject {
   // Task for background HQ upgrades so we can cancel on month change
   private var hqUpgradeTask: Task<Void, Never>?
 
+  /// The scope this view model is currently displaying. Written *synchronously* at the
+  /// top of `loadAssets(for:)` so any in-flight `refresh(for:)` task can detect a
+  /// navigation that happened during its `await` and bail before clobbering the new
+  /// scope's state. Reads inside `refresh` use this as the "is what I fetched still
+  /// what the user is looking at?" gate.
+  private var currentScope: PhotoFetchScope?
+
   init(photoLibraryService: any PhotoLibraryService) {
     self.photoLibraryService = photoLibraryService
   }
@@ -44,6 +51,9 @@ final class MonthViewModel: ObservableObject {
   /// the view model (used when `LibrarySelection` is nil — e.g. before any collection is
   /// selected).
   func loadAssets(for scope: PhotoFetchScope?) async {
+    // Claim the scope *before* the first await so a parallel `refresh(for:)` that's
+    // mid-fetch sees the new scope and discards its result instead of overwriting.
+    currentScope = scope
     isLoading = true
     errorMessage = nil
     // Cancel any in-flight HQ upgrade work
@@ -124,11 +134,25 @@ final class MonthViewModel: ObservableObject {
   /// disappeared drop out, and newly-added assets show as "loading" until the
   /// background loop fills their entry. The visible grid never flashes empty.
   ///
+  /// **Scope race.** The trigger is an orphan `Task { await refresh(...) }` fired from
+  /// `.onChange(of: libraryRevision)`; if the user navigates mid-fetch, the resumed
+  /// refresh would otherwise overwrite the new scope's state. We guard against that by
+  /// comparing the requested `scope` against `currentScope` (which `loadAssets` claims
+  /// synchronously) right before writing — a mismatch means a navigation happened
+  /// during the await and the fetch result is no longer relevant.
+  ///
   /// `scope == nil` is a no-op — there's nothing to refresh against.
+  ///
+  /// **Error visibility.** Surface `errorMessage` on failure so a stalled iCloud
+  /// refresh is at least debuggable; deliberately leaves `isLoading` alone so a
+  /// populated grid doesn't flash a loading overlay when the user can't act on it.
   func refresh(for scope: PhotoFetchScope?) async {
     guard let scope else { return }
     do {
       let newAssets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
+      // Bail if the user (or another refresh) replaced the active scope while we were
+      // awaiting the fetch. Writing now would clobber a freshly-loaded different scope.
+      guard currentScope == scope else { return }
       let newIds = Set(newAssets.map(\.id))
       let oldIds = Set(cachedAssets.map(\.id))
       let added = newAssets.filter { !oldIds.contains($0.id) }
@@ -171,8 +195,9 @@ final class MonthViewModel: ObservableObject {
         }
       }
     } catch {
-      // Refresh failures shouldn't disrupt the visible grid — leave the existing
-      // assets in place and surface the error message for the overlay.
+      // Same scope-guard so a late-arriving error from a stale fetch doesn't show on
+      // the new scope's UI.
+      guard currentScope == scope else { return }
       errorMessage = error.localizedDescription
     }
   }
