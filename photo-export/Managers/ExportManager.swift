@@ -310,7 +310,11 @@ final class ExportManager: ObservableObject {
   /// the row that owns the in-flight job. AutoSync does not observe this field, so
   /// publishing it adds a UI observer without touching the AutoSync seam.
   @Published private(set) var currentJobPlacement: ExportPlacement?
-  private(set) var generation: Int = 0
+  /// Forwarder to `queueCoordinator.generation`. The Phase-0 cancellation storage
+  /// moved to `ExportQueueCoordinator` in issue #67 item 2; this computed property
+  /// preserves `manager.generation` as a stable read surface for tests and
+  /// in-module callers.
+  var generation: Int { queueCoordinator.generation }
   /// `@Published` so AutoSync's `exportRunStatePublisher` can include the
   /// bulk-enqueue window (after the dispatcher flips this true but before the
   /// first job lands in `pendingJobs`) in its idle/active decision. Issue #67
@@ -377,15 +381,20 @@ final class ExportManager: ObservableObject {
         }
       }
     }
+    // Coordinator is constructed first so it can be injected into VariantExporter
+    // and ImportCoordinator. Both reach the Phase-0 cancellation seam (generation /
+    // isCurrent / throwIfCancelledOrStale) through this reference rather than
+    // through their Host protocols (issue #67 item 2).
+    self.queueCoordinator = ExportQueueCoordinator(host: self)
     self.variantExporter = VariantExporter(
       host: self,
+      queueCoordinator: self.queueCoordinator,
       destinationResolver: self.destinationResolver,
       recordStoreRouter: self.recordStoreRouter,
       assetResourceWriter: self.assetResourceWriter,
       mediaRenderer: self.mediaRenderer,
       fileSystem: self.fileSystem,
       exportDestination: self.exportDestination)
-    self.queueCoordinator = ExportQueueCoordinator(host: self)
     // Mirror the coordinator's published queue state onto ExportManager so existing
     // `manager.isRunning` / `.queueCount` / etc. readers and the AutoSync
     // `exportRunStatePublisher` keep emitting from the same source. Sinks fire
@@ -405,7 +414,7 @@ final class ExportManager: ObservableObject {
     self.queueCoordinator.$totalJobsCompleted
       .sink { [weak self] in self?.totalJobsCompleted = $0 }
       .store(in: &queueCancellables)
-    self.importCoordinator = ImportCoordinator(host: self)
+    self.importCoordinator = ImportCoordinator(host: self, queueCoordinator: self.queueCoordinator)
     self.importCoordinator.$isImporting
       .sink { [weak self] in self?.isImporting = $0 }
       .store(in: &importCancellables)
@@ -1222,7 +1231,7 @@ final class ExportManager: ObservableObject {
     currentJobAssetId = nil
     currentJobVariant = nil
     currentJobPlacement = nil
-    generation += 1
+    queueCoordinator.bumpGeneration()
     queueCoordinator.teardownQueue()
     queueCoordinator.resetProgressCounters()
     isEnqueueingAll = false
@@ -1537,23 +1546,17 @@ final class ExportManager: ObservableObject {
   /// helper at non-throwing checkpoints — typically inside escaping closures that
   /// `return` early when the run is stale. Per
   /// `docs/project/archive/software-architecture-improvement-plan.md` "Cross-Cutting
-  /// Contracts > Generation / cancellation ownership", this helper is the seam
-  /// `VariantExporter`, `ExportQueueCoordinator`, and `ImportCoordinator` hold via
-  /// their respective `Host` protocols. The plan originally projected the storage of
-  /// `generation` to migrate into `ExportQueueCoordinator` in Phase 5; that transfer
-  /// is deferred to a follow-up and the Host getters are a permanent seam until it
-  /// lands.
-  ///
-  /// Declared `internal` (not `private`) so the cancellation seam is visible across the
-  /// Phase-3 extraction boundary: `VariantExporter.Host` calls it through the protocol
-  /// witness, and ExportManager still calls it inline at all the pre-extraction sites.
+  /// Contracts > Generation / cancellation ownership", these helpers are the seam
+  /// the manager's own dispatchers call inline. The Phase-0 storage moved to
+  /// `ExportQueueCoordinator` in issue #67 item 2; these are thin forwarders so the
+  /// in-module call sites (`guard self.isCurrent(gen)`, `try throwIfCancelledOrStale`)
+  /// remain stable.
   func isCurrent(_ gen: Int) -> Bool {
-    return generation == gen
+    queueCoordinator.isCurrent(gen)
   }
 
   func throwIfCancelledOrStale(_ gen: Int) throws {
-    try Task.checkCancellation()
-    guard isCurrent(gen) else { throw CancellationError() }
+    try queueCoordinator.throwIfCancelledOrStale(gen)
   }
 
   private func export(job: ExportJob, generation gen: Int) async {
@@ -2018,13 +2021,6 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - ImportCoordinator.Host conformance
-
-  /// Bumps the generation counter so any late-completing async work gates out via
-  /// `isCurrent`. Called by the import coordinator's cancel path; in Phase 4b/6 will
-  /// migrate to `ExportQueueCoordinator`.
-  func bumpGeneration() {
-    generation += 1
-  }
 
   /// Writes the import report back to the manager's `@Published` mirror. Kept as a Host
   /// method (not a sink) because `importResult` is intentionally writable on the

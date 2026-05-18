@@ -19,17 +19,16 @@ struct VariantExporterTests {
   // MARK: - Fake Host
 
   /// Records every Host call so the test can assert routing without spinning up
-  /// `ExportManager`. The cancellation seam (`isCurrent` / `throwIfCancelledOrStale`)
-  /// always returns "current" — none of the tests in this file exercise cancellation.
+  /// `ExportManager`. None of the tests in this file exercise cancellation; the
+  /// real `ExportQueueCoordinator` injected for the cancellation seam stays at
+  /// generation 0 and `isCurrent(0)` always returns true.
   ///
   /// Post-Phase-3b the Host no longer carries the render bridge; the renderer is a
   /// direct dependency of `VariantExporter`. `FakeMediaRenderer` records `renderCalls`
-  /// on its own.
-  private final class FakeHost: VariantExporter.Host {
+  /// on its own. Post-issue-#67-item-2 the cancellation seam is no longer on the
+  /// Host either — it routes through the injected `ExportQueueCoordinator`.
+  private final class FakeHost: VariantExporter.Host, ExportQueueCoordinator.Host {
     var failureCalls: [(assetId: String, variant: ExportVariant, message: String)] = []
-
-    nonisolated func isCurrent(_ gen: Int) -> Bool { true }
-    nonisolated func throwIfCancelledOrStale(_ gen: Int) throws {}
 
     func setCurrentAssetFilename(_ name: String?) {}
     func setCurrentJobVariant(_ variant: ExportVariant?) {}
@@ -41,6 +40,14 @@ struct VariantExporterTests {
     ) {
       failureCalls.append((assetId: assetId, variant: variant, message: sentinelMessage))
     }
+
+    // ExportQueueCoordinator.Host — only required so the coordinator can be
+    // constructed; the tests in this file never drive the queue.
+    var isEnqueueingAll: Bool { false }
+    func performExport(job: ExportManager.ExportJob, generation: Int) async {}
+    func didDrainQueue() {}
+    func setCurrentJob(_ job: ExportManager.ExportJob) {}
+    func clearCurrentJobIdentifiers() {}
   }
 
   // MARK: - Harness
@@ -75,8 +82,10 @@ struct VariantExporterTests {
     let resolver = ExportDestinationResolver(fileSystem: fileSystem)
     let destDir = dest.rootURL.appendingPathComponent("2025/07/", isDirectory: true)
     try? FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+    let queueCoordinator = ExportQueueCoordinator(host: host)
     let exporter = VariantExporter(
       host: host,
+      queueCoordinator: queueCoordinator,
       destinationResolver: resolver,
       recordStoreRouter: router,
       assetResourceWriter: writer,

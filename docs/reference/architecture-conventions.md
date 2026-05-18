@@ -18,29 +18,30 @@ These three contracts bind every collaborator. Break one and you break either th
 
 ### 1. Cancellation contract
 
-**Storage**: `var generation: Int` lives on `ExportManager` (see [`ExportManager.swift`](../../photo-export/Managers/ExportManager.swift) — search for `private(set) var generation`).
+**Storage**: `var generation: Int` lives on `ExportQueueCoordinator` (see [`ExportQueueCoordinator.swift`](../../photo-export/Managers/ExportQueueCoordinator.swift) — search for `private(set) var generation`). `ExportManager` exposes a computed `var generation: Int { queueCoordinator.generation }` forwarder for test reads and in-module convenience.
 
-**Helpers** (both `internal` on `ExportManager`):
+**Helpers** (all on `ExportQueueCoordinator`; `ExportManager` exposes thin forwarders for the dispatcher call sites):
 
 ```swift
 func isCurrent(_ gen: Int) -> Bool
 func throwIfCancelledOrStale(_ gen: Int) throws
+func bumpGeneration()
 ```
 
 **Rule**: every async task that mutates state captures `let gen = generation` *synchronously* before the first `await`, then uses `[weak self]` + `guard self.isCurrent(gen) else { return }` at every checkpoint. Throwing paths use `try throwIfCancelledOrStale(gen)`.
 
 **Which methods bump generation** (and so cancel anything running under the old gen):
 
-- `cancelAndClear()`
-- `interruptForDestinationUnavailable()`
-- `supersedeForManualRun()`
-- `cancelImport()`
+- `cancelAndClear()` (on `ExportManager`, via `queueCoordinator.bumpGeneration()`)
+- `interruptForDestinationUnavailable()` (same path)
+- `supersedeForManualRun()` (same path)
+- `cancelImport()` (on `ImportCoordinator`, via the injected `queueCoordinator` reference)
 
 **Which method does NOT bump generation**:
 
 - `clearPending()` — drops queued jobs only. In-flight work that started before `clearPending` keeps its `gen` and finishes normally. If you need to cancel mid-flight, call `cancelAndClear` instead.
 
-**Collaborator seam**: each extracted collaborator's `Host` protocol exposes `isCurrent(_:)` (and for `ImportCoordinator`, `bumpGeneration()`) as callbacks back to the manager. This is a deferred follow-up — the storage was projected to move into `ExportQueueCoordinator` in a later phase but the Host-protocol shape proved load-bearing during implementation and the move is tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) item 2.
+**Collaborator seam**: `VariantExporter` and `ImportCoordinator` hold a direct (weak) reference to `ExportQueueCoordinator` for the cancellation helpers; their `Host` protocols no longer carry `isCurrent`, `throwIfCancelledOrStale`, `generation`, or `bumpGeneration` (issue #67 item 2 landed in May 2026). The coordinator's own dispatch loop reads its own `generation` / `isCurrent` directly. New collaborators that need the seam should inject `ExportQueueCoordinator` the same way, not route through `Host`.
 
 ### 2. Actor isolation policy
 
@@ -106,7 +107,7 @@ Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so th
 
 ## Host protocol pattern
 
-> **Subject to revision when [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67) item 2 lands.** The cancellation-seam half of each Host protocol (`generation` / `isCurrent` / `bumpGeneration`) goes away when `generation` storage moves into `ExportQueueCoordinator`. The non-cancellation Host methods are stable.
+> The cancellation-seam methods (`isCurrent` / `throwIfCancelledOrStale` / `generation` / `bumpGeneration`) are no longer on any Host protocol — that move landed in issue #67 item 2. Collaborators that need the seam inject `ExportQueueCoordinator` directly. The remaining Host methods are UI-state mirrors and dependency forwarders, all stable.
 
 When you extract a new collaborator from `ExportManager`, expose what you need from the manager via a narrow `@MainActor` `Host` protocol declared on the collaborator. The `@MainActor` annotation on the protocol itself is load-bearing — a non-MainActor Host would force `await` at every call site and break the mirror-sinks synchrony.
 
@@ -270,13 +271,13 @@ The `placement.kind` switch is *not* duplicated across `ExportManager` anymore �
 
 ## Deferred follow-ups
 
-The refactor shipped with three deliberate deferrals tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67):
+The refactor shipped with three deliberate deferrals tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67); items 2, 4, 5, and 6 landed since:
 
 1. **PhotoLibrary composition refactor** — drop `ScreenshotPhotoLibraryService: PhotoLibraryManager` inheritance. Today protected by the 20-test override gate.
-2. **Generation-counter ownership transfer** — move `var generation: Int` storage from `ExportManager` into `ExportQueueCoordinator` and delete the Host-protocol getters.
+2. ~~**Generation-counter ownership transfer**~~ — landed: `var generation: Int` now lives on `ExportQueueCoordinator`; `VariantExporter` and `ImportCoordinator` hold a direct reference for the seam.
 3. **Remaining Phase 7 folder moves** — `Destination/`, `Export/`, `App/` not yet created. Until they exist, new code goes alongside semantically related code in `Managers/` (e.g., a new destination type goes next to `ExportDestinationManager`); the folder split is a follow-up, not a precondition for new work.
 
-A second wave of follow-ups (items 4–5 in the same issue) covers AutoSync seam test growth and bulk-loop helper consolidation. Pick any of these off the issue if you want to land one as an independent PR.
+A second wave of follow-ups landed with item 4 (AutoSync seam test growth) and item 5 (`start*` bulk-loop helper consolidation). Item 6 (CI regression-gate symbol guard) is also done.
 
 ## Where to ask
 

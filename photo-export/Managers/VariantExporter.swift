@@ -16,26 +16,20 @@ import OSLog
 /// rendered-media path is invoked on the exporter's own `mediaRenderer` dependency.
 /// `ExportManager` still constructs the renderer (so it can inject the
 /// `renderActivity` callback) but no longer invokes it. The cancellation seam
-/// (`isCurrent` / `throwIfCancelledOrStale`) and the UI-state mutations are routed
-/// through the host per the Cross-Cutting Contracts — these Host methods are a
-/// permanent seam until the deferred generation-ownership transfer + UI-state
-/// extraction follow-up lands (tracked separately from the original Phase 4b/5).
+/// (`isCurrent` / `throwIfCancelledOrStale`) is now reached directly through the
+/// injected `ExportQueueCoordinator` reference (issue #67 item 2). UI-state mutations
+/// continue to route through the host.
 @MainActor
 final class VariantExporter {
 
   // MARK: - Host protocol
 
   /// Hooks the exporter calls back into `ExportManager` for state it does not own:
-  /// generation-aware cancellation checks, MainActor-published UI state (current
-  /// filename / variant / render activity), and bookkeeping-aware failure recording.
+  /// MainActor-published UI state (current filename / variant / render activity), and
+  /// bookkeeping-aware failure recording. Cancellation now goes directly through the
+  /// injected `ExportQueueCoordinator`.
   @MainActor
   protocol Host: AnyObject {
-    // Cancellation seam — Phase 0 contract. Deferred follow-up to ExportQueueCoordinator
-    // once generation-storage moves there (originally projected for Phase 5; tracked
-    // separately now). Until then this is a permanent Host method.
-    func isCurrent(_ gen: Int) -> Bool
-    func throwIfCancelledOrStale(_ gen: Int) throws
-
     // UI-state mirrors. Candidate for migration to coordinator-driven publishers
     // when ExportManager's UI-state surface is itself extracted; not currently scheduled.
     func setCurrentAssetFilename(_ name: String?)
@@ -55,6 +49,10 @@ final class VariantExporter {
   private let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "VariantExporter")
   private weak var host: Host?
+  /// Cancellation seam (Phase 0). Held as a weak reference because the queue
+  /// coordinator and the exporter have the same lifetime owner (`ExportManager`)
+  /// — a strong reference would create a retain cycle through `Host`.
+  private weak var queueCoordinator: ExportQueueCoordinator?
   private let destinationResolver: ExportDestinationResolver
   private let recordStoreRouter: RecordStoreRouter
   private let assetResourceWriter: any AssetResourceWriter
@@ -64,6 +62,7 @@ final class VariantExporter {
 
   init(
     host: Host,
+    queueCoordinator: ExportQueueCoordinator,
     destinationResolver: ExportDestinationResolver,
     recordStoreRouter: RecordStoreRouter,
     assetResourceWriter: any AssetResourceWriter,
@@ -72,6 +71,7 @@ final class VariantExporter {
     exportDestination: any ExportDestination
   ) {
     self.host = host
+    self.queueCoordinator = queueCoordinator
     self.destinationResolver = destinationResolver
     self.recordStoreRouter = recordStoreRouter
     self.assetResourceWriter = assetResourceWriter
@@ -159,7 +159,7 @@ final class VariantExporter {
       }
     }
 
-    try host?.throwIfCancelledOrStale(gen)
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
     host?.setCurrentAssetFilename(finalURL.lastPathComponent)
     host?.setCurrentJobVariant(variant)
     inFlight = (assetId: descriptor.id, variant: variant)
@@ -240,7 +240,7 @@ final class VariantExporter {
     // cancel arriving during the render does not leak a partially-written file into the
     // destination. Reordering this is a correctness regression — temp cleanup is handled
     // by `defer`, but only if we throw before the move.
-    try host?.throwIfCancelledOrStale(gen)
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
 
     try await withCheckedThrowingContinuation {
       (continuation: CheckedContinuation<Void, Error>) in
@@ -259,7 +259,7 @@ final class VariantExporter {
         }
       }
     }
-    try host?.throwIfCancelledOrStale(gen)
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
 
     if let createdAt = descriptor.creationDate {
       await withCheckedContinuation { continuation in
@@ -271,7 +271,7 @@ final class VariantExporter {
           continuation.resume()
         }
       }
-      try host?.throwIfCancelledOrStale(gen)
+      try queueCoordinator?.throwIfCancelledOrStale(gen)
     }
 
     recordStoreRouter.markVariantExported(
