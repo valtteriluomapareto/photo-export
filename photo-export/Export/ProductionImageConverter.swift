@@ -29,6 +29,13 @@ struct ProductionImageConverter: ImageConverter {
   private static let sharedContext = CIContext(options: [.cacheIntermediates: false])
 
   func convertHEIC(at sourceURL: URL, to destURL: URL, quality: Double) async throws {
+    // Pre-dispatch cancellation gate — catches a cancel issued before we got
+    // here. Once the GCD block starts there's no current Task context (the
+    // calling Task is suspended on the continuation below), so an inner
+    // `Task.checkCancellation()` would no-op. The worst case becomes
+    // "one in-flight encode per worker survives the cancel" because the
+    // next worker iteration re-enters this method and trips this check.
+    try Task.checkCancellation()
     // Dispatch the CoreImage decode/encode off the main actor — full-resolution
     // iPhone HEIC encodes are ~100–400ms on Apple Silicon and several seconds
     // on Intel, long enough to jank the SwiftUI progress UI if run on main.
@@ -48,7 +55,10 @@ struct ProductionImageConverter: ImageConverter {
 
   /// Synchronous body of the conversion, dispatched off-main by `convertHEIC`.
   /// Factored out so the dispatch boilerplate doesn't drown the actual
-  /// CoreImage interaction.
+  /// CoreImage interaction. Runs on `DispatchQueue.global(qos: .utility)` so
+  /// there's no current `Task` here — Swift Concurrency cancellation does
+  /// not propagate into this body, and `Task.checkCancellation()` would
+  /// no-op. The pre-dispatch gate in `convertHEIC` is what honors cancellation.
   private static func performConversion(at sourceURL: URL, to destURL: URL, quality: Double) throws
   {
     guard let image = CIImage(contentsOf: sourceURL) else {

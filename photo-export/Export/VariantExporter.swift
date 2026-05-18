@@ -58,9 +58,16 @@ final class VariantExporter {
   private let assetResourceWriter: any AssetResourceWriter
   private let mediaRenderer: any MediaRenderer
   /// HEIC→JPEG converter used by the `EditedProducer.convertHEIC` write arm
-  /// (issue #47). Held here so the write-step extension lands in a subsequent
-  /// sub-PR without re-threading dependencies.
+  /// (issue #47).
   private let imageConverter: any ImageConverter
+
+  /// JPEG quality used for HEIC→JPEG synthesis. `0.85` matches the default
+  /// Apple's own apps use for "high quality" JPEG export; visible quality
+  /// drop vs. the HEIC source is negligible for photos while the file size
+  /// shrinks meaningfully. Lives here (not on `ImageConverter` itself) so
+  /// the export pipeline owns the pricing decision; the protocol's
+  /// `quality:` parameter is the seam.
+  private static let heicJPEGQuality: Double = 0.85
   private let fileSystem: any FileSystemService
   private let exportDestination: any ExportDestination
 
@@ -229,6 +236,38 @@ final class VariantExporter {
         } catch {
           logger.error(
             "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
+          )
+          throw NSError(
+            domain: "Export", code: 9,
+            userInfo: [
+              NSLocalizedDescriptionKey:
+                ExportVariantRecovery.editedResourceUnavailableMessage
+            ])
+        }
+      case .convertHEIC(let request):
+        // Two-step: materialise the source HEIC/HEIF bytes to a sibling temp
+        // file via the existing PhotoKit resource writer, then re-encode as
+        // JPEG into `tempURL` via the image converter. The intermediate temp
+        // is cleaned up via `defer` so a converter failure or cancel doesn't
+        // leak it. Any converter error translates to the same
+        // `editedResourceUnavailableMessage` sentinel the render path uses,
+        // so the existing "edited variant failed" recovery flow runs cleanly.
+        let heicTempURL = tempURL.appendingPathExtension("heic-source")
+        defer {
+          if fileSystem.fileExists(atPath: heicTempURL.path) {
+            try? fileSystem.removeItem(at: heicTempURL)
+          }
+        }
+        do {
+          try await assetResourceWriter.writeResource(
+            request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
+          try await imageConverter.convertHEIC(
+            at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
+        } catch is CancellationError {
+          throw CancellationError()
+        } catch {
+          logger.error(
+            "HEIC→JPEG conversion failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
           )
           throw NSError(
             domain: "Export", code: 9,
