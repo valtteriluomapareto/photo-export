@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// Content pane shown when a year row is the focused selection. Mirrors
-/// `MonthContentView`'s top-of-pane summary (title, header, primary action)
-/// without an asset grid — pulling every photo in a year into a grid would
-/// be expensive on large libraries and the user's intent is already
-/// "act on the year", not "browse it". Drilling into a month gives the
-/// month-level grid as today.
+/// Content pane shown when a year row is the focused selection. Renders a Photos.app-style
+/// month-tile grid (12 months, 4-up cover thumbnails per tile) so the year overview reads
+/// the same as the Collections folder overview. Clicking a tile navigates into the
+/// matching `MonthContentView`; the primary action stays "Export Year".
+///
+/// Per-month counts come from `TimelineSidebarCounts`, reused here so a tile's "fully
+/// exported" badge agrees with the sidebar's `YearRow` / `MonthRow` badges without us
+/// having to re-derive the formula.
 struct YearContentView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
@@ -13,18 +15,24 @@ struct YearContentView: View {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   let year: Int
+  @Binding var selection: LibrarySelection?
   @Binding var selectedAsset: AssetDescriptor?
 
   private let photoLibraryService: any PhotoLibraryService
+  @StateObject private var counts: TimelineSidebarCounts
 
   init(
     year: Int,
+    selection: Binding<LibrarySelection?>,
     selectedAsset: Binding<AssetDescriptor?>,
     photoLibraryService: any PhotoLibraryService
   ) {
     self.year = year
+    self._selection = selection
     self._selectedAsset = selectedAsset
     self.photoLibraryService = photoLibraryService
+    _counts = StateObject(
+      wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
   }
 
   @State private var totalCount: Int?
@@ -51,27 +59,16 @@ struct YearContentView: View {
         )
       }
 
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Open a month to browse its photos.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
-        Text(
-          "Tip: hold Cmd or Shift in the sidebar to add this year to a multi-export with other years and months."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      }
-      .padding(.top, 4)
+      monthGrid
 
-      Spacer()
+      Spacer(minLength: 0)
     }
     .padding(.horizontal)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .task(id: "\(year)|\(photoLibraryManager.libraryRevision)") {
-      // Cheap one-shot count via the existing sync count API. Avoids the heavy
-      // per-asset fetch that a grid view would require.
       totalCount = (try? photoLibraryManager.countAssets(year: year))
       selectedAsset = nil
+      await counts.loadCounts(forYears: [year])
     }
   }
 
@@ -89,5 +86,76 @@ struct YearContentView: View {
           .foregroundStyle(.secondary)
       }
     }
+  }
+
+  // MARK: - Month grid
+
+  @ViewBuilder
+  private var monthGrid: some View {
+    let months = counts.monthsWithAssets(for: year)
+    if months.isEmpty {
+      // Either counts haven't landed yet or this year has no photos. The
+      // sidebar can only reach `YearContentView` for years that
+      // `availableYearsWithCounts()` returned, so the steady-state branch is
+      // "loading" rather than "empty year".
+      VStack {
+        Spacer()
+        ProgressView().controlSize(.small)
+        Spacer()
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else {
+      ScrollView {
+        let columns = [
+          GridItem(
+            .adaptive(minimum: MonthTileView.tileSide, maximum: MonthTileView.tileSide + 16),
+            spacing: 16, alignment: .top)
+        ]
+        LazyVGrid(columns: columns, spacing: 20) {
+          ForEach(months, id: \.self) { month in
+            Button {
+              navigate(toMonth: month)
+            } label: {
+              MonthTileView(
+                year: year,
+                month: month,
+                photoCount: counts.assetCountsByYearMonth["\(year)-\(month)"],
+                isFullyExported: isMonthFullyExported(month: month),
+                photoLibraryService: photoLibraryService
+              )
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 16)
+      }
+    }
+  }
+
+  // MARK: - Export status
+
+  /// Mirrors the sidebar's records-only formula via
+  /// `ExportRecordStore.sidebarSummary(...)`. Returns `false` while the adjusted count
+  /// for the month is still loading so a tile doesn't briefly flash a checkmark before
+  /// the data lands.
+  private func isMonthFullyExported(month: Int) -> Bool {
+    let key = "\(year)-\(month)"
+    let total = counts.assetCountsByYearMonth[key] ?? 0
+    guard total > 0 else { return false }
+    let adjusted = counts.adjustedCountsByYearMonth[key]
+    guard
+      let summary = exportRecordStore.sidebarSummary(
+        year: year, month: month, totalCount: total, adjustedCount: adjusted,
+        selection: exportManager.versionSelection)
+    else { return false }
+    return summary.exportedCount >= total
+  }
+
+  // MARK: - Navigation
+
+  private func navigate(toMonth month: Int) {
+    selection = .timelineMonth(year: year, month: month)
+    selectedAsset = nil
   }
 }
