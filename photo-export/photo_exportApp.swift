@@ -206,6 +206,7 @@ struct PhotoExportApp: App {
         .environmentObject(autoSyncManager)
         .environmentObject(autoSyncScopeStore)
         .environmentObject(autoSyncPhotoChangeAdapter)
+        .environmentObject(exportManager.progressState)
         .environmentObject(whatsNewState)
         .task {
           lifecycleCoordinator.attach(
