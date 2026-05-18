@@ -5,12 +5,15 @@ import os
 
 /// Manages access to the Photos library, including authorization and asset fetching.
 ///
-/// Not `final` only so `ScreenshotPhotoLibraryService` can subclass and replace every
-/// `PhotoLibraryService` method with curated synthetic content for marketing screenshots
-/// (see `docs/project/plans/screenshot-automation-plan.md`). No other subclass should
-/// exist — production launches always instantiate this class directly.
+/// `final` since issue #67 item 2 — `ScreenshotPhotoLibraryService` no longer inherits;
+/// it's a standalone `PhotoLibraryService` conformance, and this class accepts an
+/// optional `overrideService` at init that every `PhotoLibraryService` method forwards
+/// to when set. The structural fix closes the "new protocol method silently inherits
+/// production behavior" hole that the `ScreenshotPhotoLibraryServiceOverridesTests`
+/// gate only partially caught (it pinned existing overrides but not future-added
+/// methods).
 @MainActor
-class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
+final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// Published properties to track authorization status
   @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
   @Published var isAuthorized: Bool = false
@@ -48,12 +51,50 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// `photoLibraryDidChange` so subsequent reads re-fetch.
   nonisolated let collectionCountCache = CollectionCountCache()
 
+  /// Optional injection point that replaces the production PhotoKit implementation on
+  /// every `PhotoLibraryService` method. Set at init time and never mutated. The
+  /// screenshot run injects `ScreenshotPhotoLibraryService` here so the curated content
+  /// reaches the UI without `ScreenshotPhotoLibraryService` having to inherit from
+  /// this class (issue #67 item 2). `nil` for the production app launch.
+  ///
+  /// `nonisolated(unsafe)` so the `nonisolated` PhotoLibraryService methods
+  /// (`countAssets(in:)`, `countAdjustedAssets(in:)`, `cachedCountAssets(in:)`,
+  /// `cachedCountAdjustedAssets(in:)`) can read it without hopping to MainActor.
+  /// Safe in practice: the property is `let` (immutable), assigned once in init, and
+  /// the value is a class reference whose own methods enforce their own isolation.
+  nonisolated(unsafe) private let overrideService: (any PhotoLibraryService)?
+
   nonisolated static func isAuthorizationSufficient(_ status: PHAuthorizationStatus) -> Bool {
     status == .authorized || status == .limited
   }
 
+  /// Production initializer: no override; performs the PhotoKit authorization probe
+  /// and registers as a `PHPhotoLibraryChangeObserver`. Test and screenshot launches
+  /// route through `init(overrideService:)` (the screenshot service is passed in;
+  /// tests inject `FakePhotoLibraryService` into `ExportManager` directly and don't
+  /// construct a manager).
   override init() {
+    self.overrideService = nil
     super.init()
+    finishInit()
+  }
+
+  /// Composition entry point: `overrideService` (when non-nil) replaces every
+  /// `PhotoLibraryService` method on this manager. PhotoKit registration is skipped
+  /// when an override is set — the curated service produces its own content and any
+  /// observer firing would overwrite it.
+  init(overrideService: any PhotoLibraryService) {
+    self.overrideService = overrideService
+    super.init()
+    // Sync the UI-facing auth state from the injected service so the onboarding
+    // gate (`ContentView`) sees the right gating value. Subsequent changes to the
+    // override service's auth state are not observed here — the curated mode does
+    // not change auth at runtime; if a future override needs that, add a publisher.
+    authorizationStatus = overrideService.authorizationStatus
+    isAuthorized = overrideService.isAuthorized
+  }
+
+  private func finishInit() {
     // Skip PhotoKit registration entirely under XCTest / swift-testing.
     // Tests run from DerivedData; TCC sees that path as a different
     // binary than the released app and would surface a fresh permission
@@ -63,14 +104,12 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
     // `FakePhotoLibraryService` / `FakePersistentChangeSource` instead,
     // so they don't need the real PhotoKit observer.
     //
-    // Screenshot mode (`--screenshot-mode` launch arg) gets the same
-    // early-return for a different reason: the subclass serves curated
-    // synthetic content and must not register an observer that would
-    // overwrite it on the next PhotoKit change notification. Test mode
-    // and screenshot mode are sibling guards, not OR'd into one — the
-    // post-conditions differ (test mode wants `isAuthorized = false`,
-    // screenshot mode wants `true`; the subclass sets it post-`super.init`).
-    guard !Self.isRunningInTests, !Self.isRunningInScreenshotMode else { return }
+    // Screenshot mode (`--screenshot-mode` launch arg) doesn't reach this
+    // function — the screenshot run uses `init(overrideService:)` and
+    // never calls `finishInit`. That's the load-bearing invariant: any
+    // PhotoKit registration here would race with the curated content the
+    // override produces.
+    guard !Self.isRunningInTests else { return }
     // Check if Info.plist contains photos usage description
     verifyPhotoLibraryPermissions()
     // Observe library changes to invalidate cache
@@ -109,6 +148,12 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
 
   /// Request authorization to access the Photos library
   func requestAuthorization() async -> Bool {
+    if let s = overrideService {
+      let result = await s.requestAuthorization()
+      authorizationStatus = s.authorizationStatus
+      isAuthorized = s.isAuthorized
+      return result
+    }
     let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
 
     await MainActor.run {
@@ -128,6 +173,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// back to iterating the month's assets. Results are cached until the next library change
   /// or authorisation change.
   func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
+    if let s = overrideService { return try await s.countAdjustedAssets(year: year, month: month) }
     guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
     let key = "\(year)-\(month)"
     if let cached = adjustedCountByYearMonth[key] { return cached }
@@ -141,6 +187,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// Returns the number of assets in the given year whose `hasAdjustments` is true. Sums the
   /// per-month cache, populating each month on demand.
   func countAdjustedAssets(year: Int) async throws -> Int {
+    if let s = overrideService { return try await s.countAdjustedAssets(year: year) }
     guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
     var total = 0
     for month in 1...12 {
@@ -154,6 +201,10 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   func fetchAssets(year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil) async throws
     -> [AssetDescriptor]
   {
+    // Forward through the scope-aware overload below — that's where the override
+    // dispatch happens. (Going through the override directly here would still work
+    // but would double-dispatch when the override is nil; the scope path is the
+    // canonical entry.)
     try await fetchAssets(in: .timeline(year: year, month: month), mediaType: mediaType)
   }
 
@@ -166,6 +217,9 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
     -> [AssetDescriptor]
   {
+    if let s = overrideService {
+      return try await s.fetchAssets(in: scope, mediaType: mediaType)
+    }
     guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
     switch scope {
     case .timeline(let year, let month):
@@ -192,7 +246,8 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// actor. The protocol declares this `nonisolated`; we forward to a
   /// detached-task implementation here.
   nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
-    try await Task.detached(priority: .userInitiated) {
+    if let s = overrideService { return try await s.countAssets(in: scope) }
+    return try await Task.detached(priority: .userInitiated) {
       try Task.checkCancellation()
       let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
       guard Self.isAuthorizationSufficient(status) else {
@@ -233,6 +288,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   }
 
   nonisolated func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int {
+    if let s = overrideService { return try await s.cachedCountAssets(in: scope) }
     let key = Self.cacheKey(for: scope, adjusted: false)
     return try await collectionCountCache.count(for: key) {
       try await self.countAssets(in: scope)
@@ -240,6 +296,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   }
 
   nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
+    if let s = overrideService { return try await s.cachedCountAdjustedAssets(in: scope) }
     let key = Self.cacheKey(for: scope, adjusted: true)
     return try await collectionCountCache.count(for: key) {
       try await self.countAdjustedAssets(in: scope)
@@ -250,7 +307,8 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// fetch result inside a detached task; PHAsset values are not crossed back to the
   /// main actor.
   nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
-    try await Task.detached(priority: .userInitiated) {
+    if let s = overrideService { return try await s.countAdjustedAssets(in: scope) }
+    return try await Task.detached(priority: .userInitiated) {
       try Task.checkCancellation()
       let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
       guard Self.isAuthorizationSufficient(status) else {
@@ -284,6 +342,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   }
 
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
+    if let s = overrideService { return s.fetchAssetDescriptor(for: assetId) }
     // Always re-fetch from Photos to ensure the asset still exists
     // (it may have been deleted since it was enqueued for export)
     let result = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
@@ -297,6 +356,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
 
   /// Fast count of assets in a given year/month without loading them into memory
   func countAssets(year: Int, month: Int) throws -> Int {
+    if let s = overrideService { return try s.countAssets(year: year, month: month) }
     guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
     let calendar = Calendar.current
     var start = DateComponents()
@@ -321,6 +381,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
 
   /// Fast count of assets in a given year
   func countAssets(year: Int) throws -> Int {
+    if let s = overrideService { return try s.countAssets(year: year) }
     guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
     let calendar = Calendar.current
     var start = DateComponents()
@@ -345,11 +406,13 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
 
   /// Returns descending list of years that have at least one asset
   func availableYears() throws -> [Int] {
-    try availableYearsWithCounts().map(\.year)
+    if let s = overrideService { return try s.availableYears() }
+    return try availableYearsWithCounts().map(\.year)
   }
 
   /// Returns descending list of years with at least one asset, together with per-year asset counts.
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
+    if let s = overrideService { return try s.availableYearsWithCounts() }
     guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
 
     let opts = PHFetchOptions()
@@ -382,6 +445,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   // MARK: - Thumbnail Management (PhotoLibraryService)
 
   func startCachingThumbnails(for assets: [AssetDescriptor]) {
+    if let s = overrideService { s.startCachingThumbnails(for: assets); return }
     // Use cached PHAssets (populated by the preceding fetchAssets call)
     let phAssets = assets.compactMap { phAssetCache[$0.id] }
     guard !phAssets.isEmpty else { return }
@@ -395,6 +459,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   }
 
   func stopCachingThumbnails(for assets: [AssetDescriptor]) {
+    if let s = overrideService { s.stopCachingThumbnails(for: assets); return }
     let phAssets = assets.compactMap { phAssetCache[$0.id] }
     guard !phAssets.isEmpty else { return }
     let options = PHImageRequestOptions()
@@ -414,6 +479,9 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// explicitly opted into the network. The `MonthViewModel.refresh(for:)` path and
   /// `retryThumbnail(for:)` both pass `true` for that reason.
   func loadThumbnail(for assetId: String, allowNetwork: Bool = true) async -> NSImage? {
+    if let s = overrideService {
+      return await s.loadThumbnail(for: assetId, allowNetwork: allowNetwork)
+    }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
     return await withCheckedContinuation { continuation in
       let options = PHImageRequestOptions()
@@ -443,6 +511,9 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
 
   /// Load a high-quality thumbnail for an asset
   func loadThumbnailHighQuality(for assetId: String, allowNetwork: Bool = true) async -> NSImage? {
+    if let s = overrideService {
+      return await s.loadThumbnailHighQuality(for: assetId, allowNetwork: allowNetwork)
+    }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
     return await withCheckedContinuation { continuation in
       let options = PHImageRequestOptions()
@@ -472,6 +543,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
 
   /// Request a full-size image for an asset
   func requestFullImage(for assetId: String) async throws -> NSImage {
+    if let s = overrideService { return try await s.requestFullImage(for: assetId) }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else {
       throw PhotoLibraryError.assetUnavailable
     }
@@ -541,6 +613,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   // MARK: - Resource Access (PhotoLibraryService)
 
   func resources(for assetId: String) -> [ResourceDescriptor] {
+    if let s = overrideService { return s.resources(for: assetId) }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return [] }
     return PHAssetResource.assetResources(for: asset).map {
       ResourceDescriptor(
@@ -560,6 +633,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   }
 
   func assetDetails(for assetId: String) -> AssetDetails? {
+    if let s = overrideService { return s.assetDetails(for: assetId) }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
     let phResources = PHAssetResource.assetResources(for: asset)
     let primaryResource =
@@ -710,6 +784,7 @@ class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService {
   /// `descriptorKind(for:)` subtype switch is the single source of truth for which
   /// collections we surface and how.
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
+    if let s = overrideService { return try s.fetchCollectionTree() }
     guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
     if let cached = cachedCollectionTree { return cached }
     var tree: [PhotoCollectionDescriptor] = []
