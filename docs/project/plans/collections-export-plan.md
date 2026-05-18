@@ -1210,7 +1210,7 @@ All three are user-initiated actions that arguably should produce a new logical 
 old id remain on disk; selecting the original folder again finds them via the lazy migration below.
 
 **Lazy per-destination migration.** Migration runs **once before either store configures**, in a new
-coordinator (`ExportRecordsDirectoryCoordinator`, lives at `Managers/ExportRecordsDirectoryCoordinator.swift`)
+coordinator (`ExportRecordsDirectoryCoordinator`, lives at `Export/ExportRecordsDirectoryCoordinator.swift`)
 that owns the `ExportRecords/<newId>/` directory lifecycle. Its public surface is a single synchronous method:
 
 ```swift

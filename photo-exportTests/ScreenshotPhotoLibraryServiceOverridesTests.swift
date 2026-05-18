@@ -3,32 +3,17 @@ import Testing
 
 @testable import Photo_Export
 
-/// Phase 6 regression gate. The screenshot run currently uses
-/// `ScreenshotPhotoLibraryService: PhotoLibraryManager` (inheritance). Every
-/// `PhotoLibraryService` method must be overridden — leaving any to inherit from
-/// `PhotoLibraryManager` would route the screenshot run back to the real Photos
-/// library and defeat the entire point of the mode.
+/// Phase 6 regression gate. Pins that every `PhotoLibraryService` method on
+/// `ScreenshotPhotoLibraryService` returns curated synthetic data — not the empty /
+/// nil values a production-PhotoKit call without authorisation would return.
 ///
-/// This test exercises every method through the screenshot subclass and asserts the
-/// curated synthetic data flows out — not the empty / nil values a production manager
-/// would return when PhotoKit isn't authorised. A future regression that removed an
-/// `override` (so the call fell through to `PhotoLibraryManager`'s production
-/// implementation) would fail here.
-///
-/// The plan's Phase 6 also calls for "PhotoLibraryManager should not rely on
-/// inheritance"; that's a follow-up extraction (Production / Screenshot services as
-/// peers, manager as a thin wrapper). The change is large (~973 lines of production
-/// PhotoKit code to relocate) and orthogonal to the regression-gate property the
-/// inheritance contract relies on — pinned here so the larger move can land later
-/// without losing the safety net.
-///
-/// **Known limitation**: this suite enumerates every `PhotoLibraryService` method that
-/// exists today. A NEW method added to the protocol will be inherited from
-/// `PhotoLibraryManager` (production behaviour) unless someone also adds an override
-/// AND a corresponding test here. The gate catches missed overrides on existing
-/// methods, not missed overrides on additions. The composition follow-up (drop the
-/// inheritance entirely) closes this hole structurally; until then, anyone adding a
-/// method to `PhotoLibraryService` should add a test to this suite in the same PR.
+/// Since issue #67 item 1 (May 2026), `ScreenshotPhotoLibraryService` is a peer
+/// type — it no longer inherits from `PhotoLibraryManager`, so a newly-added
+/// `PhotoLibraryService` method now fails to compile until it has a real
+/// implementation here. That closes the structural hole this gate's previous
+/// docstring called out as a "known limitation". The behavioral assertions
+/// below still run as a safety net against a future regression that swaps the
+/// curated content back to PhotoKit-shaped empties.
 @MainActor
 struct ScreenshotPhotoLibraryServiceOverridesTests {
 
@@ -203,17 +188,24 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
 
   // MARK: - Wiring
 
-  /// Single-source-of-truth check: the app-launch wiring in `photo_exportApp` selects
-  /// `ScreenshotPhotoLibraryService` when `isRunningInScreenshotMode` is true. This
-  /// test mirrors that branch to confirm the type-switch produces the expected
-  /// concrete type for both modes.
-  @Test func appWiringSelectsScreenshotServiceInScreenshotMode() {
-    let production: PhotoLibraryManager = PhotoLibraryManager()
-    #expect(!(production is ScreenshotPhotoLibraryService),
-      "production manager must NOT also be ScreenshotPhotoLibraryService")
+  /// Mirrors the `photo_exportApp` injection: in screenshot mode the wrapping
+  /// `PhotoLibraryManager` holds an injected `ScreenshotPhotoLibraryService`
+  /// as its `overrideService`, and forwards every `PhotoLibraryService`
+  /// method to it. Without the wrapper, the UI's
+  /// `@EnvironmentObject var photoLibraryManager: PhotoLibraryManager` would
+  /// not reach the curated content.
+  ///
+  /// The load-bearing assertion is that the wrapper's auth state mirrors the
+  /// override's. The peer-types property (`PhotoLibraryManager` is `final`,
+  /// `ScreenshotPhotoLibraryService` does not inherit) is enforced at compile
+  /// time — there's no runtime check that adds value.
+  @Test func appWiringMirrorsOverrideServiceAuthState() {
+    let screenshotService = ScreenshotPhotoLibraryService()
+    let wrapped = PhotoLibraryManager(overrideService: screenshotService)
 
-    let screenshot: PhotoLibraryManager = ScreenshotPhotoLibraryService()
-    #expect(screenshot is ScreenshotPhotoLibraryService,
-      "screenshot wiring must produce a ScreenshotPhotoLibraryService instance")
+    #expect(wrapped.isAuthorized == true,
+      "wrapped manager mirrors the override's auth state")
+    #expect(wrapped.authorizationStatus == .authorized,
+      "wrapped manager mirrors the override's auth status")
   }
 }

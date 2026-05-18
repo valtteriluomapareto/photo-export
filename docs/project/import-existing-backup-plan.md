@@ -466,14 +466,14 @@ Acceptance criteria:
 ## File Impact
 
 Phase 1 (done):
-- `photo-export/Managers/BackupScanner.swift` — folder enumeration and matching
-- `photo-export/Managers/ImportCoordinator.swift` — import flow orchestration (extracted from ExportManager in Phase 5)
+- `photo-export/Export/BackupScanner.swift` — folder enumeration and matching
+- `photo-export/Export/ImportCoordinator.swift` — import flow orchestration (extracted from ExportManager in Phase 5)
 - `photo-export/Records/ExportRecordStore.swift` — import/rebuild API (moved to `Records/` in Phase 7)
 - `photo-export/Views/Export/ImportView.swift` — import UI with progress and results (moved to `Views/Export/` in Phase 7)
 
 Phase 2 (future):
-- new: `photo-export/Managers/BackupSidecarStore.swift` — sidecar read/write
-- `photo-export/Managers/ExportDestinationManager.swift` — sidecar root helpers under security scope
+- new: `photo-export/Export/BackupSidecarStore.swift` — sidecar read/write
+- `photo-export/Destination/ExportDestinationManager.swift` — sidecar root helpers under security scope
 
 ---
 

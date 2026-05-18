@@ -11,9 +11,11 @@ import OSLog
 /// - Owns the published mirrors `isImporting` + `importStage` directly; ExportManager
 ///   sinks them onto its own `@Published` properties so `isImportingPublisher`
 ///   subscribers and SwiftUI view bindings keep emitting from the same source.
-/// - Reaches back to `ExportManager` via `Host` for the cancellation seam (the same
-///   Phase-0 `isCurrent`/`throwIfCancelledOrStale` shape) and the writable
-///   `importResult` publisher (which test code sometimes resets directly).
+/// - Reaches the Phase-0 cancellation seam (`isCurrent` / `throwIfCancelledOrStale` /
+///   `bumpGeneration`) directly through the injected `ExportQueueCoordinator`
+///   reference, not via the host (issue #67 item 2). The host is now scoped to the
+///   writable `importResult` publisher and the dependencies the scanner + reconcile
+///   need.
 ///
 /// `importResult` stays on `ExportManager` as a `@Published var` so its writability
 /// contract is preserved; the coordinator updates it via `Host.setImportResult(_:)`.
@@ -22,16 +24,13 @@ final class ImportCoordinator: ObservableObject {
 
   // MARK: - Host
 
-  /// Hooks back to ExportManager for state the coordinator does not own:
-  /// generation-aware cancellation checks (Phase 0 contract), the writable
-  /// `importResult` mirror, and the destination/store dependencies required by
-  /// scanner + reconcile.
+  /// Hooks back to ExportManager for state the coordinator does not own: the writable
+  /// `importResult` mirror and the destination/store dependencies required by
+  /// scanner + reconcile. The Phase-0 cancellation seam is no longer on this
+  /// protocol — the coordinator reaches it through its injected
+  /// `ExportQueueCoordinator` reference.
   @MainActor
   protocol Host: AnyObject {
-    func isCurrent(_ gen: Int) -> Bool
-    var generation: Int { get }
-    func bumpGeneration()
-
     /// Writes the import report back to ExportManager so `manager.importResult`
     /// readers and the @Published mirror see the new value. Kept as a Host method
     /// (not a coordinator-owned @Published) because `manager.importResult` is a
@@ -63,9 +62,15 @@ final class ImportCoordinator: ObservableObject {
   private let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "ImportCoordinator")
   private weak var host: Host?
+  /// Cancellation seam (Phase 0). Held as a weak reference because both the queue
+  /// coordinator and this coordinator have the same lifetime owner
+  /// (`ExportManager`); a strong reference would create a retain cycle through
+  /// `Host`.
+  private weak var queueCoordinator: ExportQueueCoordinator?
 
-  init(host: Host) {
+  init(host: Host, queueCoordinator: ExportQueueCoordinator) {
     self.host = host
+    self.queueCoordinator = queueCoordinator
   }
 
   // MARK: - Public API
@@ -100,7 +105,7 @@ final class ImportCoordinator: ObservableObject {
     importStage = .scanningBackupFolder
     host.setImportResult(nil)
 
-    let importGen = host.generation
+    let importGen = queueCoordinator?.generation ?? 0
 
     importTask = Task { [weak self, weak host] in
       guard let self, let host else { return }
@@ -137,7 +142,7 @@ final class ImportCoordinator: ObservableObject {
         }.value
 
         try Task.checkCancellation()
-        guard host.isCurrent(importGen) else {
+        guard self.queueCoordinator?.isCurrent(importGen) == true else {
           self.isImporting = false
           self.importStage = nil
           return
@@ -156,7 +161,7 @@ final class ImportCoordinator: ObservableObject {
         }
 
         try Task.checkCancellation()
-        guard host.isCurrent(importGen) else {
+        guard self.queueCoordinator?.isCurrent(importGen) == true else {
           self.isImporting = false
           self.importStage = nil
           return
@@ -202,7 +207,7 @@ final class ImportCoordinator: ObservableObject {
 
         host.exportRecordStore.bulkImportRecords(records)
 
-        guard host.isCurrent(importGen) else {
+        guard self.queueCoordinator?.isCurrent(importGen) == true else {
           self.isImporting = false
           self.importStage = nil
           return
@@ -216,7 +221,7 @@ final class ImportCoordinator: ObservableObject {
         let timelineSummary = await host.exportRecordStore.reconcileAgainstFilesystem(
           at: rootURL)
         try Task.checkCancellation()
-        guard host.isCurrent(importGen) else {
+        guard self.queueCoordinator?.isCurrent(importGen) == true else {
           self.isImporting = false
           self.importStage = nil
           return
@@ -224,7 +229,7 @@ final class ImportCoordinator: ObservableObject {
         let collectionSummary = await host.collectionExportRecordStore
           .reconcileAgainstFilesystem(at: rootURL)
         try Task.checkCancellation()
-        guard host.isCurrent(importGen) else {
+        guard self.queueCoordinator?.isCurrent(importGen) == true else {
           self.isImporting = false
           self.importStage = nil
           return
@@ -264,13 +269,13 @@ final class ImportCoordinator: ObservableObject {
     }
   }
 
-  /// Cancels an in-progress import. Bumps the host's generation so any late-completing
-  /// import work gates out via `isCurrent` checks.
+  /// Cancels an in-progress import. Bumps the queue coordinator's generation so any
+  /// late-completing import work gates out via `isCurrent` checks.
   func cancelImport() {
     guard isImporting else { return }
     importTask?.cancel()
     importTask = nil
-    host?.bumpGeneration()
+    queueCoordinator?.bumpGeneration()
     isImporting = false
     importStage = nil
     host?.setImportResult(nil)

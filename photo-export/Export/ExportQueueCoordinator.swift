@@ -4,17 +4,16 @@ import OSLog
 
 /// Owns the queue side of export execution: pending jobs, drain loop, pause/resume/clear,
 /// per-placement queue counters, and the published mirrors for queue depth + total
-/// counters.
+/// counters. Also owns the Phase-0 cancellation seam — `generation` storage plus the
+/// `isCurrent(_:)` / `throwIfCancelledOrStale(_:)` / `bumpGeneration()` helpers — which
+/// moved here from `ExportManager` as part of issue #67 item 2.
 ///
 /// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 4b, this is
 /// where `pendingJobs`, `isProcessing`, `currentTask`, `queuedCountsByPlacementId`,
 /// `processQueueIfNeeded`, `processNext`, `updateQueueCount`, `pause`, `resume`, and
-/// `clearPending` live. ExportManager retains `generation`, the `currentJob*` UI
-/// identifiers, the per-asset bookkeeping, and the `export(job:gen:)` body itself — the
-/// coordinator drives the loop and calls back via `Host` to run each job. The plan
-/// originally projected `generation` storage to migrate here in Phase 5; that transfer
-/// is deferred to a follow-up and the Host getters (`generation`, `isCurrent`) are a
-/// permanent seam until it lands.
+/// `clearPending` live. ExportManager retains the `currentJob*` UI identifiers, the
+/// per-asset bookkeeping, and the `export(job:gen:)` body itself — the coordinator
+/// drives the loop and calls back via `Host` to run each job.
 ///
 /// `@Published` state on the coordinator is mirrored on ExportManager via sinks so
 /// existing views and the AutoSync `exportRunStatePublisher` keep their stable read
@@ -27,16 +26,13 @@ final class ExportQueueCoordinator: ObservableObject {
 
   // MARK: - Host
 
-  /// Hooks back to ExportManager for state it still owns: generation, the export work
-  /// itself, the queue-drain finalize hook, and the UI-state cleanup that runs between
-  /// jobs.
+  /// Hooks back to ExportManager for state it still owns: the export work itself,
+  /// the queue-drain finalize hook, and the UI-state cleanup that runs between jobs.
+  /// The Phase-0 cancellation seam (`generation`, `isCurrent`) is no longer on this
+  /// protocol — the coordinator owns its own storage and the manager forwards via
+  /// computed property + thin method (issue #67 item 2).
   @MainActor
   protocol Host: AnyObject {
-    /// Phase 0 cancellation contract. Deferred follow-up will move `generation` storage
-    /// into this coordinator; until then these are a permanent seam back to the manager.
-    var generation: Int { get }
-    func isCurrent(_ gen: Int) -> Bool
-
     /// True while a bulk-album enqueue Task is still building the queue. The coordinator
     /// uses this to avoid prematurely finalizing an empty queue.
     var isEnqueueingAll: Bool { get }
@@ -68,6 +64,40 @@ final class ExportQueueCoordinator: ObservableObject {
   @Published private(set) var queueCount: Int = 0
   @Published private(set) var totalJobsEnqueued: Int = 0
   @Published private(set) var totalJobsCompleted: Int = 0
+
+  // MARK: - Cancellation seam (Phase-0 contract; storage moved here from
+  //         ExportManager in issue #67 item 2)
+
+  /// Generation counter bumped by every cancellation transition
+  /// (`cancelAndClear`, `supersedeForManualRun`, `interruptForDestinationUnavailable`,
+  /// `cancelImport`). Async work captures `let gen = generation` synchronously before
+  /// the first `await` and re-checks `isCurrent(gen)` after every hop; a mid-flight
+  /// bump returns false and the work bails out cooperatively.
+  ///
+  /// `clearPending()` (queue-only drop) does NOT bump generation — in-flight work
+  /// keeps its `gen` and finishes normally.
+  private(set) var generation: Int = 0
+
+  /// Returns `true` if `gen` matches the current generation — i.e. the run that
+  /// captured it has not been cancelled/superseded since.
+  func isCurrent(_ gen: Int) -> Bool {
+    generation == gen
+  }
+
+  /// Throws `CancellationError` if the Task is cancelled OR if `gen` is stale.
+  /// Async work that needs to fail-stop rather than silently bail uses this in
+  /// place of `guard isCurrent(gen) else { return }`.
+  func throwIfCancelledOrStale(_ gen: Int) throws {
+    try Task.checkCancellation()
+    guard isCurrent(gen) else { throw CancellationError() }
+  }
+
+  /// Bumps the generation. Called by the cancellation transitions on
+  /// `ExportManager` (which routes through here) and by `ImportCoordinator`'s
+  /// cancel path (which holds a direct reference).
+  func bumpGeneration() {
+    generation += 1
+  }
 
   // MARK: - Internal queue state
 
@@ -149,9 +179,10 @@ final class ExportQueueCoordinator: ObservableObject {
   //         interruptForDestinationUnavailable)
 
   /// Cancels the in-flight `currentTask`, clears every queue counter, drops the queue,
-  /// resets running/paused/processing flags. Does NOT bump generation — `generation`
-  /// lives on `ExportManager` and is bumped there by the cancellation paths
-  /// (`teardownActiveWork`, `cancelImport`).
+  /// resets running/paused/processing flags. Does NOT bump generation — callers that
+  /// also want the cancellation seam to fire call `bumpGeneration()` separately. This
+  /// split lets `clearPending` (queue-only drop, no cancellation of in-flight work)
+  /// share the queue teardown logic.
   func teardownQueue() {
     currentTask?.cancel()
     currentTask = nil
@@ -224,12 +255,12 @@ final class ExportQueueCoordinator: ObservableObject {
     }
     host?.setCurrentJob(job)
     updateQueueCount()
-    let currentGen = host?.generation ?? 0
+    let currentGen = generation
     currentTask = Task { [weak self, weak host] in
       await host?.performExport(job: job, generation: currentGen)
       await MainActor.run { [weak self] in
         host?.clearCurrentJobIdentifiers()
-        guard let self, self.host?.isCurrent(currentGen) == true else { return }
+        guard let self, self.isCurrent(currentGen) else { return }
         self.totalJobsCompleted += 1
         self.processNext()
       }

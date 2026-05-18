@@ -1,7 +1,9 @@
 # Screenshot Automation Plan
 
-Date: 2026-05-11 (last revised 2026-05-12)
+Date: 2026-05-11 (last revised 2026-05-18)
 Status: ✅ Shipped. Marketing screenshots can be captured end-to-end via `scripts/screenshots/capture.sh` — six surfaces today (Timeline, Favorites, Family, Porvoo, Trips folder, London album); adding more is a one-case-in-Swift, one-line-in-bash extension. Bundled photos are user-supplied + AI-generated (see `photo-export/Resources/screenshots/ATTRIBUTION.txt`). Manual App Store upload remains the chosen path; no Fastlane Deliver wiring.
+
+> **Architecture update (2026-05-18; issue #67 item 1, PR #76)**: `ScreenshotPhotoLibraryService` no longer inherits from `PhotoLibraryManager`. It is now a standalone `PhotoLibraryService` conformance that the app injects into `PhotoLibraryManager` via `init(overrideService:)`; the manager forwards every PhotoLibraryService method to the injected service. The inheritance-based design described below in §"Phase 1" was the originally-shipped shape; the structural fix closed the "newly-added protocol method silently inherits production behavior" hole that the override-gate test could not catch. The 20-test behavioral pin in `ScreenshotPhotoLibraryServiceOverridesTests` still runs against the standalone class.
 
 ## Implementation Status
 

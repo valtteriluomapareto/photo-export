@@ -410,6 +410,165 @@ struct SidebarMultiSelectTests {
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 
+  // MARK: - Issue #67 item 4 follow-ups
+
+  /// Item 4b: cancellation parity with the timeline path
+  /// (`cancelMidTimelineSelectionLoopResetsState`). The collections dispatcher
+  /// has three buckets (favorites → albums → shared); cancelling between any
+  /// two buckets must reset `isEnqueueingAll`, leave the queue idle, and bump
+  /// the generation so a re-dispatch can run cleanly.
+  @Test func cancelMidCollectionsSelectionBetweenBucketsResetsState() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    // Favorites: one asset; album A: one asset. Gate album A's fetch so we can
+    // cancel after favorites is done but before the album loop completes.
+    h.photoLib.favoritesAssets = [makeAsset(id: "fav-1", year: 2026, month: 3)]
+    h.photoLib.resourcesByAssetId["fav-1"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "fav-1.HEIC")
+    ]
+    let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["alb-A1"])
+    h.photoLib.collectionTree = [albumA]
+    let fetchGate = AsyncCheckpoint()
+    h.photoLib.fetchAssetsCheckpointByAlbumId["A"] = fetchGate
+
+    let genBefore = h.manager.generation
+
+    let buckets = CollectionsSelectionBuckets.normalize(
+      [.favorites, .album(collectionId: "A")]
+    ) { _ in [] }
+    h.manager.startExportCollectionsSelection(buckets)
+
+    // Wait until the loop is suspended on album A's asset fetch — favorites
+    // already enqueued. After this point the next `isCurrent(gen)` check
+    // would return false if we cancel.
+    await fetchGate.waitForEnter(count: 1)
+    #expect(h.manager.isEnqueueingAll)
+
+    h.manager.cancelAndClear()
+    await fetchGate.releaseAll()
+
+    await waitUntil(!h.manager.isEnqueueingAll)
+    #expect(!h.manager.isEnqueueingAll)
+    #expect(h.manager.pendingJobs.isEmpty)
+    #expect(h.manager.generation > genBefore)
+  }
+
+  /// Item 4c: pins that the multi-select collections dispatcher delegates
+  /// per-bucket to `enqueueCollection` (the bridge into `ExportJobPlanner`).
+  /// Each bucket's distinct `placement.kind` landing in the queue proves the
+  /// dispatcher reached `enqueueCollection` for that bucket — a future
+  /// regression that added a dispatcher-level pre-filter ahead of
+  /// `enqueueCollection`, or that bypassed it for some buckets, would leave
+  /// a kind missing.
+  ///
+  /// The load-bearing *predicate-order* invariant (isExported before the
+  /// retry gate) is unit-tested directly on the planner — see
+  /// `ExportJobPlannerTests.plan_predicateOrder_isExportedRunsBeforeRetryGate`
+  /// and its `.planTimelineYear_predicateOrder_isExportedFirst` sibling. The
+  /// dispatcher itself doesn't run the predicates; it routes through the
+  /// `enqueueCollection` helper which calls the planner. This test pins the
+  /// routing the planner test depends on.
+  ///
+  /// (The issue's prescribed name `multiSelectDispatcherHonorsAutoSyncEligibilityCheck`
+  /// would have been tautological under fire-and-forget: `skipForAutoSyncRetry`
+  /// early-exits on `activeRunContext?.source != .autoSync`, and the
+  /// multi-select dispatcher never sets a run context. So an eligibility
+  /// counter would stay at zero whether or not the planner's order is
+  /// correct, and the assertion would not pin the contract. The routing
+  /// check here is the strongest dispatcher-level property available.)
+  @Test func multiSelectCollectionsDispatcherDelegatesPerBucketToEnqueueCollection() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    // One asset per bucket: favorites, a top-level album, a top-level shared
+    // album. Each must produce a distinct `placement.kind` in the queue.
+    h.photoLib.favoritesAssets = [makeAsset(id: "fav-1")]
+    h.photoLib.resourcesByAssetId["fav-1"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "fav-1.HEIC")
+    ]
+    let album = seedAlbum(h.photoLib, localId: "A", ids: ["alb-1"])
+    // Shared albums are seeded into a SEPARATE fake dict
+    // (`assetsBySharedAlbumLocalId`) — using `assetsByAlbumLocalId` would
+    // leave the `.sharedAlbum` scope's fetch returning an empty list and
+    // silently dropping the bucket.
+    h.photoLib.assetsBySharedAlbumLocalId["S"] = [makeAsset(id: "shr-1")]
+    h.photoLib.resourcesByAssetId["shr-1"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "shr-1.HEIC")
+    ]
+    let shared = PhotoCollectionDescriptor(
+      id: "shared-album:S", localIdentifier: "S", title: "Shared",
+      kind: .sharedAlbum, pathComponents: [], children: [])
+    h.photoLib.collectionTree = [album, shared]
+
+    // Gate the writer so all three jobs accumulate (one in-flight, two
+    // pending) for a clean kind-distribution snapshot.
+    let writeGate = AsyncCheckpoint()
+    h.writer.checkpoint = writeGate
+
+    let buckets = CollectionsSelectionBuckets.normalize(
+      [.favorites, .album(collectionId: "A"), .sharedAlbum(collectionId: "S")]
+    ) { _ in [] }
+    h.manager.startExportCollectionsSelection(buckets)
+
+    await writeGate.waitForEnter(count: 1)
+
+    // One job is in flight, the other two wait in pendingJobs. The union of
+    // their kinds must be exactly the three bucket kinds the dispatcher was
+    // asked to handle.
+    let inFlightKind = h.manager.currentJobPlacement.map { [$0.kind] } ?? []
+    let pendingKinds = h.manager.pendingJobs.map { $0.placement.kind }
+    let observedKinds = Set(pendingKinds + inFlightKind)
+    #expect(
+      observedKinds == Set([.favorites, .album, .sharedAlbum]),
+      """
+      Multi-select collections dispatcher must delegate per-bucket to \
+      `enqueueCollection` (bridges into `ExportJobPlanner`). Each bucket \
+      must produce its placement kind in the queue. Observed: \(observedKinds).
+      """
+    )
+
+    await writeGate.releaseAll()
+    await waitUntil(h.manager.totalJobsCompleted == 3)
+  }
+
+  /// Item 4d: the queue-coordinator route assertion. The multi-select
+  /// dispatchers were verified before this PR by terminal counters
+  /// (`totalJobsEnqueued` / `totalJobsCompleted`) but never by the queue
+  /// coordinator's own `isRunning` publisher — which is the contract AutoSync
+  /// observes via the manager's mirror. This test pins that the dispatcher's
+  /// jobs do flow through `ExportQueueCoordinator` (and so the mirror sinks
+  /// fire as expected).
+  @Test func multiSelectEnqueueRoutesThroughQueueCoordinator() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    h.photoLib.assetsByYearMonth["2026-3"] = [makeAsset(id: "a1", year: 2026, month: 3)]
+    h.photoLib.resourcesByAssetId["a1"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "a1.HEIC")
+    ]
+
+    let writeGate = AsyncCheckpoint()
+    h.writer.checkpoint = writeGate
+
+    #expect(!h.manager.queueCoordinator.isRunning, "queue idle before dispatch")
+    #expect(!h.manager.isRunning, "manager mirror idle before dispatch")
+
+    h.manager.startExportTimelineSelection(years: [2026], months: [])
+    await writeGate.waitForEnter(count: 1)
+
+    // The coordinator is processing the job; the manager's mirror sink has
+    // flipped in lockstep (the synchrony of the sink is itself a regression
+    // gate — see `ExportQueueStateSnapshotTests`).
+    #expect(h.manager.queueCoordinator.isRunning, "queue running mid-job")
+    #expect(h.manager.isRunning, "manager mirror running mid-job")
+
+    await writeGate.releaseAll()
+    await waitUntil(!h.manager.queueCoordinator.isRunning)
+    #expect(!h.manager.queueCoordinator.isRunning, "queue idle after drain")
+    #expect(!h.manager.isRunning, "manager mirror idle after drain")
+  }
+
   // MARK: - Test harness (mirrors ExportAllAlbumsTests)
 
   @MainActor

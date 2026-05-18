@@ -73,9 +73,15 @@ struct PhotoExportApp: App {
         defaults.removeObject(forKey: key)
       }
     }
+    // Compose: in screenshot mode, the curated service is injected as
+    // `overrideService`; the wrapping `PhotoLibraryManager` forwards every
+    // `PhotoLibraryService` method to it. In production, no override is set and
+    // the manager runs its built-in PhotoKit code. The standalone-conformance
+    // shape (issue #67 item 1) closes the inheritance hole the old override-gate
+    // test only partially covered.
     let plm: PhotoLibraryManager =
       PhotoLibraryManager.isRunningInScreenshotMode
-      ? ScreenshotPhotoLibraryService()
+      ? PhotoLibraryManager(overrideService: ScreenshotPhotoLibraryService())
       : PhotoLibraryManager()
     let ers = ExportRecordStore()
     let cers = CollectionExportRecordStore()

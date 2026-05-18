@@ -7,16 +7,18 @@ Photo Export follows a small **SwiftUI + Managers** architecture. Views stay rel
 
 ## App entry point
 
-[`photo_exportApp.swift`](https://github.com/valtteriluomapareto/photo-export/blob/main/photo-export/photo_exportApp.swift) creates the shared app state and injects it into the view tree with `@EnvironmentObject`.
+[`App/photo_exportApp.swift`](https://github.com/valtteriluomapareto/photo-export/blob/main/photo-export/App/photo_exportApp.swift) creates the shared app state and injects it into the view tree with `@EnvironmentObject`.
 
 ## Folder layout
 
 Long-lived stateful services and pure helpers are split by feature area under `photo-export/`:
 
+- `App/` — entry point + lifecycle services: `photo_exportApp`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
+- `Export/` — façade + collaborators: `ExportManager` (+ `ExportManager+AutoSyncConformance`), `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, and the helper-policy types: `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`
+- `Destination/` — `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`
 - `Records/` — `ExportRecordStore`, `CollectionExportRecordStore`, `JSONLRecordFile`, `RecordStoreRouter` (single placement-kind dispatch), `ExportCompletionPolicy` (single edited-fallback/required-variant rule)
 - `AutoSync/` — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, with `AutoSync/Stores/` for file-backed persistence (dirty state, per-destination tokens, retry state, run summary, scope, global photo-change token)
 - `PhotoLibrary/` — `PhotoLibraryManager`, `ScreenshotPhotoLibraryService`, `PhotoLibraryPersistentChangeAdapter`, `CollectionCountCache`
-- `Managers/` — remaining stateful services awaiting later moves: `ExportManager`, `ExportDestinationManager`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, `BackupScanner`, `ExportJobPlanner`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `ResourceSelection`, `FileIOService`, plus `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
 - `Protocols/`, `Models/`, `ViewModels/`, `Helpers/`, `Resources/`
 - `Views/` regrouped by feature: `Timeline/`, `Collections/`, `Export/`, `Settings/`, `Shared/`
 
@@ -84,18 +86,18 @@ collection store cannot affect timeline progress and vice versa.
 
 Top-level orchestrator over the export collaborators. Depends on the other three injected managers plus the extracted owners listed below.
 
-- `runExport(context:)` awaitable API for AutoSync; `start*` fire-and-forget methods for the toolbar/menu UI (`startExportAll`, `startExportYear`, `startExportMonth`, `startExportFavorites`, `startExportAllAlbums`, `startExportAllSharedAlbums`, `startExportTimelineSelection`, `startExportCollectionsSelection`). The two `*Selection` methods are the bulk dispatchers behind sidebar multi-select — they accept normalized buckets and route each item through the existing single-select helpers so dedup against the record store is shared.
-- Owns `generation: Int` (the cancellation seam) plus the published mirrors for `isRunning`, `queueCount`, `totalJobsEnqueued/Completed`, `isImporting`, `importStage` (mirrored from the coordinators via Combine sinks).
+- `runExport(context:)` awaitable API for AutoSync; `start*` fire-and-forget methods for the toolbar/menu UI (`startExportAll`, `startExportYear`, `startExportMonth`, `startExportFavorites`, `startExportAllAlbums`, `startExportAllSharedAlbums`, `startExportTimelineSelection`, `startExportCollectionsSelection`). The two `*Selection` methods are the bulk dispatchers behind sidebar multi-select — they accept normalized buckets and route each item through the existing single-select helpers so dedup against the record store is shared. The bulk dispatchers share a private `runBulkExportTask` / `runBulkEnqueueLoop` helper pair so the outer Task scaffolding and the per-item loop are defined once.
+- Exposes `generation: Int` as a computed forwarder to `ExportQueueCoordinator.generation` — the Phase-0 cancellation storage moved into the coordinator. The published mirrors for `isRunning`, `queueCount`, `totalJobsEnqueued/Completed`, `isImporting`, `importStage` are sunk from the coordinators via Combine.
 - Persists the user's version selection (`edited` / `editedWithOriginals`) in `UserDefaults` and snapshots it onto each enqueued job.
 - Delegates per-concern work to extracted owners (see below).
 
 ### Export-pipeline owners (extracted from `ExportManager` during the architecture refactor)
 
-- **`ExportJobPlanner`** (pure `enum`, `Managers/ExportJobPlanner.swift`) — turns assets + skip predicates into `[ExportJob]`. Owns the `isExported` → `shouldSkipForRetry` predicate-order discipline.
-- **`ExportQueueCoordinator`** (`@MainActor final class`, `Managers/ExportQueueCoordinator.swift`) — owns `pendingJobs`, `isProcessing`, `currentTask`, queue counters, pause/resume/cancel, and the drain loop. Publishes queue state which `ExportManager` mirrors.
-- **`VariantExporter`** (`@MainActor final class`, `Managers/VariantExporter.swift`) — per-variant write path: resource selection, destination temp setup, reuse-source copy, atomic move, timestamps, per-variant exported/failed record write.
-- **`ImportCoordinator`** (`@MainActor final class`, `Managers/ImportCoordinator.swift`) — entire scanner → matcher → bulkImport → reconcile flow for the Import Existing Backup feature.
-- **`ExportDestinationResolver`** (`Sendable struct`, `Managers/ExportDestinationResolver.swift`) — destination URL + filename allocator: stem allocation, `_orig` companion naming, inherited group stem from prior records, unique-filename collision suffixing.
+- **`ExportJobPlanner`** (pure `enum`, `Export/ExportJobPlanner.swift`) — turns assets + skip predicates into `[ExportJob]`. Owns the `isExported` → `shouldSkipForRetry` predicate-order discipline.
+- **`ExportQueueCoordinator`** (`@MainActor final class`, `Export/ExportQueueCoordinator.swift`) — owns `pendingJobs`, `isProcessing`, `currentTask`, queue counters, pause/resume/cancel, the drain loop, and the Phase-0 cancellation seam (`generation`, `isCurrent`, `throwIfCancelledOrStale`, `bumpGeneration`). Publishes queue state which `ExportManager` mirrors. `VariantExporter` and `ImportCoordinator` hold a direct weak reference for the seam.
+- **`VariantExporter`** (`@MainActor final class`, `Export/VariantExporter.swift`) — per-variant write path: resource selection, destination temp setup, reuse-source copy, atomic move, timestamps, per-variant exported/failed record write.
+- **`ImportCoordinator`** (`@MainActor final class`, `Export/ImportCoordinator.swift`) — entire scanner → matcher → bulkImport → reconcile flow for the Import Existing Backup feature.
+- **`ExportDestinationResolver`** (`Sendable struct`, `Destination/ExportDestinationResolver.swift`) — destination URL + filename allocator: stem allocation, `_orig` companion naming, inherited group stem from prior records, unique-filename collision suffixing.
 - **`RecordStoreRouter`** (`@MainActor final class`, `Records/RecordStoreRouter.swift`) — single placement-kind dispatch over the timeline and collection record stores (reads, writes, cancellation cleanup, reuse-source probe).
 - **`ExportCompletionPolicy`** (pure `enum`, `Records/ExportCompletionPolicy.swift`) — required-variant logic + edited-fallback decisions + asset-complete checks.
 

@@ -2,16 +2,18 @@ import AppKit
 import Photos
 import os
 
-/// Production `PhotoLibraryManager` subclass that serves a curated synthetic Photos
-/// library for marketing screenshot capture. Selected at app entry when the user
-/// launches with `--screenshot-mode`; see
+/// Standalone `PhotoLibraryService` conformance that serves a curated synthetic
+/// Photos library for marketing screenshot capture. Selected at app entry when the
+/// user launches with `--screenshot-mode`; see
 /// `docs/project/plans/screenshot-automation-plan.md`.
 ///
-/// Every read method on `PhotoLibraryService` is overridden — leaving any of them
-/// to inherit from `PhotoLibraryManager` would route the screenshot run back to the
-/// real Photos library, which defeats the entire reason for the mode. The base
-/// class's `init` skips PhotoKit registration when `isRunningInScreenshotMode` is
-/// true, so no observer fires to overwrite the curated state.
+/// Since issue #67 item 1 this class **does not inherit from PhotoLibraryManager**;
+/// it is a peer conformance the manager wraps via its `overrideService` injection
+/// point. That structural fix closes the "newly-added PhotoLibraryService method
+/// silently inherits production behavior" hole that the override-gate test only
+/// partially caught (it pinned existing overrides but not future-added methods —
+/// now every `PhotoLibraryService` method must be a real implementation here or
+/// the type fails to conform).
 ///
 /// Thumbnails resolve in two tiers: first a bundled JPEG/PNG/HEIC named after
 /// the asset id (looking at both the bundle root and a `screenshots/`
@@ -23,7 +25,13 @@ import os
 /// computed from `String.hashValue`, which is randomised per process — they
 /// look stable within a single capture run, not across reruns.
 @MainActor
-final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
+final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
+
+  // Authorization state for the curated mode. Always-authorized; the values are
+  // surfaced through the (now-required) protocol properties below so the wrapping
+  // `PhotoLibraryManager` can mirror them onto its `@Published` properties.
+  var authorizationStatus: PHAuthorizationStatus = .authorized
+  var isAuthorized: Bool = true
 
   private let screenshotLogger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "Screenshot")
@@ -35,11 +43,6 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   override init() {
     super.init()
-    // The base class skipped its authorization probe (isRunningInScreenshotMode
-    // is true). Force the published auth state to `.authorized` so the
-    // onboarding gate in ContentView doesn't intercept the screenshot run.
-    authorizationStatus = .authorized
-    isAuthorized = true
   }
 
   // MARK: - Curated tree
@@ -175,7 +178,7 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   // MARK: - PhotoLibraryService overrides — auth
 
-  override func requestAuthorization() async -> Bool {
+  func requestAuthorization() async -> Bool {
     isAuthorized = true
     authorizationStatus = .authorized
     return true
@@ -183,7 +186,7 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   // MARK: - PhotoLibraryService overrides — timeline reads
 
-  override func fetchAssets(
+  func fetchAssets(
     year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil
   ) async throws -> [AssetDescriptor] {
     let ids: [String]
@@ -198,40 +201,40 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
     return ids.map(Self.makeDescriptor(id:))
   }
 
-  override func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
+  func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
     Self.makeDescriptor(id: assetId)
   }
 
-  override func countAssets(year: Int, month: Int) throws -> Int {
+  func countAssets(year: Int, month: Int) throws -> Int {
     Self.timelineAssetsByMonth["\(year)-\(month)"]?.count ?? 0
   }
 
-  override func countAssets(year: Int) throws -> Int {
+  func countAssets(year: Int) throws -> Int {
     Self.timelineAssetsByMonth
       .filter { $0.key.hasPrefix("\(year)-") }
       .reduce(0) { $0 + $1.value.count }
   }
 
-  override func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
+  func countAdjustedAssets(year: Int, month: Int) async throws -> Int {
     // Mark ~1/4 of the month's assets as having adjustments — enough to surface
     // the "edited photo" badge in the year/month sidebar.
     let total = try countAssets(year: year, month: month)
     return max(0, total / 4)
   }
 
-  override func countAdjustedAssets(year: Int) async throws -> Int {
+  func countAdjustedAssets(year: Int) async throws -> Int {
     let total = try countAssets(year: year)
     return max(0, total / 4)
   }
 
-  override func availableYears() throws -> [Int] {
+  func availableYears() throws -> [Int] {
     let years = Set(
       Self.timelineAssetsByMonth.keys.compactMap { Int($0.split(separator: "-").first ?? "") }
     )
     return years.sorted(by: >)
   }
 
-  override func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
+  func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
     try availableYears().map { year in
       (year: year, count: (try? countAssets(year: year)) ?? 0)
     }
@@ -239,11 +242,11 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   // MARK: - PhotoLibraryService overrides — collections
 
-  override func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
+  func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
     Self.tree
   }
 
-  override func fetchAssets(
+  func fetchAssets(
     in scope: PhotoFetchScope, mediaType: PHAssetMediaType?
   ) async throws -> [AssetDescriptor] {
     let ids: [String]
@@ -258,7 +261,7 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
     return ids.map(Self.makeDescriptor(id:))
   }
 
-  override nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
+  nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
     // The static maps live on the main actor (the class is `@MainActor`). Re-hop
     // so the `nonisolated` contract on the protocol holds while still letting us
     // read the curated data.
@@ -279,18 +282,18 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
     }.value
   }
 
-  override nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
+  nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
     let total = try await countAssets(in: scope)
     return max(0, total / 4)
   }
 
   // MARK: - PhotoLibraryService overrides — cached counts
 
-  override nonisolated func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int {
+  nonisolated func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int {
     try await countAssets(in: scope)
   }
 
-  override nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws
+  nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws
     -> Int
   {
     try await countAdjustedAssets(in: scope)
@@ -298,27 +301,27 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   // MARK: - PhotoLibraryService overrides — thumbnails
 
-  override func startCachingThumbnails(for assets: [AssetDescriptor]) {
+  func startCachingThumbnails(for assets: [AssetDescriptor]) {
     // No-op — placeholder thumbnails are cheap to materialise on demand.
   }
 
-  override func stopCachingThumbnails(for assets: [AssetDescriptor]) {
+  func stopCachingThumbnails(for assets: [AssetDescriptor]) {
     // No-op.
   }
 
-  override func loadThumbnail(
+  func loadThumbnail(
     for assetId: String, allowNetwork: Bool = true
   ) async -> NSImage? {
     image(for: assetId, size: CGSize(width: 256, height: 256))
   }
 
-  override func loadThumbnailHighQuality(
+  func loadThumbnailHighQuality(
     for assetId: String, allowNetwork: Bool = true
   ) async -> NSImage? {
     image(for: assetId, size: CGSize(width: 1024, height: 1024))
   }
 
-  override func requestFullImage(for assetId: String) async throws -> NSImage {
+  func requestFullImage(for assetId: String) async throws -> NSImage {
     if let img = image(for: assetId, size: CGSize(width: 2048, height: 2048)) {
       return img
     }
@@ -327,7 +330,7 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
 
   // MARK: - PhotoLibraryService overrides — resources / details
 
-  override func resources(for assetId: String) -> [ResourceDescriptor] {
+  func resources(for assetId: String) -> [ResourceDescriptor] {
     [
       ResourceDescriptor(
         type: .photo, originalFilename: "\(assetId).HEIC",
@@ -335,7 +338,7 @@ final class ScreenshotPhotoLibraryService: PhotoLibraryManager {
     ]
   }
 
-  override func assetDetails(for assetId: String) -> AssetDetails? {
+  func assetDetails(for assetId: String) -> AssetDetails? {
     AssetDetails(
       originalFilename: "\(assetId).HEIC",
       fileSize: 2_400_000,
