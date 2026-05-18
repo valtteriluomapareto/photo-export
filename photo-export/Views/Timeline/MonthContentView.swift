@@ -88,6 +88,16 @@ struct MonthContentView: View {
     .onChange(of: exportManager.isRunning) { _, newValue in
       viewModel.setExportRunning(newValue)
     }
+    // Photos library mutations (most commonly iCloud sync landing newly synced assets,
+    // but also user edits in Photos.app) bump `libraryRevision`. Route them through the
+    // view model's in-place refresh so newly added assets appear without blanking the
+    // grid the user is currently looking at. The earlier "just observe `libraryRevision`
+    // in `.task(id:)`" approach blanked the grid on every unrelated edit; the refresh
+    // path re-fetches and diff-updates `assets` so still-present items keep their
+    // thumbnails.
+    .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
+      Task { await viewModel.refresh(for: .timeline(year: year, month: month)) }
+    }
   }
 
   private var overlayViews: some View {

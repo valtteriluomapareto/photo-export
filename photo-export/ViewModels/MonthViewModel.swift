@@ -113,6 +113,70 @@ final class MonthViewModel: ObservableObject {
     }
   }
 
+  /// In-place refresh used when the underlying Photos library changes underneath us
+  /// (`PhotoLibraryManager.libraryRevision` bumps after a `photoLibraryDidChange`,
+  /// typically from iCloud sync landing new assets or the user editing in Photos.app).
+  ///
+  /// Unlike `loadAssets(for:)`, this path *does not* blank `assets` or `thumbnailsById`
+  /// before fetching. SwiftUI's `ForEach(viewModel.assets, id: \.id)` diffs the new
+  /// array against the old one: assets that still exist keep their position and their
+  /// already-loaded thumbnails (the thumbnail dict is keyed by asset id), assets that
+  /// disappeared drop out, and newly-added assets show as "loading" until the
+  /// background loop fills their entry. The visible grid never flashes empty.
+  ///
+  /// `scope == nil` is a no-op — there's nothing to refresh against.
+  func refresh(for scope: PhotoFetchScope?) async {
+    guard let scope else { return }
+    do {
+      let newAssets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
+      let newIds = Set(newAssets.map(\.id))
+      let oldIds = Set(cachedAssets.map(\.id))
+      let added = newAssets.filter { !oldIds.contains($0.id) }
+      let removed = cachedAssets.filter { !newIds.contains($0.id) }
+
+      if !removed.isEmpty {
+        photoLibraryService.stopCachingThumbnails(for: removed)
+      }
+      if !added.isEmpty {
+        photoLibraryService.startCachingThumbnails(for: added)
+      }
+      cachedAssets = newAssets
+
+      // Drop dict entries for assets that left the scope so we don't hold stale
+      // thumbnails for items the grid no longer renders.
+      thumbnailsById = thumbnailsById.filter { newIds.contains($0.key) }
+      failedThumbnailIds = failedThumbnailIds.filter { newIds.contains($0) }
+      highQualityIds = highQualityIds.filter { newIds.contains($0) }
+
+      assets = newAssets
+
+      // Re-arm the background thumbnail loop. The skip-if-already-loaded guards inside
+      // `loadAndStoreThumbnail` (checked via the dict here) and
+      // `upgradeThumbnailToHighQuality` (its own guard on `highQualityIds`) keep the
+      // loop cheap when most assets are unchanged.
+      hqUpgradeTask?.cancel()
+      hqUpgradeTask = Task { [weak self] in
+        guard let self else { return }
+        for asset in newAssets {
+          guard !Task.isCancelled else { return }
+          if self.thumbnailsById[asset.id] == nil,
+            !self.failedThumbnailIds.contains(asset.id)
+          {
+            await self.loadAndStoreThumbnail(for: asset.id)
+          }
+        }
+        for asset in newAssets {
+          guard !Task.isCancelled else { return }
+          await self.upgradeThumbnailToHighQuality(for: asset.id)
+        }
+      }
+    } catch {
+      // Refresh failures shouldn't disrupt the visible grid — leave the existing
+      // assets in place and surface the error message for the overlay.
+      errorMessage = error.localizedDescription
+    }
+  }
+
   func thumbnail(for asset: AssetDescriptor) -> NSImage? {
     thumbnailsById[asset.id]
   }

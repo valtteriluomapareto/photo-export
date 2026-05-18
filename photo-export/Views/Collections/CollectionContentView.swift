@@ -92,6 +92,13 @@ struct CollectionContentView: View {
     .onChange(of: exportManager.isRunning) { _, newValue in
       viewModel.setExportRunning(newValue)
     }
+    // Same iCloud-sync / Photos.app-edit refresh path as `MonthContentView`. The
+    // earlier note about `libraryRevision` blanking this grid no longer applies — the
+    // view model's `refresh(for:)` updates `assets` in place rather than clearing
+    // first, so adding the observer here is now safe.
+    .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
+      Task { await viewModel.refresh(for: scope) }
+    }
   }
 
   // MARK: - Scope plumbing
