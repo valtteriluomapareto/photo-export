@@ -59,13 +59,9 @@ struct ExportToolbarView: ToolbarContent {
         Label("Convert HEIC to JPEG", systemImage: "arrow.left.arrow.right")
       }
       .disabled(exportManager.hasActiveExportWork)
-      // Toggling only affects assets queued AFTER the flip. Existing
-      // HEIC exports stay HEIC until the user re-runs the relevant
-      // Export action — completion bookkeeping treats them as
-      // incomplete under the new toggle, so any "Export All" / "Export
-      // Month" re-run naturally picks them up.
-      .help(
-        "Applies to new exports — re-run an Export action to convert existing HEICs.")
+      // No `.help(...)` here: macOS SwiftUI `Menu` does not surface per-
+      // item tooltips. The deferred-semantics caveat lives in
+      // `formatHelp` (menu-trigger tooltip) instead.
     } label: {
       // `Label` rather than a custom `HStack { Image(...) }` so the toolbar's
       // "Icon and Text" customization mode can render "Format" beneath the
@@ -111,10 +107,17 @@ struct ExportToolbarView: ToolbarContent {
         "Edited photos export both the user-visible version and a _orig companion "
         + "with the original bytes."
     }
-    let convertLine: String =
-      exportManager.convertHEICToJPEG
-      ? "HEIC captures are re-encoded as JPEG on export."
-      : "HEIC captures keep their original format on export."
+    let convertLine: String
+    if exportManager.convertHEICToJPEG {
+      convertLine =
+        "HEIC captures are re-encoded as JPEG on export. "
+        + "Applies to new exports — re-run an Export action to convert existing HEICs. "
+        + "Non-HEIC photos are unaffected."
+    } else {
+      convertLine =
+        "HEIC captures keep their original format on export. "
+        + "Non-HEIC photos are unaffected."
+    }
     return includeOriginalsLine + "\n" + convertLine
   }
 

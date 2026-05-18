@@ -8,6 +8,7 @@ struct OnboardingView: View {
 
   @State private var exportAll = true
   @State private var includeOriginals: Bool = false
+  @State private var convertHEICToJPEG: Bool = false
 
   var body: some View {
     VStack(spacing: 24) {
@@ -92,6 +93,18 @@ struct OnboardingView: View {
               .foregroundColor(.secondary)
               .fixedSize(horizontal: false, vertical: true)
             }
+
+            VStack(alignment: .leading, spacing: 4) {
+              Toggle("Convert HEIC to JPEG", isOn: $convertHEICToJPEG)
+                .toggleStyle(.checkbox)
+              Text(
+                "Off: HEIC captures keep their format. On: re-encode HEIC captures as "
+                  + "JPEG on export. Non-HEIC photos are unaffected."
+              )
+              .font(.caption)
+              .foregroundColor(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+            }
           }
         }
       }
@@ -108,6 +121,7 @@ struct OnboardingView: View {
           // Apply the chosen versions first so the export kicked off below uses the
           // selection the user made here, not the persisted default.
           exportManager.versionSelection = includeOriginals ? .editedWithOriginals : .edited
+          exportManager.convertHEICToJPEG = convertHEICToJPEG
           if exportAll && exportDestinationManager.canExportNow {
             exportManager.startExportAll()
           }
