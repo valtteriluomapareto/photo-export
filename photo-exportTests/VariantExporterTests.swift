@@ -29,6 +29,7 @@ struct VariantExporterTests {
   /// Host either — it routes through the injected `ExportQueueCoordinator`.
   private final class FakeHost: VariantExporter.Host, ExportQueueCoordinator.Host {
     var failureCalls: [(assetId: String, variant: ExportVariant, message: String)] = []
+    var convertHEICToJPEG: Bool = false
 
     func setCurrentAssetFilename(_ name: String?) {}
     func setCurrentJobVariant(_ variant: ExportVariant?) {}

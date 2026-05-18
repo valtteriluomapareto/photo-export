@@ -141,6 +141,17 @@ final class CollectionExportRecordStore: ObservableObject {
   @Published private(set) var state: RecordStoreState = .unconfigured
 
   @Published private(set) var mutationCounter: Int = 0
+
+  /// Mirror of `ExportManager.convertHEICToJPEG`. Kept in sync by the manager
+  /// (init + didSet on the published property). Read by
+  /// `isExported(asset:placement:selection:)` so collection-grid view callers
+  /// see the right answers without threading the toggle through every
+  /// `@EnvironmentObject` site. Issue #47.
+  ///
+  /// `@Published` (rather than plain stored) so `@EnvironmentObject` views
+  /// re-render when the toggle flips. See `ExportRecordStore`'s sibling
+  /// docstring; the same reasoning applies to collection placements.
+  @Published var convertHEICToJPEG: Bool = false
   private var notifyWorkItem: DispatchWorkItem?
 
   private let fileManager = FileManager.default
@@ -509,7 +520,8 @@ final class CollectionExportRecordStore: ObservableObject {
     guard let body = recordBodies[placement.id]?[asset.id] else { return false }
     return ExportCompletionPolicy.isComplete(
       variants: body.typedVariants, asset: asset, selection: selection,
-      policy: placement.kind.variantPolicy)
+      policy: placement.kind.variantPolicy,
+      convertHEICToJPEG: convertHEICToJPEG)
   }
 
   // MARK: - Scoped queries

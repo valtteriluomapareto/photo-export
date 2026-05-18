@@ -67,6 +67,30 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  /// Issue #47: when on, the export pipeline writes JPEG `.edited` variants for
+  /// HEIC/HEIF assets by re-encoding via `ImageConverter`. Off by default —
+  /// backward-compatible for existing users. Persisted to `UserDefaults` the
+  /// same shape as `versionSelection`.
+  ///
+  /// When flipped on, already-exported HEIC assets become "incomplete" under
+  /// `requiredVariants` (which now requires `.edited` for HEIC) and will
+  /// re-enqueue on the next manual or auto-export action. The record stores
+  /// observe `_convertHEICToJPEG` via their own published state so view-side
+  /// `isExported` queries stay accurate without callers having to thread the
+  /// flag.
+  @Published var convertHEICToJPEG: Bool {
+    didSet {
+      userDefaults.set(convertHEICToJPEG, forKey: Self.convertHEICToJPEGDefaultsKey)
+      exportRecordStore.convertHEICToJPEG = convertHEICToJPEG
+      collectionExportRecordStore.convertHEICToJPEG = convertHEICToJPEG
+      // Toggling clears any prior empty-run message: a HEIC-bearing month
+      // that previously read "already exported" now has work to do.
+      clearEmptyRunMessage()
+    }
+  }
+
+  static let convertHEICToJPEGDefaultsKey = "exportConvertHEICToJPEG"
+
   /// Toolbar/onboarding-friendly view of `versionSelection`. Off ↔ `.edited`, on ↔
   /// `.editedWithOriginals`. Mutations route back through `versionSelection` so
   /// `@Published` observation and `UserDefaults` persistence flow through one source.
@@ -389,6 +413,12 @@ final class ExportManager: ObservableObject {
     } else {
       self.versionSelection = .edited
     }
+    // `bool(forKey:)` returns `false` for an unset key — the off-by-default
+    // contract is implicit. Initial value flows into both record stores via
+    // the manual sync below (didSet is suppressed during init).
+    self.convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
+    self.exportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
+    self.collectionExportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
     // `self` is fully initialised now — rebind the default renderer with
     // a callback that routes render activity back to `renderActivity`.
     if mediaRenderer == nil {
@@ -1640,7 +1670,8 @@ final class ExportManager: ObservableObject {
       }
       let required = requiredVariants(
         for: descriptor, selection: job.selection,
-        policy: job.placement.kind.variantPolicy)
+        policy: job.placement.kind.variantPolicy,
+        convertHEICToJPEG: convertHEICToJPEG)
       let missing = required.filter { variant in
         existingRecord?.variants[variant]?.status != .done
       }
@@ -1668,7 +1699,8 @@ final class ExportManager: ObservableObject {
           from: resources, mediaType: descriptor.mediaType)
       {
         let editedProducer = ResourceSelection.selectEditedProducer(
-          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
+          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
+          convertHEICToJPEG: convertHEICToJPEG)
         if let editedFilename = editedProducer.originalFilename {
           let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
           let originalExt = (originalRes.originalFilename as NSString).pathExtension
@@ -1954,7 +1986,8 @@ final class ExportManager: ObservableObject {
       let check = autoSyncEligibilityCheck
     else { return false }
     let required = requiredVariants(
-      for: asset, selection: selection, policy: placement.kind.variantPolicy)
+      for: asset, selection: selection, policy: placement.kind.variantPolicy,
+      convertHEICToJPEG: convertHEICToJPEG)
     let now = Date()
     let hasEligible = required.contains { variant in
       check(asset.id, placement, variant, now)
