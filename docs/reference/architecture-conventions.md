@@ -212,6 +212,8 @@ Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExport
 
 These tests are wired so they fire when a load-bearing invariant breaks. Do not "fix" them by re-recording — audit first.
 
+The names below are also pinned by [`scripts/ci/check-regression-gates.sh`](../../scripts/ci/check-regression-gates.sh), which CI runs after SwiftLint. If you rename or move one of these tests, update both this table and the script in the same PR — otherwise CI will fail with a clear "MISSING SYMBOL" message.
+
 | Test | Fires when… | What to do |
 | --- | --- | --- |
 | [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) | The emission sequence on `exportRunStatePublisher`, `isImportingPublisher`, or `completedRunsPublisher` changes | Audit. Re-record snapshots only after confirming the new sequence is what AutoSync should see. |
