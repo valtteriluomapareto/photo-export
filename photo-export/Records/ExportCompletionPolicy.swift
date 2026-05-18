@@ -21,13 +21,21 @@ enum ExportCompletionPolicy {
   /// Consolidates `ExportRecordStore.isExported(asset:selection:)` and
   /// `CollectionExportRecordStore.isExported(asset:placement:selection:)`. The stores keep
   /// their public methods as thin wrappers that extract the variant dictionary.
+  ///
+  /// `convertHEICToJPEG` (issue #47) is forwarded to `requiredVariants` so a HEIC-original
+  /// asset under the toggle reads as "requires `.edited`" — completion checks against the
+  /// synthesized JPEG record rather than the untouched HEIC `.original`. Default `false`
+  /// preserves call-site behavior for tests and pre-toggle wrappers.
   static func isComplete(
     variants: [ExportVariant: ExportVariantRecord],
     asset: AssetDescriptor,
     selection: ExportVersionSelection,
-    policy: VariantPolicy
+    policy: VariantPolicy,
+    convertHEICToJPEG: Bool = false
   ) -> Bool {
-    let required = requiredVariants(for: asset, selection: selection, policy: policy)
+    let required = requiredVariants(
+      for: asset, selection: selection, policy: policy,
+      convertHEICToJPEG: convertHEICToJPEG)
     if required.allSatisfy({ variants[$0]?.status == .done }) { return true }
     return satisfiesEditedFallback(variants: variants, asset: asset, selection: selection)
   }

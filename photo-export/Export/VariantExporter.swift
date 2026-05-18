@@ -36,6 +36,12 @@ final class VariantExporter {
     func setCurrentJobVariant(_ variant: ExportVariant?)
     func clearRenderActivity()
 
+    /// Reads the HEIC→JPEG toggle's current value (issue #47). Read at write
+    /// time so a mid-run toggle change takes effect on the next variant
+    /// without an in-flight reconfigure; the queue is small enough that a
+    /// flip mid-run is bounded.
+    var convertHEICToJPEG: Bool { get }
+
     // Bookkeeping-aware failure recording (updates run-summary failure counters in
     // addition to writing the record). The exporter never bypasses this for the
     // sentinel-message path — bookkeeping is load-bearing for `ExportRunSummary`.
@@ -130,7 +136,8 @@ final class VariantExporter {
         return .none
       case .edited:
         return ResourceSelection.selectEditedProducer(
-          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
+          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
+          convertHEICToJPEG: host?.convertHEICToJPEG ?? false)
       }
     }()
 

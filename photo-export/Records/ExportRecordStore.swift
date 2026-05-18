@@ -75,6 +75,14 @@ final class ExportRecordStore: ObservableObject {
 
   // Published bump used to notify SwiftUI of logical changes
   @Published private(set) var mutationCounter: Int = 0
+
+  /// Mirror of `ExportManager.convertHEICToJPEG`. Kept in sync by the manager
+  /// (init + didSet on the published property). Read by `isExported(asset:
+  /// selection:)` and `monthSummary(assets:selection:)` so view-side
+  /// `@EnvironmentObject` callers see the right answers without having to
+  /// thread the toggle through five call sites (timeline grid, year tiles,
+  /// sidebar badges, content-pane summary, etc.). Issue #47.
+  var convertHEICToJPEG: Bool = false
   private var notifyWorkItem: DispatchWorkItem?
 
   private let fileManager = FileManager.default
@@ -343,7 +351,8 @@ final class ExportRecordStore: ObservableObject {
   func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
     guard let record = recordsById[asset.id] else { return false }
     return ExportCompletionPolicy.isComplete(
-      variants: record.variants, asset: asset, selection: selection, policy: .standard)
+      variants: record.variants, asset: asset, selection: selection, policy: .standard,
+      convertHEICToJPEG: convertHEICToJPEG)
   }
 
   func exportInfo(assetId: String) -> ExportRecord? {
