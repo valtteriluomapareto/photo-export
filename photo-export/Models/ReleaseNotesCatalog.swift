@@ -19,6 +19,19 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.4.1",
+      summary:
+        "Fixes a launch hang when 1.4 was upgraded with a destination folder set on an unreachable or sandbox-denied network share.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Launch no longer hangs on unreachable network destinations",
+          body:
+            "If you upgraded from 1.3 with the destination folder on a NAS or other network share that the app can't reach at launch — volume unmounted, sandbox-denied, or otherwise unreadable — Photo Export now starts cleanly and prompts you to re-select the folder instead of beachballing. Fixes [#92](https://github.com/valtteriluomapareto/photo-export/issues/92)."
+        )
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.4.0",
       summary:
         "Auto Export gets iCloud Shared Albums, the sidebar gets multi-select, the timeline year view gets a proper overview, and Auto Export keeps up better in long iCloud-sync sessions. Your existing backup folder and exported files are untouched.",
