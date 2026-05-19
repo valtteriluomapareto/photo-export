@@ -1,11 +1,81 @@
 # Auto-Sync and Background Sync Plan
 
-Date: 2026-05-08
-Status: In progress (last status update 2026-05-11, fourth snapshot — post-review)
+Date: 2026-05-08 (archived 2026-05-18)
+Status: ✅ MVP shipped — archived as a decision record. The Auto Export feature
+ships in `main`: state machine, manager, file-backed stores, persistent-change
+adapter, lifecycle coordinator, failure classification, retry/backoff,
+Settings tabs, status pill, menu bar item, and `Open at login` via
+`SMAppService.mainApp`. The "closed-app coverage" follow-up (LaunchAgent) is
+the remaining future work and lives in its own plan:
+[`docs/project/plans/launch-agent-background-sync-plan.md`](../plans/launch-agent-background-sync-plan.md).
 
-## Implementation Status
+Code is the source of truth for **how** the MVP works. This file is kept as a
+decision record for **why** it was shaped this way and what trade-offs were
+chosen (in particular: the safety invariants, single-active-run gate,
+destination-fingerprint identity model, agent-mediated background-sync
+direction, and rejected alternatives such as the login-item helper).
 
-Snapshot of where each phase stands. Update alongside the implementation — the table is the contract for "what's done"; the code is the contract for "how it's done."
+## Residual MVP Gaps
+
+Items that remained un-shipped at the time of archive. Either pick them up
+as standalone follow-ups or fold them into the LaunchAgent plan's Sub-phase E
+when behaviour/docs are revisited.
+
+- **Phase 1 — limited-access dispatch wiring.** Reducer carries the blocked
+  reasons for `.limited` Photos access but nothing dispatches the
+  state-change event into it. Wire the `PhotoLibraryChangeProviding`
+  authorization-status transitions and add tests.
+- **Phase 0b — advisory locking.** The destination lock spike was deferred;
+  the multi-instance behaviour (Developer ID + App Store builds against the
+  same destination) is undefined and an MVP acceptance criterion is unmet
+  pending the spike. Required before the LaunchAgent phase, since the agent
+  introduces a third write-path.
+- **Phase 4 — Issues tab "Ignore" action.** Retry exists per row; Ignore /
+  Suppress is missing.
+- **Phase 4 — main-window enable toggle.** Auto Export can be toggled from
+  Settings → Auto Export; the main-window first-toggle-on hand-off described
+  in the plan ("opens Settings → Auto Export, indeterminate until scopes are
+  saved") never landed. Re-evaluate whether it's still desired given that
+  the menu bar + Settings now cover the same flow.
+- **Phase 4 — broader VoiceOver / keyboard-navigation pass for Settings.**
+  Status pill labels already include reason context, but the Settings tab
+  itself hasn't been audited end-to-end.
+- **Phase 5 — structured audit.** Cross-reason debounce coalescing matrix,
+  precedence between debounced reasons, and locking-spike outcomes have not
+  been turned into deliberate test suites or written-up docs.
+- **Phase 5 — docs/website refresh.** `README.md`, `website/src/content/docs/
+  features.md`, `getting-started.md`, and `roadmap.md` have not been updated
+  to describe the shipped Auto Export feature.
+- **Phase 0a simplicity — `DestinationFingerprint` trim.** Drop the
+  `schemaVersion` field + factory invariants + `idV1` extraction + custom
+  Codable `CodingKeys` + `preconditionFailure` on unknown schemaVersion.
+  ~284 lines today; the followups review estimated ~50 are load-bearing for
+  one user / one schema. See archived
+  [`auto-sync-phase-0a-simplicity-followups.md`](auto-sync-phase-0a-simplicity-followups.md)
+  for the original rationale.
+- **Phase 0a simplicity — `AppLifecycleCoordinator` trim.** Drop
+  `DestinationIdentitySnapshot`, the defensive `(nil, nil)` tuple branch,
+  the `dispatchPrecondition` + `MainActor.assumeIsolated` ceremony, and
+  switch managers from closure injection to direct references. Estimated
+  ~80-line reduction from ~210 lines.
+- **Phase 0a simplicity — `ActiveRunBookkeeping` → observer pair.** Replace
+  the bookkeeping type with `$hasActiveExportWork` + a `@Published var
+  lastTerminalReason` set by the cancel/interrupt paths. Per-site context
+  carried by the scattered hooks is the trade-off; measure before
+  refactoring. The single `completedRunsSubject.send` call site already
+  exists, so this is the last piece.
+- **Phase 0a simplicity — `ExportRunScope` unused cases.** `.timelineAssets`,
+  `.favoritesAssets`, `.allAlbumsAssets`, and `.autoExport` currently
+  resolve to `.failed` immediately. Wire them when their consumers land (the
+  LaunchAgent / targeted persistent-change paths). `ExportRunVisibility`
+  could collapse to a computed property derived from `source` in the same
+  pass.
+
+## Implementation Status (frozen at archive)
+
+Snapshot of where each phase stood at archive. The code is the contract for
+"how it's done" — values below reflect 2026-05-11 plus the small fixes that
+followed before archive.
 
 | Phase | Status | Notes |
 |-------|--------|-------|
