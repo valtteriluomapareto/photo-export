@@ -308,6 +308,8 @@ struct PhotoExportApp: App {
           .tabItem { Label("Auto Export", systemImage: "arrow.triangle.2.circlepath") }
         ExportIssuesView()
           .tabItem { Label("Export Issues", systemImage: "exclamationmark.triangle") }
+        AdvancedSettingsView()
+          .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
       }
       .environmentObject(autoSyncManager)
       .environmentObject(autoSyncScopeStore)
