@@ -19,11 +19,8 @@ struct AdvancedSettingsView: View {
     Form {
       if exportManager.hasActiveExportWork {
         Section {
-          Label(
-            "These options are locked while an export is running.",
-            systemImage: "lock"
-          )
-          .foregroundStyle(.secondary)
+          ExportInProgressBanner()
+            .listRowInsets(EdgeInsets())
         }
       }
 
@@ -33,7 +30,7 @@ struct AdvancedSettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .frame(minWidth: 480, idealWidth: 520, minHeight: 320)
+    .frame(minWidth: 460, minHeight: 460)
   }
 
   private var includeOriginalsRow: some View {
@@ -63,34 +60,51 @@ struct AdvancedSettingsView: View {
   }
 
   private var includeOriginalsDescription: String {
-    switch exportManager.versionSelection {
-    case .edited:
-      return
-        "Off: each photo is exported once, in the version Photos shows you. "
-        + "Edited photos write the edit, unedited photos write the original "
-        + "bytes. Filenames match the original Photos filename.\n\n"
-        + "On: edited photos additionally write a `_orig` companion holding "
-        + "the unmodified original bytes — e.g. `IMG_0001.JPG` (the edit) "
-        + "next to `IMG_0001_orig.HEIC` (the original). Unedited photos still "
-        + "produce a single file."
-    case .editedWithOriginals:
-      return
-        "On: edited photos write both the user-visible version and a `_orig` "
-        + "companion with the original bytes (e.g. `IMG_0001.JPG` next to "
-        + "`IMG_0001_orig.HEIC`). Unedited photos still produce a single file.\n\n"
-        + "Off: each photo is exported once, in the version Photos shows you."
-    }
+    "Off: each photo is exported once, in the version Photos shows you. "
+      + "Edited photos write the edit, unedited photos write the original "
+      + "bytes.\n\n"
+      + "On: edited photos additionally write a `_orig` companion holding "
+      + "the unmodified original bytes — e.g. `IMG_0001.JPG` (the edit) "
+      + "next to `IMG_0001_orig.HEIC` (the original). Unedited photos still "
+      + "produce a single file."
   }
 
   private var convertHEICToJPEGDescription: String {
-    "Re-encode HEIC and HEIF photos as JPEG on export. Useful if your "
-      + "destination (a NAS, a Windows PC, an older photo viewer) doesn't "
-      + "understand HEIC. JPEG quality is set to 85% — visually "
-      + "indistinguishable from HEIC for photos while keeping file size "
-      + "moderate.\n\n"
+    "Re-encode HEIC and HEIF photos as high-quality JPEG on export. "
+      + "Useful if your destination (a NAS, a Windows PC, an older photo "
+      + "viewer) doesn't understand HEIC.\n\n"
       + "Applies to new exports only. Existing HEIC files on disk are not "
       + "touched; re-run an Export action (Export All, Export Month, Export "
       + "Album, or wait for Auto Export) to convert them.\n\n"
       + "Non-HEIC photos are unaffected."
+  }
+}
+
+/// Inline banner shown above the Format section while an export is
+/// running, mirroring the visual weight of `AutoExportSettingsView`'s
+/// migration/safety banners (icon + title + body in an inset card). The
+/// toggles themselves stay visible and disabled — the banner explains
+/// *why* without the user having to discover the disabled state via
+/// hover/grey-out alone.
+private struct ExportInProgressBanner: View {
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "lock.fill")
+        .foregroundStyle(.secondary)
+        .font(.title3)
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Export In Progress")
+          .font(.headline)
+        Text(
+          "Format options are locked while an export is running. Cancel or "
+            + "wait for the current run to finish to change these."
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(12)
   }
 }
