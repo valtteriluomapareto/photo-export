@@ -8,7 +8,7 @@ import os
 /// in production. Pure with respect to its inputs: same `(selection, collections,
 /// existingPlacements)` triple always yields the same placement.
 ///
-/// Identity rules (per `docs/project/plans/collections-export-plan.md` §"Placement IDs"):
+/// Identity rules (per `docs/project/archive/collections-export-plan.md` §"Placement IDs"):
 /// - Timeline: `timeline:<YYYY>-<MM>`. The synthetic constructor on `ExportPlacement`
 ///   already handles this; the resolver is only consulted for collection selections.
 /// - Favorites: fixed `collections:favorites`.

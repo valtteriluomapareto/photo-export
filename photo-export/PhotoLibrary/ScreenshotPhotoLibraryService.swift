@@ -5,7 +5,7 @@ import os
 /// Standalone `PhotoLibraryService` conformance that serves a curated synthetic
 /// Photos library for marketing screenshot capture. Selected at app entry when the
 /// user launches with `--screenshot-mode`; see
-/// `docs/project/plans/screenshot-automation-plan.md`.
+/// `docs/project/archive/screenshot-automation-plan.md`.
 ///
 /// Since issue #67 item 1 this class **does not inherit from PhotoLibraryManager**;
 /// it is a peer conformance the manager wraps via its `overrideService` injection

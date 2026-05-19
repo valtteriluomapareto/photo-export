@@ -3,7 +3,7 @@ import Testing
 
 @testable import Photo_Export
 
-/// Cases from `docs/project/plans/collections-export-plan.md` §"Path Policy → Test cases".
+/// Cases from `docs/project/archive/collections-export-plan.md` §"Path Policy → Test cases".
 /// Cases 9–11 exercise the resolver's sibling-collision disambiguation and live with the
 /// resolver tests in Phase 2; this file covers the per-component sanitizer rules only.
 struct ExportPathPolicyTests {

@@ -9,7 +9,7 @@ import Foundation
 /// `keyForCount(scope:)` / `keyForAdjustedCount(scope:)` so the same scope produces the
 /// same key.
 ///
-/// Per `docs/project/plans/collections-export-plan.md` §"PhotoLibraryService → off-main
+/// Per `docs/project/archive/collections-export-plan.md` §"PhotoLibraryService → off-main
 /// counting": "A `CollectionCountCache` actor owns per-placement-id `Task<Int, Error>?`
 /// handles. It exposes `count(for: placementId, fetch: () async throws -> Int) async -> Int`,
 /// replacing any in-flight task for the same id (cancelling the prior). Cache

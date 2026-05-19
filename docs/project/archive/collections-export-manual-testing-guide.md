@@ -2,7 +2,7 @@
 
 Date: 2026-04-30
 Feature: Collections export (Favorites + user albums)
-Parent plan: `plans/collections-export-plan.md`
+Parent plan: `collections-export-plan.md`
 
 ## Goal
 

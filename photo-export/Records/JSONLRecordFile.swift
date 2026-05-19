@@ -14,7 +14,7 @@ import os
 ///   on each loaded op, the in-flight recovery pass, the `@Published` `mutationCounter`,
 ///   and the `RecordStoreState` machine.
 ///
-/// Phase 0/1 of `docs/project/plans/collections-export-plan.md` motivates this extraction.
+/// Phase 0/1 of `docs/project/archive/collections-export-plan.md` motivates this extraction.
 /// Two stores compose one each; both inherit the corrected fsync discipline (the existing
 /// timeline `writeSnapshotAndTruncate` skipped both renames' parent-dir fsyncs, which under
 /// power loss could leave a snapshot durable while the log still contained pre-snapshot
