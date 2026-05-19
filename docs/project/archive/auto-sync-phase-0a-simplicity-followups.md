@@ -1,16 +1,39 @@
 # Phase 0a Simplicity Follow-ups
 
-Date: 2026-05-08
-Status: Notes (not actionable yet)
+Date: 2026-05-08 (archived 2026-05-18)
+Status: ✅ Revisit round complete — archived as a decision record.
 
-A simplicity review at the end of `auto-sync-phase-0a` (36 commits) flagged that
-~50% of the branch is scaffolding for `AutoSyncManager`, which doesn't exist yet.
-Verdict was **2/5 — meaningfully over-engineered**.
+A simplicity review at the end of `auto-sync-phase-0a` (36 commits) flagged
+that ~50% of the branch was scaffolding for `AutoSyncManager`, which didn't
+exist yet. Verdict at the time was **2/5 — meaningfully over-engineered**,
+with a decision to keep the foundations as-is and revisit when
+`AutoSyncManager` shipped.
 
-The decision after the review was **to not cut corners now** — keep the
-foundation as-is and accept the over-engineering as a one-time cost, since the
-`AutoSyncManager` work that consumes most of these foundations will land soon.
-This file records the findings so they can be revisited when that work begins.
+That work has now shipped (see archived
+[`auto-sync-background-sync-plan.md`](auto-sync-background-sync-plan.md)).
+Re-evaluating each note against the as-built code:
+
+- **§ "Maybe-cuts" below (`AutoSyncDirtyState`, `AutoSyncRetryState`, the
+  PhotoLibrary persistent-change types, `AutoSyncBlockedReason` /
+  `AutoSyncFailureCategory`, `TestClock`)** — All became real production
+  consumers. The reducer/manager shape matched the foundations, so the
+  "delete and rewrite" path described under "Decision rule for the next
+  round" was never taken. Resolved as **kept-as-built**.
+
+- **§ "Likely-real simplifications" below (`DestinationFingerprint` factory /
+  Codable / schemaVersion machinery, `AppLifecycleCoordinator` defensive
+  ceremony + closure-injected managers, `ExportRunScope` cases that still
+  resolve to `.failed`, `ExportRunVisibility` stored-vs-computed,
+  `ActiveRunBookkeeping` vs `$hasActiveExportWork` + `@Published var
+  lastTerminalReason`)** — Still applicable, none of them landed. Hoisted to
+  the archived auto-sync plan's **Residual MVP Gaps** so they have a single
+  pickup point.
+
+- **§ "Plan-level revisions to consider"** — Moot. The plan itself is
+  archived; revising it post-hoc has no value.
+
+The findings below are kept in archived form so the rationale for each
+simplification is recoverable if a future round picks up the residuals.
 
 ## When `AutoSyncManager` lands, reconsider:
 
