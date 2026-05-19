@@ -24,6 +24,11 @@ struct ExportToolbarView: ToolbarContent {
 
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
 
+  /// macOS 14+ environment action for opening the `Settings` scene. Used by
+  /// the toolbar cog button so users have an in-app affordance for Settings
+  /// → Advanced (Format options) without having to remember Cmd+,.
+  @Environment(\.openSettings) private var openSettings
+
   var body: some ToolbarContent {
     ToolbarItem(placement: .automatic) {
       destinationIndicator
@@ -33,9 +38,29 @@ struct ExportToolbarView: ToolbarContent {
       AutoSyncStatusPill(state: autoSyncManager.state)
     }
 
+    ToolbarItem(placement: .automatic) {
+      settingsButton
+    }
+
     ToolbarItem(placement: .primaryAction) {
       primaryActions
     }
+  }
+
+  // MARK: - Settings cog
+
+  /// In-app entry point to the Settings window. Sits between the AutoSync pill
+  /// and the primary action — roughly where the now-removed Format menu used to
+  /// live, so muscle memory still finds an affordance there. Opens whichever
+  /// tab the user last viewed; the user picks Advanced from inside.
+  private var settingsButton: some View {
+    Button {
+      openSettings()
+    } label: {
+      Label("Settings", systemImage: "gearshape")
+    }
+    .help("Settings (\u{2318},)")
+    .accessibilityLabel("Settings")
   }
 
   // MARK: - Destination Indicator
