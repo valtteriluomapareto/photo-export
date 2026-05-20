@@ -19,6 +19,23 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      // Placeholder version — adjust when the actual release ships under a
+      // different `CFBundleShortVersionString`. The catalog falls back to a
+      // generic "Photo Export has been updated" message if no entry matches
+      // the user's jump, so a stale version here degrades gracefully.
+      version: "1.6.0",
+      summary:
+        "Live Photos can now export with their paired video file (opt-in). Your existing backup folder and exported files are untouched.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Export Live Photos as paired image + video (opt-in)",
+          body:
+            "Turn on **Settings → Advanced → Export Live Photos as paired image + video** to also write the `.MOV` paired video next to the still for each Live Photo (e.g. `IMG_0001.HEIC` + `IMG_0001.MOV`). Off by default. Each Live Photo's paired video is typically 1–3 MB, so libraries with many Live Photos can roughly double in size on disk when this is on. Edited Live Photos write the rendered pair; with **Include originals** also on, `_orig.HEIC` and `_orig.MOV` companions land alongside. Shared-album Live Photos stay still-only — Apple doesn't expose their paired video. Fixes [#49](https://github.com/valtteriluomapareto/photo-export/issues/49)."
+        ),
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.5.0",
       summary:
         "Optional HEIC → JPEG conversion on export, a new Settings → Advanced tab for format options, and the toolbar's \"Export All\" button is back even when a single sidebar item is selected. Your existing backup folder and exported files are untouched.",
