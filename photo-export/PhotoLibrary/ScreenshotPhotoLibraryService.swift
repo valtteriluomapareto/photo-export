@@ -316,9 +316,9 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   }
 
   func loadThumbnailHighQuality(
-    for assetId: String, allowNetwork: Bool = true
+    for assetId: String, pixelSize: CGSize? = nil, allowNetwork: Bool = true
   ) async -> NSImage? {
-    image(for: assetId, size: CGSize(width: 1024, height: 1024))
+    image(for: assetId, size: pixelSize ?? CGSize(width: 1024, height: 1024))
   }
 
   func requestFullImage(for assetId: String) async throws -> NSImage {

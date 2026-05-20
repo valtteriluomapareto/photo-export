@@ -25,6 +25,8 @@ struct FolderTileView: View {
 
   let photoLibraryService: any PhotoLibraryService
 
+  @Environment(\.displayScale) private var displayScale
+
   @State private var covers: [NSImage] = []
   @State private var coverState: CoverState = .idle
   @State private var isHovering: Bool = false
@@ -262,10 +264,20 @@ struct FolderTileView: View {
         coverState = .empty
         return
       }
+      // Request the tile's displayed pixel size from the high-quality path
+      // so PhotoKit doesn't serve the ~200 px cached degraded version that
+      // the default `loadThumbnail` returns. The grid above this tile reads
+      // sharply; tiles now match.
+      let pixelSide = Self.tileSide * max(displayScale, 1)
+      let target = CGSize(width: pixelSide, height: pixelSide)
       let loaded = await withTaskGroup(of: (Int, NSImage?).self) { group in
         for (index, id) in coverIds.enumerated() {
           group.addTask {
-            (index, await photoLibraryService.loadThumbnail(for: id, allowNetwork: true))
+            (
+              index,
+              await photoLibraryService.loadThumbnailHighQuality(
+                for: id, pixelSize: target, allowNetwork: true)
+            )
           }
         }
         var pairs: [(Int, NSImage)] = []

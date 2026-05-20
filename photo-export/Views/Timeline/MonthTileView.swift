@@ -29,6 +29,8 @@ struct MonthTileView: View {
 
   let photoLibraryService: any PhotoLibraryService
 
+  @Environment(\.displayScale) private var displayScale
+
   @State private var covers: [NSImage] = []
   @State private var coverState: CoverState = .idle
   @State private var isHovering: Bool = false
@@ -204,10 +206,22 @@ struct MonthTileView: View {
         coverState = .empty
         return
       }
+      // Request thumbnails at the tile's displayed pixel size so PhotoKit
+      // doesn't serve the ~200 px cached degraded version that the default
+      // `loadThumbnail` path returns. Using the high-quality + exact path
+      // ensures the 4-up cover grid reads as sharply as the in-pane grid
+      // does (the grid's separate `loadThumbnailHighQuality` upgrade path
+      // also calls into this method, so both surfaces now match).
+      let pixelSide = Self.tileSide * max(displayScale, 1)
+      let target = CGSize(width: pixelSide, height: pixelSide)
       let loaded = await withTaskGroup(of: (Int, NSImage?).self) { group in
         for (index, id) in coverIds.enumerated() {
           group.addTask {
-            (index, await photoLibraryService.loadThumbnail(for: id, allowNetwork: true))
+            (
+              index,
+              await photoLibraryService.loadThumbnailHighQuality(
+                for: id, pixelSize: target, allowNetwork: true)
+            )
           }
         }
         var pairs: [(Int, NSImage)] = []

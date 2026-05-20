@@ -515,12 +515,22 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
-  /// Load a high-quality thumbnail for an asset
-  func loadThumbnailHighQuality(for assetId: String, allowNetwork: Bool = true) async -> NSImage? {
+  /// Load a high-quality thumbnail for an asset. `pixelSize` defaults to
+  /// 200×200 px (the legacy size used by the timeline grid's high-quality
+  /// upgrade path); tile views pass their displayed-pixel dimensions so
+  /// PhotoKit doesn't return a smaller cached version that has to be
+  /// scaled up by AppKit.
+  func loadThumbnailHighQuality(
+    for assetId: String,
+    pixelSize: CGSize? = nil,
+    allowNetwork: Bool = true
+  ) async -> NSImage? {
     if let s = overrideService {
-      return await s.loadThumbnailHighQuality(for: assetId, allowNetwork: allowNetwork)
+      return await s.loadThumbnailHighQuality(
+        for: assetId, pixelSize: pixelSize, allowNetwork: allowNetwork)
     }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
+    let target = pixelSize ?? CGSize(width: 200, height: 200)
     return await withCheckedContinuation { continuation in
       let options = PHImageRequestOptions()
       options.deliveryMode = .highQualityFormat
@@ -531,7 +541,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
       Self.cachingImageManager.requestImage(
         for: asset,
-        targetSize: CGSize(width: 200, height: 200),
+        targetSize: target,
         contentMode: .aspectFill,
         options: options
       ) { image, _ in
