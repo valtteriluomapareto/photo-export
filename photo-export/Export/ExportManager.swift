@@ -553,8 +553,10 @@ final class ExportManager: ObservableObject {
     // Snapshot the active selection synchronously so a picker flip before the async enqueue
     // lands (after `fetchAssets` returns) cannot change the mode that was visible at click
     // time. The picker in the toolbar is also gated on `hasActiveExportWork` for clarity, but
-    // this snapshot is the correctness guarantee.
+    // this snapshot is the correctness guarantee. `livePhotosPairedExport` (issue #49) gets
+    // the same click-time snapshot for the same reason.
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     // Only reset progress counters when the queue is truly idle. "Paused
@@ -569,7 +571,8 @@ final class ExportManager: ObservableObject {
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueMonth(
-          year: year, month: month, selection: selection, generation: gen)
+          year: year, month: month, selection: selection,
+          livePhotosPaired: livePhotosPaired, generation: gen)
         guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
@@ -598,6 +601,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -606,7 +610,8 @@ final class ExportManager: ObservableObject {
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueYear(
-          year: year, selection: selection, generation: gen)
+          year: year, selection: selection,
+          livePhotosPaired: livePhotosPaired, generation: gen)
         guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
@@ -638,6 +643,7 @@ final class ExportManager: ObservableObject {
     // selectionOverride lets `runExport(context:)` honor the run context's selection
     // without mutating the user-visible toolbar `versionSelection`.
     let selection = selectionOverride ?? versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -658,7 +664,9 @@ final class ExportManager: ObservableObject {
         guard let self else { return .stale }
         let allYears = try self.photoLibraryService.availableYears()
         let result = try await self.runBulkEnqueueLoop(items: allYears, generation: gen) { year in
-          try await self.enqueueYear(year: year, selection: selection, generation: gen)
+          try await self.enqueueYear(
+            year: year, selection: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         return result.completed ? .completed(result.totals) : .stale
       }
@@ -701,6 +709,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = selectionOverride ?? versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -716,14 +725,17 @@ final class ExportManager: ObservableObject {
       body: { [weak self] in
         guard let self else { return .stale }
         let yearsResult = try await self.runBulkEnqueueLoop(items: years, generation: gen) { year in
-          try await self.enqueueYear(year: year, selection: selection, generation: gen)
+          try await self.enqueueYear(
+            year: year, selection: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         guard yearsResult.completed else { return .stale }
         let monthsResult = try await self.runBulkEnqueueLoop(
           items: months, generation: gen, startingFrom: yearsResult.totals
         ) { m in
           try await self.enqueueMonth(
-            year: m.year, month: m.month, selection: selection, generation: gen)
+            year: m.year, month: m.month, selection: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         return monthsResult.completed ? .completed(monthsResult.totals) : .stale
       }
@@ -748,6 +760,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = selectionOverride ?? versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -756,7 +769,8 @@ final class ExportManager: ObservableObject {
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
-          selection: .favorites, scope: .favorites, selectionMode: selection, generation: gen)
+          selection: .favorites, scope: .favorites, selectionMode: selection,
+          livePhotosPaired: livePhotosPaired, generation: gen)
         guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
@@ -857,6 +871,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -879,7 +894,8 @@ final class ExportManager: ObservableObject {
         ) { _ in
           try await self.enqueueCollection(
             selection: .favorites, scope: .favorites,
-            selectionMode: selection, generation: gen)
+            selectionMode: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         guard favResult.completed else { return .stale }
         let albumsResult = try await self.runBulkEnqueueLoop(
@@ -888,7 +904,8 @@ final class ExportManager: ObservableObject {
           try await self.enqueueCollection(
             selection: .album(collectionId: albumId),
             scope: .album(collectionId: albumId),
-            selectionMode: selection, generation: gen)
+            selectionMode: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         guard albumsResult.completed else { return .stale }
         let sharedResult = try await self.runBulkEnqueueLoop(
@@ -897,7 +914,8 @@ final class ExportManager: ObservableObject {
           try await self.enqueueCollection(
             selection: .sharedAlbum(collectionId: sharedId),
             scope: .sharedAlbum(collectionId: sharedId),
-            selectionMode: selection, generation: gen)
+            selectionMode: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         return sharedResult.completed ? .completed(sharedResult.totals) : .stale
       }
@@ -1080,6 +1098,7 @@ final class ExportManager: ObservableObject {
     }
     guard !isEnqueueingAll else { return }
     let selectionMode = selectionOverride ?? versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -1126,6 +1145,7 @@ final class ExportManager: ObservableObject {
             selection: source.selection(for: id),
             scope: source.scope(for: id),
             selectionMode: selectionMode,
+            livePhotosPaired: livePhotosPaired,
             generation: gen
           )
         }
@@ -1154,6 +1174,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -1165,6 +1186,7 @@ final class ExportManager: ObservableObject {
           selection: .sharedAlbum(collectionId: collectionId),
           scope: .sharedAlbum(collectionId: collectionId),
           selectionMode: selection,
+          livePhotosPaired: livePhotosPaired,
           generation: gen
         )
         guard self.isCurrent(gen) else { return }
@@ -1196,6 +1218,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -1207,6 +1230,7 @@ final class ExportManager: ObservableObject {
           selection: .album(collectionId: collectionId),
           scope: .album(collectionId: collectionId),
           selectionMode: selection,
+          livePhotosPaired: livePhotosPaired,
           generation: gen
         )
         guard self.isCurrent(gen) else { return }
@@ -1235,6 +1259,7 @@ final class ExportManager: ObservableObject {
     selection: LibrarySelection,
     scope: PhotoFetchScope,
     selectionMode: ExportVersionSelection,
+    livePhotosPaired: Bool,
     generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
@@ -1267,16 +1292,17 @@ final class ExportManager: ObservableObject {
 
     let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
     try throwIfCancelledOrStale(gen)
-    // Snapshot the Live Photo paired-video setting onto each job (issue #49) so a mid-run
-    // toggle flip does not change what an already-queued asset writes.
-    let pairedSnapshot = livePhotosPairedExport
+    // The Live Photo paired-video setting (issue #49) is snapshotted at click time by
+    // each `start*` caller and threaded in as `livePhotosPaired`. Doing the snapshot
+    // there rather than here keeps the click-time semantics in the doc comments above —
+    // a toggle flip during the `await fetchAssets` window cannot change what gets queued.
     let newJobs = ExportJobPlanner.plan(
       assets: assets, placement: placement, selection: selectionMode,
-      livePhotosPaired: pairedSnapshot,
+      livePhotosPaired: livePhotosPaired,
       isExported: {
         collectionExportRecordStore.isExported(
           asset: $0, placement: placement, selection: selectionMode,
-          livePhotosPaired: pairedSnapshot)
+          livePhotosPaired: livePhotosPaired)
       },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     queueCoordinator.enqueue(newJobs)
@@ -1416,20 +1442,20 @@ final class ExportManager: ObservableObject {
   // `ExportQueueCoordinator.enqueue`. The three enqueue methods retain only the
   // PhotoKit fetch + `ExportJobPlanner.plan` call.
   private func enqueueMonth(
-    year: Int, month: Int, selection: ExportVersionSelection, generation gen: Int
+    year: Int, month: Int, selection: ExportVersionSelection,
+    livePhotosPaired: Bool, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return .unauthorized }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
     let placement = ExportPlacement.timeline(year: year, month: month)
-    let pairedSnapshot = livePhotosPairedExport
     let newJobs = ExportJobPlanner.plan(
       assets: assets, placement: placement, selection: selection,
-      livePhotosPaired: pairedSnapshot,
+      livePhotosPaired: livePhotosPaired,
       isExported: {
         exportRecordStore.isExported(
-          asset: $0, selection: selection, livePhotosPaired: pairedSnapshot)
+          asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
       },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     queueCoordinator.enqueue(newJobs)
@@ -1439,19 +1465,19 @@ final class ExportManager: ObservableObject {
 
   @discardableResult
   private func enqueueYear(
-    year: Int, selection: ExportVersionSelection, generation gen: Int
+    year: Int, selection: ExportVersionSelection,
+    livePhotosPaired: Bool, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return .unauthorized }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
     try throwIfCancelledOrStale(gen)
-    let pairedSnapshot = livePhotosPairedExport
     let newJobs = ExportJobPlanner.planTimelineYear(
       assets: assets, year: year, selection: selection,
-      livePhotosPaired: pairedSnapshot,
+      livePhotosPaired: livePhotosPaired,
       isExported: {
         exportRecordStore.isExported(
-          asset: $0, selection: selection, livePhotosPaired: pairedSnapshot)
+          asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
       },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     queueCoordinator.enqueue(newJobs)

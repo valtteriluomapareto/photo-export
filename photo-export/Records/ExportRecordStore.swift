@@ -68,10 +68,23 @@ final class ExportRecordStore: ObservableObject {
     /// (`.originalPairedVideo` or `.editedPairedVideo`) whose status is not
     /// `.done`. Subtracted from the records-only sidebar formula when the
     /// caller passes `livePhotosPaired: true` so a Live Photo whose still
-    /// landed but whose motion file is still pending no longer over-reports.
-    /// Transient under-reporting during active export (when both the still
-    /// and the paired video are pending) self-corrects once the still side
-    /// completes — the variant export order writes the still first.
+    /// landed but whose paired video is still pending no longer over-reports.
+    ///
+    /// Transient over-reporting during active export: the variant order writes
+    /// `.original` before `.originalPairedVideo`, so between
+    /// `markVariantExported(.original)` and `markVariantInProgress(.originalPairedVideo)`
+    /// the record has `.original.done` but no paired-video variant yet — the
+    /// counter is 0, the legacy formula counts the record, and the sidebar
+    /// reads it as fully exported even though the asset isn't complete under
+    /// `livePhotosPaired`. Self-corrects on the next `markVariantInProgress`
+    /// call when the paired-video variant lands and the counter increments.
+    ///
+    /// `.failed` paired-video variants are counted as incomplete — by design.
+    /// The user opted in and the variant didn't land, so the sidebar reflects
+    /// that the asset isn't done. There is no `pairedVideoFallbackCovered`
+    /// analogue to `editedFallbackCovered`; if Photos genuinely cannot deliver
+    /// a paired video (a known iCloud edge case), the record stays at
+    /// "incomplete" until a future export run can fetch it.
     var pairedVideoIncomplete: Int = 0
     static let zero = MonthCounters()
   }
