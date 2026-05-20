@@ -110,8 +110,7 @@ struct LibraryRootView: View {
       ExportToolbarView(
         section: section,
         selectionSet: selectionSet,
-        focusedSelection: focusedSelection,
-        folderAlbumCount: selectedFolderAlbumCount)
+        focusedSelection: focusedSelection)
     }
     .sheet(isPresented: $isShowingImportSheet) {
       ImportView()
@@ -415,22 +414,6 @@ struct LibraryRootView: View {
     }
     let preserved = selectionSet.filter { !$0.isCollection }
     selectionSet = picked.union(preserved)
-  }
-
-  /// Recursive album count under the currently-focused folder when it is the *only*
-  /// item in the selection set. Drives the toolbar's primary-action label so
-  /// "Export Folder" can render as "Export N Albums" — matching the in-pane button.
-  /// Returns `nil` for multi-select (the toolbar derives its label from the bucket
-  /// count instead) or when the focus is not a folder.
-  private var selectedFolderAlbumCount: Int? {
-    guard selectionSet.count <= 1, case .folder(let folderId) = focusedSelection else {
-      return nil
-    }
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
-    guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
-      return nil
-    }
-    return PhotoCollectionDescriptor.albumLocalIds(under: folder).count
   }
 
   /// Looks up the album's display title from the cached collection tree. Falls back to
