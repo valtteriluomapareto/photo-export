@@ -982,6 +982,15 @@ struct ExportRecordStoreQueryGoldenTests {
     storeA.markVariantExported(
       assetId: "both", variant: .edited, year: yr, month: mo, relPath: rel,
       filename: "BOTH.JPG", exportedAt: now)
+    // Live Photo whose still landed but whose paired video is mid-flight. The
+    // post-reload `pairedVideoIncomplete` counter must include this record so the
+    // sidebar's subtraction is consistent across launches.
+    storeA.markVariantExported(
+      assetId: "live", variant: .original, year: yr, month: mo, relPath: rel,
+      filename: "LIVE.HEIC", exportedAt: now)
+    storeA.markVariantInProgress(
+      assetId: "live", variant: .originalPairedVideo, year: yr, month: mo, relPath: rel,
+      filename: nil)
     storeA.flushForTesting()  // ensure the JSONL log is durable
 
     // Construct a fresh store against the same on-disk directory. Triggers
@@ -1036,17 +1045,26 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(storeB.yearExportedCount(year: yr) == byVariantStatus[.original]?[.done] ?? 0)
 
     // Concrete spot-checks:
-    // - 3 done-N records + 1 both = 4 .original.done.
+    // - 3 done-N records + 1 both + 1 live = 5 .original.done.
     // - 1 .both = 1 .edited.done.
     // - 1 stuck (originally .original.inProgress) recovered → .original.failed.
     // - 1 alsostuck (originally .edited.inProgress) recovered → .edited.failed.
     // - 1 fail = 1 .original.failed.
-    // Total: .original.done = 4, .original.failed = 2, .edited.done = 1, .edited.failed = 1.
-    #expect(storeB.recordCount(year: yr, month: mo, variant: .original, status: .done) == 4)
+    // - 1 live's .originalPairedVideo (originally .inProgress) recovered → .failed.
+    // Total: .original.done = 5, .original.failed = 2, .edited.done = 1, .edited.failed = 1,
+    //        .originalPairedVideo.failed = 1.
+    #expect(storeB.recordCount(year: yr, month: mo, variant: .original, status: .done) == 5)
     #expect(storeB.recordCount(year: yr, month: mo, variant: .original, status: .failed) == 2)
     #expect(storeB.recordCount(year: yr, month: mo, variant: .edited, status: .done) == 1)
     #expect(storeB.recordCount(year: yr, month: mo, variant: .edited, status: .failed) == 1)
+    #expect(
+      storeB.recordCount(
+        year: yr, month: mo, variant: .originalPairedVideo, status: .failed) == 1)
     #expect(storeB.recordCountBothVariantsDone(year: yr, month: mo) == 1)
+    // Issue #49: paired-video counter must survive the reload + recovery cycle. The
+    // `live` record has `.original.done` + `.originalPairedVideo.failed` (recovered
+    // from `.inProgress`), so the post-reload counter is 1.
+    #expect(storeB.recordCountPairedVideoIncomplete(year: yr, month: mo) == 1)
   }
 
   /// Covers the **snapshot-load path** plus **multi-cell in-progress recovery**, both

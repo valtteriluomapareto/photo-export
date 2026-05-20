@@ -528,6 +528,22 @@ struct ExportDestinationResolverTests {
     #expect(stem == "IMG_0001")
   }
 
+  /// 2-slot mirror of `allocatePairedGroupStem_4Slot_skipsPartiallyOccupiedIndices`.
+  /// Image slot taken at the base index, motion slot taken at (1) — allocator must
+  /// skip both and land at (2). Catches a regression where the 2-slot path only
+  /// checks one side per iteration instead of requiring both slots free at the
+  /// same index.
+  @Test func allocatePairedGroupStem_unedited_skipsPartiallyOccupiedIndices() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    plantFile("IMG_0001.HEIC", in: dir)
+    plantFile("IMG_0001 (1).MOV", in: dir)
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_0001", imageExt: "HEIC", editedExt: nil,
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+    #expect(stem == "IMG_0001 (2)")
+  }
+
   // MARK: - allocatePairedGroupStem — 2-slot edited-only Live Photo variant
 
   /// Adjusted Live Photo under `selection = .edited` (Include originals off) writes
