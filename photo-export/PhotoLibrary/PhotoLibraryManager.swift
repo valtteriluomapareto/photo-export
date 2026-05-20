@@ -68,15 +68,22 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     status == .authorized || status == .limited
   }
 
-  /// Production initializer: no override; performs the PhotoKit authorization probe
-  /// and registers as a `PHPhotoLibraryChangeObserver`. Test and screenshot launches
-  /// route through `init(overrideService:)` (the screenshot service is passed in;
-  /// tests inject `FakePhotoLibraryService` into `ExportManager` directly and don't
-  /// construct a manager).
+  /// Production initializer: no override. Does NOT touch PhotoKit — the
+  /// `PHPhotoLibrary.shared().register(self)` + authorization probe move into
+  /// `start()`, called from the WindowGroup's `.task` after SwiftUI has rendered.
+  ///
+  /// Why: issue #92 reported a launch beachball on macOS 15.7.3 with the prior
+  /// shape, where the synchronous PhotoKit first-touch inside `init` (running
+  /// during `App.init`, before any window appears) could hang on PhotoKit's
+  /// internal account/TCC paths. Deferring those calls into the `.task` block
+  /// keeps the UI responsive while the library handshake happens.
+  ///
+  /// Test and screenshot launches route through `init(overrideService:)`
+  /// (the screenshot service is passed in; tests inject `FakePhotoLibraryService`
+  /// into `ExportManager` directly and don't construct a manager).
   override init() {
     self.overrideService = nil
     super.init()
-    finishInit()
   }
 
   /// Composition entry point: `overrideService` (when non-nil) replaces every
@@ -94,31 +101,35 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     isAuthorized = overrideService.isAuthorized
   }
 
-  private func finishInit() {
-    // Skip PhotoKit registration entirely under XCTest / swift-testing.
-    // Tests run from DerivedData; TCC sees that path as a different
-    // binary than the released app and would surface a fresh permission
-    // prompt even when the user has approved the app in System Settings.
-    // The prompt blocks the test process and there's no automated way
-    // to dismiss it. AutoSync and PhotoLibrary integration tests inject
-    // `FakePhotoLibraryService` / `FakePersistentChangeSource` instead,
-    // so they don't need the real PhotoKit observer.
-    //
-    // Screenshot mode (`--screenshot-mode` launch arg) doesn't reach this
-    // function — the screenshot run uses `init(overrideService:)` and
-    // never calls `finishInit`. That's the load-bearing invariant: any
-    // PhotoKit registration here would race with the curated content the
-    // override produces.
+  /// Performs the PhotoKit authorization probe and registers as a
+  /// `PHPhotoLibraryChangeObserver`. Production callers invoke this once from
+  /// the WindowGroup's `.task` block; idempotent so accidental re-entry from
+  /// scene recreation or test harnesses is a no-op.
+  ///
+  /// Skips entirely under XCTest / swift-testing: tests run from DerivedData,
+  /// and TCC sees that path as a different binary than the released app —
+  /// asking for permissions would surface a prompt that blocks the test
+  /// process with no automated way to dismiss. AutoSync and PhotoLibrary
+  /// integration tests inject `FakePhotoLibraryService` /
+  /// `FakePersistentChangeSource` instead.
+  ///
+  /// Also skips when an `overrideService` is set (screenshot mode). That mode
+  /// uses `init(overrideService:)`, which produces curated content; running
+  /// the real observer here would race with the override.
+  func start() {
     guard !Self.isRunningInTests else { return }
-    // Check if Info.plist contains photos usage description
+    guard overrideService == nil else { return }
+    guard !hasStarted else { return }
+    hasStarted = true
     verifyPhotoLibraryPermissions()
     // Observe library changes to invalidate cache
     PHPhotoLibrary.shared().register(self)
-
     // Initialize with current authorization status
     authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     isAuthorized = Self.isAuthorizationSufficient(authorizationStatus)
   }
+
+  private var hasStarted = false
 
   /// XCTest and Swift Testing both set `XCTestConfigurationFilePath` in
   /// the test-host environment. Production launches never have it set.
