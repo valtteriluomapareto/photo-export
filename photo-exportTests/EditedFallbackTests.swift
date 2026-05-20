@@ -95,7 +95,7 @@ struct EditedFallbackTests {
 
     // The asset must now count as exported under the .edited selection so a
     // subsequent Export All doesn't re-queue it forever.
-    #expect(h.store.isExported(asset: asset, selection: .edited))
+    #expect(h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   @Test func unedittedAssetIsUnaffectedByFallback() async throws {
@@ -170,7 +170,7 @@ struct EditedFallbackTests {
     let writeCountAfterFirst = h.writer.writeCalls.count
     #expect(writeCountAfterFirst > 0, "First run should have written the fallback original")
     #expect(
-      h.store.isExported(asset: asset, selection: .edited),
+      h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false),
       "Asset must be recognised as fallback-covered before the second run")
 
     // Second run: queue should not pick up this asset again.
@@ -204,7 +204,7 @@ struct EditedFallbackTests {
       error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
       at: Date())
 
-    #expect(h.store.isExported(asset: asset, selection: .edited))
+    #expect(h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   /// Per-PR review tightening: an `.edited.failed` with the *generic*
@@ -229,7 +229,7 @@ struct EditedFallbackTests {
       error: ExportVariantRecovery.editedResourceUnavailableMessage,
       at: Date())
 
-    #expect(!h.store.isExported(asset: asset, selection: .edited))
+    #expect(!h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   /// The same `.failed` `.edited` variant with a *different* error message
@@ -250,7 +250,7 @@ struct EditedFallbackTests {
       assetId: asset.id, variant: .edited,
       error: "Disk full", at: Date())
 
-    #expect(!h.store.isExported(asset: asset, selection: .edited))
+    #expect(!h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   // MARK: - Sidebar count
@@ -292,7 +292,8 @@ struct EditedFallbackTests {
 
     // Scope: 3 photos total, 2 adjusted (edit-ok + fallback), 1 unedited.
     let summary = h.store.sidebarSummary(
-      year: yr, month: mo, totalCount: 3, adjustedCount: 2, selection: .edited)
+      year: yr, month: mo, totalCount: 3, adjustedCount: 2, selection: .edited,
+      livePhotosPaired: false)
 
     // .edited formula = editedDone (1: edit-ok) + min(origOnlyAtStem, unedited) (1) +
     //                   editedFallbackCovered (1) = 3 → fully exported.
@@ -349,7 +350,7 @@ struct EditedFallbackTests {
 
     let summary = h.store.sidebarSummary(
       year: yr, month: mo, totalCount: 1, adjustedCount: 1,
-      selection: .editedWithOriginals)
+      selection: .editedWithOriginals, livePhotosPaired: false)
     #expect(summary?.exportedCount == 0)
     #expect(summary?.status == .notExported)
   }
@@ -388,7 +389,8 @@ struct EditedFallbackTests {
 
     #expect(
       h.collectionStore.isExported(
-        asset: asset, placement: placement, selection: .edited))
+        asset: asset, placement: placement, selection: .edited,
+        livePhotosPaired: false))
   }
 
   /// Collection-store mirror of the generic-sentinel rejection test.
@@ -422,7 +424,8 @@ struct EditedFallbackTests {
 
     #expect(
       !h.collectionStore.isExported(
-        asset: asset, placement: placement, selection: .edited))
+        asset: asset, placement: placement, selection: .edited,
+        livePhotosPaired: false))
   }
 
   // MARK: - Sentinel disambiguation
@@ -488,7 +491,7 @@ struct EditedFallbackTests {
     #expect(newFilename != nil)
     #expect(newFilename != "vacation_orig.JPG")
     #expect(newFilename?.hasSuffix("_orig.JPG") == true)
-    #expect(h.store.isExported(asset: assetAdjusted, selection: .edited))
+    #expect(h.store.isExported(asset: assetAdjusted, selection: .edited, livePhotosPaired: false))
   }
 
   // MARK: - Video fallback
@@ -527,7 +530,7 @@ struct EditedFallbackTests {
         == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage)
     #expect(record?.variants[.original]?.status == .done)
     #expect(record?.variants[.original]?.filename == "IMG_4019_orig.MOV")
-    #expect(h.store.isExported(asset: asset, selection: .edited))
+    #expect(h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   // MARK: - Allocator collision

@@ -511,14 +511,16 @@ final class CollectionExportRecordStore: ObservableObject {
   /// `ExportCompletionPolicy.satisfiesEditedFallback`). Collection placements derive the
   /// `VariantPolicy` from `placement.kind` so shared-album single-resource clamping
   /// applies correctly.
-  /// `livePhotosPaired` defaults to `false` for legacy/test call sites that pre-date
-  /// issue #49. Production UI paths must pass `exportManager.livePhotosPairedExport`
-  /// so an asset whose paired-video is pending isn't reported as complete.
+  /// `livePhotosPaired` (issue #49) is REQUIRED — no default. Every UI call site that
+  /// surfaces "is this asset exported?" must consider whether the user has opted into
+  /// paired-video accounting. Tests pass `livePhotosPaired: false` explicitly when the
+  /// scenario doesn't involve Live Photos; the small extra boilerplate catches the
+  /// silent-regression class at compile time. Mirrors `ExportRecordStore.isExported`.
   func isExported(
     asset: AssetDescriptor,
     placement: ExportPlacement,
     selection: ExportVersionSelection,
-    livePhotosPaired: Bool = false
+    livePhotosPaired: Bool
   ) -> Bool {
     guard accept(placement) else { return false }
     guard let body = recordBodies[placement.id]?[asset.id] else { return false }

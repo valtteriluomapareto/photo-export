@@ -365,14 +365,17 @@ final class ExportRecordStore: ObservableObject {
   /// Includes the issue #22 edited-fallback case via the policy: an adjusted asset whose
   /// `.edited` variant is `.failed` with the `editedUnavailableOriginalBackedUpMessage`
   /// sentinel counts as exported. See `ExportCompletionPolicy.satisfiesEditedFallback`.
-  /// `livePhotosPaired` defaults to `false` for legacy/test call sites that pre-date
-  /// issue #49 and don't need the paired-video accounting. Production paths that surface
-  /// per-asset export status to the user — `monthSummary(assets:selection:livePhotosPaired:)`
-  /// and `CollectionContentView.isExported(asset:)` — must pass the actual setting so an
-  /// asset whose paired-video is pending isn't reported as complete.
+  ///
+  /// `livePhotosPaired` is REQUIRED — no default — because every UI call site that
+  /// surfaces "is this asset exported?" must consider whether the user has opted
+  /// into paired-video accounting (issue #49). The MonthContentView per-thumbnail
+  /// badge bug that motivated this constraint silently defaulted to `false` and
+  /// over-reported completeness. Tests that don't care pass `livePhotosPaired: false`
+  /// explicitly — boilerplate is worth catching the silent-regression class at
+  /// compile time.
   func isExported(
     asset: AssetDescriptor, selection: ExportVersionSelection,
-    livePhotosPaired: Bool = false
+    livePhotosPaired: Bool
   ) -> Bool {
     guard let record = recordsById[asset.id] else { return false }
     return ExportCompletionPolicy.isComplete(
@@ -485,16 +488,16 @@ final class ExportRecordStore: ObservableObject {
   /// callers should render a neutral "loading" state in that case rather than treat nil as
   /// zero.
   ///
-  /// `livePhotosPaired` (issue #49): when true, records with any paired-video variant in a
-  /// non-`.done` state are subtracted from the exported total so a Live Photo whose still
-  /// landed but whose motion file is still pending no longer over-reports against the
-  /// per-asset `isExported(asset:selection:livePhotosPaired:)`. The flag defaults to
-  /// `false` for legacy/test call sites pre-dating issue #49; production UI paths must
-  /// pass `exportManager.livePhotosPairedExport`.
+  /// `livePhotosPaired` (issue #49) is REQUIRED — no default. When true, records with
+  /// any paired-video variant in a non-`.done` state are subtracted from the exported
+  /// total so a Live Photo whose still landed but whose motion file is still pending
+  /// no longer over-reports against the per-asset
+  /// `isExported(asset:selection:livePhotosPaired:)`. Forcing every caller to pass
+  /// the flag prevents silent regressions at the UI seam (see issue #49 review notes).
   func sidebarSummary(
     year: Int, month: Int, totalCount: Int, adjustedCount: Int?,
     selection: ExportVersionSelection,
-    livePhotosPaired: Bool = false
+    livePhotosPaired: Bool
   ) -> MonthStatusSummary? {
     guard let adjustedCount else { return nil }
     let uneditedCount = max(0, totalCount - adjustedCount)
@@ -530,7 +533,7 @@ final class ExportRecordStore: ObservableObject {
     totalCountsByMonth: [Int: Int],
     adjustedCountsByMonth: [Int: Int?],
     selection: ExportVersionSelection,
-    livePhotosPaired: Bool = false
+    livePhotosPaired: Bool
   ) -> Int {
     var total = 0
     for month in 1...12 {

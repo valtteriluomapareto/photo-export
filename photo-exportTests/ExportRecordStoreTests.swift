@@ -197,8 +197,8 @@ struct ExportRecordStoreTests {
             assetId: asset.id, variant: .original, year: 2025, month: 1,
             relPath: "2025/01/", filename: "vacation_orig.JPG", exportedAt: Date())
         store.flushForTesting()
-        #expect(store.isExported(asset: asset, selection: .edited))
-        #expect(store.isExported(asset: asset, selection: .editedWithOriginals))
+        #expect(store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
+        #expect(store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
     }
 
     @Test func strictIsExportedDefaultModeAdjustedAsset() throws {
@@ -212,13 +212,13 @@ struct ExportRecordStoreTests {
             assetId: asset.id, variant: .original, year: 2025, month: 1,
             relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
         store.flushForTesting()
-        #expect(!store.isExported(asset: asset, selection: .edited))
+        #expect(!store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
 
         store.markVariantExported(
             assetId: asset.id, variant: .edited, year: 2025, month: 1,
             relPath: "2025/01/", filename: "IMG_0001 (1).JPG", exportedAt: Date())
         store.flushForTesting()
-        #expect(store.isExported(asset: asset, selection: .edited))
+        #expect(store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
     }
 
     @Test func strictIsExportedIncludeOriginalsAdjustedAssetRequiresBoth() throws {
@@ -231,13 +231,13 @@ struct ExportRecordStoreTests {
             assetId: asset.id, variant: .edited, year: 2025, month: 1,
             relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
         store.flushForTesting()
-        #expect(!store.isExported(asset: asset, selection: .editedWithOriginals))
+        #expect(!store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
 
         store.markVariantExported(
             assetId: asset.id, variant: .original, year: 2025, month: 1,
             relPath: "2025/01/", filename: "IMG_0001_orig.JPG", exportedAt: Date())
         store.flushForTesting()
-        #expect(store.isExported(asset: asset, selection: .editedWithOriginals))
+        #expect(store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
     }
 
     /// Per-thumbnail badge and header summary use the same `isExported(asset:selection:livePhotosPaired:)`
@@ -293,7 +293,7 @@ struct ExportRecordStoreTests {
         // editedDone is 0; exported = 0 + min(10, 70) = 10.
         let summary = store.sidebarSummary(
             year: 2025, month: 5, totalCount: 100, adjustedCount: 30,
-            selection: .edited)
+            selection: .edited, livePhotosPaired: false)
         #expect(summary?.exportedCount == 10)
     }
 
@@ -304,7 +304,7 @@ struct ExportRecordStoreTests {
         store.configure(for: "destLoading")
         let summary = store.sidebarSummary(
             year: 2025, month: 5, totalCount: 100, adjustedCount: nil,
-            selection: .edited)
+            selection: .edited, livePhotosPaired: false)
         #expect(summary == nil)
     }
 
@@ -333,7 +333,7 @@ struct ExportRecordStoreTests {
         // exported = 0 (editedDone) + min(8, 5) = 5. Asset-aware truth would be 3.
         let summary = store.sidebarSummary(
             year: 2025, month: 6, totalCount: 10, adjustedCount: 5,
-            selection: .edited)
+            selection: .edited, livePhotosPaired: false)
         #expect(summary?.exportedCount == 5)
     }
 
@@ -356,7 +356,7 @@ struct ExportRecordStoreTests {
         // because `vacation_orig.JPG` matches `isOrigCompanion` shape-only.
         let summary = store.sidebarSummary(
             year: 2025, month: 7, totalCount: 1, adjustedCount: 0,
-            selection: .edited)
+            selection: .edited, livePhotosPaired: false)
         #expect(summary?.exportedCount == 0)  // Documented under-count.
         #expect(summary?.status == .notExported)
     }
@@ -389,7 +389,7 @@ struct ExportRecordStoreTests {
             year: 2025,
             totalCountsByMonth: totals,
             adjustedCountsByMonth: adjusted,
-            selection: .edited)
+            selection: .edited, livePhotosPaired: false)
         #expect(count == 3)
 
         // A month whose adjustedCount is still loading contributes 0 to the total —
@@ -400,7 +400,7 @@ struct ExportRecordStoreTests {
             year: 2025,
             totalCountsByMonth: totals,
             adjustedCountsByMonth: adjustedLoading,
-            selection: .edited)
+            selection: .edited, livePhotosPaired: false)
         #expect(countWithLoading == 1)
     }
 
@@ -538,7 +538,7 @@ struct ExportRecordStoreTests {
             assetId: asset.id, variant: .original, year: 2025, month: 1,
             relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
         store.flushForTesting()
-        #expect(store.isExported(asset: asset, selection: .editedWithOriginals))
+        #expect(store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
     }
 
     @Test func testDoneCountTracksTransitionsAndMoves() throws {

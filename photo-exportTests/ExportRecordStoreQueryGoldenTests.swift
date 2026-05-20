@@ -69,12 +69,14 @@ struct ExportRecordStoreQueryGoldenTests {
     // sidebarSummary returns nil when adjustedCount is nil (loading state).
     #expect(
       store.sidebarSummary(
-        year: 2025, month: 6, totalCount: 10, adjustedCount: nil, selection: .edited)
+        year: 2025, month: 6, totalCount: 10, adjustedCount: nil, selection: .edited,
+        livePhotosPaired: false)
         == nil)
 
     #expect(
       store.sidebarYearExportedCount(
-        year: 2025, totalCountsByMonth: [:], adjustedCountsByMonth: [:], selection: .edited)
+        year: 2025, totalCountsByMonth: [:], adjustedCountsByMonth: [:], selection: .edited,
+        livePhotosPaired: false)
         == 0)
   }
 
@@ -302,7 +304,8 @@ struct ExportRecordStoreQueryGoldenTests {
       filename: "COMP_orig.HEIC", exportedAt: now)
 
     let summary = store.sidebarSummary(
-      year: yr, month: mo, totalCount: 10, adjustedCount: 3, selection: .edited)
+      year: yr, month: mo, totalCount: 10, adjustedCount: 3, selection: .edited,
+      livePhotosPaired: false)
     #expect(summary != nil)
     #expect(summary?.exportedCount == 6)  // 2 + min(4, 7)
     #expect(summary?.totalCount == 10)
@@ -311,7 +314,8 @@ struct ExportRecordStoreQueryGoldenTests {
     // Loading state.
     #expect(
       store.sidebarSummary(
-        year: yr, month: mo, totalCount: 10, adjustedCount: nil, selection: .edited)
+        year: yr, month: mo, totalCount: 10, adjustedCount: nil, selection: .edited,
+        livePhotosPaired: false)
         == nil)
   }
 
@@ -347,7 +351,7 @@ struct ExportRecordStoreQueryGoldenTests {
 
     let summary = store.sidebarSummary(
       year: yr, month: mo, totalCount: 10, adjustedCount: 3,
-      selection: .editedWithOriginals)
+      selection: .editedWithOriginals, livePhotosPaired: false)
     #expect(summary?.exportedCount == 5)  // 1 + min(4, 7)
     #expect(summary?.status == .partial)
   }
@@ -372,7 +376,8 @@ struct ExportRecordStoreQueryGoldenTests {
     }
 
     let summary = store.sidebarSummary(
-      year: yr, month: mo, totalCount: 12, adjustedCount: 2, selection: .edited)
+      year: yr, month: mo, totalCount: 12, adjustedCount: 2, selection: .edited,
+      livePhotosPaired: false)
     #expect(summary?.exportedCount == 10)  // capped, not 12
   }
 
@@ -421,7 +426,8 @@ struct ExportRecordStoreQueryGoldenTests {
       year: 2025,
       totalCountsByMonth: [6: 10, 7: 5, 8: 0],
       adjustedCountsByMonth: [6: 3, 7: 0, 8: nil],
-      selection: .edited
+      selection: .edited,
+      livePhotosPaired: false
     )
     #expect(yearTotal == 8)
 
@@ -430,7 +436,8 @@ struct ExportRecordStoreQueryGoldenTests {
       year: 2025,
       totalCountsByMonth: [6: 10, 7: 5, 8: 0],
       adjustedCountsByMonth: [6: 3, 7: nil, 8: nil],
-      selection: .edited
+      selection: .edited,
+      livePhotosPaired: false
     )
     #expect(yearTotalWithLoading == 6)  // only month 6 contributes
   }
@@ -565,18 +572,21 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(store.isExported(assetId: adjusted.id))
 
     // Strict: unedited is satisfied; adjusted is not (needs .edited.done).
-    #expect(store.isExported(asset: unedited, selection: .edited))
-    #expect(!store.isExported(asset: adjusted, selection: .edited))
-    #expect(store.isExported(asset: unedited, selection: .editedWithOriginals))
-    #expect(!store.isExported(asset: adjusted, selection: .editedWithOriginals))
+    #expect(store.isExported(asset: unedited, selection: .edited, livePhotosPaired: false))
+    #expect(!store.isExported(asset: adjusted, selection: .edited, livePhotosPaired: false))
+    #expect(
+      store.isExported(asset: unedited, selection: .editedWithOriginals, livePhotosPaired: false))
+    #expect(
+      !store.isExported(asset: adjusted, selection: .editedWithOriginals, livePhotosPaired: false))
 
     // Add the adjusted asset's edited variant — now it satisfies .edited but not
     // .editedWithOriginals (the .original is still done from above so it does).
     store.markVariantExported(
       assetId: adjusted.id, variant: .edited, year: yr, month: mo, relPath: rel,
       filename: "A.JPG", exportedAt: now)
-    #expect(store.isExported(asset: adjusted, selection: .edited))
-    #expect(store.isExported(asset: adjusted, selection: .editedWithOriginals))
+    #expect(store.isExported(asset: adjusted, selection: .edited, livePhotosPaired: false))
+    #expect(
+      store.isExported(asset: adjusted, selection: .editedWithOriginals, livePhotosPaired: false))
   }
 
   // MARK: - Incremental counter integrity under churn
