@@ -320,8 +320,6 @@ struct PhotoExportApp: App {
 
     Settings {
       TabView {
-        ExportSettingsView()
-          .tabItem { Label("Export", systemImage: "square.and.arrow.up") }
         AutoExportSettingsView()
           .tabItem { Label("Auto Export", systemImage: "arrow.triangle.2.circlepath") }
         ExportIssuesView()

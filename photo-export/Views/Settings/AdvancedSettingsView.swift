@@ -2,13 +2,13 @@ import SwiftUI
 
 /// Settings → Advanced tab. Houses mode-setting export-format options that
 /// affect every future run rather than the immediate action: `Include
-/// originals` (issue #19) and `Convert HEIC to JPEG` (issue #47). Both
-/// previously lived in the toolbar's Format menu, where a SwiftUI `Menu`'s
-/// inability to surface per-item tooltips meant the deferred-semantics
-/// caveats were invisible. Migrating to Settings gives each toggle a
-/// caption-style description that explains the trade-off in full, matching
-/// the `AutoExportSettingsView` row layout (`Toggle { VStack { Text +
-/// caption } }`).
+/// originals` (issue #19), `Convert HEIC to JPEG` (issue #47), and `Export
+/// Live Photos as paired image + video` (issue #49). The first two previously
+/// lived in the toolbar's Format menu, where a SwiftUI `Menu`'s inability to
+/// surface per-item tooltips meant the deferred-semantics caveats were
+/// invisible. Migrating to Settings gives each toggle a caption-style
+/// description that explains the trade-off in full, matching the
+/// `AutoExportSettingsView` row layout (`Toggle { VStack { Text + caption } }`).
 ///
 /// Onboarding keeps its inline toggles — first-run users shouldn't have to
 /// open Settings to set the initial export shape.
@@ -27,6 +27,7 @@ struct AdvancedSettingsView: View {
       Section("Format") {
         includeOriginalsRow
         convertHEICToJPEGRow
+        livePhotosPairedRow
       }
     }
     .formStyle(.grouped)
@@ -59,6 +60,19 @@ struct AdvancedSettingsView: View {
     .disabled(exportManager.hasActiveExportWork)
   }
 
+  private var livePhotosPairedRow: some View {
+    Toggle(isOn: $exportManager.livePhotosPairedExport) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Export Live Photos as paired image + video")
+        Text(livePhotosPairedDescription)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .disabled(exportManager.hasActiveExportWork)
+  }
+
   private var includeOriginalsDescription: String {
     "Off: each photo is exported once, in the version Photos shows you. "
       + "Edited photos write the edit, unedited photos write the original "
@@ -77,6 +91,16 @@ struct AdvancedSettingsView: View {
       + "touched; re-run an Export action (Export All, Export Month, Export "
       + "Album, or wait for Auto Export) to convert them.\n\n"
       + "Non-HEIC photos are unaffected."
+  }
+
+  private var livePhotosPairedDescription: String {
+    "Writes the paired video (a .MOV file) next to the still for each Live "
+      + "Photo (e.g. IMG_0001.HEIC alongside IMG_0001.MOV).\n\n"
+      + "Off by default. A Live Photo's paired video is typically 1–3 MB, so "
+      + "libraries with many Live Photos can roughly double in size on disk "
+      + "when this is on.\n\n"
+      + "Shared-album Live Photos stay still-only — Apple doesn't expose "
+      + "their paired video resource."
   }
 }
 
