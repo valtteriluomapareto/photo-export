@@ -21,6 +21,11 @@ enum AutoSyncEvent: Sendable {
   /// Include-originals (or future export-version) selection changed.
   case versionSelectionChanged(ExportVersionSelection)
 
+  /// `Convert HEIC to JPEG` toggle changed (issue #47). The toggle widens
+  /// `requiredVariants` for HEIC assets, so previously-skipped HEIC items
+  /// become eligible; the reducer re-evaluates at the standard 2s debounce.
+  case convertHEICToJPEGChanged(Bool)
+
   /// Photos library reported a persistent change. The reducer extracts inserted /
   /// updated / deleted ids and decides whether to schedule a targeted re-evaluation,
   /// fall back to bounded full reconciliation, or no-op.

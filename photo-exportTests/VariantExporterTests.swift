@@ -29,6 +29,7 @@ struct VariantExporterTests {
   /// Host either — it routes through the injected `ExportQueueCoordinator`.
   private final class FakeHost: VariantExporter.Host, ExportQueueCoordinator.Host {
     var failureCalls: [(assetId: String, variant: ExportVariant, message: String)] = []
+    var convertHEICToJPEG: Bool = false
 
     func setCurrentAssetFilename(_ name: String?) {}
     func setCurrentJobVariant(_ variant: ExportVariant?) {}
@@ -57,6 +58,8 @@ struct VariantExporterTests {
     let host: FakeHost
     let writer: FakeAssetResourceWriter
     let renderer: FakeMediaRenderer
+    let converter: FakeImageConverter
+    let fileSystem: FakeFileSystem
     let destDir: URL
     let storeRoot: URL
 
@@ -70,6 +73,7 @@ struct VariantExporterTests {
     let host = FakeHost()
     let writer = FakeAssetResourceWriter()
     let renderer = FakeMediaRenderer()
+    let converter = FakeImageConverter()
     let fileSystem = FakeFileSystem()
     let dest = FakeExportDestination()
     let storeRoot = FileManager.default.temporaryDirectory
@@ -90,9 +94,12 @@ struct VariantExporterTests {
       recordStoreRouter: router,
       assetResourceWriter: writer,
       mediaRenderer: renderer,
+      imageConverter: converter,
       fileSystem: fileSystem,
       exportDestination: dest)
-    return Harness(exporter: exporter, host: host, writer: writer, renderer: renderer,
+    return Harness(
+      exporter: exporter, host: host, writer: writer, renderer: renderer,
+      converter: converter, fileSystem: fileSystem,
       destDir: destDir, storeRoot: storeRoot)
   }
 
@@ -224,5 +231,91 @@ struct VariantExporterTests {
       "Host.recordVariantFailed must be called exactly once; got \(h.host.failureCalls.count)")
     #expect(h.host.failureCalls.first?.assetId == "no-res")
     #expect(h.host.failureCalls.first?.message == "No exportable resource")
+  }
+
+  // MARK: - HEIC→JPEG conversion (issue #47)
+
+  /// HEIC original + toggle ON + unedited asset: `selectEditedProducer` returns
+  /// `.convertHEIC`, so `VariantExporter` invokes `ImageConverter.convertHEIC`
+  /// and the synthesized JPEG lands at `<stem>.JPG` (not `.HEIC`). The static
+  /// resource writer must NOT be called — that would double-write the same
+  /// bytes through the wrong path. Pins the host-accessor seam end-to-end:
+  /// host returns the toggle value, exporter threads it through selection,
+  /// the converter sees the call.
+  @Test func heicWithToggleOnAndUneditedAsset_invokesConverterAndWritesJPEG() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.host.convertHEICToJPEG = true
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "heic-unedited", hasAdjustments: false,
+      originalUTI: "public.heic")
+    let resources = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC")
+    ]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+
+    _ = try await h.exporter.exportSingleVariant(
+      variant: .edited, descriptor: asset, resources: resources,
+      destDir: h.destDir, relPath: "2025/07/",
+      job: ExportManager.ExportJob(
+        assetLocalIdentifier: asset.id,
+        placement: .timeline(year: 2025, month: 7),
+        selection: .edited),
+      groupStem: nil, pairOriginalWithSuffix: false,
+      generation: 0, inFlight: &inFlight)
+
+    #expect(h.converter.convertCalls.count == 1,
+      "ImageConverter.convertHEIC must be invoked once for unedited HEIC under toggle on; got \(h.converter.convertCalls.count)")
+    // Convert destination is a `.tmp` file; the exporter strips `.tmp` and
+    // moves to the final URL. Assert the move target ends in `.JPG`.
+    let movedTo = h.fileSystem.moveCalls.last?.to.lastPathComponent ?? ""
+    #expect(movedTo.uppercased().hasSuffix(".JPG"),
+      "Final on-disk filename must end in .JPG; got \(movedTo)")
+    // The writer IS called to materialize the source HEIC bytes for the
+    // converter to read (to a `.heic-source` temp path). That's the
+    // documented `EditedProducer.convertHEIC` materialization flow; assert
+    // the writer's target is the temp side-file rather than the final
+    // variant location.
+    let writerTargetExt =
+      h.writer.writeCalls.first { $0.assetId == "heic-unedited" }?.url.lastPathComponent ?? ""
+    #expect(writerTargetExt.hasSuffix(".heic-source"),
+      "Writer must materialize the HEIC source to a `.heic-source` temp; got \(writerTargetExt)")
+  }
+
+  /// HEIC original + toggle OFF + unedited asset: the asset has no edits and
+  /// the toggle is off, so `selectEditedProducer` returns `.none` — the
+  /// exporter records a sentinel failure and never invokes the converter.
+  /// This is the documented "edited resource unavailable" sentinel path; the
+  /// pipeline's `runEditedFallbackOriginal` then writes the original at a
+  /// `_orig` companion (covered elsewhere). What this test pins is the seam:
+  /// without the toggle, the converter must not be reached.
+  @Test func heicWithToggleOffAndUneditedAsset_doesNotInvokeConverter() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.host.convertHEICToJPEG = false
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "heic-untouched", hasAdjustments: false,
+      originalUTI: "public.heic")
+    let resources = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC")
+    ]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+
+    _ = try await h.exporter.exportSingleVariant(
+      variant: .edited, descriptor: asset, resources: resources,
+      destDir: h.destDir, relPath: "2025/07/",
+      job: ExportManager.ExportJob(
+        assetLocalIdentifier: asset.id,
+        placement: .timeline(year: 2025, month: 7),
+        selection: .edited),
+      groupStem: nil, pairOriginalWithSuffix: false,
+      generation: 0, inFlight: &inFlight)
+
+    #expect(h.converter.convertCalls.isEmpty,
+      "ImageConverter.convertHEIC must not be invoked when toggle is off; got \(h.converter.convertCalls.count) calls")
+    #expect(h.host.failureCalls.contains { $0.assetId == "heic-untouched" },
+      "Unedited HEIC under .edited selection with toggle off should record an editedResourceUnavailable failure")
   }
 }

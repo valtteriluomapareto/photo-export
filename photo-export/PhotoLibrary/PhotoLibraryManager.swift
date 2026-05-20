@@ -526,12 +526,22 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
-  /// Load a high-quality thumbnail for an asset
-  func loadThumbnailHighQuality(for assetId: String, allowNetwork: Bool = true) async -> NSImage? {
+  /// Load a high-quality thumbnail for an asset. `pixelSize` defaults to
+  /// 200×200 px (the legacy size used by the timeline grid's high-quality
+  /// upgrade path); tile views pass their displayed-pixel dimensions so
+  /// PhotoKit doesn't return a smaller cached version that has to be
+  /// scaled up by AppKit.
+  func loadThumbnailHighQuality(
+    for assetId: String,
+    pixelSize: CGSize? = nil,
+    allowNetwork: Bool = true
+  ) async -> NSImage? {
     if let s = overrideService {
-      return await s.loadThumbnailHighQuality(for: assetId, allowNetwork: allowNetwork)
+      return await s.loadThumbnailHighQuality(
+        for: assetId, pixelSize: pixelSize, allowNetwork: allowNetwork)
     }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
+    let target = pixelSize ?? CGSize(width: 200, height: 200)
     return await withCheckedContinuation { continuation in
       let options = PHImageRequestOptions()
       options.deliveryMode = .highQualityFormat
@@ -542,7 +552,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
       Self.cachingImageManager.requestImage(
         for: asset,
-        targetSize: CGSize(width: 200, height: 200),
+        targetSize: target,
         contentMode: .aspectFill,
         options: options
       ) { image, _ in
@@ -1058,8 +1068,30 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       pixelWidth: asset.pixelWidth,
       pixelHeight: asset.pixelHeight,
       duration: asset.duration,
-      hasAdjustments: asset.hasAdjustments
+      hasAdjustments: asset.hasAdjustments,
+      originalUTI: Self.originalUTI(for: asset)
     )
+  }
+
+  /// PHAsset's `uniformTypeIdentifier` is exposed via undocumented KVC — it's
+  /// the cheapest reliable way to detect format without iterating
+  /// `PHAssetResource.assetResources(for:)`. Same shape as the existing
+  /// `resource.value(forKey: "fileSize")` call used for
+  /// `ResourceDescriptor.fileSize` (issue #32) — stable in practice through
+  /// current macOS versions, but defended against KVC returning nil or
+  /// non-String in case the property is renamed or removed: `originalUTI: nil`
+  /// falls back to "treat as non-HEIC" which matches the conversion-off
+  /// default.
+  ///
+  /// **Must be called from the main actor.** PHAsset KVC thread-safety is not
+  /// documented; in practice every PhotoKit call in this manager originates
+  /// from `@MainActor`-isolated contexts, so we don't race against PhotoKit's
+  /// own queues. If a future `nonisolated` fetch path needs to build
+  /// descriptors, either add a main-actor hop or switch to
+  /// `PHAssetResource.assetResources(for:).first?.uniformTypeIdentifier` at
+  /// the (one PhotoKit call per resource) cost.
+  private static func originalUTI(for asset: PHAsset) -> String? {
+    asset.value(forKey: "uniformTypeIdentifier") as? String
   }
 }
 

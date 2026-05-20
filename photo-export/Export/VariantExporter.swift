@@ -36,6 +36,12 @@ final class VariantExporter {
     func setCurrentJobVariant(_ variant: ExportVariant?)
     func clearRenderActivity()
 
+    /// Reads the HEIC→JPEG toggle's current value (issue #47). Read at write
+    /// time so a mid-run toggle change takes effect on the next variant
+    /// without an in-flight reconfigure; the queue is small enough that a
+    /// flip mid-run is bounded.
+    var convertHEICToJPEG: Bool { get }
+
     // Bookkeeping-aware failure recording (updates run-summary failure counters in
     // addition to writing the record). The exporter never bypasses this for the
     // sentinel-message path — bookkeeping is load-bearing for `ExportRunSummary`.
@@ -57,6 +63,17 @@ final class VariantExporter {
   private let recordStoreRouter: RecordStoreRouter
   private let assetResourceWriter: any AssetResourceWriter
   private let mediaRenderer: any MediaRenderer
+  /// HEIC→JPEG converter used by the `EditedProducer.convertHEIC` write arm
+  /// (issue #47).
+  private let imageConverter: any ImageConverter
+
+  /// JPEG quality used for HEIC→JPEG synthesis. `0.85` matches the default
+  /// Apple's own apps use for "high quality" JPEG export; visible quality
+  /// drop vs. the HEIC source is negligible for photos while the file size
+  /// shrinks meaningfully. Lives here (not on `ImageConverter` itself) so
+  /// the export pipeline owns the pricing decision; the protocol's
+  /// `quality:` parameter is the seam.
+  private static let heicJPEGQuality: Double = 0.85
   private let fileSystem: any FileSystemService
   private let exportDestination: any ExportDestination
 
@@ -67,6 +84,7 @@ final class VariantExporter {
     recordStoreRouter: RecordStoreRouter,
     assetResourceWriter: any AssetResourceWriter,
     mediaRenderer: any MediaRenderer,
+    imageConverter: any ImageConverter,
     fileSystem: any FileSystemService,
     exportDestination: any ExportDestination
   ) {
@@ -76,6 +94,7 @@ final class VariantExporter {
     self.recordStoreRouter = recordStoreRouter
     self.assetResourceWriter = assetResourceWriter
     self.mediaRenderer = mediaRenderer
+    self.imageConverter = imageConverter
     self.fileSystem = fileSystem
     self.exportDestination = exportDestination
   }
@@ -117,7 +136,8 @@ final class VariantExporter {
         return .none
       case .edited:
         return ResourceSelection.selectEditedProducer(
-          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor)
+          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
+          convertHEICToJPEG: host?.convertHEICToJPEG ?? false)
       }
     }()
 
@@ -223,6 +243,38 @@ final class VariantExporter {
         } catch {
           logger.error(
             "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
+          )
+          throw NSError(
+            domain: "Export", code: 9,
+            userInfo: [
+              NSLocalizedDescriptionKey:
+                ExportVariantRecovery.editedResourceUnavailableMessage
+            ])
+        }
+      case .convertHEIC(let request):
+        // Two-step: materialise the source HEIC/HEIF bytes to a sibling temp
+        // file via the existing PhotoKit resource writer, then re-encode as
+        // JPEG into `tempURL` via the image converter. The intermediate temp
+        // is cleaned up via `defer` so a converter failure or cancel doesn't
+        // leak it. Any converter error translates to the same
+        // `editedResourceUnavailableMessage` sentinel the render path uses,
+        // so the existing "edited variant failed" recovery flow runs cleanly.
+        let heicTempURL = tempURL.appendingPathExtension("heic-source")
+        defer {
+          if fileSystem.fileExists(atPath: heicTempURL.path) {
+            try? fileSystem.removeItem(at: heicTempURL)
+          }
+        }
+        do {
+          try await assetResourceWriter.writeResource(
+            request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
+          try await imageConverter.convertHEIC(
+            at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
+        } catch is CancellationError {
+          throw CancellationError()
+        } catch {
+          logger.error(
+            "HEIC→JPEG conversion failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
           )
           throw NSError(
             domain: "Export", code: 9,

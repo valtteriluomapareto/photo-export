@@ -108,7 +108,11 @@ struct ExportDestinationManagerIdentityTests {
   /// unchanged `destinationId`. Save a bookmark, restore it, refresh by calling save again
   /// — the id stays the same because it derives from the volume + path, not the bookmark
   /// bytes.
-  @Test func destinationIdSurvivesBookmarkRefresh() throws {
+  @Test(
+    .disabled(
+      if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
+      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). CI's macos-15 runner returns true (per Apple's docs) so this runs there."))
+  func destinationIdSurvivesBookmarkRefresh() throws {
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("DestId-BookmarkRefresh-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

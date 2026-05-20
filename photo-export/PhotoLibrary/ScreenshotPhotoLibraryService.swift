@@ -316,9 +316,9 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   }
 
   func loadThumbnailHighQuality(
-    for assetId: String, allowNetwork: Bool = true
+    for assetId: String, pixelSize: CGSize? = nil, allowNetwork: Bool = true
   ) async -> NSImage? {
-    image(for: assetId, size: CGSize(width: 1024, height: 1024))
+    image(for: assetId, size: pixelSize ?? CGSize(width: 1024, height: 1024))
   }
 
   func requestFullImage(for assetId: String) async throws -> NSImage {
@@ -461,6 +461,9 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
       byAdding: .day, value: -daysAgo, to: Date())
     // Mark ~1/4 of assets as edited so the "edited photo" indicators surface.
     let hasAdjustments = (hash % 4) == 0
+    // The synthetic library's bundled images are JPEG / JPG; mark the UTI
+    // accordingly so the HEIC→JPEG conversion feature (issue #47) doesn't
+    // incorrectly synthesize JPEG edits for screenshot-mode assets.
     return AssetDescriptor(
       id: id,
       creationDate: creationDate,
@@ -468,7 +471,8 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
       pixelWidth: 4032,
       pixelHeight: 3024,
       duration: 0,
-      hasAdjustments: hasAdjustments
+      hasAdjustments: hasAdjustments,
+      originalUTI: "public.jpeg"
     )
   }
 }

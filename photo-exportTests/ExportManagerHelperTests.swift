@@ -86,6 +86,78 @@ struct ExportManagerHelperTests {
     #expect(mgr.manualExportShouldConfirmSupersede == false)
   }
 
+  // MARK: - convertHEICToJPEG toggle (issue #47)
+
+  /// The toggle defaults to off when nothing's been persisted, mirrors
+  /// through to both record stores on the way in, and persists to the same
+  /// `UserDefaults` key on the way out. Pinning this prevents drift in the
+  /// "view-side stores see the right answer" contract that
+  /// `MonthContentView` / `CollectionContentView` rely on.
+  @Test func convertHEICToJPEGToggleDefaultsOffAndMirrorsToStores() {
+    let defaults = UserDefaults(suiteName: "test-heic47-\(UUID().uuidString)")!
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let timeline = ExportRecordStore(baseDirectoryURL: tempDir)
+    timeline.configure(for: "test")
+    let collection = CollectionExportRecordStore(baseDirectoryURL: tempDir)
+    collection.configure(for: "test")
+    let photoLib = PhotoLibraryManager()
+    let destMgr = ExportDestinationManager(skipRestore: true)
+    let manager = ExportManager(
+      photoLibraryService: photoLib,
+      exportDestination: destMgr,
+      exportRecordStore: timeline,
+      collectionExportRecordStore: collection,
+      userDefaults: defaults)
+
+    #expect(manager.convertHEICToJPEG == false,
+      "Toggle must default to false when nothing is persisted")
+    #expect(timeline.convertHEICToJPEG == false)
+    #expect(collection.convertHEICToJPEG == false)
+
+    manager.convertHEICToJPEG = true
+
+    #expect(manager.convertHEICToJPEG == true)
+    #expect(timeline.convertHEICToJPEG == true,
+      "Manager didSet must mirror the toggle into the timeline store")
+    #expect(collection.convertHEICToJPEG == true,
+      "Manager didSet must mirror the toggle into the collection store")
+    #expect(defaults.bool(forKey: ExportManager.convertHEICToJPEGDefaultsKey) == true,
+      "Manager didSet must persist the toggle to UserDefaults")
+  }
+
+  /// A second `ExportManager` initialised with the same `UserDefaults`
+  /// suite reads back the persisted toggle and pushes it into the record
+  /// stores during init (didSet is suppressed during init, so the manual
+  /// sync at the bottom of `ExportManager.init` is what guarantees this).
+  @Test func convertHEICToJPEGTogglePersistsAcrossManagerInits() {
+    let suiteName = "test-heic47-persist-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.set(true, forKey: ExportManager.convertHEICToJPEGDefaultsKey)
+
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    let timeline = ExportRecordStore(baseDirectoryURL: tempDir)
+    timeline.configure(for: "test")
+    let collection = CollectionExportRecordStore(baseDirectoryURL: tempDir)
+    collection.configure(for: "test")
+    let photoLib = PhotoLibraryManager()
+    let destMgr = ExportDestinationManager(skipRestore: true)
+    let manager = ExportManager(
+      photoLibraryService: photoLib,
+      exportDestination: destMgr,
+      exportRecordStore: timeline,
+      collectionExportRecordStore: collection,
+      userDefaults: defaults)
+
+    #expect(manager.convertHEICToJPEG == true,
+      "Manager must read the persisted toggle from UserDefaults at init")
+    #expect(timeline.convertHEICToJPEG == true,
+      "Manager init must mirror the persisted toggle into the timeline store")
+    #expect(collection.convertHEICToJPEG == true,
+      "Manager init must mirror the persisted toggle into the collection store")
+  }
+
   @Test func startExportMonthShortCircuitsWhenTimelineNotReady() {
     let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString, isDirectory: true)

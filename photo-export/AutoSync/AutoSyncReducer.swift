@@ -16,6 +16,12 @@ enum AutoSyncReducer {
     var destination: DestinationSnapshot
     var scopeSelection: AutoExportScopeSelection
     var versionSelection: ExportVersionSelection
+    /// Issue #47: when on, AutoSync widens `requiredVariants` for HEIC
+    /// originals (HEIC counts as adjusted-equivalent), so the eligibility
+    /// pass re-emits previously-skipped HEIC assets. Toggle changes
+    /// re-trigger the reducer at the same 2s debounce as
+    /// `versionSelection`.
+    var convertHEICToJPEG: Bool
     var importActive: Bool
     var exportRunState: ExportRunState
     /// Per-destination accumulated dirty state. Updated by `photosChanged` events
@@ -36,6 +42,7 @@ enum AutoSyncReducer {
       destination: .none,
       scopeSelection: AutoExportScopeSelection(),
       versionSelection: .edited,
+      convertHEICToJPEG: false,
       importActive: false,
       exportRunState: .idle,
       dirtyStateByDestination: [:],
@@ -111,6 +118,12 @@ enum AutoSyncReducer {
       newState.versionSelection = selection
       if selection != state.versionSelection {
         triggerReason = .versionSelectionChanged
+      }
+
+    case .convertHEICToJPEGChanged(let value):
+      newState.convertHEICToJPEG = value
+      if value != state.convertHEICToJPEG {
+        triggerReason = .convertHEICToJPEGChanged
       }
 
     case .importStateChanged(let isImporting):
@@ -557,7 +570,7 @@ enum AutoSyncReducer {
       return 10
     case .destinationSelected, .destinationBecameAvailable:
       return 3
-    case .scopeSelectionChanged, .versionSelectionChanged:
+    case .scopeSelectionChanged, .versionSelectionChanged, .convertHEICToJPEGChanged:
       return 2
     case .photosChanged:
       return 30

@@ -274,7 +274,7 @@ final class MonthViewModel: ObservableObject {
   private func upgradeThumbnailToHighQuality(for assetId: String) async {
     guard !highQualityIds.contains(assetId) else { return }
     if let hqThumb = await photoLibraryService.loadThumbnailHighQuality(
-      for: assetId, allowNetwork: !isExportRunning)
+      for: assetId, pixelSize: nil, allowNetwork: !isExportRunning)
     {
       thumbnailsById[assetId] = hqThumb
       highQualityIds.insert(assetId)
