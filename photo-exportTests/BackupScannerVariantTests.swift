@@ -362,4 +362,166 @@ struct BackupScannerVariantTests {
     #expect(record?.variants[.original]?.filename == "IMG_0001_orig.HEIC")
     #expect(record?.variants[.edited]?.filename == "IMG_0001.JPG")
   }
+
+  // MARK: - Live Photo paired-video classification
+
+  /// Unedited Live Photo: only the still and motion files exist on disk. The `.mov`
+  /// at the natural stem classifies as `.originalPairedVideo`, not a stray full-length
+  /// video. Without the Live Photo-aware classifier the scanner would dump the file
+  /// into `.unmatched` and the next export would write a duplicate.
+  @Test func classifiesUneditedLivePhotoMovAsOriginalPairedVideo() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "live-asset", creationDate: modDate, hasAdjustments: false, isLivePhoto: true)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "live-asset": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+          TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+        ]
+      ]
+    )
+    let (file, root) = try makeScannedFile("IMG_0001.MOV", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [file], photoLibraryService: svc, progress: { _ in })
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.variant == .originalPairedVideo)
+    #expect(result.matched.first?.asset.id == "live-asset")
+  }
+
+  /// Edited Live Photo: both `<stem>_orig.HEIC` + `<stem>_orig.mov` and the rendered
+  /// `<stem>.HEIC` + `<stem>.mov` are on disk. The `_orig.mov` sibling promotes the
+  /// natural-stem `.mov` to `.editedPairedVideo`.
+  @Test func classifiesEditedLivePhotoNaturalMovAsEditedPairedVideo() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "live-asset", creationDate: modDate, hasAdjustments: true, isLivePhoto: true)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "live-asset": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+          TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+          TestAssetFactory.makeResource(
+            type: .fullSizePhoto, originalFilename: "FullSize.HEIC"),
+          TestAssetFactory.makeResource(
+            type: .fullSizePairedVideo, originalFilename: "FullSize.MOV"),
+        ]
+      ]
+    )
+    // Plant all four files; the matcher needs to see the _orig.mov sibling to promote
+    // the natural-stem .mov to `.editedPairedVideo`.
+    let (origMov, root) = try makeScannedFile("IMG_0001_orig.MOV", modDate: modDate)
+    let (naturalMov, _) = try makeScannedFile("IMG_0001.MOV", modDate: modDate)
+    let (origHeic, _) = try makeScannedFile("IMG_0001_orig.HEIC", modDate: modDate)
+    let (naturalHeic, _) = try makeScannedFile("IMG_0001.HEIC", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [origMov, naturalMov, origHeic, naturalHeic],
+      photoLibraryService: svc, progress: { _ in })
+
+    let naturalMovMatch = result.matched.first {
+      $0.file.filename == "IMG_0001.MOV"
+    }
+    let origMovMatch = result.matched.first {
+      $0.file.filename == "IMG_0001_orig.MOV"
+    }
+    #expect(naturalMovMatch?.variant == .editedPairedVideo)
+    #expect(origMovMatch?.variant == .originalPairedVideo)
+  }
+
+  /// `<stem>_orig.mov` next to a Live Photo classifies as `.originalPairedVideo` even
+  /// without the rendered `.mov` companion present (e.g. partial backup, or Live Photo
+  /// edit that elided the `.fullSizePairedVideo` resource).
+  @Test func classifiesLivePhotoOrigMovAsOriginalPairedVideo() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "live-asset", creationDate: modDate, hasAdjustments: true, isLivePhoto: true)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "live-asset": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+          TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+        ]
+      ]
+    )
+    let (file, root) = try makeScannedFile("IMG_0001_orig.MOV", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [file], photoLibraryService: svc, progress: { _ in })
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.variant == .originalPairedVideo)
+  }
+
+  /// Issue #49 regression guard: the scanner classifies paired-video files correctly
+  /// even when the descriptor's `isLivePhoto` flag is stale/false. This is the import-
+  /// existing-backup-with-toggle-off path — `descriptor(from:)` skips the resource
+  /// fallback when the user hasn't enabled paired-video export, so the descriptor's
+  /// flag may be `false` for an iCloud-synced Live Photo. The scanner builds its
+  /// own fingerprint by reading the resource list directly, so the `.mov` file still
+  /// gets classified as `.originalPairedVideo`.
+  ///
+  /// Without this self-sufficiency, importing a backup with paired-video files while
+  /// the toggle is off would mis-classify them; later turning the toggle on would
+  /// re-export Live Photos and trip the destination resolver's Code 5 ("Paired
+  /// original filename already exists on disk") on the existing `.mov`.
+  @Test func scannerClassifiesPairedVideoEvenWhenAssetIsLivePhotoFlagIsFalse() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    // The asset descriptor's `isLivePhoto` is *false* — the scenario where the user
+    // has the Settings toggle off and `detectLivePhoto` short-circuits before the
+    // resource fallback. PhotoKit still returns the `.pairedVideo` resource when
+    // asked for the asset's resources, which is the signal the scanner uses.
+    let asset = TestAssetFactory.makeAsset(
+      id: "live-asset", creationDate: modDate, hasAdjustments: false, isLivePhoto: false)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "live-asset": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+          TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+        ]
+      ]
+    )
+    let (file, root) = try makeScannedFile("IMG_0001.MOV", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [file], photoLibraryService: svc, progress: { _ in })
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.variant == .originalPairedVideo)
+    #expect(result.matched.first?.asset.id == "live-asset")
+  }
+
+  /// A `.mov` file matching a regular full-length video asset (not Live Photo) still
+  /// classifies as `.original` — the paired-video step requires `isLivePhoto` on the
+  /// fingerprint, so a non-Live-Photo video doesn't fall through into a misclassified
+  /// `.originalPairedVideo`. Regression guard for the disambiguation.
+  @Test func classifiesFullVideoMovAsOriginalNotPairedVideo() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "video-asset", creationDate: modDate, mediaType: .video,
+      hasAdjustments: false, isLivePhoto: false)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "video-asset": [
+          TestAssetFactory.makeResource(type: .video, originalFilename: "MOV_0001.MOV")
+        ]
+      ]
+    )
+    let (file, root) = try makeScannedFile("MOV_0001.MOV", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [file], photoLibraryService: svc, progress: { _ in })
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.variant == .original)
+    #expect(result.matched.first?.asset.id == "video-asset")
+  }
 }

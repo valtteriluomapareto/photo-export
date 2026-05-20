@@ -7,6 +7,7 @@ Photo Export is intentionally focused. Below are ideas we're considering that wo
 
 ## Recently shipped
 
+- **Live Photos** — opt-in via Settings → Export → *Export Live Photos as paired image + video*. When on, the motion component is written next to the still (e.g. `IMG_0001.HEIC` + `IMG_0001.MOV`) using whatever extension casing PhotoKit reports for that resource — typically `.MOV` on Apple hardware. Edited Live Photos write the rendered pair; with **Include originals** also on, `_orig` companions land alongside. Default off because Live Photo motion files are typically 1–3 MB each and would roughly double disk usage for Live-Photo-heavy libraries. iCloud Shared Album Live Photos remain still-only — Apple doesn't expose their motion component.
 - **Auto Export** — automatically back up new photos as they appear in Apple Photos, with per-scope (Timeline / Favorites / Albums) selection, retry-with-backoff for transient failures, and an Export Issues view for what didn't go through. See the [Auto Export guide](/photo-export/auto-export/).
 - **Retry failed exports** — every failure in the Export Issues view has a per-row Retry button; auto-retryable categories also re-attempt on their own with exponential backoff.
 
@@ -28,7 +29,6 @@ Photo Export is intentionally focused. Below are ideas we're considering that wo
 
 ## Media support
 
-- **Live Photos** — export paired image and video components together
 - **iCloud originals** — detect remote-only assets and let users choose to download or skip
 - **Metadata sidecars** — optionally export metadata alongside media files
 

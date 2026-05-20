@@ -30,8 +30,10 @@ struct ExportDestinationResolverTests {
     FileManager.default.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data("x".utf8))
   }
 
-  private func makeAsset(hasAdjustments: Bool = false) -> AssetDescriptor {
-    TestAssetFactory.makeAsset(hasAdjustments: hasAdjustments)
+  private func makeAsset(hasAdjustments: Bool = false, isLivePhoto: Bool = false)
+    -> AssetDescriptor
+  {
+    TestAssetFactory.makeAsset(hasAdjustments: hasAdjustments, isLivePhoto: isLivePhoto)
   }
 
   private func makePhotoResource(_ filename: String) -> ResourceDescriptor {
@@ -344,5 +346,156 @@ struct ExportDestinationResolverTests {
     // Documented one-time cost: post-edit case where prior `.original.done` already
     // occupies the natural stem; the new edited write goes to `(1)`.
     #expect(url.lastPathComponent == "IMG_0001 (1).HEIC")
+  }
+
+  // MARK: - resolveDestination — Live Photo paired-video variants
+
+  /// `.originalPairedVideo` paired with `.editedPairedVideo` writes the unedited motion
+  /// file as the `_orig` companion. Mirrors the still-side `.original` paired rule, with
+  /// a `.mov` extension instead of HEIC/JPG.
+  @Test func resolveDestination_originalPairedVideo_paired_landsAtOrigMov() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let (url, stem) = try resolver.resolveDestination(
+      variant: .originalPairedVideo,
+      descriptor: makeAsset(hasAdjustments: true, isLivePhoto: true),
+      originalFilename: "IMG_0001.MOV", resources: [],
+      destDir: dir, groupStem: "IMG_0001", pairOriginalWithSuffix: true)
+    #expect(url.lastPathComponent == "IMG_0001_orig.MOV")
+    #expect(stem == "IMG_0001")
+  }
+
+  /// `.originalPairedVideo` with no `.edited` companion in the run writes the motion
+  /// file at the bare stem. Matches `.editedWithOriginals` off for an unedited Live
+  /// Photo: the still and motion files both land at the natural stem.
+  @Test func resolveDestination_originalPairedVideo_unpaired_landsAtBareMov() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let (url, _) = try resolver.resolveDestination(
+      variant: .originalPairedVideo,
+      descriptor: makeAsset(isLivePhoto: true),
+      originalFilename: "IMG_0001.MOV", resources: [],
+      destDir: dir, groupStem: "IMG_0001", pairOriginalWithSuffix: false)
+    #expect(url.lastPathComponent == "IMG_0001.MOV")
+  }
+
+  /// `.editedPairedVideo` lands at the natural stem `.mov` — same shape as the image
+  /// `.edited` variant. Confirms the `_orig` suffix is never applied to the edited
+  /// motion file.
+  @Test func resolveDestination_editedPairedVideo_landsAtBareMov() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let (url, stem) = try resolver.resolveDestination(
+      variant: .editedPairedVideo,
+      descriptor: makeAsset(hasAdjustments: true, isLivePhoto: true),
+      originalFilename: "IMG_E0001.MOV", resources: [],
+      destDir: dir, groupStem: "IMG_0001", pairOriginalWithSuffix: true)
+    #expect(url.lastPathComponent == "IMG_0001.MOV")
+    #expect(stem == "IMG_0001")
+  }
+
+  /// Collision on the paired-original target throws the same sentinel (code 5) as the
+  /// still-side variant — the caller's failure-handling path doesn't branch on which
+  /// half of the pair tripped.
+  @Test func resolveDestination_originalPairedVideo_existingFile_throwsSentinel() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    plantFile("IMG_0001_orig.MOV", in: dir)
+    do {
+      _ = try resolver.resolveDestination(
+        variant: .originalPairedVideo,
+        descriptor: makeAsset(hasAdjustments: true, isLivePhoto: true),
+        originalFilename: "IMG_0001.MOV", resources: [],
+        destDir: dir, groupStem: "IMG_0001", pairOriginalWithSuffix: true)
+      Issue.record("Expected throw on paired-original-video collision")
+    } catch let error as NSError {
+      #expect(error.domain == "Export")
+      #expect(error.code == 5)
+      #expect(error.localizedDescription.contains("IMG_0001_orig.MOV"))
+    }
+  }
+
+  // MARK: - allocatePairedGroupStem — 4-slot variant
+
+  /// Default (nil `pairedVideoExt`) keeps the legacy 2-slot behaviour exactly. Pinning
+  /// here so a refactor that swaps the parameter order or default can't silently change
+  /// what an existing call site does.
+  @Test func allocatePairedGroupStem_legacy2SlotPathUnchangedWhenPairedVideoNil() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    // Plant only the `.mov` slot. With `pairedVideoExt: nil` the resolver doesn't
+    // look at it and returns the base stem.
+    plantFile("IMG_0001.MOV", in: dir)
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir,
+      pairedVideoExt: nil)
+    #expect(stem == "IMG_0001")
+  }
+
+  /// Live Photo allocation must reserve all four slots. A pre-existing `.mov` blocks
+  /// the base stem even though both image slots are free.
+  @Test func allocatePairedGroupStem_4Slot_bumpsWhenPairedVideoEditedOccupied() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    plantFile("IMG_0001.MOV", in: dir)
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir,
+      pairedVideoExt: "MOV")
+    #expect(stem == "IMG_0001 (1)")
+  }
+
+  /// A pre-existing `_orig.mov` blocks the base stem too — the four-slot freeness
+  /// check is symmetric across the image and motion sides of the pair.
+  @Test func allocatePairedGroupStem_4Slot_bumpsWhenPairedVideoOrigOccupied() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    plantFile("IMG_0001_orig.MOV", in: dir)
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir,
+      pairedVideoExt: "MOV")
+    #expect(stem == "IMG_0001 (1)")
+  }
+
+  /// Stem bumps until every one of the four slots at that index is free. Realistic
+  /// "partial Live Photo backup on disk" scenario: image slot taken at (0), motion
+  /// slot taken at (1); allocator must skip both and land at (2).
+  @Test func allocatePairedGroupStem_4Slot_skipsPartiallyOccupiedIndices() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    plantFile("IMG_0001.HEIC", in: dir)
+    plantFile("IMG_0001 (1).MOV", in: dir)
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir,
+      pairedVideoExt: "MOV")
+    #expect(stem == "IMG_0001 (2)")
+  }
+
+  // MARK: - Casing preservation
+
+  /// The resolver preserves whatever extension casing PhotoKit reports — uppercase or
+  /// lowercase. On Apple hardware Live Photo motion files report `.MOV` (uppercase);
+  /// on assets imported from other sources the casing can vary. Without this regression
+  /// guard, a future "normalize to lowercase" cleanup could silently mismatch the
+  /// scanner's filename-equality check on re-import.
+  @Test func resolveDestination_pairedVideo_preservesLowercaseExtension() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let (url, _) = try resolver.resolveDestination(
+      variant: .originalPairedVideo,
+      descriptor: makeAsset(hasAdjustments: true, isLivePhoto: true),
+      originalFilename: "IMG_0001.mov", resources: [],
+      destDir: dir, groupStem: "IMG_0001", pairOriginalWithSuffix: true)
+    #expect(url.lastPathComponent == "IMG_0001_orig.mov")
+  }
+
+  @Test func resolveDestination_pairedVideo_preservesUppercaseExtension() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let (url, _) = try resolver.resolveDestination(
+      variant: .originalPairedVideo,
+      descriptor: makeAsset(hasAdjustments: true, isLivePhoto: true),
+      originalFilename: "IMG_0001.MOV", resources: [],
+      destDir: dir, groupStem: "IMG_0001", pairOriginalWithSuffix: true)
+    #expect(url.lastPathComponent == "IMG_0001_orig.MOV")
   }
 }

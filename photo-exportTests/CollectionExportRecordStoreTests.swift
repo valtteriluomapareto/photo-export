@@ -223,7 +223,7 @@ struct CollectionExportRecordStoreTests {
     #expect(summary.exportedCount == 0)
     #expect(summary.totalCount == 0)
     let monthSummary = store.monthSummary(
-      assets: [asset], placement: timeline, selection: .edited)
+      assets: [asset], placement: timeline, selection: .edited, livePhotosPaired: false)
     #expect(monthSummary.exportedCount == 0)
     #expect(monthSummary.status == .notExported)
   }

@@ -289,6 +289,7 @@ struct LibraryRootView: View {
       MonthContentView(
         year: year, month: month,
         versionSelection: exportManager.versionSelection,
+        livePhotosPaired: exportManager.livePhotosPairedExport,
         isExportRunning: exportManager.isRunning,
         onExportMonth: { exportManager.startExportMonth(year: year, month: month) },
         selectedAsset: $selectedAsset,

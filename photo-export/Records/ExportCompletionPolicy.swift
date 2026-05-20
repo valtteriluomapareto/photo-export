@@ -31,11 +31,13 @@ enum ExportCompletionPolicy {
     asset: AssetDescriptor,
     selection: ExportVersionSelection,
     policy: VariantPolicy,
-    convertHEICToJPEG: Bool = false
+    convertHEICToJPEG: Bool = false,
+    livePhotosPaired: Bool = false
   ) -> Bool {
     let required = requiredVariants(
       for: asset, selection: selection, policy: policy,
-      convertHEICToJPEG: convertHEICToJPEG)
+      convertHEICToJPEG: convertHEICToJPEG,
+      livePhotosPaired: livePhotosPaired)
     if required.allSatisfy({ variants[$0]?.status == .done }) { return true }
     return satisfiesEditedFallback(variants: variants, asset: asset, selection: selection)
   }

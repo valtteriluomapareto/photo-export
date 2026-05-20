@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Photos
 import SwiftUI
 import os
@@ -25,6 +26,19 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// purpose is to break SwiftUI view-update equality so the dependent `.task(id:)`
   /// re-runs.
   @Published var libraryRevision: Int = 0
+
+  /// Issue #49: when the user turns on "Export Live Photos as paired image + video",
+  /// `descriptor(from:)` enables a `PHAssetResource`-enumeration fallback to catch
+  /// Live Photos whose `.photoLive` subtype flag is missing (a known iCloud-sync
+  /// anomaly). Off by default so the per-asset cost is paid only by users who opted
+  /// into the feature. Driven by `bindLivePhotoDetectionFallback(to:)` from the app-
+  /// level wiring.
+  var livePhotoDetectionFallbackEnabled: Bool = false
+
+  /// Bag for the publisher subscription wired by `bindLivePhotoDetectionFallback`. Kept
+  /// alive for the manager's lifetime — `PhotoLibraryManager` is held by the app's
+  /// `@StateObject` so this is process-lifetime in practice.
+  private var livePhotoDetectionCancellables = Set<AnyCancellable>()
 
   private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Photos")
 
@@ -178,6 +192,18 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     return Self.isAuthorizationSufficient(status)
   }
 
+  /// Subscribes `livePhotoDetectionFallbackEnabled` to a Bool publisher — typically
+  /// `ExportManager.$livePhotosPairedExport`. Drives the `descriptor(from:)` resource
+  /// fallback so it fires only when the user has opted into paired-video export.
+  /// Synchronous sink (no `.receive(on:)`) so the value is observable immediately when
+  /// the next fetch starts. Calling this multiple times replaces the prior binding.
+  func bindLivePhotoDetectionFallback(to publisher: AnyPublisher<Bool, Never>) {
+    livePhotoDetectionCancellables.removeAll()
+    publisher
+      .sink { [weak self] in self?.livePhotoDetectionFallbackEnabled = $0 }
+      .store(in: &livePhotoDetectionCancellables)
+  }
+
   /// Returns the number of assets in the given year/month whose `hasAdjustments` is true.
   ///
   /// `PHAsset.hasAdjustments` cannot be expressed as a Photos fetch predicate, so this falls
@@ -232,21 +258,22 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       return try await s.fetchAssets(in: scope, mediaType: mediaType)
     }
     guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    let useResourceFallback = livePhotoDetectionFallbackEnabled
     switch scope {
     case .timeline(let year, let month):
       let phAssets = try await fetchPHAssets(year: year, month: month, mediaType: mediaType)
       cacheAssets(phAssets)
-      return phAssets.map { Self.descriptor(from: $0) }
+      return phAssets.map { Self.descriptor(from: $0, useResourceFallback: useResourceFallback) }
     case .favorites:
       let phAssets = fetchFavoritesPHAssets(mediaType: mediaType)
       cacheAssets(phAssets)
-      return phAssets.map { Self.descriptor(from: $0) }
+      return phAssets.map { Self.descriptor(from: $0, useResourceFallback: useResourceFallback) }
     case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
       // Shared albums enumerate identically to user albums; the only difference is the
       // `PHAssetCollection.assetCollectionSubtype` we surfaced in the tree.
       let phAssets = fetchAlbumPHAssets(collectionLocalId: collectionLocalId, mediaType: mediaType)
       cacheAssets(phAssets)
-      return phAssets.map { Self.descriptor(from: $0) }
+      return phAssets.map { Self.descriptor(from: $0, useResourceFallback: useResourceFallback) }
     }
   }
 
@@ -362,7 +389,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       return nil
     }
     cacheAssets([asset])
-    return Self.descriptor(from: asset)
+    return Self.descriptor(from: asset, useResourceFallback: livePhotoDetectionFallbackEnabled)
   }
 
   /// Fast count of assets in a given year/month without loading them into memory
@@ -1060,7 +1087,13 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     return assets
   }
 
-  static func descriptor(from asset: PHAsset) -> AssetDescriptor {
+  /// Defaults `useResourceFallback: false` so the cheap path (subtype-flag only) runs
+  /// for legacy/test call sites. Production fetches go through the instance methods
+  /// above which read `livePhotoDetectionFallbackEnabled` and pass `true` when the
+  /// user has issue #49's Settings toggle on.
+  static func descriptor(from asset: PHAsset, useResourceFallback: Bool = false)
+    -> AssetDescriptor
+  {
     AssetDescriptor(
       id: asset.localIdentifier,
       creationDate: asset.creationDate,
@@ -1069,7 +1102,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       pixelHeight: asset.pixelHeight,
       duration: asset.duration,
       hasAdjustments: asset.hasAdjustments,
-      originalUTI: Self.originalUTI(for: asset)
+      originalUTI: Self.originalUTI(for: asset),
+      isLivePhoto: Self.detectLivePhoto(asset: asset, useResourceFallback: useResourceFallback)
     )
   }
 
@@ -1092,6 +1126,23 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// the (one PhotoKit call per resource) cost.
   private static func originalUTI(for asset: PHAsset) -> String? {
     asset.value(forKey: "uniformTypeIdentifier") as? String
+  }
+
+  /// `.photoLive` media subtype is the canonical Live Photo signal and is essentially
+  /// free to check. The fallback enumerates `PHAssetResource` to also catch iCloud-
+  /// synced assets that drop the subtype flag — gated by `useResourceFallback` because
+  /// the resource enumeration allocates per asset and would fire for every image in a
+  /// large fetch. Caller passes `true` only when the user has turned issue #49's
+  /// Settings toggle on (so paired-video export will actually use the result). Image-
+  /// typed assets only — video and audio assets are never Live Photos.
+  static func detectLivePhoto(asset: PHAsset, useResourceFallback: Bool) -> Bool {
+    guard asset.mediaType == .image else { return false }
+    if asset.mediaSubtypes.contains(.photoLive) { return true }
+    guard useResourceFallback else { return false }
+    let resources = PHAssetResource.assetResources(for: asset)
+    return resources.contains { resource in
+      resource.type == .pairedVideo || resource.type == .fullSizePairedVideo
+    }
   }
 }
 

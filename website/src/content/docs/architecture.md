@@ -48,8 +48,8 @@ Tracks which assets have been exported per-destination to avoid duplicates and s
 
 - Stores records by `PHAsset.localIdentifier`
 - Per-variant state: each record carries a `variants` dictionary keyed by `original` /
-  `edited`, so the same asset can track an original export and an edited export
-  independently
+  `edited` (plus `originalPairedVideo` / `editedPairedVideo` when the Live Photo paired
+  toggle is on), so each file the asset writes is tracked independently
 - Legacy flat records (single `filename` + `status`) decode into a synthesized `.original`
   variant so existing users keep their progress after upgrade
 - JSONL-based persistence with compaction

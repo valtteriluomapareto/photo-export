@@ -356,11 +356,20 @@ final class ExportRecordStore: ObservableObject {
   /// Includes the issue #22 edited-fallback case via the policy: an adjusted asset whose
   /// `.edited` variant is `.failed` with the `editedUnavailableOriginalBackedUpMessage`
   /// sentinel counts as exported. See `ExportCompletionPolicy.satisfiesEditedFallback`.
-  func isExported(asset: AssetDescriptor, selection: ExportVersionSelection) -> Bool {
+  /// `livePhotosPaired` defaults to `false` for legacy/test call sites that pre-date
+  /// issue #49 and don't need the paired-video accounting. Production paths that surface
+  /// per-asset export status to the user — `monthSummary(assets:selection:livePhotosPaired:)`
+  /// and `CollectionContentView.isExported(asset:)` — must pass the actual setting so an
+  /// asset whose paired-video is pending isn't reported as complete.
+  func isExported(
+    asset: AssetDescriptor, selection: ExportVersionSelection,
+    livePhotosPaired: Bool = false
+  ) -> Bool {
     guard let record = recordsById[asset.id] else { return false }
     return ExportCompletionPolicy.isComplete(
       variants: record.variants, asset: asset, selection: selection, policy: .standard,
-      convertHEICToJPEG: convertHEICToJPEG)
+      convertHEICToJPEG: convertHEICToJPEG,
+      livePhotosPaired: livePhotosPaired)
   }
 
   func exportInfo(assetId: String) -> ExportRecord? {
@@ -389,10 +398,12 @@ final class ExportRecordStore: ObservableObject {
   }
 
   /// Selection-aware month summary. Caller supplies the month's loaded asset descriptors so the
-  /// evaluator can consult each asset's `hasAdjustments`.
-  func monthSummary(assets: [AssetDescriptor], selection: ExportVersionSelection)
-    -> MonthStatusSummary
-  {
+  /// evaluator can consult each asset's `hasAdjustments`. `livePhotosPaired` is the user's
+  /// current setting (issue #49) — without it, a Live Photo whose paired video is pending
+  /// would be miscounted as complete.
+  func monthSummary(
+    assets: [AssetDescriptor], selection: ExportVersionSelection, livePhotosPaired: Bool
+  ) -> MonthStatusSummary {
     let year =
       assets.first.map { Calendar.current.component(.year, from: $0.creationDate ?? Date()) }
       ?? 0
@@ -401,7 +412,8 @@ final class ExportRecordStore: ObservableObject {
       ?? 0
 
     var exported = 0
-    for asset in assets where isExported(asset: asset, selection: selection) {
+    for asset in assets
+    where isExported(asset: asset, selection: selection, livePhotosPaired: livePhotosPaired) {
       exported += 1
     }
     return makeSummary(year: year, month: month, exported: exported, total: assets.count)

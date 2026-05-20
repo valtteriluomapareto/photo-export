@@ -114,8 +114,15 @@ struct AssetDetailView: View {
       Text(asset.hasAdjustments ? "Edits: Available in Photos" : "Edits: None in Photos")
       if let export = exportRecordStore.exportInfo(assetId: asset.id) {
         variantStatusView(export.variants[.original], label: "Original")
+        if asset.isLivePhoto {
+          variantStatusView(export.variants[.originalPairedVideo], label: "Live Photo motion")
+        }
         if asset.hasAdjustments {
           variantStatusView(export.variants[.edited], label: "Edited")
+          if asset.isLivePhoto {
+            variantStatusView(
+              export.variants[.editedPairedVideo], label: "Edited Live Photo motion")
+          }
         }
       }
     }

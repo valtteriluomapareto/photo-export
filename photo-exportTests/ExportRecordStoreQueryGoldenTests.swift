@@ -523,13 +523,14 @@ struct ExportRecordStoreQueryGoldenTests {
 
     let assets = [u1, u2, a1, a2, a3]
 
-    let editedSummary = store.monthSummary(assets: assets, selection: .edited)
+    let editedSummary = store.monthSummary(
+      assets: assets, selection: .edited, livePhotosPaired: false)
     #expect(editedSummary.exportedCount == 3)
     #expect(editedSummary.totalCount == 5)
     #expect(editedSummary.status == .partial)
 
     let editedWithOriginals = store.monthSummary(
-      assets: assets, selection: .editedWithOriginals)
+      assets: assets, selection: .editedWithOriginals, livePhotosPaired: false)
     #expect(editedWithOriginals.exportedCount == 2)
     #expect(editedWithOriginals.totalCount == 5)
     #expect(editedWithOriginals.status == .partial)

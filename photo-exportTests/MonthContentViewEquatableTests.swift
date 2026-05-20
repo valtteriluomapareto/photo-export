@@ -22,6 +22,7 @@ struct MonthContentViewEquatableTests {
     year: Int = 2025,
     month: Int = 6,
     versionSelection: ExportVersionSelection = .edited,
+    livePhotosPaired: Bool = false,
     isExportRunning: Bool = false,
     selected: AssetDescriptor? = nil,
     action: @escaping () -> Void = {}
@@ -30,6 +31,7 @@ struct MonthContentViewEquatableTests {
     return MonthContentView(
       year: year, month: month,
       versionSelection: versionSelection,
+      livePhotosPaired: livePhotosPaired,
       isExportRunning: isExportRunning,
       onExportMonth: action,
       selectedAsset: Binding(get: { local }, set: { local = $0 }),

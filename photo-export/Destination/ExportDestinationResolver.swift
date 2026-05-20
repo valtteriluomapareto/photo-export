@@ -52,7 +52,12 @@ struct ExportDestinationResolver: Sendable {
     pairOriginalWithSuffix: Bool
   ) throws -> (URL, String) {
     switch variant {
-    case .original:
+    case .original, .originalPairedVideo:
+      // The original-side filename rule is extension-agnostic: the image variant uses the
+      // resource's image extension (HEIC/JPG/…), the paired-video variant uses `.mov` — both
+      // pass through the same `<stem>[_orig].<ext>` shape. The collision-throw sentinel
+      // (code 5) is preserved verbatim for both because either filename being already on
+      // disk indicates a split-pair hazard the caller must surface.
       let origExt = (originalFilename as NSString).pathExtension
       if let stem = groupStem {
         let filename = ExportFilenamePolicy.originalFilename(
@@ -73,7 +78,10 @@ struct ExportDestinationResolver: Sendable {
       let finalURL = uniqueFileURL(in: destDir, baseName: origStem, ext: origExt)
       return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
 
-    case .edited:
+    case .edited, .editedPairedVideo:
+      // Same extension-agnostic story as `.original`: image side gets the rendered image
+      // extension, paired-video side gets `.mov`. Both land at `<groupStem>.<ext>` and
+      // share the post-edit collision-suffix rule.
       let editedExt = (originalFilename as NSString).pathExtension
       if let stem = groupStem {
         let filename = ExportFilenamePolicy.editedFilename(
@@ -88,7 +96,9 @@ struct ExportDestinationResolver: Sendable {
       }
       // Fresh single-variant `.edited` (default mode adjusted asset, no prior records).
       // Use the original-side resource's stem so the edited file lands at e.g.
-      // `IMG_0001.JPG` (matching what Photos.app does for a single-asset export).
+      // `IMG_0001.JPG` (matching what Photos.app does for a single-asset export). The
+      // paired-video case falls through to this branch only if the caller forgot to
+      // pre-allocate a group stem; we still land at a sane filename rather than trapping.
       let baseStem: String
       if let original = ResourceSelection.selectOriginalResource(
         from: resources, mediaType: descriptor.mediaType)
@@ -108,8 +118,17 @@ struct ExportDestinationResolver: Sendable {
   /// and the `_orig` companion target (`<stem>_orig.<originalExt>`) are simultaneously
   /// free. Bumps the per-pair collision suffix until both slots are available so the
   /// pair never splits across stems.
+  ///
+  /// `pairedVideoExt` is non-nil for Live Photos — it adds the matching paired-video
+  /// targets (`<stem>.<pairedVideoExt>` and `<stem>_orig.<pairedVideoExt>`) to the
+  /// freeness check so a 4-slot allocation cannot pick a stem whose `.mov` half is
+  /// already occupied. When nil, behaviour is exactly the prior 2-slot allocation.
   func allocatePairedGroupStem(
-    baseStem: String, editedExt: String, originalExt: String, destDir: URL
+    baseStem: String,
+    editedExt: String,
+    originalExt: String,
+    destDir: URL,
+    pairedVideoExt: String? = nil
   ) -> String {
     var stem = baseStem
     var index = 1
@@ -119,11 +138,19 @@ struct ExportDestinationResolver: Sendable {
       let origTarget = destDir.appendingPathComponent(
         stem + ExportFilenamePolicy.originalSuffix
       ).appendingPathExtension(originalExt)
-      if !fileSystem.fileExists(atPath: editedTarget.path)
+      var allFree =
+        !fileSystem.fileExists(atPath: editedTarget.path)
         && !fileSystem.fileExists(atPath: origTarget.path)
-      {
-        return stem
+      if allFree, let movExt = pairedVideoExt {
+        let editedMov = destDir.appendingPathComponent(stem).appendingPathExtension(movExt)
+        let origMov = destDir.appendingPathComponent(
+          stem + ExportFilenamePolicy.originalSuffix
+        ).appendingPathExtension(movExt)
+        allFree =
+          !fileSystem.fileExists(atPath: editedMov.path)
+          && !fileSystem.fileExists(atPath: origMov.path)
       }
+      if allFree { return stem }
       stem = "\(baseStem) (\(index))"
       index += 1
     }

@@ -223,7 +223,8 @@ struct CollectionContentView: View {
   private func isExported(asset: AssetDescriptor) -> Bool {
     guard let placement else { return false }
     return collectionExportRecordStore.isExported(
-      asset: asset, placement: placement, selection: exportManager.versionSelection)
+      asset: asset, placement: placement, selection: exportManager.versionSelection,
+      livePhotosPaired: exportManager.livePhotosPairedExport)
   }
 
   // MARK: - Header summary
@@ -255,7 +256,8 @@ struct CollectionContentView: View {
     if let placement {
       return collectionExportRecordStore.monthSummary(
         assets: viewModel.assets, placement: placement,
-        selection: exportManager.versionSelection)
+        selection: exportManager.versionSelection,
+        livePhotosPaired: exportManager.livePhotosPairedExport)
     }
     return MonthStatusSummary(
       year: 0, month: 0, exportedCount: 0,

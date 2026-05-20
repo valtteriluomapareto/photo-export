@@ -318,4 +318,131 @@ struct VariantExporterTests {
     #expect(h.host.failureCalls.contains { $0.assetId == "heic-untouched" },
       "Unedited HEIC under .edited selection with toggle off should record an editedResourceUnavailable failure")
   }
+
+  // MARK: - Live Photo paired-video variants
+
+  /// `.originalPairedVideo` selects the `.pairedVideo` resource via the resource writer
+  /// (never the renderer). Pins the producer routing for Live Photo motion files so a
+  /// future refactor that accidentally routes them through the video render path would
+  /// fail this gate.
+  @Test func originalPairedVideo_writesViaResourceWriter_doesNotRender() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let asset = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
+    let resources = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+      TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+    ]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+
+    _ = try await h.exporter.exportSingleVariant(
+      variant: .originalPairedVideo, descriptor: asset, resources: resources,
+      destDir: h.destDir, relPath: "2025/07/",
+      job: ExportManager.ExportJob(
+        assetLocalIdentifier: asset.id,
+        placement: .timeline(year: 2025, month: 7),
+        selection: .edited),
+      groupStem: "IMG_0001", pairOriginalWithSuffix: false,
+      generation: 0, inFlight: &inFlight)
+
+    #expect(h.renderer.renderCalls.isEmpty,
+      "MediaRenderer must not be called for Live Photo paired-video variants")
+    #expect(h.writer.writeCalls.count == 1)
+    #expect(h.writer.writeCalls.first?.resource.type == .pairedVideo)
+    // Writer receives the staging `.tmp` URL before the atomic move; the user-visible
+    // filename is the `.tmp`-stripped leaf.
+    #expect(
+      h.writer.writeCalls.first?.url.deletingPathExtension().lastPathComponent == "IMG_0001.MOV")
+  }
+
+  /// `.editedPairedVideo` prefers `.fullSizePairedVideo` when Photos has rendered an
+  /// edited motion companion.
+  @Test func editedPairedVideo_prefersFullSizePairedVideoResource() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let asset = TestAssetFactory.makeAsset(id: "live", hasAdjustments: true, isLivePhoto: true)
+    let resources = [
+      TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+      TestAssetFactory.makeResource(
+        type: .fullSizePairedVideo, originalFilename: "IMG_E0001.MOV"),
+    ]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+
+    _ = try await h.exporter.exportSingleVariant(
+      variant: .editedPairedVideo, descriptor: asset, resources: resources,
+      destDir: h.destDir, relPath: "2025/07/",
+      job: ExportManager.ExportJob(
+        assetLocalIdentifier: asset.id,
+        placement: .timeline(year: 2025, month: 7),
+        selection: .edited),
+      groupStem: "IMG_0001", pairOriginalWithSuffix: true,
+      generation: 0, inFlight: &inFlight)
+
+    #expect(h.writer.writeCalls.count == 1)
+    #expect(h.writer.writeCalls.first?.resource.type == .fullSizePairedVideo)
+    #expect(
+      h.writer.writeCalls.first?.url.deletingPathExtension().lastPathComponent == "IMG_0001.MOV")
+  }
+
+  /// `.editedPairedVideo` falls back to `.pairedVideo` when Photos elides the
+  /// `.fullSizePairedVideo` resource (e.g. an edit that doesn't touch motion). The
+  /// fallback is silent: no host failure call, the writer is invoked with the unedited
+  /// motion bytes and the file lands at the natural edited stem.
+  @Test func editedPairedVideo_fallsBackToPairedVideoWhenFullSizeMissing() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let asset = TestAssetFactory.makeAsset(id: "live", hasAdjustments: true, isLivePhoto: true)
+    let resources = [
+      TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+    ]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+
+    _ = try await h.exporter.exportSingleVariant(
+      variant: .editedPairedVideo, descriptor: asset, resources: resources,
+      destDir: h.destDir, relPath: "2025/07/",
+      job: ExportManager.ExportJob(
+        assetLocalIdentifier: asset.id,
+        placement: .timeline(year: 2025, month: 7),
+        selection: .edited),
+      groupStem: "IMG_0001", pairOriginalWithSuffix: true,
+      generation: 0, inFlight: &inFlight)
+
+    #expect(h.host.failureCalls.isEmpty,
+      "Fallback must be silent — no failure recorded when `.pairedVideo` is used as a stand-in")
+    #expect(h.writer.writeCalls.count == 1)
+    #expect(h.writer.writeCalls.first?.resource.type == .pairedVideo)
+  }
+
+  /// No paired-video resource at all → host failure call with the canonical "No
+  /// exportable resource" message for `.originalPairedVideo` (matches the still-side
+  /// `.original` failure shape, so the diagnostic report and run-summary counter both
+  /// treat them uniformly).
+  @Test func originalPairedVideo_noResource_recordsFailureThroughHost() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+
+    let asset = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
+    let resources = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+    ]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+
+    let result = try await h.exporter.exportSingleVariant(
+      variant: .originalPairedVideo, descriptor: asset, resources: resources,
+      destDir: h.destDir, relPath: "2025/07/",
+      job: ExportManager.ExportJob(
+        assetLocalIdentifier: asset.id,
+        placement: .timeline(year: 2025, month: 7),
+        selection: .edited),
+      groupStem: "IMG_0001", pairOriginalWithSuffix: false,
+      generation: 0, inFlight: &inFlight)
+
+    #expect(result == nil)
+    #expect(h.host.failureCalls.count == 1)
+    #expect(h.host.failureCalls.first?.variant == .originalPairedVideo)
+    #expect(h.host.failureCalls.first?.message == "No exportable resource")
+  }
 }

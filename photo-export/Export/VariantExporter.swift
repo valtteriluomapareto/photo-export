@@ -125,27 +125,20 @@ final class VariantExporter {
     // showing `(rendering…)` forever.
     defer { host?.clearRenderActivity() }
 
-    let producer: EditedProducer = {
-      switch variant {
-      case .original:
-        if let resource = ResourceSelection.selectOriginalResource(
-          from: resources, mediaType: descriptor.mediaType)
-        {
-          return .resource(resource)
-        }
-        return .none
-      case .edited:
-        return ResourceSelection.selectEditedProducer(
-          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
-          convertHEICToJPEG: host?.convertHEICToJPEG ?? false)
-      }
-    }()
+    // Single point of byte-source dispatch: `ResourceSelection.selectProducer` returns
+    // the same `EditedProducer` enum for every variant (issue #49 — keep the seam
+    // enum-shaped rather than branching by variant here). `convertHEICToJPEG` (issue
+    // #47) is forwarded so the `.edited` case can synthesize a JPEG from a HEIC source.
+    let producer = ResourceSelection.selectProducer(
+      variant: variant, from: resources, descriptor: descriptor,
+      convertHEICToJPEG: host?.convertHEICToJPEG ?? false)
 
     guard let originalFilename = producer.originalFilename else {
       let errMsg: String
       switch variant {
-      case .original: errMsg = "No exportable resource"
-      case .edited: errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
+      case .original, .originalPairedVideo: errMsg = "No exportable resource"
+      case .edited, .editedPairedVideo:
+        errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
       }
       host?.recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: variant,

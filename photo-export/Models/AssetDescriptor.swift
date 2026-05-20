@@ -22,6 +22,10 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
   /// asset's exports should include a synthesized JPEG `.edited` variant. Treat
   /// `nil` as "not HEIC" — the default conversion-off behavior matches.
   let originalUTI: String?
+  /// True when the asset is a Live Photo (`PHAssetMediaSubtype.photoLive`). Drives the
+  /// paired-video export path: an additional `.mov` resource is selected and written
+  /// alongside the still image.
+  let isLivePhoto: Bool
 
   init(
     id: String,
@@ -31,7 +35,8 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
     pixelHeight: Int,
     duration: TimeInterval,
     hasAdjustments: Bool,
-    originalUTI: String? = nil
+    originalUTI: String? = nil,
+    isLivePhoto: Bool = false
   ) {
     self.id = id
     self.creationDate = creationDate
@@ -41,6 +46,7 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
     self.duration = duration
     self.hasAdjustments = hasAdjustments
     self.originalUTI = originalUTI
+    self.isLivePhoto = isLivePhoto
   }
 
   /// True when the asset's original byte source is HEIC or HEIF. Drives the

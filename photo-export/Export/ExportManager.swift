@@ -9,6 +9,8 @@ import os
 final class ExportManager: ObservableObject {
   /// User-facing persistence key for the active version selection.
   static let versionSelectionDefaultsKey = "exportVersionSelection"
+  /// Persistence key for the Live Photo paired-video export toggle (issue #49).
+  static let livePhotosPairedExportDefaultsKey = "livePhotosPairedExport"
 
   /// How long the "already exported" toolbar message stays visible before it auto-clears.
   /// Long enough to read, short enough that subsequent work doesn't show stale state.
@@ -25,6 +27,24 @@ final class ExportManager: ObservableObject {
     /// Selection snapshot at enqueue time. Deterministic within a single job even if the user
     /// toggles selection mid-run.
     let selection: ExportVersionSelection
+    /// Live Photo paired-video toggle snapshot at enqueue time (issue #49). Same semantics
+    /// as `selection`: a mid-run flip of the Settings toggle does not change what an
+    /// already-queued job writes, so in-flight Live Photo work finishes against the
+    /// setting the user had when they clicked Export. Defaults to `false` so call sites
+    /// not yet aware of the toggle keep the pre-issue-#49 stills-only behaviour.
+    let livePhotosPaired: Bool
+
+    init(
+      assetLocalIdentifier: String,
+      placement: ExportPlacement,
+      selection: ExportVersionSelection,
+      livePhotosPaired: Bool = false
+    ) {
+      self.assetLocalIdentifier = assetLocalIdentifier
+      self.placement = placement
+      self.selection = selection
+      self.livePhotosPaired = livePhotosPaired
+    }
 
     /// Year derived from the placement. Defined for timeline jobs; returns `0` for
     /// `.favorites`/`.album`/`.sharedAlbum` placements where year/month is not part of
@@ -99,6 +119,23 @@ final class ExportManager: ObservableObject {
     set { versionSelection = newValue ? .editedWithOriginals : .edited }
   }
 
+  /// Issue #49: when on, Live Photos export a paired `.MOV` motion file alongside the
+  /// still image (e.g. `IMG_0001.HEIC` + `IMG_0001.MOV`). With `.editedWithOriginals`
+  /// also on, edited Live Photos additionally write `_orig.HEIC` + `_orig.MOV`.
+  /// Default off — most users want stills-only and the paired video roughly doubles
+  /// disk usage for Live-Photo-heavy libraries. Persisted to `UserDefaults` so the
+  /// choice survives restart and stays globally consistent regardless of destination.
+  /// Snapshotted onto each `ExportJob` at enqueue time (alongside `selection`) so a
+  /// mid-run toggle change does not corrupt in-flight work or strand orphans.
+  @Published var livePhotosPairedExport: Bool {
+    didSet {
+      userDefaults.set(livePhotosPairedExport, forKey: Self.livePhotosPairedExportDefaultsKey)
+      // The "already exported" copy is scoped to the previous setting — under a new
+      // setting the user may have new work, so the message would be misleading.
+      clearEmptyRunMessage()
+    }
+  }
+
   // MARK: - Published State (Import)
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
@@ -150,6 +187,13 @@ final class ExportManager: ObservableObject {
   /// `requiredVariants` widens to include `.edited`.
   var convertHEICToJPEGPublisher: AnyPublisher<Bool, Never> {
     $convertHEICToJPEG.eraseToAnyPublisher()
+  }
+
+  /// Combine publisher for `livePhotosPairedExport` (issue #49). `PhotoLibraryManager`
+  /// subscribes via `bindLivePhotoDetectionFallback(to:)` so the resource-enumeration
+  /// fallback runs only when the user has the toggle on.
+  var livePhotosPairedExportPublisher: AnyPublisher<Bool, Never> {
+    $livePhotosPairedExport.eraseToAnyPublisher()
   }
 
   /// Combine publisher for the import flag.
@@ -422,8 +466,11 @@ final class ExportManager: ObservableObject {
       self.versionSelection = .edited
     }
     // `bool(forKey:)` returns `false` for an unset key — the off-by-default
-    // contract is implicit. Initial value flows into both record stores via
-    // the manual sync below (didSet is suppressed during init).
+    // contract is implicit. Initial values flow into both record stores via
+    // the manual sync below (didSet is suppressed during init). All stored
+    // properties must be assigned before any `self.` access, so the Live
+    // Photo paired-video toggle (issue #49) is set first.
+    self.livePhotosPairedExport = userDefaults.bool(forKey: Self.livePhotosPairedExportDefaultsKey)
     self.convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
     self.exportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
     self.collectionExportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
@@ -1220,11 +1267,16 @@ final class ExportManager: ObservableObject {
 
     let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
     try throwIfCancelledOrStale(gen)
+    // Snapshot the Live Photo paired-video setting onto each job (issue #49) so a mid-run
+    // toggle flip does not change what an already-queued asset writes.
+    let pairedSnapshot = livePhotosPairedExport
     let newJobs = ExportJobPlanner.plan(
       assets: assets, placement: placement, selection: selectionMode,
+      livePhotosPaired: pairedSnapshot,
       isExported: {
         collectionExportRecordStore.isExported(
-          asset: $0, placement: placement, selection: selectionMode)
+          asset: $0, placement: placement, selection: selectionMode,
+          livePhotosPaired: pairedSnapshot)
       },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     queueCoordinator.enqueue(newJobs)
@@ -1371,9 +1423,14 @@ final class ExportManager: ObservableObject {
     let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
     let placement = ExportPlacement.timeline(year: year, month: month)
+    let pairedSnapshot = livePhotosPairedExport
     let newJobs = ExportJobPlanner.plan(
       assets: assets, placement: placement, selection: selection,
-      isExported: { exportRecordStore.isExported(asset: $0, selection: selection) },
+      livePhotosPaired: pairedSnapshot,
+      isExported: {
+        exportRecordStore.isExported(
+          asset: $0, selection: selection, livePhotosPaired: pairedSnapshot)
+      },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
@@ -1388,9 +1445,14 @@ final class ExportManager: ObservableObject {
     guard photoLibraryService.isAuthorized else { return .unauthorized }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
     try throwIfCancelledOrStale(gen)
+    let pairedSnapshot = livePhotosPairedExport
     let newJobs = ExportJobPlanner.planTimelineYear(
       assets: assets, year: year, selection: selection,
-      isExported: { exportRecordStore.isExported(asset: $0, selection: selection) },
+      livePhotosPaired: pairedSnapshot,
+      isExported: {
+        exportRecordStore.isExported(
+          asset: $0, selection: selection, livePhotosPaired: pairedSnapshot)
+      },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
@@ -1679,7 +1741,8 @@ final class ExportManager: ObservableObject {
       let required = requiredVariants(
         for: descriptor, selection: job.selection,
         policy: job.placement.kind.variantPolicy,
-        convertHEICToJPEG: convertHEICToJPEG)
+        convertHEICToJPEG: convertHEICToJPEG,
+        livePhotosPaired: job.livePhotosPaired)
       let missing = required.filter { variant in
         existingRecord?.variants[variant]?.status != .done
       }
@@ -1689,20 +1752,29 @@ final class ExportManager: ObservableObject {
         return
       }
 
-      // Always attempt original before edited so edited can inherit the chosen group stem.
-      let orderedVariants: [ExportVariant] = [.original, .edited].filter { missing.contains($0) }
+      // Variant order: image side first within each pairing group so the motion file inherits
+      // the anchored stem. For non-Live-Photo assets the paired-video filters fall away and
+      // this collapses to the legacy `[.original, .edited]` order.
+      let orderedVariants: [ExportVariant] =
+        [.original, .originalPairedVideo, .edited, .editedPairedVideo]
+        .filter { missing.contains($0) }
 
-      // Whether `.original` is paired with `.edited` for this asset. When true, the
-      // `.original` file is written at `<stem>_orig.<origExt>`; otherwise at the bare stem.
+      // Whether the original-side variants are paired with their edited counterparts for this
+      // asset. When true, `.original` is written at `<stem>_orig.<origExt>` and
+      // `.originalPairedVideo` (if present) at `<stem>_orig.mov`; otherwise both land at the
+      // bare stem. The image-side `.edited` flag is sufficient: a Live Photo whose still side
+      // is edited always has its motion side considered edited too.
       let pairOriginalWithSuffix = required.contains(.edited)
 
       var groupStem = ExportDestinationResolver.inheritedGroupStem(
         from: existingRecord, descriptor: descriptor, resources: resources)
 
-      // Pre-allocate a paired stem when we will write both variants in this run with no
-      // inherited stem to anchor the pair. This guarantees the edited and `_orig` companion
-      // land on the same stem instead of splitting via per-file uniqueFileURL collisions.
-      if groupStem == nil, orderedVariants == [.original, .edited],
+      // Pre-allocate a paired stem when we will write both image-side variants in this run
+      // with no inherited stem to anchor the pair. This guarantees every member of the group
+      // — including the Live Photo motion file — lands on the same stem instead of splitting
+      // via per-file uniqueFileURL collisions. For a Live Photo we also reserve the two
+      // `.mov` slots so an unrelated motion file already on disk can't claim the group stem.
+      if groupStem == nil, required.contains(.original), required.contains(.edited),
         let originalRes = ResourceSelection.selectOriginalResource(
           from: resources, mediaType: descriptor.mediaType)
       {
@@ -1713,8 +1785,22 @@ final class ExportManager: ObservableObject {
           let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
           let originalExt = (originalRes.originalFilename as NSString).pathExtension
           let editedExt = (editedFilename as NSString).pathExtension
+          let pairedVideoExt: String? = {
+            guard required.contains(where: { $0.isPairedVideo }) else { return nil }
+            // Read the paired-video resource's extension directly; no need to route
+            // through the variant-dispatch seam just to surface a filename.
+            guard
+              let pairedResource = resources.first(where: { $0.type == .pairedVideo })
+            else { return nil }
+            let ext = (pairedResource.originalFilename as NSString).pathExtension
+            return ext.isEmpty ? nil : ext
+          }()
           groupStem = destinationResolver.allocatePairedGroupStem(
-            baseStem: baseStem, editedExt: editedExt, originalExt: originalExt, destDir: destDir)
+            baseStem: baseStem,
+            editedExt: editedExt,
+            originalExt: originalExt,
+            destDir: destDir,
+            pairedVideoExt: pairedVideoExt)
         }
       }
 
@@ -1993,9 +2079,13 @@ final class ExportManager: ObservableObject {
     guard activeRunContext?.source == .autoSync,
       let check = autoSyncEligibilityCheck
     else { return false }
+    // `livePhotosPairedExport` is read live (not snapshotted onto the job) — this predicate
+    // runs at enqueue time, before any in-flight work, so the current setting is the
+    // right value to gate against.
     let required = requiredVariants(
       for: asset, selection: selection, policy: placement.kind.variantPolicy,
-      convertHEICToJPEG: convertHEICToJPEG)
+      convertHEICToJPEG: convertHEICToJPEG,
+      livePhotosPaired: livePhotosPairedExport)
     let now = Date()
     let hasEligible = required.contains { variant in
       check(asset.id, placement, variant, now)
