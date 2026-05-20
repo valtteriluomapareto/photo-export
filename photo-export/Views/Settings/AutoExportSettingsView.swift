@@ -87,6 +87,9 @@ struct AutoExportSettingsView: View {
       Section {
         StatusSummaryRow(state: autoSyncManager.state)
         LastReconciledRow(timestamp: photoChangeAdapter.lastSuccessfulReconciliation)
+        if let catchUp = photoChangeAdapter.lastCatchUpSummary {
+          LastCatchUpRow(summary: catchUp)
+        }
         if let summary = autoSyncManager.lastRunSummary {
           LastRunRow(summary: summary)
         }
@@ -483,6 +486,39 @@ private struct LastReconciledRow: View {
   private func label(now: Date) -> String {
     guard let timestamp else { return "Checking\u{2026}" }
     return "Last updated \(Self.formatter.localizedString(for: timestamp, relativeTo: now))"
+  }
+}
+
+/// Latest iCloud-Photos catch-up summary — duration + outcome — surfaced so a
+/// reporter who hit a launch beachball (issue #92) can confirm the
+/// off-main-actor catch-up actually completed once the fix shipped. Renders
+/// quietly: only appears when there's a summary to show.
+private struct LastCatchUpRow: View {
+  let summary: PhotoLibraryPersistentChangeAdapter.CatchUpSummary
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: "tray.and.arrow.down")
+        .foregroundStyle(.secondary)
+      Text(label)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private var label: String {
+    let durationMs = Int(summary.duration * 1000)
+    let durationText = durationMs < 1000 ? "\(durationMs) ms" : String(format: "%.1f s", summary.duration)
+    switch summary.result {
+    case .capturedBaseline:
+      return "Last library check: captured baseline in \(durationText)"
+    case .emittedChanges(let count):
+      return "Last library check: \(count) change\(count == 1 ? "" : "s") in \(durationText)"
+    case .detailsUnavailable(let failures):
+      return "Last library check: details unavailable (\(failures) failures) in \(durationText)"
+    case .fetchError(let description):
+      return "Last library check: \(description) in \(durationText)"
+    }
   }
 }
 

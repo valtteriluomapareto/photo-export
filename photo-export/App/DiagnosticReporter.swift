@@ -14,6 +14,11 @@ struct DiagnosticReporter {
   let destinationId: String?
   let appVersion: String
   let buildNumber: String
+  /// Latest iCloud-Photos catch-up summary — surfaced so a reporter hitting
+  /// the issue #92 launch beachball can attach the diagnostic report and the
+  /// maintainer can see exactly how long the fetch took / how many changes
+  /// were processed without needing Console snippets.
+  let lastCatchUpSummary: PhotoLibraryPersistentChangeAdapter.CatchUpSummary?
   private let now: () -> Date
 
   init(
@@ -22,6 +27,7 @@ struct DiagnosticReporter {
     destinationId: String?,
     appVersion: String,
     buildNumber: String,
+    lastCatchUpSummary: PhotoLibraryPersistentChangeAdapter.CatchUpSummary? = nil,
     now: @escaping () -> Date = Date.init
   ) {
     self.timelineStore = timelineStore
@@ -29,6 +35,7 @@ struct DiagnosticReporter {
     self.destinationId = destinationId
     self.appVersion = appVersion
     self.buildNumber = buildNumber
+    self.lastCatchUpSummary = lastCatchUpSummary
     self.now = now
   }
 
@@ -39,6 +46,7 @@ struct DiagnosticReporter {
     lines.append("App version: \(appVersion) (\(buildNumber))")
     lines.append("Destination ID: \(destinationId ?? "<none>")")
     lines.append("")
+    lines.append(contentsOf: catchUpSection())
 
     let timelineFailed = collectTimelineProblems(status: .failed)
     let timelineInProgress = collectTimelineProblems(status: .inProgress)
@@ -184,6 +192,37 @@ struct DiagnosticReporter {
       if let fallback = problem.fallbackFilename {
         lines.append("  fallback: original exported as \(fallback)")
       }
+    }
+    lines.append("")
+    return lines
+  }
+
+  /// Catch-up summary block. Always emitted (with "(none recorded)" when no
+  /// summary is available) so a reporter who attaches the diagnostic file
+  /// without running into the issue #92 hang still tells us "the off-main
+  /// catch-up never ran on this launch."
+  private func catchUpSection() -> [String] {
+    var lines: [String] = []
+    lines.append("== Last iCloud Library Catch-Up ==")
+    guard let summary = lastCatchUpSummary else {
+      lines.append("(none recorded this launch)")
+      lines.append("")
+      return lines
+    }
+    let durationMs = Int(summary.duration * 1000)
+    lines.append("Started:   \(Self.formatter.string(from: summary.startedAt))")
+    lines.append("Finished:  \(Self.formatter.string(from: summary.finishedAt))")
+    lines.append("Duration:  \(durationMs) ms")
+    lines.append("Trigger:   \(summary.trigger)")
+    switch summary.result {
+    case .capturedBaseline:
+      lines.append("Result:    captured baseline (first launch / no prior token)")
+    case .emittedChanges(let count):
+      lines.append("Result:    emitted \(count) change(s)")
+    case .detailsUnavailable(let failures):
+      lines.append("Result:    per-change details unavailable (\(failures) failure(s)); token rebased")
+    case .fetchError(let description):
+      lines.append("Result:    fetch error: \(description); token rebased")
     }
     lines.append("")
     return lines

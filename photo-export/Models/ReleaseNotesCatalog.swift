@@ -24,14 +24,19 @@ enum ReleaseNotesCatalog {
         "Fixes launch reliability on macOS 15.7+ and when the destination folder is on an unreachable network share.",
       bullets: [
         ReleaseNote.Bullet(
-          title: "Launch no longer hangs while the Photos library initializes",
+          title: "Launch no longer hangs while the Photos library catches up",
           body:
-            "Photo Export's first-touch with Apple's Photos framework now happens after the main window has rendered, so on macOS 15.7 and newer the app starts responsively even if PhotoKit's initial handshake takes a moment. Fixes the launch beachball reported in [#92](https://github.com/valtteriluomapareto/photo-export/issues/92)."
+            "Photo Export's startup library-changes catch-up now runs in the background instead of holding the main thread. On libraries with a large backlog of recent Photos changes (often the case on macOS 15.7+ after periods away from the app), this prevents the beachball at launch reported in [#92](https://github.com/valtteriluomapareto/photo-export/issues/92). The first scan still runs — you just get a responsive window while it does."
         ),
         ReleaseNote.Bullet(
           title: "Stale network bookmark no longer blocks launch",
           body:
             "If you upgraded from 1.3 with the destination folder on a NAS or other network share that the app can't reach at launch — volume unmounted, sandbox-denied, or otherwise unreadable — Photo Export now starts cleanly and prompts you to re-select the folder instead of beachballing. Companion fix to [#92](https://github.com/valtteriluomapareto/photo-export/issues/92)."
+        ),
+        ReleaseNote.Bullet(
+          title: "Photos library first-touch is no longer synchronous on launch",
+          body:
+            "PhotoKit's initial handshake also moved off the synchronous launch path, so on macOS 15.7+ the app stays responsive even if Apple's framework takes a moment to come online. Belt-and-braces with the catch-up fix above."
         ),
       ],
       learnMore: nil
