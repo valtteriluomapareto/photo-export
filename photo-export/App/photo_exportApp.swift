@@ -215,6 +215,16 @@ struct PhotoExportApp: App {
         .environmentObject(exportManager.progressState)
         .environmentObject(whatsNewState)
         .task {
+          // First-touch PhotoKit here, not in App.init. Issue #92: the prior
+          // shape called `PHPhotoLibrary.shared().register(self)` and the
+          // authorization probe inside `PhotoLibraryManager.init`, before any
+          // window had rendered. On macOS 15.7+ that synchronous singleton
+          // init has been observed to hang launch (PhotoKit's first call
+          // touches accountsd/TCC paths). Moving it into `.task` keeps the
+          // launch path UI-responsive even if PhotoKit takes a moment.
+          // Idempotent under scene recreation; a no-op under tests + screenshot
+          // mode.
+          photoLibraryManager.start()
           lifecycleCoordinator.attach(
             initial: DestinationIdentitySnapshot(
               fingerprint: exportDestinationManager.destinationFingerprint),

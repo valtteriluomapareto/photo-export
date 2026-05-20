@@ -42,7 +42,13 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// call sites.
   nonisolated static let defaultReconcileInterval: TimeInterval = 15 * 60
 
-  private let library: PHPhotoLibrary
+  /// Optional explicit injection (tests). Production callers leave it `nil`
+  /// so the singleton is resolved lazily inside `library` — that defers the
+  /// first `PHPhotoLibrary.shared()` evaluation out of `init` and into the
+  /// `.task` block where `start()` runs. Issue #92: the synchronous singleton
+  /// init was hanging launch on macOS 15.7+ when triggered from `App.init`.
+  private let explicitLibrary: PHPhotoLibrary?
+  private lazy var library: PHPhotoLibrary = explicitLibrary ?? PHPhotoLibrary.shared()
   private let tokenStore: GlobalPhotoChangeTokenStore
   private let logger: Logger
   private let authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never>?
@@ -83,7 +89,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// that turned up actual changes so the UI side can wake alongside AutoSync;
   /// production wires it to `PhotoLibraryManager.invalidateCache()`.
   init(
-    library: PHPhotoLibrary = .shared(),
+    library: PHPhotoLibrary? = nil,
     tokenStore: GlobalPhotoChangeTokenStore,
     authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never>? = nil,
     clock: AutoSyncClock,
@@ -92,7 +98,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
     logger: Logger = Logger(
       subsystem: "com.valtteriluoma.photo-export", category: "PhotoLibraryChanges")
   ) {
-    self.library = library
+    self.explicitLibrary = library
     self.tokenStore = tokenStore
     self.authorizationStatusPublisher = authorizationStatusPublisher
     self.onPotentialLibraryChange = onPotentialLibraryChange
