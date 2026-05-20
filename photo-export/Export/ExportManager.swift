@@ -1775,20 +1775,27 @@ final class ExportManager: ObservableObject {
       // of splitting via per-file uniqueFileURL collisions, and reserves the `.mov` slot
       // so an unrelated motion file already on disk can't claim the group stem.
       //
-      // Two trigger shapes:
-      // - Edited asset: `.original` + `.edited` both in `required` (the legacy 4-slot
-      //   case). Reserves natural + `_orig` slots on both image and motion sides.
-      // - Unedited Live Photo: `.original` + `.originalPairedVideo` both in `required`,
-      //   `.edited` absent. Reserves natural-stem image + motion slots only. Without this
-      //   case, two unedited Live Photos with the same base stem but different image
-      //   extensions (e.g. `IMG_7399.heic` + `IMG_7399.jpeg`) coexist on the image side
-      //   but collide on the shared `.MOV`, leaving the second `.originalPairedVideo`
-      //   permanently `.failed`.
+      // Three trigger shapes:
+      // - Edited asset (4-slot): `.original` + `.edited` both in `required`. Reserves
+      //   natural + `_orig` slots on both image and motion sides.
+      // - Unedited Live Photo (2-slot): `.original` + `.originalPairedVideo` in
+      //   `required`, `.edited` absent. Reserves natural-stem image (original) + motion
+      //   slots. Without this case, two unedited Live Photos sharing a base stem but
+      //   different image extensions (e.g. `IMG_7399.heic` + `IMG_7399.jpeg`) coexist
+      //   on the image side but collide on the shared `.MOV`.
+      // - Adjusted Live Photo under `selection = .edited` (2-slot edited-only):
+      //   `.edited` + `.editedPairedVideo` in `required`, `.original` absent. Reserves
+      //   natural-stem image (edited) + motion slots. Same collision shape as the
+      //   unedited case but with the edited image side at the natural stem.
       let editedInRequired = required.contains(.edited)
+      let originalInRequired = required.contains(.original)
       let unEditedLivePhoto =
-        !editedInRequired && required.contains(.original) && required.contains(.originalPairedVideo)
-      if groupStem == nil, required.contains(.original),
-        editedInRequired || unEditedLivePhoto,
+        !editedInRequired && originalInRequired && required.contains(.originalPairedVideo)
+      let editedLivePhotoOnly =
+        !originalInRequired && editedInRequired && required.contains(.editedPairedVideo)
+      let triggerAllocator =
+        (editedInRequired && originalInRequired) || unEditedLivePhoto || editedLivePhotoOnly
+      if groupStem == nil, triggerAllocator,
         let originalRes = ResourceSelection.selectOriginalResource(
           from: resources, mediaType: descriptor.mediaType)
       {
@@ -1804,7 +1811,9 @@ final class ExportManager: ObservableObject {
           let ext = (pairedResource.originalFilename as NSString).pathExtension
           return ext.isEmpty ? nil : ext
         }()
-        if editedInRequired {
+        if editedInRequired && originalInRequired {
+          // 4-slot edited path: needs both edited's ext (natural stem) and original's
+          // ext (the `_orig` companion via `imageExt`).
           let editedProducer = ResourceSelection.selectEditedProducer(
             from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
             convertHEICToJPEG: convertHEICToJPEG)
@@ -1812,17 +1821,34 @@ final class ExportManager: ObservableObject {
             let editedExt = (editedFilename as NSString).pathExtension
             groupStem = destinationResolver.allocatePairedGroupStem(
               baseStem: baseStem,
-              originalExt: originalExt,
+              imageExt: originalExt,
               editedExt: editedExt,
               destDir: destDir,
               pairOriginalWithSuffix: true,
               pairedVideoExt: pairedVideoExt)
           }
+        } else if editedLivePhotoOnly {
+          // 2-slot edited-only path: the only image side written is the edited variant.
+          // Pass its extension as `imageExt` so the allocator checks
+          // `<stem>.<editedExt>` against the destination.
+          let editedProducer = ResourceSelection.selectEditedProducer(
+            from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
+            convertHEICToJPEG: convertHEICToJPEG)
+          if let editedFilename = editedProducer.originalFilename {
+            let editedExt = (editedFilename as NSString).pathExtension
+            groupStem = destinationResolver.allocatePairedGroupStem(
+              baseStem: baseStem,
+              imageExt: editedExt,
+              editedExt: nil,
+              destDir: destDir,
+              pairOriginalWithSuffix: false,
+              pairedVideoExt: pairedVideoExt)
+          }
         } else {
-          // Unedited Live Photo: no edited filename to look up.
+          // 2-slot unedited path: the only image side written is the original.
           groupStem = destinationResolver.allocatePairedGroupStem(
             baseStem: baseStem,
-            originalExt: originalExt,
+            imageExt: originalExt,
             editedExt: nil,
             destDir: destDir,
             pairOriginalWithSuffix: false,
