@@ -104,7 +104,8 @@ struct MonthContentView: View, Equatable {
               state: viewModel.thumbnailState(for: asset),
               isSelected: asset.id == selectedAsset?.id,
               isExported: exportRecordStore.isExported(
-                asset: asset, selection: versionSelection),
+                asset: asset, selection: versionSelection,
+                livePhotosPaired: livePhotosPaired),
               onRetry: { viewModel.retryThumbnail(for: asset.id) }
             )
             .frame(width: 120, height: 120)

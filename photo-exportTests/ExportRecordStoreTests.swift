@@ -240,6 +240,38 @@ struct ExportRecordStoreTests {
         #expect(store.isExported(asset: asset, selection: .editedWithOriginals))
     }
 
+    /// Per-thumbnail badge and header summary use the same `isExported(asset:selection:livePhotosPaired:)`
+    /// overload. With the toggle on, a Live Photo whose `.original` is `.done` but
+    /// `.originalPairedVideo` is `.pending` must NOT be reported as exported — otherwise the grid
+    /// shows a green check while the header still reads partial. Pins the call-site contract that
+    /// MonthContentView's thumbnail grid forwards `livePhotosPaired`.
+    @Test func strictIsExportedLivePhotoPairedPendingNotComplete() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destLivePair")
+        let live = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
+        store.markVariantExported(
+            assetId: live.id, variant: .original, year: 2025, month: 1,
+            relPath: "2025/01/", filename: "IMG_0001.HEIC", exportedAt: Date())
+        store.markVariantInProgress(
+            assetId: live.id, variant: .originalPairedVideo, year: 2025, month: 1,
+            relPath: "2025/01/", filename: nil)
+        store.flushForTesting()
+
+        // Toggle off → legacy behaviour: still-only is exported.
+        #expect(store.isExported(asset: live, selection: .edited, livePhotosPaired: false))
+        // Toggle on → paired video pending blocks completion.
+        #expect(!store.isExported(asset: live, selection: .edited, livePhotosPaired: true))
+
+        // Mark the paired video done → both modes agree.
+        store.markVariantExported(
+            assetId: live.id, variant: .originalPairedVideo, year: 2025, month: 1,
+            relPath: "2025/01/", filename: "IMG_0001.MOV", exportedAt: Date())
+        store.flushForTesting()
+        #expect(store.isExported(asset: live, selection: .edited, livePhotosPaired: true))
+    }
+
     // MARK: - Sidebar approximation: cap behaviour
 
     @Test func sidebarSummaryCapsOriginalOnlyContributionAtUneditedCount() throws {
