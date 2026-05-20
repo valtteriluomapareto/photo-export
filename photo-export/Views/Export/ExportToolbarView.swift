@@ -13,14 +13,13 @@ struct ExportToolbarView: ToolbarContent {
   /// Current sidebar multi-selection. The toolbar normalizes this into per-section
   /// dispatch buckets at action time. Empty set → the section's "Export All" path.
   let selectionSet: Set<LibrarySelection>
-  /// Most-recently-clicked item, surfaced from `LibraryRootView`. Used for the
-  /// single-select fast path (1 item → existing per-kind start methods) so we
-  /// preserve the existing "Export Month" / "Export Album" labels and dispatch.
+  /// Most-recently-clicked item, surfaced from `LibraryRootView`. Used so the
+  /// shared-album single-select case can keep its per-item label and
+  /// dispatch (issue #91 — shared albums are excluded from the global
+  /// "Export All Albums" scope, so flipping the toolbar to a global action
+  /// that would silently skip them is actively worse than the per-item
+  /// dispatch).
   let focusedSelection: LibrarySelection?
-  /// Recursive album count under the selected folder, if any. `nil` for non-folder
-  /// or multi-item selections. Used so the primary-action label can read
-  /// "Export 12 Albums" instead of just "Export Folder".
-  var folderAlbumCount: Int?
 
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
 
@@ -224,22 +223,12 @@ struct ExportToolbarView: ToolbarContent {
           years: buckets.years, months: buckets.months)
         return
       }
-      // 0 or 1 items selected — preserve existing single-select dispatch.
-      switch focusedSelection {
-      case .timelineYear(let year):
-        exportManager.startExportYear(year: year)
-      case .timelineMonth(let year, let month):
-        // With exactly one month selected, "Export All" still reads "Export Month";
-        // calling startExportMonth keeps the existing per-month dispatch + messaging.
-        // When zero is selected, we fall through to startExportAll.
-        if timelineItems.count == 1 {
-          exportManager.startExportMonth(year: year, month: month)
-        } else {
-          exportManager.startExportAll()
-        }
-      default:
-        exportManager.startExportAll()
-      }
+      // Issue #91: with 0 OR 1 sidebar items selected, the toolbar's primary
+      // action is the global "Export All". Single-item dispatch (Export
+      // Month, Export Year) remains available via the per-pane button inside
+      // `MonthContentView` / `YearContentView`. Without this, selecting any
+      // sidebar row hid "Export All" entirely — the original report.
+      exportManager.startExportAll()
     case .collections:
       let collectionItems = selectionSet.filter(\.isCollection)
       if collectionItems.count >= 2 {
@@ -252,24 +241,35 @@ struct ExportToolbarView: ToolbarContent {
         exportManager.startExportCollectionsSelection(buckets)
         return
       }
-      switch focusedSelection {
-      case .folder(let id):
-        exportManager.startExportFolder(folderId: id)
-      case .sharedAlbum(let id):
-        // Shared albums aren't included in `startExportAllAlbums` (their reduced-
-        // fidelity bytes and per-album export action are an opt-in surface). Route
-        // the toolbar primary action to the single-album call so a user staring at
-        // a shared-album pane doesn't see the batch button silently skip what
-        // they're looking at.
+      // Shared albums are the one single-select case that keeps its per-item
+      // dispatch: they're excluded from the "Export All Albums" scope (per
+      // the iCloud reduced-fidelity caveat), so flipping the toolbar button
+      // to a global action that silently skips the user's selection is
+      // actively worse than just routing to the single-album call.
+      if case .sharedAlbum(let id) = focusedSelection {
         exportManager.startExportSharedAlbum(collectionId: id)
-      case .album(let id) where collectionItems.count == 1:
-        exportManager.startExportAlbum(collectionId: id)
-      case .favorites where collectionItems.count == 1:
-        exportManager.startExportFavorites()
-      default:
-        exportManager.startExportAllAlbums()
+        return
       }
+      // Everything else (album, folder, favorites, no selection) routes to a
+      // synthesized buckets dispatch that includes Favorites + every user
+      // album, skipping shared albums. Per-pane buttons in
+      // `CollectionContentView` / `FolderContentView` still expose the
+      // single-item action.
+      exportManager.startExportCollectionsSelection(allButSharedBuckets())
     }
+  }
+
+  /// Builds the synthesized `CollectionsSelectionBuckets` used by the
+  /// toolbar's "Export All Albums" dispatch when 0 or 1 collection items are
+  /// in the sidebar selection. Includes Favorites and every user album under
+  /// the current Photos tree; deliberately excludes shared albums (issue #91
+  /// + the iCloud shared-album reduced-fidelity caveat — `startExportAll`-
+  /// style actions historically don't cover shared albums on this app).
+  private func allButSharedBuckets() -> CollectionsSelectionBuckets {
+    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
+    return CollectionsSelectionBuckets(
+      includesFavorites: true, albumIds: albumIds, sharedAlbumIds: [])
   }
 
   private var primaryActionLabel: String {
@@ -280,12 +280,9 @@ struct ExportToolbarView: ToolbarContent {
         let buckets = TimelineSelectionBuckets.normalize(timelineItems)
         return "Export \(buckets.count) \(buckets.count == 1 ? "Item" : "Items")"
       }
-      if case .timelineYear = focusedSelection, timelineItems.count == 1 {
-        return "Export Year"
-      }
-      if case .timelineMonth = focusedSelection, timelineItems.count == 1 {
-        return "Export Month"
-      }
+      // Issue #91: the toolbar's primary action is the global "Export All"
+      // when 0 or 1 sidebar items are selected. Per-pane "Export Month" /
+      // "Export Year" buttons handle the single-item action.
       return "Export All"
     case .collections:
       let collectionItems = selectionSet.filter(\.isCollection)
@@ -294,20 +291,13 @@ struct ExportToolbarView: ToolbarContent {
         // batch action. Folder expansion is deferred to dispatch time.
         return "Export \(collectionItems.count) Items"
       }
-      if case .folder = focusedSelection {
-        // Show the album count when known so the toolbar's label tracks the
-        // in-pane button. Falls back to "Export Folder" when the count is
-        // unavailable (e.g. tree not yet cached) rather than misreporting "0".
-        guard let count = folderAlbumCount, count > 0 else { return "Export Folder" }
-        return count == 1 ? "Export 1 Album" : "Export \(count) Albums"
-      }
+      // Shared albums are excluded from the global "Export All Albums" scope;
+      // keep the per-item label so a user staring at a shared-album pane
+      // doesn't see the toolbar advertise an action that would skip it.
+      // Per-pane "Export Album" / "Export Folder" / "Export Favorites"
+      // buttons in `CollectionContentView` / `FolderContentView` handle the
+      // other single-item actions.
       if case .sharedAlbum = focusedSelection { return "Export Shared Album" }
-      if case .album = focusedSelection, collectionItems.count == 1 {
-        return "Export Album"
-      }
-      if case .favorites = focusedSelection, collectionItems.count == 1 {
-        return "Export Favorites"
-      }
       return "Export All Albums"
     }
   }
@@ -332,48 +322,36 @@ struct ExportToolbarView: ToolbarContent {
           "Export every photo in the selected collections. Selected folders are expanded to their nested albums; Favorites and shared albums are included if selected."
       }
     }
-    let isFolderSelection: Bool = {
-      if case .folder = focusedSelection { return true }
-      return false
-    }()
-    let isSharedAlbumSelection: Bool = {
-      if case .sharedAlbum = focusedSelection { return true }
-      return false
-    }()
-    if isSharedAlbumSelection {
+    // Shared album single-select keeps its per-item dispatch (and label).
+    if case .sharedAlbum = focusedSelection {
       // The "Include originals" toggle is a no-op for shared albums; surface that
       // here so the version-selection state doesn't read as a contradiction.
       return
         "Export every photo in this shared album. iCloud only provides downscaled "
         + "JPEGs for shared photos; Include originals is ignored."
     }
-    switch (section, exportManager.versionSelection, isFolderSelection) {
-    case (.timeline, .edited, _):
+    switch (section, exportManager.versionSelection) {
+    case (.timeline, .edited):
       return
-        "Export every photo in the timeline (year/month) view, in the version Photos shows."
-    case (.timeline, .editedWithOriginals, _):
+        "Export every photo in the timeline (year/month) view, in the version "
+        + "Photos shows. Use the in-pane Export Month or Export Year button "
+        + "for a smaller scope."
+    case (.timeline, .editedWithOriginals):
       return
-        "Export every photo in the timeline (year/month) view, plus a _orig companion "
-        + "for any photo edited in Photos."
-    case (.collections, .edited, true):
+        "Export every photo in the timeline (year/month) view, plus a _orig "
+        + "companion for any photo edited in Photos. Use the in-pane Export "
+        + "Month or Export Year button for a smaller scope."
+    case (.collections, .edited):
       return
-        "Export every photo in every album under the selected folder, in the version "
-        + "Photos shows."
-    case (.collections, .editedWithOriginals, true):
+        "Export Favorites and every user album (including albums nested in "
+        + "folders), in the version Photos shows. Shared albums are excluded "
+        + "— use the Export Shared Album button on their pane."
+    case (.collections, .editedWithOriginals):
       return
-        "Export every photo in every album under the selected folder, plus a _orig "
-        + "companion for any photo edited in Photos."
-    case (.collections, .edited, false):
-      return
-        "Export every user album, including albums nested in folders, in the version "
-        + "Photos shows. Favorites and shared albums are excluded — use the Export "
-        + "Favorites or Export Shared Album button on their pane."
-    case (.collections, .editedWithOriginals, false):
-      return
-        "Export every user album, including albums nested in folders, plus a _orig "
-        + "companion for any photo edited in Photos. Favorites and shared albums are "
-        + "excluded — use the Export Favorites or Export Shared Album button on their "
-        + "pane."
+        "Export Favorites and every user album (including albums nested in "
+        + "folders), plus a _orig companion for any photo edited in Photos. "
+        + "Shared albums are excluded — use the Export Shared Album button "
+        + "on their pane."
     }
   }
 
