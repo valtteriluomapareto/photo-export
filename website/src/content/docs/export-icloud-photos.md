@@ -37,9 +37,10 @@ Browse your library two ways via the **Timeline / Collections** segmented contro
 - **Timeline** — your library by year and month. Click a month to preview its thumbnails and full-size photos.
 - **Collections** — your **Favorites**, every album and folder you've created in Photos, and any **iCloud shared albums** you participate in. Click an album to preview its contents. Shared albums sit in their own sidebar section because they export at reduced quality — see [Shared albums (reduced fidelity)](/photo-export/features/#shared-albums-reduced-fidelity). (Smart albums other than Favorites aren't included.)
 
-Once you've picked a scope, decide what to write:
+Once you've picked a scope, decide what to write. Open **Settings → Advanced** (Cmd+, or the toolbar's Settings cog) for two toggles:
 
-- Use the toolbar's **Include originals** toggle to choose what to write. Off (default) exports one file per photo, in the version Photos shows — edited photos write the edit, unedited photos write the original. On adds a `_orig` companion (e.g. `IMG_0001_orig.HEIC`) for any photo with edits in Photos so you keep a copy of the original bytes.
+- **Include originals for edited photos** — off (default) exports one file per photo, in the version Photos shows. Edited photos write the edit; unedited photos write the original. On adds a `_orig` companion (e.g. `IMG_0001_orig.HEIC`) for any photo with edits in Photos so you keep a copy of the original bytes.
+- **Convert HEIC to JPEG** — off (default) preserves HEIC and HEIF captures in their original format. On re-encodes HEIC captures as high-quality JPEG on export — useful if your destination (a NAS, a Windows PC, an older photo viewer) doesn't understand HEIC. Non-HEIC photos are unaffected. Applies to new exports — re-run an Export action to convert HEICs already on disk.
 
 Then export:
 

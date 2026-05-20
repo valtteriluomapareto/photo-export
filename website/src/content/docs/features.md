@@ -49,18 +49,22 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - Handles both images and videos, including edits made in Photos
 - Real-time progress tracking in the toolbar (count and current filename)
 
-### Version selection
+### Format options (Settings → Advanced)
 
-A toolbar toggle next to the export buttons chooses what to write:
+Two settings under **Settings → Advanced** (Cmd+,) shape what lands on disk. A Settings
+cog in the toolbar opens the window in one click. The onboarding flow also exposes both
+toggles inline on first launch.
+
+#### Include originals for edited photos
 
 - **Off (default)** — one file per photo, in the version Photos shows. Edited photos
   export the edit; unedited photos export the original. The file lands at the original
   Photos filename with the extension of the bytes being written, e.g. a HEIC original with
   a JPEG-rendered edit writes `IMG_0001.JPG`.
-- **On — Include originals** — same as off, plus a `_orig` companion for any photo with
-  edits in Photos. The companion holds the unmodified original bytes alongside the
-  user-visible edit. For an edited HEIC + JPEG-rendered edit the destination ends up with
-  `IMG_0001.JPG` (the edit) and `IMG_0001_orig.HEIC` (the original).
+- **On** — same as off, plus a `_orig` companion for any photo with edits in Photos. The
+  companion holds the unmodified original bytes alongside the user-visible edit. For an
+  edited HEIC + JPEG-rendered edit the destination ends up with `IMG_0001.JPG` (the edit)
+  and `IMG_0001_orig.HEIC` (the original).
 
 Unedited photos never produce a `_orig` companion — there is nothing to pair with.
 
@@ -71,6 +75,22 @@ keep their original container both times. Photos can change containers (an edite
 may export as `.JPG` because Photos rendered the edit as JPEG); videos do not get that
 asymmetric rename.
 
+#### Convert HEIC to JPEG
+
+- **Off (default)** — HEIC and HEIF captures keep their original format on export.
+- **On** — HEIC and HEIF captures are re-encoded as high-quality JPEG on export. Useful
+  if your destination (a NAS, a Windows PC, an older photo viewer) doesn't understand
+  HEIC. Non-HEIC photos (already-JPEG captures, PNG, screenshots, edited photos that
+  Photos rendered as JPEG) are unaffected.
+
+The toggle applies to **new exports only.** Existing HEIC files on disk aren't touched
+when you flip it on — re-run an Export action (Export All, Export Month, Export Album,
+or wait for Auto Export) to convert them.
+
+The two toggles compose naturally. Under **Include originals + Convert HEIC to JPEG**,
+an unedited HEIC capture writes both the JPEG (at the natural filename) and the original
+HEIC as a `_orig` companion (e.g. `IMG_0001.JPG` next to `IMG_0001_orig.HEIC`).
+
 ### Shared albums (reduced fidelity)
 
 iCloud shared albums (the kind you create in Photos to share with family or a partner) are surfaced under a "Shared Albums" section in the Collections sidebar. Selecting a shared album shows its photos in the same grid as a user album, and the **Export Shared Album** button on its pane writes everything to `Collections/Shared Albums/<Album>/`.
@@ -78,7 +98,7 @@ iCloud shared albums (the kind you create in Photos to share with family or a pa
 There's an important caveat that Photo Export can't work around: **iCloud only serves shared-album photos as downscaled JPEGs.** No API exists to fetch the full-resolution originals for an asset that lives only in a shared album. So:
 
 - The exported files are the best version Apple makes available — typically a JPEG well under the original's resolution
-- The **Include originals** toggle is a no-op for shared albums; no `_orig` companion is written
+- The **Include originals** and **Convert HEIC to JPEG** toggles are no-ops for shared albums; no `_orig` companion is written and shared-album JPEGs are already JPEG
 - A photo that exists in both your library _and_ a shared album gets exported twice — once at full quality under its owned-library scope (`2025/...`, `Collections/Albums/...`), once downscaled under `Collections/Shared Albums/...`. Photo Export uses Photos' own per-asset identifiers, which differ between the two copies, so they're treated as distinct
 - Shared albums are also excluded from the **Export All Albums** batch action — you export them one at a time, which makes the trade-off explicit
 
