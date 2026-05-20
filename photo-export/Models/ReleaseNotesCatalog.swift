@@ -19,6 +19,34 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.5.0",
+      summary:
+        "Optional HEIC → JPEG conversion on export, a new Settings → Advanced tab for format options, and the toolbar's \"Export All\" button is back even when a single sidebar item is selected. Your existing backup folder and exported files are untouched.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Convert HEIC to JPEG on export (opt-in)",
+          body:
+            "A new toggle in **Settings → Advanced** re-encodes HEIC and HEIF captures as high-quality JPEG when exporting. Useful if your destination (a NAS, a Windows PC, an older photo viewer) doesn't understand HEIC. Non-HEIC photos are unaffected. The toggle applies to new exports — re-run an Export action (or wait for Auto Export) to convert HEICs you've already exported. Off by default; existing backups are not touched. Fixes [#47](https://github.com/valtteriluomapareto/photo-export/issues/47)."
+        ),
+        ReleaseNote.Bullet(
+          title: "Format options moved to Settings → Advanced",
+          body:
+            "**Include originals for edited photos** and the new **Convert HEIC to JPEG** toggle both live in **Cmd+, → Advanced** now, with full descriptions explaining each option's on-disk effect. The previous toolbar Format menu is gone; a Settings cog in the toolbar opens the window in one click. The onboarding flow still lets you set both options inline on first launch."
+        ),
+        ReleaseNote.Bullet(
+          title: "\"Export All\" stays available with a sidebar item selected",
+          body:
+            "The toolbar's primary action now reads **Export All** (Timeline) or **Export All Albums** (Collections) whenever 0 or 1 sidebar items are selected, instead of flipping to the per-item label. The per-pane **Export Month / Year / Album / Folder / Favorites** buttons still handle single-item dispatch. Shared albums keep their dedicated **Export Shared Album** label because they're excluded from the global batch (iCloud reduced-fidelity caveat). Fixes [#91](https://github.com/valtteriluomapareto/photo-export/issues/91)."
+        ),
+        ReleaseNote.Bullet(
+          title: "Sharper month and folder tile thumbnails",
+          body:
+            "Year-view month tiles and Collections folder tiles now request thumbnails at the displayed pixel size on Retina displays instead of a small cached version. The 4-up cover grids read as crisply as the in-pane grid below them."
+        ),
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.4.1",
       summary:
         "Fixes launch reliability on macOS 15.7+ and when the destination folder is on an unreachable network share.",

@@ -70,7 +70,15 @@ const faqData = {
 			name: 'What about photos I have edited in Photos?',
 			acceptedAnswer: {
 				'@type': 'Answer',
-				text: 'By default Photo Export saves the version Photos shows you, edits included, at the original filename. Turn on the "Include originals" toggle in the toolbar to also keep an original-bytes copy as a _orig companion (for example IMG_0001_orig.HEIC alongside IMG_0001.JPG).',
+				text: 'By default Photo Export saves the version Photos shows you, edits included, at the original filename. Open Settings → Advanced (Cmd+,) and turn on "Include originals" to also keep an original-bytes copy as a _orig companion (for example IMG_0001_orig.HEIC alongside IMG_0001.JPG).',
+			},
+		},
+		{
+			'@type': 'Question',
+			name: 'Can I export HEIC photos as JPEG?',
+			acceptedAnswer: {
+				'@type': 'Answer',
+				text: 'Yes. Open Settings → Advanced (Cmd+,) and turn on Convert HEIC to JPEG. Photo Export then re-encodes HEIC and HEIF captures as high-quality JPEG on export — useful if your destination (a NAS, a Windows PC, an older photo viewer) does not understand HEIC. Non-HEIC photos are unaffected. The toggle applies to new exports only; re-run an Export action to convert HEICs already on disk.',
 			},
 		},
 		{
@@ -167,9 +175,15 @@ const faqData = {
 				</FeatureCard>
 				<FeatureCard title="Edits Included" icon="✨">
 					Exports the version Photos shows you — edits and all — at the original
-					filename. Toggle <strong>Include originals</strong> to also keep <code
+					filename. Open <strong>Settings → Advanced</strong> to also keep <code
 						>_orig</code
 					> companions with the original bytes.
+				</FeatureCard>
+				<FeatureCard title="Convert HEIC to JPEG" icon="↔️">
+					Optional toggle in <strong>Settings → Advanced</strong> re-encodes HEIC
+					and HEIF captures as high-quality JPEG on export. Useful for destinations
+					that don't understand HEIC — a NAS, a Windows PC, an older photo viewer.
+					Non-HEIC photos are unaffected.
 				</FeatureCard>
 				<FeatureCard title="Smart Export Tracking" icon="✅">
 					Remembers every exported photo. Resume-safe — never re-exports what's
@@ -303,9 +317,10 @@ const faqData = {
 				Photo Export improves on what users actually report. Recent releases
 				added <strong>album and Favorites export</strong>, <strong
 					>backup-folder import</strong
-				> to rebuild export state from an existing folder, and the
+				> to rebuild export state from an existing folder, the
 				<strong>Include originals</strong> toggle for keeping unedited copies of edited
-				photos. See the <a
+				photos, and <strong>Convert HEIC to JPEG</strong> for destinations that don't
+				understand HEIC. See the <a
 					href="https://github.com/valtteriluomapareto/photo-export/releases"
 					>release notes</a
 				> for the full history.
@@ -341,8 +356,11 @@ const faqData = {
 				</li>
 				<li>
 					<strong>Edited photos export as the version Photos shows you</strong>,
-					at the original filename. Turn on <strong>Include originals</strong> to
-					also keep an <code>_orig</code> companion with the original bytes.
+					at the original filename. Open <strong>Settings → Advanced</strong> to turn
+					on <strong>Include originals</strong> for an <code>_orig</code>
+					companion with the original bytes, or <strong
+						>Convert HEIC to JPEG</strong
+					> to re-encode HEIC captures as JPEG on export.
 				</li>
 			</ul>
 		</div>
@@ -482,13 +500,24 @@ const faqData = {
 					<dt>What about photos I have edited in Photos?</dt>
 					<dd>
 						By default, Photo Export saves the version Photos shows you — edits
-						and all — at the original filename. Turn on <strong
-							>Include originals</strong
-						> in the toolbar to also keep an original-bytes copy as a <code
-							>_orig</code
-						> companion (e.g. <code>IMG_0001_orig.HEIC</code> alongside <code
-							>IMG_0001.JPG</code
-						>).
+						and all — at the original filename. Open <strong
+							>Settings → Advanced</strong
+						> (Cmd+,) and turn on <strong>Include originals</strong> to also keep
+						an original-bytes copy as a <code>_orig</code> companion (e.g. <code
+							>IMG_0001_orig.HEIC</code
+						> alongside <code>IMG_0001.JPG</code>).
+					</dd>
+				</div>
+				<div class="faq-item">
+					<dt>Can I export HEIC photos as JPEG?</dt>
+					<dd>
+						Yes. Open <strong>Settings → Advanced</strong> (Cmd+,) and turn on <strong
+							>Convert HEIC to JPEG</strong
+						>. Photo Export then re-encodes HEIC and HEIF captures as
+						high-quality JPEG on export — useful if your destination (a NAS, a
+						Windows PC, an older photo viewer) doesn't understand HEIC. Non-HEIC
+						photos are unaffected. The toggle applies to new exports only;
+						re-run an Export action to convert HEICs already on disk.
 					</dd>
 				</div>
 				<div class="faq-item">
