@@ -69,7 +69,12 @@ protocol PhotoLibraryService: AnyObject {
   func startCachingThumbnails(for assets: [AssetDescriptor])
   func stopCachingThumbnails(for assets: [AssetDescriptor])
   func loadThumbnail(for assetId: String, allowNetwork: Bool) async -> NSImage?
-  func loadThumbnailHighQuality(for assetId: String, allowNetwork: Bool) async -> NSImage?
+  /// `pixelSize`, when supplied, replaces the default 200×200 px target. Tile
+  /// views in particular need ~360×360 px on Retina (180pt × 2x scale) for
+  /// the single-cover case to read sharply; the default leaves them blurry.
+  func loadThumbnailHighQuality(
+    for assetId: String, pixelSize: CGSize?, allowNetwork: Bool
+  ) async -> NSImage?
   func requestFullImage(for assetId: String) async throws -> NSImage
 
   func resources(for assetId: String) -> [ResourceDescriptor]

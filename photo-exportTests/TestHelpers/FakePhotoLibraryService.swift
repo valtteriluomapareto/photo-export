@@ -331,7 +331,9 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     return thumbnailsByAssetId[assetId]
   }
 
-  func loadThumbnailHighQuality(for assetId: String, allowNetwork: Bool) async -> NSImage? {
+  func loadThumbnailHighQuality(
+    for assetId: String, pixelSize: CGSize?, allowNetwork: Bool
+  ) async -> NSImage? {
     hqThumbnailsByAssetId[assetId]
   }
 
