@@ -115,13 +115,13 @@ struct AssetDetailView: View {
       if let export = exportRecordStore.exportInfo(assetId: asset.id) {
         variantStatusView(export.variants[.original], label: "Original")
         if asset.isLivePhoto {
-          variantStatusView(export.variants[.originalPairedVideo], label: "Live Photo motion")
+          variantStatusView(export.variants[.originalPairedVideo], label: "Live Photo video")
         }
         if asset.hasAdjustments {
           variantStatusView(export.variants[.edited], label: "Edited")
           if asset.isLivePhoto {
             variantStatusView(
-              export.variants[.editedPairedVideo], label: "Edited Live Photo motion")
+              export.variants[.editedPairedVideo], label: "Edited Live Photo video")
           }
         }
       }

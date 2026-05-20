@@ -55,15 +55,15 @@ The app organizes the output on disk:
 
 If any photos are stored only in iCloud, the app automatically downloads the originals during export. Unedited photos never produce a `_orig` companion — there is nothing to pair with.
 
-**Live Photos** export as still-only by default. Turn on Settings → Export →
-**Export Live Photos as paired image + video** to also write the motion component
+**Live Photos** export as still-only by default. Turn on Settings → Advanced →
+**Export Live Photos as paired image + video** to also write the paired video
 next to the still (e.g. `IMG_0001.HEIC` alongside `IMG_0001.MOV`) using whatever
 extension casing PhotoKit reports for that resource — typically `.MOV` on Apple
 hardware. With **Include originals** on, the `_orig` companions are also paired
-(e.g. `IMG_0001_orig.HEIC` + `IMG_0001_orig.MOV`). The motion file is typically
+(e.g. `IMG_0001_orig.HEIC` + `IMG_0001_orig.MOV`). The paired video is typically
 1–3 MB per Live Photo — libraries with thousands of them roughly double in size on
 disk when the toggle is on. Shared-album Live Photos stay still-only regardless of
-the setting because Apple doesn't expose the motion component for assets that live
+the setting because Apple doesn't expose the paired video for assets that live
 only in a shared album.
 
 Edited videos render on your Mac during export, which is slower than copying — expect 4K

@@ -93,8 +93,8 @@ HEIC as a `_orig` companion (e.g. `IMG_0001.JPG` next to `IMG_0001_orig.HEIC`).
 
 ### Live Photos
 
-Live Photos export as still-only by default. Turn on Settings → Export →
-**Export Live Photos as paired image + video** to also write the motion component as
+Live Photos export as still-only by default. Turn on Settings → Advanced →
+**Export Live Photos as paired image + video** to also write the paired video as
 a `.MOV` (or whatever extension PhotoKit reports for that resource — typically
 uppercase `.MOV` on Apple hardware) next to the still (e.g. `IMG_0001.HEIC` +
 `IMG_0001.MOV`). This matches the convention Photos.app uses for its own Live Photo
@@ -103,23 +103,23 @@ exports.
 - **Default (toggle off)** — byte-identical to a non-Live-Photo still. Only the
   image is written.
 - **Toggle on, Include originals off** — one paired set per asset, in the version
-  Photos shows. An unedited Live Photo writes the still and the original motion file
+  Photos shows. An unedited Live Photo writes the still and the original paired video
   at the natural stem. An edited Live Photo writes the rendered still and the
-  rendered motion file at the natural stem; if Photos didn't render a separate
-  edited motion file (the common case for edits that don't touch motion), the
-  original motion file is reused so the pair is always intact.
+  rendered paired video at the natural stem; if Photos didn't render a separate
+  edited paired video (the common case for edits that don't touch motion), the
+  original paired video is reused so the pair is always intact.
 - **Toggle on, Include originals on** — same as above, plus `_orig.HEIC` and
   `_orig.MOV` companions for any edited Live Photo. An edited Live Photo ends up
   with four files: `IMG_0001.HEIC` + `IMG_0001.MOV` (the rendered pair) and
   `IMG_0001_orig.HEIC` + `IMG_0001_orig.MOV` (the unmodified originals).
 
-**Disk footprint.** A Live Photo's motion file is typically 1–3 MB. Libraries with
+**Disk footprint.** A Live Photo's paired video is typically 1–3 MB. Libraries with
 thousands of Live Photos roughly double in size on disk when the toggle is on —
 worth checking the destination's free space before flipping it. The setting is
 remembered across launches and applies to both manual exports and Auto Export.
 
 Shared-album Live Photos remain still-only regardless of the toggle because Apple
-doesn't expose the motion component for assets that live only in a shared album.
+doesn't expose the paired video for assets that live only in a shared album.
 
 ### Shared albums (reduced fidelity)
 
