@@ -94,7 +94,8 @@ struct ExportShapeLifecycleGoldenTests {
     let resources = [makePhotoResource("IMG_0001.JPG")]
 
     let stem = resolver.allocatePairedGroupStem(
-      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "JPG", destDir: dir)
+      baseStem: "IMG_0001", originalExt: "JPG", editedExt: "HEIC",
+      destDir: dir, pairOriginalWithSuffix: true)
     #expect(stem == "IMG_0001", "fresh paired allocation must keep the base stem")
 
     let (originalURL, originalStem) = try resolver.resolveDestination(

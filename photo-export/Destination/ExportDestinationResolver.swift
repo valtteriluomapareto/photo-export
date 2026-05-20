@@ -114,41 +114,72 @@ struct ExportDestinationResolver: Sendable {
 
   // MARK: - Stem allocation
 
-  /// Allocates a stem where both the natural-stem edited target (`<stem>.<editedExt>`)
-  /// and the `_orig` companion target (`<stem>_orig.<originalExt>`) are simultaneously
-  /// free. Bumps the per-pair collision suffix until both slots are available so the
-  /// pair never splits across stems.
+  /// Allocates a stem where every slot the active variant set will write is
+  /// simultaneously free. Bumps the per-pair collision suffix until all slots are
+  /// available so the pair (or paired group) never splits across stems.
   ///
-  /// `pairedVideoExt` is non-nil for Live Photos — it adds the matching paired-video
-  /// targets (`<stem>.<pairedVideoExt>` and `<stem>_orig.<pairedVideoExt>`) to the
-  /// freeness check so a 4-slot allocation cannot pick a stem whose `.mov` half is
-  /// already occupied. When nil, behaviour is exactly the prior 2-slot allocation.
+  /// `pairOriginalWithSuffix` mirrors the call-site flag of the same name on
+  /// `resolveDestination` and selects between the two layouts:
+  /// - `true` (edited asset): `<stem>.<editedExt>` (rendered edit) + `<stem>_orig.<originalExt>`
+  ///   (original companion). `editedExt` must be non-nil. When `pairedVideoExt` is also
+  ///   non-nil (Live Photo), `<stem>.<pairedVideoExt>` + `<stem>_orig.<pairedVideoExt>`
+  ///   are added to the freeness check.
+  /// - `false` (unedited Live Photo): `<stem>.<originalExt>` only on the image side
+  ///   (no `_orig` companion is written when there is no edit), plus
+  ///   `<stem>.<pairedVideoExt>` for the motion file. `editedExt` is ignored. This case
+  ///   exists because two unedited Live Photos with different image extensions but the
+  ///   same base stem (e.g. `IMG_7399.heic` and `IMG_7399.jpeg`) coexist on the image
+  ///   side but collide on the shared `.MOV` paired-video stem; the resolver must
+  ///   detect that upfront rather than letting the second `.originalPairedVideo` write
+  ///   throw at write-time.
   func allocatePairedGroupStem(
     baseStem: String,
-    editedExt: String,
     originalExt: String,
+    editedExt: String?,
     destDir: URL,
+    pairOriginalWithSuffix: Bool,
     pairedVideoExt: String? = nil
   ) -> String {
     var stem = baseStem
     var index = 1
     while index < 10_000 {
-      let editedTarget = destDir.appendingPathComponent(stem)
-        .appendingPathExtension(editedExt)
-      let origTarget = destDir.appendingPathComponent(
-        stem + ExportFilenamePolicy.originalSuffix
-      ).appendingPathExtension(originalExt)
-      var allFree =
-        !fileSystem.fileExists(atPath: editedTarget.path)
-        && !fileSystem.fileExists(atPath: origTarget.path)
-      if allFree, let movExt = pairedVideoExt {
-        let editedMov = destDir.appendingPathComponent(stem).appendingPathExtension(movExt)
-        let origMov = destDir.appendingPathComponent(
+      var allFree: Bool
+      if pairOriginalWithSuffix {
+        // Edited-asset layout: natural-stem edited + `_orig` companion.
+        guard let editedExt else {
+          // Programmer error — `editedExt` is required when the edited slot is in
+          // play. Falling back to the unedited layout would silently corrupt
+          // collision detection for edited assets, so return the current stem
+          // and let the caller's write-time collision throw surface the bug.
+          return stem
+        }
+        let editedTarget = destDir.appendingPathComponent(stem)
+          .appendingPathExtension(editedExt)
+        let origTarget = destDir.appendingPathComponent(
           stem + ExportFilenamePolicy.originalSuffix
-        ).appendingPathExtension(movExt)
+        ).appendingPathExtension(originalExt)
         allFree =
-          !fileSystem.fileExists(atPath: editedMov.path)
-          && !fileSystem.fileExists(atPath: origMov.path)
+          !fileSystem.fileExists(atPath: editedTarget.path)
+          && !fileSystem.fileExists(atPath: origTarget.path)
+        if allFree, let movExt = pairedVideoExt {
+          let editedMov = destDir.appendingPathComponent(stem).appendingPathExtension(movExt)
+          let origMov = destDir.appendingPathComponent(
+            stem + ExportFilenamePolicy.originalSuffix
+          ).appendingPathExtension(movExt)
+          allFree =
+            !fileSystem.fileExists(atPath: editedMov.path)
+            && !fileSystem.fileExists(atPath: origMov.path)
+        }
+      } else {
+        // Unedited Live Photo layout: only the natural-stem original + the natural-
+        // stem motion file are written. `editedExt` is intentionally ignored.
+        let origTarget = destDir.appendingPathComponent(stem)
+          .appendingPathExtension(originalExt)
+        allFree = !fileSystem.fileExists(atPath: origTarget.path)
+        if allFree, let movExt = pairedVideoExt {
+          let mov = destDir.appendingPathComponent(stem).appendingPathExtension(movExt)
+          allFree = !fileSystem.fileExists(atPath: mov.path)
+        }
       }
       if allFree { return stem }
       stem = "\(baseStem) (\(index))"

@@ -130,7 +130,8 @@ struct ExportDestinationResolverTests {
     let (dir, resolver) = try Self.makeResolver()
     defer { Self.cleanup(dir) }
     let stem = resolver.allocatePairedGroupStem(
-      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir)
+      baseStem: "IMG_0001", originalExt: "HEIC", editedExt: "HEIC",
+      destDir: dir, pairOriginalWithSuffix: true)
     #expect(stem == "IMG_0001")
   }
 
@@ -139,7 +140,8 @@ struct ExportDestinationResolverTests {
     defer { Self.cleanup(dir) }
     plantFile("IMG_0001.HEIC", in: dir)
     let stem = resolver.allocatePairedGroupStem(
-      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir)
+      baseStem: "IMG_0001", originalExt: "HEIC", editedExt: "HEIC",
+      destDir: dir, pairOriginalWithSuffix: true)
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -148,7 +150,8 @@ struct ExportDestinationResolverTests {
     defer { Self.cleanup(dir) }
     plantFile("IMG_0001_orig.HEIC", in: dir)
     let stem = resolver.allocatePairedGroupStem(
-      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir)
+      baseStem: "IMG_0001", originalExt: "HEIC", editedExt: "HEIC",
+      destDir: dir, pairOriginalWithSuffix: true)
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -160,7 +163,8 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001.HEIC", in: dir)
     plantFile("IMG_0001 (1)_orig.HEIC", in: dir)
     let stem = resolver.allocatePairedGroupStem(
-      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir)
+      baseStem: "IMG_0001", originalExt: "HEIC", editedExt: "HEIC",
+      destDir: dir, pairOriginalWithSuffix: true)
     #expect(stem == "IMG_0001 (2)")
   }
 
@@ -427,8 +431,8 @@ struct ExportDestinationResolverTests {
     // look at it and returns the base stem.
     plantFile("IMG_0001.MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
-      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir,
-      pairedVideoExt: nil)
+      baseStem: "IMG_0001", originalExt: "HEIC", editedExt: "HEIC",
+      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: nil)
     #expect(stem == "IMG_0001")
   }
 
@@ -439,8 +443,8 @@ struct ExportDestinationResolverTests {
     defer { Self.cleanup(dir) }
     plantFile("IMG_0001.MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
-      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir,
-      pairedVideoExt: "MOV")
+      baseStem: "IMG_0001", originalExt: "HEIC", editedExt: "HEIC",
+      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: "MOV")
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -451,8 +455,8 @@ struct ExportDestinationResolverTests {
     defer { Self.cleanup(dir) }
     plantFile("IMG_0001_orig.MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
-      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir,
-      pairedVideoExt: "MOV")
+      baseStem: "IMG_0001", originalExt: "HEIC", editedExt: "HEIC",
+      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: "MOV")
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -465,9 +469,63 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001.HEIC", in: dir)
     plantFile("IMG_0001 (1).MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
-      baseStem: "IMG_0001", editedExt: "HEIC", originalExt: "HEIC", destDir: dir,
-      pairedVideoExt: "MOV")
+      baseStem: "IMG_0001", originalExt: "HEIC", editedExt: "HEIC",
+      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: "MOV")
     #expect(stem == "IMG_0001 (2)")
+  }
+
+  // MARK: - allocatePairedGroupStem — 2-slot unedited Live Photo variant
+
+  /// Unedited Live Photo with no collisions returns the base stem.
+  @Test func allocatePairedGroupStem_unedited_freshSlot_returnsBaseStem() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_7399", originalExt: "heic", editedExt: nil,
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+    #expect(stem == "IMG_7399")
+  }
+
+  /// Reproduces the IMG_7399 bug: a `.MOV` from a sibling unedited Live Photo with
+  /// the same base stem but a different image extension occupies the motion slot.
+  /// The allocator must bump even though `IMG_7399.heic` is free, because writing
+  /// the still there would split the still/motion pair on retry.
+  @Test func allocatePairedGroupStem_unedited_pairedVideoSlotOccupied_bumps() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    // Sibling .jpeg Live Photo has already written its motion file at IMG_7399.MOV.
+    plantFile("IMG_7399.jpeg", in: dir)
+    plantFile("IMG_7399.MOV", in: dir)
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_7399", originalExt: "heic", editedExt: nil,
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+    #expect(stem == "IMG_7399 (1)")
+  }
+
+  /// Image-side collision alone is enough to bump in the 2-slot mode — the
+  /// allocator must keep the still and motion together at the same stem.
+  @Test func allocatePairedGroupStem_unedited_imageSlotOccupied_bumps() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    plantFile("IMG_7399.heic", in: dir)
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_7399", originalExt: "heic", editedExt: nil,
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+    #expect(stem == "IMG_7399 (1)")
+  }
+
+  /// In the 2-slot unedited mode the `_orig` slots are intentionally NOT checked,
+  /// because they will never be written. An existing `_orig.<ext>` from a prior
+  /// edited-asset export must not block the base stem.
+  @Test func allocatePairedGroupStem_unedited_ignoresOrigSlots() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    plantFile("IMG_0001_orig.heic", in: dir)
+    plantFile("IMG_0001_orig.MOV", in: dir)
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_0001", originalExt: "heic", editedExt: nil,
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+    #expect(stem == "IMG_0001")
   }
 
   // MARK: - Casing preservation

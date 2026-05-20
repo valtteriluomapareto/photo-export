@@ -1769,37 +1769,63 @@ final class ExportManager: ObservableObject {
       var groupStem = ExportDestinationResolver.inheritedGroupStem(
         from: existingRecord, descriptor: descriptor, resources: resources)
 
-      // Pre-allocate a paired stem when we will write both image-side variants in this run
-      // with no inherited stem to anchor the pair. This guarantees every member of the group
-      // — including the Live Photo motion file — lands on the same stem instead of splitting
-      // via per-file uniqueFileURL collisions. For a Live Photo we also reserve the two
-      // `.mov` slots so an unrelated motion file already on disk can't claim the group stem.
-      if groupStem == nil, required.contains(.original), required.contains(.edited),
+      // Pre-allocate a paired stem when we will write multiple files at the same stem in
+      // this run with no inherited stem to anchor them. This guarantees every member of
+      // the group — including the Live Photo motion file — lands on the same stem instead
+      // of splitting via per-file uniqueFileURL collisions, and reserves the `.mov` slot
+      // so an unrelated motion file already on disk can't claim the group stem.
+      //
+      // Two trigger shapes:
+      // - Edited asset: `.original` + `.edited` both in `required` (the legacy 4-slot
+      //   case). Reserves natural + `_orig` slots on both image and motion sides.
+      // - Unedited Live Photo: `.original` + `.originalPairedVideo` both in `required`,
+      //   `.edited` absent. Reserves natural-stem image + motion slots only. Without this
+      //   case, two unedited Live Photos with the same base stem but different image
+      //   extensions (e.g. `IMG_7399.heic` + `IMG_7399.jpeg`) coexist on the image side
+      //   but collide on the shared `.MOV`, leaving the second `.originalPairedVideo`
+      //   permanently `.failed`.
+      let editedInRequired = required.contains(.edited)
+      let unEditedLivePhoto =
+        !editedInRequired && required.contains(.original) && required.contains(.originalPairedVideo)
+      if groupStem == nil, required.contains(.original),
+        editedInRequired || unEditedLivePhoto,
         let originalRes = ResourceSelection.selectOriginalResource(
           from: resources, mediaType: descriptor.mediaType)
       {
-        let editedProducer = ResourceSelection.selectEditedProducer(
-          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
-          convertHEICToJPEG: convertHEICToJPEG)
-        if let editedFilename = editedProducer.originalFilename {
-          let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
-          let originalExt = (originalRes.originalFilename as NSString).pathExtension
-          let editedExt = (editedFilename as NSString).pathExtension
-          let pairedVideoExt: String? = {
-            guard required.contains(where: { $0.isPairedVideo }) else { return nil }
-            // Read the paired-video resource's extension directly; no need to route
-            // through the variant-dispatch seam just to surface a filename.
-            guard
-              let pairedResource = resources.first(where: { $0.type == .pairedVideo })
-            else { return nil }
-            let ext = (pairedResource.originalFilename as NSString).pathExtension
-            return ext.isEmpty ? nil : ext
-          }()
+        let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
+        let originalExt = (originalRes.originalFilename as NSString).pathExtension
+        let pairedVideoExt: String? = {
+          guard required.contains(where: { $0.isPairedVideo }) else { return nil }
+          // Read the paired-video resource's extension directly; no need to route
+          // through the variant-dispatch seam just to surface a filename.
+          guard
+            let pairedResource = resources.first(where: { $0.type == .pairedVideo })
+          else { return nil }
+          let ext = (pairedResource.originalFilename as NSString).pathExtension
+          return ext.isEmpty ? nil : ext
+        }()
+        if editedInRequired {
+          let editedProducer = ResourceSelection.selectEditedProducer(
+            from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
+            convertHEICToJPEG: convertHEICToJPEG)
+          if let editedFilename = editedProducer.originalFilename {
+            let editedExt = (editedFilename as NSString).pathExtension
+            groupStem = destinationResolver.allocatePairedGroupStem(
+              baseStem: baseStem,
+              originalExt: originalExt,
+              editedExt: editedExt,
+              destDir: destDir,
+              pairOriginalWithSuffix: true,
+              pairedVideoExt: pairedVideoExt)
+          }
+        } else {
+          // Unedited Live Photo: no edited filename to look up.
           groupStem = destinationResolver.allocatePairedGroupStem(
             baseStem: baseStem,
-            editedExt: editedExt,
             originalExt: originalExt,
+            editedExt: nil,
             destDir: destDir,
+            pairOriginalWithSuffix: false,
             pairedVideoExt: pairedVideoExt)
         }
       }
