@@ -416,11 +416,14 @@ struct VariantExporterTests {
     #expect(h.writer.writeCalls.first?.resource.type == .pairedVideo)
   }
 
-  /// No paired-video resource at all → host failure call with the canonical "No
-  /// exportable resource" message for `.originalPairedVideo` (matches the still-side
-  /// `.original` failure shape, so the diagnostic report and run-summary counter both
-  /// treat them uniformly).
-  @Test func originalPairedVideo_noResource_recordsFailureThroughHost() async throws {
+  /// No paired-video resource at all → host failure call with the
+  /// `pairedVideoUnavailableMessage` sentinel for `.originalPairedVideo`. The sentinel
+  /// distinguishes "PhotoKit's resource enumeration omitted the motion file" (a known
+  /// iCloud data-availability state, covered by `ExportCompletionPolicy.isComplete`)
+  /// from a generic resource-missing failure. The asset's still side is still
+  /// reported through the normal `.failed` channel, so the diagnostic report and
+  /// run-summary counter surface it.
+  @Test func originalPairedVideo_noResource_recordsSentinelThroughHost() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -443,6 +446,7 @@ struct VariantExporterTests {
     #expect(result == nil)
     #expect(h.host.failureCalls.count == 1)
     #expect(h.host.failureCalls.first?.variant == .originalPairedVideo)
-    #expect(h.host.failureCalls.first?.message == "No exportable resource")
+    #expect(
+      h.host.failureCalls.first?.message == ExportVariantRecovery.pairedVideoUnavailableMessage)
   }
 }

@@ -136,8 +136,16 @@ final class VariantExporter {
     guard let originalFilename = producer.originalFilename else {
       let errMsg: String
       switch variant {
-      case .original, .originalPairedVideo: errMsg = "No exportable resource"
-      case .edited, .editedPairedVideo:
+      case .original:
+        errMsg = "No exportable resource"
+      case .originalPairedVideo, .editedPairedVideo:
+        // Live Photo subtype said the asset has paired video, but PhotoKit's
+        // resource enumeration didn't include one. A known iCloud data-
+        // availability state — distinguish from a generic resource-missing
+        // failure so the completion policy can treat the asset as covered
+        // (still side is on disk; Photos has nothing more to give).
+        errMsg = ExportVariantRecovery.pairedVideoUnavailableMessage
+      case .edited:
         errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
       }
       host?.recordVariantFailed(

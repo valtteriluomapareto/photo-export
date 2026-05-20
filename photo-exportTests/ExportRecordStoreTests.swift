@@ -462,6 +462,57 @@ struct ExportRecordStoreTests {
         #expect(done?.status == .complete)
     }
 
+    /// Long-term fix for the iCloud edge case: a Live Photo whose `.original` landed
+    /// but whose `.originalPairedVideo` is `.failed` with the
+    /// `pairedVideoUnavailableMessage` sentinel reads as fully exported under the
+    /// toggle. Photos has no motion file to give; the still is on disk; the asset is
+    /// as covered as it can be. Without this, libraries with iCloud-stuck Live
+    /// Photos pegged the sidebar below 100% permanently — see the deferred plan in
+    /// `Section A` of the project notes.
+    @Test func sidebarSummaryLivePhotosPairedOn_pairedVideoUnavailableSentinel_isCovered() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destPairUnavail")
+        store.markVariantExported(
+            assetId: "live", variant: .original, year: 2025, month: 8,
+            relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
+        store.markVariantFailed(
+            assetId: "live", variant: .originalPairedVideo,
+            error: ExportVariantRecovery.pairedVideoUnavailableMessage, at: Date())
+        store.flushForTesting()
+
+        let summary = store.sidebarSummary(
+            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+            selection: .edited, livePhotosPaired: true)
+        #expect(summary?.exportedCount == 1)
+        #expect(summary?.status == .complete)
+    }
+
+    /// Sentinel specificity: a paired-video `.failed` with a generic message (or the
+    /// legacy "No exportable resource" string before the sentinel rename) must NOT
+    /// be treated as covered. The sidebar still subtracts the record so it reads as
+    /// incomplete. Mirrors the `ExportCompletionPolicyTests` regression guard for
+    /// the same case at the policy level.
+    @Test func sidebarSummaryLivePhotosPairedOn_genericPairedVideoFailure_isNotCovered() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destPairGenericFail")
+        store.markVariantExported(
+            assetId: "live", variant: .original, year: 2025, month: 8,
+            relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
+        store.markVariantFailed(
+            assetId: "live", variant: .originalPairedVideo,
+            error: "disk full", at: Date())
+        store.flushForTesting()
+
+        let summary = store.sidebarSummary(
+            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+            selection: .edited, livePhotosPaired: true)
+        #expect(summary?.exportedCount == 0)
+    }
+
     /// Issue #49: the `editedWithOriginals` formula uses `bothVariantsDone` plus the
     /// natural-stem cap; the paired-video subtraction applies there too. An edited Live
     /// Photo with `.original.done` + `.edited.done` + `.editedPairedVideo.pending` reads

@@ -79,12 +79,12 @@ final class ExportRecordStore: ObservableObject {
     /// `livePhotosPaired`. Self-corrects on the next `markVariantInProgress`
     /// call when the paired-video variant lands and the counter increments.
     ///
-    /// `.failed` paired-video variants are counted as incomplete — by design.
-    /// The user opted in and the variant didn't land, so the sidebar reflects
-    /// that the asset isn't done. There is no `pairedVideoFallbackCovered`
-    /// analogue to `editedFallbackCovered`; if Photos genuinely cannot deliver
-    /// a paired video (a known iCloud edge case), the record stays at
-    /// "incomplete" until a future export run can fetch it.
+    /// `.failed` paired-video variants are counted as incomplete with one
+    /// exception: a `.failed` whose `lastError` is
+    /// `pairedVideoUnavailableMessage` is treated as covered (the still landed
+    /// and Photos has no motion file to give — analogous to
+    /// `editedFallbackCovered`). Every other failure mode stays incomplete so
+    /// the sidebar reflects asset state that the user can act on.
     var pairedVideoIncomplete: Int = 0
     static let zero = MonthCounters()
   }
@@ -796,8 +796,18 @@ final class ExportRecordStore: ObservableObject {
     {
       counters.editedFallbackCovered += sign
     }
+    // A `.failed` paired-video with the `pairedVideoUnavailableMessage` sentinel is
+    // covered (the still landed, Photos has no motion file to give). Mirrors the
+    // `editedFallbackCovered` handling — a record whose only "incompleteness" is
+    // that sentinel must NOT count against the sidebar's exported total.
     let hasIncompletePairedVideo = record.variants.contains { variant, vr in
-      variant.isPairedVideo && vr.status != .done
+      guard variant.isPairedVideo, vr.status != .done else { return false }
+      if vr.status == .failed,
+        vr.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage
+      {
+        return false
+      }
+      return true
     }
     if hasIncompletePairedVideo {
       counters.pairedVideoIncomplete += sign

@@ -181,6 +181,52 @@ struct EditedFallbackTests {
     #expect(h.manager.queueCount == 0)
   }
 
+  // MARK: - Paired-video unavailable sentinel (Section A long-term fix)
+
+  /// Parallel to `reExportSkipsAssetCoveredByFallback` for the
+  /// `pairedVideoUnavailableMessage` sentinel: a Live Photo whose still landed but
+  /// whose `.originalPairedVideo` is `.failed` with the sentinel must NOT be
+  /// re-queued on the next export run. Photos still has no motion file to give;
+  /// re-running the variant exporter would just rewrite the same sentinel.
+  ///
+  /// Mirrors the existing fallback-skip mechanism so a future refactor that drops
+  /// either the policy `isComplete` covered path OR the planner missing-variant
+  /// filter would break this test.
+  @Test func reExportSkipsLivePhotoWithPairedVideoUnavailableSentinel() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.manager.versionSelection = .edited
+    h.manager.livePhotosPairedExport = true
+
+    let asset = TestAssetFactory.makeAsset(id: "live-no-pv", isLivePhoto: true)
+    h.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    // Live Photo subtype says yes, but the resource enumeration omits `.pairedVideo`.
+    // The variant exporter sees `producer.originalFilename == nil` for the paired
+    // video and records `.failed` with the unavailable sentinel.
+    h.photoLib.resourcesByAssetId["live-no-pv"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC")
+    ]
+
+    // First run: still side lands, paired-video records as `.failed` with sentinel.
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await h.manager.waitForQueueDrained()
+    let writeCountAfterFirst = h.writer.writeCalls.count
+    #expect(writeCountAfterFirst > 0, "Still side should have been written on first run")
+    let pairedRecord = h.store.exportInfo(assetId: asset.id)?.variants[.originalPairedVideo]
+    #expect(pairedRecord?.status == .failed)
+    #expect(pairedRecord?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage)
+    #expect(
+      h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: true),
+      "Asset must be recognised as paired-video-unavailable-covered before the second run")
+
+    // Second run: queue must not re-attempt the paired video.
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await h.manager.waitForQueueDrained()
+
+    #expect(h.writer.writeCalls.count == writeCountAfterFirst)
+    #expect(h.manager.queueCount == 0)
+  }
+
   // MARK: - Store-level isExported recognition
 
   @Test func isExportedRecognisesFallbackState() {

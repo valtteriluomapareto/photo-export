@@ -53,6 +53,25 @@ enum ExportVariantRecovery {
   static let editedUnavailableOriginalBackedUpMessage =
     "Edited resource unavailable; original backed up as _orig"
 
+  /// The asset is tagged as a Live Photo (`PHAsset.mediaSubtypes.contains(.photoLive)`)
+  /// but PhotoKit's resource enumeration did not deliver a `.pairedVideo` resource at
+  /// fetch time. A known iCloud data-availability state — the still side is on disk,
+  /// the motion side is genuinely absent in Photos's view.
+  ///
+  /// Treated as "covered" by `ExportCompletionPolicy.isComplete` and by the
+  /// sidebar's `pairedVideoIncomplete` counter so a year doesn't peg below 100%
+  /// forever for an asset whose still IS exported. Distinct sentinel rather than
+  /// the generic "No exportable resource" so a future legitimate failure (the
+  /// resource enumeration returning nil due to a transient PhotoKit error, say)
+  /// doesn't get silently absorbed into "covered."
+  ///
+  /// The planner also skips re-queueing variants in this state, so re-exports
+  /// don't churn against the same missing resource. If Photos later materializes
+  /// the motion side, `libraryRevision` bumps and the next fetch re-detects from
+  /// scratch.
+  static let pairedVideoUnavailableMessage =
+    "Photos has no exportable paired video resource for this Live Photo"
+
   /// Returns true when `lastError` matches a known recoverable case the UI
   /// can render with softer copy.
   static func isRecoverable(_ message: String?) -> Bool {
@@ -60,6 +79,7 @@ enum ExportVariantRecovery {
     return message == interruptedMessage
       || message == editedResourceUnavailableMessage
       || message == editedUnavailableOriginalBackedUpMessage
+      || message == pairedVideoUnavailableMessage
   }
 
   /// User-facing copy for a recoverable failure. Returns nil when the
@@ -72,6 +92,9 @@ enum ExportVariantRecovery {
       return "\(label) version could not be exported this time. Future exports will try again."
     case editedUnavailableOriginalBackedUpMessage:
       return "\(label) version was unavailable. The original was saved as a `_orig` companion."
+    case pairedVideoUnavailableMessage:
+      return
+        "\(label): Photos doesn't currently expose a paired video for this Live Photo. The still was exported."
     default:
       return nil
     }

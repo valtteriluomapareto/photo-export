@@ -1770,7 +1770,22 @@ final class ExportManager: ObservableObject {
         convertHEICToJPEG: convertHEICToJPEG,
         livePhotosPaired: job.livePhotosPaired)
       let missing = required.filter { variant in
-        existingRecord?.variants[variant]?.status != .done
+        let existing = existingRecord?.variants[variant]
+        if existing?.status == .done { return false }
+        // Paired-video variants `.failed` with the unavailable sentinel are covered
+        // by the policy and should NOT be re-queued. Photos still doesn't have a
+        // motion file to give; re-running the variant exporter would write the
+        // same sentinel again. If Photos later materializes the resource,
+        // `libraryRevision` bumps and the next fetch builds a fresh asset
+        // descriptor — the planner re-evaluates required variants from scratch
+        // and will attempt the paired video again.
+        if variant.isPairedVideo,
+          existing?.status == .failed,
+          existing?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage
+        {
+          return false
+        }
+        return true
       }
       if missing.isEmpty {
         logger.debug(

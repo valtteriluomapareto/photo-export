@@ -237,4 +237,70 @@ struct ExportCompletionPolicyTests {
       !ExportCompletionPolicy.shouldRunEditedFallback(
         variants: variants, required: [.edited]))
   }
+
+  // MARK: - Paired-video unavailable sentinel (iCloud edge case)
+
+  /// A Live Photo whose `.original` landed but whose `.originalPairedVideo` is
+  /// `.failed` with the `pairedVideoUnavailableMessage` sentinel counts as
+  /// complete under `livePhotosPaired: true`. Mirrors the `editedFallbackCovered`
+  /// pattern — Photos has no motion file to give, the still is on disk, the asset
+  /// is as exported as it can be.
+  @Test func isComplete_livePhotosPaired_pairedVideoUnavailableSentinel_isCovered() {
+    let live = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
+    let variants: [ExportVariant: ExportVariantRecord] = [
+      .original: doneVariant(filename: "IMG_0001.HEIC"),
+      .originalPairedVideo: failedVariant(
+        message: ExportVariantRecovery.pairedVideoUnavailableMessage),
+    ]
+    #expect(
+      ExportCompletionPolicy.isComplete(
+        variants: variants, asset: live, selection: .edited, policy: .standard,
+        livePhotosPaired: true))
+  }
+
+  /// Regression guard for the sentinel-specificity claim above: a paired-video
+  /// `.failed` with a GENERIC error message (e.g. "disk full", or the legacy
+  /// "No exportable resource" before the sentinel rename) must NOT be treated
+  /// as covered. Only the explicit `pairedVideoUnavailableMessage` qualifies.
+  /// Without this assertion, a future "treat any paired-video failure as covered"
+  /// regression would silently turn legitimate failures green.
+  @Test func isComplete_livePhotosPaired_genericPairedVideoFailure_isNotCovered() {
+    let live = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
+    let variants: [ExportVariant: ExportVariantRecord] = [
+      .original: doneVariant(filename: "IMG_0001.HEIC"),
+      .originalPairedVideo: failedVariant(message: "No exportable resource"),
+    ]
+    #expect(
+      !ExportCompletionPolicy.isComplete(
+        variants: variants, asset: live, selection: .edited, policy: .standard,
+        livePhotosPaired: true))
+
+    let diskFull: [ExportVariant: ExportVariantRecord] = [
+      .original: doneVariant(filename: "IMG_0001.HEIC"),
+      .originalPairedVideo: failedVariant(message: "disk full"),
+    ]
+    #expect(
+      !ExportCompletionPolicy.isComplete(
+        variants: diskFull, asset: live, selection: .edited, policy: .standard,
+        livePhotosPaired: true))
+  }
+
+  /// `.editedPairedVideo` follows the same sentinel rule as `.originalPairedVideo`.
+  /// An edited Live Photo whose still + edit are `.done` and whose
+  /// `.editedPairedVideo` is `.failed` with the sentinel reads as complete
+  /// under `editedWithOriginals` + `livePhotosPaired: true`.
+  @Test func isComplete_editedLivePhoto_editedPairedVideoSentinel_isCovered() {
+    let live = TestAssetFactory.makeAsset(id: "live", hasAdjustments: true, isLivePhoto: true)
+    let variants: [ExportVariant: ExportVariantRecord] = [
+      .original: doneVariant(filename: "IMG_0001_orig.HEIC"),
+      .edited: doneVariant(filename: "IMG_0001.HEIC"),
+      .originalPairedVideo: doneVariant(filename: "IMG_0001_orig.MOV"),
+      .editedPairedVideo: failedVariant(
+        message: ExportVariantRecovery.pairedVideoUnavailableMessage),
+    ]
+    #expect(
+      ExportCompletionPolicy.isComplete(
+        variants: variants, asset: live, selection: .editedWithOriginals, policy: .standard,
+        livePhotosPaired: true))
+  }
 }
