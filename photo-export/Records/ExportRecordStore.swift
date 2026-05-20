@@ -64,6 +64,15 @@ final class ExportRecordStore: ObservableObject {
     /// records, leaving years stuck at 99% even after `isExported` correctly
     /// recognises them as covered.
     var editedFallbackCovered: Int = 0
+    /// Records that have at least one paired-video variant
+    /// (`.originalPairedVideo` or `.editedPairedVideo`) whose status is not
+    /// `.done`. Subtracted from the records-only sidebar formula when the
+    /// caller passes `livePhotosPaired: true` so a Live Photo whose still
+    /// landed but whose motion file is still pending no longer over-reports.
+    /// Transient under-reporting during active export (when both the still
+    /// and the paired video are pending) self-corrects once the still side
+    /// completes — the variant export order writes the still first.
+    var pairedVideoIncomplete: Int = 0
     static let zero = MonthCounters()
   }
   private var monthCounters: [MonthKey: MonthCounters] = [:]
@@ -458,6 +467,15 @@ final class ExportRecordStore: ObservableObject {
     monthCounters[MonthKey(year: year, month: month)]?.editedFallbackCovered ?? 0
   }
 
+  /// Records in `(year, month)` with at least one paired-video variant whose
+  /// status is not `.done`. Subtracted by `sidebarSummary` when the caller
+  /// passes `livePhotosPaired: true` so a Live Photo whose still landed but
+  /// whose motion file is still pending no longer reads as fully exported
+  /// in the timeline sidebar / month tile badges.
+  func recordCountPairedVideoIncomplete(year: Int, month: Int) -> Int {
+    monthCounters[MonthKey(year: year, month: month)]?.pairedVideoIncomplete ?? 0
+  }
+
   /// Records-only approximation of "fully exported under this selection," capped by the
   /// count of unedited assets in scope so that natural-stem `.original.done` records
   /// belonging to currently-adjusted assets cannot over-contribute past the number of
@@ -466,18 +484,29 @@ final class ExportRecordStore: ObservableObject {
   /// `adjustedCount` is required for both modes. Pass nil when the count hasn't loaded yet —
   /// callers should render a neutral "loading" state in that case rather than treat nil as
   /// zero.
+  ///
+  /// `livePhotosPaired` (issue #49): when true, records with any paired-video variant in a
+  /// non-`.done` state are subtracted from the exported total so a Live Photo whose still
+  /// landed but whose motion file is still pending no longer over-reports against the
+  /// per-asset `isExported(asset:selection:livePhotosPaired:)`. The flag defaults to
+  /// `false` for legacy/test call sites pre-dating issue #49; production UI paths must
+  /// pass `exportManager.livePhotosPairedExport`.
   func sidebarSummary(
     year: Int, month: Int, totalCount: Int, adjustedCount: Int?,
-    selection: ExportVersionSelection
+    selection: ExportVersionSelection,
+    livePhotosPaired: Bool = false
   ) -> MonthStatusSummary? {
     guard let adjustedCount else { return nil }
     let uneditedCount = max(0, totalCount - adjustedCount)
     let origOnlyAtStem = recordCountOriginalDoneAtNaturalStem(year: year, month: month)
+    let pairedIncomplete =
+      livePhotosPaired ? recordCountPairedVideoIncomplete(year: year, month: month) : 0
     switch selection {
     case .edited:
       let editedDone = recordCountEditedDone(year: year, month: month)
       let fallbackCovered = recordCountEditedFallback(year: year, month: month)
-      let exported = editedDone + min(origOnlyAtStem, uneditedCount) + fallbackCovered
+      let legacy = editedDone + min(origOnlyAtStem, uneditedCount) + fallbackCovered
+      let exported = max(0, legacy - pairedIncomplete)
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
     case .editedWithOriginals:
       // `editedFallbackCovered` is intentionally NOT added here:
@@ -486,7 +515,8 @@ final class ExportRecordStore: ObservableObject {
       // records under `.editedWithOriginals`. The sidebar must agree, or a
       // year that's actually 0% covered would advertise as 100%.
       let bothDone = recordCountBothVariantsDone(year: year, month: month)
-      let exported = bothDone + min(origOnlyAtStem, uneditedCount)
+      let legacy = bothDone + min(origOnlyAtStem, uneditedCount)
+      let exported = max(0, legacy - pairedIncomplete)
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
     }
   }
@@ -499,7 +529,8 @@ final class ExportRecordStore: ObservableObject {
     year: Int,
     totalCountsByMonth: [Int: Int],
     adjustedCountsByMonth: [Int: Int?],
-    selection: ExportVersionSelection
+    selection: ExportVersionSelection,
+    livePhotosPaired: Bool = false
   ) -> Int {
     var total = 0
     for month in 1...12 {
@@ -509,7 +540,8 @@ final class ExportRecordStore: ObservableObject {
       guard
         let summary = sidebarSummary(
           year: year, month: month, totalCount: monthTotal,
-          adjustedCount: monthAdjusted, selection: selection)
+          adjustedCount: monthAdjusted, selection: selection,
+          livePhotosPaired: livePhotosPaired)
       else { continue }
       total += summary.exportedCount
     }
@@ -747,6 +779,12 @@ final class ExportRecordStore: ObservableObject {
         == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
     {
       counters.editedFallbackCovered += sign
+    }
+    let hasIncompletePairedVideo = record.variants.contains { variant, vr in
+      variant.isPairedVideo && vr.status != .done
+    }
+    if hasIncompletePairedVideo {
+      counters.pairedVideoIncomplete += sign
     }
     monthCounters[key] = counters
   }

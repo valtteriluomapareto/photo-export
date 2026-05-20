@@ -404,6 +404,127 @@ struct ExportRecordStoreTests {
         #expect(countWithLoading == 1)
     }
 
+    /// Issue #49: with the paired-video toggle off, `sidebarSummary` returns the legacy
+    /// formula's numbers unchanged. A Live Photo with `.original.done` and
+    /// `.originalPairedVideo.pending` reads as 1 of 1 exported under `.edited`. Pins
+    /// the no-regression guarantee for libraries that haven't opted in.
+    @Test func sidebarSummaryLivePhotosPairedOff_unchangedByPendingPairedVideo() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destPairOff")
+        store.markVariantExported(
+            assetId: "live", variant: .original, year: 2025, month: 8,
+            relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
+        store.markVariantInProgress(
+            assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
+            relPath: "2025/08/", filename: nil)
+        store.flushForTesting()
+
+        let summary = store.sidebarSummary(
+            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+            selection: .edited, livePhotosPaired: false)
+        #expect(summary?.exportedCount == 1)
+        #expect(summary?.status == .complete)
+    }
+
+    /// Issue #49: with the toggle on, a Live Photo whose `.original` landed but whose
+    /// `.originalPairedVideo` is still pending must NOT count as exported. The sidebar
+    /// must agree with the asset-aware `isExported(asset:selection:livePhotosPaired:)`.
+    @Test func sidebarSummaryLivePhotosPairedOn_subtractsPendingPairedVideo() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destPairOn")
+        store.markVariantExported(
+            assetId: "live", variant: .original, year: 2025, month: 8,
+            relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
+        store.markVariantInProgress(
+            assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
+            relPath: "2025/08/", filename: nil)
+        store.flushForTesting()
+
+        let summary = store.sidebarSummary(
+            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+            selection: .edited, livePhotosPaired: true)
+        #expect(summary?.exportedCount == 0)
+        #expect(summary?.status == .notExported)
+
+        // Marking the paired video done brings the count up to 1.
+        store.markVariantExported(
+            assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
+            relPath: "2025/08/", filename: "IMG_0001.MOV", exportedAt: Date())
+        store.flushForTesting()
+        let done = store.sidebarSummary(
+            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+            selection: .edited, livePhotosPaired: true)
+        #expect(done?.exportedCount == 1)
+        #expect(done?.status == .complete)
+    }
+
+    /// Issue #49: the `editedWithOriginals` formula uses `bothVariantsDone` plus the
+    /// natural-stem cap; the paired-video subtraction applies there too. An edited Live
+    /// Photo with `.original.done` + `.edited.done` + `.editedPairedVideo.pending` reads
+    /// as not yet exported under the toggle.
+    @Test func sidebarSummaryIncludeOriginalsLivePhotosPairedOn_subtractsPendingPairedVideo() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destPairOnIncl")
+        let now = Date()
+        store.markVariantExported(
+            assetId: "live", variant: .original, year: 2025, month: 9,
+            relPath: "2025/09/", filename: "IMG_0001_orig.HEIC", exportedAt: now)
+        store.markVariantExported(
+            assetId: "live", variant: .edited, year: 2025, month: 9,
+            relPath: "2025/09/", filename: "IMG_0001.HEIC", exportedAt: now)
+        store.markVariantInProgress(
+            assetId: "live", variant: .editedPairedVideo, year: 2025, month: 9,
+            relPath: "2025/09/", filename: nil)
+        store.flushForTesting()
+
+        let summary = store.sidebarSummary(
+            year: 2025, month: 9, totalCount: 1, adjustedCount: 1,
+            selection: .editedWithOriginals, livePhotosPaired: true)
+        #expect(summary?.exportedCount == 0)
+    }
+
+    /// Issue #49: year-scope roll-up forwards the flag.
+    @Test func sidebarYearExportedCountLivePhotosPairedOn_subtractsPerMonth() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString, isDirectory: true)
+        let store = ExportRecordStore(baseDirectoryURL: tempDir)
+        store.configure(for: "destPairYear")
+        let now = Date()
+        // March: 1 unedited asset, still exported, paired video pending.
+        store.markVariantExported(
+            assetId: "m3", variant: .original, year: 2025, month: 3,
+            relPath: "2025/03/", filename: "M3.HEIC", exportedAt: now)
+        store.markVariantInProgress(
+            assetId: "m3", variant: .originalPairedVideo, year: 2025, month: 3,
+            relPath: "2025/03/", filename: nil)
+        // April: 1 unedited still without any paired-video record (a plain still).
+        store.markVariantExported(
+            assetId: "m4", variant: .original, year: 2025, month: 4,
+            relPath: "2025/04/", filename: "M4.JPG", exportedAt: now)
+        store.flushForTesting()
+
+        let totals = [3: 1, 4: 1]
+        let adjusted: [Int: Int?] = [3: 0, 4: 0]
+
+        // Toggle off: both months count, total = 2.
+        let off = store.sidebarYearExportedCount(
+            year: 2025, totalCountsByMonth: totals,
+            adjustedCountsByMonth: adjusted, selection: .edited, livePhotosPaired: false)
+        #expect(off == 2)
+
+        // Toggle on: March's paired-video pending drops it from the count.
+        let on = store.sidebarYearExportedCount(
+            year: 2025, totalCountsByMonth: totals,
+            adjustedCountsByMonth: adjusted, selection: .edited, livePhotosPaired: true)
+        #expect(on == 1)
+    }
+
     /// R2-10: explicit standalone case for an unedited asset under
     /// `editedWithOriginals`. The asset has only `.original.done`; that's all that's
     /// required for an unedited asset under either selection.
