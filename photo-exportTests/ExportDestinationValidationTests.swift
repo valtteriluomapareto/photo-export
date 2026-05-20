@@ -82,6 +82,50 @@ struct ExportDestinationValidationTests {
     #expect(isDir.boolValue)
   }
 
+  /// Regression: issue #92. In 1.4, a saved bookmark to an unreachable path
+  /// blocked the launch sequence on synchronous I/O — first the
+  /// stale-bookmark refresh's `url.bookmarkData(...)` call, then the
+  /// resource-key reads inside `validate(url:)`. The fix defers the
+  /// refresh until validation confirms the URL is reachable, and bails out
+  /// of validation when scope acquisition fails.
+  ///
+  /// This test reproduces the launch path with a real bookmark whose target
+  /// folder is removed before restore. The behavioural pin: restore reports
+  /// the destination as unavailable, and the stored bookmark bytes are not
+  /// rewritten (proving the synchronous refresh was deferred).
+  @Test func restoringBookmarkForMissingFolderDoesNotRewriteBookmark() throws {
+    let dir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ExportDest-Issue92-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+    let suiteName = "ExportDestinationTests-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    let bookmarkKey = "ExportDestinationBookmark-\(UUID().uuidString)"
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let writer = ExportDestinationManager(
+      skipRestore: true,
+      userDefaults: defaults,
+      bookmarkDefaultsKey: bookmarkKey
+    )
+    writer.persistSelectedFolderForTesting(dir)
+    let bookmarkBytesBefore = defaults.data(forKey: bookmarkKey)
+    #expect(bookmarkBytesBefore != nil)
+
+    try FileManager.default.removeItem(at: dir)
+
+    let restored = ExportDestinationManager(
+      userDefaults: defaults,
+      bookmarkDefaultsKey: bookmarkKey
+    )
+
+    #expect(restored.isAvailable == false)
+    #expect(restored.isWritable == false)
+    #expect(restored.destinationId == nil)
+    let bookmarkBytesAfter = defaults.data(forKey: bookmarkKey)
+    #expect(bookmarkBytesBefore == bookmarkBytesAfter)
+  }
+
   @Test func persistedBookmarkRestoresFolderAcrossManagerInstances() throws {
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("ExportDestBookmark-\(UUID().uuidString)", isDirectory: true)

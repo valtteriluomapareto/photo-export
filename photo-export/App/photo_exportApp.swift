@@ -215,6 +215,16 @@ struct PhotoExportApp: App {
         .environmentObject(exportManager.progressState)
         .environmentObject(whatsNewState)
         .task {
+          // First-touch PhotoKit here, not in App.init. Issue #92: the prior
+          // shape called `PHPhotoLibrary.shared().register(self)` and the
+          // authorization probe inside `PhotoLibraryManager.init`, before any
+          // window had rendered. On macOS 15.7+ that synchronous singleton
+          // init has been observed to hang launch (PhotoKit's first call
+          // touches accountsd/TCC paths). Moving it into `.task` keeps the
+          // launch path UI-responsive even if PhotoKit takes a moment.
+          // Idempotent under scene recreation; a no-op under tests + screenshot
+          // mode.
+          photoLibraryManager.start()
           lifecycleCoordinator.attach(
             initial: DestinationIdentitySnapshot(
               fingerprint: exportDestinationManager.destinationFingerprint),
@@ -274,7 +284,8 @@ struct PhotoExportApp: App {
         SaveDiagnosticReportCommand(
           timelineStore: exportRecordStore,
           collectionStore: collectionExportRecordStore,
-          destinationManager: exportDestinationManager)
+          destinationManager: exportDestinationManager,
+          photoChangeAdapter: autoSyncPhotoChangeAdapter)
       }
       // Sidebar select-all wired through the standard Edit menu so the shortcut
       // (Cmd+A) is discoverable. The action's behavior changes per section —
@@ -515,13 +526,15 @@ private struct SaveDiagnosticReportCommand: View {
   let timelineStore: ExportRecordStore
   let collectionStore: CollectionExportRecordStore
   let destinationManager: ExportDestinationManager
+  let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
 
   var body: some View {
     Button("Save Diagnostic Report\u{2026}") {
       SaveDiagnosticReportCommand.saveDiagnosticReport(
         timelineStore: timelineStore,
         collectionStore: collectionStore,
-        destinationManager: destinationManager)
+        destinationManager: destinationManager,
+        photoChangeAdapter: photoChangeAdapter)
     }
   }
 
@@ -532,7 +545,8 @@ private struct SaveDiagnosticReportCommand: View {
   fileprivate static func saveDiagnosticReport(
     timelineStore: ExportRecordStore,
     collectionStore: CollectionExportRecordStore,
-    destinationManager: ExportDestinationManager
+    destinationManager: ExportDestinationManager,
+    photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   ) {
     let info = Bundle.main.infoDictionary
     let appVersion = (info?["CFBundleShortVersionString"] as? String) ?? "?"
@@ -542,7 +556,8 @@ private struct SaveDiagnosticReportCommand: View {
       collectionStore: collectionStore,
       destinationId: destinationManager.destinationId,
       appVersion: appVersion,
-      buildNumber: buildNumber
+      buildNumber: buildNumber,
+      lastCatchUpSummary: photoChangeAdapter.lastCatchUpSummary
     )
     let report = reporter.makeReport()
     let panel = NSSavePanel()

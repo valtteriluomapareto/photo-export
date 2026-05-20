@@ -42,7 +42,13 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// call sites.
   nonisolated static let defaultReconcileInterval: TimeInterval = 15 * 60
 
-  private let library: PHPhotoLibrary
+  /// Optional explicit injection (tests). Production callers leave it `nil`
+  /// so the singleton is resolved lazily inside `library` — that defers the
+  /// first `PHPhotoLibrary.shared()` evaluation out of `init` and into the
+  /// `.task` block where `start()` runs. Issue #92: the synchronous singleton
+  /// init was hanging launch on macOS 15.7+ when triggered from `App.init`.
+  private let explicitLibrary: PHPhotoLibrary?
+  private lazy var library: PHPhotoLibrary = explicitLibrary ?? PHPhotoLibrary.shared()
   private let tokenStore: GlobalPhotoChangeTokenStore
   private let logger: Logger
   private let authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never>?
@@ -64,6 +70,22 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// reconcile is alive.
   @Published private(set) var lastSuccessfulReconciliation: Date?
 
+  /// Diagnostic record of the most recent catch-up attempt — duration, trigger,
+  /// outcome. In-memory only (matches `lastSuccessfulReconciliation`); the
+  /// persistent diagnostic channel is `os.Logger`. Settings → Auto Export and
+  /// the Save Diagnostic Report exporter both consume this so a reporter can
+  /// share "the fetch took N seconds and processed M changes" without copying
+  /// raw Console snippets. Issue #92.
+  @Published private(set) var lastCatchUpSummary: CatchUpSummary?
+
+  /// `OSSignposter` for Instruments time-profile traces of catch-up. Begin/end
+  /// intervals around `fetchPersistentChanges` itself and the per-change
+  /// enumeration loop so a reporter who can attach Instruments can pinpoint
+  /// which phase a stall is happening in. Issue #92.
+  private static let signposter = OSSignposter(
+    subsystem: "com.valtteriluoma.photo-export",
+    category: "PhotoLibraryChanges.CatchUp")
+
   var authorizationStatus: PHAuthorizationStatus {
     PHPhotoLibrary.authorizationStatus(for: .readWrite)
   }
@@ -83,7 +105,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// that turned up actual changes so the UI side can wake alongside AutoSync;
   /// production wires it to `PhotoLibraryManager.invalidateCache()`.
   init(
-    library: PHPhotoLibrary = .shared(),
+    library: PHPhotoLibrary? = nil,
     tokenStore: GlobalPhotoChangeTokenStore,
     authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never>? = nil,
     clock: AutoSyncClock,
@@ -92,7 +114,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
     logger: Logger = Logger(
       subsystem: "com.valtteriluoma.photo-export", category: "PhotoLibraryChanges")
   ) {
-    self.library = library
+    self.explicitLibrary = library
     self.tokenStore = tokenStore
     self.authorizationStatusPublisher = authorizationStatusPublisher
     self.onPotentialLibraryChange = onPotentialLibraryChange
@@ -188,7 +210,10 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// path the UI side has already been woken; firing
   /// `onPotentialLibraryChange` again would double-invalidate the manager's
   /// caches and bump `libraryRevision` twice per real event.
-  private enum ReconcileTrigger {
+  ///
+  /// `Sendable` so the trigger can cross the main-actor → `Task.detached` →
+  /// main-actor boundary used by the off-main catch-up dispatch (issue #92).
+  private enum ReconcileTrigger: Sendable {
     /// `photoLibraryDidChange` callback from PhotoKit. The manager has its own
     /// observer for the same notification — don't double-wake the UI.
     case observer
@@ -199,13 +224,60 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
     /// `ReconciliationScheduler`). The whole point of these triggers is that
     /// PhotoKit's observer was silent — bridge to wake the UI.
     case safetyNet
+
+    var displayLabel: String {
+      switch self {
+      case .observer: return "observer"
+      case .startup: return "startup"
+      case .safetyNet: return "safety net"
+      }
+    }
+  }
+
+  /// Diagnostic record of a single catch-up attempt. Surfaced via
+  /// `lastCatchUpSummary`, the Settings → Auto Export status row, and the Save
+  /// Diagnostic Report exporter so reporters can share concrete numbers
+  /// ("the fetch took N seconds and processed M changes") without copying raw
+  /// Console snippets. Issue #92.
+  struct CatchUpSummary: Sendable, Equatable {
+    let startedAt: Date
+    let finishedAt: Date
+    /// Human-readable trigger label (e.g. "startup", "safety net").
+    let trigger: String
+    let result: Result
+
+    var duration: TimeInterval { finishedAt.timeIntervalSince(startedAt) }
+
+    enum Result: Sendable, Equatable {
+      /// First launch with no stored token; captured `currentChangeToken` as
+      /// the silent baseline. No enumeration ran.
+      case capturedBaseline
+      /// Successful enumeration. `count` is inserted+updated+deleted assets.
+      case emittedChanges(count: Int)
+      /// One or more per-change detail fetches failed; token rebased.
+      case detailsUnavailable(failures: Int)
+      /// `fetchPersistentChanges(since:)` itself threw; token rebased.
+      case fetchError(description: String)
+    }
   }
 
   // MARK: - Private
 
-  /// Fetches changes since the last token, emits a single outcome, and
-  /// advances the persisted token. On first run with no token, captures
-  /// `currentChangeToken` as the silent baseline.
+  /// Kicks off a catch-up attempt. On a fresh launch with no prior token, the
+  /// baseline is captured synchronously and we return immediately. Otherwise
+  /// the slow PhotoKit work — `fetchPersistentChanges(since:)` plus per-change
+  /// `changeDetails(for:)` round-trips to `photolibraryd` — is dispatched off
+  /// the main actor via `Task.detached`. The result is marshalled back to
+  /// the main actor in `applyCatchUpResult`, which mutates `lastToken`, the
+  /// token store, `lastSuccessfulReconciliation`, `lastCatchUpSummary`, and
+  /// emits on `subject`.
+  ///
+  /// Issue #92: prior to this shape the entire fetch+enumerate path ran
+  /// synchronously on the main actor (since the whole class is `@MainActor`),
+  /// so a large change backlog or an unhealthy `photolibraryd` could beachball
+  /// the UI for the full duration of the XPC round-trips. The reporter's
+  /// sample showed >2,000 main-thread samples in `mach_msg2_trap` waiting on
+  /// photolibraryd inside this exact code path.
   ///
   /// `trigger` controls whether the UI bridge fires on success-with-changes
   /// — see `ReconcileTrigger`. On the `.observer` path the manager has
@@ -213,76 +285,75 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// callback, so this method skips the bridge to avoid double-bumping
   /// `libraryRevision`.
   private func fetchAndEmit(trigger: ReconcileTrigger) {
+    let startedAt = Date()
     let baseline: PHPersistentChangeToken
     if let token = lastToken {
       baseline = token
     } else {
+      // First-time baseline capture is still a successful reconcile from the
+      // user's perspective: we successfully consulted PhotoKit and confirmed
+      // there's nothing new to act on yet. This path is fast (no XPC
+      // enumeration) so it stays on main.
       let current = library.currentChangeToken
       lastToken = current
       tokenStore.save(current)
-      // First-time baseline capture is still a successful reconcile from the
-      // user's perspective: we successfully consulted PhotoKit and confirmed
-      // there's nothing new to act on yet.
-      lastSuccessfulReconciliation = Date()
+      let finishedAt = Date()
+      lastSuccessfulReconciliation = finishedAt
+      lastCatchUpSummary = CatchUpSummary(
+        startedAt: startedAt, finishedAt: finishedAt,
+        trigger: trigger.displayLabel,
+        result: .capturedBaseline)
+      logger.info(
+        "Catch-up: captured baseline token (no prior token); trigger=\(trigger.displayLabel, privacy: .public)"
+      )
       return
     }
 
-    do {
-      let result = try library.fetchPersistentChanges(since: baseline)
-      var inserted: Set<String> = []
-      var updated: Set<String> = []
-      var deleted: Set<String> = []
-      var collectionChangesPresent = false
-      var newestToken = baseline
-      var detailsFailures = 0
+    // Dispatch the slow PhotoKit work off the main actor. Capture pure value
+    // / reference inputs locally before the detach so the worker doesn't
+    // touch `self`. The lazy `library` resolves here on main if needed.
+    let libraryRef = self.library
+    let loggerRef = self.logger
+    let signposter = Self.signposter
+    logger.info(
+      "Catch-up: dispatching off-main fetch (trigger=\(trigger.displayLabel, privacy: .public))"
+    )
 
-      for change in result {
-        newestToken = change.changeToken
-        do {
-          let assetDetails = try change.changeDetails(for: PHObjectType.asset)
-          inserted.formUnion(assetDetails.insertedLocalIdentifiers)
-          updated.formUnion(assetDetails.updatedLocalIdentifiers)
-          deleted.formUnion(assetDetails.deletedLocalIdentifiers)
-        } catch {
-          detailsFailures += 1
-        }
-        do {
-          let collectionDetails = try change.changeDetails(for: PHObjectType.assetCollection)
-          if !collectionDetails.insertedLocalIdentifiers.isEmpty
-            || !collectionDetails.updatedLocalIdentifiers.isEmpty
-            || !collectionDetails.deletedLocalIdentifiers.isEmpty
-          {
-            collectionChangesPresent = true
-          }
-        } catch {
-          detailsFailures += 1
-        }
+    Task.detached(priority: .utility) {
+      let outcome = Self.runCatchUp(
+        baseline: baseline, library: libraryRef,
+        logger: loggerRef, signposter: signposter)
+      let finishedAt = Date()
+      await MainActor.run { [weak self] in
+        self?.applyCatchUpResult(
+          outcome, trigger: trigger,
+          startedAt: startedAt, finishedAt: finishedAt)
       }
+    }
+  }
 
-      if detailsFailures > 0 {
-        logger.error(
-          "Per-change detail fetches failed (count=\(detailsFailures, privacy: .public)); rebasing token"
-        )
-        rebaseTokenAfterFailure()
-        subject.send(.failure(.detailsUnavailable))
-        return
-      }
-
-      let nextTokenData = try? NSKeyedArchiver.archivedData(
-        withRootObject: newestToken, requiringSecureCoding: true)
-
-      let event = PhotoLibraryPersistentChangeEvent(
-        insertedLocalIdentifiers: inserted,
-        updatedLocalIdentifiers: updated,
-        deletedLocalIdentifiers: deleted,
-        collectionChangesPresent: collectionChangesPresent,
-        observedAt: Date(),
-        nextToken: nextTokenData
-      )
-
+  /// Marshalled back to the main actor from the off-main worker. Mutates the
+  /// adapter's published state, emits on `subject`, and conditionally fires
+  /// the UI-side bridge.
+  private func applyCatchUpResult(
+    _ outcome: CatchUpWorkerResult,
+    trigger: ReconcileTrigger,
+    startedAt: Date,
+    finishedAt: Date
+  ) {
+    switch outcome {
+    case .success(let event, let newestToken):
       lastToken = newestToken
       tokenStore.save(newestToken)
-      lastSuccessfulReconciliation = Date()
+      lastSuccessfulReconciliation = finishedAt
+      let totalChanges =
+        event.insertedLocalIdentifiers.count
+        + event.updatedLocalIdentifiers.count
+        + event.deletedLocalIdentifiers.count
+      lastCatchUpSummary = CatchUpSummary(
+        startedAt: startedAt, finishedAt: finishedAt,
+        trigger: trigger.displayLabel,
+        result: .emittedChanges(count: totalChanges))
       subject.send(.success(event))
       // UI-side bridge: only fires on the safety-net paths (`.startup`,
       // `.safetyNet`). On the `.observer` path the manager has already
@@ -293,27 +364,145 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
       if trigger != .observer, event.requiresUIWake {
         onPotentialLibraryChange?()
       }
-    } catch {
-      let mapped = mapFetchError(error)
-      logger.error(
-        "fetchPersistentChanges failed: \(error.localizedDescription, privacy: .public) → \(String(describing: mapped), privacy: .public)"
-      )
-      rebaseTokenAfterFailure()
+    case .detailsUnavailable(let failureCount, let rebaseToken):
+      lastToken = rebaseToken
+      tokenStore.save(rebaseToken)
+      lastCatchUpSummary = CatchUpSummary(
+        startedAt: startedAt, finishedAt: finishedAt,
+        trigger: trigger.displayLabel,
+        result: .detailsUnavailable(failures: failureCount))
+      subject.send(.failure(.detailsUnavailable))
+    case .fetchError(let mapped, let rebaseToken):
+      lastToken = rebaseToken
+      tokenStore.save(rebaseToken)
+      lastCatchUpSummary = CatchUpSummary(
+        startedAt: startedAt, finishedAt: finishedAt,
+        trigger: trigger.displayLabel,
+        result: .fetchError(description: String(describing: mapped)))
       subject.send(.failure(mapped))
     }
   }
 
-  /// After any fetch failure we rebase to `currentChangeToken` so the next
-  /// observer callback starts from a fresh point and can't loop forever
-  /// re-emitting the same failure for the same range. The reducer's fallback
-  /// path performs a bounded full reconciliation to cover whatever we missed.
-  private func rebaseTokenAfterFailure() {
-    let current = library.currentChangeToken
-    lastToken = current
-    tokenStore.save(current)
+  /// Outcome of `runCatchUp`. Marked `@unchecked Sendable` because PhotoKit
+  /// types (`PHPersistentChangeToken`, `PHPersistentChangeFetchResult` carried
+  /// inside `PhotoLibraryPersistentChangeEvent`) are not declared `Sendable`
+  /// by Apple but are documented as thread-safe for the operations we perform
+  /// (reading identifiers, archiving the token). The wrapper crosses a single
+  /// `Task.detached` → `MainActor.run` boundary; no concurrent mutation.
+  private enum CatchUpWorkerResult: @unchecked Sendable {
+    case success(event: PhotoLibraryPersistentChangeEvent, newestToken: PHPersistentChangeToken)
+    case detailsUnavailable(failureCount: Int, rebaseToken: PHPersistentChangeToken)
+    case fetchError(
+      mapped: PhotoLibraryPersistentChangeFetchError, rebaseToken: PHPersistentChangeToken)
   }
 
-  private func mapFetchError(_ error: Error) -> PhotoLibraryPersistentChangeFetchError {
+  /// Nonisolated catch-up worker. Runs `fetchPersistentChanges(since:)` and
+  /// the per-change enumeration off the main actor so a slow PhotoKit / a
+  /// large change backlog can't beachball the UI (issue #92).
+  ///
+  /// Logging is intentionally generous: emits a checkpoint at fetch start,
+  /// fetch return (with elapsed ms), every 100 enumerated changes (with
+  /// running elapsed), enumeration complete (with per-category counts), and
+  /// any error. Wrapped in `OSSignposter` intervals (`CatchUp`,
+  /// `FetchPersistentChanges`, `EnumerateChanges`) so Instruments traces show
+  /// the per-phase timing.
+  nonisolated private static func runCatchUp(
+    baseline: PHPersistentChangeToken,
+    library: PHPhotoLibrary,
+    logger: Logger,
+    signposter: OSSignposter
+  ) -> CatchUpWorkerResult {
+    let catchUpInterval = signposter.beginInterval("CatchUp")
+    defer { signposter.endInterval("CatchUp", catchUpInterval) }
+
+    logger.info("Catch-up: calling fetchPersistentChanges(since:) off-main")
+    let fetchStart = Date()
+    let fetchInterval = signposter.beginInterval("FetchPersistentChanges")
+    let result: PHPersistentChangeFetchResult
+    do {
+      result = try library.fetchPersistentChanges(since: baseline)
+    } catch {
+      signposter.endInterval("FetchPersistentChanges", fetchInterval)
+      let mapped = Self.mapFetchError(error)
+      logger.error(
+        "Catch-up: fetchPersistentChanges failed in \(Int(Date().timeIntervalSince(fetchStart) * 1000))ms: \(error.localizedDescription, privacy: .public) → \(String(describing: mapped), privacy: .public)"
+      )
+      return .fetchError(mapped: mapped, rebaseToken: library.currentChangeToken)
+    }
+    signposter.endInterval("FetchPersistentChanges", fetchInterval)
+    logger.info(
+      "Catch-up: fetchPersistentChanges returned in \(Int(Date().timeIntervalSince(fetchStart) * 1000))ms; enumerating…"
+    )
+
+    let enumerateInterval = signposter.beginInterval("EnumerateChanges")
+    var inserted: Set<String> = []
+    var updated: Set<String> = []
+    var deleted: Set<String> = []
+    var collectionChangesPresent = false
+    var newestToken = baseline
+    var detailsFailures = 0
+    var processedCount = 0
+    let enumerateStart = Date()
+
+    for change in result {
+      newestToken = change.changeToken
+      do {
+        let assetDetails = try change.changeDetails(for: PHObjectType.asset)
+        inserted.formUnion(assetDetails.insertedLocalIdentifiers)
+        updated.formUnion(assetDetails.updatedLocalIdentifiers)
+        deleted.formUnion(assetDetails.deletedLocalIdentifiers)
+      } catch {
+        detailsFailures += 1
+      }
+      do {
+        let collectionDetails = try change.changeDetails(for: PHObjectType.assetCollection)
+        if !collectionDetails.insertedLocalIdentifiers.isEmpty
+          || !collectionDetails.updatedLocalIdentifiers.isEmpty
+          || !collectionDetails.deletedLocalIdentifiers.isEmpty
+        {
+          collectionChangesPresent = true
+        }
+      } catch {
+        detailsFailures += 1
+      }
+      processedCount += 1
+      if processedCount.isMultiple(of: 100) {
+        logger.info(
+          "Catch-up: processed \(processedCount) changes in \(Int(Date().timeIntervalSince(enumerateStart) * 1000))ms (still iterating)…"
+        )
+      }
+    }
+    signposter.endInterval("EnumerateChanges", enumerateInterval)
+    let enumerateElapsedMs = Int(Date().timeIntervalSince(enumerateStart) * 1000)
+    logger.info(
+      "Catch-up: enumeration complete: \(processedCount) changes in \(enumerateElapsedMs)ms (insertedAssets=\(inserted.count), updatedAssets=\(updated.count), deletedAssets=\(deleted.count), collectionChanges=\(collectionChangesPresent))"
+    )
+
+    if detailsFailures > 0 {
+      logger.error(
+        "Catch-up: per-change detail fetches failed (count=\(detailsFailures, privacy: .public)); rebasing token"
+      )
+      return .detailsUnavailable(
+        failureCount: detailsFailures, rebaseToken: library.currentChangeToken)
+    }
+
+    let nextTokenData = try? NSKeyedArchiver.archivedData(
+      withRootObject: newestToken, requiringSecureCoding: true)
+
+    let event = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: inserted,
+      updatedLocalIdentifiers: updated,
+      deletedLocalIdentifiers: deleted,
+      collectionChangesPresent: collectionChangesPresent,
+      observedAt: Date(),
+      nextToken: nextTokenData)
+
+    return .success(event: event, newestToken: newestToken)
+  }
+
+  nonisolated private static func mapFetchError(_ error: Error)
+    -> PhotoLibraryPersistentChangeFetchError
+  {
     let nsError = error as NSError
     guard nsError.domain == PHPhotosErrorDomain else {
       return .tokenInvalid

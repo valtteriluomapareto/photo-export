@@ -475,12 +475,18 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         relativeTo: nil,
         bookmarkDataIsStale: &isStale
       )
-      if isStale {
-        logger.info("Bookmark data is stale; attempting to re-save")
-        _ = saveBookmark(for: url)
-      }
       selectedFolderURL = url
       validate(url: url)
+      // Refresh a stale bookmark only after `validate` confirms the URL is
+      // actually accessible. The synchronous `url.bookmarkData(...)` call
+      // inside `saveBookmark` blocks on kernel I/O when the underlying path
+      // is unreachable or sandbox-denied — that's the launch beachball in
+      // issue #92. If the destination isn't usable, the user will be prompted
+      // to re-select; the refresh happens naturally on their next selection.
+      if isStale && isAvailable {
+        logger.info("Bookmark data is stale; refreshing now that destination validated")
+        _ = saveBookmark(for: url)
+      }
     } catch {
       logger.error(
         "Failed to restore bookmark: \(String(describing: error), privacy: .public)")
@@ -497,6 +503,19 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // Temporarily acquire access for validation
     let didStart = url.startAccessingSecurityScopedResource()
     defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+
+    // When scoped access can't be acquired — typically because the bookmark
+    // is stale, sandbox-denied, or the underlying volume is unreachable —
+    // every subsequent resource-key read and FileManager call on this URL
+    // would block on the kernel I/O timeout. Bail out instead: publish
+    // unavailable state and let the user re-select. Issue #92.
+    guard didStart else {
+      isAvailable = false
+      isWritable = false
+      statusMessage = "Export folder permission needs to be re-selected"
+      setIdentity(nil)
+      return
+    }
 
     // Check reachability
     var reachable = false
