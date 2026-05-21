@@ -634,7 +634,16 @@ final class ExportRecordStore: ObservableObject {
           probes.append(Probe(assetId: assetId, variant: variant, path: "", isCorrupt: true))
           continue
         }
-        let path = root.appendingPathComponent(record.relPath)
+        // Issue #38: probe each variant's *own* on-disk location, computed from the
+        // placement-derived `record.relPath` (which the timeline store sets to the
+        // current target layout's effective path on every write) plus the variant's
+        // persisted `subfolder`. Under mid-life toggle, two variants of one asset
+        // can live in different subfolders — using a shared `record.relPath` here
+        // would mis-probe whichever variant didn't match the last write.
+        let placement = ExportPlacement.timeline(year: record.year, month: record.month)
+        let dirRelPath = ExportPlacementPathPolicy.relativePath(
+          placement: placement, subfolder: vr.subfolder)
+        let path = root.appendingPathComponent(dirRelPath)
           .appendingPathComponent(filename).path
         probes.append(Probe(assetId: assetId, variant: variant, path: path, isCorrupt: false))
       }

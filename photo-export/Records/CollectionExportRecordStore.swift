@@ -445,7 +445,13 @@ final class CollectionExportRecordStore: ObservableObject {
                 path: "", isCorrupt: true))
             continue
           }
-          let path = root.appendingPathComponent(placement.relativePath)
+          // Issue #38: per-variant subfolder. A standalone-video asset's variants
+          // may live in `<placement>/videos/`, while image-asset variants live at
+          // the bare placement path. Probe each variant against its own stored
+          // subfolder.
+          let dirRelPath = ExportPlacementPathPolicy.relativePath(
+            placement: placement, subfolder: vr.subfolder)
+          let path = root.appendingPathComponent(dirRelPath)
             .appendingPathComponent(filename).path
           probes.append(
             Probe(

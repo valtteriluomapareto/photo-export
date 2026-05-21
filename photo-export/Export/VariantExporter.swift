@@ -202,9 +202,17 @@ final class VariantExporter {
       assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
       let destinationRoot = exportDestination.selectedFolderURL
     {
+      // Issue #38: the source file lives at the placement path plus the *source
+      // variant's* persisted `subfolder` — NOT recomputed from the current
+      // `videoLayout` setting. A mid-life-toggle source could have been written
+      // under `.flat` (subfolder == nil) and now we're under `.subfolder`, or vice
+      // versa; reading the stored value pins the source to where the writer
+      // originally put it.
+      let sourceRelPath = ExportPlacementPathPolicy.relativePath(
+        placement: reuse.placement, subfolder: reuse.subfolder)
       let sourceURL =
         destinationRoot
-        .appendingPathComponent(reuse.placement.relativePath, isDirectory: true)
+        .appendingPathComponent(sourceRelPath, isDirectory: true)
         .appendingPathComponent(reuse.filename)
       do {
         try fileSystem.copyItem(from: sourceURL, to: tempURL)

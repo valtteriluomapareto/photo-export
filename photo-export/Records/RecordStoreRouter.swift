@@ -121,9 +121,17 @@ final class RecordStoreRouter {
   /// copy path uses this to copy the existing file rather than re-fetching the asset from
   /// PhotoKit. On APFS, `FileManager.copyItem` performs copy-on-write so the duplicate
   /// uses no extra bytes; on non-APFS it's a real copy.
+  ///
+  /// `subfolder` (issue #38) carries the subfolder (relative to the placement) that the
+  /// *source* variant was written into — `nil` for records written under the historical
+  /// flat layout, `"videos"` for standalone-video variants written with the subfolder
+  /// layout. Read per-variant from the source record so a mid-life toggle flip can't
+  /// mis-locate a file: the source file lives where the writer originally put it,
+  /// regardless of the current `videoLayout` setting.
   struct ReuseSource: Equatable {
     let placement: ExportPlacement
     let filename: String
+    let subfolder: String?
   }
 
   /// Finds any existing `.done` record for `(assetId, variant)` across both stores,
@@ -134,6 +142,10 @@ final class RecordStoreRouter {
   /// Per `docs/project/archive/collections-export-plan.md` §"Reuse-Source Copy Path", any
   /// prior `.done` write is acceptable as a source — there's no preference for timeline
   /// over collection beyond the deterministic search order.
+  ///
+  /// The returned `ReuseSource.subfolder` is read off the matched variant record (NOT
+  /// asset-wide), so a mid-life-toggle asset with `.original` at bare path and `.edited`
+  /// in `videos/` returns the per-variant truth.
   func findReuseSource(
     assetId: String, variant: ExportVariant, currentPlacement: ExportPlacement
   ) -> ReuseSource? {
@@ -145,7 +157,8 @@ final class RecordStoreRouter {
         let filename = variantRec.filename
       {
         let placement = ExportPlacement.timeline(year: record.year, month: record.month)
-        return ReuseSource(placement: placement, filename: filename)
+        return ReuseSource(
+          placement: placement, filename: filename, subfolder: variantRec.subfolder)
       }
     }
     // 2) Collection placements, sorted for deterministic behavior.
@@ -160,7 +173,8 @@ final class RecordStoreRouter {
         variantRec.status == .done,
         let filename = variantRec.filename
       else { continue }
-      return ReuseSource(placement: placement, filename: filename)
+      return ReuseSource(
+        placement: placement, filename: filename, subfolder: variantRec.subfolder)
     }
     return nil
   }
