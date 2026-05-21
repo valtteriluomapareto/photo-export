@@ -9,15 +9,24 @@ import Testing
 /// naming convention.
 @MainActor
 struct BackupScannerVariantTests {
+  /// `subdir` (issue #38): when non-nil, the file is materialised inside
+  /// `YYYY/MM/<subdir>/` and the synthesized `ScannedFile.subfolder` carries
+  /// the same value. The scanner emits `subfolder = "videos"` for files it
+  /// finds in `YYYY/MM/videos/`; tests pass `subdir: "videos"` to construct
+  /// fixtures that mimic what the scanner would produce.
   private func makeScannedFile(
-    _ filename: String, year: Int = 2025, month: Int = 6, modDate: Date? = nil
+    _ filename: String, year: Int = 2025, month: Int = 6, modDate: Date? = nil,
+    subdir: String? = nil
   ) throws -> (BackupScanner.ScannedFile, URL) {
     let rootDir = FileManager.default.temporaryDirectory
       .appendingPathComponent("BSV-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
     let monthStr = String(format: "%02d", month)
-    let dir = rootDir.appendingPathComponent("\(year)", isDirectory: true)
+    var dir = rootDir.appendingPathComponent("\(year)", isDirectory: true)
       .appendingPathComponent(monthStr, isDirectory: true)
+    if let subdir, !subdir.isEmpty {
+      dir = dir.appendingPathComponent(subdir, isDirectory: true)
+    }
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let url = dir.appendingPathComponent(filename)
     FileManager.default.createFile(atPath: url.path, contents: Data("test".utf8))
@@ -34,7 +43,8 @@ struct BackupScannerVariantTests {
       hasCollisionSuffix: hadSuffix,
       fileExtension: ext.lowercased(),
       modificationDate: modDate,
-      fileSize: 4
+      fileSize: 4,
+      subfolder: subdir
     )
     return (sf, rootDir)
   }

@@ -198,7 +198,13 @@ final class ImportCoordinator: ObservableObject {
                 filename: file.filename,
                 status: .done,
                 exportDate: now,
-                lastError: nil
+                lastError: nil,
+                // Issue #38: preserve the on-disk location captured by the scanner so
+                // reuse-source and reconcile can find the file. `nil` for the bare
+                // month folder; `"videos"` for files discovered under
+                // `YYYY/MM/videos/`. Without this, importing a backup written under
+                // the subfolder layout would silently mis-locate every video.
+                subfolder: file.subfolder
               )
             ]
           )

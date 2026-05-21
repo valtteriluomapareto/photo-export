@@ -14,6 +14,15 @@ struct BackupScanner {
   // MARK: - Types
 
   /// A file discovered in the backup folder's YYYY/MM/ hierarchy.
+  ///
+  /// `subfolder` (issue #38) records the subfolder inside the month directory
+  /// where the file was found — `nil` for files directly under `YYYY/MM/`,
+  /// `"videos"` for files inside the `YYYY/MM/videos/` subfolder that the
+  /// videos-in-a-subfolder export layout writes. The matcher classifies the
+  /// variant by filename/stem regardless of where the file sits, so a paired
+  /// motion `.MOV` that the user manually moved into `videos/` is still
+  /// recognised; the subfolder is preserved here so the rebuilt record carries
+  /// the file's actual on-disk location for reconcile and reuse-source.
   struct ScannedFile: Equatable {
     let url: URL
     let year: Int
@@ -25,6 +34,33 @@ struct BackupScanner {
     let fileExtension: String
     let modificationDate: Date?
     let fileSize: UInt64?
+    /// `nil` ⇒ the bare placement path. Currently the scanner only emits
+    /// `"videos"` for files discovered inside the `videos/` subfolder.
+    let subfolder: String?
+
+    init(
+      url: URL,
+      year: Int,
+      month: Int,
+      filename: String,
+      baseFilename: String,
+      hasCollisionSuffix: Bool,
+      fileExtension: String,
+      modificationDate: Date?,
+      fileSize: UInt64?,
+      subfolder: String? = nil
+    ) {
+      self.url = url
+      self.year = year
+      self.month = month
+      self.filename = filename
+      self.baseFilename = baseFilename
+      self.hasCollisionSuffix = hasCollisionSuffix
+      self.fileExtension = fileExtension
+      self.modificationDate = modificationDate
+      self.fileSize = fileSize
+      self.subfolder = subfolder
+    }
   }
 
   /// The outcome of matching scanned backup files against the Photos library.
@@ -109,47 +145,73 @@ struct BackupScanner {
           let month = parseMonth(monthDir.lastPathComponent)
         else { continue }
 
-        guard
-          let files = try? fm.contentsOfDirectory(
-            at: monthDir,
-            includingPropertiesForKeys: [
-              .isRegularFileKey, .contentModificationDateKey, .fileSizeKey,
-            ],
-            options: [.skipsHiddenFiles])
-        else { continue }
+        // Files directly under YYYY/MM/ (subfolder = nil).
+        appendFiles(in: monthDir, year: year, month: month, subfolder: nil, into: &results)
 
-        for fileURL in files {
-          guard isRegularFile(fileURL) else { continue }
-
-          let filename = fileURL.lastPathComponent
-          let ext = fileURL.pathExtension
-          let stem = (filename as NSString).deletingPathExtension
-          let (baseStem, hadSuffix) = stripCollisionSuffix(from: stem)
-          let baseFilename =
-            ext.isEmpty ? baseStem : baseStem + "." + ext
-
-          let resourceValues = try? fileURL.resourceValues(forKeys: [
-            .contentModificationDateKey, .fileSizeKey,
-          ])
-
-          results.append(
-            ScannedFile(
-              url: fileURL,
-              year: year,
-              month: month,
-              filename: filename,
-              baseFilename: baseFilename,
-              hasCollisionSuffix: hadSuffix,
-              fileExtension: ext.lowercased(),
-              modificationDate: resourceValues?.contentModificationDate,
-              fileSize: resourceValues?.fileSize.map(UInt64.init)
-            ))
+        // Issue #38: also descend into YYYY/MM/videos/ (if present) so files written
+        // under the subfolder layout are discovered by Import Existing Backup.
+        let videosDir = monthDir.appendingPathComponent("videos", isDirectory: true)
+        if isDirectory(videosDir) {
+          appendFiles(
+            in: videosDir, year: year, month: month, subfolder: "videos", into: &results)
         }
       }
     }
 
     logger.info("Scanned \(results.count) files in backup folder")
     return results
+  }
+
+  /// Enumerates regular files directly inside `directory` and emits a
+  /// `ScannedFile` for each into `results`. Used by `scanBackupFolder` to walk
+  /// both the bare month directory and its optional `videos/` child (issue #38).
+  /// Caller passes `subfolder = nil` for files at the month root and
+  /// `subfolder = "videos"` for files in the subfolder.
+  private static func appendFiles(
+    in directory: URL,
+    year: Int,
+    month: Int,
+    subfolder: String?,
+    into results: inout [ScannedFile]
+  ) {
+    let fm = FileManager.default
+    guard
+      let files = try? fm.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: [
+          .isRegularFileKey, .contentModificationDateKey, .fileSizeKey,
+        ],
+        options: [.skipsHiddenFiles])
+    else { return }
+
+    for fileURL in files {
+      guard isRegularFile(fileURL) else { continue }
+
+      let filename = fileURL.lastPathComponent
+      let ext = fileURL.pathExtension
+      let stem = (filename as NSString).deletingPathExtension
+      let (baseStem, hadSuffix) = stripCollisionSuffix(from: stem)
+      let baseFilename =
+        ext.isEmpty ? baseStem : baseStem + "." + ext
+
+      let resourceValues = try? fileURL.resourceValues(forKeys: [
+        .contentModificationDateKey, .fileSizeKey,
+      ])
+
+      results.append(
+        ScannedFile(
+          url: fileURL,
+          year: year,
+          month: month,
+          filename: filename,
+          baseFilename: baseFilename,
+          hasCollisionSuffix: hadSuffix,
+          fileExtension: ext.lowercased(),
+          modificationDate: resourceValues?.contentModificationDate,
+          fileSize: resourceValues?.fileSize.map(UInt64.init),
+          subfolder: subfolder
+        ))
+    }
   }
 
   // MARK: - Asset fingerprint (cheap, built once per asset)
