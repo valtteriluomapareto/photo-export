@@ -88,6 +88,11 @@ struct PhotoExportApp: App {
     let em = ExportManager(
       photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers,
       collectionExportRecordStore: cers)
+    // Issue #49: drive the PhotoLibraryManager `descriptor(from:)` resource fallback
+    // from the same UserDefaults-backed toggle ExportManager owns. Synchronous sink so
+    // the next fetch sees the current value; initial value flows immediately because
+    // `@Published` re-emits to new subscribers.
+    plm.bindLivePhotoDetectionFallback(to: em.livePhotosPairedExportPublisher)
 
     let configure: (String?) -> ConfigureRecordStoresResult = { [edm, ers, cers] newId in
       Self.configureRecordStores(

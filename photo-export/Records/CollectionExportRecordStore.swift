@@ -511,17 +511,24 @@ final class CollectionExportRecordStore: ObservableObject {
   /// `ExportCompletionPolicy.satisfiesEditedFallback`). Collection placements derive the
   /// `VariantPolicy` from `placement.kind` so shared-album single-resource clamping
   /// applies correctly.
+  /// `livePhotosPaired` (issue #49) is REQUIRED — no default. Every UI call site that
+  /// surfaces "is this asset exported?" must consider whether the user has opted into
+  /// paired-video accounting. Tests pass `livePhotosPaired: false` explicitly when the
+  /// scenario doesn't involve Live Photos; the small extra boilerplate catches the
+  /// silent-regression class at compile time. Mirrors `ExportRecordStore.isExported`.
   func isExported(
     asset: AssetDescriptor,
     placement: ExportPlacement,
-    selection: ExportVersionSelection
+    selection: ExportVersionSelection,
+    livePhotosPaired: Bool
   ) -> Bool {
     guard accept(placement) else { return false }
     guard let body = recordBodies[placement.id]?[asset.id] else { return false }
     return ExportCompletionPolicy.isComplete(
       variants: body.typedVariants, asset: asset, selection: selection,
       policy: placement.kind.variantPolicy,
-      convertHEICToJPEG: convertHEICToJPEG)
+      convertHEICToJPEG: convertHEICToJPEG,
+      livePhotosPaired: livePhotosPaired)
   }
 
   // MARK: - Scoped queries
@@ -559,14 +566,19 @@ final class CollectionExportRecordStore: ObservableObject {
   /// store still holds historical records for those assets but the visible grid no longer
   /// includes them, so a record-keyed total would over-report.
   func monthSummary(
-    assets: [AssetDescriptor], placement: ExportPlacement, selection: ExportVersionSelection
+    assets: [AssetDescriptor], placement: ExportPlacement, selection: ExportVersionSelection,
+    livePhotosPaired: Bool
   ) -> MonthStatusSummary {
     guard accept(placement) else {
       return MonthStatusSummary(
         year: 0, month: 0, exportedCount: 0, totalCount: assets.count, status: .notExported)
     }
     var exported = 0
-    for asset in assets where isExported(asset: asset, placement: placement, selection: selection) {
+    for asset in assets
+    where isExported(
+      asset: asset, placement: placement, selection: selection,
+      livePhotosPaired: livePhotosPaired)
+    {
       exported += 1
     }
     let status: MonthExportStatus

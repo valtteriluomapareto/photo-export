@@ -95,7 +95,7 @@ struct EditedFallbackTests {
 
     // The asset must now count as exported under the .edited selection so a
     // subsequent Export All doesn't re-queue it forever.
-    #expect(h.store.isExported(asset: asset, selection: .edited))
+    #expect(h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   @Test func unedittedAssetIsUnaffectedByFallback() async throws {
@@ -170,10 +170,56 @@ struct EditedFallbackTests {
     let writeCountAfterFirst = h.writer.writeCalls.count
     #expect(writeCountAfterFirst > 0, "First run should have written the fallback original")
     #expect(
-      h.store.isExported(asset: asset, selection: .edited),
+      h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false),
       "Asset must be recognised as fallback-covered before the second run")
 
     // Second run: queue should not pick up this asset again.
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await h.manager.waitForQueueDrained()
+
+    #expect(h.writer.writeCalls.count == writeCountAfterFirst)
+    #expect(h.manager.queueCount == 0)
+  }
+
+  // MARK: - Paired-video unavailable sentinel (Section A long-term fix)
+
+  /// Parallel to `reExportSkipsAssetCoveredByFallback` for the
+  /// `pairedVideoUnavailableMessage` sentinel: a Live Photo whose still landed but
+  /// whose `.originalPairedVideo` is `.failed` with the sentinel must NOT be
+  /// re-queued on the next export run. Photos still has no motion file to give;
+  /// re-running the variant exporter would just rewrite the same sentinel.
+  ///
+  /// Mirrors the existing fallback-skip mechanism so a future refactor that drops
+  /// either the policy `isComplete` covered path OR the planner missing-variant
+  /// filter would break this test.
+  @Test func reExportSkipsLivePhotoWithPairedVideoUnavailableSentinel() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.manager.versionSelection = .edited
+    h.manager.livePhotosPairedExport = true
+
+    let asset = TestAssetFactory.makeAsset(id: "live-no-pv", isLivePhoto: true)
+    h.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    // Live Photo subtype says yes, but the resource enumeration omits `.pairedVideo`.
+    // The variant exporter sees `producer.originalFilename == nil` for the paired
+    // video and records `.failed` with the unavailable sentinel.
+    h.photoLib.resourcesByAssetId["live-no-pv"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC")
+    ]
+
+    // First run: still side lands, paired-video records as `.failed` with sentinel.
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await h.manager.waitForQueueDrained()
+    let writeCountAfterFirst = h.writer.writeCalls.count
+    #expect(writeCountAfterFirst > 0, "Still side should have been written on first run")
+    let pairedRecord = h.store.exportInfo(assetId: asset.id)?.variants[.originalPairedVideo]
+    #expect(pairedRecord?.status == .failed)
+    #expect(pairedRecord?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage)
+    #expect(
+      h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: true),
+      "Asset must be recognised as paired-video-unavailable-covered before the second run")
+
+    // Second run: queue must not re-attempt the paired video.
     h.manager.startExportMonth(year: 2025, month: 7)
     await h.manager.waitForQueueDrained()
 
@@ -204,7 +250,7 @@ struct EditedFallbackTests {
       error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
       at: Date())
 
-    #expect(h.store.isExported(asset: asset, selection: .edited))
+    #expect(h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   /// Per-PR review tightening: an `.edited.failed` with the *generic*
@@ -229,7 +275,7 @@ struct EditedFallbackTests {
       error: ExportVariantRecovery.editedResourceUnavailableMessage,
       at: Date())
 
-    #expect(!h.store.isExported(asset: asset, selection: .edited))
+    #expect(!h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   /// The same `.failed` `.edited` variant with a *different* error message
@@ -250,7 +296,7 @@ struct EditedFallbackTests {
       assetId: asset.id, variant: .edited,
       error: "Disk full", at: Date())
 
-    #expect(!h.store.isExported(asset: asset, selection: .edited))
+    #expect(!h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   // MARK: - Sidebar count
@@ -292,7 +338,8 @@ struct EditedFallbackTests {
 
     // Scope: 3 photos total, 2 adjusted (edit-ok + fallback), 1 unedited.
     let summary = h.store.sidebarSummary(
-      year: yr, month: mo, totalCount: 3, adjustedCount: 2, selection: .edited)
+      year: yr, month: mo, totalCount: 3, adjustedCount: 2, selection: .edited,
+      livePhotosPaired: false)
 
     // .edited formula = editedDone (1: edit-ok) + min(origOnlyAtStem, unedited) (1) +
     //                   editedFallbackCovered (1) = 3 → fully exported.
@@ -349,7 +396,7 @@ struct EditedFallbackTests {
 
     let summary = h.store.sidebarSummary(
       year: yr, month: mo, totalCount: 1, adjustedCount: 1,
-      selection: .editedWithOriginals)
+      selection: .editedWithOriginals, livePhotosPaired: false)
     #expect(summary?.exportedCount == 0)
     #expect(summary?.status == .notExported)
   }
@@ -388,7 +435,8 @@ struct EditedFallbackTests {
 
     #expect(
       h.collectionStore.isExported(
-        asset: asset, placement: placement, selection: .edited))
+        asset: asset, placement: placement, selection: .edited,
+        livePhotosPaired: false))
   }
 
   /// Collection-store mirror of the generic-sentinel rejection test.
@@ -422,7 +470,8 @@ struct EditedFallbackTests {
 
     #expect(
       !h.collectionStore.isExported(
-        asset: asset, placement: placement, selection: .edited))
+        asset: asset, placement: placement, selection: .edited,
+        livePhotosPaired: false))
   }
 
   // MARK: - Sentinel disambiguation
@@ -488,7 +537,7 @@ struct EditedFallbackTests {
     #expect(newFilename != nil)
     #expect(newFilename != "vacation_orig.JPG")
     #expect(newFilename?.hasSuffix("_orig.JPG") == true)
-    #expect(h.store.isExported(asset: assetAdjusted, selection: .edited))
+    #expect(h.store.isExported(asset: assetAdjusted, selection: .edited, livePhotosPaired: false))
   }
 
   // MARK: - Video fallback
@@ -527,7 +576,7 @@ struct EditedFallbackTests {
         == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage)
     #expect(record?.variants[.original]?.status == .done)
     #expect(record?.variants[.original]?.filename == "IMG_4019_orig.MOV")
-    #expect(h.store.isExported(asset: asset, selection: .edited))
+    #expect(h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
   // MARK: - Allocator collision

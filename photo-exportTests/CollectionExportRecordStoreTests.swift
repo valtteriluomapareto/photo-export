@@ -218,12 +218,15 @@ struct CollectionExportRecordStoreTests {
     let asset = sampleAsset()
 
     #expect(store.exportInfo(assetId: asset.id, placement: timeline) == nil)
-    #expect(!store.isExported(asset: asset, placement: timeline, selection: .edited))
+    #expect(
+      !store.isExported(
+        asset: asset, placement: timeline, selection: .edited,
+        livePhotosPaired: false))
     let summary = store.summary(for: timeline)
     #expect(summary.exportedCount == 0)
     #expect(summary.totalCount == 0)
     let monthSummary = store.monthSummary(
-      assets: [asset], placement: timeline, selection: .edited)
+      assets: [asset], placement: timeline, selection: .edited, livePhotosPaired: false)
     #expect(monthSummary.exportedCount == 0)
     #expect(monthSummary.status == .notExported)
   }
@@ -393,11 +396,15 @@ struct CollectionExportRecordStoreTests {
     store.upsertPlacement(p)
     let asset = sampleAsset()  // hasAdjustments: false → requires .original
 
-    #expect(!store.isExported(asset: asset, placement: p, selection: .edited))
+    #expect(
+      !store.isExported(
+        asset: asset, placement: p, selection: .edited, livePhotosPaired: false))
     store.markVariantExported(
       assetId: asset.id, placement: p, variant: .original,
       filename: "IMG_0001.HEIC", exportedAt: Date())
-    #expect(store.isExported(asset: asset, placement: p, selection: .edited))
+    #expect(
+      store.isExported(
+        asset: asset, placement: p, selection: .edited, livePhotosPaired: false))
   }
 
   // MARK: - Persistence: load after restart

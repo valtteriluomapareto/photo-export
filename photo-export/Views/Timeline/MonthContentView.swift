@@ -34,6 +34,11 @@ struct MonthContentView: View, Equatable {
   /// (the user toggles "Include Originals") — the parent's body re-render fan-in is
   /// fine.
   let versionSelection: ExportVersionSelection
+  /// Live Photo paired-export toggle snapshot (issue #49). Same rationale as
+  /// `versionSelection`: passed in by the parent so the month grid doesn't subscribe to
+  /// `ExportManager` directly. Drives the asset-complete check on the header summary so
+  /// a Live Photo whose paired video is pending isn't reported as complete.
+  let livePhotosPaired: Bool
   /// Mirrored from `ExportManager.isRunning` by the parent. Drives the view model's
   /// HQ-thumbnail-network suppression while an export is active.
   let isExportRunning: Bool
@@ -46,6 +51,7 @@ struct MonthContentView: View, Equatable {
     year: Int,
     month: Int,
     versionSelection: ExportVersionSelection,
+    livePhotosPaired: Bool,
     isExportRunning: Bool,
     onExportMonth: @escaping () -> Void,
     selectedAsset: Binding<AssetDescriptor?>,
@@ -54,6 +60,7 @@ struct MonthContentView: View, Equatable {
     self.year = year
     self.month = month
     self.versionSelection = versionSelection
+    self.livePhotosPaired = livePhotosPaired
     self.isExportRunning = isExportRunning
     self.onExportMonth = onExportMonth
     self._selectedAsset = selectedAsset
@@ -97,7 +104,8 @@ struct MonthContentView: View, Equatable {
               state: viewModel.thumbnailState(for: asset),
               isSelected: asset.id == selectedAsset?.id,
               isExported: exportRecordStore.isExported(
-                asset: asset, selection: versionSelection),
+                asset: asset, selection: versionSelection,
+                livePhotosPaired: livePhotosPaired),
               onRetry: { viewModel.retryThumbnail(for: asset.id) }
             )
             .frame(width: 120, height: 120)
@@ -156,7 +164,8 @@ struct MonthContentView: View, Equatable {
 
   private var exportSummaryView: some View {
     let summary = exportRecordStore.monthSummary(
-      assets: viewModel.assets, selection: versionSelection)
+      assets: viewModel.assets, selection: versionSelection,
+      livePhotosPaired: livePhotosPaired)
     return HStack(spacing: 8) {
       switch summary.status {
       case .complete:
@@ -199,6 +208,7 @@ struct MonthContentView: View, Equatable {
     lhs.year == rhs.year
       && lhs.month == rhs.month
       && lhs.versionSelection == rhs.versionSelection
+      && lhs.livePhotosPaired == rhs.livePhotosPaired
       && lhs.isExportRunning == rhs.isExportRunning
       && lhs.selectedAsset?.id == rhs.selectedAsset?.id
   }

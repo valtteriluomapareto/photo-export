@@ -43,7 +43,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 ## Known limitations
 
 - Requires **macOS 15.0** or later.
-- **Live Photos** currently export as still images. Paired image + video export is planned.
+- **Live Photos** export as still-only by default. Turn on Settings → Advanced → *Export Live Photos as paired image + video* to also write the paired video next to the still (e.g. `IMG_0001.HEIC` + `IMG_0001.MOV`). The paired-video extension matches what PhotoKit reports for that resource — typically `.MOV` on Apple hardware. The paired video is usually 1–3 MB per Live Photo, so libraries with thousands of them roughly double in size when the toggle is on. Shared-album Live Photos remain still-only because Apple doesn't expose their paired video.
 - **Albums, Favorites, and iCloud Shared Albums** are supported. Smart albums other than Favorites are not currently included.
 - **Shared albums export at reduced quality.** iCloud only serves shared photos as downscaled JPEGs — there's no API to fetch full-resolution originals for an asset that lives only in a shared album. The **Include originals** toggle is a no-op for shared albums (no `_orig` companion is possible).
 - Edited photos export as the version Photos renders for you. Turn on **Settings → Advanced → Include originals** to also keep an `_orig` companion with the original bytes.

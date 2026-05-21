@@ -329,4 +329,83 @@ struct ResourceSelectionTests {
   @Test func producerOriginalFilenameNilForNone() {
     #expect(EditedProducer.none.originalFilename == nil)
   }
+
+  // MARK: - Unified producer dispatch (paired-video and image variants share a seam)
+
+  /// Helper: assert that `selectProducer` returns `.resource` with the expected
+  /// `PHAssetResourceType`. Used by the paired-video tests below.
+  private func expectResource(
+    _ producer: EditedProducer,
+    type expected: PHAssetResourceType
+  ) {
+    if case .resource(let resource) = producer {
+      #expect(resource.type == expected)
+    } else {
+      Issue.record("Expected .resource(\(expected.rawValue)), got \(producer)")
+    }
+  }
+
+  /// `.originalPairedVideo` picks the unedited motion file out of a Live Photo's
+  /// resource set. The still-side `.photo` is intentionally ignored — that's the
+  /// `.original` variant's job. Pinned through the unified `selectProducer` seam
+  /// (issue #49) so the variant-based dispatch is the single source of truth.
+  @Test func selectProducerOriginalPairedVideoPicksPairedVideoResource() {
+    let r = resources([
+      (.photo, "IMG_0001.HEIC"),
+      (.pairedVideo, "IMG_0001.MOV"),
+      (.fullSizePhoto, "IMG_0001_edit.JPG"),
+    ])
+    let producer = ResourceSelection.selectProducer(
+      variant: .originalPairedVideo, from: r, descriptor: descriptor(hasAdjustments: false))
+    expectResource(producer, type: .pairedVideo)
+  }
+
+  /// `.editedPairedVideo` prefers `.fullSizePairedVideo` when Photos has rendered an
+  /// edited motion companion (e.g. trimmed Live Photo, stabilisation applied).
+  @Test func selectProducerEditedPairedVideoPrefersFullSizePairedVideo() {
+    let r = resources([
+      (.pairedVideo, "IMG_0001.MOV"),
+      (.fullSizePairedVideo, "IMG_0001_edit.MOV"),
+    ])
+    let producer = ResourceSelection.selectProducer(
+      variant: .editedPairedVideo, from: r, descriptor: descriptor(hasAdjustments: true))
+    expectResource(producer, type: .fullSizePairedVideo)
+  }
+
+  /// When Photos elides `.fullSizePairedVideo` (edit didn't touch motion), the
+  /// edited paired-video variant falls back to `.pairedVideo` so the user still
+  /// gets the motion file alongside the edited still — recovered automatically
+  /// without a `.failed` record because the bytes the user expects are still
+  /// available.
+  @Test func selectProducerEditedPairedVideoFallsBackToPairedVideoWhenFullSizeMissing() {
+    let r = resources([(.pairedVideo, "IMG_0001.MOV")])
+    let producer = ResourceSelection.selectProducer(
+      variant: .editedPairedVideo, from: r, descriptor: descriptor(hasAdjustments: true))
+    expectResource(producer, type: .pairedVideo)
+  }
+
+  /// Empty paired-video resource set → `.none` for both paired-video variants. Caller
+  /// records the recoverable failure rather than synthesizing one.
+  @Test func selectProducerReturnsNoneWhenNoPairedResource() {
+    let r = resources([(.photo, "IMG_0001.HEIC")])
+    let original = ResourceSelection.selectProducer(
+      variant: .originalPairedVideo, from: r, descriptor: descriptor(hasAdjustments: false))
+    let edited = ResourceSelection.selectProducer(
+      variant: .editedPairedVideo, from: r, descriptor: descriptor(hasAdjustments: true))
+    #expect(original == .none)
+    #expect(edited == .none)
+  }
+
+  /// Image-side variants must not be redirected to a paired-video resource even if
+  /// one is present. Guards against a bug where the writer would pick a `.MOV`
+  /// resource when asked for `.original`.
+  @Test func selectProducerImageVariantsIgnorePairedVideoResource() {
+    let r = resources([
+      (.photo, "IMG_0001.HEIC"),
+      (.pairedVideo, "IMG_0001.MOV"),
+    ])
+    let original = ResourceSelection.selectProducer(
+      variant: .original, from: r, descriptor: descriptor(hasAdjustments: false))
+    expectResource(original, type: .photo)
+  }
 }

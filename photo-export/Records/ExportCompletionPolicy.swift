@@ -31,12 +31,29 @@ enum ExportCompletionPolicy {
     asset: AssetDescriptor,
     selection: ExportVersionSelection,
     policy: VariantPolicy,
-    convertHEICToJPEG: Bool = false
+    convertHEICToJPEG: Bool = false,
+    livePhotosPaired: Bool = false
   ) -> Bool {
     let required = requiredVariants(
       for: asset, selection: selection, policy: policy,
-      convertHEICToJPEG: convertHEICToJPEG)
-    if required.allSatisfy({ variants[$0]?.status == .done }) { return true }
+      convertHEICToJPEG: convertHEICToJPEG,
+      livePhotosPaired: livePhotosPaired)
+    let allSatisfied = required.allSatisfy { variant in
+      // `.done` always counts. Paired-video variants additionally count when
+      // they're `.failed` with the `pairedVideoUnavailableMessage` sentinel — a
+      // known iCloud data-availability state where the still side is on disk
+      // and Photos genuinely cannot deliver the motion file. Mirrors the
+      // `editedFallbackCovered` pattern for the `_orig`-rescue case.
+      if variants[variant]?.status == .done { return true }
+      if variant.isPairedVideo,
+        variants[variant]?.status == .failed,
+        variants[variant]?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage
+      {
+        return true
+      }
+      return false
+    }
+    if allSatisfied { return true }
     return satisfiesEditedFallback(variants: variants, asset: asset, selection: selection)
   }
 

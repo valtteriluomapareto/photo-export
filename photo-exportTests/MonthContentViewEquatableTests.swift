@@ -22,6 +22,7 @@ struct MonthContentViewEquatableTests {
     year: Int = 2025,
     month: Int = 6,
     versionSelection: ExportVersionSelection = .edited,
+    livePhotosPaired: Bool = false,
     isExportRunning: Bool = false,
     selected: AssetDescriptor? = nil,
     action: @escaping () -> Void = {}
@@ -30,6 +31,7 @@ struct MonthContentViewEquatableTests {
     return MonthContentView(
       year: year, month: month,
       versionSelection: versionSelection,
+      livePhotosPaired: livePhotosPaired,
       isExportRunning: isExportRunning,
       onExportMonth: action,
       selectedAsset: Binding(get: { local }, set: { local = $0 }),
@@ -86,6 +88,17 @@ struct MonthContentViewEquatableTests {
 
   @Test func notEqualOnIsExportRunningChange() {
     #expect(makeView(isExportRunning: false) != makeView(isExportRunning: true))
+  }
+
+  /// `livePhotosPaired` flips the asset-aware `isExported(asset:selection:livePhotosPaired:)`
+  /// call at the per-thumbnail badge (line 106), so a `false → true` flip MUST invalidate
+  /// the cached equality and force the `LazyVGrid` to re-evaluate. Without this assertion
+  /// a future refactor that drops `livePhotosPaired` from the `Equatable` comparison would
+  /// silently freeze thumbnail badges at their pre-toggle state across runs.
+  @Test func notEqualOnLivePhotosPairedChange() {
+    let a = makeView(livePhotosPaired: false)
+    let b = makeView(livePhotosPaired: true)
+    #expect(a != b)
   }
 
   @Test func notEqualOnSelectedAssetIdChange() {

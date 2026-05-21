@@ -4,6 +4,21 @@ import Foundation
 enum ExportVariant: String, Codable, CaseIterable, Hashable, Sendable {
   case original
   case edited
+  /// Live Photo motion file paired with `.original`. Lands at `<stem>.mov` (single mode)
+  /// or `<stem>_orig.mov` when paired with `.edited` so it tracks its companion still.
+  case originalPairedVideo
+  /// Live Photo motion file paired with `.edited`. Lands at `<stem>.mov`.
+  case editedPairedVideo
+
+  /// True when this variant is the Live Photo motion file (paired video). Image-side
+  /// variants (`.original`, `.edited`) return false. Centralised here so call sites
+  /// don't pattern-match the raw enum.
+  var isPairedVideo: Bool {
+    switch self {
+    case .originalPairedVideo, .editedPairedVideo: return true
+    case .original, .edited: return false
+    }
+  }
 }
 
 /// User-facing selection that drives which variants are required per asset.
@@ -42,11 +57,17 @@ enum VariantPolicy: Sendable {
 /// "requires `.edited`" because the export pipeline synthesizes a JPEG via
 /// `EditedProducer.convertHEIC`. Default `false` keeps every existing caller's
 /// behavior unchanged.
+///
+/// `livePhotosPaired` (issue #49): when true, Live Photo assets get a paired-video
+/// variant alongside each image variant. When false (today's default), Live Photos
+/// behave like any other still — only the image-side variants are emitted, byte-
+/// identical to the pre-issue-#49 behaviour. The flag is opt-in via Settings.
 func requiredVariants(
   for asset: AssetDescriptor,
   selection: ExportVersionSelection,
   policy: VariantPolicy,
-  convertHEICToJPEG: Bool = false
+  convertHEICToJPEG: Bool = false,
+  livePhotosPaired: Bool = false
 ) -> Set<ExportVariant> {
   switch policy {
   case .singleResource:
@@ -57,11 +78,17 @@ func requiredVariants(
     // HEIC + toggle ⇒ behave as if adjusted: `.edited` is the JPEG synthesis,
     // `.editedWithOriginals` additionally keeps the HEIC `.original`.
     let effectivelyAdjusted = asset.hasAdjustments || (convertHEICToJPEG && asset.isHEICOriginal)
+    var variants: Set<ExportVariant>
     switch selection {
     case .edited:
-      return effectivelyAdjusted ? [.edited] : [.original]
+      variants = effectivelyAdjusted ? [.edited] : [.original]
     case .editedWithOriginals:
-      return effectivelyAdjusted ? [.original, .edited] : [.original]
+      variants = effectivelyAdjusted ? [.original, .edited] : [.original]
     }
+    if asset.isLivePhoto, livePhotosPaired {
+      if variants.contains(.original) { variants.insert(.originalPairedVideo) }
+      if variants.contains(.edited) { variants.insert(.editedPairedVideo) }
+    }
+    return variants
   }
 }

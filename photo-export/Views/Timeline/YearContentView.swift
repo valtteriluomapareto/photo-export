@@ -152,7 +152,8 @@ struct YearContentView: View {
     guard
       let summary = exportRecordStore.sidebarSummary(
         year: year, month: month, totalCount: total, adjustedCount: adjusted,
-        selection: exportManager.versionSelection)
+        selection: exportManager.versionSelection,
+        livePhotosPaired: exportManager.livePhotosPairedExport)
     else { return false }
     return summary.exportedCount >= total
   }

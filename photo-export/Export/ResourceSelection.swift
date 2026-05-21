@@ -57,6 +57,53 @@ enum ResourceSelection {
     return resources.first
   }
 
+  /// Unified byte-source selector. Returns the `EditedProducer` for any variant — the
+  /// same enum shape (`.resource | .render | .none`) the edited-image path already used.
+  /// Live Photo paired-video variants reuse the `.resource` case (PhotoKit serves the
+  /// motion file as a static `PHAssetResource`, never via the render pipeline). Issue
+  /// #49's guidance: extend the enum-shaped dispatch rather than scattering booleans
+  /// through `ExportManager` — this is the seam.
+  ///
+  /// - `.original` → original-side image resource (HEIC, JPG, alternatePhoto fallback).
+  /// - `.edited` → `selectEditedProducer` (which may return `.render` for adjusted videos).
+  /// - `.originalPairedVideo` → `.pairedVideo` resource. `.none` when absent.
+  /// - `.editedPairedVideo` → `.fullSizePairedVideo` when present, falling back to
+  ///   `.pairedVideo` (Photos.app elides the rendered companion when the edit doesn't
+  ///   touch motion; the unedited bytes are the right user-visible result there).
+  static func selectProducer(
+    variant: ExportVariant,
+    from resources: [ResourceDescriptor],
+    descriptor: AssetDescriptor,
+    convertHEICToJPEG: Bool = false
+  ) -> EditedProducer {
+    switch variant {
+    case .original:
+      if let resource = selectOriginalResource(
+        from: resources, mediaType: descriptor.mediaType)
+      {
+        return .resource(resource)
+      }
+      return .none
+    case .edited:
+      return selectEditedProducer(
+        from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
+        convertHEICToJPEG: convertHEICToJPEG)
+    case .originalPairedVideo:
+      if let resource = resources.first(where: { $0.type == .pairedVideo }) {
+        return .resource(resource)
+      }
+      return .none
+    case .editedPairedVideo:
+      if let resource = resources.first(where: { $0.type == .fullSizePairedVideo }) {
+        return .resource(resource)
+      }
+      if let resource = resources.first(where: { $0.type == .pairedVideo }) {
+        return .resource(resource)
+      }
+      return .none
+    }
+  }
+
   /// Picks the byte source for an edited variant.
   ///
   /// Four outcomes:

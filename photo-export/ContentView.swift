@@ -112,7 +112,8 @@ struct YearRow: View {
     let selection = exportManager.versionSelection
     let exported = exportRecordStore.sidebarYearExportedCount(
       year: year, totalCountsByMonth: totalCountsByMonth,
-      adjustedCountsByMonth: adjustedCountsByMonth, selection: selection)
+      adjustedCountsByMonth: adjustedCountsByMonth, selection: selection,
+      livePhotosPaired: exportManager.livePhotosPairedExport)
     let total = yearTotal()
     return HStack(spacing: 8) {
       Text(verbatim: String(year))
@@ -178,7 +179,8 @@ struct MonthRow: View {
     let selection = exportManager.versionSelection
     let summary = exportRecordStore.sidebarSummary(
       year: year, month: month, totalCount: total, adjustedCount: adjusted,
-      selection: selection)
+      selection: selection,
+      livePhotosPaired: exportManager.livePhotosPairedExport)
     let queued = exportManager.queuedCount(year: year, month: month)
     // Only the row owning the currently-in-flight job spins. Other rows with queued work
     // show just the "N left" text — a spinner on every queued row of a Year export reads

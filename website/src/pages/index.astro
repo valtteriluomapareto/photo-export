@@ -54,7 +54,7 @@ const faqData = {
 			name: 'Does it export videos too?',
 			acceptedAnswer: {
 				'@type': 'Answer',
-				text: 'Yes. The app exports photos and videos. Live Photos are exported as a single still image — full motion export (paired image + video) is planned for a future release.',
+				text: 'Yes. The app exports photos and videos. Live Photos export as still-only by default; turn on Settings → Advanced → "Export Live Photos as paired image + video" to also write the paired video next to the still (e.g. IMG_0001.HEIC + IMG_0001.MOV) using whatever extension casing PhotoKit reports for that resource. Shared-album Live Photos remain still-only because Apple does not expose their paired video.',
 			},
 		},
 		{
@@ -347,8 +347,15 @@ const faqData = {
 					<strong>Requires macOS 15.0 or later.</strong>
 				</li>
 				<li>
-					<strong>Live Photos export as still images.</strong> Paired image + video
-					export is planned for a future release.
+					<strong>Live Photos export as still-only by default.</strong> Turn on Settings
+					→ Advanced → <em>Export Live Photos as paired image + video</em> to also
+					write the paired video next to the still (e.g.
+					<code>IMG_0001.HEIC</code> + <code>IMG_0001.MOV</code>) using whatever
+					extension casing PhotoKit reports — typically <code>.MOV</code> on Apple
+					hardware. The paired video is typically 1–3 MB per Live Photo, so libraries
+					with thousands of Live Photos roughly double in size on disk when the toggle
+					is on. Shared-album Live Photos stay still-only because Apple doesn't expose
+					their paired video.
 				</li>
 				<li>
 					<strong>Albums and Favorites are supported.</strong> Smart albums other
@@ -419,7 +426,6 @@ const faqData = {
 			<ul class="roadmap-list">
 				<li>Concurrent export pipeline for faster throughput</li>
 				<li>iCloud originals handling (download or skip remote-only photos)</li>
-				<li>Live Photos and paired media support</li>
 				<li>Retry failed exports without restarting the batch</li>
 				<li>Media filtering and search within the library browser</li>
 				<li>Flexible naming schemes beyond year/month</li>
@@ -476,9 +482,16 @@ const faqData = {
 				<div class="faq-item">
 					<dt>Does it export videos too?</dt>
 					<dd>
-						Yes. The app exports photos and videos. Live Photos are exported as
-						a single still image — full motion export (paired image + video) is
-						planned for a future release.
+						Yes. The app exports photos and videos. Live Photos export as
+						still-only by default; turn on
+						<em
+							>Settings → Advanced → Export Live Photos as paired image + video</em
+						>
+						to also write the paired video next to the still (e.g.
+						<code>IMG_0001.HEIC</code> + <code>IMG_0001.MOV</code>) using
+						whatever extension casing PhotoKit reports for that resource.
+						Shared-album Live Photos remain still-only because Apple does not
+						expose their paired video.
 					</dd>
 				</div>
 				<div class="faq-item">

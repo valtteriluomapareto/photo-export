@@ -69,12 +69,14 @@ struct ExportRecordStoreQueryGoldenTests {
     // sidebarSummary returns nil when adjustedCount is nil (loading state).
     #expect(
       store.sidebarSummary(
-        year: 2025, month: 6, totalCount: 10, adjustedCount: nil, selection: .edited)
+        year: 2025, month: 6, totalCount: 10, adjustedCount: nil, selection: .edited,
+        livePhotosPaired: false)
         == nil)
 
     #expect(
       store.sidebarYearExportedCount(
-        year: 2025, totalCountsByMonth: [:], adjustedCountsByMonth: [:], selection: .edited)
+        year: 2025, totalCountsByMonth: [:], adjustedCountsByMonth: [:], selection: .edited,
+        livePhotosPaired: false)
         == 0)
   }
 
@@ -302,7 +304,8 @@ struct ExportRecordStoreQueryGoldenTests {
       filename: "COMP_orig.HEIC", exportedAt: now)
 
     let summary = store.sidebarSummary(
-      year: yr, month: mo, totalCount: 10, adjustedCount: 3, selection: .edited)
+      year: yr, month: mo, totalCount: 10, adjustedCount: 3, selection: .edited,
+      livePhotosPaired: false)
     #expect(summary != nil)
     #expect(summary?.exportedCount == 6)  // 2 + min(4, 7)
     #expect(summary?.totalCount == 10)
@@ -311,7 +314,8 @@ struct ExportRecordStoreQueryGoldenTests {
     // Loading state.
     #expect(
       store.sidebarSummary(
-        year: yr, month: mo, totalCount: 10, adjustedCount: nil, selection: .edited)
+        year: yr, month: mo, totalCount: 10, adjustedCount: nil, selection: .edited,
+        livePhotosPaired: false)
         == nil)
   }
 
@@ -347,7 +351,7 @@ struct ExportRecordStoreQueryGoldenTests {
 
     let summary = store.sidebarSummary(
       year: yr, month: mo, totalCount: 10, adjustedCount: 3,
-      selection: .editedWithOriginals)
+      selection: .editedWithOriginals, livePhotosPaired: false)
     #expect(summary?.exportedCount == 5)  // 1 + min(4, 7)
     #expect(summary?.status == .partial)
   }
@@ -372,7 +376,8 @@ struct ExportRecordStoreQueryGoldenTests {
     }
 
     let summary = store.sidebarSummary(
-      year: yr, month: mo, totalCount: 12, adjustedCount: 2, selection: .edited)
+      year: yr, month: mo, totalCount: 12, adjustedCount: 2, selection: .edited,
+      livePhotosPaired: false)
     #expect(summary?.exportedCount == 10)  // capped, not 12
   }
 
@@ -421,7 +426,8 @@ struct ExportRecordStoreQueryGoldenTests {
       year: 2025,
       totalCountsByMonth: [6: 10, 7: 5, 8: 0],
       adjustedCountsByMonth: [6: 3, 7: 0, 8: nil],
-      selection: .edited
+      selection: .edited,
+      livePhotosPaired: false
     )
     #expect(yearTotal == 8)
 
@@ -430,7 +436,8 @@ struct ExportRecordStoreQueryGoldenTests {
       year: 2025,
       totalCountsByMonth: [6: 10, 7: 5, 8: 0],
       adjustedCountsByMonth: [6: 3, 7: nil, 8: nil],
-      selection: .edited
+      selection: .edited,
+      livePhotosPaired: false
     )
     #expect(yearTotalWithLoading == 6)  // only month 6 contributes
   }
@@ -523,13 +530,14 @@ struct ExportRecordStoreQueryGoldenTests {
 
     let assets = [u1, u2, a1, a2, a3]
 
-    let editedSummary = store.monthSummary(assets: assets, selection: .edited)
+    let editedSummary = store.monthSummary(
+      assets: assets, selection: .edited, livePhotosPaired: false)
     #expect(editedSummary.exportedCount == 3)
     #expect(editedSummary.totalCount == 5)
     #expect(editedSummary.status == .partial)
 
     let editedWithOriginals = store.monthSummary(
-      assets: assets, selection: .editedWithOriginals)
+      assets: assets, selection: .editedWithOriginals, livePhotosPaired: false)
     #expect(editedWithOriginals.exportedCount == 2)
     #expect(editedWithOriginals.totalCount == 5)
     #expect(editedWithOriginals.status == .partial)
@@ -564,18 +572,21 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(store.isExported(assetId: adjusted.id))
 
     // Strict: unedited is satisfied; adjusted is not (needs .edited.done).
-    #expect(store.isExported(asset: unedited, selection: .edited))
-    #expect(!store.isExported(asset: adjusted, selection: .edited))
-    #expect(store.isExported(asset: unedited, selection: .editedWithOriginals))
-    #expect(!store.isExported(asset: adjusted, selection: .editedWithOriginals))
+    #expect(store.isExported(asset: unedited, selection: .edited, livePhotosPaired: false))
+    #expect(!store.isExported(asset: adjusted, selection: .edited, livePhotosPaired: false))
+    #expect(
+      store.isExported(asset: unedited, selection: .editedWithOriginals, livePhotosPaired: false))
+    #expect(
+      !store.isExported(asset: adjusted, selection: .editedWithOriginals, livePhotosPaired: false))
 
     // Add the adjusted asset's edited variant — now it satisfies .edited but not
     // .editedWithOriginals (the .original is still done from above so it does).
     store.markVariantExported(
       assetId: adjusted.id, variant: .edited, year: yr, month: mo, relPath: rel,
       filename: "A.JPG", exportedAt: now)
-    #expect(store.isExported(asset: adjusted, selection: .edited))
-    #expect(store.isExported(asset: adjusted, selection: .editedWithOriginals))
+    #expect(store.isExported(asset: adjusted, selection: .edited, livePhotosPaired: false))
+    #expect(
+      store.isExported(asset: adjusted, selection: .editedWithOriginals, livePhotosPaired: false))
   }
 
   // MARK: - Incremental counter integrity under churn
@@ -971,6 +982,15 @@ struct ExportRecordStoreQueryGoldenTests {
     storeA.markVariantExported(
       assetId: "both", variant: .edited, year: yr, month: mo, relPath: rel,
       filename: "BOTH.JPG", exportedAt: now)
+    // Live Photo whose still landed but whose paired video is mid-flight. The
+    // post-reload `pairedVideoIncomplete` counter must include this record so the
+    // sidebar's subtraction is consistent across launches.
+    storeA.markVariantExported(
+      assetId: "live", variant: .original, year: yr, month: mo, relPath: rel,
+      filename: "LIVE.HEIC", exportedAt: now)
+    storeA.markVariantInProgress(
+      assetId: "live", variant: .originalPairedVideo, year: yr, month: mo, relPath: rel,
+      filename: nil)
     storeA.flushForTesting()  // ensure the JSONL log is durable
 
     // Construct a fresh store against the same on-disk directory. Triggers
@@ -1025,17 +1045,26 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(storeB.yearExportedCount(year: yr) == byVariantStatus[.original]?[.done] ?? 0)
 
     // Concrete spot-checks:
-    // - 3 done-N records + 1 both = 4 .original.done.
+    // - 3 done-N records + 1 both + 1 live = 5 .original.done.
     // - 1 .both = 1 .edited.done.
     // - 1 stuck (originally .original.inProgress) recovered → .original.failed.
     // - 1 alsostuck (originally .edited.inProgress) recovered → .edited.failed.
     // - 1 fail = 1 .original.failed.
-    // Total: .original.done = 4, .original.failed = 2, .edited.done = 1, .edited.failed = 1.
-    #expect(storeB.recordCount(year: yr, month: mo, variant: .original, status: .done) == 4)
+    // - 1 live's .originalPairedVideo (originally .inProgress) recovered → .failed.
+    // Total: .original.done = 5, .original.failed = 2, .edited.done = 1, .edited.failed = 1,
+    //        .originalPairedVideo.failed = 1.
+    #expect(storeB.recordCount(year: yr, month: mo, variant: .original, status: .done) == 5)
     #expect(storeB.recordCount(year: yr, month: mo, variant: .original, status: .failed) == 2)
     #expect(storeB.recordCount(year: yr, month: mo, variant: .edited, status: .done) == 1)
     #expect(storeB.recordCount(year: yr, month: mo, variant: .edited, status: .failed) == 1)
+    #expect(
+      storeB.recordCount(
+        year: yr, month: mo, variant: .originalPairedVideo, status: .failed) == 1)
     #expect(storeB.recordCountBothVariantsDone(year: yr, month: mo) == 1)
+    // Issue #49: paired-video counter must survive the reload + recovery cycle. The
+    // `live` record has `.original.done` + `.originalPairedVideo.failed` (recovered
+    // from `.inProgress`), so the post-reload counter is 1.
+    #expect(storeB.recordCountPairedVideoIncomplete(year: yr, month: mo) == 1)
   }
 
   /// Covers the **snapshot-load path** plus **multi-cell in-progress recovery**, both

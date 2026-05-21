@@ -52,7 +52,12 @@ struct ExportDestinationResolver: Sendable {
     pairOriginalWithSuffix: Bool
   ) throws -> (URL, String) {
     switch variant {
-    case .original:
+    case .original, .originalPairedVideo:
+      // The original-side filename rule is extension-agnostic: the image variant uses the
+      // resource's image extension (HEIC/JPG/…), the paired-video variant uses `.mov` — both
+      // pass through the same `<stem>[_orig].<ext>` shape. The collision-throw sentinel
+      // (code 5) is preserved verbatim for both because either filename being already on
+      // disk indicates a split-pair hazard the caller must surface.
       let origExt = (originalFilename as NSString).pathExtension
       if let stem = groupStem {
         let filename = ExportFilenamePolicy.originalFilename(
@@ -73,7 +78,10 @@ struct ExportDestinationResolver: Sendable {
       let finalURL = uniqueFileURL(in: destDir, baseName: origStem, ext: origExt)
       return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
 
-    case .edited:
+    case .edited, .editedPairedVideo:
+      // Same extension-agnostic story as `.original`: image side gets the rendered image
+      // extension, paired-video side gets `.mov`. Both land at `<groupStem>.<ext>` and
+      // share the post-edit collision-suffix rule.
       let editedExt = (originalFilename as NSString).pathExtension
       if let stem = groupStem {
         let filename = ExportFilenamePolicy.editedFilename(
@@ -88,7 +96,9 @@ struct ExportDestinationResolver: Sendable {
       }
       // Fresh single-variant `.edited` (default mode adjusted asset, no prior records).
       // Use the original-side resource's stem so the edited file lands at e.g.
-      // `IMG_0001.JPG` (matching what Photos.app does for a single-asset export).
+      // `IMG_0001.JPG` (matching what Photos.app does for a single-asset export). The
+      // paired-video case falls through to this branch only if the caller forgot to
+      // pre-allocate a group stem; we still land at a sane filename rather than trapping.
       let baseStem: String
       if let original = ResourceSelection.selectOriginalResource(
         from: resources, mediaType: descriptor.mediaType)
@@ -104,26 +114,80 @@ struct ExportDestinationResolver: Sendable {
 
   // MARK: - Stem allocation
 
-  /// Allocates a stem where both the natural-stem edited target (`<stem>.<editedExt>`)
-  /// and the `_orig` companion target (`<stem>_orig.<originalExt>`) are simultaneously
-  /// free. Bumps the per-pair collision suffix until both slots are available so the
-  /// pair never splits across stems.
+  /// Allocates a stem where every slot the active variant set will write is
+  /// simultaneously free. Bumps the per-pair collision suffix until all slots are
+  /// available so the pair (or paired group) never splits across stems.
+  ///
+  /// `pairOriginalWithSuffix` mirrors the call-site flag of the same name on
+  /// `resolveDestination` and selects between the two layouts:
+  /// - `true` (edited asset, both image sides written): `<stem>.<editedExt>` (rendered
+  ///   edit) + `<stem>_orig.<imageExt>` (original companion). `editedExt` must be
+  ///   non-nil. When `pairedVideoExt` is also non-nil (Live Photo), `<stem>.<pairedVideoExt>`
+  ///   + `<stem>_orig.<pairedVideoExt>` are added to the freeness check. Here `imageExt`
+  ///   names the extension of the file landing at the `_orig` slot (the original
+  ///   companion).
+  /// - `false` (single image side written): `<stem>.<imageExt>` only on the image side
+  ///   (no `_orig` companion when there is no edit, and no natural-stem edited when
+  ///   there is no original), plus `<stem>.<pairedVideoExt>` for the motion file.
+  ///   `editedExt` is ignored. The caller passes `imageExt` as whichever image side is
+  ///   actually being written — the original for an unedited Live Photo (`.original` +
+  ///   `.originalPairedVideo`), or the edited for an adjusted Live Photo under
+  ///   `selection = .edited` (`.edited` + `.editedPairedVideo`). Both cases exist for
+  ///   the same reason: two assets that share a base stem but use different image
+  ///   extensions (e.g. HEIC vs JPEG) coexist on the image side but collide on the
+  ///   shared `.MOV` paired-video stem; the resolver must detect that upfront rather
+  ///   than letting the second paired-video write throw at write-time.
   func allocatePairedGroupStem(
-    baseStem: String, editedExt: String, originalExt: String, destDir: URL
+    baseStem: String,
+    imageExt: String,
+    editedExt: String?,
+    destDir: URL,
+    pairOriginalWithSuffix: Bool,
+    pairedVideoExt: String? = nil
   ) -> String {
     var stem = baseStem
     var index = 1
     while index < 10_000 {
-      let editedTarget = destDir.appendingPathComponent(stem)
-        .appendingPathExtension(editedExt)
-      let origTarget = destDir.appendingPathComponent(
-        stem + ExportFilenamePolicy.originalSuffix
-      ).appendingPathExtension(originalExt)
-      if !fileSystem.fileExists(atPath: editedTarget.path)
-        && !fileSystem.fileExists(atPath: origTarget.path)
-      {
-        return stem
+      var allFree: Bool
+      if pairOriginalWithSuffix {
+        // Edited-asset layout: natural-stem edited + `_orig` companion.
+        guard let editedExt else {
+          // Programmer error — `editedExt` is required when the edited slot is in
+          // play. Falling back to the unedited layout would silently corrupt
+          // collision detection for edited assets, so return the current stem
+          // and let the caller's write-time collision throw surface the bug.
+          return stem
+        }
+        let editedTarget = destDir.appendingPathComponent(stem)
+          .appendingPathExtension(editedExt)
+        let origTarget = destDir.appendingPathComponent(
+          stem + ExportFilenamePolicy.originalSuffix
+        ).appendingPathExtension(imageExt)
+        allFree =
+          !fileSystem.fileExists(atPath: editedTarget.path)
+          && !fileSystem.fileExists(atPath: origTarget.path)
+        if allFree, let movExt = pairedVideoExt {
+          let editedMov = destDir.appendingPathComponent(stem).appendingPathExtension(movExt)
+          let origMov = destDir.appendingPathComponent(
+            stem + ExportFilenamePolicy.originalSuffix
+          ).appendingPathExtension(movExt)
+          allFree =
+            !fileSystem.fileExists(atPath: editedMov.path)
+            && !fileSystem.fileExists(atPath: origMov.path)
+        }
+      } else {
+        // Single-image-side layout: only the natural-stem image + the natural-stem
+        // motion file are written. `editedExt` is intentionally ignored — the caller
+        // passed the relevant side as `imageExt`.
+        let imageTarget = destDir.appendingPathComponent(stem)
+          .appendingPathExtension(imageExt)
+        allFree = !fileSystem.fileExists(atPath: imageTarget.path)
+        if allFree, let movExt = pairedVideoExt {
+          let mov = destDir.appendingPathComponent(stem).appendingPathExtension(movExt)
+          allFree = !fileSystem.fileExists(atPath: mov.path)
+        }
       }
+      if allFree { return stem }
       stem = "\(baseStem) (\(index))"
       index += 1
     }

@@ -9,6 +9,8 @@ import os
 final class ExportManager: ObservableObject {
   /// User-facing persistence key for the active version selection.
   static let versionSelectionDefaultsKey = "exportVersionSelection"
+  /// Persistence key for the Live Photo paired-video export toggle (issue #49).
+  static let livePhotosPairedExportDefaultsKey = "livePhotosPairedExport"
 
   /// How long the "already exported" toolbar message stays visible before it auto-clears.
   /// Long enough to read, short enough that subsequent work doesn't show stale state.
@@ -25,6 +27,24 @@ final class ExportManager: ObservableObject {
     /// Selection snapshot at enqueue time. Deterministic within a single job even if the user
     /// toggles selection mid-run.
     let selection: ExportVersionSelection
+    /// Live Photo paired-video toggle snapshot at enqueue time (issue #49). Same semantics
+    /// as `selection`: a mid-run flip of the Settings toggle does not change what an
+    /// already-queued job writes, so in-flight Live Photo work finishes against the
+    /// setting the user had when they clicked Export. Defaults to `false` so call sites
+    /// not yet aware of the toggle keep the pre-issue-#49 stills-only behaviour.
+    let livePhotosPaired: Bool
+
+    init(
+      assetLocalIdentifier: String,
+      placement: ExportPlacement,
+      selection: ExportVersionSelection,
+      livePhotosPaired: Bool = false
+    ) {
+      self.assetLocalIdentifier = assetLocalIdentifier
+      self.placement = placement
+      self.selection = selection
+      self.livePhotosPaired = livePhotosPaired
+    }
 
     /// Year derived from the placement. Defined for timeline jobs; returns `0` for
     /// `.favorites`/`.album`/`.sharedAlbum` placements where year/month is not part of
@@ -99,6 +119,23 @@ final class ExportManager: ObservableObject {
     set { versionSelection = newValue ? .editedWithOriginals : .edited }
   }
 
+  /// Issue #49: when on, Live Photos export a paired `.MOV` motion file alongside the
+  /// still image (e.g. `IMG_0001.HEIC` + `IMG_0001.MOV`). With `.editedWithOriginals`
+  /// also on, edited Live Photos additionally write `_orig.HEIC` + `_orig.MOV`.
+  /// Default off — most users want stills-only and the paired video roughly doubles
+  /// disk usage for Live-Photo-heavy libraries. Persisted to `UserDefaults` so the
+  /// choice survives restart and stays globally consistent regardless of destination.
+  /// Snapshotted onto each `ExportJob` at enqueue time (alongside `selection`) so a
+  /// mid-run toggle change does not corrupt in-flight work or strand orphans.
+  @Published var livePhotosPairedExport: Bool {
+    didSet {
+      userDefaults.set(livePhotosPairedExport, forKey: Self.livePhotosPairedExportDefaultsKey)
+      // The "already exported" copy is scoped to the previous setting — under a new
+      // setting the user may have new work, so the message would be misleading.
+      clearEmptyRunMessage()
+    }
+  }
+
   // MARK: - Published State (Import)
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
@@ -150,6 +187,13 @@ final class ExportManager: ObservableObject {
   /// `requiredVariants` widens to include `.edited`.
   var convertHEICToJPEGPublisher: AnyPublisher<Bool, Never> {
     $convertHEICToJPEG.eraseToAnyPublisher()
+  }
+
+  /// Combine publisher for `livePhotosPairedExport` (issue #49). `PhotoLibraryManager`
+  /// subscribes via `bindLivePhotoDetectionFallback(to:)` so the resource-enumeration
+  /// fallback runs only when the user has the toggle on.
+  var livePhotosPairedExportPublisher: AnyPublisher<Bool, Never> {
+    $livePhotosPairedExport.eraseToAnyPublisher()
   }
 
   /// Combine publisher for the import flag.
@@ -422,8 +466,11 @@ final class ExportManager: ObservableObject {
       self.versionSelection = .edited
     }
     // `bool(forKey:)` returns `false` for an unset key — the off-by-default
-    // contract is implicit. Initial value flows into both record stores via
-    // the manual sync below (didSet is suppressed during init).
+    // contract is implicit. Initial values flow into both record stores via
+    // the manual sync below (didSet is suppressed during init). All stored
+    // properties must be assigned before any `self.` access, so the Live
+    // Photo paired-video toggle (issue #49) is set first.
+    self.livePhotosPairedExport = userDefaults.bool(forKey: Self.livePhotosPairedExportDefaultsKey)
     self.convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
     self.exportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
     self.collectionExportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
@@ -506,8 +553,10 @@ final class ExportManager: ObservableObject {
     // Snapshot the active selection synchronously so a picker flip before the async enqueue
     // lands (after `fetchAssets` returns) cannot change the mode that was visible at click
     // time. The picker in the toolbar is also gated on `hasActiveExportWork` for clarity, but
-    // this snapshot is the correctness guarantee.
+    // this snapshot is the correctness guarantee. `livePhotosPairedExport` (issue #49) gets
+    // the same click-time snapshot for the same reason.
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     // Only reset progress counters when the queue is truly idle. "Paused
@@ -522,7 +571,8 @@ final class ExportManager: ObservableObject {
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueMonth(
-          year: year, month: month, selection: selection, generation: gen)
+          year: year, month: month, selection: selection,
+          livePhotosPaired: livePhotosPaired, generation: gen)
         guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
@@ -551,6 +601,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -559,7 +610,8 @@ final class ExportManager: ObservableObject {
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueYear(
-          year: year, selection: selection, generation: gen)
+          year: year, selection: selection,
+          livePhotosPaired: livePhotosPaired, generation: gen)
         guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
@@ -591,6 +643,7 @@ final class ExportManager: ObservableObject {
     // selectionOverride lets `runExport(context:)` honor the run context's selection
     // without mutating the user-visible toolbar `versionSelection`.
     let selection = selectionOverride ?? versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -611,7 +664,9 @@ final class ExportManager: ObservableObject {
         guard let self else { return .stale }
         let allYears = try self.photoLibraryService.availableYears()
         let result = try await self.runBulkEnqueueLoop(items: allYears, generation: gen) { year in
-          try await self.enqueueYear(year: year, selection: selection, generation: gen)
+          try await self.enqueueYear(
+            year: year, selection: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         return result.completed ? .completed(result.totals) : .stale
       }
@@ -654,6 +709,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = selectionOverride ?? versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -669,14 +725,17 @@ final class ExportManager: ObservableObject {
       body: { [weak self] in
         guard let self else { return .stale }
         let yearsResult = try await self.runBulkEnqueueLoop(items: years, generation: gen) { year in
-          try await self.enqueueYear(year: year, selection: selection, generation: gen)
+          try await self.enqueueYear(
+            year: year, selection: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         guard yearsResult.completed else { return .stale }
         let monthsResult = try await self.runBulkEnqueueLoop(
           items: months, generation: gen, startingFrom: yearsResult.totals
         ) { m in
           try await self.enqueueMonth(
-            year: m.year, month: m.month, selection: selection, generation: gen)
+            year: m.year, month: m.month, selection: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         return monthsResult.completed ? .completed(monthsResult.totals) : .stale
       }
@@ -701,6 +760,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = selectionOverride ?? versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -709,7 +769,8 @@ final class ExportManager: ObservableObject {
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
-          selection: .favorites, scope: .favorites, selectionMode: selection, generation: gen)
+          selection: .favorites, scope: .favorites, selectionMode: selection,
+          livePhotosPaired: livePhotosPaired, generation: gen)
         guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
@@ -810,6 +871,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -832,7 +894,8 @@ final class ExportManager: ObservableObject {
         ) { _ in
           try await self.enqueueCollection(
             selection: .favorites, scope: .favorites,
-            selectionMode: selection, generation: gen)
+            selectionMode: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         guard favResult.completed else { return .stale }
         let albumsResult = try await self.runBulkEnqueueLoop(
@@ -841,7 +904,8 @@ final class ExportManager: ObservableObject {
           try await self.enqueueCollection(
             selection: .album(collectionId: albumId),
             scope: .album(collectionId: albumId),
-            selectionMode: selection, generation: gen)
+            selectionMode: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         guard albumsResult.completed else { return .stale }
         let sharedResult = try await self.runBulkEnqueueLoop(
@@ -850,7 +914,8 @@ final class ExportManager: ObservableObject {
           try await self.enqueueCollection(
             selection: .sharedAlbum(collectionId: sharedId),
             scope: .sharedAlbum(collectionId: sharedId),
-            selectionMode: selection, generation: gen)
+            selectionMode: selection,
+            livePhotosPaired: livePhotosPaired, generation: gen)
         }
         return sharedResult.completed ? .completed(sharedResult.totals) : .stale
       }
@@ -1033,6 +1098,7 @@ final class ExportManager: ObservableObject {
     }
     guard !isEnqueueingAll else { return }
     let selectionMode = selectionOverride ?? versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     isEnqueueingAll = true
@@ -1079,6 +1145,7 @@ final class ExportManager: ObservableObject {
             selection: source.selection(for: id),
             scope: source.scope(for: id),
             selectionMode: selectionMode,
+            livePhotosPaired: livePhotosPaired,
             generation: gen
           )
         }
@@ -1107,6 +1174,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -1118,6 +1186,7 @@ final class ExportManager: ObservableObject {
           selection: .sharedAlbum(collectionId: collectionId),
           scope: .sharedAlbum(collectionId: collectionId),
           selectionMode: selection,
+          livePhotosPaired: livePhotosPaired,
           generation: gen
         )
         guard self.isCurrent(gen) else { return }
@@ -1149,6 +1218,7 @@ final class ExportManager: ObservableObject {
       return
     }
     let selection = versionSelection
+    let livePhotosPaired = livePhotosPairedExport
     clearEmptyRunMessage()
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
@@ -1160,6 +1230,7 @@ final class ExportManager: ObservableObject {
           selection: .album(collectionId: collectionId),
           scope: .album(collectionId: collectionId),
           selectionMode: selection,
+          livePhotosPaired: livePhotosPaired,
           generation: gen
         )
         guard self.isCurrent(gen) else { return }
@@ -1188,6 +1259,7 @@ final class ExportManager: ObservableObject {
     selection: LibrarySelection,
     scope: PhotoFetchScope,
     selectionMode: ExportVersionSelection,
+    livePhotosPaired: Bool,
     generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
@@ -1220,11 +1292,17 @@ final class ExportManager: ObservableObject {
 
     let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
     try throwIfCancelledOrStale(gen)
+    // The Live Photo paired-video setting (issue #49) is snapshotted at click time by
+    // each `start*` caller and threaded in as `livePhotosPaired`. Doing the snapshot
+    // there rather than here keeps the click-time semantics in the doc comments above —
+    // a toggle flip during the `await fetchAssets` window cannot change what gets queued.
     let newJobs = ExportJobPlanner.plan(
       assets: assets, placement: placement, selection: selectionMode,
+      livePhotosPaired: livePhotosPaired,
       isExported: {
         collectionExportRecordStore.isExported(
-          asset: $0, placement: placement, selection: selectionMode)
+          asset: $0, placement: placement, selection: selectionMode,
+          livePhotosPaired: livePhotosPaired)
       },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     queueCoordinator.enqueue(newJobs)
@@ -1364,7 +1442,8 @@ final class ExportManager: ObservableObject {
   // `ExportQueueCoordinator.enqueue`. The three enqueue methods retain only the
   // PhotoKit fetch + `ExportJobPlanner.plan` call.
   private func enqueueMonth(
-    year: Int, month: Int, selection: ExportVersionSelection, generation gen: Int
+    year: Int, month: Int, selection: ExportVersionSelection,
+    livePhotosPaired: Bool, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return .unauthorized }
@@ -1373,7 +1452,11 @@ final class ExportManager: ObservableObject {
     let placement = ExportPlacement.timeline(year: year, month: month)
     let newJobs = ExportJobPlanner.plan(
       assets: assets, placement: placement, selection: selection,
-      isExported: { exportRecordStore.isExported(asset: $0, selection: selection) },
+      livePhotosPaired: livePhotosPaired,
+      isExported: {
+        exportRecordStore.isExported(
+          asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
+      },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
@@ -1382,7 +1465,8 @@ final class ExportManager: ObservableObject {
 
   @discardableResult
   private func enqueueYear(
-    year: Int, selection: ExportVersionSelection, generation gen: Int
+    year: Int, selection: ExportVersionSelection,
+    livePhotosPaired: Bool, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return .unauthorized }
@@ -1390,7 +1474,11 @@ final class ExportManager: ObservableObject {
     try throwIfCancelledOrStale(gen)
     let newJobs = ExportJobPlanner.planTimelineYear(
       assets: assets, year: year, selection: selection,
-      isExported: { exportRecordStore.isExported(asset: $0, selection: selection) },
+      livePhotosPaired: livePhotosPaired,
+      isExported: {
+        exportRecordStore.isExported(
+          asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
+      },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
     queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
@@ -1679,9 +1767,25 @@ final class ExportManager: ObservableObject {
       let required = requiredVariants(
         for: descriptor, selection: job.selection,
         policy: job.placement.kind.variantPolicy,
-        convertHEICToJPEG: convertHEICToJPEG)
+        convertHEICToJPEG: convertHEICToJPEG,
+        livePhotosPaired: job.livePhotosPaired)
       let missing = required.filter { variant in
-        existingRecord?.variants[variant]?.status != .done
+        let existing = existingRecord?.variants[variant]
+        if existing?.status == .done { return false }
+        // Paired-video variants `.failed` with the unavailable sentinel are covered
+        // by the policy and should NOT be re-queued. Photos still doesn't have a
+        // motion file to give; re-running the variant exporter would write the
+        // same sentinel again. If Photos later materializes the resource,
+        // `libraryRevision` bumps and the next fetch builds a fresh asset
+        // descriptor — the planner re-evaluates required variants from scratch
+        // and will attempt the paired video again.
+        if variant.isPairedVideo,
+          existing?.status == .failed,
+          existing?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage
+        {
+          return false
+        }
+        return true
       }
       if missing.isEmpty {
         logger.debug(
@@ -1689,32 +1793,107 @@ final class ExportManager: ObservableObject {
         return
       }
 
-      // Always attempt original before edited so edited can inherit the chosen group stem.
-      let orderedVariants: [ExportVariant] = [.original, .edited].filter { missing.contains($0) }
+      // Variant order: image side first within each pairing group so the motion file inherits
+      // the anchored stem. For non-Live-Photo assets the paired-video filters fall away and
+      // this collapses to the legacy `[.original, .edited]` order.
+      let orderedVariants: [ExportVariant] =
+        [.original, .originalPairedVideo, .edited, .editedPairedVideo]
+        .filter { missing.contains($0) }
 
-      // Whether `.original` is paired with `.edited` for this asset. When true, the
-      // `.original` file is written at `<stem>_orig.<origExt>`; otherwise at the bare stem.
+      // Whether the original-side variants are paired with their edited counterparts for this
+      // asset. When true, `.original` is written at `<stem>_orig.<origExt>` and
+      // `.originalPairedVideo` (if present) at `<stem>_orig.mov`; otherwise both land at the
+      // bare stem. The image-side `.edited` flag is sufficient: a Live Photo whose still side
+      // is edited always has its motion side considered edited too.
       let pairOriginalWithSuffix = required.contains(.edited)
 
       var groupStem = ExportDestinationResolver.inheritedGroupStem(
         from: existingRecord, descriptor: descriptor, resources: resources)
 
-      // Pre-allocate a paired stem when we will write both variants in this run with no
-      // inherited stem to anchor the pair. This guarantees the edited and `_orig` companion
-      // land on the same stem instead of splitting via per-file uniqueFileURL collisions.
-      if groupStem == nil, orderedVariants == [.original, .edited],
+      // Pre-allocate a paired stem when we will write multiple files at the same stem in
+      // this run with no inherited stem to anchor them. This guarantees every member of
+      // the group — including the Live Photo motion file — lands on the same stem instead
+      // of splitting via per-file uniqueFileURL collisions, and reserves the `.mov` slot
+      // so an unrelated motion file already on disk can't claim the group stem.
+      //
+      // Three trigger shapes:
+      // - Edited asset (4-slot): `.original` + `.edited` both in `required`. Reserves
+      //   natural + `_orig` slots on both image and motion sides.
+      // - Unedited Live Photo (2-slot): `.original` + `.originalPairedVideo` in
+      //   `required`, `.edited` absent. Reserves natural-stem image (original) + motion
+      //   slots. Without this case, two unedited Live Photos sharing a base stem but
+      //   different image extensions (e.g. `IMG_7399.heic` + `IMG_7399.jpeg`) coexist
+      //   on the image side but collide on the shared `.MOV`.
+      // - Adjusted Live Photo under `selection = .edited` (2-slot edited-only):
+      //   `.edited` + `.editedPairedVideo` in `required`, `.original` absent. Reserves
+      //   natural-stem image (edited) + motion slots. Same collision shape as the
+      //   unedited case but with the edited image side at the natural stem.
+      let editedInRequired = required.contains(.edited)
+      let originalInRequired = required.contains(.original)
+      let unEditedLivePhoto =
+        !editedInRequired && originalInRequired && required.contains(.originalPairedVideo)
+      let editedLivePhotoOnly =
+        !originalInRequired && editedInRequired && required.contains(.editedPairedVideo)
+      let triggerAllocator =
+        (editedInRequired && originalInRequired) || unEditedLivePhoto || editedLivePhotoOnly
+      if groupStem == nil, triggerAllocator,
         let originalRes = ResourceSelection.selectOriginalResource(
           from: resources, mediaType: descriptor.mediaType)
       {
-        let editedProducer = ResourceSelection.selectEditedProducer(
-          from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
-          convertHEICToJPEG: convertHEICToJPEG)
-        if let editedFilename = editedProducer.originalFilename {
-          let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
-          let originalExt = (originalRes.originalFilename as NSString).pathExtension
-          let editedExt = (editedFilename as NSString).pathExtension
+        let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
+        let originalExt = (originalRes.originalFilename as NSString).pathExtension
+        let pairedVideoExt: String? = {
+          guard required.contains(where: { $0.isPairedVideo }) else { return nil }
+          // Read the paired-video resource's extension directly; no need to route
+          // through the variant-dispatch seam just to surface a filename.
+          guard
+            let pairedResource = resources.first(where: { $0.type == .pairedVideo })
+          else { return nil }
+          let ext = (pairedResource.originalFilename as NSString).pathExtension
+          return ext.isEmpty ? nil : ext
+        }()
+        if editedInRequired && originalInRequired {
+          // 4-slot edited path: needs both edited's ext (natural stem) and original's
+          // ext (the `_orig` companion via `imageExt`).
+          let editedProducer = ResourceSelection.selectEditedProducer(
+            from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
+            convertHEICToJPEG: convertHEICToJPEG)
+          if let editedFilename = editedProducer.originalFilename {
+            let editedExt = (editedFilename as NSString).pathExtension
+            groupStem = destinationResolver.allocatePairedGroupStem(
+              baseStem: baseStem,
+              imageExt: originalExt,
+              editedExt: editedExt,
+              destDir: destDir,
+              pairOriginalWithSuffix: true,
+              pairedVideoExt: pairedVideoExt)
+          }
+        } else if editedLivePhotoOnly {
+          // 2-slot edited-only path: the only image side written is the edited variant.
+          // Pass its extension as `imageExt` so the allocator checks
+          // `<stem>.<editedExt>` against the destination.
+          let editedProducer = ResourceSelection.selectEditedProducer(
+            from: resources, mediaType: descriptor.mediaType, descriptor: descriptor,
+            convertHEICToJPEG: convertHEICToJPEG)
+          if let editedFilename = editedProducer.originalFilename {
+            let editedExt = (editedFilename as NSString).pathExtension
+            groupStem = destinationResolver.allocatePairedGroupStem(
+              baseStem: baseStem,
+              imageExt: editedExt,
+              editedExt: nil,
+              destDir: destDir,
+              pairOriginalWithSuffix: false,
+              pairedVideoExt: pairedVideoExt)
+          }
+        } else {
+          // 2-slot unedited path: the only image side written is the original.
           groupStem = destinationResolver.allocatePairedGroupStem(
-            baseStem: baseStem, editedExt: editedExt, originalExt: originalExt, destDir: destDir)
+            baseStem: baseStem,
+            imageExt: originalExt,
+            editedExt: nil,
+            destDir: destDir,
+            pairOriginalWithSuffix: false,
+            pairedVideoExt: pairedVideoExt)
         }
       }
 
@@ -1993,9 +2172,13 @@ final class ExportManager: ObservableObject {
     guard activeRunContext?.source == .autoSync,
       let check = autoSyncEligibilityCheck
     else { return false }
+    // `livePhotosPairedExport` is read live (not snapshotted onto the job) — this predicate
+    // runs at enqueue time, before any in-flight work, so the current setting is the
+    // right value to gate against.
     let required = requiredVariants(
       for: asset, selection: selection, policy: placement.kind.variantPolicy,
-      convertHEICToJPEG: convertHEICToJPEG)
+      convertHEICToJPEG: convertHEICToJPEG,
+      livePhotosPaired: livePhotosPairedExport)
     let now = Date()
     let hasEligible = required.contains { variant in
       check(asset.id, placement, variant, now)

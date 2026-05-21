@@ -176,10 +176,21 @@ struct BackupScanner {
     let duration: TimeInterval
     /// Whether Photos reports this asset as adjusted at fingerprint time.
     let hasAdjustments: Bool
+    /// True when the asset is a Live Photo. Used by the classifier to decide whether
+    /// `.mov` siblings of an image resource are paired-video variants.
+    let isLivePhoto: Bool
     /// Original-side resources (`.photo`, `.video`, `.alternatePhoto`).
     let originalResources: [ResourceFingerprint]
     /// Edited-side resources (`.fullSizePhoto`, `.fullSizeVideo`).
     let editedResources: [ResourceFingerprint]
+    /// Live Photo motion file (unedited): `.pairedVideo`. Empty for non-Live-Photo
+    /// assets. Kept separate from `originalResources` because the classifier needs to
+    /// disambiguate `IMG_0001.mov` (Live Photo paired video) from a same-named
+    /// full-length video asset's `.video` resource.
+    let pairedVideoResources: [ResourceFingerprint]
+    /// Live Photo motion file (rendered): `.fullSizePairedVideo`. Empty when Photos
+    /// hasn't materialised an edited motion companion or for non-Live-Photo assets.
+    let editedPairedVideoResources: [ResourceFingerprint]
 
     /// Filename adapters for the existing classifier code that only needs filenames.
     var originalResourceFilenames: [String] { originalResources.map(\.filename) }
@@ -187,6 +198,10 @@ struct BackupScanner {
     /// Stems of original-side resources, used for cross-extension edited matching.
     var originalResourceStems: [String] {
       originalResourceFilenames.map { ($0 as NSString).deletingPathExtension }
+    }
+    var pairedVideoResourceFilenames: [String] { pairedVideoResources.map(\.filename) }
+    var pairedVideoResourceStems: [String] {
+      pairedVideoResourceFilenames.map { ($0 as NSString).deletingPathExtension }
     }
     /// All resource filenames (kept for backward compatibility with filename-only matching).
     var originalFilenames: [String] {
@@ -213,6 +228,27 @@ struct BackupScanner {
           ResourceSelection.isEditedResource(type: $0.type, mediaType: asset.mediaType)
         }
         .map { ResourceFingerprint(filename: $0.originalFilename, fileSize: $0.fileSize) }
+      let pairedVideoResources =
+        resources
+        .filter { $0.type == .pairedVideo }
+        .map { ResourceFingerprint(filename: $0.originalFilename, fileSize: $0.fileSize) }
+      let editedPairedVideoResources =
+        resources
+        .filter { $0.type == .fullSizePairedVideo }
+        .map { ResourceFingerprint(filename: $0.originalFilename, fileSize: $0.fileSize) }
+      // Issue #49: derive `isLivePhoto` from the resource list rather than mirroring
+      // `asset.isLivePhoto`. The descriptor flag is gated behind the user's Settings
+      // toggle (so a fresh fetch with the toggle off may return `false` even for true
+      // Live Photos on iCloud-synced libraries with a missing `.photoLive` subtype).
+      // The scanner already has the full resource list — the presence of a paired-
+      // video resource is the canonical signal, and using it here keeps Import
+      // Existing Backup classifying `.mov` companions correctly regardless of the
+      // toggle. Without this, importing a backup with paired-video files while the
+      // toggle is off, then later turning the toggle on, would trip the destination
+      // resolver's Code 5 "Paired original filename already exists on disk" on the
+      // next export run.
+      let scannerDetectedLivePhoto =
+        !pairedVideoResources.isEmpty || !editedPairedVideoResources.isEmpty
       let creationSecond: Int? =
         asset.creationDate.map { Int($0.timeIntervalSinceReferenceDate) }
       return AssetFingerprint(
@@ -224,8 +260,11 @@ struct BackupScanner {
         pixelHeight: asset.pixelHeight,
         duration: asset.duration,
         hasAdjustments: asset.hasAdjustments,
+        isLivePhoto: scannerDetectedLivePhoto,
         originalResources: originalResources,
-        editedResources: editedResources
+        editedResources: editedResources,
+        pairedVideoResources: pairedVideoResources,
+        editedPairedVideoResources: editedPairedVideoResources
       )
     }
   }
@@ -508,9 +547,51 @@ struct BackupScanner {
       // original-resource extension to avoid over-matching same-extension natural-stem files.
       return !originalExts.contains(file.fileExtension)
     }
-    if editedCandidates.isEmpty { return .unmatched }
-    return narrow(
-      file: file, candidates: editedCandidates, assetById: assetById, variant: .edited)
+    if !editedCandidates.isEmpty {
+      return narrow(
+        file: file, candidates: editedCandidates, assetById: assetById, variant: .edited)
+    }
+
+    // Step 5: Live Photo paired-video classification. Reached when image-side rules
+    // didn't match and the file is a `.mov` whose stem matches a Live Photo's
+    // paired-video resource. We classify here rather than as part of step 2/3 because
+    // the image-side filename matchers compare against `originalResourceFilenames` —
+    // a Live Photo's `.pairedVideo` filename lives in a sibling bucket
+    // (`pairedVideoResourceFilenames`) so that a `.mov` file isn't misclassified as
+    // the `.original` of a separate full-length video asset that happens to share the
+    // filename. Disambiguation against the still side is via the `_orig.mov` sibling:
+    // its presence promotes the natural-stem motion file to `.editedPairedVideo`.
+    if file.fileExtension == "mov" {
+      // 5a: `<stem>_orig.mov` → `.originalPairedVideo` against a Live Photo whose
+      // paired-video resource stem matches.
+      if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+        let pairedOrigCandidates = fingerprints.filter { fp in
+          guard fp.isLivePhoto else { return false }
+          let stems = Set(fp.pairedVideoResourceStems)
+          return stems.contains(parsed.groupStem)
+            || stems.contains(parsed.canonicalOriginalStem)
+        }
+        if !pairedOrigCandidates.isEmpty {
+          return narrow(
+            file: file, candidates: pairedOrigCandidates,
+            assetById: assetById, variant: .originalPairedVideo)
+        }
+      }
+      // 5b: natural-stem `.mov` matching a paired-video resource filename. The
+      // `_orig.mov` sibling check decides original vs edited paired video.
+      let pairedCandidates = fingerprints.filter {
+        $0.isLivePhoto && $0.pairedVideoResourceFilenames.contains(file.filename)
+      }
+      if !pairedCandidates.isEmpty {
+        let variant: ExportVariant =
+          hasOrigSibling ? .editedPairedVideo : .originalPairedVideo
+        return narrow(
+          file: file, candidates: pairedCandidates,
+          assetById: assetById, variant: variant)
+      }
+    }
+
+    return .unmatched
   }
 
   /// Narrows a candidate fingerprint set to a single match by date and then by lazy file
@@ -633,6 +714,29 @@ struct BackupScanner {
       return fp.editedResources.filter {
         ($0.filename as NSString).pathExtension.lowercased() == file.fileExtension
       }
+    case .originalPairedVideo:
+      // Step 5: Live Photo motion file. Either an `_orig.mov` companion classified
+      // against the paired-video resource stem, or a natural-stem `.mov` filename
+      // match. The byte source is the asset's `.pairedVideo` resource.
+      if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+        let acceptableStems: Set<String> = [parsed.groupStem, parsed.canonicalOriginalStem]
+        let matches = fp.pairedVideoResources.filter { res in
+          let stem = (res.filename as NSString).deletingPathExtension
+          return acceptableStems.contains(stem)
+        }
+        if !matches.isEmpty { return matches }
+      }
+      return fp.pairedVideoResources.filter { $0.filename == file.filename }
+    case .editedPairedVideo:
+      // Natural-stem `.mov` with an `_orig.mov` sibling: the byte source is the
+      // edited-side `.fullSizePairedVideo` when present, otherwise it's the same
+      // `.pairedVideo` resource the matcher already classified against (Photos
+      // elides the rendered companion when the edit doesn't touch motion).
+      let editedMatches = fp.editedPairedVideoResources.filter {
+        ($0.filename as NSString).pathExtension.lowercased() == file.fileExtension
+      }
+      if !editedMatches.isEmpty { return editedMatches }
+      return fp.pairedVideoResources.filter { $0.filename == file.filename }
     }
   }
 
