@@ -64,6 +64,29 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   private var authorizationSubscription: AnyCancellable?
   private var scheduler: ReconciliationScheduler?
 
+  /// True while a catch-up `Task.detached` is in flight (dispatched but result
+  /// not yet applied). Guards against `photoLibraryDidChange` flooding the
+  /// dispatcher: with a large library and active iCloud sync, the observer
+  /// can fire many times per second while a previous `fetchPersistentChanges`
+  /// enumeration (XPC-heavy; minutes for 10k+ changes) is still running.
+  /// Without this guard each callback spawns another concurrent `runCatchUp`
+  /// — all racing for the same photo-daemon XPC channel, re-enumerating
+  /// overlapping change ranges, and starving any user-initiated PhotoKit work
+  /// (e.g. an in-progress export) of XPC bandwidth.
+  ///
+  /// The guard collapses N stacked triggers into at most two catch-ups: the
+  /// running one + at most one follow-up (driven by `pendingFollowUpTrigger`).
+  /// If further triggers arrive while the follow-up is running, the coalesce
+  /// loop continues.
+  private var inFlightCatchUp = false
+
+  /// Trigger to fire as a follow-up catch-up once the in-flight one finishes,
+  /// or `nil` if none is pending. Coalesced via
+  /// `Self.coalescePending(_:incoming:)` so a non-observer trigger (which
+  /// wants the UI bridge to fire) survives any observer triggers arriving
+  /// alongside it.
+  private var pendingFollowUpTrigger: ReconcileTrigger?
+
   /// Timestamp of the most recent successful `fetchPersistentChanges` call,
   /// whether or not it turned up changes. Drives the "Last checked iCloud …"
   /// line in Settings → Auto Export so the user can see the safety-net
@@ -213,7 +236,9 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   ///
   /// `Sendable` so the trigger can cross the main-actor → `Task.detached` →
   /// main-actor boundary used by the off-main catch-up dispatch (issue #92).
-  private enum ReconcileTrigger: Sendable {
+  /// `internal` rather than `private` so a unit test can exercise
+  /// `coalescePending(_:incoming:)` against every case.
+  enum ReconcileTrigger: Sendable {
     /// `photoLibraryDidChange` callback from PhotoKit. The manager has its own
     /// observer for the same notification — don't double-wake the UI.
     case observer
@@ -285,6 +310,18 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// callback, so this method skips the bridge to avoid double-bumping
   /// `libraryRevision`.
   private func fetchAndEmit(trigger: ReconcileTrigger) {
+    // Coalesce against an in-flight catch-up. The baseline-capture branch below
+    // doesn't dispatch a Task, so it's exempt from this guard (the token check
+    // is synchronous and free).
+    if inFlightCatchUp {
+      pendingFollowUpTrigger = Self.coalescePending(
+        pendingFollowUpTrigger, incoming: trigger)
+      logger.debug(
+        "Catch-up: trigger=\(trigger.displayLabel, privacy: .public) arrived while in flight; coalesced (pending=\(self.pendingFollowUpTrigger?.displayLabel ?? "nil", privacy: .public))"
+      )
+      return
+    }
+
     let startedAt = Date()
     let baseline: PHPersistentChangeToken
     if let token = lastToken {
@@ -315,6 +352,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
     let libraryRef = self.library
     let loggerRef = self.logger
     let signposter = Self.signposter
+    inFlightCatchUp = true
     logger.info(
       "Catch-up: dispatching off-main fetch (trigger=\(trigger.displayLabel, privacy: .public))"
     )
@@ -330,6 +368,23 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
           startedAt: startedAt, finishedAt: finishedAt)
       }
     }
+  }
+
+  /// Coalesce policy for stacked triggers while a catch-up is in flight.
+  /// `nil` pending → use `incoming`. Otherwise prefer a non-`.observer`
+  /// trigger (startup / safetyNet) so the follow-up's
+  /// `applyCatchUpResult` fires the UI bridge — observer-only stacking
+  /// keeps the bridge suppressed, matching the `trigger != .observer`
+  /// gate in `applyCatchUpResult`.
+  ///
+  /// `internal` for unit testing. Pure function — no `self` access — so
+  /// `nonisolated` so tests on a non-main-actor type can call it directly.
+  nonisolated static func coalescePending(
+    _ pending: ReconcileTrigger?, incoming: ReconcileTrigger
+  ) -> ReconcileTrigger {
+    guard let pending else { return incoming }
+    if pending != .observer { return pending }
+    return incoming
   }
 
   /// Marshalled back to the main actor from the off-main worker. Mutates the
@@ -380,6 +435,18 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
         trigger: trigger.displayLabel,
         result: .fetchError(description: String(describing: mapped)))
       subject.send(.failure(mapped))
+    }
+
+    // Clear the in-flight flag and, if any callback arrived while we were
+    // running, fire one (and only one — coalesced) follow-up. Subsequent
+    // triggers arriving during this follow-up will re-coalesce against it.
+    inFlightCatchUp = false
+    if let follow = pendingFollowUpTrigger {
+      pendingFollowUpTrigger = nil
+      logger.debug(
+        "Catch-up: draining coalesced follow-up (trigger=\(follow.displayLabel, privacy: .public))"
+      )
+      fetchAndEmit(trigger: follow)
     }
   }
 
