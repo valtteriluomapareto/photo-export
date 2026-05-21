@@ -488,4 +488,121 @@ struct ExportManagerRunExportTests {
       Issue.record("Expected at least one observed value")
     }
   }
+
+  // MARK: - Videos-subfolder layout (issue #38)
+
+  /// Load-bearing end-to-end pin for option 2: when `videoLayout = .subfolder`, the
+  /// chokepoint at `ExportManager.runJob` routes standalone-video assets into the
+  /// `videos/` subfolder while leaving image-mediaType assets (including Live Photos
+  /// and their paired motion) at the bare placement path. This is the entire
+  /// promise the Settings caption makes.
+  ///
+  /// The asserts read both on-disk file existence (which `FakeAssetResourceWriter`
+  /// materialises) AND the per-variant `subfolder` field on the persisted record
+  /// (which reuse-source and reconcile consult). A regression that mis-routed
+  /// either side would fail this test.
+  @Test func videoLayoutSubfolderRoutesStandaloneVideosOnlyLivePhotosStayPaired() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    // Three assets in the same month so a single export run exercises all three:
+    let photo = TestAssetFactory.makeAsset(
+      id: "photo-1", mediaType: .image, isLivePhoto: false)
+    let standaloneVideo = TestAssetFactory.makeAsset(
+      id: "video-1", mediaType: .video, isLivePhoto: false)
+    let livePhoto = TestAssetFactory.makeAsset(
+      id: "live-1", mediaType: .image, isLivePhoto: true)
+
+    harness.photoLib.assetsByYearMonth["2026-3"] = [photo, standaloneVideo, livePhoto]
+    harness.photoLib.resourcesByAssetId["photo-1"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_PHOTO.JPG")
+    ]
+    harness.photoLib.resourcesByAssetId["video-1"] = [
+      TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_VIDEO.MOV")
+    ]
+    harness.photoLib.resourcesByAssetId["live-1"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_LIVE.HEIC"),
+      TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_LIVE.MOV"),
+    ]
+
+    harness.manager.videoLayout = .subfolder
+    harness.manager.livePhotosPairedExport = true
+
+    harness.manager.startExportMonth(year: 2026, month: 3)
+    await waitUntil(harness.manager.totalJobsCompleted >= 3)
+
+    let root = harness.dest.rootURL
+    let monthDir = root.appendingPathComponent("2026/03", isDirectory: true)
+    let videosDir = monthDir.appendingPathComponent("videos", isDirectory: true)
+    let fm = FileManager.default
+
+    // Photo stays at the bare month path.
+    #expect(fm.fileExists(atPath: monthDir.appendingPathComponent("IMG_PHOTO.JPG").path))
+    // Standalone video lands in the subfolder.
+    #expect(fm.fileExists(atPath: videosDir.appendingPathComponent("IMG_VIDEO.MOV").path))
+    // Live Photo still and paired motion BOTH stay at the bare month path — the
+    // load-bearing carve-out. A bug that routed `.MOV` files unconditionally would
+    // put the motion in `videos/` and fail this assertion.
+    #expect(fm.fileExists(atPath: monthDir.appendingPathComponent("IMG_LIVE.HEIC").path))
+    #expect(fm.fileExists(atPath: monthDir.appendingPathComponent("IMG_LIVE.MOV").path))
+    // And the subfolder is NOT a sibling of the Live Photo motion file.
+    #expect(!fm.fileExists(atPath: videosDir.appendingPathComponent("IMG_LIVE.MOV").path))
+
+    // Per-variant `subfolder` on persisted records mirrors the on-disk layout.
+    // Reuse-source and reconcile consult these directly.
+    let photoRecord = harness.store.exportInfo(assetId: "photo-1")
+    let videoRecord = harness.store.exportInfo(assetId: "video-1")
+    let liveRecord = harness.store.exportInfo(assetId: "live-1")
+    #expect(photoRecord?.variants[.original]?.subfolder == nil)
+    #expect(videoRecord?.variants[.original]?.subfolder == "videos")
+    #expect(liveRecord?.variants[.original]?.subfolder == nil)
+    #expect(liveRecord?.variants[.originalPairedVideo]?.subfolder == nil)
+  }
+
+  /// Mid-life same-placement re-run for a standalone video: export under `.flat`,
+  /// flip to `.subfolder`, re-export the same month. The asset is already `.done`
+  /// (the `videoLayout` toggle does not widen `requiredVariants`), so the second
+  /// run skips it — no relocation, no second file in `videos/`, the record's
+  /// `subfolder == nil` from the first write is left intact.
+  @Test func videoLayoutFlipAfterFlatExportDoesNotRelocateOrDoubleWrite() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "vid-flip", mediaType: .video, isLivePhoto: false)
+    harness.photoLib.assetsByYearMonth["2026-3"] = [asset]
+    harness.photoLib.resourcesByAssetId["vid-flip"] = [
+      TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_FLIP.MOV")
+    ]
+
+    // First export under .flat — lands at bare month path.
+    harness.manager.videoLayout = .flat
+    harness.manager.startExportMonth(year: 2026, month: 3)
+    await waitUntil(harness.manager.totalJobsCompleted >= 1)
+
+    let root = harness.dest.rootURL
+    let flatPath = root.appendingPathComponent("2026/03/IMG_FLIP.MOV").path
+    let subfolderPath = root.appendingPathComponent("2026/03/videos/IMG_FLIP.MOV").path
+    let fm = FileManager.default
+    #expect(fm.fileExists(atPath: flatPath))
+    #expect(!fm.fileExists(atPath: subfolderPath))
+
+    let firstWriteCount = harness.writer.writeCalls.count
+
+    // Flip the layout. The asset is still `.done` — `requiredVariants` doesn't widen.
+    harness.manager.videoLayout = .subfolder
+    harness.manager.startExportMonth(year: 2026, month: 3)
+    // Re-run completes quickly because there's nothing to enqueue.
+    await waitUntil(harness.manager.totalJobsCompleted >= 1)
+    // Brief settle window — `startExportMonth` is fire-and-forget; let any
+    // background queue draining finish before we assert on the writer's call log.
+    try? await Task.sleep(nanoseconds: 100_000_000)
+
+    // No second file, no second write call, no record mutation.
+    #expect(fm.fileExists(atPath: flatPath))
+    #expect(!fm.fileExists(atPath: subfolderPath))
+    #expect(harness.writer.writeCalls.count == firstWriteCount)
+    let record = harness.store.exportInfo(assetId: "vid-flip")
+    #expect(record?.variants[.original]?.subfolder == nil)
+  }
 }
