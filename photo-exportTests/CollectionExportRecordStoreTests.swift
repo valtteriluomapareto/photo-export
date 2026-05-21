@@ -649,6 +649,53 @@ struct CollectionExportRecordStoreTests {
     #expect(decoded.createdAt == original.createdAt)
   }
 
+  // MARK: - RecordBody Codable for ExportVariantRecord.subfolder (issue #38)
+
+  /// Legacy `RecordBody` JSON written before `ExportVariantRecord.subfolder`
+  /// existed must continue to decode. The collection store wraps variants in
+  /// `RecordBody { variants: [String: ExportVariantRecord] }`; the optional
+  /// `subfolder` field must default to nil for snapshots from prior versions.
+  @Test func recordBodyDecodesLegacyVariantsWithoutSubfolder() throws {
+    let legacyJSON = """
+      {
+        "variants": {
+          "original": {
+            "filename": "IMG_0001.JPG",
+            "status": "done",
+            "exportDate": 759456000
+          }
+        }
+      }
+      """.data(using: .utf8)!
+    let body = try JSONDecoder().decode(
+      CollectionExportRecordStore.RecordBody.self, from: legacyJSON)
+    let variant = body.variants["original"]
+    #expect(variant?.filename == "IMG_0001.JPG")
+    #expect(variant?.status == .done)
+    #expect(variant?.subfolder == nil)
+  }
+
+  /// Round-trip a `RecordBody` whose variants carry `subfolder = "videos"`
+  /// (the value the writer persists for standalone-video assets under
+  /// `videoLayout = .subfolder`). Pins that the collection store's
+  /// snapshot/log shape preserves the field.
+  @Test func recordBodyRoundTripPreservesSubfolderOnVariants() throws {
+    let variant = ExportVariantRecord(
+      filename: "IMG_0002.MOV",
+      status: .done,
+      exportDate: Date(timeIntervalSince1970: 759456000),
+      lastError: nil,
+      subfolder: "videos")
+    let body = CollectionExportRecordStore.RecordBody(
+      variants: ["original": variant])
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(body)
+    let decoded = try JSONDecoder().decode(
+      CollectionExportRecordStore.RecordBody.self, from: data)
+    #expect(decoded == body)
+    #expect(decoded.variants["original"]?.subfolder == "videos")
+  }
+
   // MARK: - Shared-album placement routing
 
   /// Shared-album placements pass `accept(_:)` and survive snapshot persistence.

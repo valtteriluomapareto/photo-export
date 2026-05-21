@@ -317,11 +317,16 @@ final class CollectionExportRecordStore: ObservableObject {
         placementId: record.placement.id, assetId: record.assetId, body: body))
   }
 
+  /// `subfolder` (issue #38) is the path component inside the placement folder where
+  /// the file will land (e.g. `"videos"`). `nil` means the bare placement path. The
+  /// value is persisted on the per-variant record so reuse-source and reconcile can
+  /// recover each file's true on-disk location regardless of the current setting.
   func markVariantInProgress(
     assetId: String,
     placement: ExportPlacement,
     variant: ExportVariant,
-    filename: String?
+    filename: String?,
+    subfolder: String? = nil
   ) {
     guard accept(placement) else { return }
     var body = recordBodies[placement.id]?[assetId] ?? RecordBody(variants: [:])
@@ -331,21 +336,25 @@ final class CollectionExportRecordStore: ObservableObject {
     variantRecord.filename = filename
     variantRecord.status = .inProgress
     variantRecord.lastError = nil
+    variantRecord.subfolder = subfolder
     body.variants[variant.rawValue] = variantRecord
     append(.upsertRecord(placementId: placement.id, assetId: assetId, body: body))
   }
 
+  /// See `markVariantInProgress` for `subfolder` semantics.
   func markVariantExported(
     assetId: String,
     placement: ExportPlacement,
     variant: ExportVariant,
     filename: String,
-    exportedAt: Date
+    exportedAt: Date,
+    subfolder: String? = nil
   ) {
     guard accept(placement) else { return }
     var body = recordBodies[placement.id]?[assetId] ?? RecordBody(variants: [:])
     body.variants[variant.rawValue] = ExportVariantRecord(
-      filename: filename, status: .done, exportDate: exportedAt, lastError: nil)
+      filename: filename, status: .done, exportDate: exportedAt, lastError: nil,
+      subfolder: subfolder)
     append(.upsertRecord(placementId: placement.id, assetId: assetId, body: body))
   }
 

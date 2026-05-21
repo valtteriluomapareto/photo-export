@@ -118,7 +118,8 @@ final class VariantExporter {
     groupStem: String?,
     pairOriginalWithSuffix: Bool,
     generation gen: Int,
-    inFlight: inout (assetId: String, variant: ExportVariant)?
+    inFlight: inout (assetId: String, variant: ExportVariant)?,
+    subfolder: String? = nil
   ) async throws -> String? {
     // Renderer activity must always be cleared on the way out of this function —
     // including on throw — so a render failure or cancel does not leave the toolbar
@@ -186,7 +187,7 @@ final class VariantExporter {
     inFlight = (assetId: descriptor.id, variant: variant)
     recordStoreRouter.markVariantInProgress(
       assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent)
+      relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder)
 
     // Reuse-source copy path: if `(asset, variant)` is already exported under another
     // placement, copy the existing file rather than re-fetching from PhotoKit. On APFS
@@ -329,7 +330,8 @@ final class VariantExporter {
 
     recordStoreRouter.markVariantExported(
       assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date())
+      relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date(),
+      subfolder: subfolder)
     inFlight = nil
     logger.info(
       "Exported \(finalURL.lastPathComponent, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"

@@ -45,23 +45,25 @@ final class RecordStoreRouter {
 
   func markVariantInProgress(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    relPath: String, filename: String?
+    relPath: String, filename: String?, subfolder: String? = nil
   ) {
     switch placement.kind {
     case .timeline:
       let (year, month) = placement.timelineYearMonth ?? (0, 0)
       timelineStore.markVariantInProgress(
         assetId: assetId, variant: variant,
-        year: year, month: month, relPath: relPath, filename: filename)
+        year: year, month: month, relPath: relPath, filename: filename,
+        subfolder: subfolder)
     case .favorites, .album, .sharedAlbum:
       collectionStore.markVariantInProgress(
-        assetId: assetId, placement: placement, variant: variant, filename: filename)
+        assetId: assetId, placement: placement, variant: variant, filename: filename,
+        subfolder: subfolder)
     }
   }
 
   func markVariantExported(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    relPath: String, filename: String, exportedAt: Date
+    relPath: String, filename: String, exportedAt: Date, subfolder: String? = nil
   ) {
     switch placement.kind {
     case .timeline:
@@ -69,11 +71,11 @@ final class RecordStoreRouter {
       timelineStore.markVariantExported(
         assetId: assetId, variant: variant,
         year: year, month: month, relPath: relPath,
-        filename: filename, exportedAt: exportedAt)
+        filename: filename, exportedAt: exportedAt, subfolder: subfolder)
     case .favorites, .album, .sharedAlbum:
       collectionStore.markVariantExported(
         assetId: assetId, placement: placement, variant: variant,
-        filename: filename, exportedAt: exportedAt)
+        filename: filename, exportedAt: exportedAt, subfolder: subfolder)
     }
   }
 

@@ -33,6 +33,7 @@ enum ExportJobPlanner {
     placement: ExportPlacement,
     selection: ExportVersionSelection,
     livePhotosPaired: Bool = false,
+    videoLayout: ExportVideoLayout = .flat,
     isExported: (AssetDescriptor) -> Bool,
     shouldSkipForRetry: (AssetDescriptor, ExportPlacement, ExportVersionSelection) -> Bool
   ) -> [ExportManager.ExportJob] {
@@ -41,7 +42,7 @@ enum ExportJobPlanner {
       if shouldSkipForRetry(asset, placement, selection) { return nil }
       return ExportManager.ExportJob(
         assetLocalIdentifier: asset.id, placement: placement, selection: selection,
-        livePhotosPaired: livePhotosPaired)
+        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout)
     }
   }
 
@@ -54,6 +55,7 @@ enum ExportJobPlanner {
     year: Int,
     selection: ExportVersionSelection,
     livePhotosPaired: Bool = false,
+    videoLayout: ExportVideoLayout = .flat,
     isExported: (AssetDescriptor) -> Bool,
     shouldSkipForRetry: (AssetDescriptor, ExportPlacement, ExportVersionSelection) -> Bool,
     calendar: Calendar = .current
@@ -69,7 +71,7 @@ enum ExportJobPlanner {
       if shouldSkipForRetry(asset, placement, selection) { return nil }
       return ExportManager.ExportJob(
         assetLocalIdentifier: asset.id, placement: placement, selection: selection,
-        livePhotosPaired: livePhotosPaired)
+        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout)
     }
   }
 }
