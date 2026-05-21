@@ -121,6 +121,37 @@ remembered across launches and applies to both manual exports and Auto Export.
 Shared-album Live Photos remain still-only regardless of the toggle because Apple
 doesn't expose the paired video for assets that live only in a shared album.
 
+### Separate videos into a subfolder
+
+Default off — photos and videos share each month or album folder, e.g.
+`2026/03/IMG_0001.JPG` alongside `2026/03/IMG_0002.MOV`.
+
+Turn on Settings → Advanced → **Separate videos into a subfolder** to route
+standalone videos into a `videos/` subfolder inside their placement, so a
+backup browser doesn't have to scroll past every `.MOV` to find the photos:
+
+- `2026/03/IMG_0001.JPG` (unchanged)
+- `2026/03/videos/IMG_0002.MOV`
+- `Collections/Albums/Trip/IMG_0003.JPG` and `Collections/Albums/Trip/videos/IMG_0004.MOV`
+
+The paired video of a Live Photo is an exception — it stays next to its still
+(e.g. `2026/03/IMG_LIVE.HEIC` + `2026/03/IMG_LIVE.MOV`), not in `videos/`.
+Splitting the pair across folders would break the on-disk relationship that
+Photos.app, the macOS Finder Quick Look, and other Live-Photo-aware tools use
+to recognise the still + motion as a single Live Photo.
+
+**Compose with Include originals.** An edited standalone video under both
+toggles writes both `IMG_0002.MOV` and `IMG_0002_orig.MOV` into the same
+`videos/` subfolder. An edited Live Photo with both toggles writes all four
+files (`IMG_LIVE.HEIC`, `IMG_LIVE_orig.HEIC`, `IMG_LIVE.MOV`,
+`IMG_LIVE_orig.MOV`) at the bare month folder so the pair stays intact.
+
+**Applies to new exports only.** Videos already written under the previous
+layout stay where they are — turning this on later produces a mixed layout
+(old videos in the month root, new videos in `videos/`) that won't reconcile
+itself unless you re-export the affected months. The same is true in reverse
+when turning the setting off.
+
 ### Shared albums (reduced fidelity)
 
 iCloud shared albums (the kind you create in Photos to share with family or a partner) are surfaced under a "Shared Albums" section in the Collections sidebar. Selecting a shared album shows its photos in the same grid as a user album, and the **Export Shared Album** button on its pane writes everything to `Collections/Shared Albums/<Album>/`.

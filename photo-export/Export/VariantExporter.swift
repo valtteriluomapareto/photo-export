@@ -218,7 +218,7 @@ final class VariantExporter {
         try fileSystem.copyItem(from: sourceURL, to: tempURL)
         didCopyFromReuseSource = true
         logger.debug(
-          "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(reuse.placement.relativePath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
+          "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(sourceRelPath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
         )
       } catch {
         if Self.isSourceSideCopyError(error) {
