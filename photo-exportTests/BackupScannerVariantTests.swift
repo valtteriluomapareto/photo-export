@@ -570,6 +570,55 @@ struct BackupScannerVariantTests {
     #expect(video?.month == 3)
   }
 
+  /// Mid-life mixed-layout standalone video (codex P2): the user exported
+  /// `.original` under `.flat` (lands at `2026/03/IMG.MOV`), then flipped
+  /// `videoLayout` to `.subfolder` after Photos exposed an edit, and the
+  /// subsequent run wrote `.edited` to `2026/03/videos/IMG.MOV`. Same stem,
+  /// same `.MOV` extension, no `_orig` sibling.
+  ///
+  /// Without the subfolder-split disambiguator, both files match step 2's
+  /// exact-filename rule and both classify as `.original` against the same
+  /// adjusted asset — the `.edited` data on disk is lost on import and the
+  /// next export run would write a duplicate motion file. The classifier
+  /// uses the same-stem-at-both-subfolders signal as the tiebreaker: the
+  /// file in `videos/` is the `.edited` variant; the bare-path file is
+  /// `.original`. Both come out matched, each carrying its own `subfolder`.
+  @Test func classifierDisambiguatesMidLifeMixedLayoutStandaloneVideo() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "video-mid-life", creationDate: modDate, mediaType: .video,
+      hasAdjustments: true)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "video-mid-life": [
+          TestAssetFactory.makeResource(type: .video, originalFilename: "IMG.MOV"),
+          TestAssetFactory.makeResource(
+            type: .fullSizeVideo, originalFilename: "IMG.MOV"),
+        ]
+      ]
+    )
+    let (originalAtBase, root1) = try makeScannedFile("IMG.MOV", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root1) }
+    let (editedInVideos, root2) = try makeScannedFile(
+      "IMG.MOV", modDate: modDate, subdir: "videos")
+    defer { try? FileManager.default.removeItem(at: root2) }
+
+    let result = try await BackupScanner.matchFiles(
+      [originalAtBase, editedInVideos], photoLibraryService: svc, progress: { _ in })
+
+    #expect(result.matched.count == 2)
+    #expect(result.ambiguous.isEmpty)
+    #expect(result.unmatched.isEmpty)
+    let bareMatch = result.matched.first(where: { $0.file.subfolder == nil })
+    let videosMatch = result.matched.first(where: { $0.file.subfolder == "videos" })
+    #expect(bareMatch?.variant == .original)
+    #expect(videosMatch?.variant == .edited)
+    // Both attribute to the same asset.
+    #expect(bareMatch?.asset.id == "video-mid-life")
+    #expect(videosMatch?.asset.id == "video-mid-life")
+  }
+
   /// Cross-directory Live Photo pairing: the still lives at the base path and the
   /// paired motion lives in `videos/`. The paired-video classifier matches by stem
   /// within `(year, month)` — not by directory — so it still pairs them. Pins that

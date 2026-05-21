@@ -413,6 +413,22 @@ struct BackupScanner {
         }
       }
 
+      // Issue #38: pre-compute the set of `baseFilename`s that appear BOTH at the bare
+      // month path AND inside `videos/` in the same `(year, month)` scope. A mid-life
+      // toggle of `videoLayout` produces this pattern for a standalone video that
+      // already had `.original` on disk under `.flat` and then got `.edited` written
+      // under `.subfolder` — same stem, same extension, different directory, and the
+      // two-`_orig`-companion rule doesn't apply because no `_orig` file exists. Without
+      // this hint the classifier matches both files as `.original` against the same
+      // asset and silently loses the `.edited` variant on import.
+      var filenamesAtBare = Set<String>()
+      var filenamesInVideos = Set<String>()
+      for file in files {
+        if file.subfolder == nil { filenamesAtBare.insert(file.baseFilename) }
+        if file.subfolder == "videos" { filenamesInVideos.insert(file.baseFilename) }
+      }
+      let filenamesWithSubfolderSplit = filenamesAtBare.intersection(filenamesInVideos)
+
       for file in files {
         try Task.checkCancellation()
         matchedCount += 1
@@ -430,7 +446,8 @@ struct BackupScanner {
           file,
           fingerprints: combinedFingerprints,
           assetById: assetById,
-          stemsWithOrigSibling: stemsWithOrigSibling
+          stemsWithOrigSibling: stemsWithOrigSibling,
+          filenamesWithSubfolderSplit: filenamesWithSubfolderSplit
         )
         switch matchOutcome {
         case .matched(let matched):
@@ -498,7 +515,8 @@ struct BackupScanner {
     _ file: ScannedFile,
     fingerprints: [AssetFingerprint],
     assetById: [String: AssetDescriptor],
-    stemsWithOrigSibling: Set<String>
+    stemsWithOrigSibling: Set<String>,
+    filenamesWithSubfolderSplit: Set<String> = []
   ) -> SingleMatchOutcome {
     // Step 1: `_orig` companion. Filename ends with `_orig` (with optional ` (N)`).
     if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
@@ -531,6 +549,22 @@ struct BackupScanner {
       $0.originalResourceFilenames.contains(file.filename)
     }
     if !originalExactCandidates.isEmpty {
+      // Issue #38: subfolder-split sibling. A mid-life `videoLayout` flip leaves
+      // `.original` at the bare month path and writes `.edited` into `videos/` —
+      // same stem, same extension, no `_orig` companion. Disambiguate by location:
+      // when this scope has files at BOTH subfolders for the same stem, the one in
+      // `videos/` is the `.edited` variant. Falls through to the existing
+      // `_orig`-sibling logic for normal include-originals exports.
+      if file.subfolder == "videos",
+        filenamesWithSubfolderSplit.contains(file.baseFilename)
+      {
+        let editedFromSplit = originalExactCandidates.filter { $0.hasAdjustments }
+        if !editedFromSplit.isEmpty {
+          return narrow(
+            file: file, candidates: editedFromSplit,
+            assetById: assetById, variant: .edited)
+        }
+      }
       if hasOrigSibling {
         let editedFromPair = originalExactCandidates.filter { fp in
           guard fp.hasAdjustments else { return false }

@@ -148,13 +148,14 @@ files (`IMG_LIVE.HEIC`, `IMG_LIVE_orig.HEIC`, `IMG_LIVE.MOV`,
 
 **Applies to new exports only.** Videos already written under the previous
 layout stay where they are — turning this on later produces a mixed layout
-(old videos in the month root, new videos in `videos/`) that won't reconcile
-itself unless you re-export the affected months. The same is true in reverse
-when turning the setting off. Re-running an Export action on a month that's
-already exported won't relocate the files: Photo Export records each variant
-as `.done` and skips it on subsequent runs. To force the new layout for an
-already-exported month, delete the existing copies on disk and re-run the
-Export action.
+(old videos in the month root, new videos in `videos/`). The same is true in
+reverse when turning the setting off. There's no in-app action to relocate
+already-exported files: Photo Export tracks each variant as `.done` per
+destination and skips it on subsequent runs, so deleting files on disk and
+re-running Export Month alone won't rewrite them. To rebuild a month under
+the new layout, delete the existing copies on disk, run **Import Existing
+Backup** so the records reconcile against disk truth (missing variants get
+pruned), then re-run the Export action.
 
 ### Shared albums (reduced fidelity)
 
