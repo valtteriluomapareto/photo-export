@@ -590,13 +590,15 @@ struct ExportManagerRunExportTests {
     let firstWriteCount = harness.writer.writeCalls.count
 
     // Flip the layout. The asset is still `.done` — `requiredVariants` doesn't widen.
+    // The `didSet` on `videoLayout` calls `clearEmptyRunMessage()`, so the message
+    // starts nil for the second run; waiting for the "already exported" message to
+    // appear is a deterministic signal that `startExportMonth` reached
+    // `enqueueMonth`, the planner returned `.alreadyComplete`, and the empty-run
+    // banner was set. Beats `Task.sleep`-based settle windows that race the
+    // fire-and-forget task's tail.
     harness.manager.videoLayout = .subfolder
     harness.manager.startExportMonth(year: 2026, month: 3)
-    // Re-run completes quickly because there's nothing to enqueue.
-    await waitUntil(harness.manager.totalJobsCompleted >= 1)
-    // Brief settle window — `startExportMonth` is fire-and-forget; let any
-    // background queue draining finish before we assert on the writer's call log.
-    try? await Task.sleep(nanoseconds: 100_000_000)
+    await waitUntil(harness.manager.emptyRunMessage == "This month is already exported.")
 
     // No second file, no second write call, no record mutation.
     #expect(fm.fileExists(atPath: flatPath))
@@ -604,5 +606,73 @@ struct ExportManagerRunExportTests {
     #expect(harness.writer.writeCalls.count == firstWriteCount)
     let record = harness.store.exportInfo(assetId: "vid-flip")
     #expect(record?.variants[.original]?.subfolder == nil)
+  }
+
+  /// Mid-life synthesizer policy (plan §6): a standalone video has `.original`
+  /// already done at the bare path (the user exported under `.flat`). Photos
+  /// then exposes an edit on the same asset and the user has flipped
+  /// `videoLayout` to `.subfolder`. A fresh export run needs to write `.edited`.
+  ///
+  /// Pinned invariants:
+  /// - The `.edited` file lands in `2026/03/videos/`, not the bare path.
+  /// - The new `.edited` variant record carries `subfolder = "videos"`.
+  /// - The previously-written `.original` variant record's `subfolder` stays
+  ///   `nil` — its file is still at the bare path on disk, and a future
+  ///   reuse-source or reconcile lookup for `.original` must find it there.
+  ///
+  /// Without per-variant `subfolder`, the shared `ExportRecord.relPath` would
+  /// be overwritten to `2026/03/videos/` on the `.edited` write, mis-locating
+  /// the `.original` variant on the next reconcile and silently pruning it.
+  @Test func videoLayoutMidLifeSynthesizerWritesEditedToSubfolderKeepsOriginalAtBase() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    // Adjusted standalone video. Two resources: the original `.video` plus a
+    // `.fullSizeVideo` so `selectEditedProducer` returns `.resource(...)` and
+    // the edited byte source flows through `FakeAssetResourceWriter`. Without
+    // `.fullSizeVideo`, the producer takes the `.render` branch which the
+    // fake writer doesn't service.
+    let asset = TestAssetFactory.makeAsset(
+      id: "video-mid-life", mediaType: .video, hasAdjustments: true,
+      isLivePhoto: false)
+    harness.photoLib.assetsByYearMonth["2026-3"] = [asset]
+    harness.photoLib.resourcesByAssetId["video-mid-life"] = [
+      TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_ML.MOV"),
+      TestAssetFactory.makeResource(
+        type: .fullSizeVideo, originalFilename: "IMG_ML.MOV"),
+    ]
+
+    // Pre-plant the `.original` variant as already exported under `.flat` —
+    // file conceptually at `2026/03/IMG_ML.MOV`, record carries `subfolder = nil`.
+    // The test does not need the file to exist on disk; the chokepoint only
+    // reads `existingVariants` from the store.
+    harness.store.markVariantExported(
+      assetId: "video-mid-life", variant: .original,
+      year: 2026, month: 3, relPath: "2026/03/",
+      filename: "IMG_ML.MOV", exportedAt: Date(), subfolder: nil)
+
+    // User flips the layout. The `.original` record stays as-is; only the
+    // missing `.edited` will run this round.
+    harness.manager.videoLayout = .subfolder
+
+    harness.manager.startExportMonth(year: 2026, month: 3)
+    await waitUntil(harness.manager.totalJobsCompleted >= 1)
+
+    let root = harness.dest.rootURL
+    let videosDir = root.appendingPathComponent("2026/03/videos", isDirectory: true)
+    let fm = FileManager.default
+
+    // `.edited` lands in the subfolder.
+    #expect(fm.fileExists(atPath: videosDir.appendingPathComponent("IMG_ML.MOV").path))
+
+    // Per-variant subfolder is correct on both variants. `.edited` carries
+    // `"videos"`; `.original` is untouched at `nil` (the load-bearing assertion
+    // — without per-variant storage this would now read `"videos"` from the
+    // shared `record.relPath`).
+    let record = harness.store.exportInfo(assetId: "video-mid-life")
+    #expect(record?.variants[.original]?.subfolder == nil)
+    #expect(record?.variants[.edited]?.subfolder == "videos")
+    // `.original`'s filename also stays put.
+    #expect(record?.variants[.original]?.filename == "IMG_ML.MOV")
   }
 }

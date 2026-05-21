@@ -150,7 +150,11 @@ files (`IMG_LIVE.HEIC`, `IMG_LIVE_orig.HEIC`, `IMG_LIVE.MOV`,
 layout stay where they are — turning this on later produces a mixed layout
 (old videos in the month root, new videos in `videos/`) that won't reconcile
 itself unless you re-export the affected months. The same is true in reverse
-when turning the setting off.
+when turning the setting off. Re-running an Export action on a month that's
+already exported won't relocate the files: Photo Export records each variant
+as `.done` and skips it on subsequent runs. To force the new layout for an
+already-exported month, delete the existing copies on disk and re-run the
+Export action.
 
 ### Shared albums (reduced fidelity)
 
