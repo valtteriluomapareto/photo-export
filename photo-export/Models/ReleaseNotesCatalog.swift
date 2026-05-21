@@ -30,7 +30,15 @@ enum ReleaseNotesCatalog {
         ReleaseNote.Bullet(
           title: "Export Live Photos as paired image + video (opt-in)",
           body:
-            "Turn on **Settings → Advanced → Export Live Photos as paired image + video** to also write the `.MOV` paired video next to the still for each Live Photo (e.g. `IMG_0001.HEIC` + `IMG_0001.MOV`). Off by default. Each Live Photo's paired video is typically 1–3 MB, so libraries with many Live Photos can roughly double in size on disk when this is on. Edited Live Photos write the rendered pair; with **Include originals** also on, `_orig.HEIC` and `_orig.MOV` companions land alongside. Shared-album Live Photos stay still-only — Apple doesn't expose their paired video. Fixes [#49](https://github.com/valtteriluomapareto/photo-export/issues/49)."
+            "Turn on **Settings → Advanced → Export Live Photos as paired image + video** "
+            + "to also write the `.MOV` paired video next to the still for each Live Photo "
+            + "(e.g. `IMG_0001.HEIC` + `IMG_0001.MOV`). Off by default. Each Live Photo's "
+            + "paired video is typically 1–3 MB, so libraries with many Live Photos can "
+            + "roughly double in size on disk when this is on. Edited Live Photos write the "
+            + "rendered pair; with **Include originals** also on, `_orig.HEIC` and `_orig.MOV` "
+            + "companions land alongside. Shared-album Live Photos stay still-only — Apple "
+            + "doesn't expose their paired video. "
+            + "Fixes [#49](https://github.com/valtteriluomapareto/photo-export/issues/49)."
         ),
       ],
       learnMore: nil
