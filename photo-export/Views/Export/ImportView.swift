@@ -53,9 +53,10 @@ struct ImportView: View {
     case .matchingAssets(let matched, let total):
       return "Matching assets\u{2026} \(matched) found of \(total) files"
     case .rebuildingLocalState:
-      return "Rebuilding local state\u{2026}"
+      // Issue #106 / HIG: consumer language, not developer verbs.
+      return "Saving import results\u{2026}"
     case .reconcilingDiskState:
-      return "Pruning records for missing files\u{2026}"
+      return "Cleaning up records for deleted files\u{2026}"
     case .done:
       return "Done"
     case .none:
@@ -85,6 +86,21 @@ struct ImportView: View {
           value: "\(report.matchedCount)",
           icon: "checkmark.circle"
         )
+        // Issue #106 / HIG progressive disclosure: only surface the album
+        // sub-line when the user has any collection-side matches, so the
+        // timeline-only path keeps its original layout.
+        if report.collectionMatchedCount > 0 {
+          HStack {
+            Image(systemName: "rectangle.stack")
+              .foregroundColor(.secondary)
+              .frame(width: 20)
+            Text("including \(report.collectionMatchedCount) in albums")
+              .font(.caption)
+              .foregroundColor(.secondary)
+            Spacer()
+          }
+          .padding(.leading, 4)
+        }
         if report.ambiguousCount > 0 {
           reportRow(
             label: "Ambiguous (skipped)",
@@ -99,9 +115,24 @@ struct ImportView: View {
             icon: "xmark.circle"
           )
         }
+        // Issue #106 / HIG actionable errors: name the situation when
+        // unmatched files came from orphan folders, so the user knows it's
+        // not corruption.
+        if report.orphanCollectionFolders > 0 {
+          HStack {
+            Image(systemName: "folder.badge.questionmark")
+              .foregroundColor(.secondary)
+              .frame(width: 20)
+            Text("Some folders no longer match an album in Photos. They were skipped.")
+              .font(.caption)
+              .italic()
+              .foregroundColor(.secondary)
+          }
+          .padding(.leading, 4)
+        }
         if report.prunedRecords > 0 || report.prunedVariants > 0 {
           reportRow(
-            label: "Records pruned (file missing)",
+            label: "Cleaned up for deleted files",
             value: pruneSummary(report),
             icon: "trash"
           )
@@ -112,12 +143,10 @@ struct ImportView: View {
       .cornerRadius(8)
 
       if report.matchedCount > 0 {
-        Text(
-          "The app now recognizes \(report.matchedCount) previously exported files. Future exports will skip these assets."
-        )
-        .font(.caption)
-        .foregroundColor(.secondary)
-        .multilineTextAlignment(.center)
+        Text(captionText(report))
+          .font(.caption)
+          .foregroundColor(.secondary)
+          .multilineTextAlignment(.center)
       }
 
       HStack(spacing: 12) {
@@ -138,6 +167,18 @@ struct ImportView: View {
         .buttonStyle(.borderedProminent)
       }
     }
+  }
+
+  /// Final caption under the result rows. Issue #106 weaves the collection
+  /// matched count into the same sentence when nonzero so the user sees
+  /// "including N in albums" without an extra paragraph.
+  private func captionText(_ report: ImportReport) -> String {
+    if report.collectionMatchedCount > 0 {
+      return
+        "The app now recognizes \(report.matchedCount) previously exported files, including \(report.collectionMatchedCount) in albums. Future exports will skip these assets."
+    }
+    return
+      "The app now recognizes \(report.matchedCount) previously exported files. Future exports will skip these assets."
   }
 
   private func pruneSummary(_ report: ImportReport) -> String {

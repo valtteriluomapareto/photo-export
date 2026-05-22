@@ -193,9 +193,11 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 ## Existing backup import
 
 - Rebuild local export state from an existing backup folder via **File → Import Existing Backup...** (Cmd+Shift+I)
-- Five-stage process: scan backup folder, read Photos library, match files, rebuild state, reconcile against disk
-- The reconcile step **prunes records for files that no longer exist** at the destination, so a re-run after deleting some exports always reflects current disk contents
-- Shows a detailed report with matched, ambiguous, unmatched, and pruned counts
+- Restores both **timeline** (`YYYY/MM/`) and **collection** records: `Collections/Favorites/`, `Collections/Albums/<folders…>/<Title>/`, and `Collections/Shared Albums/<Title>/` are walked alongside the year/month tree
+- Five-stage process: scan backup folder, read Photos library, match files, save import results, clean up records for deleted files
+- The cleanup step **removes records for files that no longer exist** at the destination, so a re-run after deleting some exports always reflects current disk contents
+- Folders under `Collections/Albums/` that no longer match an album in Photos are skipped (the result sheet calls them out so it doesn't look like corruption)
+- Shows a detailed report with matched, ambiguous, unmatched, and cleaned-up counts; album matches surface as "including N in albums"
 - Continue exporting on a fresh install without re-copying known assets
 
 ## Error handling

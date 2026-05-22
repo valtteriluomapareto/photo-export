@@ -37,7 +37,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 - **Auto Export** (opt-in; off by default) keeps a chosen destination automatically in sync with your Photos library: pick Timeline / Favorites / Albums in Settings → Auto Export, and Photo Export adds new photos as they appear in Apple Photos. A periodic safety-net check (every ~15 minutes, plus whenever you switch back to the app) catches newly-synced iCloud photos even in long-running sessions where Photos.app isn't open. Surfaced via a toolbar pill, a menu bar item, and a Settings status row that shows when the last check ran. Transient failures retry automatically, waiting longer between each attempt; everything that failed is listed in an Export Issues view with a per-row Retry button. **Open Photo Export at login** provides the simplest set-it-and-forget-it setup. See the [Auto Export guide](https://valtteriluomapareto.github.io/photo-export/auto-export/).
 - Track exported assets per destination so interrupted exports resume safely
 - Pause, resume, cancel, and clear queued work
-- Import an existing backup folder to rebuild local export state, pruning records for files no longer present on disk
+- Import an existing backup folder to rebuild local export state — both timeline (`YYYY/MM/`) and collection folders (`Collections/Favorites/`, `Collections/Albums/`, `Collections/Shared Albums/`) — and clean up records for files no longer present on disk
 - Save a diagnostic report (Help menu) listing failed and in-progress exports with their error messages, for attaching to bug reports
 - If Photos can't provide an asset's edited version, fall back to writing the original with a `_orig` suffix so the asset still gets backed up
 

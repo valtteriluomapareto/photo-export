@@ -76,7 +76,7 @@ If the export is interrupted — you unplug the drive, close the app, or your Ma
 
 ## Rebuilding state from an existing backup
 
-If you reinstall the app, switch builds, or restore your data on a new Mac, **File → Import Existing Backup…** rebuilds local export state from disk. It scans the destination, matches files to your Photos library, and adopts what's already there as exported. As part of the same step, it **prunes records for files that are no longer on disk** — for example if you deleted a folder, recreated it empty under the same name, or removed individual exports. The result always reflects the current contents of the destination.
+If you reinstall the app, switch builds, or restore your data on a new Mac, **File → Import Existing Backup…** rebuilds local export state from disk. It scans the destination, matches files to your Photos library, and adopts what's already there as exported. **Album and shared-album exports are restored too** — folders under `Collections/Favorites/`, `Collections/Albums/`, and `Collections/Shared Albums/` are walked alongside the year/month tree, and matched files become records under the right placement. If a folder under `Collections/Albums/` no longer matches an album in Photos (the album was deleted), the import skips it and surfaces a note in the result sheet so you know it isn't corruption. As part of the same step, the import **cleans up records for files that are no longer on disk** — for example if you deleted a folder, recreated it empty under the same name, or removed individual exports. The result always reflects the current contents of the destination.
 
 ## If an export gets stuck
 

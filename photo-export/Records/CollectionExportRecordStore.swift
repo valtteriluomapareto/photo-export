@@ -44,9 +44,10 @@ final class CollectionExportRecordStore: ObservableObject {
     /// `ExportVariant` — in practice empty, since writers only ever store
     /// `ExportVariant.rawValue` keys.
     var typedVariants: [ExportVariant: ExportVariantRecord] {
-      Dictionary(uniqueKeysWithValues: variants.compactMap { key, value in
-        ExportVariant(rawValue: key).map { ($0, value) }
-      })
+      Dictionary(
+        uniqueKeysWithValues: variants.compactMap { key, value in
+          ExportVariant(rawValue: key).map { ($0, value) }
+        })
     }
   }
 

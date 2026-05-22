@@ -20,6 +20,29 @@ enum ReleaseNotesCatalog {
   static let all: [ReleaseNote] = [
     ReleaseNote(
       // Placeholder version — adjust when the actual release ships under a
+      // different `CFBundleShortVersionString`.
+      version: "1.8.0",
+      summary:
+        "Import Existing Backup now adopts album and shared-album exports too — no more re-exporting the same albums after a reinstall.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Import Existing Backup restores album records",
+          body:
+            "Folders under `Collections/Favorites/`, `Collections/Albums/`, and "
+            + "`Collections/Shared Albums/` are now walked alongside the year/month "
+            + "tree when you choose **File → Import Existing Backup…**. Matched "
+            + "files become records under the right placement, so the next export "
+            + "skips them instead of producing duplicates with `_2`/`_3` suffixes. "
+            + "Albums or shared albums that no longer exist in Photos are skipped "
+            + "and called out in the result sheet so an empty folder doesn't look "
+            + "like corruption. "
+            + "Fixes [#106](https://github.com/valtteriluomapareto/photo-export/issues/106)."
+        )
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
+      // Placeholder version — adjust when the actual release ships under a
       // different `CFBundleShortVersionString`. The catalog falls back to a
       // generic "Photo Export has been updated" message if no entry matches
       // the user's jump, so a stale version here degrades gracefully.
@@ -41,7 +64,7 @@ enum ReleaseNotesCatalog {
             + "on disk stay where they are; turning this on later produces a mixed layout "
             + "until you re-export the affected months. "
             + "Fixes [#38](https://github.com/valtteriluomapareto/photo-export/issues/38)."
-        ),
+        )
       ],
       learnMore: nil
     ),
@@ -62,7 +85,7 @@ enum ReleaseNotesCatalog {
             + "companions land alongside. Shared-album Live Photos stay still-only — Apple "
             + "doesn't expose their paired video. "
             + "Fixes [#49](https://github.com/valtteriluomapareto/photo-export/issues/49)."
-        ),
+        )
       ],
       learnMore: nil
     ),
@@ -188,7 +211,7 @@ enum ReleaseNotesCatalog {
       ],
       learnMore:
         "The [Auto Export guide](https://valtteriluomapareto.github.io/photo-export/auto-export/) has the full walkthrough, including an Upgrading section with troubleshooting for the rare cases."
-    )
+    ),
   ]
 
   /// Returns the notes a user upgrading from `lastSeen` to `current`
