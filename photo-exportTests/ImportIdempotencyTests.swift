@@ -33,12 +33,18 @@ struct ImportIdempotencyTests {
       .appendingPathComponent("ImportIdempotency-\(UUID().uuidString)", isDirectory: true)
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
+    // Issue #106: ImportCoordinator now gates on `collectionExportRecordStore.state ==
+    // .ready` too. Production wires this via the destination-change observer in
+    // photo_exportApp.swift; tests configure it explicitly so the import gate passes.
+    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    collectionStore.configure(for: "test")
     let defaults = UserDefaults(
       suiteName: "test-ImportIdempotency-\(UUID().uuidString)")!
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
+      collectionExportRecordStore: collectionStore,
       assetResourceWriter: writer,
       fileSystem: fileSystem,
       userDefaults: defaults

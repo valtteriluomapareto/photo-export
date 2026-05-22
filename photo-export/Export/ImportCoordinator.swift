@@ -100,6 +100,20 @@ final class ImportCoordinator: ObservableObject {
       )
       return
     }
+    // Symmetric gate on the collection store (issue #106). A `.failed` collection
+    // store means we cannot persist any collection-side records this session;
+    // refusing the whole import is more honest than completing with "0 album
+    // exports recognized" — the user has no signal that something album-shaped
+    // was lost otherwise. `.unconfigured` is not reachable through the normal
+    // flow (destination select configures both stores together) but the strict
+    // `== .ready` check guards a future code path that might invoke import from
+    // another surface.
+    guard host.collectionExportRecordStore.state == .ready else {
+      logger.error(
+        "Cannot import: collection record store state=\(String(describing: host.collectionExportRecordStore.state), privacy: .public) (need .ready)"
+      )
+      return
+    }
 
     isImporting = true
     importStage = .scanningBackupFolder
@@ -137,9 +151,14 @@ final class ImportCoordinator: ObservableObject {
 
         self.importStage = .scanningBackupFolder
         try Task.checkCancellation()
-        let scannedFiles = await Task.detached {
-          BackupScanner.scanBackupFolder(at: rootURL)
+        let scanned = await Task.detached {
+          (
+            timeline: BackupScanner.scanBackupFolder(at: rootURL),
+            collections: BackupCollectionScanner.scanCollections(at: rootURL)
+          )
         }.value
+        let scannedFiles = scanned.timeline
+        let collectionGroups = scanned.collections
 
         try Task.checkCancellation()
         guard self.queueCoordinator?.isCurrent(importGen) == true else {
@@ -150,11 +169,60 @@ final class ImportCoordinator: ObservableObject {
 
         // No early return on `scannedFiles.isEmpty` — an empty destination still needs
         // reconcile so existing records get pruned to match disk truth. The bulk-import
-        // call below is a no-op for an empty matched list.
+        // calls below are no-ops for an empty matched list.
+
+        // Resolve every collection scan group to a placement via the matcher.
+        // Orphan groups contribute their files to the import-report's `unmatched`
+        // bucket; existing/fresh placements feed the per-placement matcher.
+        // Issue #106 — pre-built before the match pass so the timeline + collection
+        // counters can share a single user-visible "Matching assets…" stage
+        // (HIG: progressive disclosure).
+        let photoCollections = (try? host.photoLibraryService.fetchCollectionTree()) ?? []
+        let existingPlacements = Array(host.collectionExportRecordStore.placements.values)
+        let placementMatcher = BackupCollectionPlacementMatcher()
+        var collectionResolutions: [BackupScanner.CollectionPlacementResolution] = []
+        var orphanFiles: [BackupScanner.ScannedFile] = []
+        var orphanFolderCount = 0
+        for group in collectionGroups {
+          let outcome = placementMatcher.match(
+            group: group,
+            photoCollections: photoCollections,
+            existingPlacements: existingPlacements)
+          switch outcome {
+          case .existing(let placement), .fresh(let placement):
+            collectionResolutions.append(
+              BackupScanner.CollectionPlacementResolution(
+                placement: placement, files: group.files))
+          case .orphan(let reason):
+            self.logger.info(
+              "Skipping orphan collection folder at \(group.folderURL.path, privacy: .public): \(String(describing: reason), privacy: .public)"
+            )
+            orphanFiles.append(contentsOf: group.files)
+            orphanFolderCount += 1
+          }
+        }
 
         self.importStage = .readingPhotosLibrary
         let matchResult = try await BackupScanner.matchFiles(
           scannedFiles,
+          photoLibraryService: host.photoLibraryService
+        ) { [weak self] stage in
+          self?.importStage = stage
+        }
+
+        try Task.checkCancellation()
+        guard self.queueCoordinator?.isCurrent(importGen) == true else {
+          self.isImporting = false
+          self.importStage = nil
+          return
+        }
+
+        // Collection-side match pass. Reuses `matchSingleFile` unchanged; the
+        // candidate-asset set is scoped per placement instead of per year-month.
+        // Progress is reported through the same `.matchingAssets` stage so the
+        // UI shows a single combined counter across both passes.
+        let collectionMatchResult = try await BackupScanner.matchCollectionFiles(
+          collectionResolutions,
           photoLibraryService: host.photoLibraryService
         ) { [weak self] stage in
           self?.importStage = stage
@@ -213,6 +281,38 @@ final class ImportCoordinator: ObservableObject {
 
         host.exportRecordStore.bulkImportRecords(records)
 
+        // Collection-side bulk-import. Placements first (orphan-record guard inside
+        // the store requires placement before record); then entries. The store's
+        // `accept(_:)` gate refuses any `.timeline` placement that snuck through.
+        // Issue #106.
+        var collectionEntries: [CollectionExportRecordStore.BulkImportEntry] = []
+        collectionEntries.reserveCapacity(collectionMatchResult.matched.count)
+        for matched in collectionMatchResult.matched {
+          collectionEntries.append(
+            CollectionExportRecordStore.BulkImportEntry(
+              placement: matched.placement,
+              assetId: matched.asset.id,
+              variant: matched.variant,
+              filename: matched.file.filename,
+              exportedAt: now,
+              // Issue #38: preserve on-disk location for reuse-source and reconcile.
+              subfolder: matched.file.subfolder))
+        }
+        // Existing placements re-upserted alongside new ones — the merge is idempotent
+        // in the store and keeps the orphan-record guard happy if a placement's
+        // metadata was somehow dropped between launches.
+        let placementsToBulkImport: [ExportPlacement] = {
+          var seen = Set<String>()
+          var result: [ExportPlacement] = []
+          for resolution in collectionResolutions
+          where seen.insert(resolution.placement.id).inserted {
+            result.append(resolution.placement)
+          }
+          return result
+        }()
+        host.collectionExportRecordStore.bulkImportRecords(
+          placements: placementsToBulkImport, entries: collectionEntries)
+
         guard self.queueCoordinator?.isCurrent(importGen) == true else {
           self.isImporting = false
           self.importStage = nil
@@ -246,21 +346,37 @@ final class ImportCoordinator: ObservableObject {
         let totalPrunedRecords =
           timelineSummary.prunedRecords + collectionSummary.prunedRecords
 
+        let totalCollectionFiles = collectionGroups.reduce(0) { $0 + $1.files.count }
+        let totalScanned = scannedFiles.count + totalCollectionFiles
+        let totalMatched =
+          matchResult.matched.count + collectionMatchResult.matched.count
+        let totalAmbiguous =
+          matchResult.ambiguous.count + collectionMatchResult.ambiguous.count
+        // Orphan-folder files count as `unmatched` in the report so the user sees
+        // them in the existing "No matching asset found" row. The
+        // `orphanCollectionFolders` field on the report drives the italic
+        // disclosure underneath. Issue #106 / HIG: be honest about errors.
+        let totalUnmatched =
+          matchResult.unmatched.count + collectionMatchResult.unmatched.count
+          + orphanFiles.count
+
         host.setImportResult(
           ImportReport(
-            matchedCount: matchResult.matched.count,
-            ambiguousCount: matchResult.ambiguous.count,
-            unmatchedCount: matchResult.unmatched.count,
-            totalScanned: scannedFiles.count,
+            matchedCount: totalMatched,
+            ambiguousCount: totalAmbiguous,
+            unmatchedCount: totalUnmatched,
+            totalScanned: totalScanned,
             prunedVariants: totalPrunedVariants,
-            prunedRecords: totalPrunedRecords
+            prunedRecords: totalPrunedRecords,
+            collectionMatchedCount: collectionMatchResult.matched.count,
+            orphanCollectionFolders: orphanFolderCount
           ))
 
         self.importStage = .done
         self.isImporting = false
 
         self.logger.info(
-          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
+          "Import complete: \(totalMatched) matched (timeline=\(matchResult.matched.count), collection=\(collectionMatchResult.matched.count)), \(totalAmbiguous) ambiguous, \(totalUnmatched) unmatched (orphan-folder=\(orphanFiles.count)) out of \(totalScanned) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
         )
       } catch is CancellationError {
         self.logger.info("Import task cancelled")

@@ -2367,10 +2367,24 @@ struct ImportReport: Equatable {
   /// Records removed entirely after their last variant was pruned. Counts the
   /// timeline and collection stores together.
   let prunedRecords: Int
+  /// Subset of `matchedCount` that came from `Collections/` (favorites + user
+  /// albums + shared albums). Issue #106. Used by `ImportView` to render the
+  /// "including N in albums" sub-line under the matched row when the user
+  /// has any collection-side matches; the row stays hidden when the value
+  /// is `0` so timeline-only imports retain the original layout.
+  let collectionMatchedCount: Int
+  /// Count of on-disk leaf folders under `Collections/Albums/` or
+  /// `Collections/Shared Albums/` that resolved to a
+  /// `BackupCollectionPlacementMatcher.OrphanReason`. Surfaced as the italic
+  /// disclosure under the unmatched row when nonzero, so the user
+  /// understands `unmatchedCount > 0` for "folder no longer matches an album"
+  /// reasons rather than corruption.
+  let orphanCollectionFolders: Int
 
   init(
     matchedCount: Int, ambiguousCount: Int, unmatchedCount: Int, totalScanned: Int,
-    prunedVariants: Int = 0, prunedRecords: Int = 0
+    prunedVariants: Int = 0, prunedRecords: Int = 0,
+    collectionMatchedCount: Int = 0, orphanCollectionFolders: Int = 0
   ) {
     self.matchedCount = matchedCount
     self.ambiguousCount = ambiguousCount
@@ -2378,5 +2392,7 @@ struct ImportReport: Equatable {
     self.totalScanned = totalScanned
     self.prunedVariants = prunedVariants
     self.prunedRecords = prunedRecords
+    self.collectionMatchedCount = collectionMatchedCount
+    self.orphanCollectionFolders = orphanCollectionFolders
   }
 }

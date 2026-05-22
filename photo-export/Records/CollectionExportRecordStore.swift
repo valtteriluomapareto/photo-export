@@ -507,6 +507,107 @@ final class CollectionExportRecordStore: ObservableObject {
       prunedVariants: prunedVariants, prunedRecords: prunedRecords)
   }
 
+  // MARK: - Bulk import (for backup import — issue #106)
+
+  /// One incoming `.done` variant from the Import Existing Backup flow.
+  /// Issue #106 — collection-side counterpart to
+  /// `ExportRecordStore.bulkImportRecords(_:)`.
+  struct BulkImportEntry: Equatable {
+    let placement: ExportPlacement
+    let assetId: String
+    let variant: ExportVariant
+    let filename: String
+    let exportedAt: Date
+    /// Path component inside the placement folder, e.g. `"videos"`. `nil` →
+    /// the bare placement path.
+    let subfolder: String?
+  }
+
+  /// Bulk-imports placement metadata and `.done` variant records discovered by
+  /// the Import Existing Backup scan. Idempotent per variant: an existing
+  /// `.done` for a given `(placementId, assetId, variant)` is preserved;
+  /// weaker statuses (`.failed`, `.inProgress`, `.pending`) are replaced by
+  /// the incoming `.done`.
+  ///
+  /// Placements are upserted **before** their records to satisfy the
+  /// orphan-record guard in `apply(.upsertRecord)`. `.timeline` inputs are
+  /// refused via the `accept(_:)` gate — the disjoint-key-space invariant
+  /// holds even when the caller mis-routes input.
+  ///
+  /// Bails early when the store isn't `.ready` — same belt-and-braces no-op
+  /// pattern as the timeline-side bulk API. The import coordinator gates on
+  /// `state == .ready` before calling.
+  func bulkImportRecords(
+    placements: [ExportPlacement],
+    entries: [BulkImportEntry]
+  ) {
+    guard state == .ready else { return }
+
+    // 1. Upsert placements first. Defensive: filter `.timeline` via accept(_:).
+    var acceptedPlacementIds = Set<String>()
+    for placement in placements {
+      guard accept(placement) else { continue }
+      append(.upsertPlacement(placementId: placement.id, placement: placement))
+      acceptedPlacementIds.insert(placement.id)
+    }
+
+    // 2. Merge incoming entries by (placementId, assetId). Build the full
+    //    RecordBody for each pair before appending, so we emit at most one
+    //    `upsertRecord` op per (placement, asset) — keeps the JSONL log
+    //    compact compared to one append per variant.
+    var pendingBodies: [String: [String: RecordBody]] = [:]
+    var importedVariants = 0
+    var skippedAlreadyDone = 0
+    var skippedNoPlacement = 0
+
+    for entry in entries {
+      guard accept(entry.placement) else { continue }
+      // The placement must have been upserted above. If it wasn't (caller
+      // mismatch between `placements` and `entries`), skip the entry rather
+      // than let `apply(.upsertRecord)`'s orphan-record guard reject it
+      // silently after we've logged success.
+      guard acceptedPlacementIds.contains(entry.placement.id) else {
+        skippedNoPlacement += 1
+        continue
+      }
+
+      let placementId = entry.placement.id
+      let assetId = entry.assetId
+
+      // Seed the merge from the pending body if we've already touched this
+      // (placement, asset); else from the existing on-disk body; else empty.
+      var body =
+        pendingBodies[placementId]?[assetId]
+        ?? recordBodies[placementId]?[assetId]
+        ?? RecordBody(variants: [:])
+
+      if let existing = body.variants[entry.variant.rawValue], existing.status == .done {
+        skippedAlreadyDone += 1
+        continue
+      }
+
+      body.variants[entry.variant.rawValue] = ExportVariantRecord(
+        filename: entry.filename,
+        status: .done,
+        exportDate: entry.exportedAt,
+        lastError: nil,
+        subfolder: entry.subfolder)
+      importedVariants += 1
+      pendingBodies[placementId, default: [:]][assetId] = body
+    }
+
+    // 3. One upsertRecord op per (placementId, assetId).
+    for (placementId, byAsset) in pendingBodies {
+      for (assetId, body) in byAsset {
+        append(.upsertRecord(placementId: placementId, assetId: assetId, body: body))
+      }
+    }
+
+    logger.info(
+      "Bulk imported \(importedVariants) collection variants (skipped \(skippedAlreadyDone) already-done, \(skippedNoPlacement) without placement) across \(pendingBodies.count) placement(s)"
+    )
+  }
+
   // MARK: - Read API
 
   func exportInfo(assetId: String, placement: ExportPlacement) -> ScopedExportRecord? {

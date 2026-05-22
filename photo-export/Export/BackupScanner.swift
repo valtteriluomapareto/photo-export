@@ -466,6 +466,164 @@ struct BackupScanner {
     return result
   }
 
+  // MARK: - Collection matching (issue #106)
+
+  /// One placement plus the files (from `BackupCollectionScanner.scanCollections`)
+  /// that live under it on disk. The caller pairs scanner groups with placements
+  /// via `BackupCollectionPlacementMatcher` and feeds the result here.
+  struct CollectionPlacementResolution {
+    let placement: ExportPlacement
+    let files: [ScannedFile]
+  }
+
+  /// Matched / ambiguous / unmatched buckets for the collection-side match
+  /// pass. Same shape as `MatchResult` but with the per-placement `matched`
+  /// entries replaced by `MatchedCollectionFile`.
+  struct CollectionMatchResult {
+    var matched: [MatchedCollectionFile] = []
+    var ambiguous: [ScannedFile] = []
+    var unmatched: [ScannedFile] = []
+  }
+
+  /// A scanned collection file unambiguously matched to an asset under a
+  /// specific placement.
+  struct MatchedCollectionFile {
+    let file: ScannedFile
+    let placement: ExportPlacement
+    let asset: AssetDescriptor
+    let variant: ExportVariant
+  }
+
+  /// Matches scanned collection files to Photos library assets, scoped per
+  /// placement. Reuses `matchSingleFile` and `buildFingerprints` unchanged —
+  /// the matcher is scope-agnostic; only the candidate-asset set changes.
+  ///
+  /// An asset can legitimately appear under more than one placement (e.g.
+  /// Favorites + an Album); the per-asset fingerprint cache keeps PhotoKit
+  /// resource calls at O(distinct assets) rather than O(distinct assets ×
+  /// placements). Progress is reported through the shared
+  /// `.matchingAssets(matched:total:)` stage so the caller can fold timeline
+  /// + collection passes into a single user-visible counter (HIG:
+  /// progressive disclosure).
+  static func matchCollectionFiles(
+    _ resolutions: [CollectionPlacementResolution],
+    photoLibraryService: any PhotoLibraryService,
+    progress: @MainActor (ImportStage) -> Void
+  ) async throws -> CollectionMatchResult {
+    var result = CollectionMatchResult()
+    let totalFiles = resolutions.reduce(0) { $0 + $1.files.count }
+    var processedCount = 0
+
+    // Per-asset fingerprint cache shared across placements. An asset that
+    // appears in Favorites and an Album builds its fingerprint once.
+    var fingerprintsByAssetId: [String: AssetFingerprint] = [:]
+
+    for resolution in resolutions {
+      try Task.checkCancellation()
+      guard let scope = fetchScope(for: resolution.placement) else {
+        // Defensive — a `.timeline` placement should never reach the
+        // collection matcher. ImportCoordinator splits inputs before calling.
+        logger.error(
+          "matchCollectionFiles refused a non-collection placement \(resolution.placement.id, privacy: .public)"
+        )
+        result.unmatched.append(contentsOf: resolution.files)
+        processedCount += resolution.files.count
+        continue
+      }
+
+      await progress(.readingPhotosLibrary)
+      let assets =
+        (try? await photoLibraryService.fetchAssets(in: scope, mediaType: nil)) ?? []
+      let newAssets = assets.filter { fingerprintsByAssetId[$0.id] == nil }
+      let newFingerprints = await buildFingerprints(
+        for: newAssets, using: photoLibraryService)
+      for fp in newFingerprints {
+        fingerprintsByAssetId[fp.localIdentifier] = fp
+      }
+
+      let placementFingerprints = assets.compactMap { fingerprintsByAssetId[$0.id] }
+      var assetById: [String: AssetDescriptor] = [:]
+      for asset in assets {
+        assetById[asset.id] = asset
+      }
+
+      // Per-placement classifier hints (mirrors the per-month logic above).
+      var stemsWithOrigSibling = Set<String>()
+      for file in resolution.files {
+        if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+          stemsWithOrigSibling.insert(parsed.groupStem)
+          stemsWithOrigSibling.insert(parsed.canonicalOriginalStem)
+        }
+      }
+      var filenamesAtBare = Set<String>()
+      var filenamesInVideos = Set<String>()
+      for file in resolution.files {
+        if file.subfolder == nil { filenamesAtBare.insert(file.baseFilename) }
+        if file.subfolder == "videos" { filenamesInVideos.insert(file.baseFilename) }
+      }
+      let filenamesWithSubfolderSplit = filenamesAtBare.intersection(filenamesInVideos)
+
+      for file in resolution.files {
+        try Task.checkCancellation()
+        processedCount += 1
+        if processedCount % 50 == 0 {
+          await progress(.matchingAssets(matched: result.matched.count, total: totalFiles))
+          await Task.yield()
+        }
+
+        if placementFingerprints.isEmpty {
+          result.unmatched.append(file)
+          continue
+        }
+
+        let outcome = matchSingleFile(
+          file,
+          fingerprints: placementFingerprints,
+          assetById: assetById,
+          stemsWithOrigSibling: stemsWithOrigSibling,
+          filenamesWithSubfolderSplit: filenamesWithSubfolderSplit
+        )
+        switch outcome {
+        case .matched(let matched):
+          result.matched.append(
+            MatchedCollectionFile(
+              file: matched.file,
+              placement: resolution.placement,
+              asset: matched.asset,
+              variant: matched.variant
+            ))
+        case .ambiguous:
+          result.ambiguous.append(file)
+        case .unmatched:
+          result.unmatched.append(file)
+        }
+      }
+    }
+
+    logger.info(
+      "Collection match complete: \(result.matched.count) matched, \(result.ambiguous.count) ambiguous, \(result.unmatched.count) unmatched"
+    )
+    return result
+  }
+
+  /// Maps a placement to the `PhotoFetchScope` its assets should be fetched
+  /// from. Returns `nil` for `.timeline` placements — the collection matcher
+  /// refuses those.
+  private static func fetchScope(for placement: ExportPlacement) -> PhotoFetchScope? {
+    switch placement.kind {
+    case .favorites:
+      return .favorites
+    case .album:
+      guard let id = placement.collectionLocalIdentifier else { return nil }
+      return .album(collectionId: id)
+    case .sharedAlbum:
+      guard let id = placement.collectionLocalIdentifier else { return nil }
+      return .sharedAlbum(collectionId: id)
+    case .timeline:
+      return nil
+    }
+  }
+
   /// Returns (year, month) tuples for a month and its two neighbors.
   /// Handles year boundaries (e.g., Jan → prev Dec, Dec → next Jan).
   private static func adjacentYearMonths(year: Int, month: Int) -> [(Int, Int)] {
