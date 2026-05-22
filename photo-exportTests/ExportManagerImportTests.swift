@@ -302,4 +302,203 @@ struct ExportManagerImportTests {
     #expect(manager.importResult?.totalScanned == 1)
     #expect(store.exportInfo(assetId: "unrelated") == nil)
   }
+
+  // MARK: - Issue #106 — Collections/ import end-to-end
+
+  /// End-to-end round-trip for `Collections/Albums/<Title>/<file>`. Plants a
+  /// file under an album folder, configures the fake to expose that album in
+  /// the collection tree and to return its asset list, runs the import, and
+  /// asserts both a placement and a `.done` record land in the collection
+  /// store. This pins the new ImportCoordinator wiring: collection scanner
+  /// → placement matcher → matchCollectionFiles → collection bulkImport.
+  @Test func startImportPersistsAlbumPlacementAndRecord() async throws {
+    let (manager, photoLib, dest, _, storeRoot) = makeTestHarness()
+    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+
+    var components = DateComponents()
+    components.year = 2025
+    components.month = 6
+    components.day = 15
+    components.hour = 12
+    let date = Calendar.current.date(from: components)!
+
+    // Plant the album file at Collections/Albums/Trip/IMG_0001.JPG.
+    let albumDir = try dest.urlForRelativeDirectory(
+      "Collections/Albums/Trip/", createIfNeeded: true)
+    let fileURL = albumDir.appendingPathComponent("IMG_0001.JPG")
+    try Data("photo bytes".utf8).write(to: fileURL)
+    try FileManager.default.setAttributes(
+      [.modificationDate: date], ofItemAtPath: fileURL.path)
+
+    // PhotoKit tree: one user album titled "Trip" with one asset.
+    let asset = TestAssetFactory.makeAsset(
+      id: "trip-asset", creationDate: date, mediaType: .image)
+    let trip = PhotoCollectionDescriptor(
+      id: "album:trip-id", localIdentifier: "trip-id", title: "Trip",
+      kind: .album, pathComponents: [], children: [])
+    photoLib.collectionTree = [trip]
+    photoLib.assetsByAlbumLocalId["trip-id"] = [asset]
+    photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+    ]
+
+    manager.startImport()
+    await manager.waitForImportCompletion()
+
+    #expect(!manager.isImporting)
+    #expect(manager.importStage == .done)
+    #expect(manager.importResult?.matchedCount == 1)
+    #expect(manager.importResult?.collectionMatchedCount == 1)
+    #expect(manager.importResult?.unmatchedCount == 0)
+    #expect(manager.importResult?.orphanCollectionFolders == 0)
+
+    // Placement persisted in the collection store.
+    let placement = manager.collectionExportRecordStore.placements.values.first {
+      $0.kind == .album && $0.collectionLocalIdentifier == "trip-id"
+    }
+    #expect(placement != nil)
+    #expect(placement?.relativePath == "Collections/Albums/Trip/")
+
+    // Record body persisted under (placementId, assetId).
+    let body = manager.collectionExportRecordStore.recordBodies[
+      placement?.id ?? ""]?["trip-asset"]
+    #expect(body?.variants[ExportVariant.original.rawValue]?.status == .done)
+    #expect(body?.variants[ExportVariant.original.rawValue]?.filename == "IMG_0001.JPG")
+  }
+
+  /// Orphan-folder counter for the result sheet: a `Collections/Albums/`
+  /// leaf with no PhotoKit match contributes its files to `unmatchedCount`
+  /// and increments `orphanCollectionFolders`. The italic disclosure in
+  /// `ImportView` reads from that field.
+  @Test func startImportOrphanFolderIncrementsCounter() async throws {
+    let (manager, photoLib, dest, _, storeRoot) = makeTestHarness()
+    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+
+    // Plant two files under an album that does NOT exist in PhotoKit.
+    let dir = try dest.urlForRelativeDirectory(
+      "Collections/Albums/DeletedAlbum/", createIfNeeded: true)
+    try Data("a".utf8).write(to: dir.appendingPathComponent("A.JPG"))
+    try Data("b".utf8).write(to: dir.appendingPathComponent("B.JPG"))
+
+    // PhotoKit returns an empty collection tree.
+    photoLib.collectionTree = []
+
+    manager.startImport()
+    await manager.waitForImportCompletion()
+
+    #expect(manager.importResult?.matchedCount == 0)
+    #expect(manager.importResult?.collectionMatchedCount == 0)
+    #expect(manager.importResult?.unmatchedCount == 2)
+    #expect(manager.importResult?.orphanCollectionFolders == 1)
+  }
+
+  /// Coordinator-level disjoint-key-space invariant. The plan's Phase F
+  /// calls this out: the timeline store's `bulkImportRecords` has no kind
+  /// gate (because `ExportRecord` carries no kind field), so the disjoint
+  /// invariant on the import path lives in `ImportCoordinator`'s
+  /// input-splitting code. This test plants both a timeline file and an
+  /// album file with PhotoKit setup for each, runs import, and asserts
+  /// that timeline records ONLY land in the timeline store and album
+  /// records ONLY land in the collection store.
+  @Test func startImportRoutesTimelineAndCollectionRecordsToCorrectStores() async throws {
+    let (manager, photoLib, dest, timelineStore, storeRoot) = makeTestHarness()
+    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+
+    var components = DateComponents()
+    components.year = 2025
+    components.month = 6
+    components.day = 15
+    components.hour = 12
+    let date = Calendar.current.date(from: components)!
+
+    // Plant a timeline file and an album file.
+    try plantBackupFile(
+      in: dest, year: 2025, month: 6, filename: "TIMELINE.JPG",
+      content: "x", modDate: date)
+    let albumDir = try dest.urlForRelativeDirectory(
+      "Collections/Albums/Trip/", createIfNeeded: true)
+    let albumFile = albumDir.appendingPathComponent("ALBUM.JPG")
+    try Data("y".utf8).write(to: albumFile)
+    try FileManager.default.setAttributes(
+      [.modificationDate: date], ofItemAtPath: albumFile.path)
+
+    // PhotoKit: one timeline asset, one album asset (distinct identifiers).
+    let timelineAsset = TestAssetFactory.makeAsset(
+      id: "tl-asset", creationDate: date, mediaType: .image)
+    let albumAsset = TestAssetFactory.makeAsset(
+      id: "album-asset", creationDate: date, mediaType: .image)
+    photoLib.assetsByYearMonth["2025-6"] = [timelineAsset]
+    photoLib.resourcesByAssetId[timelineAsset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "TIMELINE.JPG")
+    ]
+    let trip = PhotoCollectionDescriptor(
+      id: "album:trip-id", localIdentifier: "trip-id", title: "Trip",
+      kind: .album, pathComponents: [], children: [])
+    photoLib.collectionTree = [trip]
+    photoLib.assetsByAlbumLocalId["trip-id"] = [albumAsset]
+    photoLib.resourcesByAssetId[albumAsset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "ALBUM.JPG")
+    ]
+
+    manager.startImport()
+    await manager.waitForImportCompletion()
+
+    #expect(manager.importResult?.matchedCount == 2)
+    #expect(manager.importResult?.collectionMatchedCount == 1)
+
+    // Timeline store has the timeline asset, NOT the album asset.
+    #expect(timelineStore.exportInfo(assetId: "tl-asset")?.variants[.original]?.status == .done)
+    #expect(timelineStore.exportInfo(assetId: "album-asset") == nil)
+
+    // Collection store has the album asset under the Trip placement, NOT the
+    // timeline asset.
+    let tripPlacement = manager.collectionExportRecordStore.placements.values.first {
+      $0.kind == .album && $0.collectionLocalIdentifier == "trip-id"
+    }
+    #expect(tripPlacement != nil)
+    let albumBody = manager.collectionExportRecordStore.recordBodies[
+      tripPlacement?.id ?? ""]?["album-asset"]
+    #expect(albumBody?.variants[ExportVariant.original.rawValue]?.status == .done)
+    // Timeline asset must NOT have leaked into any collection placement.
+    for byAsset in manager.collectionExportRecordStore.recordBodies.values {
+      #expect(byAsset["tl-asset"] == nil)
+    }
+  }
+
+  /// Collection store in `.failed` state — the symmetric gate in
+  /// `ImportCoordinator.startImport` refuses the whole import and both
+  /// stores stay untouched. Plan §7 + HIG: be honest about errors.
+  @Test func startImportRefusedWhenCollectionStoreFailed() async throws {
+    let (manager, photoLib, dest, store, storeRoot) = makeTestHarness()
+    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+
+    // Plant a corrupt collection-store snapshot so the next configure() forces .failed.
+    let collectionDestDir = manager.collectionExportRecordStore.storeRootURL
+      .appendingPathComponent("forced-failed", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: collectionDestDir, withIntermediateDirectories: true)
+    try Data("{not valid".utf8).write(
+      to: collectionDestDir.appendingPathComponent("collection-records.json"))
+    manager.collectionExportRecordStore.configure(for: "forced-failed")
+    #expect(manager.collectionExportRecordStore.state == .failed)
+
+    // Plant a timeline file that would normally be matched.
+    let date = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
+    try plantBackupFile(
+      in: dest, year: 2025, month: 6, filename: "IMG.JPG", modDate: date)
+    photoLib.assetsByYearMonth["2025-6"] = [
+      TestAssetFactory.makeAsset(id: "x", creationDate: date)
+    ]
+    photoLib.resourcesByAssetId["x"] = [
+      TestAssetFactory.makeResource(originalFilename: "IMG.JPG")
+    ]
+
+    manager.startImport()
+    // Import was refused synchronously — no task to await.
+    #expect(!manager.isImporting)
+    #expect(manager.importStage == nil)
+    #expect(manager.importResult == nil)
+    // Neither store mutated.
+    #expect(store.exportInfo(assetId: "x") == nil)
+  }
 }
