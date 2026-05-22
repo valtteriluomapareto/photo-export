@@ -146,13 +146,12 @@ struct ExportPlacementResolver {
       collections: collections,
       existingPlacements: existingPlacements
     )
-    let relativePath: String = {
-      var path = "Collections/Albums/"
-      if !parentPathString.isEmpty {
-        path += parentPathString + "/"
-      }
-      return path + leaf + "/"
-    }()
+    let parentComponents =
+      parentPathString.isEmpty ? [] : parentPathString.split(separator: "/").map(String.init)
+    let relativePath = ExportPlacementPathPolicy.collectionLeafRelativePath(
+      kind: .album,
+      parentPathComponents: parentComponents,
+      leafName: leaf)
     let displayName: String = {
       if descriptor.pathComponents.isEmpty { return descriptor.title }
       return descriptor.pathComponents.joined(separator: "/") + "/" + descriptor.title
@@ -211,7 +210,8 @@ struct ExportPlacementResolver {
       collections: collections,
       existingPlacements: existingPlacements
     )
-    let relativePath = "Collections/Shared Albums/\(leaf)/"
+    let relativePath = ExportPlacementPathPolicy.collectionLeafRelativePath(
+      kind: .sharedAlbum, parentPathComponents: [], leafName: leaf)
     return ExportPlacement(
       kind: .sharedAlbum,
       id: candidateId,

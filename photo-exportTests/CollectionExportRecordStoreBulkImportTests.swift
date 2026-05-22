@@ -232,11 +232,15 @@ struct CollectionExportRecordStoreBulkImportTests {
   }
 
   @Test func entryWithoutMatchingPlacement_skipped() throws {
-    // Caller error: an entry references a placement that wasn't in the
-    // `placements:` array. The bulk importer must skip rather than write
-    // a record under a placement id with no metadata (which the
-    // orphan-record guard inside the log would refuse, leaving the user
-    // with a "1 matched" report that actually persisted 0).
+    // Caller-side mismatch: an entry references a placement that the caller
+    // forgot to include in the `placements:` array. The bulk importer must
+    // skip the entry (the `skippedNoPlacement` counter) rather than rely on
+    // the in-store orphan-record guard to refuse it after the placement was
+    // already accepted — otherwise the user would see "1 matched" in the
+    // report despite zero records persisted. This pins the caller-mismatch
+    // path; log-truncation orphans (where a corrupted log loses the
+    // upsertPlacement line) are caught by the separate orphan-record guard
+    // inside `apply(.upsertRecord)` during snapshot/log replay.
     let (dir, store) = try makeReadyStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -255,6 +259,37 @@ struct CollectionExportRecordStoreBulkImportTests {
   }
 
   // MARK: - State gates
+
+  @Test func idempotentReimport_doesNotBloatLog() throws {
+    // Re-importing the same placement+records should be log-size idempotent,
+    // not just outcome-idempotent. Without the no-op check the JSONL would
+    // grow on every re-import, eventually triggering compaction churn.
+    let (dir, store) = try makeReadyStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let placement = albumPlacement()
+    let entry = CollectionExportRecordStore.BulkImportEntry(
+      placement: placement, assetId: "asset-1", variant: .original,
+      filename: "IMG.JPG", exportedAt: Date(timeIntervalSince1970: 1_700_000_000),
+      subfolder: nil)
+    store.bulkImportRecords(placements: [placement], entries: [entry])
+    store.flushForTesting()
+
+    let logURL = dir.appendingPathComponent("test/collection-records.jsonl")
+    let firstSize = (try? FileManager.default.attributesOfItem(atPath: logURL.path)[.size]
+      as? Int) ?? 0
+
+    // Re-import identical input. The record write still appends (because the
+    // `.done` check fires before the merge — same input twice is one variant
+    // write the second time? actually no: the existing .done wins → 0 writes).
+    // The placement upsert MUST also be skipped, which is what this test pins.
+    store.bulkImportRecords(placements: [placement], entries: [entry])
+    store.flushForTesting()
+    let secondSize = (try? FileManager.default.attributesOfItem(atPath: logURL.path)[.size]
+      as? Int) ?? 0
+
+    #expect(firstSize == secondSize, "Re-importing identical inputs grew the log")
+  }
 
   @Test func failedState_isNoOp() throws {
     let dir = FileManager.default.temporaryDirectory

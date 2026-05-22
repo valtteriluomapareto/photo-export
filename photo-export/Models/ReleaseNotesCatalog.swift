@@ -24,7 +24,7 @@ enum ReleaseNotesCatalog {
       // videos-subfolder consolidated), so the next placeholder is 1.7.0.
       version: "1.7.0",
       summary:
-        "Import Existing Backup now adopts album and shared-album exports too — no more re-exporting the same albums after a reinstall.",
+        "Import Existing Backup now adopts album and shared-album exports too — albums are no longer re-exported with `_2`/`_3` suffixes after a reinstall.",
       bullets: [
         ReleaseNote.Bullet(
           title: "Import Existing Backup restores album records",
@@ -32,8 +32,8 @@ enum ReleaseNotesCatalog {
             "Folders under `Collections/Favorites/`, `Collections/Albums/`, and "
             + "`Collections/Shared Albums/` are now walked alongside the year/month "
             + "tree when you choose **File → Import Existing Backup…**. Matched "
-            + "files become records under the right placement, so the next export "
-            + "skips them instead of producing duplicates with `_2`/`_3` suffixes. "
+            + "files become records under the right placement, so re-exports after a "
+            + "reinstall no longer create duplicate `_2` / `_3`-suffixed folders. "
             + "Albums or shared albums that no longer exist in Photos are skipped "
             + "and called out in the result sheet so an empty folder doesn't look "
             + "like corruption. "
@@ -77,7 +77,7 @@ enum ReleaseNotesCatalog {
             + "on disk stay where they are; turning this on later produces a mixed layout "
             + "until you re-export the affected months. "
             + "Fixes [#38](https://github.com/valtteriluomapareto/photo-export/issues/38)."
-        )
+        ),
       ],
       learnMore: nil
     ),

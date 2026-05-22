@@ -545,11 +545,17 @@ final class CollectionExportRecordStore: ObservableObject {
     guard state == .ready else { return }
 
     // 1. Upsert placements first. Defensive: filter `.timeline` via accept(_:).
+    // Skip the JSONL append entirely when an identical placement is already in
+    // memory — re-imports are idempotent at the outcome level, but a naive
+    // re-append would bloat the log on every run. The orphan-record guard in
+    // `apply(.upsertRecord)` only needs the placement to *be* in memory; it
+    // does not require the upsert to land in the log this turn.
     var acceptedPlacementIds = Set<String>()
     for placement in placements {
       guard accept(placement) else { continue }
-      append(.upsertPlacement(placementId: placement.id, placement: placement))
       acceptedPlacementIds.insert(placement.id)
+      if self.placements[placement.id] == placement { continue }
+      append(.upsertPlacement(placementId: placement.id, placement: placement))
     }
 
     // 2. Merge incoming entries by (placementId, assetId). Build the full

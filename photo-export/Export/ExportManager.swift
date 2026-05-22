@@ -2379,12 +2379,43 @@ struct ImportReport: Equatable {
   /// disclosure under the unmatched row when nonzero, so the user
   /// understands `unmatchedCount > 0` for "folder no longer matches an album"
   /// reasons rather than corruption.
+  ///
+  /// Total count for UI rendering. Use `orphanCollectionFolderBreakdown` for
+  /// the per-reason split that the diagnostic report surfaces — when a user
+  /// asks "why were 47 folders skipped?", that answer is here.
   let orphanCollectionFolders: Int
+
+  /// Per-reason breakdown of `orphanCollectionFolders`. Keyed by the
+  /// `OrphanReasonKey` cases below; values sum to `orphanCollectionFolders`.
+  /// Surfaced in the diagnostic report and in the import-complete log so
+  /// future debugging can distinguish "PhotoKit album was deleted" from
+  /// "two PhotoKit albums sanitize to the same on-disk leaf" without rerunning
+  /// the import. Issue #106.
+  let orphanCollectionFolderBreakdown: [OrphanReasonKey: Int]
+
+  /// `nil` for a successful import. Set to a short user-facing string when the
+  /// coordinator refused the run for a recoverable reason (e.g. corrupt
+  /// collection-store snapshot). The view branches on this to swap the
+  /// "Import Complete" header + icon for a failure state with a single Close
+  /// button. All count fields are `0` when this is set. Issue #106.
+  let failureReason: String?
+
+  /// Discriminator for `orphanCollectionFolderBreakdown`. Mirrors
+  /// `BackupCollectionPlacementMatcher.OrphanReason` cases as flat keys so
+  /// `ImportReport` stays free of any matcher-side associated-value baggage.
+  enum OrphanReasonKey: String, CaseIterable, Sendable {
+    case noPhotoKitCollection
+    case sharedAlbumNestedUnderFolder
+    case resolverDisagreesWithOnDiskLeaf
+    case ambiguousPhotoKitMatch
+  }
 
   init(
     matchedCount: Int, ambiguousCount: Int, unmatchedCount: Int, totalScanned: Int,
     prunedVariants: Int = 0, prunedRecords: Int = 0,
-    collectionMatchedCount: Int = 0, orphanCollectionFolders: Int = 0
+    collectionMatchedCount: Int = 0, orphanCollectionFolders: Int = 0,
+    orphanCollectionFolderBreakdown: [OrphanReasonKey: Int] = [:],
+    failureReason: String? = nil
   ) {
     self.matchedCount = matchedCount
     self.ambiguousCount = ambiguousCount
@@ -2394,5 +2425,15 @@ struct ImportReport: Equatable {
     self.prunedRecords = prunedRecords
     self.collectionMatchedCount = collectionMatchedCount
     self.orphanCollectionFolders = orphanCollectionFolders
+    self.orphanCollectionFolderBreakdown = orphanCollectionFolderBreakdown
+    self.failureReason = failureReason
+  }
+
+  /// Convenience constructor for a refused-import failure result. All count
+  /// fields are zero; the view renders a single-button failure sheet.
+  static func failure(reason: String) -> ImportReport {
+    ImportReport(
+      matchedCount: 0, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 0,
+      failureReason: reason)
   }
 }

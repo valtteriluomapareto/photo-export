@@ -246,15 +246,13 @@ struct BackupCollectionPlacementMatcher {
   // MARK: - Helpers
 
   private func albumsRelativePath(parent: [String], leaf: String) -> String {
-    var path = "Collections/Albums/"
-    if !parent.isEmpty {
-      path += parent.joined(separator: "/") + "/"
-    }
-    return path + leaf + "/"
+    ExportPlacementPathPolicy.collectionLeafRelativePath(
+      kind: .album, parentPathComponents: parent, leafName: leaf)
   }
 
   private func sharedAlbumsRelativePath(leaf: String) -> String {
-    "Collections/Shared Albums/\(leaf)/"
+    ExportPlacementPathPolicy.collectionLeafRelativePath(
+      kind: .sharedAlbum, parentPathComponents: [], leafName: leaf)
   }
 
   /// Recursively collects every `.album` descriptor in the PhotoKit tree,

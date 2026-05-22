@@ -98,6 +98,58 @@ struct ExportPlacementPathPolicyTests {
         == expected)
   }
 
+  // MARK: - collectionLeafRelativePath (issue #106)
+
+  /// Pin the exact byte format. This is the load-bearing single source of
+  /// truth that both `ExportPlacementResolver` and
+  /// `BackupCollectionPlacementMatcher` route through — drift here would
+  /// silently break import's existing-placement reuse.
+  @Test func collectionLeafRelativePathAlbumTopLevel() {
+    #expect(
+      ExportPlacementPathPolicy.collectionLeafRelativePath(
+        kind: .album, parentPathComponents: [], leafName: "Trip")
+        == "Collections/Albums/Trip/")
+  }
+
+  @Test func collectionLeafRelativePathAlbumNested() {
+    #expect(
+      ExportPlacementPathPolicy.collectionLeafRelativePath(
+        kind: .album, parentPathComponents: ["Trips", "2024"], leafName: "Iceland")
+        == "Collections/Albums/Trips/2024/Iceland/")
+  }
+
+  @Test func collectionLeafRelativePathAlbumSingleParent() {
+    #expect(
+      ExportPlacementPathPolicy.collectionLeafRelativePath(
+        kind: .album, parentPathComponents: ["Trips"], leafName: "Trip")
+        == "Collections/Albums/Trips/Trip/")
+  }
+
+  @Test func collectionLeafRelativePathSharedAlbum() {
+    #expect(
+      ExportPlacementPathPolicy.collectionLeafRelativePath(
+        kind: .sharedAlbum, parentPathComponents: [], leafName: "Vacation")
+        == "Collections/Shared Albums/Vacation/")
+  }
+
+  /// Resolver↔matcher round-trip pin: a fresh placement constructed via the
+  /// resolver must produce a `relativePath` that the matcher's path helper
+  /// reproduces byte-for-byte from the resolver's effective inputs. Without
+  /// this pin, future change to either side could drift silently.
+  @Test func collectionLeafRelativePathRoundTripsResolverOutput() {
+    let resolver = ExportPlacementResolver()
+    let descriptor = PhotoCollectionDescriptor(
+      id: "album:trip-id", localIdentifier: "trip-id", title: "Trip",
+      kind: .album, pathComponents: ["Trips"], children: [])
+    let placement = try? resolver.placement(
+      for: .album(collectionId: "trip-id"),
+      collections: [descriptor],
+      existingPlacements: [])
+    let helper = ExportPlacementPathPolicy.collectionLeafRelativePath(
+      kind: .album, parentPathComponents: ["Trips"], leafName: "Trip")
+    #expect(placement?.relativePath == helper)
+  }
+
   // MARK: - Fixtures
 
   private func makeAlbumPlacement() -> ExportPlacement {

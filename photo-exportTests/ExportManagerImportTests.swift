@@ -390,16 +390,62 @@ struct ExportManagerImportTests {
     #expect(manager.importResult?.collectionMatchedCount == 0)
     #expect(manager.importResult?.unmatchedCount == 2)
     #expect(manager.importResult?.orphanCollectionFolders == 1)
+    // Per-reason breakdown for diagnostics. Issue #106.
+    #expect(
+      manager.importResult?.orphanCollectionFolderBreakdown == [.noPhotoKitCollection: 1])
+  }
+
+  /// Per-reason orphan breakdown distinguishes a deleted-album folder from
+  /// a sanitization-tie ambiguous match, so a future "47 folders skipped"
+  /// diagnostic is actionable.
+  @Test func startImportOrphanBreakdownDistinguishesReasons() async throws {
+    let (manager, photoLib, dest, _, storeRoot) = makeTestHarness()
+    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+
+    // Folder #1: deleted album (no PhotoKit match).
+    let deletedDir = try dest.urlForRelativeDirectory(
+      "Collections/Albums/Deleted/", createIfNeeded: true)
+    try Data("x".utf8).write(to: deletedDir.appendingPathComponent("X.JPG"))
+
+    // Folder #2: two PhotoKit albums sanitize to the same on-disk leaf
+    // (`Trip:` and `Trip_` both map to `Trip_`).
+    let tieDir = try dest.urlForRelativeDirectory(
+      "Collections/Albums/Trip_/", createIfNeeded: true)
+    try Data("y".utf8).write(to: tieDir.appendingPathComponent("Y.JPG"))
+
+    photoLib.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "album:a", localIdentifier: "a", title: "Trip:",
+        kind: .album, pathComponents: [], children: []),
+      PhotoCollectionDescriptor(
+        id: "album:b", localIdentifier: "b", title: "Trip_",
+        kind: .album, pathComponents: [], children: []),
+    ]
+
+    manager.startImport()
+    await manager.waitForImportCompletion()
+
+    #expect(manager.importResult?.orphanCollectionFolders == 2)
+    let breakdown = manager.importResult?.orphanCollectionFolderBreakdown
+    #expect(breakdown?[.noPhotoKitCollection] == 1)
+    #expect(breakdown?[.ambiguousPhotoKitMatch] == 1)
   }
 
   /// Coordinator-level disjoint-key-space invariant. The plan's Phase F
   /// calls this out: the timeline store's `bulkImportRecords` has no kind
   /// gate (because `ExportRecord` carries no kind field), so the disjoint
   /// invariant on the import path lives in `ImportCoordinator`'s
-  /// input-splitting code. This test plants both a timeline file and an
-  /// album file with PhotoKit setup for each, runs import, and asserts
-  /// that timeline records ONLY land in the timeline store and album
-  /// records ONLY land in the collection store.
+  /// input-splitting code.
+  ///
+  /// Adversarial setup: the *same asset id* appears under both a timeline
+  /// month folder and an album folder, with two distinct on-disk files
+  /// matching the same PhotoKit asset. A bug that misrouted records would
+  /// either:
+  /// - skip writing one of the two records (collapse the asset into a single
+  ///   store), or
+  /// - write the timeline record into the collection store, or vice versa.
+  /// The test asserts that BOTH records land — one per store, each keyed
+  /// correctly — so a future routing-collapse regression would fail.
   @Test func startImportRoutesTimelineAndCollectionRecordsToCorrectStores() async throws {
     let (manager, photoLib, dest, timelineStore, storeRoot) = makeTestHarness()
     defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
@@ -411,33 +457,31 @@ struct ExportManagerImportTests {
     components.hour = 12
     let date = Calendar.current.date(from: components)!
 
-    // Plant a timeline file and an album file.
+    // The adversarial twist: the SAME asset id ("shared-asset") has copies
+    // in both the timeline folder and the album folder. Same filename in
+    // both spots so the matcher can't disambiguate by name.
     try plantBackupFile(
-      in: dest, year: 2025, month: 6, filename: "TIMELINE.JPG",
+      in: dest, year: 2025, month: 6, filename: "IMG_SHARED.JPG",
       content: "x", modDate: date)
     let albumDir = try dest.urlForRelativeDirectory(
       "Collections/Albums/Trip/", createIfNeeded: true)
-    let albumFile = albumDir.appendingPathComponent("ALBUM.JPG")
+    let albumFile = albumDir.appendingPathComponent("IMG_SHARED.JPG")
     try Data("y".utf8).write(to: albumFile)
     try FileManager.default.setAttributes(
       [.modificationDate: date], ofItemAtPath: albumFile.path)
 
-    // PhotoKit: one timeline asset, one album asset (distinct identifiers).
-    let timelineAsset = TestAssetFactory.makeAsset(
-      id: "tl-asset", creationDate: date, mediaType: .image)
-    let albumAsset = TestAssetFactory.makeAsset(
-      id: "album-asset", creationDate: date, mediaType: .image)
-    photoLib.assetsByYearMonth["2025-6"] = [timelineAsset]
-    photoLib.resourcesByAssetId[timelineAsset.id] = [
-      TestAssetFactory.makeResource(originalFilename: "TIMELINE.JPG")
-    ]
+    // Same asset descriptor referenced from both scopes (real-world: an asset
+    // can be in Favorites + an album simultaneously).
+    let sharedAsset = TestAssetFactory.makeAsset(
+      id: "shared-asset", creationDate: date, mediaType: .image)
+    photoLib.assetsByYearMonth["2025-6"] = [sharedAsset]
     let trip = PhotoCollectionDescriptor(
       id: "album:trip-id", localIdentifier: "trip-id", title: "Trip",
       kind: .album, pathComponents: [], children: [])
     photoLib.collectionTree = [trip]
-    photoLib.assetsByAlbumLocalId["trip-id"] = [albumAsset]
-    photoLib.resourcesByAssetId[albumAsset.id] = [
-      TestAssetFactory.makeResource(originalFilename: "ALBUM.JPG")
+    photoLib.assetsByAlbumLocalId["trip-id"] = [sharedAsset]
+    photoLib.resourcesByAssetId[sharedAsset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "IMG_SHARED.JPG")
     ]
 
     manager.startImport()
@@ -446,23 +490,87 @@ struct ExportManagerImportTests {
     #expect(manager.importResult?.matchedCount == 2)
     #expect(manager.importResult?.collectionMatchedCount == 1)
 
-    // Timeline store has the timeline asset, NOT the album asset.
-    #expect(timelineStore.exportInfo(assetId: "tl-asset")?.variants[.original]?.status == .done)
-    #expect(timelineStore.exportInfo(assetId: "album-asset") == nil)
+    // Timeline store has the asset under the year/month record. A bug that
+    // routed this through the collection store would leave timeline empty.
+    let timelineRecord = timelineStore.exportInfo(assetId: "shared-asset")
+    #expect(timelineRecord?.variants[.original]?.status == .done)
+    #expect(timelineRecord?.year == 2025)
+    #expect(timelineRecord?.month == 6)
+    #expect(timelineRecord?.relPath == "2025/06/")
 
-    // Collection store has the album asset under the Trip placement, NOT the
-    // timeline asset.
+    // Collection store has the SAME asset id under the Trip placement —
+    // distinct (placementId, assetId) row, not a deduplication of the
+    // timeline record.
     let tripPlacement = manager.collectionExportRecordStore.placements.values.first {
       $0.kind == .album && $0.collectionLocalIdentifier == "trip-id"
     }
     #expect(tripPlacement != nil)
     let albumBody = manager.collectionExportRecordStore.recordBodies[
-      tripPlacement?.id ?? ""]?["album-asset"]
+      tripPlacement?.id ?? ""]?["shared-asset"]
     #expect(albumBody?.variants[ExportVariant.original.rawValue]?.status == .done)
-    // Timeline asset must NOT have leaked into any collection placement.
-    for byAsset in manager.collectionExportRecordStore.recordBodies.values {
-      #expect(byAsset["tl-asset"] == nil)
-    }
+
+    // Cross-store leak check: the timeline store must NOT carry a phantom
+    // record under the album's placementId (which doesn't apply on the
+    // timeline side); the collection store must NOT carry a phantom
+    // `timeline:2025-06` placement.
+    #expect(
+      manager.collectionExportRecordStore.placements.values.allSatisfy {
+        $0.kind != .timeline
+      })
+  }
+
+  /// Pins the load-bearing `isCurrent(importGen)` guard after the new
+  /// `matchCollectionFiles` await (`ImportCoordinator.swift`). A cancel
+  /// mid-fetch must reach the guard and abort — no collection-store
+  /// mutations should land. Without this test, a future change that drops
+  /// the guard would silently write records the user cancelled.
+  @Test func startImportCancelMidCollectionMatch_leavesCollectionStoreUntouched() async throws {
+    let (manager, photoLib, dest, _, storeRoot) = makeTestHarness()
+    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+
+    let date = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
+
+    // No timeline files — keep the timeline phase as a no-op so the test
+    // assertion ("collection store untouched") isn't muddled by timeline writes.
+    // One album file under Trip/.
+    let albumDir = try dest.urlForRelativeDirectory(
+      "Collections/Albums/Trip/", createIfNeeded: true)
+    let fileURL = albumDir.appendingPathComponent("IMG_0001.JPG")
+    try Data("photo bytes".utf8).write(to: fileURL)
+    try FileManager.default.setAttributes(
+      [.modificationDate: date], ofItemAtPath: fileURL.path)
+
+    let trip = PhotoCollectionDescriptor(
+      id: "album:trip-id", localIdentifier: "trip-id", title: "Trip",
+      kind: .album, pathComponents: [], children: [])
+    photoLib.collectionTree = [trip]
+    let asset = TestAssetFactory.makeAsset(
+      id: "trip-asset", creationDate: date, mediaType: .image)
+    photoLib.assetsByAlbumLocalId["trip-id"] = [asset]
+    photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+    ]
+
+    // Gate the album fetch so the import suspends inside matchCollectionFiles.
+    let fetchGate = AsyncCheckpoint()
+    photoLib.fetchAssetsCheckpointByAlbumId["trip-id"] = fetchGate
+
+    manager.startImport()
+    // Wait until the import has entered the collection-side fetch.
+    await fetchGate.waitForEnter(count: 1)
+    #expect(manager.isImporting)
+
+    // Cancel — this bumps generation. The post-await isCurrent() guard
+    // must abort the import without writing collection records.
+    manager.cancelImport()
+    await fetchGate.release(1)
+    await manager.waitForImportCompletion()
+
+    #expect(!manager.isImporting)
+    #expect(manager.importStage == nil)
+    // Collection store untouched: no placements, no record bodies.
+    #expect(manager.collectionExportRecordStore.placements.isEmpty)
+    #expect(manager.collectionExportRecordStore.recordBodies.isEmpty)
   }
 
   /// Collection store in `.failed` state — the symmetric gate in
@@ -497,7 +605,11 @@ struct ExportManagerImportTests {
     // Import was refused synchronously — no task to await.
     #expect(!manager.isImporting)
     #expect(manager.importStage == nil)
-    #expect(manager.importResult == nil)
+    // Issue #106 / plan §G: refusal surfaces as a failure ImportReport so
+    // the sheet shows actionable copy instead of stalling on the progress
+    // view.
+    #expect(manager.importResult?.failureReason != nil)
+    #expect(manager.importResult?.matchedCount == 0)
     // Neither store mutated.
     #expect(store.exportInfo(assetId: "x") == nil)
   }

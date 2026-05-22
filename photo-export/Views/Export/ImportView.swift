@@ -66,7 +66,43 @@ struct ImportView: View {
 
   // MARK: - Result View
 
+  @ViewBuilder
   private func resultView(_ report: ImportReport) -> some View {
+    if let failureReason = report.failureReason {
+      failureView(reason: failureReason)
+    } else {
+      successView(report)
+    }
+  }
+
+  /// Failure result sheet. Issue #106: shown when the coordinator refused
+  /// the import for a recoverable reason (e.g. corrupt collection-store
+  /// snapshot). HIG: actionable error copy + a single Close button so the
+  /// user is never stuck on the progress view.
+  private func failureView(reason: String) -> some View {
+    VStack(spacing: 16) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .font(.system(size: 36))
+        .foregroundColor(.orange)
+
+      Text("Import Couldn't Run")
+        .font(.headline)
+
+      Text(reason)
+        .font(.subheadline)
+        .foregroundColor(.secondary)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 360)
+
+      Button("Close") {
+        dismiss()
+      }
+      .buttonStyle(.borderedProminent)
+      .keyboardShortcut(.cancelAction)
+    }
+  }
+
+  private func successView(_ report: ImportReport) -> some View {
     VStack(spacing: 16) {
       Image(systemName: report.matchedCount > 0 ? "checkmark.circle.fill" : "info.circle.fill")
         .font(.system(size: 36))

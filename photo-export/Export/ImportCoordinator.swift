@@ -104,14 +104,30 @@ final class ImportCoordinator: ObservableObject {
     // store means we cannot persist any collection-side records this session;
     // refusing the whole import is more honest than completing with "0 album
     // exports recognized" — the user has no signal that something album-shaped
-    // was lost otherwise. `.unconfigured` is not reachable through the normal
-    // flow (destination select configures both stores together) but the strict
-    // `== .ready` check guards a future code path that might invoke import from
-    // another surface.
+    // was lost otherwise.
+    //
+    // Surface the refusal via a failure `ImportReport` so the sheet shows the
+    // user actionable copy ("Couldn't read album records…") instead of
+    // spinning on the progress view. Plan §G.
+    //
+    // Lockstep assertion: timeline `.ready` + collection `.unconfigured` is a
+    // test-harness misconfiguration — production wires both stores through the
+    // destination-change observer in `photo_exportApp.swift` so they configure
+    // together. The assertion catches a future test that adds an import call
+    // without configuring the collection store; debug-only so it doesn't
+    // affect production. `.failed` is a legitimate runtime state and is
+    // exercised by `startImportRefusedWhenCollectionStoreFailed`.
     guard host.collectionExportRecordStore.state == .ready else {
+      if host.collectionExportRecordStore.state == .unconfigured {
+        assertionFailure(
+          "Test-harness drift: timeline store is .ready but collection store is .unconfigured. Tests must call collectionExportRecordStore.configure(for:) before driving an import. Production wires this via the destination observer."
+        )
+      }
       logger.error(
         "Cannot import: collection record store state=\(String(describing: host.collectionExportRecordStore.state), privacy: .public) (need .ready)"
       )
+      host.setImportResult(
+        .failure(reason: "Couldn't read album records. Try again in a moment."))
       return
     }
 
@@ -182,7 +198,7 @@ final class ImportCoordinator: ObservableObject {
         let placementMatcher = BackupCollectionPlacementMatcher()
         var collectionResolutions: [BackupScanner.CollectionPlacementResolution] = []
         var orphanFiles: [BackupScanner.ScannedFile] = []
-        var orphanFolderCount = 0
+        var orphanBreakdown: [ImportReport.OrphanReasonKey: Int] = [:]
         for group in collectionGroups {
           let outcome = placementMatcher.match(
             group: group,
@@ -198,9 +214,11 @@ final class ImportCoordinator: ObservableObject {
               "Skipping orphan collection folder at \(group.folderURL.path, privacy: .public): \(String(describing: reason), privacy: .public)"
             )
             orphanFiles.append(contentsOf: group.files)
-            orphanFolderCount += 1
+            let key = Self.orphanReasonKey(for: reason)
+            orphanBreakdown[key, default: 0] += 1
           }
         }
+        let orphanFolderCount = orphanBreakdown.values.reduce(0, +)
 
         self.importStage = .readingPhotosLibrary
         let matchResult = try await BackupScanner.matchFiles(
@@ -369,14 +387,25 @@ final class ImportCoordinator: ObservableObject {
             prunedVariants: totalPrunedVariants,
             prunedRecords: totalPrunedRecords,
             collectionMatchedCount: collectionMatchResult.matched.count,
-            orphanCollectionFolders: orphanFolderCount
+            orphanCollectionFolders: orphanFolderCount,
+            orphanCollectionFolderBreakdown: orphanBreakdown
           ))
 
         self.importStage = .done
         self.isImporting = false
 
+        // Per-reason orphan breakdown in the import-complete log. The
+        // diagnostic report (Help → Save Diagnostic Report) reads
+        // `importResult.orphanCollectionFolderBreakdown` directly; the log
+        // line is the at-the-moment trail. Issue #106.
+        let orphanSummary =
+          orphanBreakdown
+          .sorted(by: { $0.key.rawValue < $1.key.rawValue })
+          .map { "\($0.key.rawValue)=\($0.value)" }
+          .joined(separator: ",")
+        let orphanDetail = orphanSummary.isEmpty ? "none" : orphanSummary
         self.logger.info(
-          "Import complete: \(totalMatched) matched (timeline=\(matchResult.matched.count), collection=\(collectionMatchResult.matched.count)), \(totalAmbiguous) ambiguous, \(totalUnmatched) unmatched (orphan-folder=\(orphanFiles.count)) out of \(totalScanned) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
+          "Import complete: \(totalMatched) matched (timeline=\(matchResult.matched.count), collection=\(collectionMatchResult.matched.count)), \(totalAmbiguous) ambiguous, \(totalUnmatched) unmatched (orphan-files=\(orphanFiles.count), orphan-folders[\(orphanDetail, privacy: .public)]) out of \(totalScanned) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
         )
       } catch is CancellationError {
         self.logger.info("Import task cancelled")
@@ -388,6 +417,20 @@ final class ImportCoordinator: ObservableObject {
         self.isImporting = false
         self.importStage = nil
       }
+    }
+  }
+
+  /// Maps the matcher's `OrphanReason` (with associated values) to the
+  /// flat `ImportReport.OrphanReasonKey` discriminator that the report and
+  /// diagnostic logs surface. Issue #106.
+  private static func orphanReasonKey(
+    for reason: BackupCollectionPlacementMatcher.OrphanReason
+  ) -> ImportReport.OrphanReasonKey {
+    switch reason {
+    case .noPhotoKitCollection: return .noPhotoKitCollection
+    case .sharedAlbumNestedUnderFolder: return .sharedAlbumNestedUnderFolder
+    case .resolverDisagreesWithOnDiskLeaf: return .resolverDisagreesWithOnDiskLeaf
+    case .ambiguousPhotoKitMatch: return .ambiguousPhotoKitMatch
     }
   }
 
