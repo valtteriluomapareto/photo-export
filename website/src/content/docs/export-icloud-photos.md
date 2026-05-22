@@ -37,10 +37,11 @@ Browse your library two ways via the **Timeline / Collections** segmented contro
 - **Timeline** — your library by year and month. Click a month to preview its thumbnails and full-size photos.
 - **Collections** — your **Favorites**, every album and folder you've created in Photos, and any **iCloud shared albums** you participate in. Click an album to preview its contents. Shared albums sit in their own sidebar section because they export at reduced quality — see [Shared albums (reduced fidelity)](/photo-export/features/#shared-albums-reduced-fidelity). (Smart albums other than Favorites aren't included.)
 
-Once you've picked a scope, decide what to write. Open **Settings → Advanced** (Cmd+, or the toolbar's Settings cog) for two toggles:
+Once you've picked a scope, decide what to write. Open **Settings → Advanced** (Cmd+, or the toolbar's Settings cog) for three toggles:
 
 - **Include originals for edited photos** — off (default) exports one file per photo, in the version Photos shows. Edited photos write the edit; unedited photos write the original. On adds a `_orig` companion (e.g. `IMG_0001_orig.HEIC`) for any photo with edits in Photos so you keep a copy of the original bytes.
 - **Convert HEIC to JPEG** — off (default) preserves HEIC and HEIF captures in their original format. On re-encodes HEIC captures as high-quality JPEG on export — useful if your destination (a NAS, a Windows PC, an older photo viewer) doesn't understand HEIC. Non-HEIC photos are unaffected. Applies to new exports — re-run an Export action to convert HEICs already on disk.
+- **Separate videos into a subfolder** — off (default) keeps photos and videos in the same month or album folder. On routes standalone videos into a `videos/` subfolder (e.g. `2026/03/videos/IMG_0002.MOV`) so a backup doesn't mix `.JPG` and `.MOV` files together. The paired video of a Live Photo stays next to its still. Applies to new exports — videos already on disk stay where they are; turning this on later produces a mixed layout until you re-export the affected months.
 
 Then export:
 

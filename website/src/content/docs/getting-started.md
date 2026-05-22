@@ -50,7 +50,7 @@ Once the destination is set, you'll see the main window with a **Timeline / Coll
 
 A few extras that work in both views:
 
-- The **Include originals** toggle in the toolbar chooses what gets written. Off (default) exports one file per asset, in the version Photos shows. On adds a `_orig` companion for any photo or video edited in Photos so you keep a copy of the original bytes.
+- **Settings → Advanced** (Cmd+,) controls what lands on disk. **Include originals** adds a `_orig` companion for any photo or video edited in Photos so you keep a copy of the original bytes. **Convert HEIC to JPEG** re-encodes HEIC captures as JPEG on export, useful for destinations that don't understand HEIC. **Separate videos into a subfolder** routes standalone videos into a `videos/` subfolder so a backup doesn't mix photos and `.MOV` files. All three are off by default. The onboarding flow exposes the first two inline on first launch.
 - Edited videos render through Photos and may take longer than copying — especially for 4K or iCloud-only originals. The toolbar may briefly show `(downloading…)` while Photos prepares the source, then `(rendering…)` while the edit is applied.
 - **File → Import Existing Backup...** (Cmd+Shift+I) rebuilds local state to match the destination on disk. It adopts any files that are already there as exported, and prunes records for files that have since been deleted — useful both on a fresh install and when you've manually cleared part of a backup folder.
 
