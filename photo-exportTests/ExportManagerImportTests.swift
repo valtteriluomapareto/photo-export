@@ -218,6 +218,60 @@ struct ExportManagerImportTests {
     #expect(record?.month == 6)
   }
 
+  /// Issue #38 round-trip: a backup written under the `.subfolder` layout (videos in
+  /// `YYYY/MM/videos/`) must preserve the per-variant `subfolder` field on the
+  /// rebuilt `ExportVariantRecord`. The full integration is tested here — scanner
+  /// descent (covered in isolation by `BackupScannerVariantTests`) is one piece,
+  /// but the load-bearing assignment lives in `ImportCoordinator.startImport`
+  /// where the matched file's `subfolder` is copied onto the new variant record.
+  /// A copy-paste bug substituting `file.filename` for `file.subfolder` would
+  /// pass every other import test (which only plant files at the bare month
+  /// path) and silently mis-locate every imported video on the next reuse-source
+  /// or reconcile lookup.
+  @Test func startImportPreservesSubfolderForVideoFilesInVideosSubdirectory() async throws {
+    let (manager, photoLib, dest, store, storeRoot) = makeTestHarness()
+    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+
+    var components = DateComponents()
+    components.year = 2025
+    components.month = 3
+    components.day = 14
+    components.hour = 10
+    let date = Calendar.current.date(from: components)!
+
+    // Plant the video inside `2025/03/videos/` — the path the scanner emits
+    // `subfolder = "videos"` for.
+    let videosDir = try dest.urlForRelativeDirectory(
+      "2025/03/videos/", createIfNeeded: true)
+    let fileURL = videosDir.appendingPathComponent("IMG_VIDEO.MOV")
+    try Data("video bytes".utf8).write(to: fileURL)
+    try FileManager.default.setAttributes(
+      [.modificationDate: date], ofItemAtPath: fileURL.path)
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "video-subfolder", creationDate: date, mediaType: .video)
+    photoLib.assetsByYearMonth["2025-3"] = [asset]
+    photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_VIDEO.MOV")
+    ]
+
+    manager.startImport()
+    await manager.waitForImportCompletion()
+
+    #expect(manager.importResult?.matchedCount == 1)
+    #expect(manager.importResult?.unmatchedCount == 0)
+
+    // Round-trip: the rebuilt record carries the subfolder the scanner observed.
+    // Without this, reuse-source on the next export attempt would look at
+    // `2025/03/IMG_VIDEO.MOV` (bare path) and find nothing — silently re-exporting
+    // a file that is already on disk.
+    let record = store.exportInfo(assetId: "video-subfolder")
+    #expect(record?.variants[.original]?.status == .done)
+    #expect(record?.variants[.original]?.subfolder == "videos",
+      "ImportCoordinator must copy ScannedFile.subfolder onto the rebuilt variant record")
+    #expect(record?.variants[.original]?.filename == "IMG_VIDEO.MOV")
+  }
+
   /// A backup with a file that has no matching asset in the library produces
   /// `unmatchedCount: 1` and no `bulkImport` writes.
   @Test func startImportUnmatchedFilesReportedNotPersisted() async throws {

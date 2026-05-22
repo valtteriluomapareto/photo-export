@@ -675,4 +675,63 @@ struct ExportManagerRunExportTests {
     // `.original`'s filename also stays put.
     #expect(record?.variants[.original]?.filename == "IMG_ML.MOV")
   }
+
+  // MARK: - Per-year manual export (Export Year button)
+
+  /// End-to-end coverage for `startExportYear(year:)`. `ExportJobPlannerTests` pins the
+  /// pure month-derivation logic in `planTimelineYear`, but the orchestration that wires
+  /// the Timeline sidebar's "Export Year" button through `enqueueYear` → planner →
+  /// queue → on-disk YYYY/MM placement is otherwise untested. A regression that silently
+  /// returned early from `startExportYear`, swallowed the `Task` body, or mis-routed
+  /// jobs to the wrong month placement would pass every other timeline test.
+  ///
+  /// Three assets in three different months of the same year so the planner exercises
+  /// the per-asset month derivation and the queue fans them out to three distinct
+  /// `2025/MM/` directories.
+  @Test func startExportYearWritesEachMonthInYYYYMMStructure() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+
+    let march = TestAssetFactory.makeAsset(
+      id: "asset-march", creationDate: makeDate(2025, 3, 12))
+    let june = TestAssetFactory.makeAsset(
+      id: "asset-june", creationDate: makeDate(2025, 6, 1))
+    let september = TestAssetFactory.makeAsset(
+      id: "asset-sept", creationDate: makeDate(2025, 9, 30))
+
+    // `fetchAssets(year:month:nil)` in the fake concatenates every month bucket for
+    // the year, so seeding one asset per month bucket gives `enqueueYear` the full
+    // year set in one call.
+    harness.photoLib.assetsByYearMonth["2025-3"] = [march]
+    harness.photoLib.assetsByYearMonth["2025-6"] = [june]
+    harness.photoLib.assetsByYearMonth["2025-9"] = [september]
+    harness.photoLib.resourcesByAssetId["asset-march"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "MARCH.HEIC")
+    ]
+    harness.photoLib.resourcesByAssetId["asset-june"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "JUNE.HEIC")
+    ]
+    harness.photoLib.resourcesByAssetId["asset-sept"] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "SEPT.HEIC")
+    ]
+
+    harness.manager.startExportYear(year: 2025)
+    await waitUntil(harness.manager.totalJobsCompleted >= 3)
+
+    let root = harness.dest.rootURL
+    let fm = FileManager.default
+    #expect(fm.fileExists(
+      atPath: root.appendingPathComponent("2025/03/MARCH.HEIC").path))
+    #expect(fm.fileExists(
+      atPath: root.appendingPathComponent("2025/06/JUNE.HEIC").path))
+    #expect(fm.fileExists(
+      atPath: root.appendingPathComponent("2025/09/SEPT.HEIC").path))
+
+    // Per-record year/month must match the asset's creationDate, not the year arg —
+    // a planner bug that planted every job under `2025/01/` would still satisfy the
+    // queue-count expectation above but would fail these.
+    #expect(harness.store.exportInfo(assetId: "asset-march")?.month == 3)
+    #expect(harness.store.exportInfo(assetId: "asset-june")?.month == 6)
+    #expect(harness.store.exportInfo(assetId: "asset-sept")?.month == 9)
+  }
 }
