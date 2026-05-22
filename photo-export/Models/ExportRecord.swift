@@ -10,11 +10,23 @@ enum ExportStatus: String, Codable, Equatable {
 /// Per-variant export state. One of these lives in an `ExportRecord`'s
 /// `variants` dictionary for each variant the pipeline has touched for the
 /// asset.
+///
+/// `subfolder` (issue #38, added 2026-05-21) records the path component
+/// inside the placement folder where the file actually landed. `nil` means
+/// "bare placement path" — what every record written before this field
+/// existed decodes to. Today's writer sets it to `"videos"` for variants
+/// of a standalone-video asset under `videoLayout = .subfolder`, and `nil`
+/// for everything else. Reuse-source and reconcile consult this field
+/// rather than recomputing from the current setting, so a mid-life toggle
+/// flip cannot mis-probe a file's true location.
 struct ExportVariantRecord: Codable, Equatable {
   var filename: String?
   var status: ExportStatus
   var exportDate: Date?
   var lastError: String?
+  /// Path component inside the placement folder (e.g. `"videos"`). `nil`
+  /// resolves to the bare placement path.
+  var subfolder: String?
 }
 
 /// Named, well-known recoverable failure cases. Persisted as the `lastError`

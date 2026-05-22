@@ -124,6 +124,36 @@ struct AutoSyncManagerTests {
     #expect(scopes == [.timelineFullLibrary, .favoritesFull, .allAlbumsFull])
   }
 
+  /// Companion to `multiScopeAutoExportFansOutToSequentialPerScopeRuns` covering
+  /// the `sharedAlbums` scope. The original test deliberately exercised only
+  /// three scopes; without this one, a regression in the `.sharedAlbums →
+  /// .allSharedAlbumsFull` mapping in `AutoExportLibraryScope.fullRunScope` or
+  /// in `AutoSyncManager.expand(scope:)` would silently drop shared-album
+  /// auto-sync runs from the per-scope dispatch sequence.
+  ///
+  /// Asserts the full fan-out in canonical order (timeline → favorites →
+  /// albums → sharedAlbums) so a reordering or omission anywhere in the chain
+  /// is caught.
+  @Test func multiScopeAutoExportFanOutIncludesSharedAlbumsInCanonicalOrder() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(
+      AutoExportScopeSelection(
+        timeline: true, favorites: true, albums: true, sharedAlbums: true))
+    manager.attach(to: builder.environment)
+
+    builder.clock.advance(by: 10)
+    // Four scopes → wider yield budget than the three-scope test.
+    for _ in 0..<8 { await Task.yield() }
+
+    let scopes = builder.exportRunner.receivedContexts.map(\.scope)
+    #expect(scopes == [
+      .timelineFullLibrary, .favoritesFull, .allAlbumsFull, .allSharedAlbumsFull,
+    ])
+  }
+
   // MARK: - Photos changes → dirty state persistence
 
   @Test func photosChangedPersistsDirtyStateThroughTheStore() {

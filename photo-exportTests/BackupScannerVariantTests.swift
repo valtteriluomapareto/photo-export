@@ -9,15 +9,24 @@ import Testing
 /// naming convention.
 @MainActor
 struct BackupScannerVariantTests {
+  /// `subdir` (issue #38): when non-nil, the file is materialised inside
+  /// `YYYY/MM/<subdir>/` and the synthesized `ScannedFile.subfolder` carries
+  /// the same value. The scanner emits `subfolder = "videos"` for files it
+  /// finds in `YYYY/MM/videos/`; tests pass `subdir: "videos"` to construct
+  /// fixtures that mimic what the scanner would produce.
   private func makeScannedFile(
-    _ filename: String, year: Int = 2025, month: Int = 6, modDate: Date? = nil
+    _ filename: String, year: Int = 2025, month: Int = 6, modDate: Date? = nil,
+    subdir: String? = nil
   ) throws -> (BackupScanner.ScannedFile, URL) {
     let rootDir = FileManager.default.temporaryDirectory
       .appendingPathComponent("BSV-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
     let monthStr = String(format: "%02d", month)
-    let dir = rootDir.appendingPathComponent("\(year)", isDirectory: true)
+    var dir = rootDir.appendingPathComponent("\(year)", isDirectory: true)
       .appendingPathComponent(monthStr, isDirectory: true)
+    if let subdir, !subdir.isEmpty {
+      dir = dir.appendingPathComponent(subdir, isDirectory: true)
+    }
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let url = dir.appendingPathComponent(filename)
     FileManager.default.createFile(atPath: url.path, contents: Data("test".utf8))
@@ -34,7 +43,8 @@ struct BackupScannerVariantTests {
       hasCollisionSuffix: hadSuffix,
       fileExtension: ext.lowercased(),
       modificationDate: modDate,
-      fileSize: 4
+      fileSize: 4,
+      subfolder: subdir
     )
     return (sf, rootDir)
   }
@@ -523,5 +533,128 @@ struct BackupScannerVariantTests {
     #expect(result.matched.count == 1)
     #expect(result.matched.first?.variant == .original)
     #expect(result.matched.first?.asset.id == "video-asset")
+  }
+
+  // MARK: - Videos-subfolder discovery (issue #38)
+
+  /// `scanBackupFolder` descends into `YYYY/MM/videos/` (if present) and emits
+  /// `subfolder = "videos"` on the synthesised `ScannedFile`. Without this descent,
+  /// a backup written under the subfolder layout would be silently invisible to
+  /// Import Existing Backup — videos in the subfolder would not match and would
+  /// be re-exported as duplicates on the next run.
+  @Test func scanBackupFolderDescendsIntoVideosSubfolder() throws {
+    let rootDir = FileManager.default.temporaryDirectory
+      .appendingPathComponent("BSV-scan-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: rootDir) }
+    let monthDir = rootDir.appendingPathComponent("2026/03", isDirectory: true)
+    let videosDir = monthDir.appendingPathComponent("videos", isDirectory: true)
+    try FileManager.default.createDirectory(at: videosDir, withIntermediateDirectories: true)
+    FileManager.default.createFile(
+      atPath: monthDir.appendingPathComponent("IMG_PHOTO.JPG").path,
+      contents: Data("photo".utf8))
+    FileManager.default.createFile(
+      atPath: videosDir.appendingPathComponent("IMG_VIDEO.MOV").path,
+      contents: Data("video".utf8))
+
+    let files = BackupScanner.scanBackupFolder(at: rootDir)
+
+    #expect(files.count == 2)
+    let photo = files.first(where: { $0.filename == "IMG_PHOTO.JPG" })
+    let video = files.first(where: { $0.filename == "IMG_VIDEO.MOV" })
+    #expect(photo?.subfolder == nil)
+    #expect(video?.subfolder == "videos")
+    // Both attribute to the same (year, month).
+    #expect(photo?.year == 2026)
+    #expect(photo?.month == 3)
+    #expect(video?.year == 2026)
+    #expect(video?.month == 3)
+  }
+
+  /// Mid-life mixed-layout standalone video (codex P2): the user exported
+  /// `.original` under `.flat` (lands at `2026/03/IMG.MOV`), then flipped
+  /// `videoLayout` to `.subfolder` after Photos exposed an edit, and the
+  /// subsequent run wrote `.edited` to `2026/03/videos/IMG.MOV`. Same stem,
+  /// same `.MOV` extension, no `_orig` sibling.
+  ///
+  /// Without the subfolder-split disambiguator, both files match step 2's
+  /// exact-filename rule and both classify as `.original` against the same
+  /// adjusted asset — the `.edited` data on disk is lost on import and the
+  /// next export run would write a duplicate motion file. The classifier
+  /// uses the same-stem-at-both-subfolders signal as the tiebreaker: the
+  /// file in `videos/` is the `.edited` variant; the bare-path file is
+  /// `.original`. Both come out matched, each carrying its own `subfolder`.
+  @Test func classifierDisambiguatesMidLifeMixedLayoutStandaloneVideo() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "video-mid-life", creationDate: modDate, mediaType: .video,
+      hasAdjustments: true)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "video-mid-life": [
+          TestAssetFactory.makeResource(type: .video, originalFilename: "IMG.MOV"),
+          TestAssetFactory.makeResource(
+            type: .fullSizeVideo, originalFilename: "IMG.MOV"),
+        ]
+      ]
+    )
+    let (originalAtBase, root1) = try makeScannedFile("IMG.MOV", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root1) }
+    let (editedInVideos, root2) = try makeScannedFile(
+      "IMG.MOV", modDate: modDate, subdir: "videos")
+    defer { try? FileManager.default.removeItem(at: root2) }
+
+    let result = try await BackupScanner.matchFiles(
+      [originalAtBase, editedInVideos], photoLibraryService: svc, progress: { _ in })
+
+    #expect(result.matched.count == 2)
+    #expect(result.ambiguous.isEmpty)
+    #expect(result.unmatched.isEmpty)
+    let bareMatch = result.matched.first(where: { $0.file.subfolder == nil })
+    let videosMatch = result.matched.first(where: { $0.file.subfolder == "videos" })
+    #expect(bareMatch?.variant == .original)
+    #expect(videosMatch?.variant == .edited)
+    // Both attribute to the same asset.
+    #expect(bareMatch?.asset.id == "video-mid-life")
+    #expect(videosMatch?.asset.id == "video-mid-life")
+  }
+
+  /// Cross-directory Live Photo pairing: the still lives at the base path and the
+  /// paired motion lives in `videos/`. The paired-video classifier matches by stem
+  /// within `(year, month)` — not by directory — so it still pairs them. Pins that
+  /// behaviour so a future "same-directory" tightening doesn't silently re-export
+  /// the motion as an unmatched duplicate.
+  @Test func classifierPairsLivePhotoAcrossSubfolderSplit() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "live-split", creationDate: modDate, hasAdjustments: false,
+      isLivePhoto: true)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "live-split": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_LIVE.HEIC"),
+          TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_LIVE.MOV"),
+        ]
+      ]
+    )
+    let (still, root1) = try makeScannedFile("IMG_LIVE.HEIC", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root1) }
+    let (motion, root2) = try makeScannedFile(
+      "IMG_LIVE.MOV", modDate: modDate, subdir: "videos")
+    defer { try? FileManager.default.removeItem(at: root2) }
+
+    let result = try await BackupScanner.matchFiles(
+      [still, motion], photoLibraryService: svc, progress: { _ in })
+
+    #expect(result.matched.count == 2)
+    let stillMatch = result.matched.first(where: { $0.file.filename == "IMG_LIVE.HEIC" })
+    let motionMatch = result.matched.first(where: { $0.file.filename == "IMG_LIVE.MOV" })
+    #expect(stillMatch?.variant == .original)
+    #expect(motionMatch?.variant == .originalPairedVideo)
+    // The motion's `subfolder` survives matching so the rebuilt record points at
+    // the file's actual on-disk location.
+    #expect(motionMatch?.file.subfolder == "videos")
+    #expect(stillMatch?.file.subfolder == nil)
   }
 }

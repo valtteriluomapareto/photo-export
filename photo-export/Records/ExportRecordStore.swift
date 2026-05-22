@@ -247,13 +247,18 @@ final class ExportRecordStore: ObservableObject {
   // MARK: - Public API (variant mutations)
 
   /// Marks a variant `.inProgress`. Creates the record if missing and upserts the variant.
+  /// `subfolder` (issue #38) is the path component inside the placement folder where
+  /// the file will land (e.g. `"videos"`). `nil` means the bare placement path. The
+  /// value is persisted on the per-variant record so reuse-source and reconcile can
+  /// recover each file's true on-disk location regardless of the current setting.
   func markVariantInProgress(
     assetId: String,
     variant: ExportVariant,
     year: Int,
     month: Int,
     relPath: String,
-    filename: String?
+    filename: String?,
+    subfolder: String? = nil
   ) {
     var record =
       recordsById[assetId]
@@ -269,11 +274,13 @@ final class ExportRecordStore: ObservableObject {
     variantRecord.filename = filename
     variantRecord.status = .inProgress
     variantRecord.lastError = nil
+    variantRecord.subfolder = subfolder
     record.variants[variant] = variantRecord
     append(.upsert(record))
   }
 
   /// Marks a variant `.done` with a final filename. Creates the record if missing.
+  /// See `markVariantInProgress` for `subfolder` semantics.
   func markVariantExported(
     assetId: String,
     variant: ExportVariant,
@@ -281,7 +288,8 @@ final class ExportRecordStore: ObservableObject {
     month: Int,
     relPath: String,
     filename: String,
-    exportedAt: Date
+    exportedAt: Date,
+    subfolder: String? = nil
   ) {
     var record =
       recordsById[assetId]
@@ -291,7 +299,8 @@ final class ExportRecordStore: ObservableObject {
     record.month = month
     record.relPath = relPath
     let variantRecord = ExportVariantRecord(
-      filename: filename, status: .done, exportDate: exportedAt, lastError: nil)
+      filename: filename, status: .done, exportDate: exportedAt, lastError: nil,
+      subfolder: subfolder)
     record.variants[variant] = variantRecord
     append(.upsert(record))
   }
@@ -625,7 +634,16 @@ final class ExportRecordStore: ObservableObject {
           probes.append(Probe(assetId: assetId, variant: variant, path: "", isCorrupt: true))
           continue
         }
-        let path = root.appendingPathComponent(record.relPath)
+        // Issue #38: probe each variant's *own* on-disk location, computed from the
+        // placement-derived `record.relPath` (which the timeline store sets to the
+        // current target layout's effective path on every write) plus the variant's
+        // persisted `subfolder`. Under mid-life toggle, two variants of one asset
+        // can live in different subfolders — using a shared `record.relPath` here
+        // would mis-probe whichever variant didn't match the last write.
+        let placement = ExportPlacement.timeline(year: record.year, month: record.month)
+        let dirRelPath = ExportPlacementPathPolicy.relativePath(
+          placement: placement, subfolder: vr.subfolder)
+        let path = root.appendingPathComponent(dirRelPath)
           .appendingPathComponent(filename).path
         probes.append(Probe(assetId: assetId, variant: variant, path: path, isCorrupt: false))
       }

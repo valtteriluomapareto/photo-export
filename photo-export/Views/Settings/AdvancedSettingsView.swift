@@ -29,6 +29,10 @@ struct AdvancedSettingsView: View {
         convertHEICToJPEGRow
         livePhotosPairedRow
       }
+
+      Section("Organization") {
+        videoLayoutRow
+      }
     }
     .formStyle(.grouped)
     .frame(minWidth: 460, minHeight: 460)
@@ -73,6 +77,24 @@ struct AdvancedSettingsView: View {
     .disabled(exportManager.hasActiveExportWork)
   }
 
+  private var videoLayoutRow: some View {
+    Toggle(
+      isOn: Binding(
+        get: { exportManager.videoLayout == .subfolder },
+        set: { exportManager.videoLayout = $0 ? .subfolder : .flat }
+      )
+    ) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Separate videos into a subfolder")
+        Text(videoLayoutDescription)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .disabled(exportManager.hasActiveExportWork)
+  }
+
   private var includeOriginalsDescription: String {
     "Off: each photo is exported once, in the version Photos shows you. "
       + "Edited photos write the edit, unedited photos write the original "
@@ -102,6 +124,16 @@ struct AdvancedSettingsView: View {
       + "Shared-album Live Photos stay still-only — Apple doesn't expose "
       + "their paired video resource."
   }
+
+  private var videoLayoutDescription: String {
+    "Off: photos and videos share each month or album folder.\n\n"
+      + "On: videos go into a \"videos\" subfolder next to their photos. "
+      + "The paired video of a Live Photo is an exception — it stays next "
+      + "to its still so the pair isn't split across folders.\n\n"
+      + "Applies to new exports only. Videos already on disk stay where "
+      + "they are; turning this on later produces a mixed layout until you "
+      + "re-export."
+  }
 }
 
 /// Inline banner shown above the Format section while an export is
@@ -120,7 +152,7 @@ private struct ExportInProgressBanner: View {
         Text("Export In Progress")
           .font(.headline)
         Text(
-          "Format options are locked while an export is running. Cancel or "
+          "Export settings are locked while an export is running. Cancel or "
             + "wait for the current run to finish to change these."
         )
         .font(.callout)

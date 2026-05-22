@@ -118,7 +118,8 @@ final class VariantExporter {
     groupStem: String?,
     pairOriginalWithSuffix: Bool,
     generation gen: Int,
-    inFlight: inout (assetId: String, variant: ExportVariant)?
+    inFlight: inout (assetId: String, variant: ExportVariant)?,
+    subfolder: String? = nil
   ) async throws -> String? {
     // Renderer activity must always be cleared on the way out of this function —
     // including on throw — so a render failure or cancel does not leave the toolbar
@@ -186,7 +187,7 @@ final class VariantExporter {
     inFlight = (assetId: descriptor.id, variant: variant)
     recordStoreRouter.markVariantInProgress(
       assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent)
+      relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder)
 
     // Reuse-source copy path: if `(asset, variant)` is already exported under another
     // placement, copy the existing file rather than re-fetching from PhotoKit. On APFS
@@ -201,15 +202,23 @@ final class VariantExporter {
       assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
       let destinationRoot = exportDestination.selectedFolderURL
     {
+      // Issue #38: the source file lives at the placement path plus the *source
+      // variant's* persisted `subfolder` — NOT recomputed from the current
+      // `videoLayout` setting. A mid-life-toggle source could have been written
+      // under `.flat` (subfolder == nil) and now we're under `.subfolder`, or vice
+      // versa; reading the stored value pins the source to where the writer
+      // originally put it.
+      let sourceRelPath = ExportPlacementPathPolicy.relativePath(
+        placement: reuse.placement, subfolder: reuse.subfolder)
       let sourceURL =
         destinationRoot
-        .appendingPathComponent(reuse.placement.relativePath, isDirectory: true)
+        .appendingPathComponent(sourceRelPath, isDirectory: true)
         .appendingPathComponent(reuse.filename)
       do {
         try fileSystem.copyItem(from: sourceURL, to: tempURL)
         didCopyFromReuseSource = true
         logger.debug(
-          "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(reuse.placement.relativePath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
+          "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(sourceRelPath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
         )
       } catch {
         if Self.isSourceSideCopyError(error) {
@@ -329,7 +338,8 @@ final class VariantExporter {
 
     recordStoreRouter.markVariantExported(
       assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date())
+      relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date(),
+      subfolder: subfolder)
     inFlight = nil
     logger.info(
       "Exported \(finalURL.lastPathComponent, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"

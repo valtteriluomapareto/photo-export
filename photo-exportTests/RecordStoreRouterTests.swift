@@ -345,4 +345,39 @@ struct RecordStoreRouterTests {
       assetId: "z", variant: .original, currentPlacement: shared)
     #expect(reuse?.filename == "TL.HEIC", "timeline must be preferred over collection")
   }
+
+  // MARK: - ReuseSource per-variant subfolder (issue #38)
+
+  /// `findReuseSource` reads `subfolder` from the *specific variant* it returns —
+  /// not "the asset's first variant." Under mid-life toggle an asset can carry
+  /// different `subfolder` values on its `.original` and `.edited` variants;
+  /// asking for one must yield that one's true on-disk location, or VariantExporter
+  /// would build the wrong source URL when copying. Pins the per-variant read
+  /// against a future refactor that mistakenly reads `variants.first?.subfolder`.
+  @Test func findReuseSource_returnsPerVariantSubfolder() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    // Same asset, both variants written into the timeline store with different
+    // `subfolder` values — the kind of split a mid-life toggle of `videoLayout`
+    // produces on a standalone video.
+    h.timeline.markVariantExported(
+      assetId: "split-asset", variant: .original,
+      year: 2025, month: 7, relPath: "2025/07/",
+      filename: "X.MOV", exportedAt: Date(), subfolder: nil)
+    h.timeline.markVariantExported(
+      assetId: "split-asset", variant: .edited,
+      year: 2025, month: 7, relPath: "2025/07/videos/",
+      filename: "X.MOV", exportedAt: Date(), subfolder: "videos")
+
+    let alb = album("ALB")
+    h.collection.upsertPlacement(alb)
+
+    let originalReuse = h.router.findReuseSource(
+      assetId: "split-asset", variant: .original, currentPlacement: alb)
+    #expect(originalReuse?.subfolder == nil)
+
+    let editedReuse = h.router.findReuseSource(
+      assetId: "split-asset", variant: .edited, currentPlacement: alb)
+    #expect(editedReuse?.subfolder == "videos")
+  }
 }

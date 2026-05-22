@@ -23,6 +23,29 @@ enum ReleaseNotesCatalog {
       // different `CFBundleShortVersionString`. The catalog falls back to a
       // generic "Photo Export has been updated" message if no entry matches
       // the user's jump, so a stale version here degrades gracefully.
+      version: "1.7.0",
+      summary:
+        "Optional videos-in-a-subfolder layout so a backup doesn't mix `.JPG` and `.MOV` files in the same folder. Your existing backup folder and exported files are untouched.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Separate videos into a subfolder (opt-in)",
+          body:
+            "A new toggle in **Settings → Advanced → Organization → Separate videos "
+            + "into a subfolder** routes standalone videos into a `videos/` subfolder "
+            + "inside their placement (e.g. `2026/03/IMG_0001.JPG` next to "
+            + "`2026/03/videos/IMG_0002.MOV`), so a backup browser doesn't have to scroll "
+            + "past every video to find the photos. The paired video of a Live Photo is an "
+            + "exception — it stays next to its still so the still + motion pair isn't "
+            + "split across folders and remains recognised as a Live Photo by viewers and "
+            + "re-importers. Off by default. Applies to new exports only — videos already "
+            + "on disk stay where they are; turning this on later produces a mixed layout "
+            + "until you re-export the affected months. "
+            + "Fixes [#38](https://github.com/valtteriluomapareto/photo-export/issues/38)."
+        ),
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.6.0",
       summary:
         "Live Photos can now export with their paired video file (opt-in). Your existing backup folder and exported files are untouched.",

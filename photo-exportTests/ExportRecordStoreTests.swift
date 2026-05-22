@@ -615,6 +615,46 @@ struct ExportRecordStoreTests {
         #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 0)
         #expect(store.monthSummary(year: 2025, month: 10, totalAssets: 10).exportedCount == 1)
     }
+
+    // MARK: - ExportVariantRecord.subfolder (issue #38)
+
+    /// Legacy snapshot JSON written before the `subfolder` field existed must
+    /// continue to decode, with `subfolder == nil`. Synthesized `Codable`
+    /// treats missing keys as nil for optionals — this test pins that
+    /// behaviour against a future custom-decoder regression.
+    @Test func variantRecordDecodesLegacySnapshotWithoutSubfolder() throws {
+        let legacyJSON = """
+            {
+              "filename": "IMG_0001.JPG",
+              "status": "done",
+              "exportDate": 759456000,
+              "lastError": null
+            }
+            """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(ExportVariantRecord.self, from: legacyJSON)
+        #expect(decoded.filename == "IMG_0001.JPG")
+        #expect(decoded.status == .done)
+        #expect(decoded.subfolder == nil)
+    }
+
+    /// Round-trip with `subfolder = "videos"` preserves the value across
+    /// encode + decode. Pins that the field flows through the same Codable
+    /// pipeline both `ExportRecord` (timeline) and `RecordBody` (collection)
+    /// use to wrap `ExportVariantRecord`.
+    @Test func variantRecordRoundTripPreservesSubfolder() throws {
+        let original = ExportVariantRecord(
+            filename: "IMG_0002.MOV",
+            status: .done,
+            exportDate: Date(timeIntervalSince1970: 759456000),
+            lastError: nil,
+            subfolder: "videos")
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(original)
+        let decoded = try JSONDecoder().decode(ExportVariantRecord.self, from: data)
+        #expect(decoded == original)
+        #expect(decoded.subfolder == "videos")
+    }
 }
 
 extension Data {
