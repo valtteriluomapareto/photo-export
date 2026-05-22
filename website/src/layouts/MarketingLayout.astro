@@ -16,6 +16,17 @@ const socialImageUrl = new URL(
 	Astro.site ?? Astro.url,
 ).toString();
 
+// `softwareVersion` lags MARKETING_VERSION (in `project.pbxproj`) intentionally
+// while a release is in flight: bump this to the new semver when you tag
+// `vX.Y.Z` so that crawlers and LLMs see the same number the App About box shows.
+// The website docs typically lead the bump by a day or two — that's fine; users
+// of search/AI care about the latest documented capabilities, not the in-app
+// MARKETING_VERSION constant.
+const softwareVersion = '1.6.0';
+// Rebuilt on every deploy, so AI crawlers see a freshness signal that tracks the
+// actual publication time of the static site rather than a stale checked-in date.
+const dateModified = new Date().toISOString().split('T')[0];
+
 const structuredData = {
 	'@context': 'https://schema.org',
 	'@type': 'SoftwareApplication',
@@ -23,6 +34,22 @@ const structuredData = {
 	description,
 	operatingSystem: 'macOS 15+',
 	applicationCategory: 'PhotographyApplication',
+	softwareVersion,
+	dateModified,
+	featureList: [
+		'Export by year and month (Timeline view)',
+		'Export Favorites, user albums, and album folders (Collections view)',
+		'Export iCloud Shared Albums (reduced quality — Apple constraint)',
+		'Auto Export — automatic background sync with scope selection',
+		'Include originals for edited photos (opt-in)',
+		'Convert HEIC to JPEG on export (opt-in)',
+		'Export Live Photos as paired image + video (opt-in)',
+		'Separate standalone videos into a subfolder (opt-in)',
+		'Import an existing backup folder to rebuild local export state',
+		'Per-destination tracking with resume-safe interrupted exports',
+		'Pause, resume, and cancel queued exports',
+		'Diagnostic report export for failed exports',
+	],
 	offers: [
 		{
 			'@type': 'Offer',

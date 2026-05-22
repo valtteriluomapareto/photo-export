@@ -1,0 +1,24 @@
+# Photo Export
+
+> Free, open-source macOS app to back up Apple Photos and iCloud Photos to a normal folder on a local or external drive. Uses Apple's PhotoKit framework — no account, no cloud service, no subscription. macOS 15+.
+
+Photo Export ships through two channels with identical functionality: free on GitHub Releases, paid on the Mac App Store (the App Store version helps fund development). Both are signed and notarized by Apple. The app reads the Photos library read-only and writes user-chosen files to a destination folder.
+
+Key user-visible capabilities: export by year/month (Timeline) or by Favorites, user albums, folders, and iCloud Shared Albums (Collections); Auto Export for automatic background sync; opt-in toggles in Settings → Advanced for **Include originals for edited photos**, **Convert HEIC to JPEG**, **Export Live Photos as paired image + video**, and **Separate videos into a subfolder**. Resume-safe, per-destination tracking, pause/resume/cancel queue controls, Import Existing Backup for adopting an existing folder.
+
+## Docs
+
+- [Getting started](https://valtteriluomapareto.github.io/photo-export/getting-started/): How to install Photo Export, grant Photos access, choose a destination, and run your first export.
+- [Features](https://valtteriluomapareto.github.io/photo-export/features/): The complete list of capabilities — Auto Export, library browsing, format options, shared albums, queue controls, and known boundaries.
+- [Auto Export](https://valtteriluomapareto.github.io/photo-export/auto-export/): How to set up automatic background backup with scope selection (Timeline / Favorites / Albums / Shared Albums), retry policy, and the three status surfaces (toolbar pill, menu bar, Settings).
+- [Export iCloud Photos to External Drive](https://valtteriluomapareto.github.io/photo-export/export-icloud-photos/): Step-by-step task-focused guide for the most common workflow.
+- [Architecture](https://valtteriluomapareto.github.io/photo-export/architecture/): Technical overview of the app's internal structure — managers, record stores, view models, and persistence.
+- [Roadmap and recently shipped](https://valtteriluomapareto.github.io/photo-export/roadmap/): What's planned and what just shipped.
+
+## Optional
+
+- [Source code on GitHub](https://github.com/valtteriluomapareto/photo-export)
+- [Issue tracker](https://github.com/valtteriluomapareto/photo-export/issues)
+- [Release notes](https://github.com/valtteriluomapareto/photo-export/releases)
+- [Mac App Store listing](https://apps.apple.com/app/photo-export-local-backup/id6761410742)
+- [MIT license](https://github.com/valtteriluomapareto/photo-export/blob/main/LICENSE)

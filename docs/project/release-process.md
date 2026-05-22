@@ -26,7 +26,9 @@ Keep older entries in the catalog — users skipping multiple releases see the c
 scripts/bump-version.sh 1.2.0
 ```
 
-This updates `MARKETING_VERSION` in `project.pbxproj` (all 6 build configs), commits, and creates a `v1.2.0` git tag.
+This updates `MARKETING_VERSION` in `project.pbxproj` (all 6 build configs), mirrors the version into `website/src/layouts/MarketingLayout.astro` (the `softwareVersion` field on the homepage's SoftwareApplication JSON-LD, used by LLMs and search engines for version-aware results), commits, and creates a `v1.2.0` git tag.
+
+For pre-release bumps (`1.3.0-beta.1`), the website's `softwareVersion` is written as the base `1.3.0` rather than the suffixed form — Schema.org's `softwareVersion` is user-facing copy that surfaces in LLM and search-result snippets, where a hyphen suffix reads strangely. The bundle still carries the full pre-release string.
 
 To set the version without committing or tagging:
 

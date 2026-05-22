@@ -95,17 +95,44 @@ sed -i '' "s/MARKETING_VERSION = $CURRENT_VERSION;/MARKETING_VERSION = $NEW_VERS
 UPDATED=$(grep -c "MARKETING_VERSION = $NEW_VERSION;" "$PROJECT_FILE")
 echo "Updated $UPDATED MARKETING_VERSION entries to $NEW_VERSION"
 
+# Mirror the version into the marketing site's structured data so the
+# SoftwareApplication JSON-LD on the homepage reports the same number as the
+# bundle. Stable and pre-release tags both write CATALOG_VERSION (`X.Y.Z`
+# without any beta suffix) — Schema.org's softwareVersion is user-facing
+# copy that surfaces in LLM/search results, where a hyphen suffix reads
+# strangely. Pre-release testers grabbing the direct-distribution DMG still
+# see the right number in About; only the public site stays on stable copy.
+WEBSITE_LAYOUT="website/src/layouts/MarketingLayout.astro"
+WEBSITE_UPDATED="false"
+if [[ -f "$WEBSITE_LAYOUT" ]]; then
+  CURRENT_WEBSITE_VERSION=$(grep -m1 "const softwareVersion" "$WEBSITE_LAYOUT" | sed "s/.*'\([^']*\)'.*/\1/")
+  if [[ "$CURRENT_WEBSITE_VERSION" != "$CATALOG_VERSION" ]]; then
+    sed -i '' "s/const softwareVersion = '[^']*';/const softwareVersion = '$CATALOG_VERSION';/" "$WEBSITE_LAYOUT"
+    echo "Updated softwareVersion in $WEBSITE_LAYOUT to $CATALOG_VERSION"
+    WEBSITE_UPDATED="true"
+  else
+    echo "Website softwareVersion already $CATALOG_VERSION — no change."
+  fi
+fi
+
 if [[ "$NO_TAG" == "--no-tag" ]]; then
   echo "Skipping tag (--no-tag)."
   echo ""
   echo "Next steps:"
-  echo "  git add $PROJECT_FILE"
+  if [[ "$WEBSITE_UPDATED" == "true" ]]; then
+    echo "  git add $PROJECT_FILE $WEBSITE_LAYOUT"
+  else
+    echo "  git add $PROJECT_FILE"
+  fi
   echo "  git commit -m \"Bump version to $NEW_VERSION\""
   exit 0
 fi
 
 # Commit and tag
 git add "$PROJECT_FILE"
+if [[ "$WEBSITE_UPDATED" == "true" ]]; then
+  git add "$WEBSITE_LAYOUT"
+fi
 git commit -m "Bump version to $NEW_VERSION"
 git tag "v$NEW_VERSION"
 

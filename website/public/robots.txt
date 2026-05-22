@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://valtteriluomapareto.github.io/photo-export/sitemap-index.xml
