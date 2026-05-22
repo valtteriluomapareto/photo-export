@@ -54,7 +54,7 @@ const faqData = {
 			name: 'Does it export videos too?',
 			acceptedAnswer: {
 				'@type': 'Answer',
-				text: 'Yes. The app exports photos and videos. Live Photos export as still-only by default; turn on Settings → Advanced → "Export Live Photos as paired image + video" to also write the paired video next to the still (e.g. IMG_0001.HEIC + IMG_0001.MOV) using whatever extension casing PhotoKit reports for that resource. Shared-album Live Photos remain still-only because Apple does not expose their paired video.',
+				text: 'Yes. The app exports photos and videos. Live Photos export as still-only by default; turn on Settings → Advanced → "Export Live Photos as paired image + video" to also write the paired video next to the still (e.g. IMG_0001.HEIC + IMG_0001.MOV) using whatever extension casing PhotoKit reports for that resource. Shared-album Live Photos remain still-only because Apple does not expose their paired video. Standalone videos can optionally land in a videos/ subfolder via Settings → Advanced → Separate videos into a subfolder, so a backup doesn\'t mix .JPG and .MOV files in the same folder.',
 			},
 		},
 		{
@@ -62,7 +62,7 @@ const faqData = {
 			name: 'How do I export a single album from Apple Photos?',
 			acceptedAnswer: {
 				'@type': 'Answer',
-				text: "Yes — you can export your Favorites or any individual album to its own folder on your drive. Photo Export lists everything you've created in Photos under a Collections tab in the sidebar; pick one and click Export. Albums land at Collections/Albums/<Album>/ (folder hierarchy preserved); Favorites land at Collections/Favorites/. Smart albums other than Favorites and shared albums aren't included. Timeline (year/month) export still works exactly as before.",
+				text: "Yes — you can export your Favorites or any individual album to its own folder on your drive. Photo Export lists everything you've created in Photos under a Collections tab in the sidebar; pick one and click Export. Albums land at Collections/Albums/<Album>/ (folder hierarchy preserved); Favorites land at Collections/Favorites/. Smart albums other than Favorites aren't included. iCloud Shared Albums are surfaced in their own sidebar section and export to Collections/Shared Albums/, but at reduced quality — Apple only serves shared photos as downscaled JPEGs. Timeline (year/month) export still works exactly as before.",
 			},
 		},
 		{
@@ -184,6 +184,20 @@ const faqData = {
 					and HEIF captures as high-quality JPEG on export. Useful for destinations
 					that don't understand HEIC — a NAS, a Windows PC, an older photo viewer.
 					Non-HEIC photos are unaffected.
+				</FeatureCard>
+				<FeatureCard title="Live Photos" icon="🎞">
+					Optional toggle in <strong>Settings → Advanced</strong> writes the paired
+					<code>.MOV</code> next to each Live Photo's still (e.g.
+					<code>IMG_0001.HEIC</code> + <code>IMG_0001.MOV</code>). Off by
+					default — Live Photo paired videos roughly double disk usage on
+					Live-Photo-heavy libraries.
+				</FeatureCard>
+				<FeatureCard title="Videos in a Subfolder" icon="🎥">
+					Optional toggle in <strong>Settings → Advanced</strong> routes standalone
+					videos into a <code>videos/</code> subfolder (e.g.
+					<code>2026/03/videos/IMG_0002.MOV</code>) so a backup doesn't mix
+					<code>.JPG</code> and <code>.MOV</code> files in the same folder. Live Photo
+					pairs stay together.
 				</FeatureCard>
 				<FeatureCard title="Smart Export Tracking" icon="✅">
 					Remembers every exported photo. Resume-safe — never re-exports what's
@@ -347,27 +361,27 @@ const faqData = {
 					<strong>Requires macOS 15.0 or later.</strong>
 				</li>
 				<li>
-					<strong>Live Photos export as still-only by default.</strong> Turn on Settings
-					→ Advanced → <em>Export Live Photos as paired image + video</em> to also
-					write the paired video next to the still (e.g.
-					<code>IMG_0001.HEIC</code> + <code>IMG_0001.MOV</code>) using whatever
-					extension casing PhotoKit reports — typically <code>.MOV</code> on Apple
-					hardware. The paired video is typically 1–3 MB per Live Photo, so libraries
-					with thousands of Live Photos roughly double in size on disk when the toggle
-					is on. Shared-album Live Photos stay still-only because Apple doesn't expose
-					their paired video.
+					<strong>Smart albums other than Favorites aren't surfaced.</strong> Albums,
+					Favorites, and iCloud Shared Albums are.
 				</li>
 				<li>
-					<strong>Albums and Favorites are supported.</strong> Smart albums other
-					than Favorites, and shared albums, are not currently included.
+					<strong>iCloud Shared Albums export at reduced quality.</strong> Apple only
+					serves shared photos as downscaled JPEGs — there's no API to fetch the full-resolution
+					originals. The <strong>Include originals</strong> and
+					<strong>Convert HEIC to JPEG</strong> toggles are no-ops for shared albums,
+					and shared-album Live Photos can't be exported with their paired video.
 				</li>
 				<li>
-					<strong>Edited photos export as the version Photos shows you</strong>,
-					at the original filename. Open <strong>Settings → Advanced</strong> to turn
-					on <strong>Include originals</strong> for an <code>_orig</code>
-					companion with the original bytes, or <strong
-						>Convert HEIC to JPEG</strong
-					> to re-encode HEIC captures as JPEG on export.
+					<strong>Exports run sequentially.</strong> Edited videos additionally render
+					through the Photos framework, which can take noticeably longer than copying
+					— especially for 4K or iCloud-only originals.
+				</li>
+				<li>
+					<strong>Toggle changes apply to new exports only.</strong> Turning on
+					<strong>Convert HEIC to JPEG</strong> or
+					<strong>Separate videos into a subfolder</strong> later doesn't relocate
+					or re-encode files already on disk; re-run an Export action (or wait for
+					Auto Export) to bring them in line.
 				</li>
 			</ul>
 		</div>
@@ -491,7 +505,11 @@ const faqData = {
 						<code>IMG_0001.HEIC</code> + <code>IMG_0001.MOV</code>) using
 						whatever extension casing PhotoKit reports for that resource.
 						Shared-album Live Photos remain still-only because Apple does not
-						expose their paired video.
+						expose their paired video. Standalone videos can optionally land in
+						a <code>videos/</code> subfolder via
+						<em>Settings → Advanced → Separate videos into a subfolder</em>, so
+						a backup doesn't mix <code>.JPG</code> and <code>.MOV</code> files in
+						the same folder.
 					</dd>
 				</div>
 				<div class="faq-item">
@@ -504,9 +522,11 @@ const faqData = {
 						Albums land at <code>Collections/Albums/&lt;Album&gt;/</code> (folder
 						hierarchy preserved); Favorites land at <code
 							>Collections/Favorites/</code
-						>. Smart albums other than Favorites and shared albums aren't
-						included. Timeline (year/month) export still works exactly as
-						before.
+						>. Smart albums other than Favorites aren't included.
+						<strong>iCloud Shared Albums</strong> are surfaced in their own sidebar
+						section and export to <code>Collections/Shared Albums/</code>, but
+						at reduced quality — Apple only serves shared photos as downscaled
+						JPEGs. Timeline (year/month) export still works exactly as before.
 					</dd>
 				</div>
 				<div class="faq-item">
