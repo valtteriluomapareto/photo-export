@@ -4,7 +4,7 @@ Goal: reduce main-thread stalls and SwiftUI re-render churn so the app stays at 
 
 This plan is scoped to **UI smoothness only**. Export throughput, parallelization, and feature work are out of scope. Cross-cutting contracts (cancellation seam, actor isolation policy, AutoSync seam) from [`docs/reference/architecture-conventions.md`](../../reference/architecture-conventions.md) must be preserved by every task below.
 
-> **Status:** Initial draft reviewed against current implementation (May 2026). Findings from that review have been integrated inline as preconditions, corrections, and verified line:file references. Notable preconditions surfaced by the review: Task 1.3 requires a `PhotoLibraryManager` API change (the `PHImageRequestID` is currently discarded); Task 2.2 requires a `ForEach` stable-ID fix in the grid views; Task 2.3 requires a new `RecordStoreState.loading` enum case. See each task's "Precondition" block for details.
+> **Status:** Draft reviewed in two passes against the current implementation (May 2026). Findings from both passes are integrated inline. Key preconditions: Task 1.3 keeps the `PhotoLibraryService` protocol unchanged but reworks the internal loader implementation (no `PHImageRequestID` in the public API); Task 2.2 requires a `ForEach` stable-ID fix in `MonthContentView` / `CollectionContentView`; Task 2.3 requires a new `RecordStoreState.loading` enum case. Tier 1 sequencing was tightened in the second pass: **Tasks 1.2 and 1.3 are sequential, not parallel** — both modify the same `loadThumbnail` / `loadThumbnailHighQuality` implementations. Tier 1 also gained test-seam specifications: an injected `MainActorTimerProvider` for the coalescer (Task 1.1), an injected `DecodeFunction` for the thumbnail cache (Task 1.2), and `FakePhotoLibraryService` spy callbacks for the cancellation tests (Task 1.3).
 
 ---
 
@@ -39,17 +39,34 @@ Tasks below are ordered by impact ÷ effort.
 
 **Approach:**
 
-1. Introduce a `MainActorCoalescer` helper that schedules `objectWillChange.send()` at most once per frame (use `DispatchSourceTimer` at 16 ms, or a `Task { try await Task.sleep(...) }` rate limiter).
-2. Route per-append mutations through the coalescer instead of mutating `@Published` directly. Mutations to underlying state apply *synchronously* (so reads see the latest value); only the `objectWillChange` signal is rate-limited.
-3. Keep an "immediately publish" escape hatch for state transitions that must reach the UI synchronously. Explicit immediate-publish list: `isRunning`, `isPaused`, `activeRunContext` (run start/end), `state` transitions to `.failed`, completion of `isImporting`. Test that toggling any of these inside a coalesced burst still flushes immediately.
+1. Introduce a **single shared `MainActorCoalescer`** (one instance per app, owned by `ExportManager.init` and passed to both record stores plus `ExportProgressState`). A per-store coalescer would let `ExportProgressState` (read by `ExportProgressBar`) and `ExportRecordStore.mutationCounter` (read by sidebar) publish in different frame windows, producing visible cross-store incoherence (bar shows job N+1 while sidebar reflects N). One coalescer per app → one batched notification per frame across all stores, while each store still fires its own `objectWillChange` so observers stay decoupled.
+2. **Frame primitive:** use `CVDisplayLink` (the macOS display-sync primitive). `DispatchSourceTimer` at 16 ms fires on wall-clock intervals decoupled from vsync — a flush 2 ms before vsync wastes a full frame. `CVDisplayLink`'s callback fires *at* vsync, so a coalesced batch always reaches SwiftUI before the next render pass. The callback hops to `@MainActor` via `Task { @MainActor in ... }` or `MainActor.assumeIsolated` (the latter is safe because the display-link callback is delivered to a main-thread context on macOS for typical configurations — verify when implementing).
+3. Route per-append mutations through the coalescer instead of mutating `@Published` directly. Mutations to underlying state apply *synchronously* (so reads see the latest value); only the `objectWillChange` signal is rate-limited. This intentionally deviates from SwiftUI's "willChange→write→read in the same frame" expectation: views read the old value during frame N and see the willChange + new value at frame N+1. This is a known, acceptable trade-off for coalesced publishing.
+4. **Expose `flushPending()` on the coalescer** and call it from every cancellation / pause / resume / `cancelAndClear` path. Without flush, a pending coalesced send can land *after* the cancel state mutates, briefly showing a stale intermediate.
+5. Keep an "immediately publish" escape hatch for state transitions that must reach the UI synchronously. Explicit immediate-publish list: `isRunning`, `isPaused`, `activeRunContext` (run start/end), `state` transitions to `.failed`, completion of `isImporting`. Test that toggling any of these inside a coalesced burst still flushes immediately.
+
+**Test seam:** The coalescer must accept its frame source as a protocol so tests can drive it deterministically:
+
+```swift
+protocol MainActorTimerProvider {
+    func scheduleNextFrame(_ work: @escaping @MainActor () -> Void)
+}
+// Production: CVDisplayLinkTimerProvider
+// Tests: ManualFrameTimerProvider with fireNextFrame() / advance(by:)
+```
+
+Today's `DispatchQueue.main.asyncAfter` debouncer in the stores is **not** unit-testable except by real-time sleep (see `ExportRecordStoreTests` L170 which sleeps 600 ms). The new seam removes that flakiness.
 
 **Definition of done:**
 
-- During a 5,000-asset export, the SwiftUI invalidation count for the year/month sidebar is bounded by `runDurationSeconds × 60`, not by `assetCount`. Measured via the harness (see Rollout & Measurement).
-- `ExportProgressState` no longer fires `objectWillChange` more than 60 Hz during a sustained run.
-- A new regression test asserts the 60 Hz bound (counting `objectWillChange` signals across a synthetic 5k-record append burst).
-- No regressions in `ExportRecordStoreTests` or `CollectionExportRecordStoreTests`.
+- New `MainActorCoalescerTests` asserts: 5,000 synchronous `scheduleChange()` calls trigger ≤2 `objectWillChange.send()` invocations (one per frame window with `ManualFrameTimerProvider`).
+- New test asserts `flushPending()` synchronously fires any pending notification before returning (critical for cancel paths).
+- A new regression test asserts: after Task 1.1 lands, `mutationCounter` increments are bounded to one per frame window over a 5,000-record synthetic append burst.
+- `ExportProgressState` no longer fires `objectWillChange` more than once per frame during a sustained run.
+- No regressions in `ExportRecordStoreTests` or `CollectionExportRecordStoreTests` (note: the existing `testMutationCounterCoalescedNotifications` at ~L170 will need to be rewritten against the new seam).
 - The cancellation seam contract is unaffected (mutations still apply synchronously to in-memory state; only `objectWillChange` is debounced).
+
+> **Note on Definition of Done measurement.** "SwiftUI invalidation count" and "`objectWillChange` count" are *not* the same metric — SwiftUI's diff layer can skip body re-evaluation even when `objectWillChange` fires, depending on which `@Published` properties the view reads. The coalescer can be tested against the latter directly; the former requires the in-app invalidation counter (see Rollout & Measurement §1) and is profiling-only, not a CI gate.
 
 **Risk:** Tests that read `@Published` immediately after a mutation may now see the new value before SwiftUI has been notified. That's correct behavior, but any test relying on `objectWillChange` ordering needs updating.
 
@@ -57,32 +74,63 @@ Tasks below are ordered by impact ÷ effort.
 
 ### Task 1.2 — Off-main thumbnail decode + decoded image cache
 
-**What:** Decode thumbnails to `CGImage` on a utility task and cache the decoded result in an LRU. Cells render `Image(decorative:scale:orientation:)` from the cached `CGImage`, never `Image(nsImage:)` from raw bytes.
+**What:** Cache the bitmap that `PHCachingImageManager` already returns and hand SwiftUI a stable `CGImage` reference so it doesn't re-decode on every render pass.
+
+**Decode primitive — what's actually being cached.** `PHCachingImageManager.requestImage` already returns a *decoded* `NSImage` bitmap; the stutter comes from `Image(nsImage:)` re-rendering work AppKit does eagerly per draw, not from a missing first-decode. So the cache stores `CGImage` (the stable backing bitmap), wrapped at render time. Do **not** introduce `CGImageSourceCreateThumbnailAtIndex` — PhotoKit already did the source decode.
+
+**Render API on macOS.** SwiftUI on macOS has **no `Image(cgImage:)` initializer** (that's iOS only). The macOS render path is `Image(nsImage: NSImage(cgImage: cachedCGImage, size: .zero))`. `NSImage(cgImage:)` is a thin wrapper (no second decode) — it just holds the `CGImage` reference. Cells call this each render but the per-call work is cheap.
 
 **Where:**
 
-- `photo-export/PhotoLibrary/PhotoLibraryManager.swift` — `loadThumbnail` (L525–554) uses `deliveryMode: .fastFormat`; `loadThumbnailHighQuality` (~L561) uses `deliveryMode: .highQualityFormat`. Both call sites need cache integration.
+- `photo-export/PhotoLibrary/PhotoLibraryManager.swift` — `loadThumbnail` (L525–554) `deliveryMode: .fastFormat`; `loadThumbnailHighQuality` (~L561) `deliveryMode: .highQualityFormat`. Both call sites integrate the cache.
 - `photo-export/Views/Shared/ThumbnailView.swift` — render path (L22 today renders `Image(nsImage:)`).
-- `photo-export/ViewModels/MonthViewModel.swift` — `loadAndStoreThumbnail()` (~L259) and `upgradeThumbnailToHighQuality()` (~L276) feed `thumbnailsById`; this view-model surface should consume from the new cache rather than holding per-asset state.
-- New file: `photo-export/PhotoLibrary/DecodedThumbnailCache.swift`. Start with `@MainActor` ownership and explicit off-main fill via `Task.detached`; only move to `actor` if cell-render reads truly need cross-thread access (likely no — SwiftUI body is `@MainActor`).
+- `photo-export/ViewModels/MonthViewModel.swift` — **delete `thumbnailsById`** outright. Keeping it alongside the cache means each scope decodes thumbnails into its own dict (100k assets × N scopes = N× redundant work). The view-model becomes a thin scope-cancellation owner; the cell reads from the cache directly.
+- New file: `photo-export/PhotoLibrary/DecodedThumbnailCache.swift`. `@MainActor`-owned with explicit off-main fill via `Task.detached`.
 
 **Approach:**
 
-1. New `DecodedThumbnailCache` keyed by `CacheKey(localIdentifier, targetSize, contentMode, deliveryMode)`. The `deliveryMode` axis is mandatory — without it, the HQ upgrade path would collide with the fast-format grid entry. Back with `NSCache` for size-based eviction.
-2. Thumbnail request flow becomes: check decoded cache → on miss, `PHCachingImageManager.requestImage` → off-main `CGImage` decode (via `Task.detached(priority: .userInitiated)`) → insert into cache → publish to cell.
-3. HQ upgrade semantics: when the HQ entry lands, it does **not** evict the fast-format entry for the same asset (different cache key). Cell render preference: HQ if present, else fast-format.
-4. Memory budget: cap at ~100 MB or 500 entries via `NSCache.totalCostLimit` / `countLimit`. Cost = `width * height * 4` per decoded `CGImage`.
-5. Invalidation in v1: clear the entire cache on `libraryRevision` bump (matches today's `phAssetCache` lifecycle in `PhotoLibraryManager` ~L58). A targeted-invalidation v2 reading `PHChange.changeDetails(for:)` is a follow-up — `MonthViewModel.refresh()` (~L149) currently does a full refetch without diffing PhotoKit change details, so wholesale invalidation matches existing behavior.
-6. Respond to `NSCache` memory-pressure eviction; do not also hand-roll a low-memory listener in v1.
+1. New `DecodedThumbnailCache` keyed by `CacheKey(localIdentifier, quantizedTargetSize, contentMode, deliveryMode)`. **`targetSize` is quantized** to the nearest 8 pt — a 200×200 cell and a 201×201 cell (possible from layout rounding on Retina) must not produce separate cache entries. Without quantization, scroll fragments the cache. `PHImageContentMode` and `PHImageRequestOptionsDeliveryMode` are both `Hashable`; verify when implementing.
+2. **Dedup concurrent requests for the same key** by storing pending entries as `Task<CGImage?, Never>` — second callers `await` the in-flight task instead of triggering a duplicate PhotoKit request and decode.
+3. Request flow: check cache (hit → return stored `CGImage` or `await` in-flight Task) → on miss, `PHCachingImageManager.requestImage` → wrap returned `NSImage` to `CGImage` via `NSImage.cgImage(forProposedRect:context:hints:)` on a `Task.detached(priority: .userInitiated)` → store and publish.
+4. HQ upgrade semantics: HQ and fast-format entries coexist (different `deliveryMode` axis). Cell render preference: HQ if present, else fast-format.
+5. Memory budget: cap at ~100 MB or 500 entries via `NSCache.totalCostLimit` / `countLimit`. Cost = `width * height * 4` per decoded `CGImage`. Accept `NSCache` for v1; if profiling shows pathological eviction, v2 swaps in a hand-rolled LRU (no SwiftPM deps means it'd be written from scratch — defer until proven needed).
+6. Invalidation in v1: clear the entire cache on `libraryRevision` bump (matches `phAssetCache` lifecycle in `PhotoLibraryManager` ~L58). The cache is owned by `PhotoLibraryManager` and invalidated from `invalidateCache()` (L731–735).
+7. Move `startCachingImages` / `stopCachingImages` from `MonthViewModel.loadAssets` (~L82) into the grid view's `.onAppear` / `.onDisappear`. The current call site fires on every scope-load, including refreshes from `libraryRevision`; viewport-bound is the correct lifecycle.
+
+**Test seams:**
+
+```swift
+final class DecodedThumbnailCache {
+    typealias DecodeFunction = (NSImage) async -> CGImage?
+    init(decode: @escaping DecodeFunction = Self.productionDecode) { … }
+}
+```
+
+Tests inject a trivial decode (`{ _ in makeTinyCGImage() }`) and assert cache semantics without touching PhotoKit. Recipe for a 1×1 `CGImage` test fixture:
+
+```swift
+func makeTinyCGImage() -> CGImage {
+    let space = CGColorSpaceCreateDeviceRGB()
+    let ctx = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8,
+                        bytesPerRow: 4, space: space,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    return ctx.makeImage()!
+}
+```
 
 **Definition of done:**
 
-- Grid scroll at 1000 px/s shows no decode-related stutter on a profile of a typical Photos library.
+- New `DecodedThumbnailCacheTests`:
+  - `testCacheDedupsConcurrentRequestsForSameKey` — two `async let` requests for the same key invoke the decode closure exactly once.
+  - `testCachePreservesBothDeliveryModes` — fast and HQ entries for the same `localIdentifier` coexist.
+  - `testCacheInvalidatesOnClear` — `clear()` drops all entries.
+  - `testCacheRespectsCountLimitUnderInsertPressure` — 5,000 inserts do not exceed `countLimit`.
+  - `testCacheKeyQuantization` — 200×200 and 201×201 sizes hit the same cache key.
+- `MonthViewModel.thumbnailsById` deleted; cell reads the cache directly.
+- Grid scroll at 1000 px/s shows no decode-related stutter (profiling-only; not a CI gate).
 - Memory does not grow unbounded on long scrolls (`NSCache` eviction observed in Instruments).
-- The cache survives `libraryRevision` bumps without showing stale thumbnails for changed assets.
-- A scrolled-then-HQ-upgraded grid does not show duplicate or stale thumbnails for overlapping assets (HQ replaces fast-format at render time; both can coexist in the cache).
 
-**Risk:** `NSCache` eviction is opaque; if it evicts too aggressively the cache becomes useless. Profile under memory pressure before shipping. Per-cell state held in `MonthViewModel.thumbnailsById` may need to move into the cache itself to avoid double-caching.
+**Risk:** `NSCache` eviction is opaque. Ship with the count-limit regression test; profile under memory pressure before declaring done. Deleting `thumbnailsById` touches `MonthViewModel` tests — confirm none of them peek at the dict.
 
 ---
 
@@ -92,27 +140,41 @@ Tasks below are ordered by impact ÷ effort.
 
 **Precondition — API gap to close first:** Today's thumbnail call sites *discard* the `PHImageRequestID` returned by `requestImage` (`PhotoLibraryManager.swift` L538, L580) and the manager has **no public cancellation API for thumbnails**. The full-image path already does this correctly — see `ProductionMediaRenderer.swift` L150–209 (captures `PHImageRequestID`, wraps in `withTaskCancellationHandler`, calls `PHImageManager.default().cancelImageRequest(id)` on cancellation). **Use that as the template.**
 
+**Loader signature stays the same.** Do **not** add `cancelThumbnailRequest(id:)` to the `PhotoLibraryService` protocol — that leaks PhotoKit's `PHImageRequestID` to callers and forces every test fake to model a low-level cancellation ID. Keep `loadThumbnail(for:) async -> NSImage?` as the public shape; cancellation is internal to the implementation and is triggered by cancelling the *caller's `Task`* (which a SwiftUI `.task(id:)` does automatically when the cell is reused). This also means `Protocols/PhotoLibraryService.swift` doesn't need updating — only the production implementation changes.
+
 **Where:**
 
-- `photo-export/PhotoLibrary/PhotoLibraryManager.swift` — refactor `loadThumbnail` (L525–554) and `loadThumbnailHighQuality` (~L561) to capture the `PHImageRequestID` and adopt the `withTaskCancellationHandler` pattern from `ProductionMediaRenderer`. Either expose `cancelThumbnailRequest(id: PHImageRequestID)` for explicit callers, or (cleaner) make the loaders themselves Swift-Concurrency-cancellable so callers only need to cancel their `Task`.
-- `photo-export/Views/Shared/ThumbnailView.swift` — add cell-scoped `.task(id: asset.localIdentifier)` driving the load.
-- `photo-export/ViewModels/MonthViewModel.swift` — `hqUpgradeTask` (~L30, L189) already cancels on scope change; reconcile that with per-cell cancellation so the two mechanisms don't fight (HQ upgrade is currently driven from the view-model, not the cell — decide which owns the lifecycle and don't have both running).
+- `photo-export/PhotoLibrary/PhotoLibraryManager.swift` — refactor `loadThumbnail` (L525–554) and `loadThumbnailHighQuality` (~L561) to wrap the existing PhotoKit call in `withTaskCancellationHandler`, capturing the returned `PHImageRequestID` in a `RequestIDBox` and calling `cancelImageRequest(id)` in `onCancel`.
+- `photo-export/Views/Shared/ThumbnailView.swift` — add `.task(id: asset.localIdentifier)` driving the load. SwiftUI cancels this task automatically on cell reuse.
+- `photo-export/ViewModels/MonthViewModel.swift` — `hqUpgradeTask` (~L30, L189) already cancels on scope change. **Keep the HQ upgrade view-model-driven** (option (a) below); do not move it per-cell.
+- `photo-export/Protocols/PhotoLibraryService.swift` — **no protocol change.** `FakePhotoLibraryService` does need to model `Task` cancellation in its async stubs so the test seam is honest about what cancellation gives the caller.
 
 **Approach:**
 
-1. Refactor `loadThumbnail`/`loadThumbnailHighQuality` to the `ProductionMediaRenderer`-style `withTaskCancellationHandler` pattern. This is a non-trivial API change — every callsite needs review.
-2. Use `.task(id: asset.localIdentifier)` on `ThumbnailView` so the request is cancelled by Swift Concurrency when the cell is reused.
-3. Drive `startCachingImages` / `stopCachingImages` from visible-row range (the grid's `onAppear` / `onDisappear` on cells, batched). Note: today these are called once per scope change from `MonthViewModel.loadAssets()` (~L82) — they need to follow the viewport instead.
-4. Reconcile with `MonthViewModel.hqUpgradeTask`: either (a) keep view-model-driven HQ upgrade and skip cell-level cancellation for the HQ path, or (b) move HQ upgrade to per-cell as well. Recommend (a) in v1.
-5. Add a small grace period (e.g. 50 ms) before cancelling, to avoid flicker on scroll bounce.
+1. Refactor `loadThumbnail` / `loadThumbnailHighQuality` to `withTaskCancellationHandler` internally. Public signature unchanged.
+2. Use `.task(id: asset.localIdentifier)` on `ThumbnailView` so the request is cancelled when the cell is reused.
+3. Move `startCachingImages` / `stopCachingImages` from `MonthViewModel.loadAssets()` (~L82) into the grid view's `.onAppear` / `.onDisappear` (also touched by Task 1.2). PhotoKit's internal LRU is adequate for v1 — per-cell prefetch tracking is a v2 concern only if profiling shows it's needed.
+4. Keep HQ upgrade view-model-driven (option (a)). Reasoning: fast-format requests are lightweight and frequent (cell-cancellation is a win); HQ upgrades are heavy and ordered (per-cell cancellation would race the sequence and produce visible flicker). Cell-cancellation owns only the fast-format path.
+5. **Grace period for scroll bounce:** wrap the load with a 50 ms `Task.sleep` before issuing the PhotoKit request. If the cell is cancelled during that window (e.g. a scroll bounce), no PhotoKit work happens. If it survives, the work proceeds. The grace period is *pre-request*, not post-cancel, which keeps it cheap and naturally testable.
+
+**Test seam:**
+
+- `FakePhotoLibraryService` gains:
+  - `onLoadThumbnail: (assetId: String) -> Void` and `onCancelThumbnail: (assetId: String) -> Void` callbacks for spy assertions.
+  - A `loadThumbnailDelay: TimeInterval?` knob so tests can model a slow PhotoKit response and exercise cancellation during the response window.
+- The grace-period sleep needs an injected clock (reuse the `MainActorTimerProvider` seam from Task 1.1, or a separate `GracePeriodClock` protocol) so tests don't need real-time sleeps.
 
 **Definition of done:**
 
-- A fast flick-scroll over 5,000 cells leaves ≤ (visible-count + prefetch-window) in-flight requests at any time, measured by emitting custom signposts around each `requestImage` call (see Rollout & Measurement).
-- Cancellation is visible in the PhotoKit signpost log.
-- Scroll-bounce (briefly leaving and re-entering the viewport) does not cause visible thumbnail flicker on the bounced cells.
+- `loadThumbnail`/`loadThumbnailHighQuality` no longer discard the `PHImageRequestID`; both wrap in `withTaskCancellationHandler` following the `ProductionMediaRenderer` template.
+- `ThumbnailView` uses `.task(id: asset.localIdentifier)`.
+- New `PhotoLibraryManagerCancellationTests`:
+  - `testLoadThumbnailCancelsPhotoKitRequestWhenTaskIsCancelled` — start a load, cancel the wrapping Task, assert `cancelImageRequest` was called for the captured ID (using a fake `PHImageManager`-shim or the spy callback on `FakePhotoLibraryService`).
+  - `testGracePeriodSuppressesRequestWhenCancelledWithinWindow` — start a load, cancel within 30 ms (well under the 50 ms grace), assert no PhotoKit `requestImage` ever fired.
+- Integration-level test (using `FakePhotoLibraryService` spy and a synthetic 5,000-asset scroll simulation): in-flight thumbnail count stays bounded by `(visible + prefetch_window)` throughout a fast scroll.
+- No HQ upgrade behavior change visible to users (existing `MonthViewModel` HQ tests still pass).
 
-**Risk:** Aggressive cancellation can cause flicker if a cell is cancelled and immediately re-requested. The grace period addresses this; profile to confirm 50 ms is sufficient. The API refactor of the loaders touches every thumbnail caller — keep the surface minimal so the diff stays reviewable.
+**Risk:** The grace period delays first-paint by 50 ms even for cells that aren't bounced. For steady-state scrolling that's invisible; for the first cells on a cold load it's not. Profile to confirm 50 ms is the right number; consider a smaller (20 ms) value if first-paint feels sluggish. The internal-only cancellation approach means observability of cancellation events depends on the test spy or PhotoKit signposts — there's no app-visible cancellation event surface.
 
 ---
 
@@ -319,12 +381,13 @@ Each tier should land independently with measurements before moving to the next.
 **Sequencing recommendation:**
 
 1. Build the measurement harness *and* the bulk-fixture helper.
-2. Land Task 1.1 (coalescing). Re-measure.
-3. Land Tasks 1.2 and 1.3 (thumbnail decode + cancellation) in parallel — they touch disjoint code (`PhotoLibraryManager` request path vs. `ThumbnailView` lifecycle). Re-measure.
-4. Land Task 2.1 (observation surfaces) one property at a time. Re-measure after each.
-5. Land Task 2.2 (progressive fetch) — landing the `ForEach` ID precondition fix first as a standalone PR. Re-measure.
-6. Land Task 2.3 (off-main load) — landing the `RecordStoreState.loading` enum case first. Re-measure.
-7. Re-evaluate whether Tier 3 is needed based on remaining stall sources.
+2. Land Task 1.1 (coalescing) — independent of other tasks. Re-measure.
+3. Land Task 1.2 (decoded thumbnail cache) — adds the cache *and* deletes `MonthViewModel.thumbnailsById`. Re-measure.
+4. Land Task 1.3 (cell-scoped cancellation) — must follow 1.2, **not in parallel**. Both modify the same `loadThumbnail` / `loadThumbnailHighQuality` functions in `PhotoLibraryManager`; landing them in parallel produces a merge conflict in the most-modified part of the file. The cache lands first because cancellation is more useful when it cancels into a populated cache; the API gets refactored once to wrap both the cache lookup and the `withTaskCancellationHandler`.
+5. Land Task 2.1 (observation surfaces) one property at a time. Re-measure after each.
+6. Land Task 2.2 (progressive fetch) — landing the `ForEach` ID precondition fix first as a standalone PR. Re-measure.
+7. Land Task 2.3 (off-main load) — landing the `RecordStoreState.loading` enum case first. Re-measure.
+8. Re-evaluate whether Tier 3 is needed based on remaining stall sources.
 
 ---
 
