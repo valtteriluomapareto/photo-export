@@ -728,15 +728,42 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `PhotoLibraryPersistentChangeAdapter` can wake the UI side after a
   /// safety-net reconcile turns up changes that PhotoKit's normal
   /// `photoLibraryDidChange` callback missed (issue #69).
+  ///
+  /// **Ordering matters.** Issue #104: an earlier version of this method
+  /// bumped `libraryRevision &+= 1` synchronously and dispatched
+  /// `collectionCountCache.invalidateAll()` in a separate unawaited Task.
+  /// Observers reacting to the bump — notably `TimelineSidebarView`'s
+  /// `.onChange(libraryRevision)` handler, which kicks off
+  /// `TimelineSidebarCounts.loadCounts` → `cachedCountAssets` reads —
+  /// could queue cache reads BEFORE the invalidation Task had a chance to
+  /// run, win the race to the cache actor, and read stale counts. The
+  /// visible symptom was the green per-month checkmark stuck on a month
+  /// that had gained new photos in Photos.app.
+  ///
+  /// The fix sequences the count-cache wipe BEFORE the `libraryRevision`
+  /// bump inside a single unstructured Task, so any observer reacting to
+  /// the bump always sees a cleared cache.
+  ///
+  /// **Caveat on the regression test**
+  /// (`PhotoLibraryManagerTests.invalidateCacheDefersLibraryRevisionBumpUntilCountCacheIsCleared`):
+  /// the test pins the implementation detail — synchronous vs. deferred
+  /// bump — rather than the observer-vs-invalidation race directly.
+  /// Reproducing the race itself in a unit test is non-deterministic
+  /// because Swift Concurrency's task scheduler can order the observer's
+  /// Task and the invalidation Task in either direction. The deferred
+  /// bump is the directly-testable consequence and is load-bearing: if a
+  /// future refactor restores the synchronous bump (or splits the work
+  /// back into two parallel Tasks), the race re-opens and the test fires.
   func invalidateCache() {
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil
-    libraryRevision &+= 1
-    // Cancel any in-flight count tasks and drop cached counts so the next sidebar read
-    // re-fetches against the updated library state.
-    Task { [collectionCountCache] in
+    // Cancel any in-flight count tasks and drop cached counts, THEN bump
+    // libraryRevision so sidebar `.onChange(libraryRevision)` observers
+    // refetching counts always see a cleared cache. See issue #104.
+    Task { @MainActor [weak self, collectionCountCache] in
       await collectionCountCache.invalidateAll()
+      self?.libraryRevision &+= 1
     }
   }
 
