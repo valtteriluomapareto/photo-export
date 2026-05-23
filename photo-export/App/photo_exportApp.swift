@@ -32,6 +32,7 @@ struct PhotoExportApp: App {
   private let autoSyncRetryStateStore: FileBackedAutoSyncRetryStateStore
   private let autoSyncRunSummaryStore: FileBackedAutoSyncRunSummaryStore
   private let autoSyncPerDestinationTokenStore: FileBackedAutoSyncPerDestinationTokenStore
+  private let autoSyncCurrentRunStore: FileBackedAutoSyncCurrentRunStore
   private let autoSyncClock: SystemAutoSyncClock
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
@@ -132,6 +133,8 @@ struct PhotoExportApp: App {
       baseDirectoryURL: destinationsRoot)
     let perDestinationTokenStore = FileBackedAutoSyncPerDestinationTokenStore(
       baseDirectoryURL: destinationsRoot)
+    let currentRunStore = FileBackedAutoSyncCurrentRunStore(
+      baseDirectoryURL: destinationsRoot)
     let tokenStore = GlobalPhotoChangeTokenStore(
       fileURL: autoSyncRoot.appendingPathComponent("photo-library-change-token.data"))
     // One clock shared between the photo-change adapter and AutoSync so test
@@ -196,6 +199,7 @@ struct PhotoExportApp: App {
     self.autoSyncRetryStateStore = retryStore
     self.autoSyncRunSummaryStore = runSummaryStore
     self.autoSyncPerDestinationTokenStore = perDestinationTokenStore
+    self.autoSyncCurrentRunStore = currentRunStore
     self.autoSyncClock = clock
   }
 
@@ -258,6 +262,7 @@ struct PhotoExportApp: App {
               retryStateStore: autoSyncRetryStateStore,
               runSummaryStore: autoSyncRunSummaryStore,
               perDestinationTokenStore: autoSyncPerDestinationTokenStore,
+              currentRunStore: autoSyncCurrentRunStore,
               clock: autoSyncClock,
               userDefaults: .standard
             )
@@ -290,7 +295,8 @@ struct PhotoExportApp: App {
           timelineStore: exportRecordStore,
           collectionStore: collectionExportRecordStore,
           destinationManager: exportDestinationManager,
-          photoChangeAdapter: autoSyncPhotoChangeAdapter)
+          photoChangeAdapter: autoSyncPhotoChangeAdapter,
+          currentRunStore: autoSyncCurrentRunStore)
       }
       // Sidebar select-all wired through the standard Edit menu so the shortcut
       // (Cmd+A) is discoverable. The action's behavior changes per section —
@@ -532,6 +538,7 @@ private struct SaveDiagnosticReportCommand: View {
   let collectionStore: CollectionExportRecordStore
   let destinationManager: ExportDestinationManager
   let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+  let currentRunStore: any AutoSyncCurrentRunStore
 
   var body: some View {
     Button("Save Diagnostic Report\u{2026}") {
@@ -539,7 +546,8 @@ private struct SaveDiagnosticReportCommand: View {
         timelineStore: timelineStore,
         collectionStore: collectionStore,
         destinationManager: destinationManager,
-        photoChangeAdapter: photoChangeAdapter)
+        photoChangeAdapter: photoChangeAdapter,
+        currentRunStore: currentRunStore)
     }
   }
 
@@ -551,18 +559,26 @@ private struct SaveDiagnosticReportCommand: View {
     timelineStore: ExportRecordStore,
     collectionStore: CollectionExportRecordStore,
     destinationManager: ExportDestinationManager,
-    photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+    photoChangeAdapter: PhotoLibraryPersistentChangeAdapter,
+    currentRunStore: any AutoSyncCurrentRunStore
   ) {
     let info = Bundle.main.infoDictionary
     let appVersion = (info?["CFBundleShortVersionString"] as? String) ?? "?"
     let buildNumber = (info?["CFBundleVersion"] as? String) ?? "?"
+    // Load the current-run journal at panel-open time for the active
+    // destination. Absent destination → no journal (no per-destination
+    // store to consult); absent file → no journal section in the report.
+    let previousRunJournal = destinationManager.destinationId.flatMap {
+      currentRunStore.load(destinationId: $0)
+    }
     let reporter = DiagnosticReporter(
       timelineStore: timelineStore,
       collectionStore: collectionStore,
       destinationId: destinationManager.destinationId,
       appVersion: appVersion,
       buildNumber: buildNumber,
-      lastCatchUpSummary: photoChangeAdapter.lastCatchUpSummary
+      lastCatchUpSummary: photoChangeAdapter.lastCatchUpSummary,
+      previousRunJournal: previousRunJournal
     )
     let report = reporter.makeReport()
     let panel = NSSavePanel()

@@ -422,6 +422,111 @@ struct AutoSyncStorePersistenceTests {
     }
   }
 
+  // MARK: - Current-run journal
+
+  /// Fixture: a populated `AutoSyncRunJournal` mid-fan-out. Locks the field
+  /// names and ordering on disk so a future Codable rename can't strand
+  /// existing users' in-flight-journal files (and thus hide a previous
+  /// session's silent shutdown from the diagnostic report). The fixture
+  /// reads back through the production decoder, asserting all six fields.
+  @Test func currentRunJournalDecodesKnownFixture() throws {
+    let fixture = """
+      {
+        "currentScope" : "albums",
+        "currentScopeStartedAt" : 770000300,
+        "scopes" : ["timeline", "favorites", "albums", "sharedAlbums"],
+        "startedAt" : 770000000,
+        "trigger" : "appLaunch"
+      }
+      """.data(using: .utf8)!
+
+    let decoded = try JSONDecoder().decode(AutoSyncRunJournal.self, from: fixture)
+
+    #expect(decoded.startedAt == Date(timeIntervalSinceReferenceDate: 770000000))
+    #expect(decoded.trigger == "appLaunch")
+    #expect(decoded.scopes == ["timeline", "favorites", "albums", "sharedAlbums"])
+    #expect(decoded.currentScope == "albums")
+    #expect(decoded.currentScopeStartedAt == Date(timeIntervalSinceReferenceDate: 770000300))
+  }
+
+  /// Round-trip + file-path pin for `currentRun.json`. Catches a rename of
+  /// the documented file that would silently orphan existing in-flight
+  /// journals — the smoking-gun signal for issue #112-class bugs.
+  @Test func currentRunJournalRoundTripsAndLivesAtDocumentedPath() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      let journal = AutoSyncRunJournal(
+        startedAt: Date(timeIntervalSinceReferenceDate: 770000000),
+        trigger: "appLaunch",
+        scopes: ["timeline", "favorites", "albums", "sharedAlbums"],
+        currentScope: "albums",
+        currentScopeStartedAt: Date(timeIntervalSinceReferenceDate: 770000300))
+
+      try store.save(journal, destinationId: "dest-1")
+
+      #expect(store.load(destinationId: "dest-1") == journal)
+      let expectedURL = dir
+        .appendingPathComponent("dest-1", isDirectory: true)
+        .appendingPathComponent("currentRun.json")
+      #expect(
+        FileManager.default.fileExists(atPath: expectedURL.path),
+        "currentRun.json must live at <base>/<destId>/currentRun.json — a rename here orphans existing in-flight journals and hides previous-session silent shutdowns from the diagnostic"
+      )
+    }
+  }
+
+  /// Missing file → `nil`. This is the steady-state path: a user with no
+  /// in-flight AutoSync run on a given launch should see no journal section
+  /// in the diagnostic, so the report stays byte-identical to today.
+  @Test func currentRunJournalReturnsNilForMissingFile() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      #expect(store.load(destinationId: "never-written") == nil)
+    }
+  }
+
+  /// `clear` is the load-bearing signal: the manager calls it on every
+  /// fan-out exit (clean completion, cancellation, failure-break). The next
+  /// launch must see no journal — that is what tells the maintainer the
+  /// previous session exited cleanly. A regression that silently no-ops
+  /// `clear` would produce phantom "killed mid-run" sections on every clean
+  /// launch.
+  @Test func currentRunJournalClearRemovesFile() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      let journal = AutoSyncRunJournal(
+        startedAt: Date(timeIntervalSinceReferenceDate: 770000000),
+        trigger: "appLaunch",
+        scopes: ["timeline"],
+        currentScope: nil,
+        currentScopeStartedAt: nil)
+
+      try store.save(journal, destinationId: "dest-1")
+      #expect(store.load(destinationId: "dest-1") != nil)
+
+      try store.clear(destinationId: "dest-1")
+      #expect(store.load(destinationId: "dest-1") == nil)
+      let url = dir
+        .appendingPathComponent("dest-1", isDirectory: true)
+        .appendingPathComponent("currentRun.json")
+      #expect(
+        !FileManager.default.fileExists(atPath: url.path),
+        "clear must remove the file on disk — leaving it would falsely report previous-session abnormal exit on next launch")
+    }
+  }
+
+  /// `clear` against a never-written destination is a no-op rather than an
+  /// error. The manager's defer-block calls `clear` on every fan-out exit;
+  /// for a fan-out that never wrote (e.g. destination went away before the
+  /// initial save), a thrown error would be a noise-only log line.
+  @Test func currentRunJournalClearIsIdempotentWhenFileAbsent() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      // Must not throw.
+      try store.clear(destinationId: "never-written")
+    }
+  }
+
   // MARK: - Token blobs (opaque PHPersistentChangeToken)
 
   /// The per-destination token store treats the token as an opaque `Data`

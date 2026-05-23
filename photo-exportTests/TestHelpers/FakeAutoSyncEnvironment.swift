@@ -91,6 +91,7 @@ struct FakeAutoSyncEnvironmentBuilder {
   let retryStore = InMemoryAutoSyncRetryStateStore()
   let runSummaryStore = InMemoryAutoSyncRunSummaryStore()
   let perDestinationTokenStore = InMemoryAutoSyncPerDestinationTokenStore()
+  let currentRunStore = InMemoryAutoSyncCurrentRunStore()
   let clock = TestClock()
   let userDefaults: UserDefaults
 
@@ -110,6 +111,7 @@ struct FakeAutoSyncEnvironmentBuilder {
       retryStateStore: retryStore,
       runSummaryStore: runSummaryStore,
       perDestinationTokenStore: perDestinationTokenStore,
+      currentRunStore: currentRunStore,
       clock: clock,
       userDefaults: userDefaults
     )
