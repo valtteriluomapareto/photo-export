@@ -4,7 +4,7 @@ Sibling to [`ui-smoothness-plan.md`](ui-smoothness-plan.md). Goal: migrate the c
 
 Cross-cutting contracts from [`docs/reference/architecture-conventions.md`](../../reference/architecture-conventions.md) — cancellation seam, actor isolation policy, AutoSync seam — must be preserved by every phase. The AutoSync seam in particular needs deliberate bridging (see §AutoSync Bridge below); the rest survives the migration intact.
 
-> **Status:** Draft. Not yet review-validated against current code beyond the spot-checks called out inline. Treat the file:line references as a starting point — re-verify before implementation.
+> **Status:** Draft reviewed in one pass by a SwiftUI specialist, software architect, and senior tester (May 2026). Corrections integrated inline. Key changes from the review pass: the `withObservationTracking` timing explanation was inverted (corrected below); the `CurrentValueSubject` bridge needs an explicit `oldValue` guard inside `didSet` (added below); the granularity-test sketch in §Testing Strategy was broken because `withObservationTracking` is one-shot (corrected with a re-registering helper); Phase 5 should be preceded by a short spike to validate the AutoSync bridge before committing to the full migration; ExportManager migration is now an explicit deferral option rather than mandatory.
 
 ---
 
@@ -53,11 +53,18 @@ The smoothness plan was written assuming the current `ObservableObject` substrat
 
 ## Migration Roadmap
 
-Six phases. Order matters: each phase de-risks the next by validating an aspect of the migration (injection patterns, Combine bridge, test seams) on lower-stakes types before applying it to the highest-stakes one.
+Seven phases (after the review pass added a bridge spike as Phase 0.5). Order: validate the injection-pattern recipe on a trivial type (Phase 0), then *spike the AutoSync bridge in isolation* (Phase 0.5) so the highest-risk piece fails fast if it's going to fail at all, then progress from leaves to the most-observed types. The full ExportManager migration (Phase 5) is now an explicit *optional* deferral — see Phase 5 for the rationale.
 
 ### Phase 0 — Foundation
 
-**Goal:** validate the approach end-to-end on one trivial type before touching anything significant.
+**Goal:** validate the approach end-to-end on one trivial type before touching anything significant. Also: create the test infrastructure every later phase depends on.
+
+**Prerequisites (must land before any other phase):**
+
+- Create `photo-exportTests/Fixtures/` (does not exist today).
+- Build a `FakePhotoLibraryService` bulk-fixture helper that can synthesize a 10k–100k-asset configuration. This is also a UI Smoothness Plan prerequisite — coordinate so it lands once.
+- Add the `ObservationCounter` test helper (see §Testing Strategy) so Phase 0+ granularity tests have a deterministic counting primitive.
+- Confirm test style: the codebase uses **Swift Testing (`@Test` / `#expect`)**, not XCTest. All new migration tests must follow this style.
 
 **Tasks:**
 
@@ -85,6 +92,33 @@ Six phases. Order matters: each phase de-risks the next by validating an aspect 
 **Definition of done:** `WhatsNewState` is `@Observable`, the app builds, tests pass, the recipe doc exists.
 
 **Risk:** Low. Worst case is the migration recipe needs refinement before Phase 1.
+
+---
+
+### Phase 0.5 — AutoSync Bridge Spike (fail-fast on the hardest piece)
+
+**Goal:** prove the `CurrentValueSubject` mirror bridge produces the same `exportRunStatePublisher` emission sequence as today's `@Published`-projected version, *before* investing in five phases of migration that assume the bridge works.
+
+**Why this exists.** The original plan ran the highest-risk migration (Phase 5, ExportManager + AutoSync bridge) *last*. That's the wrong risk profile: if the bridge fundamentally doesn't preserve the contract, you'd find out only after the rest of the codebase is already committed to `@Observable`. A 2–3 day isolated spike catches the failure mode before any other phase starts.
+
+**Scope:**
+
+- Create a *scratch* `@Observable` clone of `ExportManager` (in a branch, not landed) that wraps the four AutoSync-tracked properties (`activeRunContext`, `isRunning`, `queueCount`, `isEnqueueingAll`) with `didSet`-backed `CurrentValueSubject` mirrors and rebuilds `exportRunStatePublisher` over them.
+- Capture a baseline of emissions from today's `ExportManager.exportRunStatePublisher` against a scripted mutation sequence (see §Testing Strategy for the concrete sequence).
+- Run the same scripted sequence against the scratch `@Observable` clone; capture its emissions.
+- Compare: emissions must be identical (same `ExportRunState` values in the same order, same `removeDuplicates` collapsing).
+
+**Definition of done:**
+
+- A test (in the scratch branch, not landed) demonstrates emission equivalence between the `@Published` and `@Observable + mirror` shapes against the scripted sequence.
+- A short writeup documents any subtle differences found (re-entrancy on the same main-actor scope, ordering when two properties mutate in the same tick, behavior under `Task.yield()` between mutations) so subsequent phases know what to watch for.
+
+**Exit criteria → next step:**
+
+- **Spike passes:** continue with Phases 1–4. Decide for Phase 5 whether to fully migrate ExportManager or defer it (see Phase 5 for the deferral option).
+- **Spike fails:** abandon the bridge approach. Two fallback paths exist: (a) keep `ExportManager` as `ObservableObject` indefinitely and migrate everything else (acceptable — see Phase 5 deferral rationale); (b) redesign AutoSync's consumption to use an `AsyncStream` driven by `withObservationTracking` re-registration, which is a larger refactor of `AutoSyncManager` itself and is out of scope here.
+
+**Risk:** Low for the spike itself (it's a scratch branch). High *value* — this is the gating decision for whether Phase 5 is feasible at all.
 
 ---
 
@@ -122,12 +156,18 @@ Six phases. Order matters: each phase de-risks the next by validating an aspect 
 - `ViewModels/MonthViewModel.swift` — read by `MonthContentView` and `CollectionContentView`. After the UI Smoothness Plan's Task 1.2 lands, `thumbnailsById` will have been deleted, leaving a thinner surface to migrate.
 - `Models/ExportProgressState.swift` — held by `ExportManager` (~L75), read by `ExportProgressBar` and timeline `MonthRow`. Currently `ObservableObject` with `@Published` properties that fire per-asset during runs (motivation for smoothness Task 1.1).
 
+**Hard ordering requirement — Task 1.2 of the UI Smoothness Plan must land before this phase.** Task 1.2 deletes `MonthViewModel.thumbnailsById`; migrating `MonthViewModel` to `@Observable` while that property still exists means the migration has to handle a property that's about to be removed, then immediately remove it. Either:
+- (a) Land smoothness Task 1.2 first, then start Phase 2; or
+- (b) Defer `MonthViewModel` from Phase 2 entirely and migrate it as part of Task 1.2's diff, since Task 1.2 already touches the file.
+
+Recommendation: (b). Drop `MonthViewModel` from Phase 2's scope and let it migrate alongside the thumbnail-cache work. Phase 2 then handles only `ExportProgressState`.
+
 **Tasks:**
 
 1. `ExportProgressState` is owned by `ExportManager`. While `ExportManager` is still `ObservableObject`, it can hold an `@Observable` instance as a plain property — *but* the manager won't re-publish changes to the instance. That's actually fine for SwiftUI views (they observe `ExportProgressState` directly via `@Environment` or by being passed an instance), but verify no view currently observes `ExportProgressState` *via* `ExportManager.objectWillChange`. Grep before migrating.
-2. `MonthViewModel` is `@StateObject` in `MonthContentView`. Migrate to `@State var viewModel = MonthViewModel(...)` and adjust initialization.
+2. (Deferred to Task 1.2.) `MonthViewModel` migration; not in Phase 2's scope per the ordering requirement above.
 
-**Definition of done:** Both types are `@Observable`; per-asset progress UI updates only invalidate the progress bar and the affected row, not the whole observing tree.
+**Definition of done:** `ExportProgressState` is `@Observable`; per-asset progress UI updates only invalidate the progress bar and the affected row, not the whole observing tree.
 
 **Risk:** Medium. `ExportProgressState`'s observation chain crosses `ExportManager`; if a view observes the wrong thing transitively, granularity won't kick in.
 
@@ -179,9 +219,16 @@ Six phases. Order matters: each phase de-risks the next by validating an aspect 
 
 ---
 
-### Phase 5 — ExportManager + the AutoSync Bridge
+### Phase 5 — ExportManager + the AutoSync Bridge *(optional / deferrable)*
 
 **Goal:** the highest-risk migration. `ExportManager` is the AutoSync seam.
+
+**Make-or-defer decision.** After Phases 0.5, 1–4 land, the only remaining `ObservableObject` of consequence is `ExportManager` itself. Before starting Phase 5, capture invalidation counts from the post-Phase-4 baseline and answer: *how much of the smoothness payoff is left on the table by leaving ExportManager as `ObservableObject`?*
+
+- If post-Phase-4 metrics show that ExportManager's coarse invalidation is responsible for ≥20% of the remaining view churn, proceed with Phase 5.
+- If <20%, **defer indefinitely.** Keep `ExportManager` as `ObservableObject` + `@Published`; document that the AutoSync seam is the reason. This is a legitimate end state, not a half-finished migration: the seam exists *because* AutoSync needs Combine semantics, and `ObservableObject` is the framework-native shape for that.
+
+The Phase 0.5 spike's outcome also feeds this decision — if the bridge proved fragile in spike, defer is mandatory.
 
 **The AutoSync constraint, restated.** `AutoSync/AutoSyncManager.swift:121` subscribes to `environment.exportRunner.exportRunStatePublisher`, which is built inside `Export/ExportManager.swift:196–209` as:
 
@@ -199,10 +246,16 @@ The `$`-projections come from `@Published` — they don't exist on `@Observable`
 ```swift
 @Observable @MainActor final class ExportManager {
     var activeRunContext: ExportRunContext? {
-        didSet { activeRunContextSubject.send(activeRunContext) }
+        didSet {
+            guard activeRunContext != oldValue else { return }
+            activeRunContextSubject.send(activeRunContext)
+        }
     }
     var isRunning: Bool = false {
-        didSet { isRunningSubject.send(isRunning) }
+        didSet {
+            guard isRunning != oldValue else { return }
+            isRunningSubject.send(isRunning)
+        }
     }
     // ... and so on for queueCount, isEnqueueingAll
 
@@ -221,6 +274,8 @@ The `$`-projections come from `@Published` — they don't exist on `@Observable`
 }
 ```
 
+**The `oldValue` guard is load-bearing.** `CurrentValueSubject.send(_)` emits on *every* call regardless of value equality (unlike `@Published`'s `willSet`, which behaves similarly but composes differently with downstream operators). Without the guard, assigning the same value to a property emits a duplicate through the subject; the downstream `.removeDuplicates()` collapses it for `exportRunStatePublisher`, but any direct subscriber to a mirror subject (e.g. a future feature observing `isRunningSubject` directly) would see redundant emissions. Add the guard at every `didSet` to keep the bridge's surface honest.
+
 This preserves:
 
 - Synchronous emission (the `didSet` fires synchronously inside the same main-actor scope as the property mutation).
@@ -232,7 +287,7 @@ It costs verbosity (four extra subjects, four extra `didSet` lines) but every li
 
 **Alternatives considered and rejected (for ExportManager specifically):**
 
-- `withObservationTracking` from AutoSync. Issue: the `onChange` closure fires *before* the property update is observable. AutoSync would read the old value, which breaks coherence. Could work for non-coherence-sensitive consumers; not appropriate here.
+- `withObservationTracking` from AutoSync. The actual issue is that the primitive is *one-shot*: after `onChange` fires, tracking ends and the caller must re-register inside (or after) `onChange` to keep observing. For a continuous AutoSync subscription this means hand-rolling a re-registration loop that's equivalent to a `.sink`, with no upside over the `CurrentValueSubject` mirror. (Note: contrary to an earlier draft of this plan, `onChange` fires *after* the mutation is committed and the new value is observable — it is closer to `didChange` than `willChange`. The blocker is the one-shot semantics, not stale reads.)
 - Convert `exportRunStatePublisher` to `AsyncStream`. Issue: AutoSync's current code is built on Combine subscriptions; rewriting it to consume an `AsyncStream` is a separate, large refactor and is out of scope.
 - Keep `ExportManager` as `ObservableObject` indefinitely. Workable as a fallback if the bridge proves unstable, but undercuts the migration's payoff.
 
@@ -264,7 +319,7 @@ Because this is the single load-bearing piece, a standalone callout:
 
 **Contract** (from architecture-conventions.md §AutoSync seam): synchronous `.sink`, never `.receive(on:)` or `MainActor.run`; mirrors fire in the same main-actor scope as the upstream mutation; AutoSync observes a coherent main-actor snapshot.
 
-**With `@Observable` (default behavior):** breaks. No `$property` projections; `withObservationTracking` is one-shot and fires *before* the property update is observable.
+**With `@Observable` (default behavior):** breaks. No `$property` projections. `withObservationTracking` is one-shot — after `onChange` fires, the tracking registration is gone and the caller has to re-register manually. For Combine-shaped continuous subscriptions, this means writing a re-registration loop equivalent to a `.sink`, with no advantage over the explicit subject mirror.
 
 **Bridge recipe:**
 
@@ -330,36 +385,62 @@ This baseline is what the migration is measured against. It also surfaces unexpe
 
 ### Per-phase verification
 
-Each phase adds at least one regression test that asserts *granular tracking actually engaged*. Pattern:
+Each phase adds at least one regression test that asserts *granular tracking actually engaged*.
+
+**Caveat — `withObservationTracking` is one-shot.** A naïve call (`withObservationTracking { read } onChange: { count += 1 }`) stops tracking after the *first* mutation. To observe N mutations, the test has to re-register inside `onChange` (or wrap that pattern in a helper). Test sketches that omit the re-registration loop will silently under-count or appear to pass when they shouldn't.
+
+**Required test helper** (add to `photo-exportTests/TestHelpers/ObservationCounter.swift` before Phase 0):
 
 ```swift
-@Test func testObservableGranularity_RecordStore() async {
-    let store = ExportRecordStore(...)
-    var summaryReads = 0
-    var unrelatedReads = 0
+@MainActor
+final class ObservationCounter {
+    private(set) var count = 0
+    private var isActive = true
 
-    withObservationTracking {
-        _ = store.monthSummary(forYear: 2024, month: 5)  // reads only this bucket
-    } onChange: {
-        summaryReads += 1
+    /// Begin tracking `read`; increment `count` whenever any tracked property
+    /// mutates. Re-registers automatically until `stop()` is called.
+    func start<T>(_ read: @escaping @MainActor () -> T) {
+        guard isActive else { return }
+        withObservationTracking {
+            _ = read()
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.isActive else { return }
+                self.count += 1
+                self.start(read) // re-register
+            }
+        }
     }
 
-    withObservationTracking {
-        _ = store.monthSummary(forYear: 2023, month: 1)  // unrelated bucket
-    } onChange: {
-        unrelatedReads += 1
-    }
-
-    // Mutate only the 2024/05 bucket
-    store.markExported(asset: makeAsset(year: 2024, month: 5), ...)
-    await Task.yield()
-
-    expect(summaryReads).toBe(1)
-    expect(unrelatedReads).toBe(0)  // <-- the win: unrelated tracking didn't fire
+    func stop() { isActive = false }
 }
 ```
 
-This is the test that proves granularity. Add one per migrated type (or per phase).
+Granularity test using the helper:
+
+```swift
+@Test @MainActor func testObservableGranularity_RecordStore() async {
+    let store = ExportRecordStore(...)
+    let bucketUnderTest = ObservationCounter()
+    let unrelatedBucket = ObservationCounter()
+
+    bucketUnderTest.start { store.monthSummary(forYear: 2024, month: 5) }
+    unrelatedBucket.start { store.monthSummary(forYear: 2023, month: 1) }
+
+    store.markExported(asset: makeAsset(year: 2024, month: 5), ...)
+    await Task.yield()
+
+    #expect(bucketUnderTest.count == 1)
+    #expect(unrelatedBucket.count == 0)  // the granularity win
+
+    bucketUnderTest.stop()
+    unrelatedBucket.stop()
+}
+```
+
+**Verify the underlying granularity assumption before relying on the test.** The test only proves granularity if `monthSummary(forYear:month:)` reads a *single* observable property keyed by `(year, month)`. Read `Records/ExportRecordStore.swift:427–454` to confirm: today's implementation reads `monthCounters[MonthKey(year: year, month: month)]`, a single dictionary lookup on a single stored property. After migration, `@Observable` tracks reads at the level of the `monthCounters` *dictionary*, not at individual key level — so any mutation to *any* month bucket would fire the dependency. To get per-bucket granularity, the migration should either (a) expose per-month-key tracking via the `Observation` framework's `_$observationRegistrar` extension, or (b) accept that granularity is at the dictionary level and the test asserts a weaker but still useful property (any month-bucket mutation invalidates any month-bucket reader — still better than the current "any record mutation invalidates every observer").
+
+Pick (b) for v1 and document the limitation; (a) is a possible future refinement.
 
 ### Cancellation seam regression
 
@@ -370,27 +451,62 @@ Run the existing cancellation tests after each phase. Specifically:
 
 These should not be affected by observation changes; if they fail, something subtle is wrong with actor isolation.
 
-### AutoSync seam regression (Phase 5 critical)
+### AutoSync seam regression (Phase 0.5 spike + Phase 5 gate)
 
-The AutoSync test suite (`AutoSyncManagerTests` and its environment-fake-based scenarios) is the critical gate for Phase 5. Add a new test before Phase 5 starts:
+The AutoSync test suite (`AutoSyncManagerTests` and its environment-fake-based scenarios) is the critical gate for both the Phase 0.5 spike and the Phase 5 migration. The same scripted sequence drives both — captured against the pre-migration code, replayed against the spike branch, and re-checked when Phase 5 lands.
+
+**Scripted mutation sequence** (exercise all four CombineLatest4 inputs and the `removeDuplicates` collapse):
+
+```
+Step 1. Initial state: activeRunContext=nil, isRunning=false, queueCount=0, isEnqueueingAll=false
+        → expect emission: ExportRunState(isManualActive=false, isAutoSyncActive=false)
+Step 2. User triggers Export All: isEnqueueingAll=true
+        → expect emission: ExportRunState(isManualActive=true)  (manual fire-and-forget)
+Step 3. First job appends: queueCount=1 (isEnqueueingAll still true)
+        → expect NO emission  (removeDuplicates collapses; isManualActive stayed true)
+Step 4. Bulk dispatcher finishes enqueueing: isEnqueueingAll=false, queueCount=1, isRunning=true
+        → expect NO emission  (still manualActive)
+Step 5. Queue drains: queueCount=0, isRunning=false
+        → expect emission: ExportRunState(isManualActive=false)
+Step 6. AutoSync starts a run: activeRunContext=AutoSyncContext, isRunning=true
+        → expect emission: ExportRunState(isAutoSyncActive=true)
+Step 7. AutoSync finishes: activeRunContext=nil, isRunning=false
+        → expect emission: ExportRunState(isAutoSyncActive=false, isManualActive=false)
+```
+
+Expected emission count: **4 distinct states.** Any deviation from this count or order indicates the bridge altered the publisher's contract.
+
+**Capture mechanism:**
+
+1. On the pre-migration code (today's `@Published` version), run a one-shot test that drives this sequence and records every emission to `photo-exportTests/Fixtures/ExportRunStatePublisherBaseline.json`.
+2. Commit the fixture.
+3. The Phase 0.5 spike runs the same test against the scratch `@Observable` clone and asserts emissions match the fixture.
+4. After Phase 5 lands, the test runs against the migrated `ExportManager` and asserts the fixture still matches.
 
 ```swift
-@Test func testExportRunStatePublisherEmitsIdenticallyAfterMigration() {
-    // Drive a scripted sequence of mutations on ExportManager;
-    // capture the emitted ExportRunState sequence;
-    // compare against a recorded baseline from the pre-migration code.
+@Test @MainActor func testExportRunStatePublisherMatchesBaseline() async throws {
+    let manager = makeExportManager(/* with fakes */)
+    let recorder = PublisherRecorder<ExportRunState>()
+    let subscription = manager.exportRunStatePublisher.sink { recorder.record($0) }
+    defer { subscription.cancel() }
+
+    // Drive the 7-step sequence above.
+    await driveScriptedSequence(on: manager)
+
+    let baseline = try loadBaseline("ExportRunStatePublisherBaseline.json")
+    #expect(recorder.captured == baseline)
 }
 ```
 
-The baseline is captured *before* Phase 5 starts. The test runs *after* Phase 5 lands. Equal emission sequence = bridge is correct.
+**Why this is non-negotiable.** The AutoSync contract is documented in [`docs/reference/architecture-conventions.md`](../../reference/architecture-conventions.md) §AutoSync seam. Any silent change here (an extra emission, a dropped emission, a reordered pair) can cause AutoSync to race the manual export path — the exact regression the seam exists to prevent. The fixture-baselined test is the only realistic way to catch such bugs.
 
 ### Combine bridge unit tests (Phase 5)
 
 For each property mirrored to a `CurrentValueSubject`:
 
-- Mutation triggers a single `send` with the new value.
-- No `send` fires when the property is set to its current value (matches `removeDuplicates` behavior).
-- Ordering between multiple subjects is preserved.
+- Mutation to a *new* value triggers a `send` with the new value.
+- Mutation to the *same* value (e.g. `manager.isRunning = false` when it's already `false`) triggers **no** `send`, because the `didSet` guard skips it (`guard newValue != oldValue else { return }`). This deviates from raw `CurrentValueSubject` behavior — without the guard, every property assignment would emit regardless of value equality. The guard is the bridge's correctness primitive.
+- Ordering between multiple subjects is preserved when two properties are mutated in the same synchronous scope (e.g. `manager.isRunning = true; manager.queueCount = 1` emits `isRunning` first, `queueCount` second, deterministically because `didSet`s fire in declaration order within the same main-actor tick).
 
 ### View-level snapshot tests (optional)
 
@@ -432,14 +548,15 @@ Existing tests instantiate managers directly and assert on `@Published` properti
 
 ---
 
+## Decisions (closed by the review pass)
+
+- **Sequencing relative to the UI Smoothness Plan: interleaved.** Land the unchanged smoothness tasks first (1.2, 1.3, 2.2, 2.3, 3.2); then Phases 0 → 0.5 → 1–4 of this plan; then re-evaluate the reshaped smoothness tasks (1.1, 2.1, 3.1) and decide whether Phase 5 proceeds (per Phase 5's make-or-defer rule). Rationale: the unchanged smoothness tasks ship visible wins and don't conflict; the migration removes Task 2.1 outright and de-scopes 1.1/3.1.
+- **`MonthViewModel` migration timing: deferred into Task 1.2.** Phase 2 covers `ExportProgressState` only. `MonthViewModel`'s migration happens inside Task 1.2's diff because Task 1.2 already touches that file.
+- **AutoSync `exportRunStatePublisher` scripted sequence: closed.** See the 7-step sequence in §Testing Strategy — same script for the Phase 0.5 spike and the Phase 5 gate.
+
 ## Open Questions
 
-- **Sequencing relative to the UI Smoothness Plan.** Options:
-  1. **Smoothness plan first, then this.** Pro: smoothness wins ship sooner; users feel the difference before migration. Con: invest in Task 2.1 (and parts of 1.1) that this plan then makes obsolete — wasted work.
-  2. **This plan first, then remaining smoothness tasks.** Pro: no wasted work on tasks that get obsoleted. Con: migration is the higher-risk track; users wait longer for smoothness wins.
-  3. **Interleaved.** Land smoothness Tasks 1.2 / 1.3 / 2.2 / 2.3 / 3.2 (the unchanged ones) first; then Phases 0–5 of this plan; then re-evaluate Tasks 1.1 / 2.1 / 3.1.
-  - Recommendation: **(3)**. The unchanged smoothness tasks deliver visible wins and don't conflict; the migration removes the work for 2.1 entirely and de-scopes 1.1/3.1.
-- **`MonthViewModel` migration timing.** If smoothness Task 1.2 (thumbnail cache) lands first, `MonthViewModel` shrinks significantly. Decide whether to migrate `MonthViewModel` in Phase 2 (current placement) or defer until after Task 1.2 lands.
-- **Test fixture for the `exportRunStatePublisher` baseline.** What's the scripted mutation sequence? Should it be the same scenario as the invalidation baseline, or a separate AutoSync-focused script? Phase 5 prerequisite — decide before Phase 5 starts.
-- **`@ObservationIgnored` use.** Are there properties on the migrated types that should genuinely not participate in tracking (e.g. private caches, telemetry counters)? Audit during each phase; default to *not* using `@ObservationIgnored` unless there's a demonstrated reason.
-- **Whether to migrate `ExportProgressState` independently or fold into `ExportManager`.** With `@Observable`, the granular tracking might make the separate `ExportProgressState` object unnecessary — readers could observe `ExportManager` directly and only re-evaluate on the specific progress field they read. Consider folding back together in Phase 2 or Phase 5 if the separation no longer earns its keep.
+- **`@ObservationIgnored` use.** Audit during each phase; default to *not* using `@ObservationIgnored` unless there's a demonstrated reason (private cache that's never read by views, telemetry counter the observer doesn't care about).
+- **Whether to fold `ExportProgressState` back into `ExportManager`.** With `@Observable`, the granular tracking might make the separate `ExportProgressState` object unnecessary — readers could observe `ExportManager.currentAssetFilename` directly and only re-evaluate on that specific property. **Defer until after Phase 2:** capture invalidation counts on the migrated `ExportProgressState`; if the split no longer earns its keep, fold back in a follow-up.
+- **Per-key granularity for `monthCounters`.** Today, `@Observable` tracks at the dictionary level, not at individual key level. The v1 test in §Testing Strategy accepts dictionary-level granularity. If profiling shows that's insufficient (a hot grid that re-renders on unrelated month-bucket mutations), explore exposing per-key tracking via the `Observation` framework's lower-level `_$observationRegistrar` API. Future refinement; not Phase 3 blocker.
+- **`Observations<T>` async sequence.** macOS 15+ ships an `async` consumption shape for `@Observable` types that some non-Combine consumers might prefer over hand-rolled `withObservationTracking` loops. Not relevant for AutoSync (which is Combine-shaped), but useful to document in the recipe doc as the modern primitive for background-task observation.
