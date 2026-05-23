@@ -631,35 +631,48 @@ struct AutoSyncManagerTests {
   /// Each sub-scope iteration updates `currentScope` *before* the per-scope
   /// `await runExport(context:)`. A SIGKILL during a sub-run leaves the
   /// journal naming the active scope, not the previous one.
-  @Test func eachSubScopeUpdatesCurrentScopeBeforeAwait() async {
+  ///
+  /// Uses the fake's `shouldHang` hook to park `runExport` for the first
+  /// sub-scope on a `CheckedContinuation`. While parked, the journal on
+  /// disk must name `timeline` deterministically — no scheduler-fairness
+  /// race like the earlier yield-snapshot version had.
+  @Test func eachSubScopeUpdatesCurrentScopeBeforeAwait() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
     builder.destination.subject.send(safeDestination())
     builder.scopes.subject.send(
       AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    builder.exportRunner.shouldHang = { context in
+      context.scope == .timelineFullLibrary
+    }
     manager.attach(to: builder.environment)
 
     builder.clock.advance(by: 10)
-    // Yield enough for all three scopes to execute (fake returns
-    // immediately each call). After completion, the journal should be
-    // cleared (next test pins that); during execution, the per-scope
-    // update happens. We verify by snapshotting after a partial yield
-    // budget where some — but not all — runs have completed.
+    // Yield enough for the fan-out Task to enter the loop, write the
+    // per-scope update, and suspend on the hang. Three yields cover
+    // dispatch + suspension.
+    for _ in 0..<3 { await Task.yield() }
+
     let destId = safeDestination().id!
-    // Yield once: dispatcher should have run for `timeline`.
-    await Task.yield()
-    let afterFirst = builder.currentRunStore.load(destinationId: destId)
-    if let afterFirst {
-      // currentScope could be `timeline` (about to run, mid-run) OR
-      // `favorites` (timeline finished, about to do favorites). Either
-      // way, it must be one of the planned scopes — *never* nil after
-      // the first iteration begins.
-      #expect(
-        afterFirst.currentScope != nil,
-        "currentScope must be populated as soon as the first sub-scope iteration starts")
-      #expect(["timeline", "favorites", "albums"].contains(afterFirst.currentScope!))
-    }
+    let journal = try #require(
+      builder.currentRunStore.load(destinationId: destId),
+      "Journal must exist while fan-out is parked on the first sub-scope")
+    let currentScope = try #require(
+      journal.currentScope,
+      "Per-iteration update must land before the await — currentScope must not be nil while a sub-run is in flight"
+    )
+    #expect(
+      currentScope == "timeline",
+      "Hung-on-timeline fan-out must name `timeline` as the current scope")
+
+    // Teardown: resume the parked continuation so the fan-out can
+    // complete, the defer-block clears the journal, and the test exits
+    // cleanly. A parked `CheckedContinuation` traps when deallocated
+    // unresumed.
+    builder.exportRunner.resumeHung(
+      with: builder.exportRunner.makeDefaultCompletedSummary())
+    for _ in 0..<6 { await Task.yield() }
   }
 
   /// Clean fan-out completion deletes the journal. The deferred `clear`
@@ -721,46 +734,59 @@ struct AutoSyncManagerTests {
       "Fan-out must break on first non-.completed summary")
   }
 
-  /// **Smoking-gun integration test.** Drive a fake exportRunner that
-  /// hangs forever on the second sub-scope, then tear down without
-  /// waiting for clean exit (simulating SIGKILL). The journal on disk
-  /// should reflect the second scope as the current one — that is the
-  /// forensic signal a maintainer needs to triage issue-#112-class bugs.
-  @Test func journalReflectsCurrentScopeWhenFanOutKilledMidSecondScope() async {
+  /// **Smoking-gun integration test.** Hang the second sub-scope's
+  /// `runExport` on a `CheckedContinuation`. While the fan-out task is
+  /// parked there (just as it would be if the OS killed the process
+  /// during the second sub-scope), the on-disk journal must name
+  /// `favorites`. This is the forensic property a maintainer would rely
+  /// on when triaging an issue-#112-class report.
+  ///
+  /// The hang-based approach replaces an earlier yield-snapshot version
+  /// whose assertion was scheduler-dependent: the fake's synchronous
+  /// `runExport` could drain all three scopes in one scheduling slice,
+  /// leaving no observable mid-fan-out state. Parking on a continuation
+  /// gives a deterministic snapshot point.
+  @Test func journalNamesCurrentScopeWhenFanOutHangsMidSecondScope() async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
     builder.destination.subject.send(safeDestination())
     builder.scopes.subject.send(
       AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    builder.exportRunner.shouldHang = { context in
+      context.scope == .favoritesFull
+    }
     manager.attach(to: builder.environment)
 
-    let destId = safeDestination().id!
-
-    // We can't actually hang the fake (it has no continuation primitive),
-    // but we can verify the per-iteration update lands by observing the
-    // journal *between* iterations. Strategy: snapshot before each yield
-    // hop and look for the moment `currentScope == "favorites"`.
     builder.clock.advance(by: 10)
+    // Yield enough for: dispatch → timeline iteration (returns
+    // `.completed` immediately under the fake) → favorites iteration
+    // update + suspension on the hang. Six yields is a comfortable
+    // upper bound; the test is deterministic in the sense that the
+    // continuation never resumes until `resumeHung` is called.
+    for _ in 0..<6 { await Task.yield() }
 
-    var observedScopes: Set<String> = []
-    for _ in 0..<8 {
-      if let j = builder.currentRunStore.load(destinationId: destId),
-        let current = j.currentScope
-      {
-        observedScopes.insert(current)
-      }
-      await Task.yield()
-    }
-
-    // The fan-out moves through three scopes; at least one mid-flight
-    // observation must land on the second. (timeline as the first is
-    // also fine to observe; albums as the third too. The smoking-gun
-    // property is that we *can* observe the intermediate state.)
+    let destId = safeDestination().id!
+    let journal = try #require(
+      builder.currentRunStore.load(destinationId: destId),
+      "Journal must exist while the fan-out is parked on a sub-scope")
+    let currentScope = try #require(
+      journal.currentScope,
+      "Per-iteration update must populate currentScope before the await")
     #expect(
-      observedScopes.contains("favorites") || observedScopes.contains("albums"),
-      "Per-iteration update must be observable mid-fan-out — this is the forensic signal for issue-#112-class bugs"
+      currentScope == "favorites",
+      "Hung-on-favorites fan-out must name `favorites` — the forensic signal a maintainer reads from the diagnostic to triage issue-#112-class bugs"
     )
+    #expect(
+      builder.exportRunner.receivedContexts.count == 2,
+      "Exactly two runExport calls should have happened: timeline (completed) and favorites (parked)"
+    )
+
+    // Teardown: resume so the fan-out's defer can clear the journal and
+    // the Task can complete.
+    builder.exportRunner.resumeHung(
+      with: builder.exportRunner.makeDefaultCompletedSummary())
+    for _ in 0..<6 { await Task.yield() }
   }
 
   /// Disabling AutoSync mid-fan-out cancels the task. The defer-block

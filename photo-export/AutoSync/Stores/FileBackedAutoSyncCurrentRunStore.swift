@@ -24,23 +24,28 @@ import os
 /// `fsync` per fan-out boundary (≤5 per run), and (c) the marginal latency
 /// is well under the latency of the AutoSync run itself.
 ///
-/// The helper is duplicated here rather than shared with `JSONLRecordFile`
-/// because that type is generic and exposing it would force the new store
-/// to carry unused generic parameters; the helper is five lines.
+/// The fsync call is routed through a `DirectoryFsyncing` protocol seam so
+/// tests can record invocations and prove the call happens — a future
+/// refactor that drops the fsync would otherwise compile and pass every
+/// behavioral test, silently re-introducing the durability gap this store
+/// was specifically architected to close.
 @MainActor
 final class FileBackedAutoSyncCurrentRunStore: AutoSyncCurrentRunStore {
   private let baseDirectoryURL: URL
   private let fileManager: FileManager
+  private let directoryFsync: any DirectoryFsyncing
   private let logger: Logger
 
   init(
     baseDirectoryURL: URL,
     fileManager: FileManager = .default,
+    directoryFsync: any DirectoryFsyncing = ProductionDirectoryFsync(),
     logger: Logger = Logger(
       subsystem: "com.valtteriluoma.photo-export", category: "AutoSyncCurrentRunStore")
   ) {
     self.baseDirectoryURL = baseDirectoryURL
     self.fileManager = fileManager
+    self.directoryFsync = directoryFsync
     self.logger = logger
   }
 
@@ -65,14 +70,14 @@ final class FileBackedAutoSyncCurrentRunStore: AutoSyncCurrentRunStore {
     encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
     let data = try encoder.encode(journal)
     try data.write(to: url, options: .atomic)
-    Self.fsyncDirectory(url.deletingLastPathComponent())
+    directoryFsync.fsyncDirectory(url.deletingLastPathComponent())
   }
 
   func clear(destinationId: String) throws {
     let url = fileURL(for: destinationId)
     guard fileManager.fileExists(atPath: url.path) else { return }
     try fileManager.removeItem(at: url)
-    Self.fsyncDirectory(url.deletingLastPathComponent())
+    directoryFsync.fsyncDirectory(url.deletingLastPathComponent())
   }
 
   private func fileURL(for destinationId: String) -> URL {
@@ -86,16 +91,5 @@ final class FileBackedAutoSyncCurrentRunStore: AutoSyncCurrentRunStore {
     if !fileManager.fileExists(atPath: dir.path) {
       try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
     }
-  }
-
-  /// Best-effort parent-directory fsync. Mirrors `JSONLRecordFile.fsyncDirectory`
-  /// — open the directory read-only, fsync, close. Failures are silent: the
-  /// rename itself succeeded, the durability of the entry is best-effort, and
-  /// the journal is a diagnostic artifact (not export correctness state).
-  private static func fsyncDirectory(_ url: URL) {
-    let fd = open(url.path, O_RDONLY)
-    if fd < 0 { return }
-    defer { close(fd) }
-    _ = fsync(fd)
   }
 }

@@ -112,9 +112,16 @@ struct DiagnosticReporterTests {
   // MARK: - Previous AutoSync run journal
 
   /// When no journal is on disk, the report omits the section *entirely*
-  /// — no header, no "(none)" placeholder. Pins the byte-for-byte
-  /// compatibility promise: a user with no in-flight run on launch sees
-  /// the same report shape as before the journal feature shipped.
+  /// — no header, no "(none)" placeholder, and none of the per-field
+  /// labels. Pins the byte-for-byte compatibility promise: a user with
+  /// no in-flight run on launch sees the same report shape as before
+  /// the journal feature shipped.
+  ///
+  /// The per-field-label asserts catch a regression that emits an empty
+  /// section body (no header but field labels still rendered). Without
+  /// them, a refactor that returned `["Trigger:        ", ...]` from
+  /// `previousRunSection()` when `previousRunJournal == nil` would slip
+  /// through.
   @Test func absentJournalOmitsTheSectionEntirely() {
     let h = makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
@@ -123,6 +130,16 @@ struct DiagnosticReporterTests {
 
     #expect(!report.contains("== Previous Auto-Export Run =="))
     #expect(!report.contains("Previous Auto-Export"))
+    // Per-field labels — pinned at the journal section's specific
+    // 8-space gap so the assertions don't false-fail against the
+    // catch-up section (which uses a 3-space gap for its own
+    // `Started:` / `Trigger:` lines). "Planned scopes:" and the
+    // "Status: in-flight" line are exclusive to the journal section
+    // regardless of width.
+    #expect(!report.contains("Trigger:        "))
+    #expect(!report.contains("Planned scopes:"))
+    #expect(!report.contains("Current scope:"))
+    #expect(!report.contains("Status:         in-flight on launch"))
   }
 
   /// Populated journal renders all six fields and the load-bearing
@@ -150,6 +167,14 @@ struct DiagnosticReporterTests {
     let report = reporter.makeReport()
 
     #expect(report.contains("== Previous Auto-Export Run =="))
+    // Pin the `Started:` line's field-label width (8 spaces between
+    // "Started:" and the value). Locks in the layout so a refactor that
+    // drops the padding doesn't silently change what users see. Exact
+    // timestamp drift is uninteresting; the width pin catches the real
+    // regression class.
+    #expect(
+      report.contains("Started:        "),
+      "Started: line must use the 8-space label-to-value gap shared by all journal-section fields")
     #expect(report.contains("Trigger:        appLaunch"))
     #expect(report.contains("Planned scopes: timeline, favorites, albums, sharedAlbums"))
     #expect(report.contains("Current scope:  albums (since"))

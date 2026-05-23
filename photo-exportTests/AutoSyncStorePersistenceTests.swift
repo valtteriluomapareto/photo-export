@@ -527,6 +527,115 @@ struct AutoSyncStorePersistenceTests {
     }
   }
 
+  /// Pins the on-disk JSON key names independently of the Codable
+  /// declaration. The fixture-decode test alone doesn't catch a Codable
+  /// rename — a maintainer who renames `currentScope → activeScope` and
+  /// updates the fixture string in the same PR would pass that test
+  /// without realising the rename strands existing users' on-disk
+  /// journal files. This test reads the file back and substring-asserts
+  /// every documented key. Mirror of
+  /// `dirtyStateEncodedBytesAreSortedAndPrettyPrinted`'s idiom.
+  @Test func currentRunJournalEncodedBytesContainExpectedKeys() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      let journal = AutoSyncRunJournal(
+        startedAt: Date(timeIntervalSinceReferenceDate: 770000000),
+        trigger: "appLaunch",
+        scopes: ["timeline"],
+        currentScope: "timeline",
+        currentScopeStartedAt: Date(timeIntervalSinceReferenceDate: 770000001))
+      try store.save(journal, destinationId: "dest-1")
+
+      let url = dir
+        .appendingPathComponent("dest-1", isDirectory: true)
+        .appendingPathComponent("currentRun.json")
+      let raw = try String(contentsOf: url, encoding: .utf8)
+
+      // Every documented key must appear in the on-disk JSON. A Codable
+      // rename would silently strand existing users' files; this test
+      // catches the rename even when fixture-decode does not.
+      #expect(raw.contains("\"startedAt\""))
+      #expect(raw.contains("\"trigger\""))
+      #expect(raw.contains("\"scopes\""))
+      #expect(raw.contains("\"currentScope\""))
+      #expect(raw.contains("\"currentScopeStartedAt\""))
+    }
+  }
+
+  /// The parent-directory fsync is the load-bearing detail that
+  /// distinguishes this store from the run-summary store — it's what
+  /// makes the journal survive SIGKILL/jetsam between the write and the
+  /// next launch. Without a structural test asserting `fsyncDirectory`
+  /// is invoked, a future refactor that drops the call would compile
+  /// cleanly and pass every other test, silently re-introducing the
+  /// durability gap the journal was specifically architected to close.
+  /// `DirectoryFsyncing` protocol seam exists for exactly this assertion.
+  @Test func saveAndClearBothFsyncTheParentDirectory() throws {
+    try withTempDirectory { dir in
+      let recorder = RecordingDirectoryFsync()
+      let store = FileBackedAutoSyncCurrentRunStore(
+        baseDirectoryURL: dir,
+        directoryFsync: recorder)
+      let journal = AutoSyncRunJournal(
+        startedAt: Date(timeIntervalSinceReferenceDate: 770000000),
+        trigger: "appLaunch",
+        scopes: ["timeline"],
+        currentScope: nil,
+        currentScopeStartedAt: nil)
+
+      try store.save(journal, destinationId: "dest-1")
+      #expect(
+        recorder.fsyncedPaths.count == 1,
+        "save must fsync the parent directory after the atomic write")
+
+      try store.clear(destinationId: "dest-1")
+      #expect(
+        recorder.fsyncedPaths.count == 2,
+        "clear must fsync the parent directory after removing the file")
+
+      // Both calls must target `<base>/<destId>/` — not the base
+      // directory itself, not the file's full path.
+      let expectedParent = dir
+        .appendingPathComponent("dest-1", isDirectory: true)
+        .standardizedFileURL
+      let standardized = recorder.fsyncedPaths.map { $0.standardizedFileURL }
+      #expect(standardized.allSatisfy { $0.path == expectedParent.path })
+    }
+  }
+
+  /// Atomic-write semantics: a stray `.tmp` sibling left behind by a
+  /// previous aborted save (Foundation's `Data.write(.atomic)` uses
+  /// `.tmp`-then-rename internally; a SIGKILL during the rename window
+  /// could leave debris) must NOT influence what `load` returns. The
+  /// store only consults the canonical `currentRun.json` path. This
+  /// test pins that behaviour: a hand-written `currentRun.json.tmp`
+  /// containing garbage produces `load` == nil when no canonical file
+  /// exists.
+  ///
+  /// Foundation's actual atomic-write does use a randomized suffix (not
+  /// literally `.tmp`), so a real leftover from an aborted Foundation
+  /// write would have an unpredictable name; the test exercises the
+  /// failure mode using a deterministic synthetic name.
+  @Test func loadIgnoresLingeringTmpSiblingsFromAbortedWrites() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+
+      // Simulate aborted save: a sibling .tmp file landed but the
+      // rename to the final path never happened.
+      let destDir = dir.appendingPathComponent("dest-1", isDirectory: true)
+      try FileManager.default.createDirectory(
+        at: destDir, withIntermediateDirectories: true)
+      let tmpURL = destDir.appendingPathComponent("currentRun.json.tmp")
+      try Data("partial garbage from an aborted save".utf8).write(to: tmpURL)
+
+      // load must return nil — the canonical file does not exist, and
+      // the store must not fall back to reading a sibling.
+      #expect(
+        store.load(destinationId: "dest-1") == nil,
+        "load must only consult currentRun.json — never a .tmp sibling")
+    }
+  }
+
   // MARK: - Token blobs (opaque PHPersistentChangeToken)
 
   /// The per-destination token store treats the token as an opaque `Data`

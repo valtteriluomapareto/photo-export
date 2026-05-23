@@ -36,9 +36,25 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
   var nextRunSummary: ExportRunSummary?
   /// Contexts the manager passed in. Tests assert on this.
   var receivedContexts: [ExportRunContext] = []
+  /// Predicate that selects which contexts cause `runExport` to park on a
+  /// `CheckedContinuation` instead of returning. Tests use this to deterministically
+  /// hold the fan-out at a known phase and snapshot in-flight state from
+  /// disk (currentRun.json) without racing against `Task.yield()` scheduling.
+  /// Default: never hangs.
+  ///
+  /// Test authors MUST call `resumeHung(with:)` before letting the test
+  /// scope exit — a parked `CheckedContinuation` traps when deallocated
+  /// unresumed.
+  var shouldHang: @MainActor (ExportRunContext) -> Bool = { _ in false }
+  private var hangedContinuations: [CheckedContinuation<ExportRunSummary, Never>] = []
 
   func runExport(context: ExportRunContext) async -> ExportRunSummary {
     receivedContexts.append(context)
+    if shouldHang(context) {
+      return await withCheckedContinuation { continuation in
+        hangedContinuations.append(continuation)
+      }
+    }
     if let summary = nextRunSummary {
       nextRunSummary = nil
       return summary
@@ -49,6 +65,31 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
       enqueuedCount: 0, completedCount: 0, failedCount: 0, skippedCount: 0,
       cancelReason: nil, result: .completed
     )
+  }
+
+  /// Resumes every parked `runExport` call with `summary`. Call from the
+  /// test teardown to unblock hung iterations so the fan-out can complete
+  /// and the cleanup defer can run.
+  func resumeHung(with summary: ExportRunSummary) {
+    let toResume = hangedContinuations
+    hangedContinuations.removeAll()
+    for continuation in toResume {
+      continuation.resume(returning: summary)
+    }
+  }
+
+  /// Constructs a default `.completed` summary against the most recently
+  /// received context. Convenience for tests that just want to unblock a
+  /// hang without constructing a synthetic summary themselves.
+  func makeDefaultCompletedSummary() -> ExportRunSummary {
+    let context = receivedContexts.last ?? ExportRunContext(
+      runId: UUID(), source: .autoSync, visibility: .background,
+      reason: .appLaunch, scope: .timelineFullLibrary, selection: .edited,
+      startedAt: Date())
+    return ExportRunSummary(
+      context: context, endedAt: Date(),
+      enqueuedCount: 0, completedCount: 0, failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: .completed)
   }
 }
 
