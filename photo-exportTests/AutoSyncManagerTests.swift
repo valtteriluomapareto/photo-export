@@ -588,6 +588,231 @@ struct AutoSyncManagerTests {
     #expect(entry?.attemptCount == 1)
   }
 
+  // MARK: - Current-run journal
+
+  /// Fan-out start writes the journal *before* the first sub-scope runs,
+  /// with `currentScope == nil`. This is the "before the first await"
+  /// guarantee: a SIGKILL between dispatch and the loop body still leaves
+  /// the journal observable on next launch.
+  ///
+  /// Strategy: configure the fake exportRunner to hang on the first
+  /// `runExport` so the fan-out task can't advance past the journal-update
+  /// site, then assert the journal state from the in-memory store.
+  @Test func fanOutStartWritesInitialJournalBeforeFirstSubScope() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(
+      AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    manager.attach(to: builder.environment)
+
+    builder.clock.advance(by: 10)
+    // Single yield gets us into the fan-out task; the first runExport
+    // returns immediately under the fake, which updates the journal to
+    // the *first* scope before the next iteration. So before any yield,
+    // the journal is at the initial state; after one yield, it's at the
+    // first sub-scope. We test both points to pin the ordering.
+
+    // Right after debounce fires but before the first Task.yield, the
+    // initial save has landed (it's a synchronous call inside startRun).
+    let destId = safeDestination().id!
+    let initial = builder.currentRunStore.load(destinationId: destId)
+    #expect(initial != nil, "Journal must be written synchronously before the fan-out Task is dispatched")
+    #expect(initial?.trigger == "appLaunch")
+    #expect(initial?.scopes == ["timeline", "favorites", "albums"])
+    // Note: by the time `clock.advance` returned and the debounce timer
+    // fired, the synchronous Task body may or may not have started. The
+    // critical invariant is that `scopes` is populated; whether
+    // `currentScope` is already set to "timeline" depends on Swift's
+    // Task scheduling. The next test pins the update behavior.
+  }
+
+  /// Each sub-scope iteration updates `currentScope` *before* the per-scope
+  /// `await runExport(context:)`. A SIGKILL during a sub-run leaves the
+  /// journal naming the active scope, not the previous one.
+  ///
+  /// Uses the fake's `shouldHang` hook to park `runExport` for the first
+  /// sub-scope on a `CheckedContinuation`. While parked, the journal on
+  /// disk must name `timeline` deterministically — no scheduler-fairness
+  /// race like the earlier yield-snapshot version had.
+  @Test func eachSubScopeUpdatesCurrentScopeBeforeAwait() async throws {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(
+      AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    builder.exportRunner.shouldHang = { context in
+      context.scope == .timelineFullLibrary
+    }
+    manager.attach(to: builder.environment)
+
+    builder.clock.advance(by: 10)
+    // Yield enough for the fan-out Task to enter the loop, write the
+    // per-scope update, and suspend on the hang. Three yields cover
+    // dispatch + suspension.
+    for _ in 0..<3 { await Task.yield() }
+
+    let destId = safeDestination().id!
+    let journal = try #require(
+      builder.currentRunStore.load(destinationId: destId),
+      "Journal must exist while fan-out is parked on the first sub-scope")
+    let currentScope = try #require(
+      journal.currentScope,
+      "Per-iteration update must land before the await — currentScope must not be nil while a sub-run is in flight"
+    )
+    #expect(
+      currentScope == "timeline",
+      "Hung-on-timeline fan-out must name `timeline` as the current scope")
+
+    // Teardown: resume the parked continuation so the fan-out can
+    // complete, the defer-block clears the journal, and the test exits
+    // cleanly. A parked `CheckedContinuation` traps when deallocated
+    // unresumed.
+    builder.exportRunner.resumeHung(
+      with: builder.exportRunner.makeDefaultCompletedSummary())
+    for _ in 0..<6 { await Task.yield() }
+  }
+
+  /// Clean fan-out completion deletes the journal. The deferred `clear`
+  /// inside the fan-out task fires on every exit path; the steady-state
+  /// signal of "previous session exited cleanly" is the *absence* of the
+  /// file on next launch.
+  @Test func cleanFanOutCompletionClearsTheJournal() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(
+      AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    manager.attach(to: builder.environment)
+
+    builder.clock.advance(by: 10)
+    for _ in 0..<8 { await Task.yield() }
+
+    let destId = safeDestination().id!
+    #expect(
+      builder.currentRunStore.load(destinationId: destId) == nil,
+      "Clean fan-out completion must leave no journal on disk")
+  }
+
+  /// A sub-scope that returns a non-`.completed` summary breaks the
+  /// fan-out early. The deferred `clear` still fires. The next launch
+  /// must NOT see a phantom in-flight journal.
+  @Test func nonCompletedSubSummaryBreaksFanOutAndStillClearsJournal() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(
+      AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    manager.attach(to: builder.environment)
+
+    let destId = safeDestination().id!
+    let context = ExportRunContext(
+      runId: UUID(), source: .autoSync, visibility: .background,
+      reason: .appLaunch, scope: .timelineFullLibrary, selection: .edited,
+      startedAt: Date())
+    // First sub-scope returns .failed → fan-out breaks before reaching
+    // favorites / albums. Defer still fires; journal still cleared.
+    builder.exportRunner.nextRunSummary = ExportRunSummary(
+      context: context, endedAt: Date(),
+      enqueuedCount: 1, completedCount: 0, failedCount: 1, skippedCount: 0,
+      cancelReason: nil, result: .failed
+    )
+
+    builder.clock.advance(by: 10)
+    for _ in 0..<8 { await Task.yield() }
+
+    #expect(
+      builder.currentRunStore.load(destinationId: destId) == nil,
+      "A broken-out fan-out (non-.completed summary) must still clear the journal")
+    // Verify only the first sub-scope ran — confirms the break.
+    #expect(
+      builder.exportRunner.receivedContexts.count == 1,
+      "Fan-out must break on first non-.completed summary")
+  }
+
+  /// **Smoking-gun integration test.** Hang the second sub-scope's
+  /// `runExport` on a `CheckedContinuation`. While the fan-out task is
+  /// parked there (just as it would be if the OS killed the process
+  /// during the second sub-scope), the on-disk journal must name
+  /// `favorites`. This is the forensic property a maintainer would rely
+  /// on when triaging an issue-#112-class report.
+  ///
+  /// The hang-based approach replaces an earlier yield-snapshot version
+  /// whose assertion was scheduler-dependent: the fake's synchronous
+  /// `runExport` could drain all three scopes in one scheduling slice,
+  /// leaving no observable mid-fan-out state. Parking on a continuation
+  /// gives a deterministic snapshot point.
+  @Test func journalNamesCurrentScopeWhenFanOutHangsMidSecondScope() async throws {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(
+      AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    builder.exportRunner.shouldHang = { context in
+      context.scope == .favoritesFull
+    }
+    manager.attach(to: builder.environment)
+
+    builder.clock.advance(by: 10)
+    // Yield enough for: dispatch → timeline iteration (returns
+    // `.completed` immediately under the fake) → favorites iteration
+    // update + suspension on the hang. Six yields is a comfortable
+    // upper bound; the test is deterministic in the sense that the
+    // continuation never resumes until `resumeHung` is called.
+    for _ in 0..<6 { await Task.yield() }
+
+    let destId = safeDestination().id!
+    let journal = try #require(
+      builder.currentRunStore.load(destinationId: destId),
+      "Journal must exist while the fan-out is parked on a sub-scope")
+    let currentScope = try #require(
+      journal.currentScope,
+      "Per-iteration update must populate currentScope before the await")
+    #expect(
+      currentScope == "favorites",
+      "Hung-on-favorites fan-out must name `favorites` — the forensic signal a maintainer reads from the diagnostic to triage issue-#112-class bugs"
+    )
+    #expect(
+      builder.exportRunner.receivedContexts.count == 2,
+      "Exactly two runExport calls should have happened: timeline (completed) and favorites (parked)"
+    )
+
+    // Teardown: resume so the fan-out's defer can clear the journal and
+    // the Task can complete.
+    builder.exportRunner.resumeHung(
+      with: builder.exportRunner.makeDefaultCompletedSummary())
+    for _ in 0..<6 { await Task.yield() }
+  }
+
+  /// Disabling AutoSync mid-fan-out cancels the task. The defer-block
+  /// runs and clears the journal. Next launch sees no journal.
+  @Test func disablingDuringFanOutClearsTheJournal() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(
+      AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    manager.attach(to: builder.environment)
+
+    let destId = safeDestination().id!
+    builder.clock.advance(by: 10)
+    await Task.yield()
+    // Disable mid-fan-out.
+    manager.setEnabled(false)
+    // Drain the cancellation.
+    for _ in 0..<8 { await Task.yield() }
+
+    #expect(
+      builder.currentRunStore.load(destinationId: destId) == nil,
+      "Cancellation must still clear the journal — the defer-block runs on every exit path")
+  }
+
   // MARK: - Idempotent attach
 
   @Test func attachIsIdempotent() {

@@ -204,7 +204,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 - Export folder unavailable or write-protected detection
 - Individual asset failures are skipped and recorded — the batch continues
 - Failed assets are logged with error details
-- **Help → Save Diagnostic Report…** writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state with its underlying error message — attach it to a bug report so the cause is visible
+- **Help → Save Diagnostic Report…** writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state with its underlying error message — attach it to a bug report so the cause is visible. If a prior Auto Export run was interrupted mid-flight by the operating system, the report names which scope (timeline / favorites / albums / shared albums) was in flight at the time
 - When Photos can't provide an asset's edited version (`Edited resource unavailable`), the app **falls back to writing the original** with a `_orig` suffix so the asset still gets bytes on disk; the diagnostic report annotates the affected entries
 
 ## Current boundaries

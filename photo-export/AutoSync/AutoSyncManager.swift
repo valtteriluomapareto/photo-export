@@ -488,10 +488,86 @@ final class AutoSyncManager: ObservableObject {
     // later scope fails. ExportManager's `runExport` doesn't implement
     // `.autoExport` directly — translating here keeps the runner narrow.
     let runScopes = Self.expand(scope: spec.scope)
+
+    // Write the current-run journal *before* dispatching the fan-out Task.
+    // The journal is the crash-survivable signal: if it exists on the next
+    // launch's diagnostic, this fan-out was killed mid-flight. Doing the
+    // write synchronously here (rather than as the first thing inside the
+    // Task) means the journal lands on disk before any per-scope await
+    // could be interrupted — even a SIGKILL between the write and the
+    // first await still leaves the journal observable. Manual export runs
+    // are out of scope and do not write a journal; they don't route
+    // through `startRun`.
+    //
+    // `initialJournal` is `let` so the per-iteration update inside the
+    // Task can build a new struct from it without capturing a mutable
+    // `var` across the Task boundary. `AutoSyncRunJournal` is `Sendable`,
+    // so the immutable capture is concurrency-clean.
+    let destinationId = reducerState.destination.id
+    let fanOutStartedAt = environment.clock.now()
+    let plannedScopeRawValues = runScopes.compactMap { $0.clearableScope?.rawValue }
+    let initialJournal: AutoSyncRunJournal? = destinationId.map { _ in
+      AutoSyncRunJournal(
+        startedAt: fanOutStartedAt,
+        trigger: spec.reason.rawValue,
+        scopes: plannedScopeRawValues,
+        currentScope: nil,
+        currentScopeStartedAt: nil
+      )
+    }
+    if let destinationId, let initialJournal {
+      do {
+        try environment.currentRunStore.save(initialJournal, destinationId: destinationId)
+      } catch {
+        log.error(
+          "Failed to write current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+        )
+      }
+    }
+
     activeRunFanOutTask = Task { @MainActor [weak self] in
       defer { self?.activeRunFanOutTask = nil }
+      defer {
+        // Clean up the journal on every exit path — clean completion,
+        // cancellation, and the `break` on a non-`.completed` summary all
+        // reach this defer. `clear` is a no-op when the file is absent
+        // (the early-return-before-loop cases), so repeated calls and
+        // missing-destination paths are safe.
+        if let destinationId {
+          do {
+            try environment.currentRunStore.clear(destinationId: destinationId)
+          } catch {
+            self?.log.error(
+              "Failed to clear current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+          }
+        }
+      }
       for runScope in runScopes {
         if Task.isCancelled { return }
+        // Update the journal with the sub-scope about to start. Done
+        // *before* the `await` so a SIGKILL during the await leaves the
+        // journal pointing at the in-flight scope, not the previous one.
+        // Builds a new struct from `initialJournal` rather than mutating
+        // a captured var — keeps the closure concurrency-clean.
+        if let destinationId, let base = initialJournal,
+          let scopeRaw = runScope.clearableScope?.rawValue
+        {
+          let updated = AutoSyncRunJournal(
+            startedAt: base.startedAt,
+            trigger: base.trigger,
+            scopes: base.scopes,
+            currentScope: scopeRaw,
+            currentScopeStartedAt: environment.clock.now()
+          )
+          do {
+            try environment.currentRunStore.save(updated, destinationId: destinationId)
+          } catch {
+            self?.log.error(
+              "Failed to update current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+          }
+        }
         let context = ExportRunContext(
           runId: UUID(),
           source: spec.source,

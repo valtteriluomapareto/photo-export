@@ -67,7 +67,7 @@ The full walkthrough — what triggers a run, how retry works, what the status i
 - **"Export folder is not reachable"** — Check that the external drive is plugged in and mounted.
 - **"Export folder is read-only"** — Right-click the folder, choose Get Info, and make sure you have write permission.
 - **Photos permission denied** — Open **System Settings → Privacy & Security → Photos** and enable access for Photo Export.
-- **Export stuck near 100%** — Use **Help → Save Diagnostic Report…** to write a text file listing every photo whose export is in `failed` or `in-progress` state, including the underlying error message. Attach it to a [GitHub issue](https://github.com/valtteriluomapareto/photo-export/issues) so the cause is visible.
+- **Export stuck near 100%** — Use **Help → Save Diagnostic Report…** to write a text file listing every photo whose export is in `failed` or `in-progress` state, including the underlying error message. If a previous Auto Export run was interrupted by the operating system (rare, but possible on very large libraries), the report also names which scope was in flight at the time. Attach the file to a [GitHub issue](https://github.com/valtteriluomapareto/photo-export/issues) so the cause is visible.
 - **Unexpected `_orig` files in my backup** — If Photos can't provide the edited version of an asset (`Edited resource unavailable` in the diagnostic report), the app writes the original file with an `_orig` suffix so you still have a backup of the asset. The diagnostic report flags these assets.
 
 ## Upgrading from an earlier version

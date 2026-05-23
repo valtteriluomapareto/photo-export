@@ -422,6 +422,220 @@ struct AutoSyncStorePersistenceTests {
     }
   }
 
+  // MARK: - Current-run journal
+
+  /// Fixture: a populated `AutoSyncRunJournal` mid-fan-out. Locks the field
+  /// names and ordering on disk so a future Codable rename can't strand
+  /// existing users' in-flight-journal files (and thus hide a previous
+  /// session's silent shutdown from the diagnostic report). The fixture
+  /// reads back through the production decoder, asserting all six fields.
+  @Test func currentRunJournalDecodesKnownFixture() throws {
+    let fixture = """
+      {
+        "currentScope" : "albums",
+        "currentScopeStartedAt" : 770000300,
+        "scopes" : ["timeline", "favorites", "albums", "sharedAlbums"],
+        "startedAt" : 770000000,
+        "trigger" : "appLaunch"
+      }
+      """.data(using: .utf8)!
+
+    let decoded = try JSONDecoder().decode(AutoSyncRunJournal.self, from: fixture)
+
+    #expect(decoded.startedAt == Date(timeIntervalSinceReferenceDate: 770000000))
+    #expect(decoded.trigger == "appLaunch")
+    #expect(decoded.scopes == ["timeline", "favorites", "albums", "sharedAlbums"])
+    #expect(decoded.currentScope == "albums")
+    #expect(decoded.currentScopeStartedAt == Date(timeIntervalSinceReferenceDate: 770000300))
+  }
+
+  /// Round-trip + file-path pin for `currentRun.json`. Catches a rename of
+  /// the documented file that would silently orphan existing in-flight
+  /// journals — the smoking-gun signal for issue #112-class bugs.
+  @Test func currentRunJournalRoundTripsAndLivesAtDocumentedPath() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      let journal = AutoSyncRunJournal(
+        startedAt: Date(timeIntervalSinceReferenceDate: 770000000),
+        trigger: "appLaunch",
+        scopes: ["timeline", "favorites", "albums", "sharedAlbums"],
+        currentScope: "albums",
+        currentScopeStartedAt: Date(timeIntervalSinceReferenceDate: 770000300))
+
+      try store.save(journal, destinationId: "dest-1")
+
+      #expect(store.load(destinationId: "dest-1") == journal)
+      let expectedURL = dir
+        .appendingPathComponent("dest-1", isDirectory: true)
+        .appendingPathComponent("currentRun.json")
+      #expect(
+        FileManager.default.fileExists(atPath: expectedURL.path),
+        "currentRun.json must live at <base>/<destId>/currentRun.json — a rename here orphans existing in-flight journals and hides previous-session silent shutdowns from the diagnostic"
+      )
+    }
+  }
+
+  /// Missing file → `nil`. This is the steady-state path: a user with no
+  /// in-flight AutoSync run on a given launch should see no journal section
+  /// in the diagnostic, so the report stays byte-identical to today.
+  @Test func currentRunJournalReturnsNilForMissingFile() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      #expect(store.load(destinationId: "never-written") == nil)
+    }
+  }
+
+  /// `clear` is the load-bearing signal: the manager calls it on every
+  /// fan-out exit (clean completion, cancellation, failure-break). The next
+  /// launch must see no journal — that is what tells the maintainer the
+  /// previous session exited cleanly. A regression that silently no-ops
+  /// `clear` would produce phantom "killed mid-run" sections on every clean
+  /// launch.
+  @Test func currentRunJournalClearRemovesFile() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      let journal = AutoSyncRunJournal(
+        startedAt: Date(timeIntervalSinceReferenceDate: 770000000),
+        trigger: "appLaunch",
+        scopes: ["timeline"],
+        currentScope: nil,
+        currentScopeStartedAt: nil)
+
+      try store.save(journal, destinationId: "dest-1")
+      #expect(store.load(destinationId: "dest-1") != nil)
+
+      try store.clear(destinationId: "dest-1")
+      #expect(store.load(destinationId: "dest-1") == nil)
+      let url = dir
+        .appendingPathComponent("dest-1", isDirectory: true)
+        .appendingPathComponent("currentRun.json")
+      #expect(
+        !FileManager.default.fileExists(atPath: url.path),
+        "clear must remove the file on disk — leaving it would falsely report previous-session abnormal exit on next launch")
+    }
+  }
+
+  /// `clear` against a never-written destination is a no-op rather than an
+  /// error. The manager's defer-block calls `clear` on every fan-out exit;
+  /// for a fan-out that never wrote (e.g. destination went away before the
+  /// initial save), a thrown error would be a noise-only log line.
+  @Test func currentRunJournalClearIsIdempotentWhenFileAbsent() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      // Must not throw.
+      try store.clear(destinationId: "never-written")
+    }
+  }
+
+  /// Pins the on-disk JSON key names independently of the Codable
+  /// declaration. The fixture-decode test alone doesn't catch a Codable
+  /// rename — a maintainer who renames `currentScope → activeScope` and
+  /// updates the fixture string in the same PR would pass that test
+  /// without realising the rename strands existing users' on-disk
+  /// journal files. This test reads the file back and substring-asserts
+  /// every documented key. Mirror of
+  /// `dirtyStateEncodedBytesAreSortedAndPrettyPrinted`'s idiom.
+  @Test func currentRunJournalEncodedBytesContainExpectedKeys() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+      let journal = AutoSyncRunJournal(
+        startedAt: Date(timeIntervalSinceReferenceDate: 770000000),
+        trigger: "appLaunch",
+        scopes: ["timeline"],
+        currentScope: "timeline",
+        currentScopeStartedAt: Date(timeIntervalSinceReferenceDate: 770000001))
+      try store.save(journal, destinationId: "dest-1")
+
+      let url = dir
+        .appendingPathComponent("dest-1", isDirectory: true)
+        .appendingPathComponent("currentRun.json")
+      let raw = try String(contentsOf: url, encoding: .utf8)
+
+      // Every documented key must appear in the on-disk JSON. A Codable
+      // rename would silently strand existing users' files; this test
+      // catches the rename even when fixture-decode does not.
+      #expect(raw.contains("\"startedAt\""))
+      #expect(raw.contains("\"trigger\""))
+      #expect(raw.contains("\"scopes\""))
+      #expect(raw.contains("\"currentScope\""))
+      #expect(raw.contains("\"currentScopeStartedAt\""))
+    }
+  }
+
+  /// The parent-directory fsync is the load-bearing detail that
+  /// distinguishes this store from the run-summary store — it's what
+  /// makes the journal survive SIGKILL/jetsam between the write and the
+  /// next launch. Without a structural test asserting `fsyncDirectory`
+  /// is invoked, a future refactor that drops the call would compile
+  /// cleanly and pass every other test, silently re-introducing the
+  /// durability gap the journal was specifically architected to close.
+  /// `DirectoryFsyncing` protocol seam exists for exactly this assertion.
+  @Test func saveAndClearBothFsyncTheParentDirectory() throws {
+    try withTempDirectory { dir in
+      let recorder = RecordingDirectoryFsync()
+      let store = FileBackedAutoSyncCurrentRunStore(
+        baseDirectoryURL: dir,
+        directoryFsync: recorder)
+      let journal = AutoSyncRunJournal(
+        startedAt: Date(timeIntervalSinceReferenceDate: 770000000),
+        trigger: "appLaunch",
+        scopes: ["timeline"],
+        currentScope: nil,
+        currentScopeStartedAt: nil)
+
+      try store.save(journal, destinationId: "dest-1")
+      #expect(
+        recorder.fsyncedPaths.count == 1,
+        "save must fsync the parent directory after the atomic write")
+
+      try store.clear(destinationId: "dest-1")
+      #expect(
+        recorder.fsyncedPaths.count == 2,
+        "clear must fsync the parent directory after removing the file")
+
+      // Both calls must target `<base>/<destId>/` — not the base
+      // directory itself, not the file's full path.
+      let expectedParent = dir
+        .appendingPathComponent("dest-1", isDirectory: true)
+        .standardizedFileURL
+      let standardized = recorder.fsyncedPaths.map { $0.standardizedFileURL }
+      #expect(standardized.allSatisfy { $0.path == expectedParent.path })
+    }
+  }
+
+  /// Atomic-write semantics: a stray `.tmp` sibling left behind by a
+  /// previous aborted save (Foundation's `Data.write(.atomic)` uses
+  /// `.tmp`-then-rename internally; a SIGKILL during the rename window
+  /// could leave debris) must NOT influence what `load` returns. The
+  /// store only consults the canonical `currentRun.json` path. This
+  /// test pins that behaviour: a hand-written `currentRun.json.tmp`
+  /// containing garbage produces `load` == nil when no canonical file
+  /// exists.
+  ///
+  /// Foundation's actual atomic-write does use a randomized suffix (not
+  /// literally `.tmp`), so a real leftover from an aborted Foundation
+  /// write would have an unpredictable name; the test exercises the
+  /// failure mode using a deterministic synthetic name.
+  @Test func loadIgnoresLingeringTmpSiblingsFromAbortedWrites() throws {
+    try withTempDirectory { dir in
+      let store = FileBackedAutoSyncCurrentRunStore(baseDirectoryURL: dir)
+
+      // Simulate aborted save: a sibling .tmp file landed but the
+      // rename to the final path never happened.
+      let destDir = dir.appendingPathComponent("dest-1", isDirectory: true)
+      try FileManager.default.createDirectory(
+        at: destDir, withIntermediateDirectories: true)
+      let tmpURL = destDir.appendingPathComponent("currentRun.json.tmp")
+      try Data("partial garbage from an aborted save".utf8).write(to: tmpURL)
+
+      // load must return nil — the canonical file does not exist, and
+      // the store must not fall back to reading a sibling.
+      #expect(
+        store.load(destinationId: "dest-1") == nil,
+        "load must only consult currentRun.json — never a .tmp sibling")
+    }
+  }
+
   // MARK: - Token blobs (opaque PHPersistentChangeToken)
 
   /// The per-destination token store treats the token as an opaque `Data`
