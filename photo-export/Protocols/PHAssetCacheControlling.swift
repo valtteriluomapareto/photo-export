@@ -51,7 +51,14 @@ protocol PHAssetCacheControlling: AnyObject {
 /// No-op default for test sites that construct an `ExportManager` and don't
 /// care about cache-drop behaviour. The real production implementation is
 /// `PhotoLibraryManager`.
+///
+/// `nonisolated init()` so the type can be constructed as a default-argument
+/// value on `ExportManager.init`'s `phAssetCacheControl:` parameter from any
+/// isolation context. The class itself stays `@MainActor`-isolated to satisfy
+/// the protocol's `@MainActor` constraint; only the synthesized `init` needs
+/// the wider availability.
 @MainActor
 final class NoOpPHAssetCacheControl: PHAssetCacheControlling {
+  nonisolated init() {}
   func forgetPHAssetCache() {}
 }
