@@ -223,20 +223,10 @@ struct ExportAllAlbumsTests {
     #expect(kinds.isSubset(of: [.album]))
   }
 
-  /// Bulk-album export drops `phAssetCache` between iterations to bound peak
-  /// memory at one album's working set rather than the cumulative 282-album
-  /// sweep. Pins the structural property responsible for keeping a sandboxed
-  /// macOS app under its memory high watermark on large libraries (issue #112).
-  ///
-  /// The assertion goes through a `RecordingPHAssetCacheControl` spy injected
-  /// at `ExportManager` init. A future refactor that drops the
-  /// `phAssetCacheControl.forgetPHAssetCache()` line from `runBulkEnqueueLoop`
-  /// would let `forgetCallCount` stay below the album count and fail this
-  /// test — the structural defence against silent re-introduction of the
-  /// bug. (Real cache emptiness is verified by code-reading rather than
-  /// directly observed because `PHAsset` can't be constructed in unit tests
-  /// without PhotoKit authorisation; the spy is the load-bearing test
-  /// surface, mirroring `RecordingDirectoryFsync` from PR #114.)
+  /// Bulk-album export must drop `phAssetCache` between iterations so peak
+  /// memory is bounded by one album's working set, not the cumulative
+  /// 282-album sweep (issue #112). Asserts via a `RecordingPHAssetCacheControl`
+  /// spy because `PHAsset` can't be constructed in unit tests.
   @Test func bulkAlbumExportCallsForgetPHAssetCachePerAlbum() async throws {
     let photoLib = FakePhotoLibraryService()
     let dest = FakeExportDestination()
@@ -278,15 +268,9 @@ struct ExportAllAlbumsTests {
     manager.startExportAllAlbums()
     await waitUntil(manager.totalJobsEnqueued == 3)
 
-    // The bulk loop's items list also includes the no-op favorites pass
-    // (a 0-or-1 element pass) and the shared-albums pass (also 0 or 1).
-    // For a tree with three albums and no favorites/shared, the favorites
-    // pass runs 0 iterations, the albums pass runs 3, the shared pass
-    // runs 0. Per-iteration drops therefore total 3. If the implementation
-    // later changes to run a 0-element favorites pass through a
-    // runBulkEnqueueLoop call, the assertion may need a `>=` rather than
-    // an exact match — the architectural invariant is "at least one drop
-    // per real bulk iteration".
+    // Three real album iterations → at least three drops. Favorites/shared
+    // passes are empty in this fixture. `>=` rather than `==` lets the
+    // assertion survive adding empty passes that still loop.
     #expect(
       cacheControl.forgetCallCount >= 3,
       "runBulkEnqueueLoop must call forgetPHAssetCache() at least once per album; got \(cacheControl.forgetCallCount)"

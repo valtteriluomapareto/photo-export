@@ -1077,21 +1077,12 @@ final class ExportManager: ObservableObject {
   ) async throws -> (totals: BulkExportTotals, completed: Bool) {
     var totals = seed
     for item in items {
-      // Drop the PHAsset cache contributions from the previous iteration
-      // BEFORE starting this one. Each iteration's `enqueue` closure
-      // ultimately calls `fetchAssets`, which additively populates
-      // `phAssetCache`. Without an intra-loop drop, a 20-year timeline
-      // sweep or a 282-album fan-out accumulates every PHAsset reference
-      // it touches; the sandboxed-app memory high watermark is crossed
-      // on large libraries (issue #112). Peak cache footprint is bounded
-      // by the max single iteration's fetch size, not the cumulative
-      // total. No-op for tests that pass `NoOpPHAssetCacheControl`.
+      // Drop the previous iteration's PHAsset cache before starting the
+      // next. Bounds peak cache footprint at one iteration's fetch rather
+      // than the cumulative timeline/album sweep (issue #112).
       phAssetCacheControl.forgetPHAssetCache()
-      // Yield before each iteration so WindowServer pings and other main-
-      // actor work can interleave during long bulk enqueues. On a 282-album
-      // fan-out the absence of this yield is enough to register as "app is
-      // unresponsive" — softening the perceptible beachball during the
-      // AutoSync startup sweep (issue #112).
+      // Yield so WindowServer pings interleave during long bulk enqueues;
+      // without it a 282-album fan-out registers as unresponsive (issue #112).
       await Task.yield()
       let outcome = try await enqueue(item)
       guard isCurrent(gen) else { return (totals, false) }

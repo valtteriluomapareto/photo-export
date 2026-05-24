@@ -54,18 +54,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Shared caching image manager for thumbnails
   private static let cachingImageManager = PHCachingImageManager()
 
-  /// Long-lived cache of recently-fetched PHAsset objects keyed by
-  /// localIdentifier. Populated by `fetchAssets(in:)` so thumbnail prefetch
-  /// (`startCachingThumbnails` / `stopCachingThumbnails`) and resource
-  /// lookups (`descriptor → PHAsset` bridging) avoid re-fetching. Entries
-  /// persist until `invalidateCache()` (library changes) or
-  /// `forgetPHAssetCache()` (per-iteration drops in
-  /// `ExportManager.runBulkEnqueueLoop` — issue #112).
-  ///
-  /// **Not** wholesale-replaced on each fetch — `cacheAssets(_:)` below is
-  /// per-key additive. The bulk-export loop drops this between iterations
-  /// to keep the fan-out's peak memory bounded by one iteration's working
-  /// set rather than the cumulative timeline-year / 282-album sweep.
+  /// Long-lived cache of PHAsset objects keyed by `localIdentifier`. Populated
+  /// additively by `cacheAssets(_:)` from `fetchAssets(in:)`. Cleared by
+  /// `invalidateCache()` (library change) or `forgetPHAssetCache()`
+  /// (per-iteration drops in `ExportManager.runBulkEnqueueLoop`, issue #112).
   private var phAssetCache: [String: PHAsset] = [:]
 
   /// Cache of adjusted-asset counts keyed by `"YYYY-M"`. Populated lazily by
@@ -726,15 +718,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
-  /// Resolves a single PHAsset by id, preferring the in-memory cache. On
-  /// miss, fetches via `PHAsset.fetchAssets(withLocalIdentifiers:)` and
-  /// returns the result *without* writing back to `phAssetCache` — the
-  /// caller is doing a one-shot resolve, not a bulk cache population.
-  /// Writing back on miss would defeat `forgetPHAssetCache()` for the
-  /// AutoSync fan-out: the per-asset resource-fallback path (`descriptor(from:)`
-  /// when `livePhotoDetectionFallbackEnabled` is on) refills the cache one
-  /// asset at a time during export, undoing the bulk drop between scopes
-  /// (issue #112).
+  /// Resolves a single PHAsset by id from the cache, falling back to a
+  /// one-shot fetch on miss. Does *not* write the miss result back: doing
+  /// so would let per-asset resource-fallback resolves silently refill the
+  /// cache during export and defeat `forgetPHAssetCache()` (issue #112).
   private func cachedOrFetchPHAsset(id: String) -> PHAsset? {
     if let cached = phAssetCache[id] { return cached }
     let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
@@ -757,13 +744,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
-  /// Narrow companion to `invalidateCache()` that drops *only* the PHAsset
-  /// cache. Unlike `invalidateCache()` it does not bump `libraryRevision`,
-  /// does not clear `cachedCollectionTree`, and does not invalidate the
-  /// collection count cache — so calling it does not trigger SwiftUI
-  /// re-fetches in sidebar/grid views, which would be wrong to do mid-
-  /// AutoSync. Conforms to `PHAssetCacheControlling` so `AutoSyncManager`
-  /// can call it between fan-out sub-scopes (issue #112).
+  /// Drops only the PHAsset cache. Unlike `invalidateCache()` it does not
+  /// bump `libraryRevision` or clear the collection tree, so it can run
+  /// mid-export without triggering SwiftUI re-fetches in sidebar/grid
+  /// (issue #112).
   func forgetPHAssetCache() {
     phAssetCache.removeAll()
   }
@@ -826,17 +810,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
     let result = PHAsset.fetchAssets(with: opts)
     var assets: [PHAsset] = []
-    // Use the index-based form (not `enumerateObjects { ... }`) so the
-    // `autoreleasepool` can wrap PhotoKit's `result.object(at:)` call —
-    // that's where the autoreleased Obj-C temporaries are minted.
-    // `enumerateObjects`'s callback receives the asset as an argument
-    // produced by PhotoKit *outside* any user-controllable pool, so a
-    // pool inside the closure body drains pure Swift code and effectively
-    // nothing PhotoKit-side. Matches the proven pattern at
-    // `fetchPHAssets(year:month:)` below. Without per-iteration drain,
-    // PhotoKit's 282-album + favorites + shared-album sweep generates an
-    // autoreleased pile large enough to contribute to crossing a
-    // sandboxed-app memory high watermark (issue #112).
+    // Index-based form (not `enumerateObjects`) so `autoreleasepool` wraps
+    // `result.object(at:)` — that's where the autoreleased Obj-C temporaries
+    // are minted. A pool inside `enumerateObjects`'s closure drains only the
+    // user-side body, not PhotoKit's allocation (issue #112).
     for index in 0..<result.count {
       autoreleasepool {
         assets.append(result.object(at: index))
@@ -1119,12 +1096,9 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     let fetchResult = PHAsset.fetchAssets(with: fetchOptions)
     var assets: [PHAsset] = []
 
-    // Process in batches to avoid loading everything into memory at once.
-    // Batch size lowered from 500 to 100 (issue #112): for a heavy timeline
-    // year, this gives 5× more frequent main-thread yields, softening the
-    // perceptible UI beachball during the AutoSync startup fan-out. Memory
-    // per batch is bounded by the autoreleasepool below; the batch size
-    // only controls yield frequency.
+    // batchSize 100 (down from 500) for 5× more frequent main-thread yields
+    // during the AutoSync startup sweep (issue #112). Memory is bounded by
+    // the autoreleasepool below; this only controls yield frequency.
     let totalAssets = fetchResult.count
     let batchSize = 100
 
