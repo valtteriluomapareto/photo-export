@@ -19,6 +19,42 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.6.1",
+      summary:
+        "Fixes a silent shutdown some users saw during Auto Export's "
+        + "startup scan on large libraries (80k+ assets, many albums). "
+        + "The saved Diagnostic Report can now identify which Auto Export "
+        + "step was running if a future run is interrupted.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Auto Export startup scan no longer hits the system memory limit",
+          body:
+            "On large libraries with many albums, Photo Export's startup "
+            + "Auto Export scan accumulated memory across timeline + "
+            + "favorites + every album in one pass. On the largest libraries "
+            + "this could cross macOS's per-app memory ceiling, at which "
+            + "point the system terminated the app silently — no crash "
+            + "dialog, just gone. The scan now bounds memory per step instead "
+            + "of cumulatively. The UI may still briefly stutter on launch "
+            + "for very large libraries (a separate follow-up), but the "
+            + "silent shutdown should be gone. "
+            + "Fixes [#112](https://github.com/valtteriluomapareto/photo-export/issues/112)."
+        ),
+        ReleaseNote.Bullet(
+          title: "Diagnostic Report names the interrupted Auto Export step",
+          body:
+            "If an Auto Export run is ever interrupted (system kill, force "
+            + "quit, crash), the next saved Diagnostic Report includes a "
+            + "**Previous Auto-Export Run** section naming the step that was "
+            + "in flight (e.g. timeline year, favorites, all albums). "
+            + "Healthy reports are unchanged — the section only appears "
+            + "after an abnormal exit. Makes future Auto Export issues much "
+            + "easier to diagnose."
+        ),
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.6.0",
       summary:
         "Live Photos can now export with their paired video file, and standalone videos "
