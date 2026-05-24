@@ -223,6 +223,60 @@ struct ExportAllAlbumsTests {
     #expect(kinds.isSubset(of: [.album]))
   }
 
+  /// Bulk-album export must drop `phAssetCache` between iterations so peak
+  /// memory is bounded by one album's working set, not the cumulative
+  /// 282-album sweep (issue #112). Asserts via a `RecordingPHAssetCacheControl`
+  /// spy because `PHAsset` can't be constructed in unit tests.
+  @Test func bulkAlbumExportCallsForgetPHAssetCachePerAlbum() async throws {
+    let photoLib = FakePhotoLibraryService()
+    let dest = FakeExportDestination()
+    let writer = FakeAssetResourceWriter()
+    let fileSystem = FakeFileSystem()
+    let storeRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ExportAllAlbums-cache-\(UUID().uuidString)", isDirectory: true)
+    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
+    timelineStore.configure(for: "test")
+    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    collectionStore.configure(for: "test")
+    let suiteName = "test-ExportAllAlbums-cache-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    let cacheControl = RecordingPHAssetCacheControl()
+    let manager = ExportManager(
+      photoLibraryService: photoLib,
+      exportDestination: dest,
+      exportRecordStore: timelineStore,
+      collectionExportRecordStore: collectionStore,
+      assetResourceWriter: writer,
+      fileSystem: fileSystem,
+      phAssetCacheControl: cacheControl,
+      userDefaults: defaults
+    )
+    defer {
+      manager.cancelAndClear()
+      timelineStore.flushForTesting()
+      collectionStore.flushForTesting()
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+      UserDefaults().removePersistentDomain(forName: suiteName)
+    }
+
+    let albumA = seedAlbum(photoLib, localId: "A", ids: ["a1"])
+    let albumB = seedAlbum(photoLib, localId: "B", ids: ["b1"])
+    let albumC = seedAlbum(photoLib, localId: "C", ids: ["c1"])
+    photoLib.collectionTree = [albumA, albumB, albumC]
+
+    manager.startExportAllAlbums()
+    await waitUntil(manager.totalJobsEnqueued == 3)
+
+    // Three real album iterations → at least three drops. Favorites/shared
+    // passes are empty in this fixture. `>=` rather than `==` lets the
+    // assertion survive adding empty passes that still loop.
+    #expect(
+      cacheControl.forgetCallCount >= 3,
+      "runBulkEnqueueLoop must call forgetPHAssetCache() at least once per album; got \(cacheControl.forgetCallCount)"
+    )
+  }
+
   @Test func emptyAlbumTreeSetsNoAlbumsMessage() async throws {
     let h = makeHarness()
     defer { h.cleanup() }

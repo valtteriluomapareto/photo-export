@@ -118,6 +118,19 @@ final class FakeAutoSyncImportProvider: AutoSyncImportProviding {
   }
 }
 
+/// `PHAssetCacheControlling` test double. Counts invocations so tests can
+/// assert `ExportManager.runBulkEnqueueLoop` drops the PHAsset cache between
+/// bulk-export iterations (issue #112). Sibling pattern to
+/// `RecordingDirectoryFsync` from PR #114.
+@MainActor
+final class RecordingPHAssetCacheControl: PHAssetCacheControlling {
+  private(set) var forgetCallCount: Int = 0
+
+  func forgetPHAssetCache() {
+    forgetCallCount += 1
+  }
+}
+
 /// Convenience builder for an AutoSyncEnvironment wired to fakes. The default
 /// configuration: idle exporter, no destination, no scopes, not importing,
 /// in-memory dirty/retry stores, deterministic test clock.

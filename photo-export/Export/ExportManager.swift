@@ -324,6 +324,10 @@ final class ExportManager: ObservableObject {
   // MARK: - Dependencies
   private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Export")
   let photoLibraryService: any PhotoLibraryService
+  /// Seam for dropping `PhotoLibraryManager`'s long-lived PHAsset cache
+  /// between bulk-export iterations. See `PHAssetCacheControlling` for the
+  /// memory-watermark backstory (issue #112).
+  private let phAssetCacheControl: any PHAssetCacheControlling
   let exportDestination: any ExportDestination
   let exportRecordStore: ExportRecordStore
   let collectionExportRecordStore: CollectionExportRecordStore
@@ -467,12 +471,14 @@ final class ExportManager: ObservableObject {
     mediaRenderer: (any MediaRenderer)? = nil,
     imageConverter: any ImageConverter = ProductionImageConverter(),
     fileSystem: any FileSystemService = FileIOService(),
+    phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
     userDefaults: UserDefaults = .standard
   ) {
     self.userDefaults = userDefaults
     self.photoLibraryService = photoLibraryService
     self.exportDestination = exportDestination
     self.exportRecordStore = exportRecordStore
+    self.phAssetCacheControl = phAssetCacheControl
     // Default to a fresh collection store backed by the same on-disk root as the timeline
     // store. Tests typically pass `nil` and get a default-rooted store; production wires
     // an injected one from `photo_exportApp` so both stores share the destination's
@@ -1071,6 +1077,13 @@ final class ExportManager: ObservableObject {
   ) async throws -> (totals: BulkExportTotals, completed: Bool) {
     var totals = seed
     for item in items {
+      // Drop the previous iteration's PHAsset cache before starting the
+      // next. Bounds peak cache footprint at one iteration's fetch rather
+      // than the cumulative timeline/album sweep (issue #112).
+      phAssetCacheControl.forgetPHAssetCache()
+      // Yield so WindowServer pings interleave during long bulk enqueues;
+      // without it a 282-album fan-out registers as unresponsive (issue #112).
+      await Task.yield()
       let outcome = try await enqueue(item)
       guard isCurrent(gen) else { return (totals, false) }
       switch outcome {
