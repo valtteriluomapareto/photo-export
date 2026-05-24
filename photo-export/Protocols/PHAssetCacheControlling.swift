@@ -24,15 +24,22 @@ import Foundation
 /// the cache accumulates within a single scope iteration without an intra-
 /// loop drop. Architect-lens review on the v1 implementation caught this.
 ///
-/// `Sendable` so the existential can be stored in non-`@MainActor` test
-/// contexts. The `@MainActor` constraint on the protocol provides the
-/// isolation guarantee for the method body.
+/// `@MainActor`-isolated by protocol attribute so the existential carries
+/// the isolation guarantee for the method body. Not marked `Sendable` —
+/// existing `@MainActor` protocols in this codebase (e.g.
+/// `AutoSyncCurrentRunStore`) follow the same convention; adding the
+/// `Sendable` requirement would force `PhotoLibraryManager` to declare
+/// `@unchecked Sendable` (it has lots of MainActor-isolated mutable state,
+/// which Swift can't auto-verify as `Sendable` even though MainActor
+/// serializes the access). If a future caller needs to capture the
+/// existential into a non-MainActor context (e.g. when the deferred Fix B
+/// off-main enumeration PR lands), revisit then.
 ///
 /// Production conformance: `PhotoLibraryManager`. Test conformance:
 /// `RecordingPHAssetCacheControl` for invocation-count assertions,
 /// `NoOpPHAssetCacheControl` for tests that don't care.
 @MainActor
-protocol PHAssetCacheControlling: AnyObject, Sendable {
+protocol PHAssetCacheControlling: AnyObject {
   /// Drops the PHAsset-by-id cache. Distinct from `PhotoLibraryManager.invalidateCache()`
   /// which also bumps `libraryRevision` and clears the collection tree —
   /// that triggers SwiftUI re-fetches in sidebar/grid views, which is wrong
