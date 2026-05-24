@@ -38,25 +38,6 @@ struct PhotoLibraryManagerTests {
   /// from a previous `bindLivePhotoDetectionFallback` call would keep
   /// overwriting `livePhotoDetectionFallbackEnabled` whenever the prior
   /// publisher emitted, racing the new binding.
-  /// `forgetPHAssetCache()` (issue #112) is a one-liner that calls
-  /// `phAssetCache.removeAll()`. The interesting verification — "cache drops
-  /// between AutoSync sub-scopes" — is structural, via the
-  /// `RecordingPHAssetCacheControl` spy in `AutoSyncManagerTests`. This test
-  /// pins the method's existence and the `phAssetCacheCount` getter on a
-  /// fresh manager (initial cache is empty; calling forget keeps it empty
-  /// rather than crashing on a no-op `removeAll()`).
-  ///
-  /// The cache cannot be populated from a unit test without a real
-  /// PhotoKit-authorised session — `cacheAssets(_:)` is `private`, and
-  /// `overrideService` early-returns from `fetchAssets(in:)` before the
-  /// cache-population path. So the test surface here is intentionally narrow.
-  @Test func forgetPHAssetCacheLeavesEmptyCacheUntouched() {
-    let plm = PhotoLibraryManager()
-    #expect(plm.phAssetCacheCount == 0)
-    plm.forgetPHAssetCache()
-    #expect(plm.phAssetCacheCount == 0)
-  }
-
   @Test func bindLivePhotoDetectionFallback_rebindReplacesPriorSubscription() {
     let firstSubject = PassthroughSubject<Bool, Never>()
     let secondSubject = PassthroughSubject<Bool, Never>()

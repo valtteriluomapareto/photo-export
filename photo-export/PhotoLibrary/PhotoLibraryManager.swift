@@ -59,18 +59,14 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// (`startCachingThumbnails` / `stopCachingThumbnails`) and resource
   /// lookups (`descriptor → PHAsset` bridging) avoid re-fetching. Entries
   /// persist until `invalidateCache()` (library changes) or
-  /// `forgetPHAssetCache()` (AutoSync sub-scope boundaries).
+  /// `forgetPHAssetCache()` (per-iteration drops in
+  /// `ExportManager.runBulkEnqueueLoop` — issue #112).
   ///
   /// **Not** wholesale-replaced on each fetch — `cacheAssets(_:)` below is
-  /// per-key additive. AutoSync drops this between scope iterations via
-  /// `forgetPHAssetCache()` to keep the fan-out's peak memory bounded by
-  /// one scope's working set rather than the whole fan-out (issue #112).
+  /// per-key additive. The bulk-export loop drops this between iterations
+  /// to keep the fan-out's peak memory bounded by one iteration's working
+  /// set rather than the cumulative timeline-year / 282-album sweep.
   private var phAssetCache: [String: PHAsset] = [:]
-
-  /// Test-only accessor for `phAssetCache.count`. Plain `internal` so
-  /// `@testable import Photo_Export` can read it without exposing the cache
-  /// itself.
-  var phAssetCacheCount: Int { phAssetCache.count }
 
   /// Cache of adjusted-asset counts keyed by `"YYYY-M"`. Populated lazily by
   /// `countAdjustedAssets` and cleared when the Photos library changes or the user re-authorises.
@@ -830,15 +826,21 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
     let result = PHAsset.fetchAssets(with: opts)
     var assets: [PHAsset] = []
-    // `autoreleasepool` per iteration drains the Obj-C temporaries PhotoKit
-    // produces during enumeration. Without it, the autoreleased pile only
-    // drains at the next runloop boundary — across the AutoSync fan-out's
-    // 282-album + favorites + shared-album sweep, that pile is large enough
-    // to push a sandboxed app past its memory high watermark (issue #112).
-    // Matches the pattern `fetchPHAssets(year:month:)` already uses for the
-    // timeline scope.
-    result.enumerateObjects { asset, _, _ in
-      autoreleasepool { assets.append(asset) }
+    // Use the index-based form (not `enumerateObjects { ... }`) so the
+    // `autoreleasepool` can wrap PhotoKit's `result.object(at:)` call —
+    // that's where the autoreleased Obj-C temporaries are minted.
+    // `enumerateObjects`'s callback receives the asset as an argument
+    // produced by PhotoKit *outside* any user-controllable pool, so a
+    // pool inside the closure body drains pure Swift code and effectively
+    // nothing PhotoKit-side. Matches the proven pattern at
+    // `fetchPHAssets(year:month:)` below. Without per-iteration drain,
+    // PhotoKit's 282-album + favorites + shared-album sweep generates an
+    // autoreleased pile large enough to contribute to crossing a
+    // sandboxed-app memory high watermark (issue #112).
+    for index in 0..<result.count {
+      autoreleasepool {
+        assets.append(result.object(at: index))
+      }
     }
     return assets
   }
@@ -857,10 +859,13 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
     let result = PHAsset.fetchAssets(in: collection, options: opts)
     var assets: [PHAsset] = []
-    // See `fetchFavoritesPHAssets` above for why per-iteration `autoreleasepool`
-    // is required here (issue #112).
-    result.enumerateObjects { asset, _, _ in
-      autoreleasepool { assets.append(asset) }
+    // See `fetchFavoritesPHAssets` above for why this uses the index-based
+    // form with `autoreleasepool` wrapping `result.object(at:)` rather than
+    // `enumerateObjects { ... }` (issue #112).
+    for index in 0..<result.count {
+      autoreleasepool {
+        assets.append(result.object(at: index))
+      }
     }
     return assets
   }

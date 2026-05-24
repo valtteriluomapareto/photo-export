@@ -313,3 +313,73 @@ regressions recur.
 
 Proceed to implementation now. The diagnosis is overdetermined by code
 reading; the `.ips` would refine, not redirect, the fix set.
+
+---
+
+## Implementation notes (v2 plan → v2 implementation deltas)
+
+The implementation differs from this plan in three documented ways, all
+discovered during code reading and multi-lens review of the first
+implementation attempt:
+
+### Cache-drop site moved one layer down
+
+This plan placed the cache-drop in `AutoSyncManager.startRun` (between
+scope iterations). Architect-lens review on the first attempt found that
+each scope's bulk path (`ExportManager.runBulkEnqueueLoop`) iterates
+internally — timeline across years, albums across 282 collections — and
+the cache accumulates *within* a single AutoSync scope without an
+intra-loop drop. For an 80k library across 20 years, the timeline scope
+alone would still accumulate ~80k entries before reaching the
+between-scope drop.
+
+The cache-drop therefore moved to the top of each iteration in
+`ExportManager.runBulkEnqueueLoop`. This bounds peak cache footprint by
+the max single-iteration fetch size (~one year of timeline or one album)
+rather than the cumulative fan-out. The next bulk loop's first iteration
+also drops the previous scope's last-iter residue, so the
+between-scope drop in `AutoSyncManager` is no longer needed and was
+removed. `PHAssetCacheControlling` is injected into `ExportManager`
+rather than `AutoSyncEnvironment`.
+
+### Fix 4 (collection-tree hoist) skipped
+
+This plan's Fix 4 ("hoist `fetchCollectionTree()` out of
+`enqueueCollection`'s 282-iteration loop") was based on the assumption
+that each per-album call walked the tree. Code reading at
+`PhotoLibraryManager.swift:843-846` shows `cachedCollectionTree`
+already memoizes the walk: the first call constructs the tree, the
+remaining 281 calls return the cached array. Hoisting would not change
+the memory profile and was dropped.
+
+### `autoreleasepool` placement rewrite
+
+This plan called for adding `autoreleasepool` to `fetchFavoritesPHAssets`
+and `fetchAlbumPHAssets`. The first attempt wrapped only the pure-Swift
+`assets.append(asset)` call inside the `enumerateObjects` closure body —
+which drains nothing PhotoKit-side, because PhotoKit's autoreleased
+temporaries are minted by the `enumerateObjects` callback machinery
+*before* the user's closure runs. Multi-lens review caught this.
+
+The implementation converts both sites to index-based `for index in
+0..<result.count { autoreleasepool { assets.append(result.object(at:
+index)) } }` matching the proven pattern at `fetchPHAssets(year:month:)`.
+The pool now wraps the `result.object(at:)` call — that's the PhotoKit
+call that mints the autoreleased object.
+
+### Other deltas from this plan
+
+- The `phAssetCacheCount` test hook proposed in §"Testing strategy" was
+  added in the first attempt and then dropped: it's only useful if a
+  unit test can populate the cache, and `PHAsset` can't be constructed
+  in unit tests without PhotoKit authorisation. The structural assertion
+  via the `RecordingPHAssetCacheControl` spy in `ExportAllAlbumsTests`
+  is the load-bearing test.
+- The weak `PhotoLibraryManagerTests.forgetPHAssetCacheLeavesEmptyCacheUntouched`
+  proposed in §"Testing strategy" was added and then dropped for the
+  same reason — it pinned method existence (a compile-time concern) and
+  nothing else.
+- `PHAssetCacheControlling` is marked `Sendable` (in addition to its
+  `@MainActor` constraint) to future-proof against detached-task capture.
+  A `NoOpPHAssetCacheControl` default is provided for `ExportManager`
+  test sites that don't care about cache-drop behaviour.

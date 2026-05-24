@@ -22,10 +22,6 @@ struct AutoSyncEnvironment {
   /// finish. Surfaced in the user's diagnostic report so a previous
   /// session's silent shutdown is observable from the saved `.txt`.
   let currentRunStore: any AutoSyncCurrentRunStore
-  /// PHAsset cache control surface for the fan-out. AutoSyncManager calls
-  /// `forgetPHAssetCache()` between sub-scopes to bound peak memory at one
-  /// scope's working set rather than the whole fan-out (issue #112).
-  let phAssetCacheControl: any PHAssetCacheControlling
   let clock: any AutoSyncClock
   let userDefaults: UserDefaults
 }

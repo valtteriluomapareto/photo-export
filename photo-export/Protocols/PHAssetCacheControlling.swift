@@ -1,30 +1,50 @@
 import Foundation
 
 /// Hook for dropping `PhotoLibraryManager`'s PHAsset-by-id cache between
-/// AutoSync sub-scopes. Exists as its own seam (rather than a method on
-/// `PhotoLibraryChangeProviding`) because cache-control is a behavior method,
-/// not a change-observation method, and mixing concerns at the protocol level
-/// would force `FakePersistentChangeSource` to implement an unrelated stub.
+/// bulk-export iterations. Exists as its own seam (rather than a method on
+/// `PhotoLibraryService` or `PhotoLibraryChangeProviding`) because
+/// cache-control is a behavior method, not a fetch or a change-observation
+/// method. Mixing concerns at the protocol level would force
+/// `FakePhotoLibraryService` / `FakePersistentChangeSource` to implement
+/// unrelated stubs.
 ///
 /// Why this seam exists: on a large library (80k+ assets, 200+ albums), the
-/// AutoSync fan-out's per-scope `fetchAssets` calls additively populate
-/// `phAssetCache` without ever clearing between scopes. The cache only drops
-/// on `photoLibraryDidChange` — which can be hours away in normal use.
-/// Without dropping between scopes, the cache accumulates references to
-/// every PHAsset the fan-out touched, and PhotoKit's lazy working set behind
-/// each PHAsset pins additional memory. The sandboxed-app high watermark is
-/// crossed; the process is terminated by an `EXC_RESOURCE` corpse exception
-/// with no user-facing crash dialog (issue #112).
+/// AutoSync fan-out's per-iteration `fetchAssets` calls in
+/// `ExportManager.runBulkEnqueueLoop` additively populate `phAssetCache`. The
+/// cache only drops on `photoLibraryDidChange` — which can be hours away in
+/// normal use. Without dropping between iterations, the cache accumulates
+/// references to every PHAsset the bulk loop touched, and PhotoKit's lazy
+/// working set behind each PHAsset pins additional memory. The sandboxed-app
+/// high watermark is crossed; the process is terminated by an `EXC_RESOURCE`
+/// corpse exception with no user-facing crash dialog (issue #112).
 ///
-/// Production conformance: `PhotoLibraryManager`. Test conformance: a fake
-/// that records the call so `AutoSyncManagerTests` can prove the fan-out
-/// drains the cache at the right boundaries.
+/// The drop sits inside `runBulkEnqueueLoop` (not at the AutoSync sub-scope
+/// boundary as v1 implemented) because each scope's bulk loop iterates
+/// internally — timeline across years, albums across 282 collections — and
+/// the cache accumulates within a single scope iteration without an intra-
+/// loop drop. Architect-lens review on the v1 implementation caught this.
+///
+/// `Sendable` so the existential can be stored in non-`@MainActor` test
+/// contexts. The `@MainActor` constraint on the protocol provides the
+/// isolation guarantee for the method body.
+///
+/// Production conformance: `PhotoLibraryManager`. Test conformance:
+/// `RecordingPHAssetCacheControl` for invocation-count assertions,
+/// `NoOpPHAssetCacheControl` for tests that don't care.
 @MainActor
-protocol PHAssetCacheControlling: AnyObject {
+protocol PHAssetCacheControlling: AnyObject, Sendable {
   /// Drops the PHAsset-by-id cache. Distinct from `PhotoLibraryManager.invalidateCache()`
-  /// which also bumps `libraryRevision` and clears the collection tree — that
-  /// triggers SwiftUI re-fetches in sidebar/grid views, which is wrong to do
-  /// mid-AutoSync. `forgetPHAssetCache` is the narrow operation: just drop the
-  /// dict, leave UI-facing state alone.
+  /// which also bumps `libraryRevision` and clears the collection tree —
+  /// that triggers SwiftUI re-fetches in sidebar/grid views, which is wrong
+  /// to do mid-export. `forgetPHAssetCache` is the narrow operation: just
+  /// drop the dict, leave UI-facing state alone.
   func forgetPHAssetCache()
+}
+
+/// No-op default for test sites that construct an `ExportManager` and don't
+/// care about cache-drop behaviour. The real production implementation is
+/// `PhotoLibraryManager`.
+@MainActor
+final class NoOpPHAssetCacheControl: PHAssetCacheControlling {
+  func forgetPHAssetCache() {}
 }

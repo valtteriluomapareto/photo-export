@@ -88,7 +88,8 @@ struct PhotoExportApp: App {
     let cers = CollectionExportRecordStore()
     let em = ExportManager(
       photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers,
-      collectionExportRecordStore: cers)
+      collectionExportRecordStore: cers,
+      phAssetCacheControl: plm)
     // Issue #49: drive the PhotoLibraryManager `descriptor(from:)` resource fallback
     // from the same UserDefaults-backed toggle ExportManager owns. Synchronous sink so
     // the next fetch sees the current value; initial value flows immediately because
@@ -263,7 +264,6 @@ struct PhotoExportApp: App {
               runSummaryStore: autoSyncRunSummaryStore,
               perDestinationTokenStore: autoSyncPerDestinationTokenStore,
               currentRunStore: autoSyncCurrentRunStore,
-              phAssetCacheControl: photoLibraryManager,
               clock: autoSyncClock,
               userDefaults: .standard
             )

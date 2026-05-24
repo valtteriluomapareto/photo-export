@@ -119,8 +119,9 @@ final class FakeAutoSyncImportProvider: AutoSyncImportProviding {
 }
 
 /// `PHAssetCacheControlling` test double. Counts invocations so tests can
-/// assert the AutoSync fan-out drains the cache at the right boundaries
-/// (issue #112). Sibling pattern to `RecordingDirectoryFsync` from PR #114.
+/// assert `ExportManager.runBulkEnqueueLoop` drops the PHAsset cache between
+/// bulk-export iterations (issue #112). Sibling pattern to
+/// `RecordingDirectoryFsync` from PR #114.
 @MainActor
 final class RecordingPHAssetCacheControl: PHAssetCacheControlling {
   private(set) var forgetCallCount: Int = 0
@@ -145,7 +146,6 @@ struct FakeAutoSyncEnvironmentBuilder {
   let runSummaryStore = InMemoryAutoSyncRunSummaryStore()
   let perDestinationTokenStore = InMemoryAutoSyncPerDestinationTokenStore()
   let currentRunStore = InMemoryAutoSyncCurrentRunStore()
-  let phAssetCacheControl = RecordingPHAssetCacheControl()
   let clock = TestClock()
   let userDefaults: UserDefaults
 
@@ -166,7 +166,6 @@ struct FakeAutoSyncEnvironmentBuilder {
       runSummaryStore: runSummaryStore,
       perDestinationTokenStore: perDestinationTokenStore,
       currentRunStore: currentRunStore,
-      phAssetCacheControl: phAssetCacheControl,
       clock: clock,
       userDefaults: userDefaults
     )

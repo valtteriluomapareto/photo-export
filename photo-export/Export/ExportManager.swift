@@ -324,6 +324,10 @@ final class ExportManager: ObservableObject {
   // MARK: - Dependencies
   private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Export")
   let photoLibraryService: any PhotoLibraryService
+  /// Seam for dropping `PhotoLibraryManager`'s long-lived PHAsset cache
+  /// between bulk-export iterations. See `PHAssetCacheControlling` for the
+  /// memory-watermark backstory (issue #112).
+  private let phAssetCacheControl: any PHAssetCacheControlling
   let exportDestination: any ExportDestination
   let exportRecordStore: ExportRecordStore
   let collectionExportRecordStore: CollectionExportRecordStore
@@ -467,12 +471,14 @@ final class ExportManager: ObservableObject {
     mediaRenderer: (any MediaRenderer)? = nil,
     imageConverter: any ImageConverter = ProductionImageConverter(),
     fileSystem: any FileSystemService = FileIOService(),
+    phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
     userDefaults: UserDefaults = .standard
   ) {
     self.userDefaults = userDefaults
     self.photoLibraryService = photoLibraryService
     self.exportDestination = exportDestination
     self.exportRecordStore = exportRecordStore
+    self.phAssetCacheControl = phAssetCacheControl
     // Default to a fresh collection store backed by the same on-disk root as the timeline
     // store. Tests typically pass `nil` and get a default-rooted store; production wires
     // an injected one from `photo_exportApp` so both stores share the destination's
@@ -1071,6 +1077,16 @@ final class ExportManager: ObservableObject {
   ) async throws -> (totals: BulkExportTotals, completed: Bool) {
     var totals = seed
     for item in items {
+      // Drop the PHAsset cache contributions from the previous iteration
+      // BEFORE starting this one. Each iteration's `enqueue` closure
+      // ultimately calls `fetchAssets`, which additively populates
+      // `phAssetCache`. Without an intra-loop drop, a 20-year timeline
+      // sweep or a 282-album fan-out accumulates every PHAsset reference
+      // it touches; the sandboxed-app memory high watermark is crossed
+      // on large libraries (issue #112). Peak cache footprint is bounded
+      // by the max single iteration's fetch size, not the cumulative
+      // total. No-op for tests that pass `NoOpPHAssetCacheControl`.
+      phAssetCacheControl.forgetPHAssetCache()
       // Yield before each iteration so WindowServer pings and other main-
       // actor work can interleave during long bulk enqueues. On a 282-album
       // fan-out the absence of this yield is enough to register as "app is

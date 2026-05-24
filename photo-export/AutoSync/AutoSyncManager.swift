@@ -578,14 +578,15 @@ final class AutoSyncManager: ObservableObject {
           startedAt: environment.clock.now()
         )
         let summary = await environment.exportRunner.runExport(context: context)
-        // Drop the PHAsset cache contributions from this scope before
-        // moving on. Without this, the fan-out's per-scope `fetchAssets`
-        // calls additively pin every PHAsset reference across timeline
-        // years + favorites + every album + shared albums — pushing a
-        // sandboxed app past its memory high watermark on large
-        // libraries (issue #112). Done unconditionally — even a
-        // cancelled or failed scope has already added its fetches.
-        environment.phAssetCacheControl.forgetPHAssetCache()
+        // Cache-drop between scopes is no longer the load-bearing
+        // mechanism for issue #112 — that lives one layer down, inside
+        // `ExportManager.runBulkEnqueueLoop`, which iterates internally
+        // across timeline years / 282 albums / shared albums. Each bulk
+        // iteration drops the cache at its top, so the next scope's
+        // first iteration already cleans up the previous scope's
+        // residual entries. Re-introducing a between-scope drop here
+        // would be redundant.
+        //
         // Check cancellation again after the await — the user may have
         // toggled off / switched destinations during the run.
         guard !Task.isCancelled else { return }
