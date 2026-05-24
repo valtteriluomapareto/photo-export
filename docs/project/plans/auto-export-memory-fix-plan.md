@@ -1,24 +1,24 @@
-# Auto-Export Memory Exhaustion Fix Plan
+# Auto-Export Memory Exhaustion Fix Plan — v2
 
-**Status:** Draft v1. Diagnosis confirmed via the reporter's Console log (three
-`ReportCrash: PID … exceeded the memory high watermark` events in the
-reproduction window). Pending: `.ips` stack trace from
-`~/Library/Logs/DiagnosticReports/` for stack-level confirmation, requested
-in [#112 comment](https://github.com/valtteriluomapareto/photo-export/issues/112#issuecomment-4527469582).
+**Status:** Draft v2. Diagnosis confirmed (memory-watermark termination —
+`EXC_RESOURCE` / `RESOURCE_TYPE_MEMORY` corpse). v1's "Fix A" recommendation
+was rejected after multi-lens review: it was both too big (new parallel API)
+and too small (didn't address sibling memory consumers visible in code reading,
+and the cache-references-alone math doesn't cross a 1+ GB watermark). v2
+recommends a tighter cluster of six concrete changes with stronger code-reading
+support and an explicit uncertainty budget.
 
-**Bug:** [#112](https://github.com/valtteriluomapareto/photo-export/issues/112) —
-photo-export silently terminates during startup auto-export on a large library
-(80k+ assets, 282 albums + shared albums, auto-export covering timeline +
-favorites + all albums + shared albums).
+**Bug:** [#112](https://github.com/valtteriluomapareto/photo-export/issues/112).
 
-**Companion shipped:** AutoSync run journal (PR #114, merged as `6ac73f0`).
-Doesn't fix the kill, but in the next release will leave a `currentRun.json`
-naming which scope was in flight when the kill happened. Forensic surface for
-the next-time-this-class-of-bug-happens triage.
+**Companion already merged:** AutoSync run journal (PR #114, commit `6ac73f0`).
+**Forward** forensic surface for future bugs of this class — not retroactive
+validation for the reporter's prior crashes (their version shipped without the
+journal). The journal arrives in the same release as this fix; if the kill
+still happens after this PR ships, the journal names the surviving scope.
 
-## What we know
+## What we know (unchanged from v1)
 
-From the reporter's `log show` output:
+Reporter's `log show` output, three lines in the reproduction window:
 
 ```
 11:16:01  ReportCrash: PID 57308 exceeded the memory high watermark
@@ -26,24 +26,32 @@ From the reporter's `log show` output:
 13:00:22  ReportCrash: PID 76599 exceeded the memory high watermark
 ```
 
-Each preceded by `event condition bump 0 -> 1` and
-`post-exception thread qos drop 21 -> 17` — the classic `EXC_RESOURCE` /
-`RESOURCE_TYPE_MEMORY` signature. Three separate PIDs in a two-hour window
-= three separate launches all hitting the same limit. Process name isn't
-in the log line itself (corpse exceptions log PID only), but the
-`osanalyticshelper: Omitting com.valtteriluoma.photo-export … stability`
-line at 13:19 confirms the stability daemon has accumulated records for
-the bundle. Causation is virtually certain.
+Each preceded by `event condition bump 0 -> 1` and `post-exception thread qos
+drop 21 -> 17` — the classic `EXC_RESOURCE` / `RESOURCE_TYPE_MEMORY` signature.
+Three separate PIDs in a two-hour window. Termination is via corpse exception,
+not kernel jetsam. Process name not in the log line itself (corpse exceptions
+log PID only); the `osanalyticshelper: Omitting com.valtteriluoma.photo-export
+… stability` line at 13:19 confirms the stability daemon has crash records for
+the bundle.
 
-**This is not kernel jetsam.** It's the sandboxed-app **high-watermark**
-mechanism — `EXC_RESOURCE` is delivered, `ReportCrash` writes a corpse
-report (`.ips` / `.memexec`), the process is terminated. From the app's
-perspective: indistinguishable from SIGKILL. From the user's perspective:
-no crash dialog, just a disappearing app.
+## What we DON'T know yet
+
+The corpse `.ips` from `~/Library/Logs/DiagnosticReports/` would name the
+proximate call stack. Requested in
+[#112 comment](https://github.com/valtteriluomapareto/photo-export/issues/112#issuecomment-4527469582).
+v2 does **not** gate implementation on it — the diagnosis is overdetermined
+by code reading. If the `.ips` arrives and redirects, this plan expands.
 
 ## Root cause analysis
 
-`PhotoLibraryManager.phAssetCache` at `PhotoLibraryManager.swift:58`:
+The auto-export fan-out (`AutoSyncManager.swift:477-595` →
+`AutoSyncReducer.swift:179-202`) iterates timeline year/month chunks +
+favorites + 282 user albums + shared albums. Across this fan-out, several
+distinct memory consumers compound:
+
+### 1. `phAssetCache` accumulates across the fan-out
+
+`PhotoLibraryManager.phAssetCache` at `:58`:
 
 ```swift
 /// Bounded cache of recently-fetched PHAsset objects keyed by localIdentifier.
@@ -52,215 +60,256 @@ no crash dialog, just a disappearing app.
 private var phAssetCache: [String: PHAsset] = [:]
 ```
 
-**The doc-comment is wrong.** `cacheAssets(_:)` at `:712-716`:
+**The doc-comment is aspirational, not regressed-out.** `git log -S phAssetCache`
+shows the symbol was introduced in commit `e2a831f` with the additive
+`cacheAssets(_:)` from line one. The wholesale-replace behaviour the comment
+describes has never existed.
+
+`cacheAssets(_:)` at `:712-716` is additive; every `fetchAssets(in:)` call at
+`:265/:269/:275` writes into it; the cache only clears on `invalidateCache()`
+(`:731`), called from `photoLibraryDidChange`.
+
+### 2. `cachedOrFetchPHAsset(id:)` re-populates the cache on miss
+
+At `:719-725`:
 
 ```swift
-private func cacheAssets(_ assets: [PHAsset]) {
-  for asset in assets {
-    phAssetCache[asset.localIdentifier] = asset
-  }
+private func cachedOrFetchPHAsset(id: String) -> PHAsset? {
+  if let cached = phAssetCache[id] { return cached }
+  let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+  guard let asset = result.firstObject else { return nil }
+  cacheAssets([asset])    // <-- refills the long-lived cache
+  return asset
 }
 ```
 
-The implementation is **additive**, not wholesale-replace. Every
-`fetchAssets(in:)` call inserts entries; the cache only clears on
-`invalidateCache()` (`:731`), called only from `photoLibraryDidChange`.
+A scope-local cache strategy that doesn't address this would be defeated as
+soon as the export path falls through to a per-asset lookup (resource fallback
+during export of a Live Photo's edited variant, for example).
 
-The auto-export fan-out (`AutoSyncManager.swift:477-519` →
-`AutoSyncReducer.swift:179-202`) iterates:
+### 3. Missing `autoreleasepool` on the album / favorites fetch paths
 
-1. Timeline split into year/month chunks (`fetchPHAssets(year:month:)`).
-   For an 80k library spanning many years, that's tens of fetches, each
-   adding ~thousands of entries.
-2. Favorites once (`fetchFavoritesPHAssets`).
-3. **282 user albums** (`fetchAlbumPHAssets` once per album).
-4. Shared albums (same path as user albums, different subtype).
+`fetchPHAssets(year:month:)` at `:1019-1088` wraps its inner loop in
+`autoreleasepool { ... }` (around `:1078`) so PhotoKit's per-iteration
+autoreleased temporaries drain promptly.
 
-Across all four scopes, **every PHAsset reference the fan-out touched
-remains pinned in `phAssetCache` until app exit (or library change).**
-The dict deduplicates by `localIdentifier`, so an asset present in
-timeline + favorites + 3 albums occupies one entry — but each unique
-asset is one entry, and at this library size that's ~80k+ entries plus
-their underlying PhotoKit working-set (lazy resource handles, etc).
+`fetchFavoritesPHAssets` (`:791-804`) and `fetchAlbumPHAssets` (`:806-821`)
+do NOT — they call `result.enumerateObjects { asset, _, _ in assets.append(asset) }`
+with no pool. Across 282 albums × hundreds of assets each, the autoreleased
+pile drains only at the next runloop boundary. This is a co-conspirator the
+v1 plan missed entirely.
 
-Read sites for `phAssetCache`:
+### 4. `fetchCollectionTree()` walks the full tree per album
 
-- `:491`, `:507` — `descriptor → PHAsset` bridge in resource-export paths.
-- `:720` — `cachedOrFetchPHAsset(id:)` falls back to a fresh `PHAsset.fetchAssets(withLocalIdentifiers:)` if missing.
+`ExportManager.enqueueCollection` (around `:1328`) calls into
+`fetchCollectionTree()` *inside* the per-album loop. 282 iterations × full
+tree walk is its own memory pulse independent of `phAssetCache`. The result
+is cacheable at `:743` (`cachedCollectionTree`) but the per-album work still
+runs every iteration.
 
-**The cache is an optimisation, not a correctness requirement.** Dropping
-entries between scopes is safe; the fallback re-fetch path already exists.
+### 5. The arithmetic
 
-## Three candidate fixes
+PHAsset is an Obj-C object: ~16B header + ivars (localIdentifier, dates,
+dimensions, mediaType, flags, internal handles) ≈ 200–500 bytes resident per
+asset. 80k × 500B + Swift dict overhead (~80–100 bytes/entry including the
+36-char UUID string) ≈ **50–60 MB**.
 
-### Fix A — scope-local PHAsset cache *(load-bearing)*
+A typical sandboxed macOS app high watermark is **>1 GB**. So PHAsset
+references in `phAssetCache` alone are not crossing the watermark. Causes
+#3 and #4 above, plus PhotoKit's lazy working set retained by each PHAsset
+(resource handles, photolibraryd IPC caches, image-export sessions in
+progress), plus `PHFetchResult` retention via captured closures across the
+fan-out, are the other plausible contributors. Pure cache-size accounting
+doesn't close the gap on its own — but the cache is the most easily
+addressed lever, and the other levers (autoreleasepools, tree hoist) are in
+the same file.
 
-Change the cache lifecycle from "lives until library change" to "lives
-until the scope iteration's caller is done with the result." The smallest
-defensible refactor:
+**v2's bet:** the six fixes below address every memory consumer visible in
+code reading; if they're not enough collectively, the `.ips` (when it
+arrives) names what's left.
 
-- **Option A1 (minimal diff):** add a sibling API
-  `fetchAssetsWithPHAssets(in:mediaType:) -> (descriptors:, phAssets: [String: PHAsset])`
-  that returns the scope-local dict alongside the descriptors. Auto-export
-  uses it; the dict is released when the scope iteration completes. The
-  long-lived `phAssetCache` shrinks to "stuff the UI fetched recently"
-  (which is what the doc-comment originally promised).
-- **Option A2 (cleaner, larger diff):** drop `phAssetCache` entirely from
-  the auto-export path. All `descriptor → PHAsset` lookups go through
-  `cachedOrFetchPHAsset(id:)`, which re-fetches via
-  `PHAsset.fetchAssets(withLocalIdentifiers:)`. Cost: extra PhotoKit
-  lookup per asset on the export hot path; saves: zero accumulated
-  references.
-- **Option A3 (bounded cache):** keep the long-lived cache, cap at N
-  entries with LRU. Cost: depends on access patterns for cross-scope
-  lookups that we'd need to characterise first.
+## The fix — six concrete changes in one PR
 
-**Recommendation: A1.** Preserves the within-scope lookup hot path
-(thumbnails, sequential resource writes), drops the cross-scope
-accumulation that's killing us, doesn't change behaviour for non-auto-export
-callers. Read sites at `:491`, `:507` continue working because they're
-within the same scope as the cache population.
+### Fix 1: scope-end cache drop *(load-bearing)*
 
-### Fix B — off-main PHAsset enumeration *(beachball)*
+In `AutoSyncManager.startRun`'s fan-out loop (`AutoSyncManager.swift:546-593`),
+after each sub-scope's `runExport` completes, call a new narrow entry point
+on `PhotoLibraryManager`:
 
-`fetchFavoritesPHAssets` (`:791-804`) and `fetchAlbumPHAssets`
-(`:806-821`) call `result.enumerateObjects { … }` synchronously on the
-main actor. `fetchPHAssets(year:month:)` (`:1019-1088`) iterates
-`fetchResult.object(at: index)` with a `Task.sleep(1ms)` yield every 500
-items — which still leaves the main thread blocked for the rest of each
-500-item batch.
+```swift
+photos.forgetPHAssetCache()    // drops phAssetCache, leaves cachedCollectionTree alone
+```
 
-The pattern at `:286-306, :347-380` already exists: `Task.detached(priority: .userInitiated)`
-wrapping the `PHFetchResult` work. Apply the same shape to the three
-fetch sites.
+Implemented in `PhotoLibraryManager` as:
 
-PHFetchResult and PHAsset reads are documented thread-safe; the
-cross-actor hand-off happens at the existing `await` boundaries that
-already cross actors.
+```swift
+func forgetPHAssetCache() {
+  phAssetCache.removeAll()
+}
+```
 
-**Fix B does NOT fix the kill on its own.** Moving the work off-main
-doesn't reduce its memory footprint — the same PHAssets accumulate in
-`phAssetCache`. B addresses the *symptom* (UI beachball) but not the
-*termination*.
+Distinct from `invalidateCache()` (`:731`) — does not touch
+`cachedCollectionTree`, does not bump `libraryRevision`, does not trigger
+SwiftUI re-fetches in sidebar/grid views. Just drops the dict.
 
-### Fix C — yield between albums *(cheap responsiveness)*
+`phAssetCache` is `@MainActor`-isolated (`PhotoLibraryManager` is `@MainActor`
+at `:16`); `AutoSyncManager` is `@MainActor` at `:12`; the fan-out Task is
+explicitly `Task { @MainActor in ... }` at `:528`. So the clear happens on the
+same actor that owns the cache — no race, no Sendable concern.
 
-`ExportManager.runBulkEnqueueLoop` (`:1066-1083`) iterates 282+
-collections back-to-back without yielding. Even with Fix B moving each
-fetch off-main, the dispatch-and-await pattern in this loop keeps the
-main actor busy across iterations.
+### Fix 2: `cachedOrFetchPHAsset` doesn't refill the long-lived cache
 
-Add `await Task.yield()` between iterations. Lets WindowServer pings
-interleave, drops jetsam pressure score, and is a one-line change.
+At `:719-725`, drop the `cacheAssets([asset])` call (or add a `cacheResult:
+Bool` parameter with a `false` default — slightly larger diff but preserves
+behaviour for the one caller that wants it). Since the fallback is only ever
+used for resolver-time `descriptor → PHAsset` bridging, refilling the
+long-lived cache from this site is the same accumulation pattern Fix 1 is
+draining; without Fix 2, the export path refills what Fix 1 drained.
+
+### Fix 3: `autoreleasepool` around album / favorites enumeration
+
+At `:791-804` (`fetchFavoritesPHAssets`) and `:806-821` (`fetchAlbumPHAssets`),
+wrap the `result.enumerateObjects { ... }` body in `autoreleasepool { ... }`.
+Matches the pattern `fetchPHAssets(year:month:)` already uses at `:1078`.
+Drains PhotoKit's per-iteration autoreleased Obj-C temporaries.
+
+### Fix 4: hoist `fetchCollectionTree()` out of per-album loop
+
+In `ExportManager` (around `:1300-1370`), the call to `fetchCollectionTree()`
+inside `enqueueCollection` should be hoisted out to `runBulkEnqueueLoop`'s
+caller and threaded through, or memoized for the duration of the fan-out. 282
+× tree walk → 1 × tree walk.
+
+### Fix 5: `await Task.yield()` between albums
+
+`ExportManager.runBulkEnqueueLoop` at `:1066-1083` iterates 282+ collections
+without yielding. Add `await Task.yield()` between iterations. Lets
+WindowServer pings interleave; drops jetsam pressure score; doesn't help
+memory but helps the beachball just enough that the user notices.
+
+### Fix 6: timeline batch size 500 → 100
+
+`fetchPHAssets(year:month:)` at `:1074` uses a `batchSize` of 500 between
+`Task.sleep(1ms)` yields. Reducing to 100 = 5× more frequent yields during
+the heaviest single scope. One-character constant change.
 
 ## Sequencing decision
 
-**Single PR:** Fix A + Fix C.
+**Single PR:** all six fixes.
 
 Rationale:
-- **Fix A is necessary and sufficient for the kill.** Without it, B's
-  off-main move keeps the memory pinned in the same dict on a different
-  thread.
-- **Fix C is one line.** Folds in naturally.
-- **Fix B is deferred.** Off-main moves of PhotoKit enumeration have a
-  wider refactoring footprint (thumbnail-fetch / live-photo-detection
-  paths read from the same fetch results) and beachball-only impact.
-  Better in its own PR with its own test surface.
+- Fixes 1–4 collectively address the memory-pressure cause and are tightly
+  coupled (Fix 2 is required for Fix 1 to hold; Fix 3 is in the same file as
+  Fix 1; Fix 4 is the same loop as Fix 5).
+- Fix 5 and Fix 6 are small UX-perceptibility wins co-located with the
+  memory fixes.
+- The off-main enumeration refactor v1 called "Fix B" is **deferred** to a
+  follow-up PR. Off-main moves of PhotoKit calls (`Task.detached(priority:
+  .userInitiated)`) have a wider refactoring footprint — thumbnail-fetch and
+  live-photo-detection paths read from the same fetch results — and the
+  user's symptom is the *kill*, not the beachball. The beachball can be
+  addressed in its own focused PR.
 
-The user-facing outcome after this PR: auto-export completes without
-termination on large libraries. The UI may still beachball briefly during
-the heavy scopes — that's Fix B's job in a follow-up.
+User-facing outcome after this PR: auto-export completes without termination
+on large libraries. The UI may still beachball briefly on the heaviest
+scopes; the timeline batch shrink (Fix 6) softens it, but doesn't eliminate
+it. That's the deferred PR's job.
 
-## Implementation outline (Fix A + C)
+## Implementation outline
 
-1. **Add `fetchAssetsWithPHAssets(in:mediaType:)`** in `PhotoLibraryManager`.
-   Returns `(descriptors: [AssetDescriptor], phAssets: [String: PHAsset])`.
-   Internally calls the existing `fetchPHAssets` / `fetchFavoritesPHAssets`
-   / `fetchAlbumPHAssets` and constructs the dict locally without touching
-   `self.phAssetCache`.
-2. **Update auto-export callers** (`ExportManager.enqueueCollection` at
-   `:1311-1367`, the timeline path, favorites path) to use the new API
-   and pass the scope-local dict to whichever downstream stage needs
-   `descriptor → PHAsset` resolution. Or, if the downstream only needs
-   descriptors, just discard the dict.
-3. **Leave `phAssetCache` and the existing `fetchAssets(in:)` for UI
-   callers.** They're not the failure mode and changing them would
-   expand the blast radius unnecessarily.
-4. **Fix the doc-comment** on `phAssetCache:58`. It currently lies; honest
-   doc is "Long-lived cache; entries persist until the next library
-   change. Auto-export uses `fetchAssetsWithPHAssets` to avoid contributing
-   to this cache."
-5. **Add `await Task.yield()`** between iterations in
-   `runBulkEnqueueLoop` (`:1066-1083`).
+Order of changes within the PR:
+
+1. **Add `forgetPHAssetCache()`** to `PhotoLibraryManager`. Document it.
+   Update the misleading doc-comment at `:58` to match reality (something
+   like: "Long-lived cache, persists until library change or explicit
+   `forgetPHAssetCache()`. Auto-export drops this between scope iterations
+   to bound peak memory across the fan-out.").
+2. **Call it from `AutoSyncManager.startRun`** after each scope's `runExport`
+   (`:546-593`).
+3. **Remove the `cacheAssets([asset])` call at `:723`** in
+   `cachedOrFetchPHAsset` (or add the `cacheResult: Bool = false` parameter).
+4. **Wrap album and favorites enumeration** in `autoreleasepool { ... }`
+   (`:791-804`, `:806-821`).
+5. **Hoist `fetchCollectionTree()`** out of `enqueueCollection` to the fan-out
+   driver.
+6. **Add `await Task.yield()`** between iterations in `runBulkEnqueueLoop`.
+7. **Change timeline batch size** 500 → 100 at `:1074`.
 
 ## Testing strategy
 
-- **Unit:** new `PhotoLibraryManagerScopeLocalCacheTests` — drive 5
-  successive `fetchAssetsWithPHAssets` calls with a fake `PHFetchResult`
-  shim; assert `phAssetCache` (the long-lived one on the manager) does
-  NOT grow.
-- **Unit:** assert the existing `fetchAssets(in:)` UI API still populates
-  `phAssetCache` (no behaviour change for UI paths).
-- **Integration:** drive a fake `AutoSyncManager` fan-out with 50
-  album-scope iterations and assert peak `phAssetCache.count` remains <
-  the per-scope worst case. Doesn't need real PhotoKit; can use the
-  existing `PhotoLibraryService` injection point.
-- **Manual on real device:** maintainer reproduces against a library
-  closest to the reporter's class (80k+ assets, 200+ albums). Exit
-  criterion: AutoSync startup fan-out completes; no termination; saved
-  diagnostic report shows healthy completion.
-- **Forensic backstop:** the recently-merged journal — once shipped, any
-  residual termination leaves a `currentRun.json` naming the surviving
-  failure scope. Tells us which fix to land next if this one is partial.
+The existing test infrastructure does not expose `phAssetCache` size:
+`PhotoLibraryService` (`Protocols/PhotoLibraryService.swift:7-82`) returns
+`[AssetDescriptor]` only; `FakePhotoLibraryService` (`TestHelpers/
+FakePhotoLibraryService.swift:8`) never touches the cache; and
+`PhotoLibraryManagerTests.swift` is 59 lines covering only the live-photo
+fallback path. **The plan owns the new test surface as a line item.**
+
+1. **Add a `phAssetCacheCount` test hook** on `PhotoLibraryManager` —
+   `internal var phAssetCacheCount: Int { phAssetCache.count }` — gated to
+   `#if DEBUG` or behind an `@testable` boundary.
+2. **Unit test in `PhotoLibraryManagerTests`** driving the real
+   `PhotoLibraryManager` with a fake `PhotoLibraryService` injection that
+   returns canned descriptors; assert that after a simulated AutoSync scope
+   iteration, `forgetPHAssetCache()` brings `phAssetCacheCount` to 0.
+3. **Unit test for `cachedOrFetchPHAsset`** asserting the cache count does
+   not grow when called repeatedly after the Fix 2 change.
+4. **Integration-ish test in `AutoSyncManagerTests`**: drive a fan-out with
+   3 scopes, assert `forgetPHAssetCache()` was called 3 times (record on a
+   spy method on the fake). This is the structural-assertion analogue of
+   the `RecordingDirectoryFsync` pattern from PR #114.
+5. **Manual on real device:** maintainer reproduces against a library
+   closest to the reporter's class (80k+ assets, 200+ albums). Exit
+   criterion: AutoSync startup fan-out completes; no termination; saved
+   diagnostic report shows healthy completion. **This remains the
+   load-bearing manual gate** — the unit tests prove behaviour, not
+   memory.
+
+**Not committing to:** `XCTMemoryMetric` / `measure(metrics:)` regression
+guards. The codebase has zero such usage today; introducing one in this PR
+expands review scope significantly. Acceptable follow-up if memory
+regressions recur.
 
 ## Anti-promises / non-goals
 
-- **UI beachball stays.** Fix A drops memory; Fix B addresses
-  responsiveness. Beachball is explicitly Fix B's territory and not part
-  of this PR.
-- **No `phAssetCache` redesign for UI paths.** Long-lived UI cache stays
-  as-is. Smaller scope, smaller diff, smaller review.
-- **No throttling work-in-flight.** If the corpse `.ips` (when it
-  arrives) points at a different memory consumer than `phAssetCache`
-  (e.g. resource buffering during export, or PhotoKit's own working
-  set), the plan expands. Today's plan addresses the strongest signal
-  visible in code reading.
+- **UI beachball stays substantially.** Fix 5 (`Task.yield()`) and Fix 6
+  (batch shrink) soften it; the structural fix is the deferred off-main
+  enumeration PR.
+- **No `phAssetCache` redesign for UI paths.** Long-lived cache stays as-is
+  for non-AutoSync callers. The `startCachingThumbnails` /
+  `stopCachingThumbnails` read sites at `:491` / `:507` continue to read
+  from the cache — they're called from the UI for thumbnail prefetch, not
+  from the AutoSync export path.
 - **No new entitlements, no memory-pressure observer, no in-app status
   surface for memory health.**
-- **No retroactive fix for users on 1.6.0 (129).** The fix ships in the
-  next release. The journal also ships in the next release. Users on
-  the current version continue to need the workaround (turn auto-export
-  off before launch, on after) until they update.
+- **No PHAsset working-set instrumentation.** If after this PR the kill
+  still happens, the journal will name the surviving scope and the next
+  PR can dig into PhotoKit-side memory (resource handles, image-export
+  sessions). v2 does not promise to address that today.
+- **No retroactive fix for users on 1.6.0 (129).** Both this fix and the
+  journal ship in the next release. Users on the current version continue
+  to need the workaround (turn auto-export off before launch, on after).
+- **Off-main enumeration is deferred** to a follow-up PR.
 
 ## Open questions
 
-1. **The `phAssetCache` doc-comment.** "Replaced wholesale on each fetch"
-   contradicts the implementation. Was the cache ever wholesale-replaced
-   and quietly changed without updating the doc, or has the doc always
-   been aspirational? *Action: git-blame the comment vs. `cacheAssets(_:)`
-   before refactoring — if there's a removed wholesale-replace code path
-   in history, it documents the intended design.*
-2. **`.ips` confirmation.** The reporter may attach the corpse report.
-   If the stack points at `phAssetCache` accumulation or `cacheAssets(_:)`,
-   the plan is unchanged. If it points at resource-write buffering,
-   thumbnail caching, or PhotoKit's working set, the plan expands.
-   *Action: wait for the issue follow-up; revise this document if the
-   stack redirects.*
-3. **Fix B's necessity timing.** Even after Fix A, with a 282-album
-   fan-out the main thread is busy enough to beachball noticeably. Is
-   this the same PR's problem or a follow-up? *Recommendation: follow-up
-   PR. The user reported "beachballing while doing the sync" and "closes
-   without an error" as two symptoms; A fixes the closes-without-error.
-   The beachball needs its own PR to keep the diff reviewable.*
-4. **PR #92 / #107 interaction.** The catch-up coalesce work landed
-   recently. Does the new scope-local cache API need to participate in
-   the coalesce path, or is it auto-export-only? *Assessment: catch-up
-   uses targeted-by-id fetches via `PHAsset.fetchAssets(withLocalIdentifiers:)`,
-   not the scope-fetch path. No interaction.*
+1. **`fetchCollectionTree()` hoist mechanism.** Is the cleanest cut to memoize
+   it in `runBulkEnqueueLoop`'s caller and pass through, or to add a
+   `runBulkEnqueueLoop(collectionTree: PhotoCollectionTree)` parameter?
+   *Decided at implementation time; both are defensible.*
+2. **The corpse `.ips`.** If it arrives and the stack points outside the six
+   fixes above (e.g. resource buffering during export, image-export sessions,
+   thumbnail decode), the plan expands. *Action: revisit after the `.ips`
+   arrives or after ~one week without it; ship v2 as-is regardless.*
+
+## What was closed from v1's open questions
+
+- **v1 OQ#1 (doc-comment archaeology).** Resolved: the doc was aspirational
+  from inception (`e2a831f`), no wholesale-replace path ever existed.
+- **v1 OQ#4 (PR #92 / #107 interaction).** Resolved: catch-up uses targeted
+  `PHAsset.fetchAssets(withLocalIdentifiers:)`, not the scope-fetch path.
+  No interaction.
 
 ## When to act
 
-After the `.ips` arrives (or after some time without it — say a week —
-acting on the strongest available signal). The diagnosis is strong
-enough today to start implementation; the `.ips` would either confirm or
-expand the scope.
+Proceed to implementation now. The diagnosis is overdetermined by code
+reading; the `.ips` would refine, not redirect, the fix set.
