@@ -578,6 +578,14 @@ final class AutoSyncManager: ObservableObject {
           startedAt: environment.clock.now()
         )
         let summary = await environment.exportRunner.runExport(context: context)
+        // Drop the PHAsset cache contributions from this scope before
+        // moving on. Without this, the fan-out's per-scope `fetchAssets`
+        // calls additively pin every PHAsset reference across timeline
+        // years + favorites + every album + shared albums — pushing a
+        // sandboxed app past its memory high watermark on large
+        // libraries (issue #112). Done unconditionally — even a
+        // cancelled or failed scope has already added its fetches.
+        environment.phAssetCacheControl.forgetPHAssetCache()
         // Check cancellation again after the await — the user may have
         // toggled off / switched destinations during the run.
         guard !Task.isCancelled else { return }

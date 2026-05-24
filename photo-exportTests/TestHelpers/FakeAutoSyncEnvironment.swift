@@ -118,6 +118,18 @@ final class FakeAutoSyncImportProvider: AutoSyncImportProviding {
   }
 }
 
+/// `PHAssetCacheControlling` test double. Counts invocations so tests can
+/// assert the AutoSync fan-out drains the cache at the right boundaries
+/// (issue #112). Sibling pattern to `RecordingDirectoryFsync` from PR #114.
+@MainActor
+final class RecordingPHAssetCacheControl: PHAssetCacheControlling {
+  private(set) var forgetCallCount: Int = 0
+
+  func forgetPHAssetCache() {
+    forgetCallCount += 1
+  }
+}
+
 /// Convenience builder for an AutoSyncEnvironment wired to fakes. The default
 /// configuration: idle exporter, no destination, no scopes, not importing,
 /// in-memory dirty/retry stores, deterministic test clock.
@@ -133,6 +145,7 @@ struct FakeAutoSyncEnvironmentBuilder {
   let runSummaryStore = InMemoryAutoSyncRunSummaryStore()
   let perDestinationTokenStore = InMemoryAutoSyncPerDestinationTokenStore()
   let currentRunStore = InMemoryAutoSyncCurrentRunStore()
+  let phAssetCacheControl = RecordingPHAssetCacheControl()
   let clock = TestClock()
   let userDefaults: UserDefaults
 
@@ -153,6 +166,7 @@ struct FakeAutoSyncEnvironmentBuilder {
       runSummaryStore: runSummaryStore,
       perDestinationTokenStore: perDestinationTokenStore,
       currentRunStore: currentRunStore,
+      phAssetCacheControl: phAssetCacheControl,
       clock: clock,
       userDefaults: userDefaults
     )

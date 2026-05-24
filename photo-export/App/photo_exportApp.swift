@@ -263,6 +263,7 @@ struct PhotoExportApp: App {
               runSummaryStore: autoSyncRunSummaryStore,
               perDestinationTokenStore: autoSyncPerDestinationTokenStore,
               currentRunStore: autoSyncCurrentRunStore,
+              phAssetCacheControl: photoLibraryManager,
               clock: autoSyncClock,
               userDefaults: .standard
             )

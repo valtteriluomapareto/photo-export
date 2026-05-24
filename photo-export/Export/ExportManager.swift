@@ -1071,6 +1071,12 @@ final class ExportManager: ObservableObject {
   ) async throws -> (totals: BulkExportTotals, completed: Bool) {
     var totals = seed
     for item in items {
+      // Yield before each iteration so WindowServer pings and other main-
+      // actor work can interleave during long bulk enqueues. On a 282-album
+      // fan-out the absence of this yield is enough to register as "app is
+      // unresponsive" — softening the perceptible beachball during the
+      // AutoSync startup sweep (issue #112).
+      await Task.yield()
       let outcome = try await enqueue(item)
       guard isCurrent(gen) else { return (totals, false) }
       switch outcome {
