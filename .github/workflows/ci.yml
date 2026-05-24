@@ -98,7 +98,7 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tail -20
+            build 2>&1 | tail -200
           echo "Debug build succeeded."
           echo "::endgroup::"
 
