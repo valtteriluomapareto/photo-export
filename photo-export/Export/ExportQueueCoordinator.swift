@@ -61,6 +61,8 @@ final class ExportQueueCoordinator: ObservableObject {
   // MARK: - Published queue state (mirrored on ExportManager)
 
   @Published private(set) var isRunning: Bool = false {
+    // Must stay synchronous — no Publisher.send, no actor hops — so the
+    // AutoSync seam's seven-step characterization sequence keeps its shape.
     didSet {
       guard isRunning != oldValue else { return }
       if isRunning {

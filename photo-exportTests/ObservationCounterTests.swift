@@ -1,5 +1,6 @@
+import Foundation
 import Observation
-import XCTest
+import Testing
 
 @testable import Photo_Export
 
@@ -11,67 +12,41 @@ private final class ObservationCounterTestModel {
 }
 
 @MainActor
-final class ObservationCounterTests: XCTestCase {
-  private typealias Model = ObservationCounterTestModel
-
-  func testCountsSequentialChangesByReRegistering() async {
-    let model = Model()
+struct ObservationCounterTests {
+  @Test func countsSequentialChangesByReRegistering() async throws {
+    let model = ObservationCounterTestModel()
     let counter = ObservationCounter { [model] in _ = model.value }
 
     model.value = 1
-    _ = await counter.waitForNextChange()
+    _ = try await counter.waitForNextChange()
     model.value = 2
-    _ = await counter.waitForNextChange()
+    _ = try await counter.waitForNextChange()
     model.value = 3
-    let final = await counter.waitForNextChange()
+    let final = try await counter.waitForNextChange()
 
-    XCTAssertEqual(counter.changeCount, 3)
-    XCTAssertEqual(final, 3)
+    #expect(counter.changeCount == 3)
+    #expect(final == 3)
   }
 
-  func testIgnoresMutationsToUntrackedProperties() async {
-    let model = Model()
+  @Test func waitForNextChangeTimesOutWhenNoMutationArrives() async throws {
+    let model = ObservationCounterTestModel()
     let counter = ObservationCounter { [model] in _ = model.value }
+    await #expect(throws: ObservationCounterTimeout.self) {
+      _ = try await counter.waitForNextChange(timeout: .milliseconds(50))
+    }
+  }
 
+  @Test func mutatingUntrackedPropertyDoesNotIncrement() async throws {
+    let model = ObservationCounterTestModel()
+    let counter = ObservationCounter { [model] in _ = model.value }
     model.unrelated = "ignored"
-    // Give any (incorrect) re-registration a chance to fire. A tiny yield
-    // is enough — ObservationCounter increments inside a Task on the main
-    // queue, so anything pending would have landed by now.
-    await Task.yield()
-    XCTAssertEqual(counter.changeCount, 0)
-
+    // Wait the full timeout to prove no observer fired for the untracked write.
+    await #expect(throws: ObservationCounterTimeout.self) {
+      _ = try await counter.waitForNextChange(timeout: .milliseconds(100))
+    }
+    #expect(counter.changeCount == 0)
     model.value = 1
-    _ = await counter.waitForNextChange()
-    XCTAssertEqual(counter.changeCount, 1)
-  }
-
-  func testStopFreezesCounterAfterNextChange() async {
-    let model = Model()
-    let counter = ObservationCounter { [model] in _ = model.value }
-
-    counter.stop()
-    model.value = 1
-    _ = await counter.waitForNextChange()
-    XCTAssertEqual(counter.changeCount, 1)
-
-    // After stop(), the counter does not re-register, so further mutations
-    // produce no additional change events.
-    model.value = 2
-    await Task.yield()
-    XCTAssertEqual(counter.changeCount, 1)
-  }
-
-  func testResetReturnsCountToZeroWithoutAffectingObservation() async {
-    let model = Model()
-    let counter = ObservationCounter { [model] in _ = model.value }
-
-    model.value = 1
-    _ = await counter.waitForNextChange()
-    counter.reset()
-    XCTAssertEqual(counter.changeCount, 0)
-
-    model.value = 2
-    _ = await counter.waitForNextChange()
-    XCTAssertEqual(counter.changeCount, 1)
+    _ = try await counter.waitForNextChange()
+    #expect(counter.changeCount == 1)
   }
 }

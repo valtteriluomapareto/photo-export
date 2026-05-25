@@ -80,6 +80,29 @@ Land this before invasive refactors.
 The goal of Phase 0 is not perfect profiling. It is enough repeatable evidence
 to decide which later work actually moves the app.
 
+### Reproducing the baseline trace
+
+Phase 0 wires three signposters (all under subsystem
+`com.valtteriluoma.photo-export`):
+
+| Category                            | Owner                                                  | Records                              |
+| ----------------------------------- | ------------------------------------------------------ | ------------------------------------ |
+| `AppLifecycle`                      | `App/AppDiagnostics.swift`                             | `AppLaunch` interval, `SelectionChanged` event |
+| `Export.Run`                        | `Export/ExportQueueCoordinator.swift`                  | `ExportRun` interval                 |
+| `PhotoLibraryChanges.CatchUp`       | `PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift` | `CatchUp`, `FetchPersistentChanges`, `EnumerateChanges` intervals |
+
+`BodyInvalidationCounter` (`App/BodyInvalidationCounter.swift`, `#if DEBUG`)
+counts SwiftUI body re-evaluations for the four wired views:
+`MonthContentView`, `CollectionContentView`, `TimelineSidebarView`,
+`CollectionsSidebarView`. Read from a debug REPL with
+`po BodyInvalidationCounter.shared.snapshot()`.
+
+To capture a run: cold-start the app → select a ~10k-asset month → trigger
+"Export Month" (or stop after ~200 jobs) → record the `AppLaunch` duration,
+the `ExportRun` duration, and a body-counter snapshot. Scroll sessions have
+no clean SwiftUI lifecycle hook on macOS — use Instruments' Core Animation
+track instead.
+
 ## Phase 1 - Observation-Independent Smoothness Wins
 
 These tasks can land before the Observation migration. They reduce real work on
