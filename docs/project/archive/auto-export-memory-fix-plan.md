@@ -1,12 +1,17 @@
-# Auto-Export Memory Exhaustion Fix Plan — v2
+# Auto-Export Memory Exhaustion Fix Plan - v2 (Archived)
 
-**Status:** Draft v2. Diagnosis confirmed (memory-watermark termination —
-`EXC_RESOURCE` / `RESOURCE_TYPE_MEMORY` corpse). v1's "Fix A" recommendation
-was rejected after multi-lens review: it was both too big (new parallel API)
-and too small (didn't address sibling memory consumers visible in code reading,
-and the cache-references-alone math doesn't cross a 1+ GB watermark). v2
-recommends a tighter cluster of six concrete changes with stronger code-reading
-support and an explicit uncertainty budget.
+**Status:** Implemented and archived as the issue #112 decision record. The
+initial v2 recommendation below is preserved for history, but the code landed
+with the documented implementation deltas near the end of this file. Do not use
+the original "six concrete changes" section as an active checklist.
+
+Diagnosis was confirmed as memory-watermark termination
+(`EXC_RESOURCE` / `RESOURCE_TYPE_MEMORY` corpse). v1's "Fix A" recommendation
+was rejected after multi-lens review: it was both too big (new parallel API) and
+too small (it did not address sibling memory consumers visible in code reading,
+and the cache-references-alone math does not cross a 1+ GB watermark). v2
+recommended a tighter cluster of changes with stronger code-reading support and
+an explicit uncertainty budget.
 
 **Bug:** [#112](https://github.com/valtteriluomapareto/photo-export/issues/112).
 
@@ -128,7 +133,7 @@ the same file.
 code reading; if they're not enough collectively, the `.ips` (when it
 arrives) names what's left.
 
-## The fix — six concrete changes in one PR
+## Historical v2 Recommendation - six concrete changes in one PR
 
 ### Fix 1: scope-end cache drop *(load-bearing)*
 
@@ -311,8 +316,10 @@ regressions recur.
 
 ## When to act
 
-Proceed to implementation now. The diagnosis is overdetermined by code
-reading; the `.ips` would refine, not redirect, the fix set.
+Archived note: no new implementation should be started from this section. The
+fix has already landed with the deltas documented below. Future smoothness work
+that builds on this area belongs in the active
+[`../plans/ui-smoothness-plan.md`](../plans/ui-smoothness-plan.md) roadmap.
 
 ---
 
