@@ -29,11 +29,12 @@ final class MonthViewModel: ObservableObject {
   /// for the 144 pt tile grid with comfortable headroom.
   private let cachingWindowSize: Int = 500
 
-  /// Assets currently registered with `PHCachingImageManager`. Invariant:
-  /// `cachedAssets.count <= cachingWindowSize`, and it mirrors the prefix of
-  /// the active scope that we've actually passed to `startCachingThumbnails`.
-  /// `refresh(for:)`'s diff (added/removed) is computed against this windowed
-  /// set, not the full scope, so the cache delta stays bounded.
+  /// Assets currently registered with `PHCachingImageManager`. After
+  /// `loadAssets`/`refresh` returns, this mirrors the prefix of the active
+  /// scope that we passed to `startCachingThumbnails`, capped at
+  /// `cachingWindowSize`. `refresh(for:)`'s diff (added/removed) is computed
+  /// against this windowed set, not the full scope, so the cache delta stays
+  /// bounded.
   private var cachedAssets: [AssetDescriptor] = []
 
   // Track which thumbnails have been upgraded to high quality

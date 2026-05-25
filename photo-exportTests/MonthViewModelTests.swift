@@ -474,6 +474,108 @@ struct MonthViewModelTests {
     }
   }
 
+  /// Companion to `startCachingThumbnailsIsCappedToWindowForLargeScopes`:
+  /// a fresh iCloud arrival that lands *outside* the caching window
+  /// (position 550 of 601) must still get `allowNetwork: true` on its fast
+  /// probe so the tile fills in without a Retry click. The
+  /// `newlyArrivedIds` set is scope-level for exactly this reason — the
+  /// windowed `added` set would skip tail arrivals and leave them stamped
+  /// `failedThumbnailIds`, with the HQ upgrade gated on that set and
+  /// unable to rescue them.
+  @Test func refreshAllowsNetworkForFreshArrivalOutsideCachingWindow() async throws {
+    let svc = FakePhotoLibraryService()
+    let initial = (0..<600).map { makeAsset(id: "a\($0)") }
+    svc.favoritesAssets = initial
+    for asset in initial { svc.thumbnailsByAssetId[asset.id] = dummyImage() }
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+    await drainBackgroundWork()
+    let startCachingCountAfterLoad = svc.startCachingCalls.count
+    let stopCachingCountAfterLoad = svc.stopCachingCalls.count
+
+    // Fresh iCloud arrival inserted at position 550 — past the 500-asset
+    // caching window. Fast probe needs network; without it the asset would
+    // land in failedThumbnailIds.
+    let fresh = makeAsset(id: "fresh-tail")
+    var refreshed = initial
+    refreshed.insert(fresh, at: 550)
+    svc.favoritesAssets = refreshed
+    svc.thumbnailsByAssetId[fresh.id] = dummyImage()
+    svc.thumbnailRequiresNetwork = [fresh.id]
+    svc.loadThumbnailCalls.removeAll()
+
+    await vm.refresh(for: .favorites)
+    await drainBackgroundWork()
+
+    let freshCall = svc.loadThumbnailCalls.first { $0.assetId == fresh.id }
+    #expect(
+      freshCall?.allowNetwork == true,
+      "tail-of-scope arrival must still get allowNetwork: true")
+    #expect(
+      vm.thumbnailsById[fresh.id] != nil,
+      "tail arrival's thumbnail must materialise")
+    #expect(!vm.failedThumbnailIds.contains(fresh.id))
+    // No cache delta — the windowed prefix (first 500) didn't change, so
+    // neither start- nor stopCachingThumbnails should have fired again.
+    #expect(svc.startCachingCalls.count == startCachingCountAfterLoad)
+    #expect(svc.stopCachingCalls.count == stopCachingCountAfterLoad)
+  }
+
+  /// Grow-without-replacement: scope expands from 600 → 700 by appending
+  /// 100 assets past the caching window. The windowed prefix is unchanged,
+  /// so refresh must not re-invoke `startCachingThumbnails` (the very
+  /// regression that motivated the cap — funnelling tens of thousands of
+  /// assets back through PHCachingImageManager).
+  @Test func refreshDoesNotRetriggerCachingWhenWindowedPrefixIsUnchanged() async throws {
+    let svc = FakePhotoLibraryService()
+    let initial = (0..<600).map { makeAsset(id: "a\($0)") }
+    svc.favoritesAssets = initial
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+    await drainBackgroundWork()
+    let startCachingCountAfterLoad = svc.startCachingCalls.count
+
+    // 100 fresh assets appended past the window.
+    let appended = (600..<700).map { makeAsset(id: "a\($0)") }
+    svc.favoritesAssets = initial + appended
+
+    await vm.refresh(for: .favorites)
+    await drainBackgroundWork()
+
+    #expect(vm.assets.count == 700)
+    #expect(
+      svc.startCachingCalls.count == startCachingCountAfterLoad,
+      "windowed prefix unchanged → no second startCachingThumbnails call")
+    #expect(svc.stopCachingCalls.isEmpty)
+  }
+
+  /// Refresh into an empty scope is a no-op-y path that must not crash on
+  /// `prefix(500)` of `[]`, and must stop caching for everything that was
+  /// previously cached (the scope is now empty so the cache window
+  /// collapses to nothing).
+  @Test func refreshIntoEmptyScopeStopsAllPriorCachingWithoutPanic() async throws {
+    let svc = FakePhotoLibraryService()
+    let initial = [makeAsset(id: "a"), makeAsset(id: "b")]
+    svc.favoritesAssets = initial
+    for asset in initial { svc.thumbnailsByAssetId[asset.id] = dummyImage() }
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+    await drainBackgroundWork()
+    let stopCachingCountAfterLoad = svc.stopCachingCalls.count
+
+    svc.favoritesAssets = []
+    await vm.refresh(for: .favorites)
+    await drainBackgroundWork()
+
+    #expect(vm.assets.isEmpty)
+    #expect(vm.thumbnailsById.isEmpty)
+    #expect(svc.stopCachingCalls.count == stopCachingCountAfterLoad + 1)
+    #expect(svc.stopCachingCalls.last?.map(\.id) == ["a", "b"])
+  }
+
   // MARK: - Wrapper: loadAssets(forYear:month:)
 
   /// The legacy wrapper `loadAssets(forYear:month:)` simply delegates to
