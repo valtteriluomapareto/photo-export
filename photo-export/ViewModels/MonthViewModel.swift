@@ -103,8 +103,7 @@ final class MonthViewModel: ObservableObject {
     if currentScope != scope { return }
     isLoading = false
 
-    // Snapshot the windowed prefix and fire `startCachingThumbnails` once,
-    // matching the cap-window behaviour `loadAssets` used to apply in one go.
+    // Preheat the windowed prefix once the full asset list has settled.
     let cachingWindow = Array(assets.prefix(cachingWindowSize))
     if !cachingWindow.isEmpty {
       photoLibraryService.startCachingThumbnails(for: cachingWindow)
@@ -116,19 +115,16 @@ final class MonthViewModel: ObservableObject {
   /// (`PhotoLibraryManager.libraryRevision` bumps after a `photoLibraryDidChange`,
   /// typically from iCloud sync landing new assets or the user editing in Photos.app).
   ///
-  /// Unlike `loadAssets(for:)`, this path *does not* blank `assets` before fetching.
-  /// SwiftUI's `ForEach(viewModel.assets)` diffs the new array against the old one:
-  /// assets that still exist keep their position and their cells keep their loaded
-  /// thumbnails, assets that disappeared drop out, and newly-added assets show as
-  /// "loading" until each cell's `.task` fills its tile. The visible grid never
-  /// flashes empty.
+  /// Does *not* blank `assets` before fetching: `ForEach(viewModel.assets)` diffs
+  /// the new array against the old, survivors keep their position and their cells
+  /// keep their loaded thumbnails, and newly-added assets show as "loading" until
+  /// each cell's `.task` fills its tile. The visible grid never flashes empty.
   ///
-  /// Refresh uses the progressive stream too — large favorites refreshes
-  /// don't materialise 37k assets in one shot — but commits the new array
-  /// (and the cache delta) once at the end so partial state isn't visible.
-  /// Mid-refresh scope changes still discard the in-flight batches.
+  /// Collects the full stream into a local array before committing so partial
+  /// state isn't visible mid-refresh; the per-batch scope guard still discards
+  /// in-flight batches if the user navigates away.
   ///
-  /// `scope == nil` is a no-op — there's nothing to refresh against.
+  /// `scope == nil` is a no-op.
   func refresh(for scope: PhotoFetchScope?) async {
     guard let scope else { return }
     var collected: [AssetDescriptor] = []

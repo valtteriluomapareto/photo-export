@@ -443,9 +443,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
-  /// Adds a `mediaType ==` clause to an existing `PHFetchOptions` predicate
-  /// (ANDed with any predicate already set). Extracted because every progressive
-  /// scope branch repeats it.
+  /// ANDs a `mediaType ==` clause onto `opts.predicate` when `mediaType`
+  /// is non-nil.
   nonisolated fileprivate static func applyMediaTypeFilter(
     _ mediaType: PHAssetMediaType?, to opts: PHFetchOptions
   ) {

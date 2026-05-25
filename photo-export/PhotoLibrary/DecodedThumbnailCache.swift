@@ -74,12 +74,8 @@ final class DecodedThumbnailCache {
 
   func clear() {
     storage.removeAllObjects()
-    // Cancel and forget every in-flight decode. The generation bump alone
-    // would only stop their *cache writes* — but a caller arriving after the
-    // clear and before the in-flight decode completes would still find the
-    // stale task in `inFlight`, join it, and receive the pre-clear image.
-    // Cancelling stops the wasted PhotoKit work; removing forces post-clear
-    // callers to start a fresh decode.
+    // Cancel and forget in-flight decodes so a caller arriving after `clear`
+    // can't join a stale task and receive its pre-clear image.
     for (_, entry) in inFlight {
       entry.task.cancel()
     }
