@@ -27,6 +27,7 @@ See [`docs/reference/architecture-conventions.md`](../reference/architecture-con
 - [ ] Manual refresh to rescan library on demand
 - [ ] Add video playback in asset detail view — currently shows static image only
 - [ ] Allow user to retry failed exports
+- [ ] Backup sidecar writer/reader for faster same-library reinstalls — design captured in [`archive/import-existing-backup-plan.md`](archive/import-existing-backup-plan.md) Phase 2 (new `BackupSidecarStore`, sidecar-first import path with metadata-match fallback)
 
 ## Performance
 
@@ -40,3 +41,9 @@ See [`docs/reference/architecture-conventions.md`](../reference/architecture-con
 - [ ] Ensure good accessibility for all interactive elements
 - [ ] Persist filter choices and other relevant settings
 - [ ] Remember window state and last viewed month/year
+- [ ] Detect app-owned sidecars in a chosen destination and guide the user toward import — [`archive/import-existing-backup-plan.md`](archive/import-existing-backup-plan.md) Phase 3 (sidecar-detection prompt, sharper progress UI, better stale/corrupt-sidecar messages)
+
+## Testing
+
+- [ ] UI tests with deterministic launch mode + CI integration — [`archive/testing-improvement-plan.md`](archive/testing-improvement-plan.md) Step 8 (`UI_TEST_MODE` env-driven seam, XCUI flows for the main user journeys, GitHub Actions wiring)
+- [ ] Shared test fixtures directory and helpers — [`archive/testing-improvement-plan.md`](archive/testing-improvement-plan.md) Step 9

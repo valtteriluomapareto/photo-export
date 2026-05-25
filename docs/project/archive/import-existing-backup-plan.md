@@ -1,5 +1,7 @@
 # Import Existing Backup Plan
 
+Status: Phase 1 (manual legacy import MVP) shipped. Phases 2 (sidecar writer/reader) and 3 (UX polish) were never started and have been folded back into [`implementation-tasks.md`](../implementation-tasks.md) as loose future-improvement items — re-spec before picking up. Kept as a decision record for the matching algorithm, the sidecar schema notes, and the "do not depend on `PHCloudIdentifier`" rationale.
+
 ## Summary
 
 The current app can resume only when its local Application Support state survives. That fails for the real user problem:

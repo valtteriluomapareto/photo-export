@@ -1,10 +1,16 @@
-# Modern SwiftUI Observation Migration Plan
+# Modern SwiftUI Observation Migration Plan (Archived)
 
-Sibling to [`ui-smoothness-plan.md`](ui-smoothness-plan.md). Goal: migrate the codebase from `ObservableObject` + `@Published` to the `@Observable` macro (available since macOS 14; the codebase targets macOS 15), so SwiftUI gets per-property fine-grained dependency tracking instead of one-dirty-bit-per-object invalidation.
+Status: superseded as a standalone plan. The current active roadmap is
+[`../plans/ui-smoothness-plan.md`](../plans/ui-smoothness-plan.md), which folds
+this Observation migration strategy into the broader UI smoothness plan. This
+file is kept as a decision record for the detailed review notes, bridge analysis,
+and testing sketches that informed the merged roadmap.
+
+Original goal: migrate the codebase from `ObservableObject` + `@Published` to the `@Observable` macro (available since macOS 14; the codebase targets macOS 15), so SwiftUI gets per-property fine-grained dependency tracking instead of one-dirty-bit-per-object invalidation.
 
 Cross-cutting contracts from [`docs/reference/architecture-conventions.md`](../../reference/architecture-conventions.md) — cancellation seam, actor isolation policy, AutoSync seam — must be preserved by every phase. The AutoSync seam in particular needs deliberate bridging (see §AutoSync Bridge below); the rest survives the migration intact.
 
-> **Status:** Draft reviewed in one pass by a SwiftUI specialist, software architect, and senior tester (May 2026). Corrections integrated inline. Key changes from the review pass: the `withObservationTracking` timing explanation was inverted (corrected below); the `CurrentValueSubject` bridge needs an explicit `oldValue` guard inside `didSet` (added below); the granularity-test sketch in §Testing Strategy was broken because `withObservationTracking` is one-shot (corrected with a re-registering helper); Phase 5 should be preceded by a short spike to validate the AutoSync bridge before committing to the full migration; ExportManager migration is now an explicit deferral option rather than mandatory.
+> **Original review status:** Draft reviewed in one pass by a SwiftUI specialist, software architect, and senior tester (May 2026). Corrections integrated inline. Key changes from the review pass: the `withObservationTracking` timing explanation was inverted (corrected below); the `CurrentValueSubject` bridge needs an explicit `oldValue` guard inside `didSet` (added below); the granularity-test sketch in §Testing Strategy was broken because `withObservationTracking` is one-shot (corrected with a re-registering helper); Phase 5 should be preceded by a short spike to validate the AutoSync bridge before committing to the full migration; ExportManager migration is now an explicit deferral option rather than mandatory.
 
 ---
 
@@ -375,7 +381,8 @@ The goal of the test plan isn't only "don't regress" — it's "verify the *granu
 
 ### Pre-migration baseline (before Phase 0)
 
-Establish a baseline using the invalidation harness from `ui-smoothness-plan.md` §Rollout & Measurement:
+Establish a baseline using the invalidation harness from the active
+[`../plans/ui-smoothness-plan.md`](../plans/ui-smoothness-plan.md) roadmap:
 
 1. Capture per-view invalidation counts during a scripted scenario: launch → select a 10k-asset month → start a 200-asset export → observe.
 2. Record the counts for: month sidebar rows, year sidebar rows, grid cells, progress bar, toolbar.

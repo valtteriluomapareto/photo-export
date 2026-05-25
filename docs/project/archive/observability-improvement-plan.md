@@ -1,5 +1,7 @@
 # Observability Improvement Plan
 
+Status: Shipped via PR #114 (`e1f7e0d`, `b04faa4`). Kept as a decision record for the run-journal design and why the broader observability tiers were deferred.
+
 Goal: when the app dies in a way that doesn't produce a CrashReporter artifact (OS jetsam, watchdog termination, sandbox kill), the existing **Help → Save Diagnostic Report** menu item should tell a maintainer *whether the previous session died mid-export* and *which AutoSync scope was in flight when it did*. Today the saved report carries post-mortem record counts and the last iCloud catch-up summary — it says nothing about what was *running* when the app went away.
 
 Scope: a single new collaborator (a small per-destination "run journal" file), one small `DiagnosticReporter` extension to render it, plus tests and a website-docs touch-up. AutoSync-driven runs only — manual exports are out of scope. No new entitlements, no telemetry backend, no in-app UI.
