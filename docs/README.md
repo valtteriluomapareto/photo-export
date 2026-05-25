@@ -28,10 +28,8 @@ When a change is user-visible, update **both** the root README and the matching 
 
 Current process and open work:
 
-- [`project/implementation-tasks.md`](project/implementation-tasks.md) — open work items (including the deferred architecture follow-ups, [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67))
+- [`project/implementation-tasks.md`](project/implementation-tasks.md) — open work items (including the deferred architecture follow-ups, [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67), and loose future improvements folded back from archived plans)
 - [`project/release-process.md`](project/release-process.md) — how to cut a release (version bump, tag, publish)
-- [`project/import-existing-backup-plan.md`](project/import-existing-backup-plan.md) — backup-import design notes (Phase 1 implemented)
-- [`project/testing-improvement-plan.md`](project/testing-improvement-plan.md) — test coverage gaps and improvement plan
 - [`project/plans/ui-smoothness-plan.md`](project/plans/ui-smoothness-plan.md) — active UI smoothness and SwiftUI Observation modernization roadmap
 - [`project/plans/launch-agent-background-sync-plan.md`](project/plans/launch-agent-background-sync-plan.md) — proposed LaunchAgent for closed-app Auto Export (follow-up to the shipped MVP)
 
@@ -57,6 +55,8 @@ Completed or superseded plans, kept as decision records:
 - [`project/archive/auto-export-memory-fix-plan.md`](project/archive/auto-export-memory-fix-plan.md) — issue #112 Auto Export memory-watermark fix plan (implemented; kept for rationale and implementation deltas)
 - [`project/archive/observability-improvement-plan.md`](project/archive/observability-improvement-plan.md) — AutoSync run journal feeding the diagnostic report (shipped via PR #114)
 - [`project/archive/videos-subfolder-plan.md`](project/archive/videos-subfolder-plan.md) — issue #38 standalone-video `videos/` subfolder layout (shipped in 1.6.0 via PR #105)
+- [`project/archive/import-existing-backup-plan.md`](project/archive/import-existing-backup-plan.md) — Import Existing Backup design (Phase 1 shipped; Phases 2-3 folded back into `implementation-tasks.md` as loose future-improvement items)
+- [`project/archive/testing-improvement-plan.md`](project/archive/testing-improvement-plan.md) — test coverage roadmap (Steps 1-7 shipped; Steps 8-9 folded back into `implementation-tasks.md` under a new Testing section)
 
 ## Reference material
 

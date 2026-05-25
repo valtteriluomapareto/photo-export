@@ -1,5 +1,7 @@
 # Testing Improvement Plan
 
+Status: Steps 1-7 shipped. Steps 8 (UI tests + CI) and 9 (fixtures/helpers) were never started and have been folded back into [`implementation-tasks.md`](../implementation-tasks.md) under a new Testing section — re-spec before picking up. The "~167 tests in 18 suites" baseline below is the count at the time of Step 7's completion and was not maintained afterward; treat it as historical. Kept as a decision record for the protocol-seam strategy and the gap analysis it produced.
+
 Current state: **~167 tests in 18 suites.** Protocol seams are in place (Step 2 done). Export pipeline, record store recovery, backup-scanner matching, edited-mode export, and ExportDestinationManager validation/persistence all have coverage. Remaining gaps are MonthViewModel async loading, full ExportDestinationManager integration (volume unmount, security-scope pairing), and UI tests.
 
 > Re-count by running `xcodebuild ... test` and reading the test summary; this header is hand-maintained and may lag the suite by a few tests at any point in time.
