@@ -82,8 +82,7 @@ final class ExportQueueCoordinator: ObservableObject {
   /// Begin/end intervals around the `isRunning` state transition so a trace
   /// can pinpoint how long a drain loop took, irrespective of which `start*`
   /// entry point opened it. Mirrors the pattern at
-  /// `PhotoLibraryPersistentChangeAdapter.signposter`. Issue tracker:
-  /// `docs/project/plans/ui-smoothness-plan.md` Phase 0.
+  /// `PhotoLibraryPersistentChangeAdapter.signposter`.
   private static let signposter = OSSignposter(
     subsystem: "com.valtteriluoma.photo-export",
     category: "Export.Run")

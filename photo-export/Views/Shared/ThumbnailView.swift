@@ -4,7 +4,7 @@ import SwiftUI
 
 enum ThumbnailState {
   case loading
-  case loaded(NSImage)
+  case loaded(CGImage)
   case failed
 }
 
@@ -18,8 +18,8 @@ struct ThumbnailView: View {
   var body: some View {
     ZStack {
       switch state {
-      case .loaded(let image):
-        Image(nsImage: image)
+      case .loaded(let cgImage):
+        Image(nsImage: NSImage(cgImage: cgImage, size: .zero))
           .resizable()
           .aspectRatio(contentMode: .fill)
           .frame(width: 100, height: 100)

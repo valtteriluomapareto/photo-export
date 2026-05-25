@@ -321,6 +321,22 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
     image(for: assetId, size: pixelSize ?? CGSize(width: 1024, height: 1024))
   }
 
+  func decodedThumbnail(
+    for assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
+  ) async -> CGImage? {
+    cachedDecodedThumbnail(
+      for: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode)
+  }
+
+  func cachedDecodedThumbnail(
+    for assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
+  ) -> CGImage? {
+    let target = deliveryMode == .fast ? quantizedSize : quantizedSize
+    guard let source = image(for: assetId, size: target) else { return nil }
+    var rect = CGRect(origin: .zero, size: source.size)
+    return source.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+  }
+
   func requestFullImage(for assetId: String) async throws -> NSImage {
     if let img = image(for: assetId, size: CGSize(width: 2048, height: 2048)) {
       return img

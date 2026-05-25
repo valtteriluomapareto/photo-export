@@ -337,6 +337,32 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     hqThumbnailsByAssetId[assetId]
   }
 
+  /// Returns the CGImage backing bitmap of whichever canned NSImage matches
+  /// the delivery mode, or nil if no canned image is registered. The fake
+  /// does not implement caching or dedup; the production path tests those
+  /// behaviors via `DecodedThumbnailCacheTests`.
+  func decodedThumbnail(
+    for assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
+  ) async -> CGImage? {
+    cachedDecodedThumbnail(
+      for: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode)
+  }
+
+  func cachedDecodedThumbnail(
+    for assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
+  ) -> CGImage? {
+    let source: NSImage?
+    switch deliveryMode {
+    case .fast:
+      source = thumbnailsByAssetId[assetId]
+    case .highQuality:
+      source = hqThumbnailsByAssetId[assetId] ?? thumbnailsByAssetId[assetId]
+    }
+    guard let source else { return nil }
+    var rect = CGRect(origin: .zero, size: source.size)
+    return source.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+  }
+
   func requestFullImage(for assetId: String) async throws -> NSImage {
     if let error = requestFullImageError { throw error }
     guard let image = fullImagesByAssetId[assetId] else {

@@ -6,7 +6,12 @@ import SwiftUI
 @MainActor
 final class MonthViewModel: ObservableObject {
   @Published private(set) var assets: [AssetDescriptor] = []
-  @Published private(set) var thumbnailsById: [String: NSImage] = [:]
+  /// Ids whose thumbnail has been successfully fetched into the
+  /// `DecodedThumbnailCache` since the current scope loaded. Drives
+  /// `thumbnailState(for:)` — the actual `CGImage` lives in the cache, not
+  /// here, so the per-scope memory footprint is bounded by `NSCache` limits
+  /// rather than scaling with how many scopes the user has visited.
+  @Published private(set) var loadedThumbnailIds: Set<String> = []
   @Published private(set) var failedThumbnailIds: Set<String> = []
   @Published var isLoading: Bool = false
   @Published var errorMessage: String?
@@ -16,6 +21,11 @@ final class MonthViewModel: ObservableObject {
   @Published private(set) var isExportRunning: Bool = false
 
   private let photoLibraryService: any PhotoLibraryService
+
+  /// Display-pixel target for the grid thumbnails. Quantized to a single
+  /// bucket so the cache key for a given asset stays stable across grid
+  /// reuse. 256×256 covers 120pt tiles at 2× retina with a small margin.
+  private let gridThumbnailSize = CGSize(width: 256, height: 256)
 
   // Control initial thumbnail batch size
   private let initialThumbnailBatchSize: Int = 40
@@ -65,7 +75,7 @@ final class MonthViewModel: ObservableObject {
       cachedAssets = []
     }
     assets = []
-    thumbnailsById = [:]
+    loadedThumbnailIds = []
     failedThumbnailIds = []
     highQualityIds = []
     selectedAssetId = nil
@@ -84,18 +94,18 @@ final class MonthViewModel: ObservableObject {
 
       // Preload an initial batch of fast thumbnails
       let initialBatch = Array(scopedAssets.prefix(initialThumbnailBatchSize))
-      var initialThumbs: [String: NSImage] = [:]
+      var initialLoaded = Set<String>()
 
       for asset in initialBatch {
-        if let thumb = await photoLibraryService.loadThumbnail(
-          for: asset.id, allowNetwork: false)
+        if await photoLibraryService.decodedThumbnail(
+          for: asset.id, quantizedSize: gridThumbnailSize, deliveryMode: .fast) != nil
         {
-          initialThumbs[asset.id] = thumb
+          initialLoaded.insert(asset.id)
         } else {
           failedThumbnailIds.insert(asset.id)
         }
       }
-      thumbnailsById = initialThumbs
+      loadedThumbnailIds = initialLoaded
       isLoading = false
 
       // Auto-select first asset if available
@@ -127,12 +137,12 @@ final class MonthViewModel: ObservableObject {
   /// (`PhotoLibraryManager.libraryRevision` bumps after a `photoLibraryDidChange`,
   /// typically from iCloud sync landing new assets or the user editing in Photos.app).
   ///
-  /// Unlike `loadAssets(for:)`, this path *does not* blank `assets` or `thumbnailsById`
-  /// before fetching. SwiftUI's `ForEach(viewModel.assets, id: \.id)` diffs the new
-  /// array against the old one: assets that still exist keep their position and their
-  /// already-loaded thumbnails (the thumbnail dict is keyed by asset id), assets that
-  /// disappeared drop out, and newly-added assets show as "loading" until the
-  /// background loop fills their entry. The visible grid never flashes empty.
+  /// Unlike `loadAssets(for:)`, this path *does not* blank `assets` or
+  /// `loadedThumbnailIds` before fetching. SwiftUI's `ForEach(viewModel.assets)` diffs
+  /// the new array against the old one: assets that still exist keep their position
+  /// and their already-cached thumbnails, assets that disappeared drop out, and
+  /// newly-added assets show as "loading" until the background loop fills their entry.
+  /// The visible grid never flashes empty.
   ///
   /// **Scope race.** The trigger is an orphan `Task { await refresh(...) }` fired from
   /// `.onChange(of: libraryRevision)`; if the user navigates mid-fetch, the resumed
@@ -166,37 +176,32 @@ final class MonthViewModel: ObservableObject {
       }
       cachedAssets = newAssets
 
-      // Drop dict entries for assets that left the scope so we don't hold stale
-      // thumbnails for items the grid no longer renders.
-      thumbnailsById = thumbnailsById.filter { newIds.contains($0.key) }
-      failedThumbnailIds = failedThumbnailIds.filter { newIds.contains($0) }
-      highQualityIds = highQualityIds.filter { newIds.contains($0) }
+      // Drop set entries for assets that left the scope so we don't claim "loaded"
+      // for items the grid no longer renders.
+      loadedThumbnailIds = loadedThumbnailIds.intersection(newIds)
+      failedThumbnailIds = failedThumbnailIds.intersection(newIds)
+      highQualityIds = highQualityIds.intersection(newIds)
 
       assets = newAssets
 
       // Re-arm the background thumbnail loop. The skip-if-already-loaded guards inside
-      // `loadAndStoreThumbnail` (checked via the dict here) and
+      // `loadAndStoreThumbnail` (checked via `loadedThumbnailIds`) and
       // `upgradeThumbnailToHighQuality` (its own guard on `highQualityIds`) keep the
       // loop cheap when most assets are unchanged.
       //
       // Newly-added assets are likely fresh from iCloud — PhotoKit fires
-      // `photoLibraryDidChange` once the asset's metadata lands, but the local
-      // thumbnail cache may still be empty for a moment. Allow the network for the
-      // added set so the tile fills in immediately; without it the asset would land
-      // in `failedThumbnailIds` (and the HQ upgrade is gated on that set, so it
-      // wouldn't rescue it either — the user would see a "Retry" tile until they
-      // navigated away and back).
+      // `photoLibraryDidChange` once the asset's metadata lands, but the decoded cache
+      // is still empty for them. The fast probe issued via `decodedThumbnail` will
+      // either land an entry or surface a failure that the HQ upgrade can still rescue.
       hqUpgradeTask?.cancel()
-      let addedIds = Set(added.map(\.id))
       hqUpgradeTask = Task { [weak self] in
         guard let self else { return }
         for asset in newAssets {
           guard !Task.isCancelled else { return }
-          if self.thumbnailsById[asset.id] == nil,
+          if !self.loadedThumbnailIds.contains(asset.id),
             !self.failedThumbnailIds.contains(asset.id)
           {
-            await self.loadAndStoreThumbnail(
-              for: asset.id, allowNetwork: addedIds.contains(asset.id))
+            await self.loadAndStoreThumbnail(for: asset.id)
           }
         }
         for asset in newAssets {
@@ -212,33 +217,38 @@ final class MonthViewModel: ObservableObject {
     }
   }
 
-  func thumbnail(for asset: AssetDescriptor) -> NSImage? {
-    thumbnailsById[asset.id]
-  }
-
+  /// Synchronous probe of the decoded-thumbnail cache. Returns `.loaded` only
+  /// when the cache still holds an entry for the asset; an evicted entry
+  /// surfaces as `.loading` and the background loop will refetch.
   func thumbnailState(for asset: AssetDescriptor) -> ThumbnailState {
     let id = asset.id
-    if let image = thumbnailsById[id] {
-      return .loaded(image)
-    } else if failedThumbnailIds.contains(id) {
-      return .failed
-    } else {
+    if loadedThumbnailIds.contains(id) {
+      if let image = photoLibraryService.cachedDecodedThumbnail(
+        for: id, quantizedSize: gridThumbnailSize, deliveryMode: .highQuality)
+        ?? photoLibraryService.cachedDecodedThumbnail(
+          for: id, quantizedSize: gridThumbnailSize, deliveryMode: .fast)
+      {
+        return .loaded(image)
+      }
       return .loading
     }
+    if failedThumbnailIds.contains(id) {
+      return .failed
+    }
+    return .loading
   }
 
   func retryThumbnail(for assetId: String) {
     failedThumbnailIds.remove(assetId)
     highQualityIds.remove(assetId)
+    loadedThumbnailIds.remove(assetId)
     Task { [weak self] in
       guard let self else { return }
-      // Explicit user retry — allow the network so a still-syncing iCloud asset
-      // can fetch its thumbnail, and run the HQ upgrade unconditionally (not
-      // gated on whether fast succeeded). The fast pipeline can return
-      // `PHPhotosError` 3303 for freshly-arrived iCloud assets while HQ returns
-      // a valid render; treating retry as "try everything" means the user only
-      // needs to click once.
-      await self.loadAndStoreThumbnail(for: assetId, allowNetwork: true)
+      // Explicit user retry — try both delivery modes. The fast pipeline can
+      // return `PHPhotosError` 3303 for freshly-arrived iCloud assets while HQ
+      // returns a valid render; treating retry as "try everything" means the
+      // user only needs to click once.
+      await self.loadAndStoreThumbnail(for: assetId)
       await self.upgradeThumbnailToHighQuality(for: assetId)
     }
   }
@@ -251,15 +261,14 @@ final class MonthViewModel: ObservableObject {
     isExportRunning = running
   }
 
-  /// Initial-load and second-batch fast-thumbnail fetch. Defaults to `allowNetwork:
-  /// false` so the local cache is hit instantly; callers pass `true` when the asset
-  /// likely needs an iCloud round-trip (refresh's newly-added set, an explicit user
-  /// retry).
-  private func loadAndStoreThumbnail(for assetId: String, allowNetwork: Bool = false) async {
-    if let thumb = await photoLibraryService.loadThumbnail(
-      for: assetId, allowNetwork: allowNetwork)
+  /// Initial-load and second-batch fast-thumbnail fetch. Reads through the
+  /// decoded-thumbnail cache; the underlying decode path handles
+  /// `allowNetwork` (currently always enabled at the cache decode level).
+  private func loadAndStoreThumbnail(for assetId: String) async {
+    if await photoLibraryService.decodedThumbnail(
+      for: assetId, quantizedSize: gridThumbnailSize, deliveryMode: .fast) != nil
     {
-      thumbnailsById[assetId] = thumb
+      loadedThumbnailIds.insert(assetId)
     } else {
       failedThumbnailIds.insert(assetId)
     }
@@ -273,10 +282,10 @@ final class MonthViewModel: ObservableObject {
   /// "Retry" tile silently once HQ rescues it.
   private func upgradeThumbnailToHighQuality(for assetId: String) async {
     guard !highQualityIds.contains(assetId) else { return }
-    if let hqThumb = await photoLibraryService.loadThumbnailHighQuality(
-      for: assetId, pixelSize: nil, allowNetwork: !isExportRunning)
+    if await photoLibraryService.decodedThumbnail(
+      for: assetId, quantizedSize: gridThumbnailSize, deliveryMode: .highQuality) != nil
     {
-      thumbnailsById[assetId] = hqThumb
+      loadedThumbnailIds.insert(assetId)
       highQualityIds.insert(assetId)
       failedThumbnailIds.remove(assetId)
     }

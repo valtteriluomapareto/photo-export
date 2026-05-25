@@ -68,6 +68,13 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `photoLibraryDidChange` so subsequent reads re-fetch.
   nonisolated let collectionCountCache = CollectionCountCache()
 
+  /// Bounded `CGImage` cache for thumbnail renders. Replaces the unbounded
+  /// per-scope NSImage dictionaries that previously lived on `MonthViewModel`.
+  /// Cleared by `invalidateCache()` so a library mutation drops every stale
+  /// render. Set in init via `setupDecodedThumbnailCache()` so the decode
+  /// closure can capture `[weak self]`.
+  private(set) var decodedThumbnailCache: DecodedThumbnailCache!
+
   /// Optional injection point that replaces the production PhotoKit implementation on
   /// every `PhotoLibraryService` method. Set at init time and never mutated. The
   /// screenshot run injects `ScreenshotPhotoLibraryService` here so the curated content
@@ -101,6 +108,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   override init() {
     self.overrideService = nil
     super.init()
+    setupDecodedThumbnailCache()
   }
 
   /// Composition entry point: `overrideService` (when non-nil) replaces every
@@ -116,6 +124,87 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     // not change auth at runtime; if a future override needs that, add a publisher.
     authorizationStatus = overrideService.authorizationStatus
     isAuthorized = overrideService.isAuthorized
+    setupDecodedThumbnailCache()
+  }
+
+  /// Wires `decodedThumbnailCache` with a decode closure that calls back into
+  /// `self` (via `[weak self]`) for the actual PhotoKit fetch. Kept in a
+  /// helper so both initializers share the same setup.
+  private func setupDecodedThumbnailCache() {
+    decodedThumbnailCache = DecodedThumbnailCache { [weak self] key in
+      guard let self else { return nil }
+      return await self.decodeThumbnail(for: key)
+    }
+  }
+
+  /// Production decode path used by `DecodedThumbnailCache`. Routes through
+  /// `overrideService` (screenshot mode) when one is set; otherwise issues a
+  /// PhotoKit request with the matching delivery mode and extracts the
+  /// CGImage backing bitmap from the returned NSImage.
+  private func decodeThumbnail(for key: DecodedThumbnailCache.Key) async -> CGImage? {
+    if let s = overrideService {
+      return await s.decodedThumbnail(
+        for: key.assetId, quantizedSize: key.quantizedSize, deliveryMode: key.deliveryMode)
+    }
+    guard let asset = cachedOrFetchPHAsset(id: key.assetId) else { return nil }
+    let options = PHImageRequestOptions()
+    switch key.deliveryMode {
+    case .fast:
+      options.deliveryMode = .fastFormat
+      options.resizeMode = .fast
+    case .highQuality:
+      options.deliveryMode = .highQualityFormat
+      options.resizeMode = .exact
+    }
+    options.isNetworkAccessAllowed = true
+    let contentMode: PHImageContentMode =
+      key.contentMode == .aspectFill
+      ? .aspectFill : .aspectFit
+
+    let nsImage: NSImage? = await withCheckedContinuation { continuation in
+      let resumed = OSAllocatedUnfairLock(initialState: false)
+      Self.cachingImageManager.requestImage(
+        for: asset, targetSize: key.quantizedSize, contentMode: contentMode, options: options
+      ) { image, _ in
+        guard
+          resumed.withLock({
+            let was = $0
+            $0 = true
+            return !was
+          })
+        else { return }
+        continuation.resume(returning: image)
+      }
+    }
+    guard let nsImage else { return nil }
+    var rect = CGRect(origin: .zero, size: nsImage.size)
+    return nsImage.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+  }
+
+  func decodedThumbnail(
+    for assetId: String,
+    quantizedSize: CGSize,
+    deliveryMode: ThumbnailDeliveryMode
+  ) async -> CGImage? {
+    let key = DecodedThumbnailCache.Key(
+      assetId: assetId,
+      quantizedSize: quantizedSize,
+      contentMode: .aspectFill,
+      deliveryMode: deliveryMode)
+    return await decodedThumbnailCache.image(for: key)
+  }
+
+  func cachedDecodedThumbnail(
+    for assetId: String,
+    quantizedSize: CGSize,
+    deliveryMode: ThumbnailDeliveryMode
+  ) -> CGImage? {
+    let key = DecodedThumbnailCache.Key(
+      assetId: assetId,
+      quantizedSize: quantizedSize,
+      contentMode: .aspectFill,
+      deliveryMode: deliveryMode)
+    return decodedThumbnailCache.cached(for: key)
   }
 
   /// Performs the PhotoKit authorization probe and registers as a
@@ -736,6 +825,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil
+    decodedThumbnailCache?.clear()
     libraryRevision &+= 1
     // Cancel any in-flight count tasks and drop cached counts so the next sidebar read
     // re-fetches against the updated library state.
