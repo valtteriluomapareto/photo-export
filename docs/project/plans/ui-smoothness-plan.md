@@ -59,26 +59,29 @@ favorites fetches, and lowers the timeline fetch batch size to 100. The follow-u
 left to this plan is the broader PhotoKit fetch smoothness work, not the issue
 #112 memory fix itself.
 
-## Phase 0 - Measurement and Fixtures
+## Phase 0 - Measurement and Fixtures — landed
 
 Land this before invasive refactors.
 
-1. Add a bulk fixture helper for `FakePhotoLibraryService` that can synthesize
-   10k to 100k `AssetDescriptor` libraries, including large months and large
-   album trees.
-2. Add an `ObservationCounter` helper for `withObservationTracking` tests. The
-   helper must re-register after every `onChange`, because the primitive is
-   one-shot.
-3. Add lightweight invalidation measurement around target views. Prefer a
-   deterministic debug counter over relying on `_printChanges()`.
-4. Extend existing `os_signpost` usage for launch, year/month selection, album
-   selection, scroll sessions, and export-run start/end.
-5. Capture a baseline scenario: launch -> select a 10k-asset month -> start a
-   200-asset export -> observe sidebar rows, grid cells, toolbar, and progress
-   UI.
+1. ✅ `BulkLibraryFixture` (`photo-exportTests/TestHelpers/BulkLibraryFixture.swift`)
+   synthesizes 10k–100k-asset libraries with optional large-month piles and
+   album/folder trees.
+2. ✅ `ObservationCounter` (`photo-exportTests/TestHelpers/ObservationCounter.swift`)
+   wraps `withObservationTracking` with a timeout and re-registration. For
+   the upcoming Phase 2 work.
+3. ✅ `BodyInvalidationCounter` (`photo-export/App/BodyInvalidationCounter.swift`,
+   `#if DEBUG`) + `.measureBodyInvalidations("…")` wired into
+   `MonthContentView`, `CollectionContentView`, `TimelineSidebarView`,
+   `CollectionsSidebarView`.
+4. ✅ `AppDiagnostics` (`photo-export/App/AppDiagnostics.swift`) for the
+   `AppLaunch` interval and `SelectionChanged` event; `Export.Run` interval
+   on `ExportQueueCoordinator.isRunning`. Scroll-session signposts deferred —
+   SwiftUI on macOS has no clean per-scroll hook; use Instruments' Core
+   Animation track.
+5. ✅ Reproduction scenario captured in the section below.
 
-The goal of Phase 0 is not perfect profiling. It is enough repeatable evidence
-to decide which later work actually moves the app.
+The goal of Phase 0 was not perfect profiling. It was enough repeatable
+evidence to decide which later work actually moves the app.
 
 ### Reproducing the baseline trace
 
@@ -116,48 +119,54 @@ the main thread or bound PhotoKit request lifetimes.
 progressive-fetch work lands; an explicit `id: \.id` would be a textual
 no-op.
 
-### 2. Decoded Thumbnail Cache
+### 2. Decoded Thumbnail Cache — landed
 
-Add a `DecodedThumbnailCache` owned by `PhotoLibraryManager`.
+`DecodedThumbnailCache` (`photo-export/PhotoLibrary/DecodedThumbnailCache.swift`)
+owns CGImage storage keyed by `(assetId, quantizedSize, deliveryMode)`,
+backed by `NSCache` with `totalCostLimit = 64 MB` + `countLimit = 512`.
+Concurrent requests for the same key share one decode, ref-counted so the
+shared decode is cancelled only when every waiter has cancelled. `clear()`
+discards stored entries and stamps a generation so in-flight decodes that
+were started before the call don't land in the cleared cache.
 
-Requirements:
+`PhotoLibraryManager` configures the cache's decode closure to extract a
+`CGImage` from PhotoKit's NSImage via
+`cgImage(forProposedRect:context:hints:)`. `invalidateCache()` clears the
+cache alongside `phAssetCache` and the count cache. The cell renders
+through `Image(nsImage: NSImage(cgImage:size:))`. `MonthViewModel`'s
+`thumbnailsById` dict is gone — replaced by `DecodedThumbnailCache` as the
+single source of truth.
 
-- Cache a stable `CGImage` backing bitmap, not another per-scope `NSImage`
-  dictionary.
-- Render on macOS through `Image(nsImage: NSImage(cgImage:size:))`.
-- Key by asset id, quantized target size, content mode, and delivery mode.
-- Deduplicate concurrent requests for the same cache key.
-- Keep fast-format and high-quality entries distinct.
-- Bound memory with `NSCache.totalCostLimit` and `countLimit`.
-- Clear on `libraryRevision` changes.
-- Delete `MonthViewModel.thumbnailsById`; the cell should read through the
-  cache path instead of each scope keeping its own image dictionary.
+Coverage: `photo-exportTests/DecodedThumbnailCacheTests.swift` — concurrent
+dedup with identity check, fast/HQ separation, clear-mid-flight, count-limit
+eviction, quantization, cancel-only-waiter-cancels-decode,
+cancel-one-of-two-waiters-survives.
 
-Test seams:
+### 3. Cell-Scoped Thumbnail Cancellation — landed
 
-- Inject a decode function so cache behavior can be tested without PhotoKit.
-- Test concurrent deduplication, delivery-mode separation, clear behavior,
-  count-limit behavior, and target-size quantization.
+`PhotoLibraryManager.decodeThumbnail` (and the legacy
+`loadThumbnail`/`loadThumbnailHighQuality`) wrap PhotoKit's `requestImage`
+with `withTaskCancellationHandler`. The onCancel branch calls
+`PHCachingImageManager.cancelImageRequest` with the id captured in an
+inline `OSAllocatedUnfairLock<PHImageRequestID?>`. Pre-cancel and post-set
+re-checks around the request keep the cancellation race tight.
 
-### 3. Cell-Scoped Thumbnail Cancellation
+`ThumbnailView` (`photo-export/Views/Shared/ThumbnailView.swift`) owns its
+own `@State` and drives loading via `.task(id: "\(asset.id)#\(retry)")`.
+Render order: cached HQ → cached fast → async fast → 150 ms linger →
+async HQ. The linger keeps flick-scrolls from firing HQ at all; `failed`
+is only set after both legs return nil, so a fresh iCloud asset where fast
+3303s but HQ rescues doesn't flash a Retry tile.
 
-Refactor `PhotoLibraryManager.loadThumbnail` and
-`loadThumbnailHighQuality` to cancel the underlying PhotoKit request when the
-caller's Swift task is cancelled.
+`MonthViewModel` (`photo-export/ViewModels/MonthViewModel.swift`) loses
+`loadedThumbnailIds`, `failedThumbnailIds`, `highQualityIds`,
+`hqUpgradeTask`, `loadAndStoreThumbnail`, `upgradeThumbnailToHighQuality`,
+`thumbnailState(for:)`, and `retryThumbnail(for:)`. It keeps the asset
+list, the windowed `PHCachingImageManager` preheat lifecycle (issue #109),
+and the refresh scope-race guard.
 
-Rules:
-
-- Keep the `PhotoLibraryService` public API unchanged.
-- Do not expose `PHImageRequestID` through the protocol.
-- Implement cancellation internally with `withTaskCancellationHandler`, following
-  the existing full-image render path as the template.
-- Use `.task(id: asset.localIdentifier)` in thumbnail cells so SwiftUI cancels
-  off-screen/reused cells.
-- Keep high-quality upgrade policy deliberate; do not accidentally move every HQ
-  request to independent per-cell work if that causes flicker or request storms.
-
-Task 1.2 and Task 1.3 must land sequentially. They both touch the thumbnail
-loader path, so doing them in parallel invites a conflict and a muddier design.
+`PhotoLibraryService` API surface is unchanged; `PHImageRequestID` never
+crosses the protocol boundary.
 
 ### 4. Progressive PhotoKit Fetch Enumeration
 
@@ -230,8 +239,8 @@ the previous album's covers.
 Likely moot after 1.2 (decoded thumbnail cache deletes `thumbnailsById` so
 there is no per-scope dict to write into late) and 1.3 (cell-scoped
 cancellation cancels the in-flight `loadThumbnail` so the late-write race
-never resumes). Re-measure first. If a click-frame flash still happens
-after those land, two cheap fixes:
+never resumes) — both now landed. Re-measure on a 5k-asset album before
+acting. If a click-frame flash still happens, two cheap fixes:
 
 - Apply `.id(scope)` to the grid container so SwiftUI tears down and
   recreates the view tree atomically on scope change. Zero stale frames,
