@@ -19,6 +19,32 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.6.2",
+      summary:
+        "Fixes the Collections grid (Favorites and large albums) getting "
+        + "stuck on the loading spinner forever for users with very large "
+        + "collections — e.g. tens of thousands of favorites. Timeline was "
+        + "unaffected.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Collections thumbnails load on large libraries",
+          body:
+            "Opening Favorites or a large album with tens of thousands of "
+            + "assets would leave every tile on the spinner indefinitely, "
+            + "with no recovery short of relaunching. Photo Export was "
+            + "pre-registering every asset in the collection with PhotoKit's "
+            + "thumbnail cache in one shot, which overwhelmed the cache and "
+            + "stalled every subsequent thumbnail request. The pre-register "
+            + "step is now capped to a leading window so the visible tiles "
+            + "load promptly. Deep scrolls in extra-large collections may "
+            + "still feel a bit slower than Timeline; a follow-up will tie "
+            + "the cache to what's actually on screen. "
+            + "Fixes [#109](https://github.com/valtteriluomapareto/photo-export/issues/109)."
+        )
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.6.1",
       summary:
         "Fixes a silent shutdown some users saw during Auto Export's "

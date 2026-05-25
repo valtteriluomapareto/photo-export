@@ -214,6 +214,35 @@ Rules:
 - Do not add a TTL on top of `CollectionCountCache`'s existing wholesale
   invalidation unless measurement proves it is needed.
 
+### 7. Stale-Frame Sweep on Scope Switch
+
+When the user clicks a different album in the sidebar, `LibrarySelection`
+updates synchronously but `MonthViewModel.loadAssets(for:)` runs as a `Task`.
+For one or two frames the grid renders the previous scope's `assets` +
+`thumbnailsById` before the clear-state lines at the top of `loadAssets`
+fire. A secondary contributor: the prior scope's `hqUpgradeTask` can be
+suspended inside `await loadThumbnail(...)`, resume after
+`hqUpgradeTask?.cancel()`, and write one thumbnail into the post-clear dict
+(no `Task.isCancelled` check after the await in `loadAndStoreThumbnail`).
+Surfaced during issue #109 testing on a 5k-asset album: visible flash of
+the previous album's covers.
+
+Likely moot after 1.2 (decoded thumbnail cache deletes `thumbnailsById` so
+there is no per-scope dict to write into late) and 1.3 (cell-scoped
+cancellation cancels the in-flight `loadThumbnail` so the late-write race
+never resumes). Re-measure first. If a click-frame flash still happens
+after those land, two cheap fixes:
+
+- Apply `.id(scope)` to the grid container so SwiftUI tears down and
+  recreates the view tree atomically on scope change. Zero stale frames,
+  no view-model changes.
+- Or clear `assets` / `thumbnailsById` synchronously from the sidebar
+  click handler, before the `Task` that calls `loadAssets` is scheduled.
+
+Either fix is small. The point of capturing it here is so it does not get
+lost; the symptom is real but its root cause overlaps so much with 1.2/1.3
+that doing it standalone wastes work.
+
 ## Phase 2 - Observation Migration
 
 Observation is the main modern Swift direction for UI state in this app. Migrate
