@@ -149,9 +149,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
     options.isNetworkAccessAllowed = true
 
-    let requestIDBox = PHImageRequestIDBox()
+    let requestIDLock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
     let nsImage: NSImage? = await withTaskCancellationHandler {
-      await withCheckedContinuation { continuation in
+      if Task.isCancelled { return nil }
+      return await withCheckedContinuation { continuation in
         let resumed = OSAllocatedUnfairLock(initialState: false)
         let requestID = Self.cachingImageManager.requestImage(
           for: asset, targetSize: key.quantizedSize, contentMode: .aspectFill, options: options
@@ -165,10 +166,16 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
           else { return }
           continuation.resume(returning: image)
         }
-        requestIDBox.set(requestID)
+        requestIDLock.withLock { $0 = requestID }
+        // If cancellation landed between the body starting and `requestID`
+        // being stored, the onCancel branch read nil and missed its window.
+        // Catch it here.
+        if Task.isCancelled {
+          Self.cachingImageManager.cancelImageRequest(requestID)
+        }
       }
     } onCancel: {
-      if let requestID = requestIDBox.get() {
+      if let requestID = requestIDLock.withLock({ $0 }) {
         Self.cachingImageManager.cancelImageRequest(requestID)
       }
     }
@@ -611,9 +618,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     options.deliveryMode = .fastFormat
     options.isNetworkAccessAllowed = allowNetwork
     options.resizeMode = .fast
-    let requestIDBox = PHImageRequestIDBox()
+    let requestIDLock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
     return await withTaskCancellationHandler {
-      await withCheckedContinuation { continuation in
+      if Task.isCancelled { return nil }
+      return await withCheckedContinuation { continuation in
         let resumed = OSAllocatedUnfairLock(initialState: false)
         let requestID = Self.cachingImageManager.requestImage(
           for: asset,
@@ -630,10 +638,13 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
           else { return }
           continuation.resume(returning: image)
         }
-        requestIDBox.set(requestID)
+        requestIDLock.withLock { $0 = requestID }
+        if Task.isCancelled {
+          Self.cachingImageManager.cancelImageRequest(requestID)
+        }
       }
     } onCancel: {
-      if let requestID = requestIDBox.get() {
+      if let requestID = requestIDLock.withLock({ $0 }) {
         Self.cachingImageManager.cancelImageRequest(requestID)
       }
     }
@@ -659,9 +670,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     options.deliveryMode = .highQualityFormat
     options.isNetworkAccessAllowed = allowNetwork
     options.resizeMode = .exact
-    let requestIDBox = PHImageRequestIDBox()
+    let requestIDLock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
     return await withTaskCancellationHandler {
-      await withCheckedContinuation { continuation in
+      if Task.isCancelled { return nil }
+      return await withCheckedContinuation { continuation in
         let resumed = OSAllocatedUnfairLock(initialState: false)
         let requestID = Self.cachingImageManager.requestImage(
           for: asset,
@@ -678,10 +690,13 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
           else { return }
           continuation.resume(returning: image)
         }
-        requestIDBox.set(requestID)
+        requestIDLock.withLock { $0 = requestID }
+        if Task.isCancelled {
+          Self.cachingImageManager.cancelImageRequest(requestID)
+        }
       }
     } onCancel: {
-      if let requestID = requestIDBox.get() {
+      if let requestID = requestIDLock.withLock({ $0 }) {
         Self.cachingImageManager.cancelImageRequest(requestID)
       }
     }
@@ -1273,14 +1288,4 @@ extension PhotoLibraryManager: @preconcurrency PHPhotoLibraryChangeObserver {
       self.invalidateCache()
     }
   }
-}
-
-/// Thread-safe holder for a `PHImageRequestID`. Used inside
-/// `withTaskCancellationHandler` to bridge Swift task cancellation to
-/// `PHImageManager.cancelImageRequest` — the `onCancel` closure may fire on
-/// any thread, while `requestImage` returns the id from PhotoKit's queue.
-final class PHImageRequestIDBox: @unchecked Sendable {
-  private let lock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
-  func set(_ id: PHImageRequestID) { lock.withLock { $0 = id } }
-  func get() -> PHImageRequestID? { lock.withLock { $0 } }
 }

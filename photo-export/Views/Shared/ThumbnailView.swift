@@ -2,14 +2,9 @@ import AppKit
 import Photos
 import SwiftUI
 
-/// Grid thumbnail tile. Owns its own load via `.task(id: asset.id)` so
-/// SwiftUI cancels the in-flight PhotoKit request when the cell scrolls
-/// off-screen or is reused for a different asset.
-///
-/// Render order: cached HQ → cached fast → async fast → async HQ. Each
-/// async leg awaits `PhotoLibraryManager.decodedThumbnail`, which wraps
-/// PhotoKit's `requestImage` in `withTaskCancellationHandler` so this
-/// cell's `.task` lifecycle propagates all the way to PhotoKit.
+/// Grid thumbnail tile. Cells own their load via `.task(id:)` so SwiftUI
+/// cancels the in-flight PhotoKit request when the cell scrolls off-screen
+/// or is reused.
 struct ThumbnailView: View {
   let asset: AssetDescriptor
   let isSelected: Bool
@@ -22,8 +17,13 @@ struct ThumbnailView: View {
   @State private var retryToken: Int = 0
 
   /// Quantized display-pixel target. Single bucket so the cache key stays
-  /// stable across grid reuse; matches `MonthViewModel.gridThumbnailSize`.
+  /// stable across grid reuse.
   private static let targetSize = CGSize(width: 256, height: 256)
+
+  /// Lingering window before firing the HQ decode. Cells that scroll past
+  /// in less than this never issue an HQ request, bounding the worst-case
+  /// fanout on flick-scrolls.
+  private static let hqLingerDelay: Duration = .milliseconds(150)
 
   var body: some View {
     ZStack {
@@ -107,7 +107,7 @@ struct ThumbnailView: View {
 
   private func loadThumbnail() async {
     failed = false
-    // Cached probes first so a re-mount on warm scroll doesn't fire a PhotoKit request.
+    // Cached probes first so a re-mount on warm scroll skips PhotoKit.
     if let hq = photoLibraryManager.cachedDecodedThumbnail(
       for: asset.id, quantizedSize: Self.targetSize, deliveryMode: .highQuality)
     {
@@ -118,20 +118,22 @@ struct ThumbnailView: View {
       for: asset.id, quantizedSize: Self.targetSize, deliveryMode: .fast)
     {
       image = cachedFast
-      // Fall through to attempt the HQ upgrade.
     } else if let fast = await photoLibraryManager.decodedThumbnail(
       for: asset.id, quantizedSize: Self.targetSize, deliveryMode: .fast)
     {
       image = fast
-    } else if !Task.isCancelled {
-      failed = true
     }
+    // Linger so cells that flick past in <150 ms never spend an HQ decode.
+    try? await Task.sleep(for: Self.hqLingerDelay)
     guard !Task.isCancelled else { return }
     if let hq = await photoLibraryManager.decodedThumbnail(
       for: asset.id, quantizedSize: Self.targetSize, deliveryMode: .highQuality)
     {
       image = hq
-      failed = false
+    } else if image == nil, !Task.isCancelled {
+      // Both fast and HQ legs returned nil; only surface the Retry tile now,
+      // so a transient fast-format miss doesn't flash it before HQ rescues.
+      failed = true
     }
   }
 

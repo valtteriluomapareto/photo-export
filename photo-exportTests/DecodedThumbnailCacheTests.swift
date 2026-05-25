@@ -178,10 +178,11 @@ struct DecodedThumbnailCacheTests {
   // MARK: - Cancellation propagation
 
   @Test func cancellingOnlyWaiterCancelsTheUnderlyingDecode() async {
+    let decodeEntered = AsyncCheckpoint()
     let decodeWasCancelled = CancellationFlag()
     let cache = DecodedThumbnailCache(decode: { _ in
       await withTaskCancellationHandler {
-        try? await Task.sleep(for: .seconds(5))
+        await decodeEntered.enter()
         return Self.makeCGImage()
       } onCancel: {
         Task { await decodeWasCancelled.set() }
@@ -191,19 +192,20 @@ struct DecodedThumbnailCacheTests {
     let task = Task { @MainActor in
       _ = await cache.image(for: key())
     }
-    // Let the decode task register the in-flight slot before we cancel.
-    try? await Task.sleep(for: .milliseconds(20))
+    // Wait deterministically until the decode is suspended on the gate.
+    await decodeEntered.waitForEnter(count: 1)
     task.cancel()
+    await decodeEntered.releaseAll()
     _ = await task.value
-    // Cancellation propagated all the way to the inner decode.
     #expect(await decodeWasCancelled.value)
   }
 
   @Test func cancellingOneOfTwoWaitersDoesNotCancelDecode() async {
+    let decodeEntered = AsyncCheckpoint()
     let decodeWasCancelled = CancellationFlag()
     let cache = DecodedThumbnailCache(decode: { _ in
       await withTaskCancellationHandler {
-        try? await Task.sleep(for: .milliseconds(80))
+        await decodeEntered.enter()
         return Self.makeCGImage()
       } onCancel: {
         Task { await decodeWasCancelled.set() }
@@ -213,19 +215,30 @@ struct DecodedThumbnailCacheTests {
     let firstWaiter = Task { @MainActor in
       _ = await cache.image(for: key())
     }
-    // Tiny delay so `firstWaiter` registers the in-flight slot before the
-    // second waiter joins. Without this, both tasks would arrive at the same
-    // dictionary slot before either has registered, and the ref-count goes
-    // 0→1 twice instead of 0→1→2.
-    try? await Task.sleep(for: .milliseconds(20))
+    // Wait until the first waiter has registered the in-flight slot and the
+    // decode is suspended on the gate.
+    await decodeEntered.waitForEnter(count: 1)
     let secondWaiter = Task { @MainActor in
       await cache.image(for: key())
     }
-    try? await Task.sleep(for: .milliseconds(20))
+    // Let the second waiter reach `await task.value` (i.e. take its ref-count
+    // slot) before the first cancels.
+    await Task.yield()
+    await Task.yield()
     firstWaiter.cancel()
-    _ = await firstWaiter.value
-    // Second waiter survives — it still holds a ref on the in-flight slot.
+    // Give the cancellation a turn to land — releaseWaiter is scheduled via a
+    // Task hop, so yield twice before asserting it didn't cascade into the
+    // inner decode.
+    await Task.yield()
+    await Task.yield()
+    #expect(await decodeWasCancelled.value == false)
+    // Release the gate so the inner decode (and both waiters) can complete.
+    // Must happen *before* awaiting firstWaiter.value — firstWaiter is still
+    // suspended on `await task.value`, which won't resolve until the inner
+    // decode returns.
+    await decodeEntered.releaseAll()
     let secondResult = await secondWaiter.value
+    _ = await firstWaiter.value
     #expect(secondResult != nil)
     #expect(await decodeWasCancelled.value == false)
   }

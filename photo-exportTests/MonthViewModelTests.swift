@@ -142,7 +142,9 @@ struct MonthViewModelTests {
 
   /// Refresh keeps existing assets in place and adds newcomers without
   /// blanking the grid. Mirrors the iCloud-sync case where the user is
-  /// watching a month grid as new photos land in the library.
+  /// watching a month grid as new photos land in the library. The newcomer
+  /// must also be preheated for caching — only the added asset is started,
+  /// survivors are not stopped.
   @Test func refreshKeepsExistingAssetsAndAddsNewcomers() async throws {
     let svc = FakePhotoLibraryService()
     let original = (0..<3).map { makeAsset(id: "a\($0)") }
@@ -150,12 +152,17 @@ struct MonthViewModelTests {
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .timeline(year: 2025, month: 6))
+    let startCountBefore = svc.startCachingCalls.count
+    let stopCountBefore = svc.stopCachingCalls.count
 
     let added = makeAsset(id: "a3")
     svc.assetsByYearMonth["2025-6"] = original + [added]
     await vm.refresh(for: .timeline(year: 2025, month: 6))
 
     #expect(vm.assets.map(\.id) == ["a0", "a1", "a2", "a3"])
+    #expect(svc.startCachingCalls.count == startCountBefore + 1)
+    #expect(svc.startCachingCalls.last?.map(\.id) == ["a3"])
+    #expect(svc.stopCachingCalls.count == stopCountBefore)
   }
 
   /// Assets that disappear from the library are removed from `assets` and

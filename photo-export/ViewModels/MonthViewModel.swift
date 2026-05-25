@@ -3,10 +3,9 @@ import Foundation
 import Photos
 import SwiftUI
 
-/// Owns the asset list for a single scope (timeline month, favorites, album).
-/// Thumbnail rendering is now cell-driven via `ThumbnailView.task(id:)` against
-/// `PhotoLibraryManager.decodedThumbnail`; this view model only manages the
-/// asset array and the `PHCachingImageManager` preheat lifecycle.
+/// Owns the asset list for a single scope (timeline month, favorites, album)
+/// and the `PHCachingImageManager` preheat lifecycle. Thumbnail loading
+/// itself lives on the cell.
 @MainActor
 final class MonthViewModel: ObservableObject {
   @Published private(set) var assets: [AssetDescriptor] = []
@@ -99,10 +98,9 @@ final class MonthViewModel: ObservableObject {
       let newAssets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
       guard currentScope == scope else { return }
       let newIds = Set(newAssets.map(\.id))
+      let oldIds = Set(cachedAssets.map(\.id))
       let removed = cachedAssets.filter { !newIds.contains($0.id) }
-      let added = newAssets.filter { asset in
-        !cachedAssets.contains(where: { $0.id == asset.id })
-      }
+      let added = newAssets.filter { !oldIds.contains($0.id) }
 
       if !removed.isEmpty {
         photoLibraryService.stopCachingThumbnails(for: removed)
