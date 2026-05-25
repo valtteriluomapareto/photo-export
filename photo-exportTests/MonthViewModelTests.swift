@@ -152,6 +152,30 @@ struct MonthViewModelTests {
     #expect(vm.assets.map(\.id) == ["s2-a"])
   }
 
+  /// `PHCachingImageManager.startCachingImages` is meant for a visible-window
+  /// sized set. Passing the entire scope choked the shared image manager when
+  /// a user had 37k favorites — every subsequent `requestImage` (including the
+  /// initial fast batch) stalled, so the grid sat on the spinner forever
+  /// (issue #109). The view model now caps the set it hands to the service to
+  /// `cachingWindowSize` (500).
+  @Test func startCachingThumbnailsIsCappedToWindowForLargeScopes() async throws {
+    let svc = FakePhotoLibraryService()
+    // 600 assets — well above the 500-window cap.
+    let many = (0..<600).map { makeAsset(id: "fav-\($0)") }
+    svc.favoritesAssets = many
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+
+    // All 600 are in the published `assets` array (the grid renders them all,
+    // lazily). But the caching call only saw the first 500.
+    #expect(vm.assets.count == 600)
+    let cachedBatch = svc.startCachingCalls.last
+    #expect(cachedBatch?.count == 500)
+    #expect(cachedBatch?.first?.id == "fav-0")
+    #expect(cachedBatch?.last?.id == "fav-499")
+  }
+
   @Test func nilScopeClearsAllState() async throws {
     let svc = FakePhotoLibraryService()
     let assets = [makeAsset(id: "a"), makeAsset(id: "b")]

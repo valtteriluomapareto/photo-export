@@ -20,7 +20,20 @@ final class MonthViewModel: ObservableObject {
   // Control initial thumbnail batch size
   private let initialThumbnailBatchSize: Int = 40
 
-  // Track cached assets to manage PHCachingImageManager preheating
+  /// Upper bound on how many assets we hand to `PHCachingImageManager` at once.
+  /// `startCachingImages` is designed for the visible window (Apple's sample
+  /// code typically caches scores to low hundreds); passing the full scope —
+  /// e.g. a 37k-asset Favorites collection — choked the shared caching manager
+  /// and stalled every subsequent `requestImage`, so the grid sat on the
+  /// spinner forever (issue #109). 500 covers any realistic visible row count
+  /// for the 144 pt tile grid with comfortable headroom.
+  private let cachingWindowSize: Int = 500
+
+  /// Assets currently registered with `PHCachingImageManager`. Invariant:
+  /// `cachedAssets.count <= cachingWindowSize`, and it mirrors the prefix of
+  /// the active scope that we've actually passed to `startCachingThumbnails`.
+  /// `refresh(for:)`'s diff (added/removed) is computed against this windowed
+  /// set, not the full scope, so the cache delta stays bounded.
   private var cachedAssets: [AssetDescriptor] = []
 
   // Track which thumbnails have been upgraded to high quality
@@ -78,9 +91,11 @@ final class MonthViewModel: ObservableObject {
     do {
       let scopedAssets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
       assets = scopedAssets
-      // Start caching for new scope
-      photoLibraryService.startCachingThumbnails(for: scopedAssets)
-      cachedAssets = scopedAssets
+      // Start caching for new scope — capped to a leading window so massive
+      // scopes (e.g. 37k favorites) don't choke PHCachingImageManager.
+      let cachingWindow = Array(scopedAssets.prefix(cachingWindowSize))
+      photoLibraryService.startCachingThumbnails(for: cachingWindow)
+      cachedAssets = cachingWindow
 
       // Preload an initial batch of fast thumbnails
       let initialBatch = Array(scopedAssets.prefix(initialThumbnailBatchSize))
@@ -153,10 +168,24 @@ final class MonthViewModel: ObservableObject {
       // Bail if the user (or another refresh) replaced the active scope while we were
       // awaiting the fetch. Writing now would clobber a freshly-loaded different scope.
       guard currentScope == scope else { return }
+      // Window the cache delta the same way `loadAssets` does — diff between
+      // the *windowed* prefix of new vs old, not the full scopes. Without this,
+      // refreshing a 37k-asset scope where everything is "new to the cache"
+      // would funnel the entire scope into `startCachingThumbnails` and
+      // re-trigger the choke we're guarding against.
       let newIds = Set(newAssets.map(\.id))
-      let oldIds = Set(cachedAssets.map(\.id))
-      let added = newAssets.filter { !oldIds.contains($0.id) }
-      let removed = cachedAssets.filter { !newIds.contains($0.id) }
+      let newCachingWindow = Array(newAssets.prefix(cachingWindowSize))
+      let newCachedIds = Set(newCachingWindow.map(\.id))
+      let oldCachedIds = Set(cachedAssets.map(\.id))
+      let added = newCachingWindow.filter { !oldCachedIds.contains($0.id) }
+      let removed = cachedAssets.filter { !newCachedIds.contains($0.id) }
+      // Network-allow decision below tracks "new to the scope," which is a
+      // superset of "new to the windowed cache." Without this, an iCloud
+      // arrival landing outside the window would get `allowNetwork: false`
+      // and stamp itself as failed — the very regression the existing
+      // refresh-from-iCloud test pins.
+      let priorScopeIds = Set(assets.map(\.id))
+      let newlyArrivedIds = newIds.subtracting(priorScopeIds)
 
       if !removed.isEmpty {
         photoLibraryService.stopCachingThumbnails(for: removed)
@@ -164,7 +193,7 @@ final class MonthViewModel: ObservableObject {
       if !added.isEmpty {
         photoLibraryService.startCachingThumbnails(for: added)
       }
-      cachedAssets = newAssets
+      cachedAssets = newCachingWindow
 
       // Drop dict entries for assets that left the scope so we don't hold stale
       // thumbnails for items the grid no longer renders.
@@ -187,7 +216,6 @@ final class MonthViewModel: ObservableObject {
       // wouldn't rescue it either — the user would see a "Retry" tile until they
       // navigated away and back).
       hqUpgradeTask?.cancel()
-      let addedIds = Set(added.map(\.id))
       hqUpgradeTask = Task { [weak self] in
         guard let self else { return }
         for asset in newAssets {
@@ -196,7 +224,7 @@ final class MonthViewModel: ObservableObject {
             !self.failedThumbnailIds.contains(asset.id)
           {
             await self.loadAndStoreThumbnail(
-              for: asset.id, allowNetwork: addedIds.contains(asset.id))
+              for: asset.id, allowNetwork: newlyArrivedIds.contains(asset.id))
           }
         }
         for asset in newAssets {
