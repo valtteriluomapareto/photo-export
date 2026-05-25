@@ -142,6 +142,7 @@ struct MonthContentView: View, Equatable {
     .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
       Task { await viewModel.refresh(for: .timeline(year: year, month: month)) }
     }
+    .measureBodyInvalidations("MonthContentView")
   }
 
   private var overlayViews: some View {

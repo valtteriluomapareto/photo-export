@@ -85,15 +85,13 @@ to decide which later work actually moves the app.
 These tasks can land before the Observation migration. They reduce real work on
 the main thread or bound PhotoKit request lifetimes.
 
-### 1. Stable Grid Identity
+### 1. Stable Grid Identity — already implemented
 
-Fix the grid `ForEach` identity before any progressive fetch work:
-
-- `MonthContentView`: use `ForEach(viewModel.assets, id: \.id)`.
-- `CollectionContentView`: use `ForEach(viewModel.assets, id: \.id)`.
-
-Without explicit stable IDs, progressive append can cause unnecessary cell
-re-evaluation and make the UI feel worse.
+`AssetDescriptor` is `Identifiable` with `let id: String`, so the existing
+`ForEach(viewModel.assets)` calls in `MonthContentView` and
+`CollectionContentView` already key on `\.id`. No change is needed before
+progressive-fetch work lands; an explicit `id: \.id` would be a textual
+no-op.
 
 ### 2. Decoded Thumbnail Cache
 

@@ -139,9 +139,10 @@ struct LibraryRootView: View {
     .onChange(of: selectionSet) { oldSet, newSet in
       applySelectionChange(oldSet: oldSet, newSet: newSet)
     }
-    .onChange(of: focusedSelection) { _, _ in
+    .onChange(of: focusedSelection) { _, newValue in
       selectedAsset = nil
       persistLastSelection()
+      AppDiagnostics.selectionChanged(kind: Self.selectionKind(newValue))
     }
     .focusedSceneValue(
       \.importBackupAction,
@@ -448,5 +449,20 @@ struct LibraryRootView: View {
       }
     }
     return nil
+  }
+
+  /// Maps a selection to the short tag emitted on the `SelectionChanged`
+  /// signpost. Kept static so it's callable from the `.onChange` closure
+  /// without capturing self.
+  fileprivate static func selectionKind(_ selection: LibrarySelection?) -> String {
+    guard let selection else { return "none" }
+    switch selection {
+    case .timelineYear: return "year"
+    case .timelineMonth: return "month"
+    case .favorites: return "favorites"
+    case .album: return "album"
+    case .sharedAlbum: return "sharedAlbum"
+    case .folder: return "folder"
+    }
   }
 }

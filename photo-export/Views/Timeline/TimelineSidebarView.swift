@@ -93,6 +93,7 @@ struct TimelineSidebarView: View {
     .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
       handleAppear()
     }
+    .measureBodyInvalidations("TimelineSidebarView")
   }
 
   // MARK: - Selection bridging

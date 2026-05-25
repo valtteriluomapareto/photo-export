@@ -99,6 +99,7 @@ struct CollectionContentView: View {
     .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
       Task { await viewModel.refresh(for: scope) }
     }
+    .measureBodyInvalidations("CollectionContentView")
   }
 
   // MARK: - Scope plumbing
