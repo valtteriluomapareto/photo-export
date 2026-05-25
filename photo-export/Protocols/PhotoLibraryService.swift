@@ -78,16 +78,13 @@ protocol PhotoLibraryService: AnyObject {
 
   // MARK: - Decoded thumbnail cache
 
-  /// Async load that routes through `DecodedThumbnailCache`. Concurrent
-  /// requests for the same key share one decode. `quantizedSize` should be
-  /// pre-bucketed by the caller (typically to 64-px steps); see
-  /// `PhotoLibraryManager` for the production decode path.
+  /// Async load through the decoded-thumbnail cache. `quantizedSize` is
+  /// pre-bucketed by the caller.
   func decodedThumbnail(
     for assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
   ) async -> CGImage?
 
-  /// Synchronous probe of the decoded-thumbnail cache. Returns nil if the
-  /// entry is absent or has been evicted. Safe to call from a SwiftUI body.
+  /// Synchronous cache probe; nil if absent or evicted.
   func cachedDecodedThumbnail(
     for assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
   ) -> CGImage?

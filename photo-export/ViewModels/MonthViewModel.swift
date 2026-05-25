@@ -18,7 +18,6 @@ final class MonthViewModel: ObservableObject {
 
   // Selection is tracked via id to avoid retaining assets strongly across updates
   @Published var selectedAssetId: String?
-  @Published private(set) var isExportRunning: Bool = false
 
   private let photoLibraryService: any PhotoLibraryService
 
@@ -257,13 +256,8 @@ final class MonthViewModel: ObservableObject {
     selectedAssetId = assetId
   }
 
-  func setExportRunning(_ running: Bool) {
-    isExportRunning = running
-  }
-
   /// Initial-load and second-batch fast-thumbnail fetch. Reads through the
-  /// decoded-thumbnail cache; the underlying decode path handles
-  /// `allowNetwork` (currently always enabled at the cache decode level).
+  /// decoded-thumbnail cache.
   private func loadAndStoreThumbnail(for assetId: String) async {
     if await photoLibraryService.decodedThumbnail(
       for: assetId, quantizedSize: gridThumbnailSize, deliveryMode: .fast) != nil

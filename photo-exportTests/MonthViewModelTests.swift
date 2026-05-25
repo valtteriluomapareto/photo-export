@@ -213,9 +213,9 @@ struct MonthViewModelTests {
     #expect(vm.loadedThumbnailIds.contains("retry-me"))
   }
 
-  // MARK: - select / setExportRunning
+  // MARK: - select
 
-  @Test func selectAndSetExportRunningToggleState() async throws {
+  @Test func selectTogglesSelectedAssetId() async throws {
     let svc = FakePhotoLibraryService()
     let vm = MonthViewModel(photoLibraryService: svc)
 
@@ -223,12 +223,6 @@ struct MonthViewModelTests {
     #expect(vm.selectedAssetId == "abc")
     vm.select(assetId: nil)
     #expect(vm.selectedAssetId == nil)
-
-    #expect(!vm.isExportRunning)
-    vm.setExportRunning(true)
-    #expect(vm.isExportRunning)
-    vm.setExportRunning(false)
-    #expect(!vm.isExportRunning)
   }
 
   // MARK: - thumbnailState(for:) accessor
@@ -246,8 +240,9 @@ struct MonthViewModelTests {
       Issue.record("expected .loading before loadAssets")
     }
     await vm.loadAssets(for: .timeline(year: 2025, month: 9))
-    if case .loaded = vm.thumbnailState(for: asset) {
-      // good
+    if case .loaded(let cgImage) = vm.thumbnailState(for: asset) {
+      #expect(cgImage.width > 0)
+      #expect(cgImage.height > 0)
     } else {
       Issue.record("expected .loaded after loadAssets")
     }
@@ -375,14 +370,11 @@ struct MonthViewModelTests {
       "stale May refresh must not clobber June after navigation")
   }
 
-  /// Regression: when iCloud lands a new photo, `photoLibraryDidChange` fires
-  /// the moment the asset's metadata is available, but PhotoKit's local
-  /// thumbnail cache may still be empty for a moment. `refresh(for:)` must
-  /// fetch the new asset's thumbnail with `allowNetwork: true` so the tile
-  /// fills in immediately; otherwise the asset lands in `failedThumbnailIds`
-  /// and the HQ upgrade — gated on that set — can't rescue it, leaving the
-  /// user staring at a "Retry" tile until they navigate away and back.
-  @Test func refreshUsesNetworkForNewlyArrivedAsset() async throws {
+  /// After a library mutation, `refresh(for:)` loads thumbnails for any
+  /// newly-arrived assets without requiring the user to navigate away and
+  /// back. The cache decode path is the only mechanism here — there is no
+  /// per-call network policy left to assert.
+  @Test func refreshLoadsThumbnailForNewlyArrivedAsset() async throws {
     let svc = FakePhotoLibraryService()
     let existing = makeAsset(id: "existing")
     svc.assetsByYearMonth["2025-6"] = [existing]

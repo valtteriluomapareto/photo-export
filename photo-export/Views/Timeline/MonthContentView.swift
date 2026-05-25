@@ -17,7 +17,7 @@ import SwiftUI
 /// Without the explicit `Equatable` conformance below, SwiftUI's struct-diff would
 /// see the new closure as a "changed" property and re-evaluate this body anyway.
 /// The conformance compares only the value fields that actually affect rendering
-/// (`year`, `month`, `versionSelection`, `isExportRunning`, the bound asset id);
+/// (`year`, `month`, `versionSelection`, `livePhotosPaired`, the bound asset id);
 /// the closure and the binding wrapper are excluded so SwiftUI short-circuits the
 /// LazyVGrid re-evaluation when those rendering inputs are unchanged.
 struct MonthContentView: View, Equatable {
@@ -39,9 +39,6 @@ struct MonthContentView: View, Equatable {
   /// `ExportManager` directly. Drives the asset-complete check on the header summary so
   /// a Live Photo whose paired video is pending isn't reported as complete.
   let livePhotosPaired: Bool
-  /// Mirrored from `ExportManager.isRunning` by the parent. Drives the view model's
-  /// HQ-thumbnail-network suppression while an export is active.
-  let isExportRunning: Bool
   /// Closure that triggers the "Export Month" action. Owned by the parent so we can
   /// avoid touching `ExportManager` here.
   let onExportMonth: () -> Void
@@ -52,7 +49,6 @@ struct MonthContentView: View, Equatable {
     month: Int,
     versionSelection: ExportVersionSelection,
     livePhotosPaired: Bool,
-    isExportRunning: Bool,
     onExportMonth: @escaping () -> Void,
     selectedAsset: Binding<AssetDescriptor?>,
     photoLibraryService: any PhotoLibraryService
@@ -61,7 +57,6 @@ struct MonthContentView: View, Equatable {
     self.month = month
     self.versionSelection = versionSelection
     self.livePhotosPaired = livePhotosPaired
-    self.isExportRunning = isExportRunning
     self.onExportMonth = onExportMonth
     self._selectedAsset = selectedAsset
     _viewModel = StateObject(
@@ -128,9 +123,6 @@ struct MonthContentView: View, Equatable {
       {
         selectedAsset = initialAsset
       }
-    }
-    .onChange(of: isExportRunning) { _, newValue in
-      viewModel.setExportRunning(newValue)
     }
     // Photos library mutations (most commonly iCloud sync landing newly synced assets,
     // but also user edits in Photos.app) bump `libraryRevision`. Route them through the
@@ -210,7 +202,6 @@ struct MonthContentView: View, Equatable {
       && lhs.month == rhs.month
       && lhs.versionSelection == rhs.versionSelection
       && lhs.livePhotosPaired == rhs.livePhotosPaired
-      && lhs.isExportRunning == rhs.isExportRunning
       && lhs.selectedAsset?.id == rhs.selectedAsset?.id
   }
 }

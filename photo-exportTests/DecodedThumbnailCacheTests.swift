@@ -31,10 +31,9 @@ struct DecodedThumbnailCacheTests {
   private func key(
     id: String = "a",
     size: CGSize = CGSize(width: 200, height: 200),
-    mode: ThumbnailContentMode = .aspectFill,
     delivery: ThumbnailDeliveryMode = .fast
   ) -> DecodedThumbnailCache.Key {
-    .init(assetId: id, quantizedSize: size, contentMode: mode, deliveryMode: delivery)
+    .init(assetId: id, quantizedSize: size, deliveryMode: delivery)
   }
 
   // MARK: - Concurrent deduplication
@@ -51,10 +50,15 @@ struct DecodedThumbnailCacheTests {
     async let first = cache.image(for: key())
     async let second = cache.image(for: key())
     async let third = cache.image(for: key())
-    _ = await (first, second, third)
+    let (a, b, c) = await (first, second, third)
 
     let count = await decodeCount.value
     #expect(count == 1)
+    // Identity check: all three callers receive the same decoded CGImage, not
+    // three serial decodes that happened to return equal-looking values.
+    #expect(a != nil)
+    #expect(a === b)
+    #expect(b === c)
   }
 
   // MARK: - Delivery-mode separation
@@ -152,6 +156,40 @@ struct DecodedThumbnailCacheTests {
     let cache = DecodedThumbnailCache(decode: { _ in nil })
     let result = await cache.image(for: key())
     #expect(result == nil)
+    #expect(cache.cached(for: key()) == nil)
+  }
+
+  @Test func concurrentCallersAllSeeNilWhenDecodeReturnsNil() async {
+    let cache = DecodedThumbnailCache(decode: { _ in
+      try? await Task.sleep(for: .milliseconds(20))
+      return nil
+    })
+
+    async let first = cache.image(for: key())
+    async let second = cache.image(for: key())
+    let (a, b) = await (first, second)
+    #expect(a == nil)
+    #expect(b == nil)
+    #expect(cache.cached(for: key()) == nil)
+  }
+
+  // MARK: - In-flight + clear race
+
+  @Test func clearMidFlightDropsStaleDecodeFromCache() async {
+    let cache = DecodedThumbnailCache(decode: { _ in
+      try? await Task.sleep(for: .milliseconds(50))
+      return Self.makeCGImage()
+    })
+
+    async let loadResult = cache.image(for: key())
+    // Let `image(for:)` register the in-flight slot before we clear.
+    await Task.yield()
+    cache.clear()
+    let decoded = await loadResult
+
+    // The decode succeeded (the caller still sees a CGImage) but the cache
+    // does not retain the post-clear bytes — a subsequent request re-decodes.
+    #expect(decoded != nil)
     #expect(cache.cached(for: key()) == nil)
   }
 }

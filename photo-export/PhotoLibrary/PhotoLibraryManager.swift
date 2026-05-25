@@ -68,11 +68,9 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `photoLibraryDidChange` so subsequent reads re-fetch.
   nonisolated let collectionCountCache = CollectionCountCache()
 
-  /// Bounded `CGImage` cache for thumbnail renders. Replaces the unbounded
-  /// per-scope NSImage dictionaries that previously lived on `MonthViewModel`.
-  /// Cleared by `invalidateCache()` so a library mutation drops every stale
-  /// render. Set in init via `setupDecodedThumbnailCache()` so the decode
-  /// closure can capture `[weak self]`.
+  /// Bounded `CGImage` cache for thumbnail renders. Cleared by
+  /// `invalidateCache()`. Set in init via `setupDecodedThumbnailCache()` so
+  /// the decode closure can capture `[weak self]`.
   private(set) var decodedThumbnailCache: DecodedThumbnailCache!
 
   /// Optional injection point that replaces the production PhotoKit implementation on
@@ -127,9 +125,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     setupDecodedThumbnailCache()
   }
 
-  /// Wires `decodedThumbnailCache` with a decode closure that calls back into
-  /// `self` (via `[weak self]`) for the actual PhotoKit fetch. Kept in a
-  /// helper so both initializers share the same setup.
   private func setupDecodedThumbnailCache() {
     decodedThumbnailCache = DecodedThumbnailCache { [weak self] key in
       guard let self else { return nil }
@@ -137,10 +132,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
-  /// Production decode path used by `DecodedThumbnailCache`. Routes through
-  /// `overrideService` (screenshot mode) when one is set; otherwise issues a
-  /// PhotoKit request with the matching delivery mode and extracts the
-  /// CGImage backing bitmap from the returned NSImage.
   private func decodeThumbnail(for key: DecodedThumbnailCache.Key) async -> CGImage? {
     if let s = overrideService {
       return await s.decodedThumbnail(
@@ -157,14 +148,11 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       options.resizeMode = .exact
     }
     options.isNetworkAccessAllowed = true
-    let contentMode: PHImageContentMode =
-      key.contentMode == .aspectFill
-      ? .aspectFill : .aspectFit
 
     let nsImage: NSImage? = await withCheckedContinuation { continuation in
       let resumed = OSAllocatedUnfairLock(initialState: false)
       Self.cachingImageManager.requestImage(
-        for: asset, targetSize: key.quantizedSize, contentMode: contentMode, options: options
+        for: asset, targetSize: key.quantizedSize, contentMode: .aspectFill, options: options
       ) { image, _ in
         guard
           resumed.withLock({
@@ -186,12 +174,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     quantizedSize: CGSize,
     deliveryMode: ThumbnailDeliveryMode
   ) async -> CGImage? {
-    let key = DecodedThumbnailCache.Key(
-      assetId: assetId,
-      quantizedSize: quantizedSize,
-      contentMode: .aspectFill,
-      deliveryMode: deliveryMode)
-    return await decodedThumbnailCache.image(for: key)
+    await decodedThumbnailCache.image(
+      for: .init(assetId: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode))
   }
 
   func cachedDecodedThumbnail(
@@ -199,12 +183,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     quantizedSize: CGSize,
     deliveryMode: ThumbnailDeliveryMode
   ) -> CGImage? {
-    let key = DecodedThumbnailCache.Key(
-      assetId: assetId,
-      quantizedSize: quantizedSize,
-      contentMode: .aspectFill,
-      deliveryMode: deliveryMode)
-    return decodedThumbnailCache.cached(for: key)
+    decodedThumbnailCache.cached(
+      for: .init(assetId: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode))
   }
 
   /// Performs the PhotoKit authorization probe and registers as a
@@ -825,7 +805,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil
-    decodedThumbnailCache?.clear()
+    decodedThumbnailCache.clear()
     libraryRevision &+= 1
     // Cancel any in-flight count tasks and drop cached counts so the next sidebar read
     // re-fetches against the updated library state.
