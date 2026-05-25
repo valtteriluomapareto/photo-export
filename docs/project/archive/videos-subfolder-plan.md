@@ -1,7 +1,7 @@
 # Videos Subfolder Plan (issue #38)
 
 Date: 2026-05-21
-Status: Proposed (not started). Targets `main` post-PR #102 (Live Photos paired export).
+Status: Shipped in 1.6.0 via PR #105. Kept as a decision record for the per-variant `subfolder` choice and the Live Photos co-location rule.
 
 ## Summary
 

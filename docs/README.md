@@ -55,6 +55,8 @@ Completed or superseded plans, kept as decision records:
 - [`project/archive/auto-sync-phase-0a-simplicity-followups.md`](project/archive/auto-sync-phase-0a-simplicity-followups.md) — Phase 0a simplicity-review notes (the revisit round completed when the AutoSyncManager work shipped; residual trims live in the auto-sync plan's "Residual MVP Gaps")
 - [`project/archive/observable-migration-plan.md`](project/archive/observable-migration-plan.md) — standalone SwiftUI Observation migration plan (superseded by the active UI smoothness roadmap)
 - [`project/archive/auto-export-memory-fix-plan.md`](project/archive/auto-export-memory-fix-plan.md) — issue #112 Auto Export memory-watermark fix plan (implemented; kept for rationale and implementation deltas)
+- [`project/archive/observability-improvement-plan.md`](project/archive/observability-improvement-plan.md) — AutoSync run journal feeding the diagnostic report (shipped via PR #114)
+- [`project/archive/videos-subfolder-plan.md`](project/archive/videos-subfolder-plan.md) — issue #38 standalone-video `videos/` subfolder layout (shipped in 1.6.0 via PR #105)
 
 ## Reference material
 
