@@ -243,6 +243,41 @@ struct DecodedThumbnailCacheTests {
     #expect(await decodeWasCancelled.value == false)
   }
 
+  /// After `clear()`, a new request for the same key must start a fresh
+  /// decode — not join the pre-clear in-flight task and receive its stale
+  /// image. The generation guard prevents the cache from *storing* the
+  /// stale result, but without dropping the in-flight slot a joining caller
+  /// would still receive it.
+  @Test func clearMidFlightForcesFreshDecodeForNewCallers() async {
+    let decodeEntered = AsyncCheckpoint()
+    let cache = DecodedThumbnailCache(decode: { _ in
+      await decodeEntered.enter()
+      return Self.makeCGImage()
+    })
+
+    // First caller starts the in-flight decode.
+    let firstCaller = Task { @MainActor in
+      _ = await cache.image(for: key())
+    }
+    await decodeEntered.waitForEnter(count: 1)
+
+    // Library mutation lands. Clear must invalidate the in-flight slot so
+    // a follower starts fresh.
+    cache.clear()
+
+    let secondCaller = Task { @MainActor in
+      _ = await cache.image(for: key())
+    }
+    // A fresh decode means the checkpoint is entered a second time. If the
+    // second caller had joined the original task, the count would stay at 1
+    // and `waitForEnter(count: 2)` would hang.
+    await decodeEntered.waitForEnter(count: 2)
+
+    await decodeEntered.releaseAll()
+    _ = await firstCaller.value
+    _ = await secondCaller.value
+  }
+
   @Test func clearMidFlightDropsStaleDecodeFromCache() async {
     let cache = DecodedThumbnailCache(decode: { _ in
       try? await Task.sleep(for: .milliseconds(50))
