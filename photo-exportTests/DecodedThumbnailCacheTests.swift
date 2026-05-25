@@ -175,6 +175,61 @@ struct DecodedThumbnailCacheTests {
 
   // MARK: - In-flight + clear race
 
+  // MARK: - Cancellation propagation
+
+  @Test func cancellingOnlyWaiterCancelsTheUnderlyingDecode() async {
+    let decodeWasCancelled = CancellationFlag()
+    let cache = DecodedThumbnailCache(decode: { _ in
+      await withTaskCancellationHandler {
+        try? await Task.sleep(for: .seconds(5))
+        return Self.makeCGImage()
+      } onCancel: {
+        Task { await decodeWasCancelled.set() }
+      }
+    })
+
+    let task = Task { @MainActor in
+      _ = await cache.image(for: key())
+    }
+    // Let the decode task register the in-flight slot before we cancel.
+    try? await Task.sleep(for: .milliseconds(20))
+    task.cancel()
+    _ = await task.value
+    // Cancellation propagated all the way to the inner decode.
+    #expect(await decodeWasCancelled.value)
+  }
+
+  @Test func cancellingOneOfTwoWaitersDoesNotCancelDecode() async {
+    let decodeWasCancelled = CancellationFlag()
+    let cache = DecodedThumbnailCache(decode: { _ in
+      await withTaskCancellationHandler {
+        try? await Task.sleep(for: .milliseconds(80))
+        return Self.makeCGImage()
+      } onCancel: {
+        Task { await decodeWasCancelled.set() }
+      }
+    })
+
+    let firstWaiter = Task { @MainActor in
+      _ = await cache.image(for: key())
+    }
+    // Tiny delay so `firstWaiter` registers the in-flight slot before the
+    // second waiter joins. Without this, both tasks would arrive at the same
+    // dictionary slot before either has registered, and the ref-count goes
+    // 0→1 twice instead of 0→1→2.
+    try? await Task.sleep(for: .milliseconds(20))
+    let secondWaiter = Task { @MainActor in
+      await cache.image(for: key())
+    }
+    try? await Task.sleep(for: .milliseconds(20))
+    firstWaiter.cancel()
+    _ = await firstWaiter.value
+    // Second waiter survives — it still holds a ref on the in-flight slot.
+    let secondResult = await secondWaiter.value
+    #expect(secondResult != nil)
+    #expect(await decodeWasCancelled.value == false)
+  }
+
   @Test func clearMidFlightDropsStaleDecodeFromCache() async {
     let cache = DecodedThumbnailCache(decode: { _ in
       try? await Task.sleep(for: .milliseconds(50))
@@ -204,4 +259,10 @@ private actor DecodeCounter {
 private actor DecodedKeysRecorder {
   private(set) var values: [DecodedThumbnailCache.Key] = []
   func append(_ key: DecodedThumbnailCache.Key) { values.append(key) }
+}
+
+/// Actor-isolated flag for cancellation observation tests.
+private actor CancellationFlag {
+  private(set) var value: Bool = false
+  func set() { value = true }
 }

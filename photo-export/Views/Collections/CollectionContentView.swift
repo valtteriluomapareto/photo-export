@@ -63,10 +63,8 @@ struct CollectionContentView: View {
           ForEach(viewModel.assets) { asset in
             ThumbnailView(
               asset: asset,
-              state: viewModel.thumbnailState(for: asset),
               isSelected: asset.id == selectedAsset?.id,
-              isExported: isExported(asset: asset),
-              onRetry: { viewModel.retryThumbnail(for: asset.id) }
+              isExported: isExported(asset: asset)
             )
             .frame(width: 120, height: 120)
             .onTapGesture {

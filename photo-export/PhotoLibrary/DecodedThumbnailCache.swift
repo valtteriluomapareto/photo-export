@@ -3,9 +3,10 @@ import Foundation
 
 /// Bounded `CGImage` cache for thumbnail decode results. Caller is
 /// responsible for quantizing `quantizedSize`. Concurrent requests for the
-/// same key share one decode. `clear()` discards stored entries and arranges
-/// for in-flight decodes started before the call to *not* land in the
-/// cleared cache.
+/// same key share one decode and one PhotoKit request, ref-counted: the
+/// shared decode is cancelled only when every waiter cancels. `clear()`
+/// discards stored entries and prevents in-flight decodes started before
+/// the call from landing in the cleared cache.
 @MainActor
 final class DecodedThumbnailCache {
   struct Key: Hashable, Sendable {
@@ -33,22 +34,36 @@ final class DecodedThumbnailCache {
 
   func image(for key: Key) async -> CGImage? {
     if let existing = cached(for: key) { return existing }
-    if let inFlight = inFlight[key] { return await inFlight.value }
-    let gen = generation
-    let task = Task<CGImage?, Never> { [weak self] in
-      guard let self else { return nil }
-      let result = await self.decode(key)
-      // Skip the store if a `clear()` arrived while we were decoding — the
-      // decoded bytes may no longer match the post-mutation library state.
-      if let result, self.generation == gen {
-        let box = ImageBox(image: result)
-        self.storage.setObject(box, forKey: KeyBox(key), cost: box.cost)
+
+    let task: Task<CGImage?, Never>
+    if var entry = inFlight[key] {
+      entry.waiterCount += 1
+      inFlight[key] = entry
+      task = entry.task
+    } else {
+      let gen = generation
+      task = Task<CGImage?, Never> { [weak self] in
+        guard let self else { return nil }
+        let result = await self.decode(key)
+        // Skip the store if `clear()` arrived during the decode — the
+        // decoded bytes may not match the post-mutation library state.
+        if let result, self.generation == gen {
+          let box = ImageBox(image: result)
+          self.storage.setObject(box, forKey: KeyBox(key), cost: box.cost)
+        }
+        self.inFlight.removeValue(forKey: key)
+        return result
       }
-      self.inFlight.removeValue(forKey: key)
-      return result
+      inFlight[key] = InFlight(task: task, waiterCount: 1)
     }
-    inFlight[key] = task
-    return await task.value
+
+    return await withTaskCancellationHandler {
+      await task.value
+    } onCancel: {
+      Task { @MainActor [weak self] in
+        self?.releaseWaiter(key: key)
+      }
+    }
   }
 
   func clear() {
@@ -56,9 +71,25 @@ final class DecodedThumbnailCache {
     generation &+= 1
   }
 
+  private func releaseWaiter(key: Key) {
+    guard var entry = inFlight[key] else { return }
+    entry.waiterCount -= 1
+    if entry.waiterCount <= 0 {
+      entry.task.cancel()
+      inFlight.removeValue(forKey: key)
+    } else {
+      inFlight[key] = entry
+    }
+  }
+
+  private struct InFlight {
+    let task: Task<CGImage?, Never>
+    var waiterCount: Int
+  }
+
   private let decode: Decode
   private let storage: NSCache<KeyBox, ImageBox>
-  private var inFlight: [Key: Task<CGImage?, Never>] = [:]
+  private var inFlight: [Key: InFlight] = [:]
   private var generation: Int = 0
 }
 
