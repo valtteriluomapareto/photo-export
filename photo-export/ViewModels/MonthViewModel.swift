@@ -26,6 +26,11 @@ final class MonthViewModel: ObservableObject {
   /// for the 144 pt tile grid with comfortable headroom.
   private let cachingWindowSize: Int = 500
 
+  /// Per-batch chunk handed to `fetchAssetsProgressive`. Tuned to ~200 per the
+  /// smoothness plan; bigger batches stutter the main actor on each commit,
+  /// smaller batches add per-batch overhead without measurable UI benefit.
+  private let progressiveBatchSize: Int = 200
+
   /// Assets currently registered with `PHCachingImageManager`. After
   /// `loadAssets`/`refresh` returns, this mirrors the prefix of the active
   /// scope that we passed to `startCachingThumbnails`, capped at
@@ -41,6 +46,11 @@ final class MonthViewModel: ObservableObject {
   /// what the user is looking at?" gate.
   private var currentScope: PhotoFetchScope?
 
+  /// Streaming load task for the current scope. Cancelled when the user
+  /// navigates away so in-flight batches from the previous scope can't bleed
+  /// into the new one.
+  private var streamTask: Task<Void, Never>?
+
   init(photoLibraryService: any PhotoLibraryService) {
     self.photoLibraryService = photoLibraryService
   }
@@ -54,9 +64,12 @@ final class MonthViewModel: ObservableObject {
   /// the view model (used when `LibrarySelection` is nil — e.g. before any collection is
   /// selected).
   func loadAssets(for scope: PhotoFetchScope?) async {
-    // Claim the scope *before* the first await so a parallel `refresh(for:)` that's
-    // mid-fetch sees the new scope and discards its result instead of overwriting.
+    // Claim the scope and tear down the previous stream *before* the first
+    // await so a parallel `refresh(for:)` that's mid-fetch sees the new scope
+    // and discards its result instead of overwriting.
     currentScope = scope
+    streamTask?.cancel()
+    streamTask = nil
     isLoading = true
     errorMessage = nil
     if !cachedAssets.isEmpty {
@@ -71,23 +84,41 @@ final class MonthViewModel: ObservableObject {
       return
     }
 
+    let stream = photoLibraryService.fetchAssetsProgressive(
+      in: scope, mediaType: nil, batchSize: progressiveBatchSize)
+    var firstBatchSeen = false
     do {
-      let scopedAssets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
-      assets = scopedAssets
-      // Cap the preheat to a leading window so massive scopes (e.g. 37k
-      // favorites) don't choke PHCachingImageManager — issue #109.
-      let cachingWindow = Array(scopedAssets.prefix(cachingWindowSize))
-      photoLibraryService.startCachingThumbnails(for: cachingWindow)
-      cachedAssets = cachingWindow
-      isLoading = false
-
-      if let first = scopedAssets.first {
-        selectedAssetId = first.id
+      for try await batch in stream {
+        // Bail if the user navigated away while the stream was producing. The
+        // detached producer Task also cancels via `streamTask?.cancel()`
+        // above, but the consumer guard makes the abandonment immediate from
+        // the VM's perspective.
+        guard currentScope == scope else { return }
+        assets.append(contentsOf: batch)
+        if !firstBatchSeen {
+          firstBatchSeen = true
+          isLoading = false
+          if let first = batch.first {
+            selectedAssetId = first.id
+          }
+        }
       }
     } catch {
+      guard currentScope == scope else { return }
       errorMessage = error.localizedDescription
       isLoading = false
+      return
     }
+    if currentScope != scope { return }
+    isLoading = false
+
+    // Snapshot the windowed prefix and fire `startCachingThumbnails` once,
+    // matching the cap-window behaviour `loadAssets` used to apply in one go.
+    let cachingWindow = Array(assets.prefix(cachingWindowSize))
+    if !cachingWindow.isEmpty {
+      photoLibraryService.startCachingThumbnails(for: cachingWindow)
+    }
+    cachedAssets = cachingWindow
   }
 
   /// In-place refresh used when the underlying Photos library changes underneath us
@@ -101,42 +132,48 @@ final class MonthViewModel: ObservableObject {
   /// "loading" until each cell's `.task` fills its tile. The visible grid never
   /// flashes empty.
   ///
-  /// **Scope race.** The trigger is an orphan `Task { await refresh(...) }` fired from
-  /// `.onChange(of: libraryRevision)`; if the user navigates mid-fetch, the resumed
-  /// refresh would otherwise overwrite the new scope's state. We guard against that by
-  /// comparing the requested `scope` against `currentScope` (which `loadAssets` claims
-  /// synchronously) right before writing — a mismatch means a navigation happened
-  /// during the await and the fetch result is no longer relevant.
+  /// Refresh uses the progressive stream too — large favorites refreshes
+  /// don't materialise 37k assets in one shot — but commits the new array
+  /// (and the cache delta) once at the end so partial state isn't visible.
+  /// Mid-refresh scope changes still discard the in-flight batches.
   ///
   /// `scope == nil` is a no-op — there's nothing to refresh against.
   func refresh(for scope: PhotoFetchScope?) async {
     guard let scope else { return }
+    var collected: [AssetDescriptor] = []
+    let stream = photoLibraryService.fetchAssetsProgressive(
+      in: scope, mediaType: nil, batchSize: progressiveBatchSize)
     do {
-      let newAssets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
-      guard currentScope == scope else { return }
-      // Window the cache delta the same way `loadAssets` does — diff between
-      // the *windowed* prefix of new vs old, not the full scopes. Without this,
-      // refreshing a 37k-asset scope where everything is "new to the cache"
-      // would funnel the entire scope into `startCachingThumbnails` and
-      // re-trigger the choke we're guarding against.
-      let newCachingWindow = Array(newAssets.prefix(cachingWindowSize))
-      let newCachedIds = Set(newCachingWindow.map(\.id))
-      let oldCachedIds = Set(cachedAssets.map(\.id))
-      let added = newCachingWindow.filter { !oldCachedIds.contains($0.id) }
-      let removed = cachedAssets.filter { !newCachedIds.contains($0.id) }
-
-      if !removed.isEmpty {
-        photoLibraryService.stopCachingThumbnails(for: removed)
+      for try await batch in stream {
+        guard currentScope == scope else { return }
+        collected.append(contentsOf: batch)
       }
-      if !added.isEmpty {
-        photoLibraryService.startCachingThumbnails(for: added)
-      }
-      cachedAssets = newCachingWindow
-      assets = newAssets
     } catch {
       guard currentScope == scope else { return }
       errorMessage = error.localizedDescription
+      return
     }
+    guard currentScope == scope else { return }
+
+    // Window the cache delta the same way `loadAssets` does — diff between
+    // the *windowed* prefix of new vs old, not the full scopes. Without this,
+    // refreshing a 37k-asset scope where everything is "new to the cache"
+    // would funnel the entire scope into `startCachingThumbnails` and
+    // re-trigger the choke we're guarding against.
+    let newCachingWindow = Array(collected.prefix(cachingWindowSize))
+    let newCachedIds = Set(newCachingWindow.map(\.id))
+    let oldCachedIds = Set(cachedAssets.map(\.id))
+    let added = newCachingWindow.filter { !oldCachedIds.contains($0.id) }
+    let removed = cachedAssets.filter { !newCachedIds.contains($0.id) }
+
+    if !removed.isEmpty {
+      photoLibraryService.stopCachingThumbnails(for: removed)
+    }
+    if !added.isEmpty {
+      photoLibraryService.startCachingThumbnails(for: added)
+    }
+    cachedAssets = newCachingWindow
+    assets = collected
   }
 
   func select(assetId: String?) {

@@ -303,6 +303,69 @@ struct MonthViewModelTests {
   }
 
 
+  // MARK: - Progressive streaming
+
+  /// Mid-stream scope switch: the user clicks album B while album A's
+  /// progressive fetch has only delivered its first batch. The remaining
+  /// batches from A must not bleed into the assets array after B's load
+  /// completes.
+  @Test func loadAssetsDiscardsLateBatchesAfterScopeSwitch() async throws {
+    let svc = FakePhotoLibraryService()
+    // Two scopes, each with enough assets for multiple batches at size 200.
+    let albumA = (0..<500).map { makeAsset(id: "a-\($0)") }
+    let albumB = [makeAsset(id: "b-0"), makeAsset(id: "b-1")]
+    svc.assetsByAlbumLocalId["A"] = albumA
+    svc.assetsByAlbumLocalId["B"] = albumB
+
+    // Gate every batch of A on a checkpoint so the test can interleave a
+    // scope switch between batches.
+    let gate = AsyncCheckpoint()
+    svc.progressiveCheckpointByScopeKey["album:A"] = gate
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    async let loadA: Void = vm.loadAssets(for: .album(collectionId: "A"))
+
+    // First batch arrives.
+    await gate.waitForEnter(count: 1)
+    await gate.release(1)
+    // Second batch arrives.
+    await gate.waitForEnter(count: 2)
+
+    // Switch to album B while A's third batch is suspended on the gate.
+    await vm.loadAssets(for: .album(collectionId: "B"))
+
+    // Let any further A-batch attempts drain.
+    await gate.releaseAll()
+    await loadA
+
+    #expect(
+      vm.assets.map(\.id) == ["b-0", "b-1"],
+      "stale batches from album A must not survive the scope switch")
+  }
+
+  /// Refresh during a progressive fetch must collect the entire new scope
+  /// before committing, so partial state isn't visible. With a 700-asset
+  /// scope (4 batches at size 200), the assets array still flips atomically
+  /// once the stream finishes.
+  @Test func refreshCommitsCollectedAssetsAtomically() async throws {
+    let svc = FakePhotoLibraryService()
+    let initial = (0..<700).map { makeAsset(id: "a\($0)") }
+    svc.favoritesAssets = initial
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+    let countAfterLoad = vm.assets.count
+
+    // Append 50 new assets at the tail.
+    let appended = (700..<750).map { makeAsset(id: "a\($0)") }
+    svc.favoritesAssets = initial + appended
+    await vm.refresh(for: .favorites)
+
+    #expect(countAfterLoad == 700)
+    #expect(vm.assets.count == 750)
+    #expect(vm.assets.last?.id == "a749")
+  }
+
   // MARK: - Wrapper: loadAssets(forYear:month:)
 
   @Test func legacyWrapperIsEquivalentToScopeBasedLoader() async throws {

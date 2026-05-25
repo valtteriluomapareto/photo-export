@@ -168,28 +168,40 @@ and the refresh scope-race guard.
 `PhotoLibraryService` API surface is unchanged; `PHImageRequestID` never
 crosses the protocol boundary.
 
-### 4. Progressive PhotoKit Fetch Enumeration
+### 4. Progressive PhotoKit Fetch Enumeration — landed
 
-Replace "enumerate everything, then commit" with batched delivery for large
-fetches.
+`PhotoLibraryService` grows `fetchAssetsProgressive(in:mediaType:batchSize:)`
+returning `AsyncThrowingStream<[AssetDescriptor], any Error>`.
 
-Scope:
+`PhotoLibraryManager`'s implementation runs the `PHFetchResult` build and
+the stride-based enumeration on a `Task.detached(priority: .userInitiated)`,
+so a 37k-asset materialisation no longer blocks the main actor. Each
+batch's `PHAsset` array is cached on the main actor in the same hop that
+maps it to `[AssetDescriptor]`. Default batch size is 200; `onTermination`
+cancels the producer task. Auth-denied or unknown-album fall-throughs
+throw or finish cleanly.
 
-- Favorites fetches.
-- Album fetches.
-- Large timeline/month fetches where the count justifies streaming.
+`MonthViewModel.loadAssets(for:)` consumes the stream and appends batches
+to `@Published assets` as they arrive — the grid renders the first 200
+tiles as soon as PhotoKit yields them, instead of waiting for the entire
+scope. `isLoading = false` and `selectedAssetId` fire after the first
+batch. The windowed `PHCachingImageManager` preheat snapshot (issue #109,
+500-asset cap) runs once at end of stream. A `streamTask` reference is
+cancelled on scope change so mid-stream batches from the prior scope
+cannot bleed into the new one.
 
-Rules:
+`MonthViewModel.refresh(for:)` streams too, but collects into a local
+array and commits assets + the windowed cache delta atomically at end —
+preserves the in-place refresh contract (no partial-state flashes).
 
-- Gate progressive mode by fetch size. Small fetches can stay single-shot.
-- Yield batches around 200 descriptors initially; tune with profiling.
-- Preserve the grid `.onChange(of: libraryRevision)` -> in-place refresh pattern.
-  Do not switch grids back to `.task(id: libraryRevision)` because that causes
-  visible blanking on unrelated library mutations.
-- Cancellation must discard old-scope batches when the selection changes.
+The grid's `.onChange(of: libraryRevision)` → in-place refresh wiring is
+unchanged; `.task(id: libraryRevision)` is still avoided.
 
-This is the direct successor to the memory plan's "off-main enumeration later"
-follow-up, but its goal is smoothness rather than issue #112 crash prevention.
+Coverage: `MonthViewModelTests` gains
+`loadAssetsDiscardsLateBatchesAfterScopeSwitch` (uses
+`FakePhotoLibraryService.progressiveCheckpointByScopeKey` to gate batches
+and observe mid-stream scope changes) and
+`refreshCommitsCollectedAssetsAtomically`.
 
 ### 5. Off-Main Record Store Load
 

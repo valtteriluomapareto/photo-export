@@ -220,6 +220,68 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     }
   }
 
+  /// Yields the same assets `fetchAssets(in:mediaType:)` would return, but
+  /// chopped into `batchSize`-sized chunks. Tests that want to observe
+  /// intermediate state can set `progressiveCheckpointByScopeKey` to gate
+  /// each batch on a checkpoint.
+  nonisolated func fetchAssetsProgressive(
+    in scope: PhotoFetchScope, mediaType: PHAssetMediaType?, batchSize: Int
+  ) -> AsyncThrowingStream<[AssetDescriptor], any Error> {
+    AsyncThrowingStream { continuation in
+      let task = Task { @MainActor [weak self] in
+        guard let self else {
+          continuation.finish()
+          return
+        }
+        let all: [AssetDescriptor]
+        do {
+          all = try await self.fetchAssets(in: scope, mediaType: mediaType)
+        } catch {
+          continuation.finish(throwing: error)
+          return
+        }
+        let chunk = max(1, batchSize)
+        var index = 0
+        let scopeKey = Self.progressiveScopeKey(for: scope)
+        while index < all.count {
+          if Task.isCancelled {
+            continuation.finish()
+            return
+          }
+          if let gate = self.progressiveCheckpointByScopeKey[scopeKey] {
+            await gate.enter()
+          }
+          let end = min(index + chunk, all.count)
+          continuation.yield(Array(all[index..<end]))
+          index = end
+        }
+        continuation.finish()
+      }
+      continuation.onTermination = { _ in task.cancel() }
+    }
+  }
+
+  /// Per-scope release-on-demand checkpoint for progressive streaming. When
+  /// set, the fake suspends before yielding each batch — tests use this to
+  /// observe partial state. Same shape as
+  /// `fetchAssetsCheckpointByAlbumId` / `fetchAssetsCheckpointByYear`.
+  var progressiveCheckpointByScopeKey: [String: AsyncCheckpoint] = [:]
+
+  nonisolated fileprivate static func progressiveScopeKey(for scope: PhotoFetchScope)
+    -> String
+  {
+    switch scope {
+    case .timeline(let year, let month):
+      return "timeline:\(year)-\(month.map(String.init) ?? "all")"
+    case .favorites:
+      return "favorites"
+    case .album(let id):
+      return "album:\(id)"
+    case .sharedAlbum(let id):
+      return "shared-album:\(id)"
+    }
+  }
+
   nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
     // The fake's storage is `@MainActor`-isolated; hop on to read it.
     return await MainActor.run { [weak self] in

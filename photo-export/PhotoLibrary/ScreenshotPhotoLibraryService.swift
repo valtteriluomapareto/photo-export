@@ -336,6 +336,26 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
     return source.cgImage(forProposedRect: &rect, context: nil, hints: nil)
   }
 
+  nonisolated func fetchAssetsProgressive(
+    in scope: PhotoFetchScope, mediaType: PHAssetMediaType?, batchSize: Int
+  ) -> AsyncThrowingStream<[AssetDescriptor], any Error> {
+    AsyncThrowingStream { continuation in
+      Task { @MainActor [weak self] in
+        guard let self else {
+          continuation.finish()
+          return
+        }
+        do {
+          let all = try await self.fetchAssets(in: scope, mediaType: mediaType)
+          if !all.isEmpty { continuation.yield(all) }
+          continuation.finish()
+        } catch {
+          continuation.finish(throwing: error)
+        }
+      }
+    }
+  }
+
   func requestFullImage(for assetId: String) async throws -> NSImage {
     if let img = image(for: assetId, size: CGSize(width: 2048, height: 2048)) {
       return img

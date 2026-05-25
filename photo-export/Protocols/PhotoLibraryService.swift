@@ -43,6 +43,16 @@ protocol PhotoLibraryService: AnyObject {
   func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
     -> [AssetDescriptor]
 
+  /// Streams assets in batches for the given scope. Implementations may emit a
+  /// single batch for small fetches and multiple batches for large ones; the
+  /// union of all yielded batches equals what `fetchAssets(in:mediaType:)`
+  /// would return. The stream finishes when enumeration is complete (or the
+  /// caller's Task is cancelled). Throws the same errors `fetchAssets`
+  /// would throw — typically `authorizationDenied` or a fetch failure.
+  nonisolated func fetchAssetsProgressive(
+    in scope: PhotoFetchScope, mediaType: PHAssetMediaType?, batchSize: Int
+  ) -> AsyncThrowingStream<[AssetDescriptor], any Error>
+
   /// Number of assets in a fetch scope. Phase 2 keeps these uncached — every call
   /// re-fetches. Phase 3 introduces a `CollectionCountCache` actor.
   ///

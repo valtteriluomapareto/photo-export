@@ -364,6 +364,102 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
+  /// Streams the asset list for `scope` in batches of up to `batchSize`. The
+  /// `PHFetchResult` build and per-batch enumeration run on a detached task so
+  /// the main actor doesn't block on a 37k-asset materialisation. Each
+  /// batch's `PHAsset`s are cached on the main actor (so subsequent
+  /// `cachedOrFetchPHAsset` lookups hit) before the descriptor batch is
+  /// yielded. Cancellation between batches stops the stream cleanly.
+  nonisolated func fetchAssetsProgressive(
+    in scope: PhotoFetchScope, mediaType: PHAssetMediaType?, batchSize: Int = 200
+  ) -> AsyncThrowingStream<[AssetDescriptor], any Error> {
+    if let s = overrideService {
+      return s.fetchAssetsProgressive(
+        in: scope, mediaType: mediaType, batchSize: batchSize)
+    }
+    return AsyncThrowingStream { continuation in
+      let task = Task.detached(priority: .userInitiated) { [weak self] in
+        guard let self else {
+          continuation.finish()
+          return
+        }
+        let isAuthorized = await MainActor.run { self.isAuthorized }
+        guard isAuthorized else {
+          continuation.finish(throwing: PhotoLibraryError.authorizationDenied)
+          return
+        }
+        let useResourceFallback = await MainActor.run {
+          self.livePhotoDetectionFallbackEnabled
+        }
+
+        let result: PHFetchResult<PHAsset>
+        switch scope {
+        case .timeline, .favorites:
+          let opts = Self.fetchOptions(for: scope)
+          Self.applyMediaTypeFilter(mediaType, to: opts)
+          result = PHAsset.fetchAssets(with: opts)
+        case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
+          guard
+            let collection = Self.fetchAssetCollection(
+              localIdentifier: collectionLocalId)
+          else {
+            continuation.finish()
+            return
+          }
+          let opts = Self.fetchOptions(for: scope)
+          Self.applyMediaTypeFilter(mediaType, to: opts)
+          result = PHAsset.fetchAssets(in: collection, options: opts)
+        }
+
+        let count = result.count
+        let chunk = max(1, batchSize)
+        var index = 0
+        while index < count {
+          if Task.isCancelled {
+            continuation.finish()
+            return
+          }
+          let end = min(index + chunk, count)
+          var phAssets: [PHAsset] = []
+          phAssets.reserveCapacity(end - index)
+          for i in index..<end {
+            autoreleasepool {
+              phAssets.append(result.object(at: i))
+            }
+          }
+          // descriptor(from:) is @MainActor (inherits from PLM); fold the
+          // cache update + descriptor mapping into one main-actor hop.
+          let descriptors = await MainActor.run {
+            self.cacheAssets(phAssets)
+            return phAssets.map {
+              Self.descriptor(from: $0, useResourceFallback: useResourceFallback)
+            }
+          }
+          continuation.yield(descriptors)
+          index = end
+        }
+        continuation.finish()
+      }
+      continuation.onTermination = { _ in task.cancel() }
+    }
+  }
+
+  /// Adds a `mediaType ==` clause to an existing `PHFetchOptions` predicate
+  /// (ANDed with any predicate already set). Extracted because every progressive
+  /// scope branch repeats it.
+  nonisolated fileprivate static func applyMediaTypeFilter(
+    _ mediaType: PHAssetMediaType?, to opts: PHFetchOptions
+  ) {
+    guard let mediaType else { return }
+    let mediaPredicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
+    if let existing = opts.predicate {
+      opts.predicate = NSCompoundPredicate(
+        andPredicateWithSubpredicates: [existing, mediaPredicate])
+    } else {
+      opts.predicate = mediaPredicate
+    }
+  }
+
   // MARK: - Collection scope counts (Phase 2; uncached)
 
   /// Number of assets in a fetch scope. Phase 2 keeps these uncached. The implementation
