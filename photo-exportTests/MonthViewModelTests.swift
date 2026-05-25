@@ -359,11 +359,95 @@ struct MonthViewModelTests {
     // Append 50 new assets at the tail.
     let appended = (700..<750).map { makeAsset(id: "a\($0)") }
     svc.favoritesAssets = initial + appended
-    await vm.refresh(for: .favorites)
+
+    // Observe `assets.count` mid-refresh via a checkpoint that fires
+    // before each batch. The count must stay pinned at 700 until refresh
+    // returns; any per-batch append would surface as an intermediate
+    // value here.
+    let gate = AsyncCheckpoint()
+    svc.progressiveCheckpointByScopeKey["favorites"] = gate
+    async let refreshTask: Void = vm.refresh(for: .favorites)
+    await gate.waitForEnter(count: 1)
+    #expect(vm.assets.count == 700, "refresh must not have committed yet")
+    await gate.releaseAll()
+    await refreshTask
 
     #expect(countAfterLoad == 700)
     #expect(vm.assets.count == 750)
     #expect(vm.assets.last?.id == "a749")
+  }
+
+  /// First-batch visibility: as soon as PhotoKit yields a batch, the grid
+  /// should be able to render those tiles — `isLoading` flips to false and
+  /// the first asset is selected, even while later batches are suspended.
+  @Test func loadAssetsExposesFirstBatchBeforeStreamCompletes() async throws {
+    let svc = FakePhotoLibraryService()
+    let assets = (0..<400).map { makeAsset(id: "a\($0)") }
+    svc.favoritesAssets = assets
+
+    // Gate every batch so the test can observe state between batch 1 and
+    // batch 2.
+    let gate = AsyncCheckpoint()
+    svc.progressiveCheckpointByScopeKey["favorites"] = gate
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    async let loadTask: Void = vm.loadAssets(for: .favorites)
+
+    // First batch (200) arrives.
+    await gate.waitForEnter(count: 1)
+    await gate.release(1)
+    // Second batch is now suspended; we should see the first 200 assets
+    // visible and isLoading already cleared.
+    await gate.waitForEnter(count: 2)
+    #expect(
+      vm.assets.count == 200,
+      "first batch must be visible while later batches are still suspended")
+    #expect(!vm.isLoading, "isLoading must flip false on the first batch")
+    #expect(vm.selectedAssetId == "a0")
+
+    await gate.releaseAll()
+    await loadTask
+    #expect(vm.assets.count == 400)
+  }
+
+  /// Refresh's per-batch scope-guard: navigating away mid-refresh discards
+  /// the in-flight stream's batches. The existing
+  /// `refreshBailsWhenScopeChangedMidFetch` only gates the *pre-stream*
+  /// `fetchAssets` call inside the fake; this test gates between batches
+  /// so the per-batch `currentScope == scope` guard inside `refresh` is
+  /// what does the work.
+  @Test func refreshDiscardsLateBatchesAfterScopeSwitch() async throws {
+    let svc = FakePhotoLibraryService()
+    let favs = (0..<500).map { makeAsset(id: "fav-\($0)") }
+    let albumB = [makeAsset(id: "b-0")]
+    svc.favoritesAssets = favs
+    svc.assetsByAlbumLocalId["B"] = albumB
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+    let assetsBefore = vm.assets
+
+    // Refresh favorites, gated between batches.
+    let gate = AsyncCheckpoint()
+    svc.progressiveCheckpointByScopeKey["favorites"] = gate
+    async let refreshTask: Void = vm.refresh(for: .favorites)
+    await gate.waitForEnter(count: 1)
+
+    // Switch scope while the refresh is suspended at batch 1.
+    svc.progressiveCheckpointByScopeKey["favorites"] = nil
+    await vm.loadAssets(for: .album(collectionId: "B"))
+    #expect(vm.assets.map(\.id) == ["b-0"])
+
+    // Drain the gated refresh — its per-batch scope guard should bail
+    // rather than overwrite album B.
+    await gate.releaseAll()
+    await refreshTask
+
+    #expect(
+      vm.assets.map(\.id) == ["b-0"],
+      "stale favorites refresh must not clobber album B")
+    // Sanity: the pre-switch favorites snapshot was non-empty.
+    #expect(!assetsBefore.isEmpty)
   }
 
   // MARK: - Wrapper: loadAssets(forYear:month:)

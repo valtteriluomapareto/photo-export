@@ -26,9 +26,9 @@ final class MonthViewModel: ObservableObject {
   /// for the 144 pt tile grid with comfortable headroom.
   private let cachingWindowSize: Int = 500
 
-  /// Per-batch chunk handed to `fetchAssetsProgressive`. Tuned to ~200 per the
-  /// smoothness plan; bigger batches stutter the main actor on each commit,
-  /// smaller batches add per-batch overhead without measurable UI benefit.
+  /// Per-batch chunk handed to `fetchAssetsProgressive`. Bigger batches stutter
+  /// the main actor on each commit; smaller batches add per-batch overhead
+  /// without measurable UI benefit.
   private let progressiveBatchSize: Int = 200
 
   /// Assets currently registered with `PHCachingImageManager`. After
@@ -46,11 +46,6 @@ final class MonthViewModel: ObservableObject {
   /// what the user is looking at?" gate.
   private var currentScope: PhotoFetchScope?
 
-  /// Streaming load task for the current scope. Cancelled when the user
-  /// navigates away so in-flight batches from the previous scope can't bleed
-  /// into the new one.
-  private var streamTask: Task<Void, Never>?
-
   init(photoLibraryService: any PhotoLibraryService) {
     self.photoLibraryService = photoLibraryService
   }
@@ -64,12 +59,10 @@ final class MonthViewModel: ObservableObject {
   /// the view model (used when `LibrarySelection` is nil — e.g. before any collection is
   /// selected).
   func loadAssets(for scope: PhotoFetchScope?) async {
-    // Claim the scope and tear down the previous stream *before* the first
-    // await so a parallel `refresh(for:)` that's mid-fetch sees the new scope
-    // and discards its result instead of overwriting.
+    // Claim the scope *before* the first await so a parallel `refresh(for:)`
+    // that's mid-fetch sees the new scope and discards its result instead of
+    // overwriting.
     currentScope = scope
-    streamTask?.cancel()
-    streamTask = nil
     isLoading = true
     errorMessage = nil
     if !cachedAssets.isEmpty {
@@ -86,21 +79,18 @@ final class MonthViewModel: ObservableObject {
 
     let stream = photoLibraryService.fetchAssetsProgressive(
       in: scope, mediaType: nil, batchSize: progressiveBatchSize)
-    var firstBatchSeen = false
     do {
       for try await batch in stream {
-        // Bail if the user navigated away while the stream was producing. The
-        // detached producer Task also cancels via `streamTask?.cancel()`
-        // above, but the consumer guard makes the abandonment immediate from
-        // the VM's perspective.
+        // Bail if the parent Task was cancelled (the cell scrolled off, the
+        // window closed) or if a new scope claimed `currentScope` during the
+        // await.
+        if Task.isCancelled { return }
         guard currentScope == scope else { return }
+        let wasEmpty = assets.isEmpty
         assets.append(contentsOf: batch)
-        if !firstBatchSeen {
-          firstBatchSeen = true
+        if wasEmpty {
           isLoading = false
-          if let first = batch.first {
-            selectedAssetId = first.id
-          }
+          if let first = batch.first { selectedAssetId = first.id }
         }
       }
     } catch {
@@ -109,6 +99,7 @@ final class MonthViewModel: ObservableObject {
       isLoading = false
       return
     }
+    if Task.isCancelled { return }
     if currentScope != scope { return }
     isLoading = false
 
@@ -145,6 +136,7 @@ final class MonthViewModel: ObservableObject {
       in: scope, mediaType: nil, batchSize: progressiveBatchSize)
     do {
       for try await batch in stream {
+        if Task.isCancelled { return }
         guard currentScope == scope else { return }
         collected.append(contentsOf: batch)
       }
@@ -153,6 +145,7 @@ final class MonthViewModel: ObservableObject {
       errorMessage = error.localizedDescription
       return
     }
+    if Task.isCancelled { return }
     guard currentScope == scope else { return }
 
     // Window the cache delta the same way `loadAssets` does — diff between

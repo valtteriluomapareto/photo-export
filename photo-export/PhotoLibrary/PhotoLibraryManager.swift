@@ -364,12 +364,11 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
-  /// Streams the asset list for `scope` in batches of up to `batchSize`. The
-  /// `PHFetchResult` build and per-batch enumeration run on a detached task so
-  /// the main actor doesn't block on a 37k-asset materialisation. Each
-  /// batch's `PHAsset`s are cached on the main actor (so subsequent
-  /// `cachedOrFetchPHAsset` lookups hit) before the descriptor batch is
-  /// yielded. Cancellation between batches stops the stream cleanly.
+  /// Streams the asset list for `scope` in `batchSize`-sized chunks. Runs the
+  /// `PHFetchResult` enumeration off-main; PHAsset caching and descriptor
+  /// mapping fold into a single main-actor hop per batch. PhotoKit allows
+  /// `result.object(at:)` from a non-main thread; the main-actor constraint
+  /// only applies to the cache + descriptor reads it follows.
   nonisolated func fetchAssetsProgressive(
     in scope: PhotoFetchScope, mediaType: PHAssetMediaType?, batchSize: Int = 200
   ) -> AsyncThrowingStream<[AssetDescriptor], any Error> {
