@@ -56,40 +56,4 @@ struct PhotoLibraryManagerTests {
     secondSubject.send(false)
     #expect(plm.livePhotoDetectionFallbackEnabled == false)
   }
-
-  /// Baseline: each `invalidateCache()` call (one per real
-  /// `photoLibraryDidChange` callback) bumps `libraryRevision` exactly once
-  /// and the `@Published` publisher emits exactly once. Without source-side
-  /// coalescing, a 50-asset Photos.app burst that arrives as 50 separate
-  /// observer callbacks produces 50 downstream invalidations on every
-  /// `libraryRevision`-observing sidebar/grid view.
-  ///
-  /// Documents the current behaviour. If a debounce lands at the source
-  /// (plan §1.6), flip `expectedEmissions` to the post-debounce count and
-  /// add a timing-window assertion.
-  @Test func libraryRevisionBumpsPropagateOneToOne() async throws {
-    let plm = PhotoLibraryManager()
-    let burstSize = 50
-    var emissions = 0
-    let cancellable = plm.$libraryRevision
-      .dropFirst()
-      .sink { _ in emissions += 1 }
-
-    for _ in 0..<burstSize {
-      plm.invalidateCache()
-    }
-
-    // Combine `@Published` fires synchronously on the publishing actor; one
-    // yield lets any tasks scheduled inside `invalidateCache` (the
-    // `collectionCountCache.invalidateAll()` hop) drain so a debounce
-    // implementation can't accidentally pass by side-channel.
-    await Task.yield()
-
-    #expect(
-      emissions == burstSize,
-      "no source-side coalescing today; each invalidateCache bumps libraryRevision once")
-    #expect(plm.libraryRevision == burstSize)
-
-    cancellable.cancel()
-  }
 }

@@ -220,13 +220,9 @@ line reader (~190k syscalls for the file). One `Data(contentsOf:)` +
 read straight off `log show --signpost` instead of a Time Profiler trace.
 
 The "off-main load" framing this section originally proposed was based
-on the wrong bottleneck hypothesis. The reader fix lands the user-felt
-launch win without `.loading` state plumbing. The full off-main
-scaffolding (`.loading`, async configure, mutation-during-loading
-assertion, ~150-test-site migration) is deferred until measurement shows
-it's needed for some other path — possibly never under PhotoKit's
-observer batching, possibly relevant for a hypothetical 500k-record
-store with a multi-megabyte snapshot file.
+on the wrong bottleneck hypothesis. Off-main scaffolding (`.loading`
+state, async configure, mutation-during-loading assertion, the
+test-site migration) is deferred — no measured need.
 
 ### 6. Debounce `libraryRevision` Bursts — not needed today
 
@@ -235,12 +231,12 @@ showed PhotoKit already coalesces changes at the observer-callback level:
 one `photoLibraryDidChange(_:)` per batched library change, one
 downstream `invalidateCache()`, one `libraryRevision` bump. The
 50-bump-in-tight-loop scenario the plan worried about does not reflect
-real PhotoKit behaviour.
+real PhotoKit behaviour, so source-side debouncing would solve a
+problem that does not exist.
 
-`LibraryRevisionBumpsPropagateOneToOne`
-(`photo-exportTests/PhotoLibraryManagerTests.swift`) documents the
-no-coalescing-today contract so if a real-world burst pattern surfaces
-later, the test flips into a regression gate for the debounce fix.
+Revisit if a real-world burst pattern surfaces — likely via a future
+`PhotoLibraryChanges.CatchUp` trace showing multiple `CatchUp` intervals
+within a 250 ms window during a user-visible UI hitch.
 
 ### 7. Stale-Frame Sweep on Scope Switch — moot, pinned by test
 

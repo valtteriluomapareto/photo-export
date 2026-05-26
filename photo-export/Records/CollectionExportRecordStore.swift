@@ -187,7 +187,7 @@ final class CollectionExportRecordStore: ObservableObject {
   /// in-memory state and detaches from any on-disk files.
   func configure(for destinationId: String?) {
     let signpost = AppDiagnostics.beginConfigure(label: "collection")
-    defer { AppDiagnostics.endConfigure(signpost, label: "collection") }
+    defer { signpost.end() }
 
     placements = [:]
     recordBodies = [:]

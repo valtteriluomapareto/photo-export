@@ -150,7 +150,7 @@ final class ExportRecordStore: ObservableObject {
   /// Points the store at a specific destination id (subdirectory). Passing nil clears state (shows empty).
   func configure(for destinationId: String?) {
     let signpost = AppDiagnostics.beginConfigure(label: "timeline")
-    defer { AppDiagnostics.endConfigure(signpost, label: "timeline") }
+    defer { signpost.end() }
 
     // Reset in-memory state
     recordsById = [:]
