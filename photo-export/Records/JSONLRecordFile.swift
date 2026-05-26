@@ -401,4 +401,3 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     try handle.synchronize()
   }
 }
-
