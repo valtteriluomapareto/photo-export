@@ -260,20 +260,24 @@ moves `assets = []` past an await would surface immediately.
 Observation is the main modern Swift direction for UI state in this app. Migrate
 from low-risk leaves toward high-risk seams.
 
-### 2.0 Pilot and Recipe
+### 2.0 Pilot and Recipe — landed
 
-Pilot with a small type that has no Combine consumers and no AutoSync contract.
-`WhatsNewState` is the preferred first candidate.
+`WhatsNewState` migrated as the leaf pilot — no Combine consumers, no
+AutoSync contract, no `$publisher` projections. The migration applied:
 
-Definition of done:
+- Class is `@Observable @MainActor final class` (drops `ObservableObject`
+  and `@Published`).
+- App-entry storage flipped from `@StateObject` to `@State`.
+- Injection flipped from `.environmentObject(...)` to `.environment(...)`.
+- `LibraryRootView` consumer flipped from `@EnvironmentObject` to
+  `@Environment(WhatsNewState.self)`.
+- `WhatsNewView` swapped `@ObservedObject var state` to plain
+  `let state` — no `$`-projected bindings, so no `@Bindable` needed.
 
-- The type is `@Observable @MainActor final class`.
-- App storage changes from `@StateObject` to `@State`.
-- Injection changes from `.environmentObject(...)` to `.environment(...)`.
-- Consumers use `@Environment(Type.self)`.
-- Two-way writes use `@Bindable` where needed.
-- A short recipe is added at
-  `docs/reference/observation-migration-recipe.md`.
+Recipe lives at
+[`../../reference/observation-migration-recipe.md`](../../reference/observation-migration-recipe.md);
+the pre-migration grep checklist there is the load-bearing tool for
+picking which type goes next.
 
 ### 2.1 AutoSync Bridge Spike
 

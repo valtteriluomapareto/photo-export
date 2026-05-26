@@ -12,7 +12,7 @@ struct LibraryRootView: View {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var whatsNewState: WhatsNewState
+  @Environment(WhatsNewState.self) private var whatsNewState
 
   @State private var section: LibrarySection
 

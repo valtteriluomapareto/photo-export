@@ -22,7 +22,7 @@ struct PhotoExportApp: App {
   /// `let` — no view subscribes to them.
   @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
   @StateObject private var loginItemController: LoginItemController
-  @StateObject private var whatsNewState: WhatsNewState
+  @State private var whatsNewState: WhatsNewState
 
   private let autoSyncDestinationAdapter: DestinationSnapshotAdapter
   /// `@StateObject` because Settings → Auto Export observes
@@ -193,7 +193,7 @@ struct PhotoExportApp: App {
     _autoSyncManager = StateObject(wrappedValue: asm)
     _autoSyncScopeStore = StateObject(wrappedValue: scopeStore)
     _loginItemController = StateObject(wrappedValue: LoginItemController())
-    _whatsNewState = StateObject(wrappedValue: WhatsNewState())
+    _whatsNewState = State(wrappedValue: WhatsNewState())
     _destinationSafetyMonitor = StateObject(wrappedValue: safetyMonitor)
     self.autoSyncDestinationAdapter = destinationAdapter
     _autoSyncPhotoChangeAdapter = StateObject(wrappedValue: photoAdapter)
@@ -224,7 +224,7 @@ struct PhotoExportApp: App {
         .environmentObject(autoSyncScopeStore)
         .environmentObject(autoSyncPhotoChangeAdapter)
         .environmentObject(exportManager.progressState)
-        .environmentObject(whatsNewState)
+        .environment(whatsNewState)
         .task {
           // First-touch PhotoKit here, not in App.init. Issue #92: the prior
           // shape called `PHPhotoLibrary.shared().register(self)` and the
