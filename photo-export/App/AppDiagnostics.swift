@@ -29,4 +29,23 @@ enum AppDiagnostics {
   static func selectionChanged(kind: String) {
     signposter.emitEvent("SelectionChanged", "kind=\(kind)")
   }
+
+  /// Signposter for record-store load timing. Wraps each
+  /// `configure(for:)` body so the launch + destination-switch costs of
+  /// snapshot decode, JSONL replay, and counter rebuild can be read off
+  /// Instruments / Console.app without a Time Profiler trace.
+  static let recordStoreSignposter = OSSignposter(
+    subsystem: "com.valtteriluoma.photo-export",
+    category: "RecordStore")
+
+  /// Begin a `Configure` interval for the named store. Pair with
+  /// `endConfigure(_:)` (typically via `defer`). `label` distinguishes the
+  /// two stores in the trace: `"timeline"` or `"collection"`.
+  static func beginConfigure(label: String) -> OSSignpostIntervalState {
+    recordStoreSignposter.beginInterval("Configure", "store=\(label)")
+  }
+
+  static func endConfigure(_ state: OSSignpostIntervalState, label: String) {
+    recordStoreSignposter.endInterval("Configure", state, "store=\(label)")
+  }
 }

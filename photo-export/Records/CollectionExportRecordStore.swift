@@ -186,6 +186,9 @@ final class CollectionExportRecordStore: ObservableObject {
   /// Points the store at a specific destination id (subdirectory). Passing `nil` clears
   /// in-memory state and detaches from any on-disk files.
   func configure(for destinationId: String?) {
+    let signpost = AppDiagnostics.beginConfigure(label: "collection")
+    defer { AppDiagnostics.endConfigure(signpost, label: "collection") }
+
     placements = [:]
     recordBodies = [:]
 
