@@ -14,11 +14,6 @@ import Observation
 /// - **Upgrade** (`lastSeenVersion` is non-nil and differs): shown as a
 ///   "What's new in this version" summary, with pointers to the Auto
 ///   Export guide and reassurance about file safety on upgrade.
-///
-/// `@Observable` (Phase 2.0 pilot for the broader Observation migration).
-/// Per-property tracking means a sheet binding that reads only
-/// `shouldShow` doesn't re-evaluate when `lastSeenVersion` or
-/// `upgradeNotes` mutate — and vice versa.
 @Observable
 @MainActor
 final class WhatsNewState {
