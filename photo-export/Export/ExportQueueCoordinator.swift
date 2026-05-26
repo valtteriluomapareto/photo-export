@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import OSLog
+import os
 
 /// Owns the queue side of export execution: pending jobs, drain loop, pause/resume/clear,
 /// per-placement queue counters, and the published mirrors for queue depth + total
@@ -59,11 +60,33 @@ final class ExportQueueCoordinator: ObservableObject {
 
   // MARK: - Published queue state (mirrored on ExportManager)
 
-  @Published private(set) var isRunning: Bool = false
+  @Published private(set) var isRunning: Bool = false {
+    // Must stay synchronous — no Publisher.send, no actor hops — so the
+    // AutoSync seam's seven-step characterization sequence keeps its shape.
+    didSet {
+      guard isRunning != oldValue else { return }
+      if isRunning {
+        runInterval = Self.signposter.beginInterval("ExportRun")
+      } else if let state = runInterval {
+        Self.signposter.endInterval("ExportRun", state)
+        runInterval = nil
+      }
+    }
+  }
   @Published private(set) var isPaused: Bool = false
   @Published private(set) var queueCount: Int = 0
   @Published private(set) var totalJobsEnqueued: Int = 0
   @Published private(set) var totalJobsCompleted: Int = 0
+
+  /// `OSSignposter` for Instruments time-profile traces of export runs.
+  /// Begin/end intervals around the `isRunning` state transition so a trace
+  /// can pinpoint how long a drain loop took, irrespective of which `start*`
+  /// entry point opened it. Mirrors the pattern at
+  /// `PhotoLibraryPersistentChangeAdapter.signposter`.
+  private static let signposter = OSSignposter(
+    subsystem: "com.valtteriluoma.photo-export",
+    category: "Export.Run")
+  private var runInterval: OSSignpostIntervalState?
 
   // MARK: - Cancellation seam (Phase-0 contract; storage moved here from
   //         ExportManager in issue #67 item 2)

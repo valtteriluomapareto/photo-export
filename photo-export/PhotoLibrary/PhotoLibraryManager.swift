@@ -68,6 +68,11 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `photoLibraryDidChange` so subsequent reads re-fetch.
   nonisolated let collectionCountCache = CollectionCountCache()
 
+  /// Bounded `CGImage` cache for thumbnail renders. Cleared by
+  /// `invalidateCache()`. Set in init via `setupDecodedThumbnailCache()` so
+  /// the decode closure can capture `[weak self]`.
+  private(set) var decodedThumbnailCache: DecodedThumbnailCache!
+
   /// Optional injection point that replaces the production PhotoKit implementation on
   /// every `PhotoLibraryService` method. Set at init time and never mutated. The
   /// screenshot run injects `ScreenshotPhotoLibraryService` here so the curated content
@@ -101,6 +106,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   override init() {
     self.overrideService = nil
     super.init()
+    setupDecodedThumbnailCache()
   }
 
   /// Composition entry point: `overrideService` (when non-nil) replaces every
@@ -116,6 +122,84 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     // not change auth at runtime; if a future override needs that, add a publisher.
     authorizationStatus = overrideService.authorizationStatus
     isAuthorized = overrideService.isAuthorized
+    setupDecodedThumbnailCache()
+  }
+
+  private func setupDecodedThumbnailCache() {
+    decodedThumbnailCache = DecodedThumbnailCache { [weak self] key in
+      guard let self else { return nil }
+      return await self.decodeThumbnail(for: key)
+    }
+  }
+
+  private func decodeThumbnail(for key: DecodedThumbnailCache.Key) async -> CGImage? {
+    if let s = overrideService {
+      return await s.decodedThumbnail(
+        for: key.assetId, quantizedSize: key.quantizedSize, deliveryMode: key.deliveryMode)
+    }
+    guard let asset = cachedOrFetchPHAsset(id: key.assetId) else { return nil }
+    let options = PHImageRequestOptions()
+    switch key.deliveryMode {
+    case .fast:
+      options.deliveryMode = .fastFormat
+      options.resizeMode = .fast
+    case .highQuality:
+      options.deliveryMode = .highQualityFormat
+      options.resizeMode = .exact
+    }
+    options.isNetworkAccessAllowed = true
+
+    let requestIDLock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
+    let nsImage: NSImage? = await withTaskCancellationHandler {
+      if Task.isCancelled { return nil }
+      return await withCheckedContinuation { continuation in
+        let resumed = OSAllocatedUnfairLock(initialState: false)
+        let requestID = Self.cachingImageManager.requestImage(
+          for: asset, targetSize: key.quantizedSize, contentMode: .aspectFill, options: options
+        ) { image, _ in
+          guard
+            resumed.withLock({
+              let was = $0
+              $0 = true
+              return !was
+            })
+          else { return }
+          continuation.resume(returning: image)
+        }
+        requestIDLock.withLock { $0 = requestID }
+        // If cancellation landed between the body starting and `requestID`
+        // being stored, the onCancel branch read nil and missed its window.
+        // Catch it here.
+        if Task.isCancelled {
+          Self.cachingImageManager.cancelImageRequest(requestID)
+        }
+      }
+    } onCancel: {
+      if let requestID = requestIDLock.withLock({ $0 }) {
+        Self.cachingImageManager.cancelImageRequest(requestID)
+      }
+    }
+    guard let nsImage else { return nil }
+    var rect = CGRect(origin: .zero, size: nsImage.size)
+    return nsImage.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+  }
+
+  func decodedThumbnail(
+    for assetId: String,
+    quantizedSize: CGSize,
+    deliveryMode: ThumbnailDeliveryMode
+  ) async -> CGImage? {
+    await decodedThumbnailCache.image(
+      for: .init(assetId: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode))
+  }
+
+  func cachedDecodedThumbnail(
+    for assetId: String,
+    quantizedSize: CGSize,
+    deliveryMode: ThumbnailDeliveryMode
+  ) -> CGImage? {
+    decodedThumbnailCache.cached(
+      for: .init(assetId: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode))
   }
 
   /// Performs the PhotoKit authorization probe and registers as a
@@ -277,6 +361,100 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       let phAssets = fetchAlbumPHAssets(collectionLocalId: collectionLocalId, mediaType: mediaType)
       cacheAssets(phAssets)
       return phAssets.map { Self.descriptor(from: $0, useResourceFallback: useResourceFallback) }
+    }
+  }
+
+  /// Streams the asset list for `scope` in `batchSize`-sized chunks. Runs the
+  /// `PHFetchResult` enumeration off-main; PHAsset caching and descriptor
+  /// mapping fold into a single main-actor hop per batch. PhotoKit allows
+  /// `result.object(at:)` from a non-main thread; the main-actor constraint
+  /// only applies to the cache + descriptor reads it follows.
+  nonisolated func fetchAssetsProgressive(
+    in scope: PhotoFetchScope, mediaType: PHAssetMediaType?, batchSize: Int = 200
+  ) -> AsyncThrowingStream<[AssetDescriptor], any Error> {
+    if let s = overrideService {
+      return s.fetchAssetsProgressive(
+        in: scope, mediaType: mediaType, batchSize: batchSize)
+    }
+    return AsyncThrowingStream { continuation in
+      let task = Task.detached(priority: .userInitiated) { [weak self] in
+        guard let self else {
+          continuation.finish()
+          return
+        }
+        let isAuthorized = await MainActor.run { self.isAuthorized }
+        guard isAuthorized else {
+          continuation.finish(throwing: PhotoLibraryError.authorizationDenied)
+          return
+        }
+        let useResourceFallback = await MainActor.run {
+          self.livePhotoDetectionFallbackEnabled
+        }
+
+        let result: PHFetchResult<PHAsset>
+        switch scope {
+        case .timeline, .favorites:
+          let opts = Self.fetchOptions(for: scope)
+          Self.applyMediaTypeFilter(mediaType, to: opts)
+          result = PHAsset.fetchAssets(with: opts)
+        case .album(let collectionLocalId), .sharedAlbum(let collectionLocalId):
+          guard
+            let collection = Self.fetchAssetCollection(
+              localIdentifier: collectionLocalId)
+          else {
+            continuation.finish()
+            return
+          }
+          let opts = Self.fetchOptions(for: scope)
+          Self.applyMediaTypeFilter(mediaType, to: opts)
+          result = PHAsset.fetchAssets(in: collection, options: opts)
+        }
+
+        let count = result.count
+        let chunk = max(1, batchSize)
+        var index = 0
+        while index < count {
+          if Task.isCancelled {
+            continuation.finish()
+            return
+          }
+          let end = min(index + chunk, count)
+          var phAssets: [PHAsset] = []
+          phAssets.reserveCapacity(end - index)
+          for i in index..<end {
+            autoreleasepool {
+              phAssets.append(result.object(at: i))
+            }
+          }
+          // descriptor(from:) is @MainActor (inherits from PLM); fold the
+          // cache update + descriptor mapping into one main-actor hop.
+          let descriptors = await MainActor.run {
+            self.cacheAssets(phAssets)
+            return phAssets.map {
+              Self.descriptor(from: $0, useResourceFallback: useResourceFallback)
+            }
+          }
+          continuation.yield(descriptors)
+          index = end
+        }
+        continuation.finish()
+      }
+      continuation.onTermination = { _ in task.cancel() }
+    }
+  }
+
+  /// ANDs a `mediaType ==` clause onto `opts.predicate` when `mediaType`
+  /// is non-nil.
+  nonisolated fileprivate static func applyMediaTypeFilter(
+    _ mediaType: PHAssetMediaType?, to opts: PHFetchOptions
+  ) {
+    guard let mediaType else { return }
+    let mediaPredicate = NSPredicate(format: "mediaType == %d", mediaType.rawValue)
+    if let existing = opts.predicate {
+      opts.predicate = NSCompoundPredicate(
+        andPredicateWithSubpredicates: [existing, mediaPredicate])
+    } else {
+      opts.predicate = mediaPredicate
     }
   }
 
@@ -530,28 +708,38 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       return await s.loadThumbnail(for: assetId, allowNetwork: allowNetwork)
     }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
-    return await withCheckedContinuation { continuation in
-      let options = PHImageRequestOptions()
-      options.deliveryMode = .fastFormat
-      options.isNetworkAccessAllowed = allowNetwork
-      options.resizeMode = .fast
-
-      let resumed = OSAllocatedUnfairLock(initialState: false)
-
-      Self.cachingImageManager.requestImage(
-        for: asset,
-        targetSize: CGSize(width: 200, height: 200),
-        contentMode: .aspectFill,
-        options: options
-      ) { image, _ in
-        guard
-          resumed.withLock({
-            let was = $0
-            $0 = true
-            return !was
-          })
-        else { return }
-        continuation.resume(returning: image)
+    let options = PHImageRequestOptions()
+    options.deliveryMode = .fastFormat
+    options.isNetworkAccessAllowed = allowNetwork
+    options.resizeMode = .fast
+    let requestIDLock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
+    return await withTaskCancellationHandler {
+      if Task.isCancelled { return nil }
+      return await withCheckedContinuation { continuation in
+        let resumed = OSAllocatedUnfairLock(initialState: false)
+        let requestID = Self.cachingImageManager.requestImage(
+          for: asset,
+          targetSize: CGSize(width: 200, height: 200),
+          contentMode: .aspectFill,
+          options: options
+        ) { image, _ in
+          guard
+            resumed.withLock({
+              let was = $0
+              $0 = true
+              return !was
+            })
+          else { return }
+          continuation.resume(returning: image)
+        }
+        requestIDLock.withLock { $0 = requestID }
+        if Task.isCancelled {
+          Self.cachingImageManager.cancelImageRequest(requestID)
+        }
+      }
+    } onCancel: {
+      if let requestID = requestIDLock.withLock({ $0 }) {
+        Self.cachingImageManager.cancelImageRequest(requestID)
       }
     }
   }
@@ -572,28 +760,38 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
     let target = pixelSize ?? CGSize(width: 200, height: 200)
-    return await withCheckedContinuation { continuation in
-      let options = PHImageRequestOptions()
-      options.deliveryMode = .highQualityFormat
-      options.isNetworkAccessAllowed = allowNetwork
-      options.resizeMode = .exact
-
-      let resumed = OSAllocatedUnfairLock(initialState: false)
-
-      Self.cachingImageManager.requestImage(
-        for: asset,
-        targetSize: target,
-        contentMode: .aspectFill,
-        options: options
-      ) { image, _ in
-        guard
-          resumed.withLock({
-            let was = $0
-            $0 = true
-            return !was
-          })
-        else { return }
-        continuation.resume(returning: image)
+    let options = PHImageRequestOptions()
+    options.deliveryMode = .highQualityFormat
+    options.isNetworkAccessAllowed = allowNetwork
+    options.resizeMode = .exact
+    let requestIDLock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
+    return await withTaskCancellationHandler {
+      if Task.isCancelled { return nil }
+      return await withCheckedContinuation { continuation in
+        let resumed = OSAllocatedUnfairLock(initialState: false)
+        let requestID = Self.cachingImageManager.requestImage(
+          for: asset,
+          targetSize: target,
+          contentMode: .aspectFill,
+          options: options
+        ) { image, _ in
+          guard
+            resumed.withLock({
+              let was = $0
+              $0 = true
+              return !was
+            })
+          else { return }
+          continuation.resume(returning: image)
+        }
+        requestIDLock.withLock { $0 = requestID }
+        if Task.isCancelled {
+          Self.cachingImageManager.cancelImageRequest(requestID)
+        }
+      }
+    } onCancel: {
+      if let requestID = requestIDLock.withLock({ $0 }) {
+        Self.cachingImageManager.cancelImageRequest(requestID)
       }
     }
   }
@@ -736,6 +934,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil
+    decodedThumbnailCache.clear()
     libraryRevision &+= 1
     // Cancel any in-flight count tasks and drop cached counts so the next sidebar read
     // re-fetches against the updated library state.

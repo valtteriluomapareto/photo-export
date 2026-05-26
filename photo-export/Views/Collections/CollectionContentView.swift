@@ -63,10 +63,8 @@ struct CollectionContentView: View {
           ForEach(viewModel.assets) { asset in
             ThumbnailView(
               asset: asset,
-              state: viewModel.thumbnailState(for: asset),
               isSelected: asset.id == selectedAsset?.id,
-              isExported: isExported(asset: asset),
-              onRetry: { viewModel.retryThumbnail(for: asset.id) }
+              isExported: isExported(asset: asset)
             )
             .frame(width: 120, height: 120)
             .onTapGesture {
@@ -89,9 +87,6 @@ struct CollectionContentView: View {
         selectedAsset = initialAsset
       }
     }
-    .onChange(of: exportManager.isRunning) { _, newValue in
-      viewModel.setExportRunning(newValue)
-    }
     // Same iCloud-sync / Photos.app-edit refresh path as `MonthContentView`. The
     // earlier note about `libraryRevision` blanking this grid no longer applies — the
     // view model's `refresh(for:)` updates `assets` in place rather than clearing
@@ -99,6 +94,7 @@ struct CollectionContentView: View {
     .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
       Task { await viewModel.refresh(for: scope) }
     }
+    .measureBodyInvalidations("CollectionContentView")
   }
 
   // MARK: - Scope plumbing

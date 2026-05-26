@@ -132,6 +132,7 @@ struct CollectionsSidebarView: View {
     .task(id: photoLibraryManager.libraryRevision) {
       reloadTree()
     }
+    .measureBodyInvalidations("CollectionsSidebarView")
   }
 
   /// Soft hint shown when zero shared albums were returned. We can't tell the user

@@ -139,9 +139,20 @@ struct LibraryRootView: View {
     .onChange(of: selectionSet) { oldSet, newSet in
       applySelectionChange(oldSet: oldSet, newSet: newSet)
     }
-    .onChange(of: focusedSelection) { _, _ in
+    .onChange(of: focusedSelection) { _, newValue in
       selectedAsset = nil
       persistLastSelection()
+      let kind: String
+      switch newValue {
+      case .none: kind = "none"
+      case .timelineYear: kind = "year"
+      case .timelineMonth: kind = "month"
+      case .favorites: kind = "favorites"
+      case .album: kind = "album"
+      case .sharedAlbum: kind = "sharedAlbum"
+      case .folder: kind = "folder"
+      }
+      AppDiagnostics.selectionChanged(kind: kind)
     }
     .focusedSceneValue(
       \.importBackupAction,
@@ -279,18 +290,18 @@ struct LibraryRootView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .timelineMonth(let year, let month):
-      // Pass `versionSelection` and `isExportRunning` down as values rather than
-      // letting `MonthContentView` subscribe to `ExportManager` directly. The
-      // manager fires `objectWillChange` per export job (queueCount sink, etc.);
-      // `.equatable()` on a value-comparing `MonthContentView` then short-circuits
-      // the LazyVGrid re-evaluation when the rendering inputs are unchanged. Without
-      // `.equatable()` the freshly-allocated `onExportMonth` closure per render
-      // would defeat SwiftUI's structural diff.
+      // Pass `versionSelection` down as a value rather than letting
+      // `MonthContentView` subscribe to `ExportManager` directly. The manager
+      // fires `objectWillChange` per export job (queueCount sink, etc.);
+      // `.equatable()` on a value-comparing `MonthContentView` then
+      // short-circuits the LazyVGrid re-evaluation when the rendering inputs
+      // are unchanged. Without `.equatable()` the freshly-allocated
+      // `onExportMonth` closure per render would defeat SwiftUI's structural
+      // diff.
       MonthContentView(
         year: year, month: month,
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
-        isExportRunning: exportManager.isRunning,
         onExportMonth: { exportManager.startExportMonth(year: year, month: month) },
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
@@ -449,4 +460,5 @@ struct LibraryRootView: View {
     }
     return nil
   }
+
 }

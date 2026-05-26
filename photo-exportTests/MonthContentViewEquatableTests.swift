@@ -23,7 +23,6 @@ struct MonthContentViewEquatableTests {
     month: Int = 6,
     versionSelection: ExportVersionSelection = .edited,
     livePhotosPaired: Bool = false,
-    isExportRunning: Bool = false,
     selected: AssetDescriptor? = nil,
     action: @escaping () -> Void = {}
   ) -> MonthContentView {
@@ -32,7 +31,6 @@ struct MonthContentViewEquatableTests {
       year: year, month: month,
       versionSelection: versionSelection,
       livePhotosPaired: livePhotosPaired,
-      isExportRunning: isExportRunning,
       onExportMonth: action,
       selectedAsset: Binding(get: { local }, set: { local = $0 }),
       photoLibraryService: FakePhotoLibraryService()
@@ -84,10 +82,6 @@ struct MonthContentViewEquatableTests {
     #expect(
       makeView(versionSelection: .edited)
         != makeView(versionSelection: .editedWithOriginals))
-  }
-
-  @Test func notEqualOnIsExportRunningChange() {
-    #expect(makeView(isExportRunning: false) != makeView(isExportRunning: true))
   }
 
   /// `livePhotosPaired` flips the asset-aware `isExported(asset:selection:livePhotosPaired:)`

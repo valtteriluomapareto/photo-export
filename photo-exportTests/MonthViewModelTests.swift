@@ -5,18 +5,11 @@ import Testing
 
 @testable import Photo_Export
 
-/// Closes a P0 coverage gap: `MonthViewModel` had **zero** direct tests despite
-/// being the heart of both `MonthContentView` and `CollectionContentView`. It
-/// owns the asset/thumbnail pipeline (initial fast-thumbnail batch → background
-/// fast-thumbnail fanout → HQ upgrade), the `PHCachingImageManager` lifecycle
-/// (`stopCachingThumbnails` for the previous scope before `startCachingThumbnails`
-/// for the new), and the cancellation of the in-flight HQ upgrade task on every
-/// scope change.
-///
-/// A regression that broke any of those — for example, dropping the
-/// `stopCachingThumbnails` call so the cache leaks across scope changes, or
-/// flipping the order of the auto-select-first and `isLoading=false` settings —
-/// would be invisible to the rest of the test suite.
+/// `MonthViewModel` is the asset-list driver for both `MonthContentView` and
+/// `CollectionContentView`. Since the cell-scoped thumbnail refactor, the
+/// view model owns only the asset array, the `PHCachingImageManager`
+/// preheat lifecycle, and the scope-race guard — thumbnail loading lives in
+/// `ThumbnailView.task(id:)` against `PhotoLibraryManager.decodedThumbnail`.
 @MainActor
 struct MonthViewModelTests {
 
@@ -34,35 +27,12 @@ struct MonthViewModelTests {
     )
   }
 
-  /// 1×1 transparent NSImage so the fake's `loadThumbnail` returns a non-nil value.
-  private func dummyImage() -> NSImage {
-    let img = NSImage(size: NSSize(width: 1, height: 1))
-    img.lockFocus()
-    NSColor.clear.setFill()
-    NSRect(x: 0, y: 0, width: 1, height: 1).fill()
-    img.unlockFocus()
-    return img
-  }
-
-  /// Wait briefly for the background HQ upgrade `Task` (spawned at the end of
-  /// `loadAssets(for:)`) to drain. The fake's thumbnail methods return
-  /// synchronously, so two yields is enough on a quiet test runner.
-  private func drainBackgroundWork() async {
-    for _ in 0..<5 {
-      await Task.yield()
-      try? await Task.sleep(nanoseconds: 5_000_000)
-    }
-  }
-
   // MARK: - Initial load
 
-  @Test func initialLoadFetchesAssetsAndThumbnails() async throws {
+  @Test func loadAssetsPopulatesAssetArray() async throws {
     let svc = FakePhotoLibraryService()
     let assets = (0..<3).map { makeAsset(id: "a\($0)") }
     svc.assetsByYearMonth["2025-6"] = assets
-    for asset in assets {
-      svc.thumbnailsByAssetId[asset.id] = dummyImage()
-    }
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .timeline(year: 2025, month: 6))
@@ -70,34 +40,6 @@ struct MonthViewModelTests {
     #expect(vm.assets.map(\.id) == ["a0", "a1", "a2"])
     #expect(!vm.isLoading)
     #expect(vm.errorMessage == nil)
-    // All three assets had canned thumbnails — none should be in failedThumbnailIds.
-    #expect(vm.failedThumbnailIds.isEmpty)
-    #expect(vm.thumbnailsById.count == 3)
-  }
-
-  @Test func assetsWithoutThumbnailsLandInFailedSet() async throws {
-    let svc = FakePhotoLibraryService()
-    let withThumb = makeAsset(id: "ok")
-    let noThumb = makeAsset(id: "missing")
-    svc.assetsByYearMonth["2025-7"] = [withThumb, noThumb]
-    svc.thumbnailsByAssetId[withThumb.id] = dummyImage()
-    // noThumb has no canned thumbnail → fake returns nil → failedThumbnailIds.
-
-    let vm = MonthViewModel(photoLibraryService: svc)
-    await vm.loadAssets(for: .timeline(year: 2025, month: 7))
-
-    #expect(vm.thumbnailsById.keys.sorted() == ["ok"])
-    #expect(vm.failedThumbnailIds == ["missing"])
-    if case .loaded(let img) = vm.thumbnailState(for: withThumb) {
-      #expect(img === svc.thumbnailsByAssetId["ok"])
-    } else {
-      Issue.record("expected .loaded for withThumb")
-    }
-    if case .failed = vm.thumbnailState(for: noThumb) {
-      // good
-    } else {
-      Issue.record("expected .failed for noThumb")
-    }
   }
 
   // MARK: - Auto-select
@@ -115,14 +57,13 @@ struct MonthViewModelTests {
 
   @Test func emptyAssetListDoesNotAutoSelect() async throws {
     let svc = FakePhotoLibraryService()
-    svc.assetsByYearMonth["2025-1"] = []  // no assets
+    svc.assetsByYearMonth["2025-1"] = []
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .timeline(year: 2025, month: 1))
 
     #expect(vm.assets.isEmpty)
     #expect(vm.selectedAssetId == nil)
-    #expect(vm.thumbnailsById.isEmpty)
   }
 
   // MARK: - Scope switching + caching lifecycle
@@ -180,22 +121,17 @@ struct MonthViewModelTests {
     let svc = FakePhotoLibraryService()
     let assets = [makeAsset(id: "a"), makeAsset(id: "b")]
     svc.assetsByYearMonth["2025-2"] = assets
-    for asset in assets { svc.thumbnailsByAssetId[asset.id] = dummyImage() }
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .timeline(year: 2025, month: 2))
     #expect(!vm.assets.isEmpty)
     #expect(vm.selectedAssetId != nil)
 
-    // Pass nil — view model should clear everything.
     await vm.loadAssets(for: nil)
 
     #expect(vm.assets.isEmpty)
-    #expect(vm.thumbnailsById.isEmpty)
-    #expect(vm.failedThumbnailIds.isEmpty)
     #expect(vm.selectedAssetId == nil)
     #expect(!vm.isLoading)
-    // The previous scope's caching was stopped on entry to the nil-scope load.
     #expect(svc.stopCachingCalls.last?.map(\.id) == ["a", "b"])
   }
 
@@ -214,31 +150,9 @@ struct MonthViewModelTests {
     #expect(vm.assets.isEmpty)
   }
 
-  // MARK: - retryThumbnail
+  // MARK: - select
 
-  @Test func retryThumbnailClearsFailedAndReloads() async throws {
-    let svc = FakePhotoLibraryService()
-    let asset = makeAsset(id: "retry-me")
-    svc.assetsByYearMonth["2025-5"] = [asset]
-    // Initial load: no canned thumbnail → falls into failedThumbnailIds.
-
-    let vm = MonthViewModel(photoLibraryService: svc)
-    await vm.loadAssets(for: .timeline(year: 2025, month: 5))
-    #expect(vm.failedThumbnailIds == ["retry-me"])
-    #expect(vm.thumbnailsById["retry-me"] == nil)
-
-    // Now stage a thumbnail and retry — failedThumbnailIds clears, thumbnail loads.
-    svc.thumbnailsByAssetId["retry-me"] = dummyImage()
-    vm.retryThumbnail(for: "retry-me")
-    await drainBackgroundWork()
-
-    #expect(!vm.failedThumbnailIds.contains("retry-me"))
-    #expect(vm.thumbnailsById["retry-me"] != nil)
-  }
-
-  // MARK: - select / setExportRunning
-
-  @Test func selectAndSetExportRunningToggleState() async throws {
+  @Test func selectTogglesSelectedAssetId() async throws {
     let svc = FakePhotoLibraryService()
     let vm = MonthViewModel(photoLibraryService: svc)
 
@@ -246,109 +160,69 @@ struct MonthViewModelTests {
     #expect(vm.selectedAssetId == "abc")
     vm.select(assetId: nil)
     #expect(vm.selectedAssetId == nil)
-
-    #expect(!vm.isExportRunning)
-    vm.setExportRunning(true)
-    #expect(vm.isExportRunning)
-    vm.setExportRunning(false)
-    #expect(!vm.isExportRunning)
-  }
-
-  // MARK: - thumbnail(for:) accessor
-
-  @Test func thumbnailAccessorReturnsLoadedImageOrNil() async throws {
-    let svc = FakePhotoLibraryService()
-    let asset = makeAsset(id: "t")
-    let img = dummyImage()
-    svc.assetsByYearMonth["2025-9"] = [asset]
-    svc.thumbnailsByAssetId[asset.id] = img
-
-    let vm = MonthViewModel(photoLibraryService: svc)
-    #expect(vm.thumbnail(for: asset) == nil)  // before load
-    await vm.loadAssets(for: .timeline(year: 2025, month: 9))
-    #expect(vm.thumbnail(for: asset) === img)
   }
 
   // MARK: - refresh(for:)
 
-  /// Refresh keeps already-loaded thumbnails for assets that still exist and
-  /// fetches thumbnails for newly added assets. Mirrors the iCloud-sync case
-  /// where the user is watching a month grid as new photos land in the library.
-  @Test func refreshKeepsExistingThumbnailsAndLoadsAddedOnes() async throws {
+  /// Refresh keeps existing assets in place and adds newcomers without
+  /// blanking the grid. Mirrors the iCloud-sync case where the user is
+  /// watching a month grid as new photos land in the library. The newcomer
+  /// must also be preheated for caching — only the added asset is started,
+  /// survivors are not stopped.
+  @Test func refreshKeepsExistingAssetsAndAddsNewcomers() async throws {
     let svc = FakePhotoLibraryService()
     let original = (0..<3).map { makeAsset(id: "a\($0)") }
     svc.assetsByYearMonth["2025-6"] = original
-    for asset in original { svc.thumbnailsByAssetId[asset.id] = dummyImage() }
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .timeline(year: 2025, month: 6))
-    await drainBackgroundWork()
-    let thumbsBefore = vm.thumbnailsById
-    #expect(thumbsBefore.count == 3)
+    let startCountBefore = svc.startCachingCalls.count
+    let stopCountBefore = svc.stopCachingCalls.count
 
-    // Library mutation: a fourth photo lands.
     let added = makeAsset(id: "a3")
     svc.assetsByYearMonth["2025-6"] = original + [added]
-    svc.thumbnailsByAssetId[added.id] = dummyImage()
-
     await vm.refresh(for: .timeline(year: 2025, month: 6))
-    await drainBackgroundWork()
 
     #expect(vm.assets.map(\.id) == ["a0", "a1", "a2", "a3"])
-    // Survivors keep their original NSImage references — the dict was filtered,
-    // not rebuilt.
-    for asset in original {
-      #expect(vm.thumbnailsById[asset.id] === thumbsBefore[asset.id])
-    }
-    // Newcomer's thumbnail loaded too.
-    #expect(vm.thumbnailsById["a3"] != nil)
+    #expect(svc.startCachingCalls.count == startCountBefore + 1)
+    #expect(svc.startCachingCalls.last?.map(\.id) == ["a3"])
+    #expect(svc.stopCachingCalls.count == stopCountBefore)
   }
 
-  /// Assets that disappear from the library are removed from `assets` and from
-  /// every per-id dict (`thumbnailsById`, `failedThumbnailIds`, `highQualityIds`),
-  /// and their PHCachingImageManager preheat is stopped.
+  /// Assets that disappear from the library are removed from `assets` and
+  /// their `PHCachingImageManager` preheat is stopped.
   @Test func refreshPrunesRemovedAssets() async throws {
     let svc = FakePhotoLibraryService()
     let keep = makeAsset(id: "keep")
     let drop = makeAsset(id: "drop")
     svc.assetsByYearMonth["2025-7"] = [keep, drop]
-    svc.thumbnailsByAssetId[keep.id] = dummyImage()
-    svc.thumbnailsByAssetId[drop.id] = dummyImage()
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .timeline(year: 2025, month: 7))
-    await drainBackgroundWork()
-    #expect(vm.thumbnailsById.count == 2)
     let stopCountBefore = svc.stopCachingCalls.count
 
-    // Library mutation: `drop` is deleted from Photos.app.
     svc.assetsByYearMonth["2025-7"] = [keep]
     await vm.refresh(for: .timeline(year: 2025, month: 7))
 
     #expect(vm.assets.map(\.id) == ["keep"])
-    #expect(vm.thumbnailsById.keys.sorted() == ["keep"])
-    #expect(!vm.failedThumbnailIds.contains("drop"))
     #expect(svc.stopCachingCalls.count == stopCountBefore + 1)
     #expect(svc.stopCachingCalls.last?.map(\.id) == ["drop"])
   }
 
   /// `refresh(for: nil)` is a no-op — the view model retains whatever it was
-  /// already displaying. Mirrors the docstring contract.
+  /// already displaying.
   @Test func refreshNilScopeIsNoOp() async throws {
     let svc = FakePhotoLibraryService()
     let assets = [makeAsset(id: "x")]
     svc.assetsByYearMonth["2025-1"] = assets
-    svc.thumbnailsByAssetId["x"] = dummyImage()
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .timeline(year: 2025, month: 1))
     let assetsBefore = vm.assets
-    let thumbsBefore = vm.thumbnailsById
 
     await vm.refresh(for: nil)
 
     #expect(vm.assets.map(\.id) == assetsBefore.map(\.id))
-    #expect(vm.thumbnailsById.count == thumbsBefore.count)
   }
 
   /// Race fix: if the user navigates to a new scope while a `refresh` task is
@@ -361,165 +235,26 @@ struct MonthViewModelTests {
     let june = [makeAsset(id: "june-1")]
     svc.assetsByYearMonth["2025-5"] = may
     svc.assetsByYearMonth["2025-6"] = june
-    for asset in may + june { svc.thumbnailsByAssetId[asset.id] = dummyImage() }
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .timeline(year: 2025, month: 5))
-    await drainBackgroundWork()
     #expect(vm.assets.map(\.id) == ["may-1", "may-2"])
 
-    // Gate the May refresh's fetch so we can navigate to June while it's
-    // mid-flight.
     let gate = AsyncCheckpoint()
     svc.fetchAssetsCheckpointByYear[2025] = gate
 
     async let refreshTask: Void = vm.refresh(for: .timeline(year: 2025, month: 5))
     await gate.waitForEnter(count: 1)
-    // While the refresh is suspended at the fetch, navigate to June.
     svc.fetchAssetsCheckpointByYear[2025] = nil
     await vm.loadAssets(for: .timeline(year: 2025, month: 6))
-    await drainBackgroundWork()
     #expect(vm.assets.map(\.id) == ["june-1"])
 
-    // Release the gated refresh — its scope guard should make it discard the
-    // May payload rather than overwrite June.
     await gate.releaseAll()
     await refreshTask
-    await drainBackgroundWork()
 
     #expect(
       vm.assets.map(\.id) == ["june-1"],
       "stale May refresh must not clobber June after navigation")
-  }
-
-  /// Regression: when iCloud lands a new photo, `photoLibraryDidChange` fires
-  /// the moment the asset's metadata is available, but PhotoKit's local
-  /// thumbnail cache may still be empty for a moment. `refresh(for:)` must
-  /// fetch the new asset's thumbnail with `allowNetwork: true` so the tile
-  /// fills in immediately; otherwise the asset lands in `failedThumbnailIds`
-  /// and the HQ upgrade — gated on that set — can't rescue it, leaving the
-  /// user staring at a "Retry" tile until they navigate away and back.
-  @Test func refreshUsesNetworkForNewlyArrivedAsset() async throws {
-    let svc = FakePhotoLibraryService()
-    let existing = makeAsset(id: "existing")
-    svc.assetsByYearMonth["2025-6"] = [existing]
-    svc.thumbnailsByAssetId[existing.id] = dummyImage()
-
-    let vm = MonthViewModel(photoLibraryService: svc)
-    await vm.loadAssets(for: .timeline(year: 2025, month: 6))
-    await drainBackgroundWork()
-
-    // Fresh iCloud arrival: thumbnail exists in PhotoKit but the local cache is
-    // cold, so an `allowNetwork: false` call would return nil and stamp the
-    // asset as failed.
-    let fresh = makeAsset(id: "fresh-from-icloud")
-    svc.assetsByYearMonth["2025-6"] = [existing, fresh]
-    svc.thumbnailsByAssetId[fresh.id] = dummyImage()
-    svc.thumbnailRequiresNetwork = [fresh.id]
-    svc.loadThumbnailCalls.removeAll()
-
-    await vm.refresh(for: .timeline(year: 2025, month: 6))
-    await drainBackgroundWork()
-
-    #expect(vm.assets.map(\.id) == ["existing", "fresh-from-icloud"])
-    #expect(
-      vm.thumbnailsById[fresh.id] != nil,
-      "newly-arrived asset must get its thumbnail without manual retry")
-    #expect(!vm.failedThumbnailIds.contains(fresh.id))
-    // The added asset was fetched with allowNetwork: true. The existing asset is
-    // already in `thumbnailsById` so the loop skips it — no second probe.
-    let freshCall = svc.loadThumbnailCalls.first { $0.assetId == fresh.id }
-    #expect(freshCall?.allowNetwork == true, "added-asset path must allow network")
-  }
-
-  /// User-reported regression: PhotoKit's `fastFormat` thumbnail request can return
-  /// `PHPhotosError` 3303 ("no resource found matching image request spec") for
-  /// assets that have just synced from iCloud — the asset's metadata is present but
-  /// no fast-format render has been built yet. `highQualityFormat` uses a different
-  /// pipeline and *does* return an image. The view model must therefore run the HQ
-  /// upgrade even when the fast probe failed, and clear `failedThumbnailIds` when
-  /// HQ succeeds, so the user doesn't have to click "Retry."
-  @Test func hqUpgradeRescuesFastFormatFailureForFreshAsset() async throws {
-    let svc = FakePhotoLibraryService()
-    let existing = makeAsset(id: "existing")
-    svc.assetsByYearMonth["2025-6"] = [existing]
-    svc.thumbnailsByAssetId[existing.id] = dummyImage()
-
-    let vm = MonthViewModel(photoLibraryService: svc)
-    await vm.loadAssets(for: .timeline(year: 2025, month: 6))
-    await drainBackgroundWork()
-
-    // Fresh arrival: PhotoKit has NO fast-format render (thumbnailsByAssetId
-    // empty) but DOES have an HQ-format render available. This is the case the
-    // user reported on the PR — Retry tile in the grid until they navigate away.
-    let fresh = makeAsset(id: "fresh")
-    svc.assetsByYearMonth["2025-6"] = [existing, fresh]
-    svc.hqThumbnailsByAssetId[fresh.id] = dummyImage()
-    // Intentionally NO svc.thumbnailsByAssetId[fresh.id] — fast format fails.
-
-    await vm.refresh(for: .timeline(year: 2025, month: 6))
-    await drainBackgroundWork()
-
-    #expect(vm.assets.map(\.id) == ["existing", "fresh"])
-    #expect(
-      vm.thumbnailsById[fresh.id] != nil,
-      "HQ upgrade must rescue the fresh asset after fast failed")
-    #expect(
-      !vm.failedThumbnailIds.contains(fresh.id),
-      "failed flag must be cleared once HQ provides a thumbnail")
-    if case .loaded = vm.thumbnailState(for: fresh) {
-      // good
-    } else {
-      Issue.record("fresh asset should render as .loaded after HQ rescue")
-    }
-  }
-
-  /// Companion to `startCachingThumbnailsIsCappedToWindowForLargeScopes`:
-  /// a fresh iCloud arrival that lands *outside* the caching window
-  /// (position 550 of 601) must still get `allowNetwork: true` on its fast
-  /// probe so the tile fills in without a Retry click. The
-  /// `newlyArrivedIds` set is scope-level for exactly this reason — the
-  /// windowed `added` set would skip tail arrivals and leave them stamped
-  /// `failedThumbnailIds`, with the HQ upgrade gated on that set and
-  /// unable to rescue them.
-  @Test func refreshAllowsNetworkForFreshArrivalOutsideCachingWindow() async throws {
-    let svc = FakePhotoLibraryService()
-    let initial = (0..<600).map { makeAsset(id: "a\($0)") }
-    svc.favoritesAssets = initial
-    for asset in initial { svc.thumbnailsByAssetId[asset.id] = dummyImage() }
-
-    let vm = MonthViewModel(photoLibraryService: svc)
-    await vm.loadAssets(for: .favorites)
-    await drainBackgroundWork()
-    let startCachingCountAfterLoad = svc.startCachingCalls.count
-    let stopCachingCountAfterLoad = svc.stopCachingCalls.count
-
-    // Fresh iCloud arrival inserted at position 550 — past the 500-asset
-    // caching window. Fast probe needs network; without it the asset would
-    // land in failedThumbnailIds.
-    let fresh = makeAsset(id: "fresh-tail")
-    var refreshed = initial
-    refreshed.insert(fresh, at: 550)
-    svc.favoritesAssets = refreshed
-    svc.thumbnailsByAssetId[fresh.id] = dummyImage()
-    svc.thumbnailRequiresNetwork = [fresh.id]
-    svc.loadThumbnailCalls.removeAll()
-
-    await vm.refresh(for: .favorites)
-    await drainBackgroundWork()
-
-    let freshCall = svc.loadThumbnailCalls.first { $0.assetId == fresh.id }
-    #expect(
-      freshCall?.allowNetwork == true,
-      "tail-of-scope arrival must still get allowNetwork: true")
-    #expect(
-      vm.thumbnailsById[fresh.id] != nil,
-      "tail arrival's thumbnail must materialise")
-    #expect(!vm.failedThumbnailIds.contains(fresh.id))
-    // No cache delta — the windowed prefix (first 500) didn't change, so
-    // neither start- nor stopCachingThumbnails should have fired again.
-    #expect(svc.startCachingCalls.count == startCachingCountAfterLoad)
-    #expect(svc.stopCachingCalls.count == stopCachingCountAfterLoad)
   }
 
   /// Grow-without-replacement: scope expands from 600 → 700 by appending
@@ -534,15 +269,12 @@ struct MonthViewModelTests {
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .favorites)
-    await drainBackgroundWork()
     let startCachingCountAfterLoad = svc.startCachingCalls.count
 
-    // 100 fresh assets appended past the window.
     let appended = (600..<700).map { makeAsset(id: "a\($0)") }
     svc.favoritesAssets = initial + appended
 
     await vm.refresh(for: .favorites)
-    await drainBackgroundWork()
 
     #expect(vm.assets.count == 700)
     #expect(
@@ -551,47 +283,184 @@ struct MonthViewModelTests {
     #expect(svc.stopCachingCalls.isEmpty)
   }
 
-  /// Refresh into an empty scope is a no-op-y path that must not crash on
-  /// `prefix(500)` of `[]`, and must stop caching for everything that was
-  /// previously cached (the scope is now empty so the cache window
-  /// collapses to nothing).
+  /// Refresh into an empty scope must stop caching for the prior window
+  /// without crashing on `prefix(500)` of `[]`.
   @Test func refreshIntoEmptyScopeStopsAllPriorCachingWithoutPanic() async throws {
     let svc = FakePhotoLibraryService()
     let initial = [makeAsset(id: "a"), makeAsset(id: "b")]
     svc.favoritesAssets = initial
-    for asset in initial { svc.thumbnailsByAssetId[asset.id] = dummyImage() }
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .favorites)
-    await drainBackgroundWork()
     let stopCachingCountAfterLoad = svc.stopCachingCalls.count
 
     svc.favoritesAssets = []
     await vm.refresh(for: .favorites)
-    await drainBackgroundWork()
 
     #expect(vm.assets.isEmpty)
-    #expect(vm.thumbnailsById.isEmpty)
     #expect(svc.stopCachingCalls.count == stopCachingCountAfterLoad + 1)
     #expect(svc.stopCachingCalls.last?.map(\.id) == ["a", "b"])
   }
 
+
+  // MARK: - Progressive streaming
+
+  /// Mid-stream scope switch: the user clicks album B while album A's
+  /// progressive fetch has only delivered its first batch. The remaining
+  /// batches from A must not bleed into the assets array after B's load
+  /// completes.
+  @Test func loadAssetsDiscardsLateBatchesAfterScopeSwitch() async throws {
+    let svc = FakePhotoLibraryService()
+    // Two scopes, each with enough assets for multiple batches at size 200.
+    let albumA = (0..<500).map { makeAsset(id: "a-\($0)") }
+    let albumB = [makeAsset(id: "b-0"), makeAsset(id: "b-1")]
+    svc.assetsByAlbumLocalId["A"] = albumA
+    svc.assetsByAlbumLocalId["B"] = albumB
+
+    // Gate every batch of A on a checkpoint so the test can interleave a
+    // scope switch between batches.
+    let gate = AsyncCheckpoint()
+    svc.progressiveCheckpointByScopeKey["album:A"] = gate
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    async let loadA: Void = vm.loadAssets(for: .album(collectionId: "A"))
+
+    // First batch arrives.
+    await gate.waitForEnter(count: 1)
+    await gate.release(1)
+    // Second batch arrives.
+    await gate.waitForEnter(count: 2)
+
+    // Switch to album B while A's third batch is suspended on the gate.
+    await vm.loadAssets(for: .album(collectionId: "B"))
+
+    // Let any further A-batch attempts drain.
+    await gate.releaseAll()
+    await loadA
+
+    #expect(
+      vm.assets.map(\.id) == ["b-0", "b-1"],
+      "stale batches from album A must not survive the scope switch")
+  }
+
+  /// Refresh during a progressive fetch must collect the entire new scope
+  /// before committing, so partial state isn't visible. With a 700-asset
+  /// scope (4 batches at size 200), the assets array still flips atomically
+  /// once the stream finishes.
+  @Test func refreshCommitsCollectedAssetsAtomically() async throws {
+    let svc = FakePhotoLibraryService()
+    let initial = (0..<700).map { makeAsset(id: "a\($0)") }
+    svc.favoritesAssets = initial
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+    let countAfterLoad = vm.assets.count
+
+    // Append 50 new assets at the tail.
+    let appended = (700..<750).map { makeAsset(id: "a\($0)") }
+    svc.favoritesAssets = initial + appended
+
+    // Observe `assets.count` mid-refresh via a checkpoint that fires
+    // before each batch. The count must stay pinned at 700 until refresh
+    // returns; any per-batch append would surface as an intermediate
+    // value here.
+    let gate = AsyncCheckpoint()
+    svc.progressiveCheckpointByScopeKey["favorites"] = gate
+    async let refreshTask: Void = vm.refresh(for: .favorites)
+    await gate.waitForEnter(count: 1)
+    #expect(vm.assets.count == 700, "refresh must not have committed yet")
+    await gate.releaseAll()
+    await refreshTask
+
+    #expect(countAfterLoad == 700)
+    #expect(vm.assets.count == 750)
+    #expect(vm.assets.last?.id == "a749")
+  }
+
+  /// First-batch visibility: as soon as PhotoKit yields a batch, the grid
+  /// should be able to render those tiles — `isLoading` flips to false and
+  /// the first asset is selected, even while later batches are suspended.
+  @Test func loadAssetsExposesFirstBatchBeforeStreamCompletes() async throws {
+    let svc = FakePhotoLibraryService()
+    let assets = (0..<400).map { makeAsset(id: "a\($0)") }
+    svc.favoritesAssets = assets
+
+    // Gate every batch so the test can observe state between batch 1 and
+    // batch 2.
+    let gate = AsyncCheckpoint()
+    svc.progressiveCheckpointByScopeKey["favorites"] = gate
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    async let loadTask: Void = vm.loadAssets(for: .favorites)
+
+    // First batch (200) arrives.
+    await gate.waitForEnter(count: 1)
+    await gate.release(1)
+    // Second batch is now suspended; we should see the first 200 assets
+    // visible and isLoading already cleared.
+    await gate.waitForEnter(count: 2)
+    #expect(
+      vm.assets.count == 200,
+      "first batch must be visible while later batches are still suspended")
+    #expect(!vm.isLoading, "isLoading must flip false on the first batch")
+    #expect(vm.selectedAssetId == "a0")
+
+    await gate.releaseAll()
+    await loadTask
+    #expect(vm.assets.count == 400)
+  }
+
+  /// Refresh's per-batch scope-guard: navigating away mid-refresh discards
+  /// the in-flight stream's batches. The existing
+  /// `refreshBailsWhenScopeChangedMidFetch` only gates the *pre-stream*
+  /// `fetchAssets` call inside the fake; this test gates between batches
+  /// so the per-batch `currentScope == scope` guard inside `refresh` is
+  /// what does the work.
+  @Test func refreshDiscardsLateBatchesAfterScopeSwitch() async throws {
+    let svc = FakePhotoLibraryService()
+    let favs = (0..<500).map { makeAsset(id: "fav-\($0)") }
+    let albumB = [makeAsset(id: "b-0")]
+    svc.favoritesAssets = favs
+    svc.assetsByAlbumLocalId["B"] = albumB
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+    let assetsBefore = vm.assets
+
+    // Refresh favorites, gated between batches.
+    let gate = AsyncCheckpoint()
+    svc.progressiveCheckpointByScopeKey["favorites"] = gate
+    async let refreshTask: Void = vm.refresh(for: .favorites)
+    await gate.waitForEnter(count: 1)
+
+    // Switch scope while the refresh is suspended at batch 1.
+    svc.progressiveCheckpointByScopeKey["favorites"] = nil
+    await vm.loadAssets(for: .album(collectionId: "B"))
+    #expect(vm.assets.map(\.id) == ["b-0"])
+
+    // Drain the gated refresh — its per-batch scope guard should bail
+    // rather than overwrite album B.
+    await gate.releaseAll()
+    await refreshTask
+
+    #expect(
+      vm.assets.map(\.id) == ["b-0"],
+      "stale favorites refresh must not clobber album B")
+    // Sanity: the pre-switch favorites snapshot was non-empty.
+    #expect(!assetsBefore.isEmpty)
+  }
+
   // MARK: - Wrapper: loadAssets(forYear:month:)
 
-  /// The legacy wrapper `loadAssets(forYear:month:)` simply delegates to
-  /// `loadAssets(for: .timeline(...))`. Verify both paths produce the same
-  /// observable state.
   @Test func legacyWrapperIsEquivalentToScopeBasedLoader() async throws {
     let svc = FakePhotoLibraryService()
     let asset = makeAsset(id: "wrapper")
     svc.assetsByYearMonth["2025-8"] = [asset]
-    svc.thumbnailsByAssetId[asset.id] = dummyImage()
 
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(forYear: 2025, month: 8)
 
     #expect(vm.assets.map(\.id) == ["wrapper"])
-    #expect(vm.thumbnailsById["wrapper"] != nil)
     #expect(vm.selectedAssetId == "wrapper")
   }
 }

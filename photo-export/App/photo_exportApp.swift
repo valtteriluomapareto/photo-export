@@ -37,6 +37,7 @@ struct PhotoExportApp: App {
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
   init() {
+    AppDiagnostics.beginLaunch()
     // Screenshot mode (`--screenshot-mode` launch arg) swaps the real Photos
     // backing for a curated synthetic library so marketing screenshots don't
     // leak the maintainer's personal Photos library. The subclass shape lets
@@ -277,6 +278,7 @@ struct PhotoExportApp: App {
           // before the monitor reads their counts.
           destinationSafetyMonitor.attach()
           applyScreenshotWindowSizeIfRequested()
+          AppDiagnostics.endLaunch()
         }
     }
     // Default sized so the sidebar (~240) + content grid (~560) + detail
