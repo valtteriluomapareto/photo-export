@@ -106,10 +106,13 @@ the `ExportRun` duration, and a body-counter snapshot. Scroll sessions have
 no clean SwiftUI lifecycle hook on macOS — use Instruments' Core Animation
 track instead.
 
-## Phase 1 - Observation-Independent Smoothness Wins
+## Phase 1 - Observation-Independent Smoothness Wins — landed
 
 These tasks can land before the Observation migration. They reduce real work on
-the main thread or bound PhotoKit request lifetimes.
+the main thread or bound PhotoKit request lifetimes. All seven sub-items are
+resolved as of May 2026: 1.1–1.4 shipped as planned, 1.5 was reframed by
+measurement (the JSONL reader, not off-main load), and 1.6 / 1.7 were
+confirmed not needed by the same measurement plus the new regression tests.
 
 ### 1. Stable Grid Identity — already implemented
 
@@ -203,66 +206,58 @@ Coverage: `MonthViewModelTests` gains
 and observe mid-stream scope changes) and
 `refreshCommitsCollectedAssetsAtomically`.
 
-### 5. Off-Main Record Store Load
+### 5. JSONL Reader — landed (was: Off-Main Record Store Load)
 
-Move JSON snapshot decode, JSONL replay, and counter rebuild work off the main
-actor.
+Cold-start measurement on a 184 KB JSONL log showed `configure(for:)` taking
+273 ms. The cost wasn't snapshot decode, replay, or counter rebuild — it was
+byte-at-a-time `FileHandle.read(upToCount: 1)` in `JSONLRecordFile.swift`'s
+line reader (~190k syscalls for the file). One `Data(contentsOf:)` +
+`split(separator: 0x0A)` brings the same `configure(for:)` to 13 ms;
+`AppLaunch` overall dropped from 507 ms to 239 ms.
 
-Precondition:
+`RecordStore.Configure` interval signposts were added in
+`App/AppDiagnostics.swift` so launch and destination-switch cost can be
+read straight off `log show --signpost` instead of a Time Profiler trace.
 
-- Add `RecordStoreState.loading`.
-- Define transitions: `.unconfigured` -> `.loading` -> `.ready` or `.failed`.
-- Views and `RecordStoreAlertHost` must handle `.loading`.
+The "off-main load" framing this section originally proposed was based
+on the wrong bottleneck hypothesis. The reader fix lands the user-felt
+launch win without `.loading` state plumbing. The full off-main
+scaffolding (`.loading`, async configure, mutation-during-loading
+assertion, ~150-test-site migration) is deferred until measurement shows
+it's needed for some other path — possibly never under PhotoKit's
+observer batching, possibly relevant for a hypothetical 500k-record
+store with a multi-megabyte snapshot file.
 
-Recommended mutation policy during loading:
+### 6. Debounce `libraryRevision` Bursts — not needed today
 
-- Mutations are forbidden by construction.
-- Add an assertion before applying mutations to catch any path that writes before
-  `.ready`.
-- `RecordStoreRouter.findReuseSource()` may return `nil` during `.loading`; this
-  is a transient efficiency loss, not a correctness problem.
+Phase 0's `PhotoLibraryChanges.CatchUp` signposts on a cold-start trace
+showed PhotoKit already coalesces changes at the observer-callback level:
+one `photoLibraryDidChange(_:)` per batched library change, one
+downstream `invalidateCache()`, one `libraryRevision` bump. The
+50-bump-in-tight-loop scenario the plan worried about does not reflect
+real PhotoKit behaviour.
 
-### 6. Debounce `libraryRevision` Bursts
+`LibraryRevisionBumpsPropagateOneToOne`
+(`photo-exportTests/PhotoLibraryManagerTests.swift`) documents the
+no-coalescing-today contract so if a real-world burst pattern surfaces
+later, the test flips into a regression gate for the debounce fix.
 
-If measurement shows PhotoKit change bursts still trigger expensive sidebar/grid
-refreshes, debounce `PhotoLibraryManager.libraryRevision` at the source.
+### 7. Stale-Frame Sweep on Scope Switch — moot, pinned by test
 
-Rules:
+Confirmed moot at the view-model level by
+`loadAssetsClearsAssetsBeforeFirstBatch`
+(`photo-exportTests/MonthViewModelTests.swift`): the synchronous prefix of
+`MonthViewModel.loadAssets(for:)` blanks `assets` and `selectedAssetId`
+before the first await against the progressive stream, so a SwiftUI body
+re-evaluation in the click-frame window cannot find the previous scope's
+covers attached to the new scope's selection. 1.2's removal of
+`thumbnailsById` and 1.3's cell-scoped thumbnail cancellation close the
+secondary late-write race the plan also worried about.
 
-- Start with 100 to 250 ms; choose based on measured UI response.
-- Confirm AutoSync wake-up does not depend on `libraryRevision`. AutoSync should
-  continue using `PhotoLibraryChangeProviding` / persistent-change paths.
-- Do not add a TTL on top of `CollectionCountCache`'s existing wholesale
-  invalidation unless measurement proves it is needed.
-
-### 7. Stale-Frame Sweep on Scope Switch
-
-When the user clicks a different album in the sidebar, `LibrarySelection`
-updates synchronously but `MonthViewModel.loadAssets(for:)` runs as a `Task`.
-For one or two frames the grid renders the previous scope's `assets` +
-`thumbnailsById` before the clear-state lines at the top of `loadAssets`
-fire. A secondary contributor: the prior scope's `hqUpgradeTask` can be
-suspended inside `await loadThumbnail(...)`, resume after
-`hqUpgradeTask?.cancel()`, and write one thumbnail into the post-clear dict
-(no `Task.isCancelled` check after the await in `loadAndStoreThumbnail`).
-Surfaced during issue #109 testing on a 5k-asset album: visible flash of
-the previous album's covers.
-
-Likely moot after 1.2 (decoded thumbnail cache deletes `thumbnailsById` so
-there is no per-scope dict to write into late) and 1.3 (cell-scoped
-cancellation cancels the in-flight `loadThumbnail` so the late-write race
-never resumes) — both now landed. Re-measure on a 5k-asset album before
-acting. If a click-frame flash still happens, two cheap fixes:
-
-- Apply `.id(scope)` to the grid container so SwiftUI tears down and
-  recreates the view tree atomically on scope change. Zero stale frames,
-  no view-model changes.
-- Or clear `assets` / `thumbnailsById` synchronously from the sidebar
-  click handler, before the `Task` that calls `loadAssets` is scheduled.
-
-Either fix is small. The point of capturing it here is so it does not get
-lost; the symptom is real but its root cause overlaps so much with 1.2/1.3
-that doing it standalone wastes work.
+If a visual flash ever reproduces in a real-app trace, `.id(scope)` on
+the grid container remains the cheap escape hatch — but the view-model
+invariant is now a pinned regression gate, so any future change that
+moves `assets = []` past an await would surface immediately.
 
 ## Phase 2 - Observation Migration
 
