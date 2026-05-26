@@ -89,7 +89,7 @@ adds `@ObservationIgnored` by accident) fails loudly:
   let state = WhatsNewState(/* ... */)
   let counter = ObservationCounter { _ = state.shouldShow }
 
-  state.markAsSeen()
+  state.markAsSeen()  // shouldShow: true → false (a value change)
 
   let count = try await counter.waitForNextChange()
   #expect(count == 1)
@@ -100,6 +100,51 @@ adds `@ObservationIgnored` by accident) fails loudly:
 (`photo-exportTests/TestHelpers/ObservationCounter.swift`) re-registers
 after each fire and has a built-in timeout, so a property that *isn't*
 tracked surfaces as a timeout, not a hang.
+
+### Important: mutations have to produce a value change
+
+`withObservationTracking`'s observers are notified on willSet only when
+the new value differs from the old (the macro fires willSet
+unconditionally, but the tracking framework deduplicates by value).
+Confirmed empirically while migrating `LoginItemController`: calling a
+method that re-reads from the same upstream source and writes the same
+value back does not fire the observer, even though the assignment did
+run.
+
+For types whose production mutation paths cannot deterministically
+produce a value change in a test environment (e.g. wrappers around
+`SMAppService` or similar system services that return the same value
+when called from tests), add a small `#if DEBUG`-gated mutation seam:
+
+```swift
+#if DEBUG
+  func setStatusForObservationTracking(_ newStatus: Status) {
+    status = newStatus
+  }
+#endif
+```
+
+The test then forces a known value transition and uses
+`withObservationTracking` directly (synchronous, simpler than the async
+`ObservationCounter` for the single-mutation case):
+
+```swift
+@Test func statusMutationFiresTrackedObserver() {
+  let controller = LoginItemController()
+  let initial = controller.status
+  var observedChange = false
+  withObservationTracking {
+    _ = controller.status
+  } onChange: {
+    observedChange = true
+  }
+
+  let next: LoginItemController.Status = (initial == .enabled) ? .notFound : .enabled
+  controller.setStatusForObservationTracking(next)
+
+  #expect(observedChange)
+}
+```
 
 ## Verification checklist
 
