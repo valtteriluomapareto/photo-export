@@ -158,6 +158,83 @@ struct JSONLRecordFileTests {
     #expect(result.ops.isEmpty)
   }
 
+  // MARK: - Bulk reader edge cases
+  //
+  // The line reader was rewritten from per-byte `FileHandle.read(upToCount: 1)`
+  // to one-shot `Data(contentsOf:) + split(separator: 0x0A)` for a 20× speedup
+  // on warm reads. These tests pin the file-shape edge cases where the two
+  // implementations differ subtly.
+
+  @Test func loadHandlesLogWithoutTrailingNewline() throws {
+    let (dir, file, _) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // Write two JSON ops separated by a single newline, NO trailing newline
+    // on the last line. The historical line reader returned the
+    // unterminated tail as a final line; bulk-read must preserve that
+    // behaviour so a crash mid-write doesn't drop the last durable line.
+    let op1Data = try JSONEncoder().encode(Op(kind: .upsert, key: "a", value: "1"))
+    let op2Data = try JSONEncoder().encode(Op(kind: .upsert, key: "b", value: "2"))
+    var bytes = Data()
+    bytes.append(op1Data)
+    bytes.append(0x0A)
+    bytes.append(op2Data)  // no trailing 0x0A
+    let logURL = dir.appendingPathComponent("log.jsonl")
+    try bytes.write(to: logURL)
+
+    let result = file.load()
+    #expect(
+      result.ops == [
+        Op(kind: .upsert, key: "a", value: "1"),
+        Op(kind: .upsert, key: "b", value: "2"),
+      ])
+    #expect(result.malformedLineCount == 0)
+  }
+
+  @Test func loadSkipsConsecutiveBlankLines() throws {
+    let (dir, file, _) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // A series of consecutive newlines must not be treated as malformed
+    // lines — they're zero-byte separators, not zero-byte JSON. The bulk
+    // reader's `split(separator:omittingEmptySubsequences:)` defaults to
+    // dropping empty subsequences; this test pins that contract.
+    let op1Data = try JSONEncoder().encode(Op(kind: .upsert, key: "a", value: "1"))
+    let op2Data = try JSONEncoder().encode(Op(kind: .upsert, key: "b", value: "2"))
+    var bytes = Data()
+    bytes.append(op1Data)
+    bytes.append(contentsOf: [0x0A, 0x0A, 0x0A])  // three newlines
+    bytes.append(op2Data)
+    bytes.append(0x0A)
+    let logURL = dir.appendingPathComponent("log.jsonl")
+    try bytes.write(to: logURL)
+
+    let result = file.load()
+    #expect(
+      result.ops == [
+        Op(kind: .upsert, key: "a", value: "1"),
+        Op(kind: .upsert, key: "b", value: "2"),
+      ])
+    #expect(result.malformedLineCount == 0)
+  }
+
+  @Test func loadHandlesZeroByteLogFile() throws {
+    let (dir, file, _) = try makeStore()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // Distinct from `loadReturnsEmptyWhenNothingOnDisk`: the file exists
+    // but is zero bytes. Bulk read's `Data(contentsOf:)` returns empty
+    // `Data`, `split` yields no slices, and the load surfaces no ops and
+    // no malformed-line count.
+    let logURL = dir.appendingPathComponent("log.jsonl")
+    try Data().write(to: logURL)
+    #expect(FileManager.default.fileExists(atPath: logURL.path))
+
+    let result = file.load()
+    #expect(result.ops.isEmpty)
+    #expect(result.malformedLineCount == 0)
+  }
+
   // MARK: - Compaction trigger
 
   /// Crossing the mutation-count threshold writes a snapshot and truncates the log so the
