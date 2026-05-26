@@ -450,6 +450,50 @@ struct MonthViewModelTests {
     #expect(!assetsBefore.isEmpty)
   }
 
+  /// Stale-frame regression for the scope-switch race. Between the moment
+  /// `loadAssets(for: scopeB)` is called and the moment its first batch
+  /// arrives, `assets` must already be empty. Otherwise a SwiftUI body
+  /// re-evaluation in that window would render scope A's covers under
+  /// scope B's selection — the click-frame flash that the plan's §1.7
+  /// captures. The synchronous `assets = []` line at the top of
+  /// `loadAssets(for:)` (combined with 1.2's removal of `thumbnailsById`
+  /// and 1.3's cell-scoped thumbnail cancellation) is what makes the
+  /// invariant hold; this test pins it.
+  @Test func loadAssetsClearsAssetsBeforeFirstBatch() async throws {
+    let svc = FakePhotoLibraryService()
+    let albumA = (0..<100).map { makeAsset(id: "a-\($0)") }
+    let albumB = (0..<50).map { makeAsset(id: "b-\($0)") }
+    svc.assetsByAlbumLocalId["A"] = albumA
+    svc.assetsByAlbumLocalId["B"] = albumB
+
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .album(collectionId: "A"))
+    #expect(vm.assets.count == 100)
+    #expect(vm.selectedAssetId == "a-0")
+
+    // Gate scope B's first batch so the test can observe the pre-batch
+    // state. The synchronous prefix of `loadAssets(for: B)` runs before
+    // the first await against the stream — by the time the gate's
+    // `enter()` lands, `assets = []` and `selectedAssetId = nil` have
+    // already fired.
+    let gate = AsyncCheckpoint()
+    svc.progressiveCheckpointByScopeKey["album:B"] = gate
+
+    async let loadB: Void = vm.loadAssets(for: .album(collectionId: "B"))
+    await gate.waitForEnter(count: 1)
+
+    #expect(
+      vm.assets.isEmpty,
+      "scope switch must clear assets synchronously before the first batch")
+    #expect(vm.selectedAssetId == nil)
+    #expect(vm.isLoading)
+
+    await gate.releaseAll()
+    await loadB
+    #expect(vm.assets.count == 50)
+    #expect(vm.selectedAssetId == "b-0")
+  }
+
   // MARK: - Wrapper: loadAssets(forYear:month:)
 
   @Test func legacyWrapperIsEquivalentToScopeBasedLoader() async throws {
