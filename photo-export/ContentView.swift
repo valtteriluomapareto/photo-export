@@ -91,14 +91,7 @@ struct AuthorizationView: View {
       }
     }
     .padding()
-    // Same reasoning as `OnboardingView`: give the pre-auth state a real
-    // minimum so the window can't collapse to its near-zero intrinsic size
-    // (the content is centered with no min frame) under the WindowGroup's
-    // default `.automatic` resizability. Otherwise a stale tiny window frame
-    // restored across reinstall is never clamped back up.
-    .frame(
-      minWidth: 600, idealWidth: 720, maxWidth: .infinity,
-      minHeight: 640, idealHeight: 760, maxHeight: .infinity)
+    .firstRunWindowMinSize()
     .task {
       if photoLibraryManager.authorizationStatus == .notDetermined {
         _ = await photoLibraryManager.requestAuthorization()
