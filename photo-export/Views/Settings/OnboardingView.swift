@@ -133,7 +133,18 @@ struct OnboardingView: View {
 
       Spacer()
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // The onboarding state needs its own minimum the same way `LibraryRootView`
+    // gives the library state one. Without it the centered, Spacer-driven
+    // content has a near-zero intrinsic minimum, so with the WindowGroup's
+    // default `.automatic` resizability the window's minimum tracks that tiny
+    // value. A stale small window frame restored across an App Store reinstall
+    // then never gets clamped back up, and the welcome screen renders in an
+    // unusable sliver the user can't enlarge (issue: feedback May 2026). The
+    // ideal sizes give a comfortable first-run window; `maxWidth/maxHeight:
+    // .infinity` keeps it freely resizable larger.
+    .frame(
+      minWidth: 600, idealWidth: 720, maxWidth: .infinity,
+      minHeight: 640, idealHeight: 760, maxHeight: .infinity)
     .background(Color(.windowBackgroundColor))
   }
 }
