@@ -11,8 +11,25 @@ struct OnboardingView: View {
   @State private var convertHEICToJPEG: Bool = false
 
   var body: some View {
+    // GeometryReader + ScrollView keeps the content vertically centered when it
+    // fits, and scrolls when it doesn't — at the largest Dynamic Type sizes (or
+    // on a short display) the steps + buttons can exceed the window's minimum
+    // height, and without scrolling the action buttons would be clipped out of
+    // reach. `minHeight: proxy.size.height` makes the inner stack fill the
+    // viewport so the `Spacer`s still center it whenever there's room.
+    GeometryReader { proxy in
+      ScrollView {
+        content
+          .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+      }
+    }
+    .firstRunWindowMinSize()
+    .background(Color(.windowBackgroundColor))
+  }
+
+  private var content: some View {
     VStack(spacing: 24) {
-      Spacer()
+      Spacer(minLength: 0)
 
       Image(systemName: "photo.on.rectangle.angled")
         .resizable()
@@ -131,9 +148,7 @@ struct OnboardingView: View {
         .disabled(exportDestinationManager.selectedFolderURL == nil)
       }
 
-      Spacer()
+      Spacer(minLength: 0)
     }
-    .firstRunWindowMinSize()
-    .background(Color(.windowBackgroundColor))
   }
 }
