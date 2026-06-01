@@ -19,6 +19,33 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.6.3",
+      summary:
+        "Smoother, faster browsing on large libraries, plus a fix for a "
+        + "collapsed welcome screen some users hit on a fresh install.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Faster, smoother photo grid",
+          body:
+            "The grid now streams assets in batches instead of waiting for "
+            + "a whole month or collection to finish loading, reuses a "
+            + "shared thumbnail cache across the timeline and collections, "
+            + "and drops thumbnail work for tiles you've scrolled past. "
+            + "Large libraries reach a usable grid sooner and scroll with "
+            + "less stutter."
+        ),
+        ReleaseNote.Bullet(
+          title: "Welcome screen opens at a usable size on first run",
+          body:
+            "On a fresh install, the welcome and Photos-permission screens "
+            + "could open as a tiny sliver that wouldn't resize. They now "
+            + "open at a sensible minimum size and resize freely. "
+            + "Fixes [#125](https://github.com/valtteriluomapareto/photo-export/issues/125)."
+        ),
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.6.2",
       summary:
         "Fixes the Collections grid (Favorites and large albums) getting "
