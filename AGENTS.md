@@ -31,6 +31,12 @@ swift-format format --recursive --in-place photo-export
 
 UI tests exist in `photo-exportUITests/` but are skipped by default in the shared scheme.
 
+To preview the first-run `OnboardingView` from a Debug build, pass `--force-onboarding` when launching the built app — it routes straight to onboarding regardless of Photos authorization or saved onboarding state. The flag is compiled out of release builds.
+
+```bash
+"$(xcodebuild -project photo-export.xcodeproj -scheme "photo-export" -configuration Debug -showBuildSettings 2>/dev/null | awk -F' = ' '/ BUILT_PRODUCTS_DIR /{print $2}')/Photo Export.app/Contents/MacOS/Photo Export" --force-onboarding
+```
+
 ## Architecture
 
 **Pattern:** SwiftUI + a single façade (`ExportManager`) over focused, `@MainActor` collaborators. Views are thin; orchestration lives on `ExportManager`; per-concern work is delegated. See [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) for the load-bearing contracts (cancellation seam, actor isolation policy, AutoSync seam preservation) — read it before touching `ExportManager`, the queue, or anything AutoSync observes.

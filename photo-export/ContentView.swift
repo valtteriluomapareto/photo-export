@@ -21,9 +21,22 @@ struct ContentView: View {
   // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
 
+  // Debug-only: launch with `--force-onboarding` to route straight to `OnboardingView`,
+  // regardless of Photos authorization or saved onboarding state. Lets you preview and
+  // iterate on the first-run screens without disturbing real app state — handy because a
+  // Debug build is rarely Photos-authorized, so the router would otherwise land on
+  // `AuthorizationView`. Always false in release builds.
+  private static let forceOnboarding: Bool = {
+    #if DEBUG
+      return CommandLine.arguments.contains("--force-onboarding")
+    #else
+      return false
+    #endif
+  }()
+
   var body: some View {
     Group {
-      if photoLibraryManager.isAuthorized && !hasCompletedOnboarding {
+      if Self.forceOnboarding || (photoLibraryManager.isAuthorized && !hasCompletedOnboarding) {
         OnboardingView {
           hasCompletedOnboarding = true
         }
