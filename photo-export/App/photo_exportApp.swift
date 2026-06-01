@@ -286,6 +286,14 @@ struct PhotoExportApp: App {
     // The user can resize either column past these defaults; new windows
     // start at this size.
     .defaultSize(width: 1280, height: 800)
+    // Make the window's minimum track its content minimum explicitly rather
+    // than relying on `.automatic`'s implicit resolution, which has shifted
+    // across macOS releases (issue #125 surfaced on Tahoe 26.5). Each routed
+    // state supplies its own minimum: `LibraryRootView` pins 1100x700, while
+    // the first-run states use `firstRunWindowMinSize()`. The window stays
+    // freely resizable larger because every state's `maxWidth/maxHeight` is
+    // `.infinity`. Mirrors the Settings scene below.
+    .windowResizability(.contentMinSize)
     .commands {
       CommandGroup(replacing: .appInfo) {
         AboutCommand()
