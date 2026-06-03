@@ -78,6 +78,8 @@ If you point Photo Export at a folder that already contains user-visible files (
 
 For folders the app has been writing to before, no prompt appears — its export records identify the destination as one of its own.
 
+**If you've exported to this folder before but Photo Export shows no progress for it** — which can happen after updating the app or reconnecting an external drive — click **Review…** on the prompt and choose **Rebuild Records from Destination**. Photo Export scans what's already on the drive and rebuilds its progress from those files, so the next export skips them instead of writing duplicate copies. Choose **Use This Destination** only when the existing files are genuinely new content you placed there yourself. Your destination files are never touched either way.
+
 ## Open at login
 
 Turn on **Open Photo Export at login** (in **Settings → Auto Export → Startup**) and the app starts automatically when you log in, the menu bar icon appears, and Auto Export watches your library from the moment you sit down at your Mac.
@@ -158,7 +160,7 @@ If in 1.2.3 you chose **Select Photos** rather than full Photos access, that lim
 ## Troubleshooting
 
 - **Toolbar pill says "Action needed — no destination"** — open Settings → Auto Export (click the pill) and the destination picker in the main window's toolbar. Pick a writable folder.
-- **"Action needed — destination needs review"** — the safety scan found pre-existing files at the destination. Click **Resolve…** in Settings, then **Use This Destination** if those files are yours to keep.
+- **"Action needed — destination needs review"** — the safety scan found pre-existing files at the destination. Click **Review…** in Settings. If you've exported to this folder before, choose **Rebuild Records from Destination** to restore your progress; otherwise choose **Use This Destination** if those files are yours to keep.
 - **"Action needed — pick what to export"** — open Settings → Auto Export and tick at least one category.
 - **Auto Export status stays at "Waiting"** — usually the drive is disconnected or a manual export is in progress. The status row will tell you which. Reconnect the drive or wait for the manual run to finish.
 - **A run failed but I fixed the underlying problem** — open Settings → Export Issues and click **Retry** on the affected row. If the entire destination changed (e.g. the drive was reformatted), use **File → Import Existing Backup…** to rebuild the local records first.
