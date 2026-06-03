@@ -1,21 +1,49 @@
 import SwiftUI
 
-/// Recovery sheet for the migration-conflict blocked state. Plan §"Safety
-/// Invariants": "When destination state blocks app functionality, the
-/// resolution path is user action, not app cleanup" — this sheet is the
-/// user-action surface.
+/// Recovery sheet that rebuilds a destination's local export records from the
+/// files actually present on the drive, via Import Existing Backup. Serves two
+/// blocked-destination states that share the same remedy:
 ///
-/// MVP recovery offers a single action: **Rebuild Records from Destination**. Runs
-/// Import Existing Backup against the current destination so the
-/// new-id record store is rebuilt from the destination's actual contents,
-/// then GCs the legacy id's app-internal state directories via the lifecycle
-/// coordinator. The destination drive's files are never touched.
+/// - `.migrationConflict` — both a current-id and a legacy-id record set exist
+///   for the same destination (Plan §"Safety Invariants"). Rebuilding adopts the
+///   destination's contents as the current-id store, then the legacy state is
+///   GC'd via the lifecycle coordinator.
+/// - `.orphanedProgress` — the destination has files but *no* matching records
+///   (issue #129). This happens when the per-destination record directory was
+///   orphaned (its name derived from security-scoped bookmark bytes that macOS
+///   later refreshed), so the app silently presented a fresh 0% store and a
+///   re-export would collide with the existing files as ` (1)` duplicates.
+///   `DestinationSafetyMonitor` already detects this state; rebuilding restores
+///   progress from the drive so subsequent exports skip the already-present
+///   files instead of duplicating them.
 ///
-/// Two other actions named in the plan ("Keep legacy records", "Start fresh")
-/// are deferred — they have additional safety concerns ("Keep legacy" would
-/// silently use stale records, "Start fresh" would cause collision-suffixed
-/// duplicates on re-export) that need a richer confirmation flow.
-struct MigrationConflictRecoveryView: View {
+/// Both modes share the rebuild/progress/result machinery; only the explanatory
+/// copy and the post-rebuild resolution differ. Resolution is injected as
+/// `onRebuildComplete` so this view stays decoupled from whichever collaborator
+/// owns the blocked state (the lifecycle coordinator for migration conflicts,
+/// the safety monitor for orphaned progress).
+///
+/// The destination drive's files are never touched — recovery only rebuilds the
+/// app's local record store.
+struct DestinationRecordRecoveryView: View {
+  /// The blocked-destination state this sheet is resolving. Drives copy and,
+  /// via the injected closures, the resolution.
+  enum Mode: Equatable {
+    case migrationConflict
+    case orphanedProgress
+  }
+
+  let mode: Mode
+  /// Invoked once after a rebuild import completes successfully. Migration:
+  /// GC the legacy state and clear the conflict. Orphaned progress: confirm the
+  /// destination so the safety prompt clears.
+  let onRebuildComplete: () -> Void
+  /// Accept the destination's existing files as-is, without rebuilding. Only set
+  /// for `.orphanedProgress` — the legitimate "these are genuinely new files I
+  /// put here" path. `nil` for `.migrationConflict`, where adopting stale records
+  /// is exactly what we're trying to avoid.
+  let onUseAsIs: (() -> Void)?
+
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
@@ -23,7 +51,7 @@ struct MigrationConflictRecoveryView: View {
 
   /// `idle` → user hasn't started reconciling; show the explainer.
   /// `reconciling` → import is in flight; show progress.
-  /// `succeeded` → import completed and the legacy state has been GC'd.
+  /// `succeeded` → import completed and the blocked state has been resolved.
   /// `failed` → import surfaced an error; show retry / cancel.
   @State private var phase: Phase = .idle
   /// Tracks user-initiated cancel of an in-flight reconcile so the
@@ -47,14 +75,14 @@ struct MigrationConflictRecoveryView: View {
       footer
     }
     .padding(24)
-    .frame(width: 480, height: 380)
+    .frame(width: 480, height: 400)
     .onChange(of: exportManager.isImporting) { _, isImporting in
       // Watch for the import-in-flight → done transition. The import was
       // launched by `startReconcile`; `phase == .reconciling` filters out
       // unrelated imports the user might have launched from the menu.
       guard phase == .reconciling, !isImporting else { return }
       if let report = exportManager.importResult {
-        lifecycleCoordinator.clearMigrationConflictAfterReconcile()
+        onRebuildComplete()
         phase = .succeeded(
           matched: report.matchedCount,
           unmatched: report.unmatchedCount,
@@ -76,16 +104,16 @@ struct MigrationConflictRecoveryView: View {
 
   private var header: some View {
     HStack(spacing: 10) {
-      Image(systemName: "exclamationmark.triangle.fill")
+      Image(systemName: headerSymbol)
         .foregroundStyle(.orange)
         .font(.title2)
       VStack(alignment: .leading, spacing: 2) {
-        Text("Destination Has Unresolved Issues")
+        Text(headerTitle)
           .font(.headline)
-        Text("Conflict: current vs legacy records for the same destination.")
+        Text(headerSubtitle)
           .font(.caption)
           .foregroundStyle(.secondary)
-        if let conflict = lifecycleCoordinator.migrationConflict {
+        if mode == .migrationConflict, let conflict = lifecycleCoordinator.migrationConflict {
           DisclosureGroup("Show diagnostic details") {
             VStack(alignment: .leading, spacing: 2) {
               Text("Current id: \(conflict.newId.prefix(12))…")
@@ -98,6 +126,27 @@ struct MigrationConflictRecoveryView: View {
           .padding(.top, 4)
         }
       }
+    }
+  }
+
+  private var headerSymbol: String {
+    switch mode {
+    case .migrationConflict: return "exclamationmark.triangle.fill"
+    case .orphanedProgress: return "exclamationmark.shield.fill"
+    }
+  }
+
+  private var headerTitle: String {
+    switch mode {
+    case .migrationConflict: return "Destination Has Unresolved Issues"
+    case .orphanedProgress: return "Confirm This Destination"
+    }
+  }
+
+  private var headerSubtitle: String {
+    switch mode {
+    case .migrationConflict: return "Conflict: current vs legacy records for the same destination."
+    case .orphanedProgress: return "This folder has files but no export records."
     }
   }
 
@@ -115,7 +164,17 @@ struct MigrationConflictRecoveryView: View {
     }
   }
 
+  @ViewBuilder
   private var idleContent: some View {
+    switch mode {
+    case .migrationConflict:
+      migrationIdleContent
+    case .orphanedProgress:
+      orphanedProgressIdleContent
+    }
+  }
+
+  private var migrationIdleContent: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(
         "This destination has two sets of local records — one from the current identity scheme and one from a legacy scheme. Auto Export is blocked because the app can't tell which is authoritative."
@@ -133,6 +192,36 @@ struct MigrationConflictRecoveryView: View {
       if !canReconcile {
         Label(
           "Import isn't available right now — the destination drive may not be connected.",
+          systemImage: "info.circle"
+        )
+        .font(.caption)
+        .foregroundStyle(.orange)
+      }
+    }
+  }
+
+  private var orphanedProgressIdleContent: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text(
+        "This folder already contains files, but Photo Export has no record of exporting here."
+      )
+      .font(.callout)
+
+      Text("If you've exported to this folder before — for example after updating the app or reconnecting the drive — **Rebuild Records from Destination** to restore your progress and avoid creating duplicate files.")
+        .font(.callout)
+      Text(
+        "Rebuilding scans the drive's actual contents and rebuilds the record store from what's already there. Your exported files are not touched."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+
+      Text("If these are genuinely new files you placed here yourself, choose **Use This Destination** instead.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      if !canReconcile {
+        Label(
+          "Rebuild isn't available right now — the destination drive may not be connected.",
           systemImage: "info.circle"
         )
         .font(.caption)
@@ -159,14 +248,14 @@ struct MigrationConflictRecoveryView: View {
       return "Matching assets… \(matched) found of \(total) files"
     case .rebuildingLocalState: return "Rebuilding local state…"
     case .reconcilingDiskState: return "Pruning records for missing files…"
-    case .done: return "Cleaning up legacy state…"
+    case .done: return "Finishing up…"
     case .none: return "Reconciling…"
     }
   }
 
   private func succeededContent(matched: Int, unmatched: Int, prunedRecords: Int) -> some View {
     VStack(alignment: .leading, spacing: 8) {
-      Label("Conflict resolved", systemImage: "checkmark.seal.fill")
+      Label(succeededTitle, systemImage: "checkmark.seal.fill")
         .foregroundStyle(.green)
         .font(.headline)
       VStack(alignment: .leading, spacing: 4) {
@@ -179,10 +268,19 @@ struct MigrationConflictRecoveryView: View {
           Text("• \(prunedRecords) stale records pruned")
             .foregroundStyle(.secondary)
         }
-        Text("Legacy state directory has been removed.")
-          .foregroundStyle(.secondary)
+        if mode == .migrationConflict {
+          Text("Legacy state directory has been removed.")
+            .foregroundStyle(.secondary)
+        }
       }
       .font(.callout)
+    }
+  }
+
+  private var succeededTitle: String {
+    switch mode {
+    case .migrationConflict: return "Conflict resolved"
+    case .orphanedProgress: return "Progress restored"
     }
   }
 
@@ -204,6 +302,12 @@ struct MigrationConflictRecoveryView: View {
       switch phase {
       case .idle:
         Button("Cancel") { dismiss() }
+        if let onUseAsIs {
+          Button("Use This Destination") {
+            onUseAsIs()
+            dismiss()
+          }
+        }
         Button("Rebuild Records from Destination") { startReconcile() }
           .keyboardShortcut(.defaultAction)
           .disabled(!canReconcile)

@@ -146,24 +146,30 @@ struct AutoExportSettingsView: View {
     .formStyle(.grouped)
     .frame(minWidth: 460, minHeight: 460)
     .sheet(isPresented: $isShowingMigrationRecoverySheet) {
-      MigrationConflictRecoveryView()
-        .environmentObject(lifecycleCoordinator)
-        .environmentObject(exportManagerFromEnvironment)
-        .environmentObject(exportDestinationManager)
-    }
-    .confirmationDialog(
-      "Confirm Destination",
-      isPresented: $isShowingSafetyConfirm,
-      titleVisibility: .visible
-    ) {
-      Button("Use This Destination") {
-        safetyMonitor.confirmCurrentDestination()
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "The selected destination already contains files, but this app has no record of exporting to it. If those files belong to you and you want Auto Export to add to this folder, confirm. Auto Export will never delete or overwrite existing files."
+      DestinationRecordRecoveryView(
+        mode: .migrationConflict,
+        onRebuildComplete: { lifecycleCoordinator.clearMigrationConflictAfterReconcile() },
+        onUseAsIs: nil
       )
+      .environmentObject(lifecycleCoordinator)
+      .environmentObject(exportManagerFromEnvironment)
+      .environmentObject(exportDestinationManager)
+    }
+    .sheet(isPresented: $isShowingSafetyConfirm) {
+      // Issue #129: the destination has files but no records. Offer to rebuild
+      // progress from the drive (so re-exports skip the existing files instead
+      // of creating ` (1)` duplicates) as well as the plain "these are my
+      // pre-existing files" confirm. Both resolve the safety prompt by
+      // confirming the destination; the rebuild path additionally restores the
+      // record store from the drive's contents first.
+      DestinationRecordRecoveryView(
+        mode: .orphanedProgress,
+        onRebuildComplete: { safetyMonitor.confirmCurrentDestination() },
+        onUseAsIs: { safetyMonitor.confirmCurrentDestination() }
+      )
+      .environmentObject(lifecycleCoordinator)
+      .environmentObject(exportManagerFromEnvironment)
+      .environmentObject(exportDestinationManager)
     }
   }
 
@@ -326,7 +332,7 @@ private struct SafetyConfirmationBanner: View {
         Text("Confirm This Destination")
           .font(.headline)
         Text(
-          "The destination folder already contains files. Auto Export needs you to confirm it's your backup before it starts writing."
+          "The destination folder already contains files but has no export records. If you've exported here before, you can rebuild your progress; otherwise confirm it's your backup before Auto Export starts writing."
         )
         .font(.callout)
         .foregroundStyle(.secondary)

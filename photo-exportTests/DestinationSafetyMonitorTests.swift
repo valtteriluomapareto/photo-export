@@ -122,6 +122,30 @@ struct DestinationSafetyMonitorTests {
     #expect(harness.monitor.needsSafetyConfirmation == true)
   }
 
+  /// Issue #129 recovery backbone: rebuilding records from the destination is
+  /// what resolves the "files but no records" prompt. This pins the invariant
+  /// the rebuild relies on — once the record store is non-empty, the monitor
+  /// reports safe even though the directory still holds user files (the scan is
+  /// short-circuited before it runs).
+  @Test func recordsPresentDoesNotFlagEvenWithFiles() async {
+    let harness = makeHarness(scanResult: true)
+    defer { harness.cleanup() }
+    let fp = fingerprint(id: "dest-rebuilt")
+
+    // Simulate the post-rebuild world: the import has repopulated the store.
+    harness.recordStore.configure(for: fp.id)
+    harness.recordStore.markVariantExported(
+      assetId: "asset-1", variant: .original, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+    harness.recordStore.flushForTesting()
+
+    harness.monitor.attach()
+    harness.fingerprintSubject.send(fp)
+    await settleAsyncScan()
+
+    #expect(harness.monitor.needsSafetyConfirmation == false)
+  }
+
   @Test func confirmingCurrentDestinationClearsTheFlag() async {
     let harness = makeHarness(scanResult: true)
     defer { harness.cleanup() }
