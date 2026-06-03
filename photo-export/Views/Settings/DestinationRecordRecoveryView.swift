@@ -334,6 +334,21 @@ struct DestinationRecordRecoveryView: View {
     didCancelReconcile = false
     phase = .reconciling
     exportManager.startImport()
+    // `startImport()` flips `isImporting` to true synchronously when it actually
+    // launches. It can also bail on an internal guard the `canReconcile` gate
+    // doesn't mirror — most notably a timeline record store that isn't `.ready`
+    // (a corrupt snapshot leaves it `.failed` while still presenting as empty,
+    // which is exactly a state that fires this sheet). On those early returns
+    // `isImporting` stays false, the `isImporting` change observer never fires,
+    // and the sheet would otherwise sit in `.reconciling` forever with only a
+    // Cancel button. Detect the no-op start and surface it as a failure the user
+    // can retry or dismiss.
+    if !exportManager.isImporting {
+      phase = .failed(
+        message:
+          "Couldn't start the rebuild — the destination or its records aren't ready. "
+          + "Reconnect the drive if it's disconnected, then try again.")
+    }
   }
 
   /// Same gates `startImport` checks internally, surfaced for the button's
