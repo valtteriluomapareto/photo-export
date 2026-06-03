@@ -657,4 +657,177 @@ struct BackupScannerVariantTests {
     #expect(motionMatch?.file.subfolder == "videos")
     #expect(stillMatch?.file.subfolder == nil)
   }
+
+  // MARK: - Case-insensitive filename matching (issue #127)
+
+  /// An unedited HEIC exported with a lowercase extension (`IMG_1961.heic`) must match the
+  /// asset even though PhotoKit reports the original resource as `IMG_1961.HEIC`. Before the
+  /// fix the exact-filename comparison was case-sensitive, so the file landed in `unmatched`
+  /// and Import Existing Backup couldn't recover it — leaving the asset to be re-exported into
+  /// a ` (1)` duplicate.
+  @Test func matchesOriginalDespiteExtensionCaseMismatch() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "case-orig", creationDate: modDate, hasAdjustments: false)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "case-orig": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_1961.HEIC")
+        ]
+      ]
+    )
+    let (file, root) = try makeScannedFile("IMG_1961.heic", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [file], photoLibraryService: svc, progress: { _ in })
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.variant == .original)
+    #expect(result.matched.first?.asset.id == "case-orig")
+    #expect(result.ambiguous.isEmpty)
+    #expect(result.unmatched.isEmpty)
+  }
+
+  /// The exact scenario from issue #127: an edited HEIC asset whose backup holds the edited
+  /// render at the bare lowercase name (`IMG_1961.heic`, matching Photos' lowercase
+  /// `fullSizePhoto` resource) alongside the `_orig` original (`IMG_1961_orig.HEIC`, matching
+  /// PhotoKit's uppercase `.photo` resource). Both must match — the bare file as `.edited`,
+  /// the `_orig` companion as `.original` — despite the original resource's extension case
+  /// differing from the on-disk edited file.
+  @Test func matchesEditedAndOrigPairDespiteCaseMismatch() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "case-pair", creationDate: modDate, hasAdjustments: true)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "case-pair": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_1961.HEIC"),
+          TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "IMG_1961.heic"),
+        ]
+      ]
+    )
+    let (edited, root1) = try makeScannedFile("IMG_1961.heic", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root1) }
+    let (original, root2) = try makeScannedFile("IMG_1961_orig.HEIC", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root2) }
+
+    let result = try await BackupScanner.matchFiles(
+      [edited, original], photoLibraryService: svc, progress: { _ in })
+
+    #expect(result.matched.count == 2)
+    let editedMatch = result.matched.first(where: { $0.file.filename == "IMG_1961.heic" })
+    let originalMatch = result.matched.first(where: { $0.file.filename == "IMG_1961_orig.HEIC" })
+    #expect(editedMatch?.variant == .edited)
+    #expect(originalMatch?.variant == .original)
+    #expect(result.ambiguous.isEmpty)
+    #expect(result.unmatched.isEmpty)
+  }
+
+  /// Step 3 (collision-stripped match) must also fold case: a backup that uniquified to
+  /// `IMG_1961 (1).heic` (lowercase) still matches PhotoKit's `IMG_1961.HEIC`.
+  @Test func matchesCollisionSuffixedOriginalDespiteCaseMismatch() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "case-collision", creationDate: modDate, hasAdjustments: false)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "case-collision": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_1961.HEIC")
+        ]
+      ]
+    )
+    let (file, root) = try makeScannedFile("IMG_1961 (1).heic", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [file], photoLibraryService: svc, progress: { _ in })
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.variant == .original)
+    #expect(result.matched.first?.asset.id == "case-collision")
+    #expect(result.ambiguous.isEmpty)
+    #expect(result.unmatched.isEmpty)
+  }
+
+  /// Step 4 (cross-extension edited) must fold the stem comparison: an edited JPG render
+  /// stored at a lowercase stem (`img_abc.jpg`) classifies against a HEIC original whose
+  /// resource stem PhotoKit reports as `IMG_ABC`. This is the only path that exercises the
+  /// `originalResourceStemsLowercased` fold.
+  @Test func classifiesCrossExtensionEditedDespiteStemCaseMismatch() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "xext-case", creationDate: modDate, hasAdjustments: true)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "xext-case": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_ABC.HEIC"),
+          TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullRender.JPG"),
+        ]
+      ]
+    )
+    let (file, root) = try makeScannedFile("img_abc.jpg", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [file], photoLibraryService: svc, progress: { _ in })
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.variant == .edited)
+    #expect(result.matched.first?.asset.id == "xext-case")
+    #expect(result.ambiguous.isEmpty)
+    #expect(result.unmatched.isEmpty)
+  }
+
+  /// Step 5b (Live Photo paired video) must fold the `.mov`/`.MOV` filename comparison.
+  @Test func matchesPairedVideoDespiteMovCaseMismatch() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let asset = TestAssetFactory.makeAsset(
+      id: "live-case", creationDate: modDate, hasAdjustments: false, isLivePhoto: true)
+    let svc = service(
+      ["2025-6": [asset]],
+      resources: [
+        "live-case": [
+          TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+          TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+        ]
+      ]
+    )
+    let (file, root) = try makeScannedFile("IMG_0001.mov", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [file], photoLibraryService: svc, progress: { _ in })
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.variant == .originalPairedVideo)
+    #expect(result.matched.first?.asset.id == "live-case")
+    #expect(result.ambiguous.isEmpty)
+    #expect(result.unmatched.isEmpty)
+  }
+
+  /// Negative guard: case-folding widens the match key, so it must not collapse two distinct
+  /// assets. A lowercase `img_a.heic` must resolve only to the `IMG_A.HEIC` asset, never
+  /// become ambiguous against `IMG_B.HEIC`.
+  @Test func caseFoldDoesNotOverMatchDistinctAssets() async throws {
+    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let assetA = TestAssetFactory.makeAsset(id: "asset-A", creationDate: modDate)
+    let assetB = TestAssetFactory.makeAsset(id: "asset-B", creationDate: modDate)
+    let svc = service(
+      ["2025-6": [assetA, assetB]],
+      resources: [
+        "asset-A": [TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_A.HEIC")],
+        "asset-B": [TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_B.HEIC")],
+      ]
+    )
+    let (file, root) = try makeScannedFile("img_a.heic", modDate: modDate)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let result = try await BackupScanner.matchFiles(
+      [file], photoLibraryService: svc, progress: { _ in })
+    #expect(result.matched.count == 1)
+    #expect(result.matched.first?.asset.id == "asset-A")
+    #expect(result.ambiguous.isEmpty)
+    #expect(result.unmatched.isEmpty)
+  }
 }
