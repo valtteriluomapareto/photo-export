@@ -254,6 +254,21 @@ struct BackupScanner {
     /// hasn't materialised an edited motion companion or for non-Live-Photo assets.
     let editedPairedVideoResources: [ResourceFingerprint]
 
+    // Case-folded lookup sets, computed once in `buildFingerprints` (the struct's whole
+    // reason to exist is "built once per asset batch" — recomputing these per match would
+    // reintroduce the per-asset work the snapshot exists to avoid). PhotoKit reports
+    // resource filenames in whatever case the capture device used (e.g. `IMG_0001.HEIC`),
+    // while the on-disk export can carry a different case (`IMG_0001.heic` — Photos'
+    // edited-render resource is lowercase). Matching folds case on both sides; PhotoKit
+    // never reports two resources on one asset differing only by case, and the
+    // case-insensitive destination filesystem guarantees the scanned files can't collide
+    // by case either, so folding cannot manufacture a false match. Extension comparisons
+    // already lowercase both sides.
+    let originalResourceFilenamesLowercased: Set<String>
+    let originalResourceStemsLowercased: Set<String>
+    let pairedVideoResourceFilenamesLowercased: Set<String>
+    let pairedVideoResourceStemsLowercased: Set<String>
+
     /// Filename adapters for the existing classifier code that only needs filenames.
     var originalResourceFilenames: [String] { originalResources.map(\.filename) }
     var editedResourceFilenames: [String] { editedResources.map(\.filename) }
@@ -268,6 +283,21 @@ struct BackupScanner {
     /// All resource filenames (kept for backward compatibility with filename-only matching).
     var originalFilenames: [String] {
       originalResourceFilenames + editedResourceFilenames
+    }
+
+    /// Lowercases every filename in `resources` and the stem of each, for the case-folded
+    /// lookup sets. Centralized so the filename and stem derivations stay in lockstep.
+    static func foldedFilenamesAndStems(
+      _ resources: [ResourceFingerprint]
+    ) -> (filenames: Set<String>, stems: Set<String>) {
+      var filenames = Set<String>()
+      var stems = Set<String>()
+      for resource in resources {
+        let lower = resource.filename.lowercased()
+        filenames.insert(lower)
+        stems.insert((lower as NSString).deletingPathExtension)
+      }
+      return (filenames, stems)
     }
   }
 
@@ -313,6 +343,8 @@ struct BackupScanner {
         !pairedVideoResources.isEmpty || !editedPairedVideoResources.isEmpty
       let creationSecond: Int? =
         asset.creationDate.map { Int($0.timeIntervalSinceReferenceDate) }
+      let originalFolded = AssetFingerprint.foldedFilenamesAndStems(originalResources)
+      let pairedFolded = AssetFingerprint.foldedFilenamesAndStems(pairedVideoResources)
       return AssetFingerprint(
         localIdentifier: asset.id,
         mediaType: asset.mediaType,
@@ -326,7 +358,11 @@ struct BackupScanner {
         originalResources: originalResources,
         editedResources: editedResources,
         pairedVideoResources: pairedVideoResources,
-        editedPairedVideoResources: editedPairedVideoResources
+        editedPairedVideoResources: editedPairedVideoResources,
+        originalResourceFilenamesLowercased: originalFolded.filenames,
+        originalResourceStemsLowercased: originalFolded.stems,
+        pairedVideoResourceFilenamesLowercased: pairedFolded.filenames,
+        pairedVideoResourceStemsLowercased: pairedFolded.stems
       )
     }
   }
@@ -405,11 +441,13 @@ struct BackupScanner {
       // companion paired with that `_orig` original — even when the file's filename also
       // matches a known original-resource filename (the include-originals same-extension
       // case where the original moved out of the way to the `_orig` sibling).
+      // Stems are case-folded so a mixed-case sibling pair (e.g. `IMG_1.heic` next to
+      // `IMG_1_orig.HEIC`) still pairs up — case varies in real exports (issue #127).
       var stemsWithOrigSibling = Set<String>()
       for file in files {
         if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
-          stemsWithOrigSibling.insert(parsed.groupStem)
-          stemsWithOrigSibling.insert(parsed.canonicalOriginalStem)
+          stemsWithOrigSibling.insert(parsed.groupStem.lowercased())
+          stemsWithOrigSibling.insert(parsed.canonicalOriginalStem.lowercased())
         }
       }
 
@@ -526,8 +564,9 @@ struct BackupScanner {
           fp.originalResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
         )
         guard exts.isEmpty || exts.contains(file.fileExtension) else { return false }
-        return fp.originalResourceStems.contains(parsed.groupStem)
-          || fp.originalResourceStems.contains(parsed.canonicalOriginalStem)
+        let stems = fp.originalResourceStemsLowercased
+        return stems.contains(parsed.groupStem.lowercased())
+          || stems.contains(parsed.canonicalOriginalStem.lowercased())
       }
       if !origCandidates.isEmpty {
         return narrow(
@@ -541,12 +580,17 @@ struct BackupScanner {
     let fileStem = (file.filename as NSString).deletingPathExtension
     let (canonicalFileStem, _) = ExportFilenamePolicy.stripTrailingCollisionSuffix(from: fileStem)
     let hasOrigSibling =
-      stemsWithOrigSibling.contains(fileStem)
-      || stemsWithOrigSibling.contains(canonicalFileStem)
+      stemsWithOrigSibling.contains(fileStem.lowercased())
+      || stemsWithOrigSibling.contains(canonicalFileStem.lowercased())
+
+    // Case-folded keys for matching the on-disk filename against PhotoKit-reported resource
+    // names (see `AssetFingerprint` for why case must be folded).
+    let fileFilenameLower = file.filename.lowercased()
+    let fileBaseFilenameLower = file.baseFilename.lowercased()
 
     // Step 2: exact match to a known original-resource filename.
     let originalExactCandidates = fingerprints.filter {
-      $0.originalResourceFilenames.contains(file.filename)
+      $0.originalResourceFilenamesLowercased.contains(fileFilenameLower)
     }
     if !originalExactCandidates.isEmpty {
       // Issue #38: subfolder-split sibling. A mid-life `videoLayout` flip leaves
@@ -588,7 +632,7 @@ struct BackupScanner {
     // Step 3: collision-stripped match to a known original-resource filename.
     if file.hasCollisionSuffix {
       let baseCandidates = fingerprints.filter {
-        $0.originalResourceFilenames.contains(file.baseFilename)
+        $0.originalResourceFilenamesLowercased.contains(fileBaseFilenameLower)
       }
       if !baseCandidates.isEmpty {
         if hasOrigSibling {
@@ -619,9 +663,10 @@ struct BackupScanner {
     let (canonicalStem, _) = ExportFilenamePolicy.stripTrailingCollisionSuffix(from: stem)
     let editedCandidates = fingerprints.filter { fp in
       guard fp.hasAdjustments else { return false }
+      let stems = fp.originalResourceStemsLowercased
       guard
-        fp.originalResourceStems.contains(stem)
-          || fp.originalResourceStems.contains(canonicalStem)
+        stems.contains(stem.lowercased())
+          || stems.contains(canonicalStem.lowercased())
       else { return false }
       let editedExts = Set(
         fp.editedResourceFilenames.map { ($0 as NSString).pathExtension.lowercased() }
@@ -663,9 +708,9 @@ struct BackupScanner {
       if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
         let pairedOrigCandidates = fingerprints.filter { fp in
           guard fp.isLivePhoto else { return false }
-          let stems = Set(fp.pairedVideoResourceStems)
-          return stems.contains(parsed.groupStem)
-            || stems.contains(parsed.canonicalOriginalStem)
+          let stems = fp.pairedVideoResourceStemsLowercased
+          return stems.contains(parsed.groupStem.lowercased())
+            || stems.contains(parsed.canonicalOriginalStem.lowercased())
         }
         if !pairedOrigCandidates.isEmpty {
           return narrow(
@@ -676,7 +721,7 @@ struct BackupScanner {
       // 5b: natural-stem `.mov` matching a paired-video resource filename. The
       // `_orig.mov` sibling check decides original vs edited paired video.
       let pairedCandidates = fingerprints.filter {
-        $0.isLivePhoto && $0.pairedVideoResourceFilenames.contains(file.filename)
+        $0.isLivePhoto && $0.pairedVideoResourceFilenamesLowercased.contains(fileFilenameLower)
       }
       if !pairedCandidates.isEmpty {
         let variant: ExportVariant =
@@ -793,17 +838,21 @@ struct BackupScanner {
       // candidate has an original resource at the parsed stem with matching
       // extension. The byte source is that resource.
       if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
-        let acceptableStems: Set<String> = [parsed.groupStem, parsed.canonicalOriginalStem]
+        let acceptableStems: Set<String> = [
+          parsed.groupStem.lowercased(), parsed.canonicalOriginalStem.lowercased(),
+        ]
         let matches = fp.originalResources.filter { res in
-          let stem = (res.filename as NSString).deletingPathExtension
+          let stem = (res.filename as NSString).deletingPathExtension.lowercased()
           let ext = (res.filename as NSString).pathExtension.lowercased()
           return acceptableStems.contains(stem) && ext == file.fileExtension
         }
         if !matches.isEmpty { return matches }
       }
       // Step 2 / 3: exact filename match (or collision-stripped base).
-      let acceptableFilenames: Set<String> = [file.filename, file.baseFilename]
-      return fp.originalResources.filter { acceptableFilenames.contains($0.filename) }
+      let acceptableFilenames: Set<String> = [
+        file.filename.lowercased(), file.baseFilename.lowercased(),
+      ]
+      return fp.originalResources.filter { acceptableFilenames.contains($0.filename.lowercased()) }
     case .edited:
       // Step 2/3 override and step 4 (cross-extension edited): the byte source
       // is an edited-side resource whose extension matches the scanned file.
@@ -815,14 +864,16 @@ struct BackupScanner {
       // against the paired-video resource stem, or a natural-stem `.mov` filename
       // match. The byte source is the asset's `.pairedVideo` resource.
       if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
-        let acceptableStems: Set<String> = [parsed.groupStem, parsed.canonicalOriginalStem]
+        let acceptableStems: Set<String> = [
+          parsed.groupStem.lowercased(), parsed.canonicalOriginalStem.lowercased(),
+        ]
         let matches = fp.pairedVideoResources.filter { res in
-          let stem = (res.filename as NSString).deletingPathExtension
+          let stem = (res.filename as NSString).deletingPathExtension.lowercased()
           return acceptableStems.contains(stem)
         }
         if !matches.isEmpty { return matches }
       }
-      return fp.pairedVideoResources.filter { $0.filename == file.filename }
+      return fp.pairedVideoResources.filter { $0.filename.lowercased() == file.filename.lowercased() }
     case .editedPairedVideo:
       // Natural-stem `.mov` with an `_orig.mov` sibling: the byte source is the
       // edited-side `.fullSizePairedVideo` when present, otherwise it's the same
@@ -832,7 +883,7 @@ struct BackupScanner {
         ($0.filename as NSString).pathExtension.lowercased() == file.fileExtension
       }
       if !editedMatches.isEmpty { return editedMatches }
-      return fp.pairedVideoResources.filter { $0.filename == file.filename }
+      return fp.pairedVideoResources.filter { $0.filename.lowercased() == file.filename.lowercased() }
     }
   }
 

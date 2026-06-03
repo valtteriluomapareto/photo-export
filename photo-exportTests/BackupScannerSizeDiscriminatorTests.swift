@@ -325,4 +325,52 @@ struct BackupScannerSizeDiscriminatorTests {
     #expect(original?.0 == "edit-A")
     #expect(original?.1 == .original)
   }
+
+  /// Issue #127: the byte-source selector `resourcesCompatible` must fold case too, so the
+  /// size discriminator still finds the admitting resource when the on-disk filename differs
+  /// in case from the PhotoKit-reported resource name. Without the fold both candidates'
+  /// resources are filtered out and the burst falls to ambiguous.
+  @Test func burstDisambiguatedByResourceFileSizeDespiteCaseMismatch() async throws {
+    let burstDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let burstA = TestAssetFactory.makeAsset(
+      id: "burst-A", creationDate: burstDate, mediaType: .image,
+      pixelWidth: 4032, pixelHeight: 3024)
+    let burstB = TestAssetFactory.makeAsset(
+      id: "burst-B", creationDate: burstDate, mediaType: .image,
+      pixelWidth: 4032, pixelHeight: 3024)
+
+    let service = makeService(
+      assets: [("2025-6", [burstA, burstB])],
+      resources: [
+        "burst-A": [
+          TestAssetFactory.makeResource(originalFilename: "IMG_5000.HEIC", fileSize: 2_500_000)
+        ],
+        "burst-B": [
+          TestAssetFactory.makeResource(originalFilename: "IMG_5000.HEIC", fileSize: 2_700_000)
+        ],
+      ]
+    )
+
+    // On-disk files carry a lowercase extension; the uniquified sibling uses the lowercase
+    // base too. Both must still resolve via size against the uppercase PhotoKit resources.
+    let (files, rootDir) = try makeScannedFiles([
+      (year: 2025, month: 6, filename: "IMG_5000.heic", modDate: burstDate, fileSize: 2_500_000),
+      (
+        year: 2025, month: 6, filename: "IMG_5000 (2).heic", modDate: burstDate,
+        fileSize: 2_700_000
+      ),
+    ])
+    defer { try? FileManager.default.removeItem(at: rootDir) }
+
+    let result = try await BackupScanner.matchFiles(
+      files, photoLibraryService: service
+    ) { _ in }
+
+    #expect(result.ambiguous.isEmpty)
+    #expect(result.unmatched.isEmpty)
+    let matchByFilename = Dictionary(
+      uniqueKeysWithValues: result.matched.map { ($0.file.filename, $0.asset.id) })
+    #expect(matchByFilename["IMG_5000.heic"] == "burst-A")
+    #expect(matchByFilename["IMG_5000 (2).heic"] == "burst-B")
+  }
 }
