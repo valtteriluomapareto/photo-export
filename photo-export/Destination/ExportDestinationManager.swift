@@ -493,6 +493,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     logger.info(
       "User selected export folder: \(url.path, privacy: .public) (decision: \(String(describing: decision), privacy: .public))"
     )
+    // Save the new bookmark FIRST. Only once it succeeds do we mutate persisted identity —
+    // otherwise a failed save on a `.newDestination` pick would have already dropped the *old*
+    // destination's stable id while `selectedFolderURL`/`identity` still point at it, and the
+    // next validate/relaunch would reseed the old destination from a possibly-drifted
+    // fingerprint and re-key its records.
+    guard saveBookmark(for: url) else {
+      statusMessage = "Failed to save access to selected folder"
+      return
+    }
     switch decision {
     case .newDestination:
       // Forget the prior destination's legacy hash and stable id. Otherwise a sequence like
@@ -507,12 +516,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     case .sameDestination:
       // Re-granting access to the SAME folder. Keep the stable id (records stay keyed
       // identically) and the stashed legacy id (so the coordinator can still find the original
-      // `ExportRecords/<oldId>/` even though `saveBookmark` is about to overwrite the bytes).
+      // `ExportRecords/<oldId>/` even though the bytes were just overwritten).
       break
-    }
-    guard saveBookmark(for: url) else {
-      statusMessage = "Failed to save access to selected folder"
-      return
     }
     selectedFolderURL = url
     validate(url: url)
@@ -626,14 +631,23 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
     let storedScoped = storedURL.startAccessingSecurityScopedResource()
     defer { if storedScoped { storedURL.stopAccessingSecurityScopedResource() } }
+    // If scoped access can't be acquired (old drive unplugged / stale bookmark / sandbox-denied
+    // — the normal re-grant-after-stale flow), the stored URL is not live: its resource-key and
+    // path reads would be unreliable (and could block on kernel I/O, the #92 bail-out `validate`
+    // avoids). Crucially, the canonical-path fallback below would then compare a dead stored
+    // path against the fresh pick and, for a network share remounted at a new path, classify the
+    // SAME destination as `.differentFromStored` — forking the id and re-exporting. Surface the
+    // confirmation instead of guessing.
+    guard storedScoped else { return .ambiguous }
 
     if let storedFID = Self.fileResourceIdentifier(of: storedURL),
       let pickedFID = Self.fileResourceIdentifier(of: pickedURL)
     {
       return storedFID.isEqual(pickedFID) ? .sameAsStored : .differentFromStored
     }
-    // File identity unreadable (rare) — fall back to canonical path. Both URLs are live at
-    // selection time, so this momentary path comparison is safe; it is not persisted.
+    // File identity unreadable (rare) — fall back to canonical path. Scoped access succeeded, so
+    // both URLs are live at selection time; this momentary path comparison is safe and is not
+    // persisted.
     let storedPath = storedURL.resolvingSymlinksInPath().standardizedFileURL.path
     let pickedPath = pickedURL.resolvingSymlinksInPath().standardizedFileURL.path
     return storedPath == pickedPath ? .sameAsStored : .differentFromStored

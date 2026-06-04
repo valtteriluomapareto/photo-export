@@ -301,4 +301,38 @@ struct StableDestinationIdentityTests {
     #expect(manager.destinationId == currentFP.id)
     #expect(manager.destinationId != seeded)
   }
+
+  /// When the stored bookmark **won't resolve**, the real `defaultSameFolderEvidence` must report
+  /// `.ambiguous` and delegate to the resolver rather than silently path-comparing (which on a
+  /// remounted share would fork the id). Uses the real evidence path (no injected provider);
+  /// corrupt bookmark bytes force the unresolvable case deterministically.
+  @Test(
+    .disabled(
+      if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
+      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+  func unresolvableStoredBookmarkIsAmbiguousAndDelegatesToResolver() throws {
+    let dir = try makeTempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    let fp = lowConfidence("/Volumes/mount-A/backup")
+    var resolverCalls = 0
+    let manager = ExportDestinationManager(
+      skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
+      stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in fp },
+      ambiguityResolver: { _ in
+        resolverCalls += 1
+        return .sameDestination
+      })
+    manager.persistSelectedFolderForTesting(dir)
+    let seeded = try #require(manager.destinationId)
+
+    // Corrupt the stored bookmark so `URL(resolvingBookmarkData:)` throws → `.ambiguous`.
+    defaults.set(Data("not-a-bookmark".utf8), forKey: bookmarkKey)
+    manager.selectFolderForTesting(dir)
+
+    #expect(resolverCalls == 1)  // routed through the ambiguity resolver
+    #expect(manager.destinationId == seeded)  // resolver chose .sameDestination → id kept
+  }
 }
