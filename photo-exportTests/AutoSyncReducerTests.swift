@@ -138,6 +138,40 @@ struct AutoSyncReducerTests {
     #expect(next.current == .blocked(.destinationUnsafe))
   }
 
+  /// #127: a network-share remount drifts the fingerprint but keeps the stable id. The reducer
+  /// must keep keying on the stable id so the destination's accumulated dirty work is preserved,
+  /// not orphaned under a new key.
+  @Test func remountWithDriftedFingerprintKeepsStableIdAndPreservesDirty() {
+    let stableId = "stable-S"
+    let fpMountA = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/backup",
+      standardizedPath: "/Volumes/mount-A/backup")
+    let fpMountB = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/backup",
+      standardizedPath: "/Volumes/mount-B/backup")
+    #expect(fpMountA.id != fpMountB.id)
+
+    var state = AutoSyncReducer.State.initial
+    state.enabled = true
+    state.scopeSelection = AutoExportScopeSelection(timeline: true)
+    state.destination = DestinationSnapshot(
+      stableId: stableId, fingerprint: fpMountA, isAvailable: true, safety: .safe)
+    state.current = .idle
+    var dirty = AutoSyncDirtyState.empty
+    var scopeState = dirty.scope(.timeline)
+    scopeState.recordPendingAssetId("asset-1", costCap: AutoSyncReducer.targetedAssetCostCap)
+    dirty.setScope(.timeline, scopeState)
+    state.dirtyStateByDestination[stableId] = dirty
+
+    let drifted = DestinationSnapshot(
+      stableId: stableId, fingerprint: fpMountB, isAvailable: true, safety: .safe)
+    let (next, _) = AutoSyncReducer.reduce(.destinationChanged(drifted), in: state, now: now)
+
+    #expect(next.destination.id == stableId)
+    #expect(
+      next.dirtyStateByDestination[stableId]?.scope(.timeline).pendingAssetIds == ["asset-1"])
+  }
+
   // MARK: - scopeSelectionChanged
 
   @Test func clearingAllScopesBlocksOnNoScopesSelected() {

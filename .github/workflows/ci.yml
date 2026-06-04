@@ -87,6 +87,14 @@ jobs:
           ./scripts/ci/check-regression-gates.sh
           echo "::endgroup::"
 
+      - name: Check destination-identity keying
+        run: |
+          echo "::group::Destination-identity keying guard"
+          echo "Verifying per-destination state keys on the stable id, not fingerprint?.id"
+          echo "(docs/reference/architecture-conventions.md §Destination identity)."
+          ./scripts/ci/check-fingerprint-id-keying.sh
+          echo "::endgroup::"
+
       - name: Build Debug
         run: |
           echo "::group::Debug build"

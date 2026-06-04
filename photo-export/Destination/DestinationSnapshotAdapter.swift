@@ -4,9 +4,9 @@ import Foundation
 /// Production `AutoSyncDestinationProviding` wiring. Combines four signals
 /// AutoSync needs into a single `DestinationSnapshot` stream:
 ///
-/// 1. `destinationFingerprint` from `ExportDestinationManager` — the canonical
-///    identity. Nil means "no destination selected" (or the drive is unmounted
-///    with no cached fingerprint).
+/// 1. `identity` from `ExportDestinationManager` — the stable logical id plus the
+///    advisory fingerprint, published as one atomic value. A `nil` `stableId` means
+///    "no destination selected" or the drive is currently unavailable.
 /// 2. `isAvailable` from `ExportDestinationManager` — drive mounted and writable.
 /// 3. `migrationConflict` from `AppLifecycleCoordinator`: non-nil → safety
 ///    becomes `.unsafeMigrationConflict`.
@@ -50,12 +50,12 @@ final class DestinationSnapshotAdapter: AutoSyncDestinationProviding {
     safetyMonitor: DestinationSafetyMonitor
   ) -> AnyPublisher<DestinationSnapshot, Never> {
     Publishers.CombineLatest4(
-      destinationManager.$destinationFingerprint,
+      destinationManager.$identity,
       destinationManager.$isAvailable,
       lifecycleCoordinator.$migrationConflict,
       safetyMonitor.$needsSafetyConfirmation
     )
-    .map { fingerprint, isAvailable, conflict, needsConfirm in
+    .map { identity, isAvailable, conflict, needsConfirm in
       let safety: DestinationSafetyState
       if conflict != nil {
         safety = .unsafeMigrationConflict
@@ -64,8 +64,10 @@ final class DestinationSnapshotAdapter: AutoSyncDestinationProviding {
       } else {
         safety = .safe
       }
+      // Key on the stable id; carry the fingerprint for the safety gate's confidence read.
       return DestinationSnapshot(
-        fingerprint: fingerprint, isAvailable: isAvailable, safety: safety)
+        stableId: identity.stableId, fingerprint: identity.fingerprint,
+        isAvailable: isAvailable, safety: safety)
     }
     .removeDuplicates()
     .eraseToAnyPublisher()

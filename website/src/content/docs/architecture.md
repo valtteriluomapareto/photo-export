@@ -36,15 +36,23 @@ Handles Photos authorization and asset fetching. Uses `PHCachingImageManager` fo
 
 ### ExportDestinationManager
 
-Manages the chosen export destination folder using security-scoped bookmarks.
+Manages the chosen export destination folder using security-scoped bookmarks, and owns the
+**stable logical destination id** that keys every per-destination store.
 
 - Presents the macOS folder picker
 - Persists the selection via security-scoped bookmarks
 - Validates folder accessibility on launch
+- Owns a stable destination id, persisted beside the bookmark, seeded from the destination's
+  volume/path fingerprint once and then reused for the life of that selection. Reusing it keeps a
+  network-share remount (whose path-derived fingerprint changes) from re-exporting everything;
+  the fingerprint is kept only as a confidence signal for the Auto Export safety check.
+- Publishes identity (stable id + fingerprint) as one value so subscribers never see a stale id
+  paired with a fresh fingerprint
 
 ### ExportRecordStore (timeline)
 
-Tracks which assets have been exported per-destination to avoid duplicates and support resume.
+Tracks which assets have been exported per-destination (keyed by the stable destination id) to
+avoid duplicates and support resume.
 
 - Stores records by `PHAsset.localIdentifier`
 - Per-variant state: each record carries a `variants` dictionary keyed by `original` /

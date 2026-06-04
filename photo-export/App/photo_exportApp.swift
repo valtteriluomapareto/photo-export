@@ -238,8 +238,8 @@ struct PhotoExportApp: App {
           photoLibraryManager.start()
           lifecycleCoordinator.attach(
             initial: DestinationIdentitySnapshot(
-              fingerprint: exportDestinationManager.destinationFingerprint),
-            fingerprintPublisher: exportDestinationManager.$destinationFingerprint
+              identity: exportDestinationManager.identity),
+            identityPublisher: exportDestinationManager.$identity
               .eraseToAnyPublisher()
           )
           // Skip the entire AutoSync wiring in screenshot mode. The

@@ -22,7 +22,21 @@ compacted snapshot — implemented by the shared `JSONLRecordFile` component.
 ## Files & Locations
 
 - Directory (sandboxed): `~/Library/Containers/<bundle id>/Data/Library/Application Support/<bundle id>/ExportRecords/<destinationId>/`
-  - `destinationId` is a SHA-256 hash of the destination's volume UUID + volume-relative path, so each export destination gets its own isolated record store
+  - `destinationId` is the **stable logical destination id** — a per-destination key persisted
+    beside the security-scoped bookmark (`ExportDestinationStableId` in `UserDefaults`). Each
+    destination gets its own isolated record store. The id is *seeded* from the destination
+    fingerprint (SHA-256 of volume UUID + volume-relative path for drives with a volume UUID;
+    SHA-256 of the canonical path for drives without one — network shares, exFAT) the first
+    time a destination validates, then **reused verbatim** for as long as the stored bookmark
+    resolves to the same folder. Reusing the seeded id — rather than recomputing the
+    fingerprint every launch — is what keeps a network-share remount (whose path-derived
+    fingerprint drifts) from opening an empty record dir and re-exporting everything (issue
+    #127). The same id keys the AutoSync per-destination state
+    (`AutoSync/destinations/<destinationId>/`), the current-run journal, and the
+    safety-confirmation store; the fingerprint is retained only as the identity-confidence
+    signal for the AutoSync safety gate. Identity ownership and the keying invariant live in
+    [`docs/reference/architecture-conventions.md`](architecture-conventions.md) §Destination
+    identity.
 - Timeline store files:
   - `export-records.jsonl` — append-only mutation log (one JSON object per line)
   - `export-records.json` — compacted snapshot of the current state (single JSON object mapping `id` → `ExportRecord`)

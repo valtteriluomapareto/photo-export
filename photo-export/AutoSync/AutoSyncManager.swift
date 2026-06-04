@@ -204,7 +204,10 @@ final class AutoSyncManager: ObservableObject {
   /// / resume logic will read it.
   private func handleDestinationSnapshot(_ snapshot: DestinationSnapshot) {
     guard let environment else { return }
-    let newId = snapshot.fingerprint?.id
+    // Key on the stable logical id, not `fingerprint?.id` — a network-share remount drifts the
+    // fingerprint but keeps the stable id, so the dirty/retry/summary state stays under the
+    // same key and pending work is not orphaned.
+    let newId = snapshot.id
     let oldId = reducerState.destination.id
     if let newId, newId != oldId {
       let dirty = environment.dirtyStateStore.load(destinationId: newId)

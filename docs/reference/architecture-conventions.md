@@ -208,6 +208,46 @@ func startExportX(...) {
 
 Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`, plus the shared `enqueueBulkAlbumExport` driver behind `startExportAllAlbums` / `startExportAllSharedAlbums` / `startExportFolder` / `startExportAlbums`) follow the same shape but loop over multiple `enqueueX(...)` calls and set `isEnqueueingAll = true` for the duration. The four outer-Task scaffoldings share a private helper, `runBulkExportTask(...)`, which owns the `Task { [weak self] in }` wrapping, the `isEnqueueingAll = false` teardown on every exit path, the success finalize, and the partial-failure recovery on throw. The inner per-item loop shares `runBulkEnqueueLoop(...)` so multi-bucket dispatchers (years + months for timeline; favorites + albums + shared for collections) can chain passes while accumulating into a single `BulkExportTotals`.
 
+## Destination identity
+
+Every per-destination store — both record stores (`ExportRecords/<id>/`), the AutoSync state
+(`AutoSync/destinations/<id>/`), the current-run journal, and the safety-confirmation store — is
+keyed on a single **stable logical destination id**. This is a load-bearing contract: it is the
+root-cause fix for #127 (a network-share remount re-exporting everything).
+
+- **Owner.** `ExportDestinationManager` owns the id. It is persisted in `UserDefaults`
+  (`ExportDestinationStableId`) beside the security-scoped bookmark, **seeded** once from the
+  destination fingerprint the first time a destination validates, then **reused verbatim** for
+  as long as the stored bookmark resolves to the same folder. It is refreshed only when the user
+  explicitly selects a *different* folder (decided by **bookmark/file-identity equivalence**, not
+  path — the path is the drift-prone signal). `clearSelection()` drops it.
+- **One atomic identity value.** The manager publishes `@Published identity: DestinationIdentity`
+  (stable id + advisory fingerprint) as **one** value — not two `@Published` fields. The old
+  `destinationFingerprint` + `destinationId` pair-write is **retired**: it had a mid-emission gap
+  where a subscriber could read a new fingerprint with the stale id, and the documented "read
+  `fingerprint?.id`" workaround inverted the moment the stable id diverged from the fingerprint
+  id. Do not reintroduce a second `@Published` identity field; thread `DestinationIdentity`
+  through instead. `destinationId` remains a read-through of `identity.stableId`.
+- **Unavailable invariant.** While the destination is unavailable (`fingerprint == nil` /
+  `isAvailable == false`), the *published active* stable id is `nil` even though the *persisted*
+  id is kept privately for reuse. Publishing the persisted id while unavailable would make
+  `AppLifecycleCoordinator.apply` see an unchanged id on unplug and skip
+  `interruptForDestinationUnavailable`.
+- **The fingerprint is advisory.** `DestinationFingerprint` survives, but only as the
+  identity-*confidence* signal for the AutoSync safety gate (`identityConfidence`). It is **not**
+  the keying id and may drift across a network-share remount while the stable id holds. The
+  snapshot `Equatable` deliberately still carries the (drifting) fingerprint so a metadata refresh
+  flows through to subscribers; **stable-id equality**, not struct equality, is the
+  "same destination, don't re-key" line of defense (`DestinationIdentitySnapshot.id` /
+  `DestinationSnapshot.id` / the `removeDuplicates` filters in `AppLifecycleCoordinator.attach`
+  and `DestinationSafetyMonitor.attach`).
+- **Lint guard.** Keying per-destination state on `fingerprint?.id` is forbidden outside the
+  fingerprint module and enforced by [`scripts/ci/check-fingerprint-id-keying.sh`](../../scripts/ci/check-fingerprint-id-keying.sh)
+  (run in CI after the regression-gate check). A behavioral test can only cover the paths it
+  exercises; this grep proves the *absence* of a future consumer that re-derives the key from the
+  fingerprint. The lone legitimate `fingerprint.id` read (turning a freshly computed fingerprint
+  into the *seed* for a brand-new stable id) is tagged `// keying-id-ok`.
+
 ## Regression gates
 
 These tests are wired so they fire when a load-bearing invariant breaks. Do not "fix" them by re-recording — audit first.

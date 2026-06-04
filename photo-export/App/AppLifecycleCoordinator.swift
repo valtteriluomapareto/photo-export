@@ -20,42 +20,50 @@ struct MigrationConflictState: Equatable, Sendable {
   let legacyId: String
 }
 
-/// Snapshot of the destination identity the coordinator reacts to. Carries the structured
-/// fingerprint when one is available, plus the bare id for the no-fingerprint cases (drive
-/// unmounted / no destination selected). The id alone is what determines whether a change
-/// is "same destination" — equal ids skip the cancel/reconfigure cycle even if a transient
-/// fingerprint refresh produced a slightly different live fingerprint.
+/// Snapshot of the destination identity the coordinator reacts to. Carries the **stable
+/// logical id** (`id`) plus the advisory `fingerprint`. The id alone determines whether a
+/// change is "same destination" — equal ids skip the cancel/reconfigure cycle even when a
+/// transient fingerprint refresh (or a network-share remount under a new path) produced a
+/// different live fingerprint.
 ///
-/// Construction is via `init(fingerprint:)` or `.none`; both keep `id == fingerprint?.id`
-/// invariant. There is intentionally no public initializer that takes id and fingerprint
-/// separately — earlier review caught that allowing them to drift silently would let a
-/// caller pass an id that disagrees with the embedded fingerprint's derived id, which
-/// would then split downstream code that mixes `currentDestination.id` (used today) with
-/// `currentDestination.fingerprint?.id` (the future safety-gate read).
+/// `id` is the stable id sourced from `DestinationIdentity.stableId`, **not** recomputed from
+/// `fingerprint?.id`. The earlier "no separate id" init ban (when the id *was*
+/// `fingerprint?.id`) is relaxed: `init(identity:)` carries an id that may legitimately diverge
+/// from the fingerprint's derived id. The `init(fingerprint:)` convenience (id tracks the
+/// fingerprint id) remains for tests and no-drift call sites.
 struct DestinationIdentitySnapshot: Equatable, Sendable {
   let id: String?
   let fingerprint: DestinationFingerprint?
 
-  static let none = DestinationIdentitySnapshot(fingerprint: nil)
+  static let none = DestinationIdentitySnapshot(identity: .unavailable)
 
+  init(identity: DestinationIdentity) {
+    self.id = identity.stableId
+    self.fingerprint = identity.fingerprint
+  }
+
+  /// Test / no-drift convenience: the id tracks the fingerprint id.
   init(fingerprint: DestinationFingerprint?) {
-    self.fingerprint = fingerprint
-    self.id = fingerprint?.id
+    self.init(
+      identity: DestinationIdentity(
+        stableId: fingerprint?.id,  // keying-id-ok: no-drift convenience
+        fingerprint: fingerprint))
   }
 }
 
 /// Process-lifetime owner of bootstrap and destination-change handling for the app.
 ///
 /// Lives in `PhotoExportApp` as a single `@StateObject`, but the wiring is intentionally
-/// independent of view scope: `attach(initial:fingerprintPublisher:)` is idempotent so
+/// independent of view scope: `attach(initial:identityPublisher:)` is idempotent so
 /// multi-window scene recreation re-runs the view's `.task` without re-bootstrapping the app.
 ///
-/// The destination-change path is fingerprint-aware: a same-id change (the current
-/// fingerprint re-asserted with the same id, e.g. from a stale-bookmark refresh that
-/// resolved to the same volume) is a no-op rather than a `cancelAndClear()` + reconfigure
-/// cycle. The coordinator carries the full `DestinationFingerprint` (not just the id hash)
-/// so downstream code — safety gate, AutoSync — can read `identityConfidence` and the
-/// volume/path components without recomputing them from a URL.
+/// The destination-change path keys on the **stable logical id**: a same-id change (the same
+/// destination re-asserted with the same stable id, e.g. a stale-bookmark refresh or a network-
+/// share remount that drifted the fingerprint but resolved to the same folder) is a no-op
+/// rather than a `cancelAndClear()` + reconfigure cycle. The coordinator carries the full
+/// `DestinationFingerprint` alongside the id so downstream code — safety gate, AutoSync — can
+/// read `identityConfidence` and the volume/path components without recomputing them from a
+/// URL; that fingerprint is advisory and may differ from the stable id's seed.
 @MainActor
 final class AppLifecycleCoordinator: ObservableObject {
   private let cancelActiveWork: () -> Void
@@ -115,7 +123,7 @@ final class AppLifecycleCoordinator: ObservableObject {
   /// it freely on every scene recreation.
   func attach(
     initial: DestinationIdentitySnapshot,
-    fingerprintPublisher: AnyPublisher<DestinationFingerprint?, Never>
+    identityPublisher: AnyPublisher<DestinationIdentity, Never>
   ) {
     guard !didAttach else {
       log.debug("attach called more than once; ignoring (multi-window scene recreation)")
@@ -128,26 +136,26 @@ final class AppLifecycleCoordinator: ObservableObject {
     // The publisher is driven by `ExportDestinationManager`'s `@MainActor` writes, so
     // emissions arrive on the main thread. `MainActor.assumeIsolated` makes the call to
     // `apply(destination:)` explicit under Swift 6 strict concurrency without paying for a
-    // thread hop. `removeDuplicates()` (over the id hash) filters value-equal re-assignments;
-    // the `currentDestination.id == newId` check inside `apply` is a belt-and-braces guard
-    // for any future publisher implementation that does not honor that filter.
+    // thread hop. `removeDuplicates()` (over the full `DestinationIdentity`) filters
+    // value-equal re-assignments; the `currentDestination.id == newId` check inside `apply` is
+    // a belt-and-braces guard for any future publisher implementation that does not honor that
+    // filter.
     //
     // **IMPORTANT:** the upstream publisher MUST emit on the main thread. If a future caller
     // wires a publisher that hops threads (e.g. `.subscribe(on: .global)`), the
     // `assumeIsolated` call will trap. The debug-only precondition below makes that case
     // observable in development; release builds rely on the contract being honored.
-    // `removeDuplicates()` filters fingerprint-equal re-emissions (full identity, not just id).
-    // The id-only filter would drop same-id-different-metadata events — e.g. a high-confidence
-    // drive rename that keeps the volume UUID + relative path but changes `volumeRootPath` /
-    // `standardizedPath` — which the same-id branch in `apply(destination:)` is designed to
-    // surface to subscribers.
+    // `removeDuplicates()` filters identity-equal re-emissions (stable id *and* fingerprint).
+    // A stable-id-only filter would drop same-id-different-metadata events — e.g. a network-
+    // share remount that keeps the stable id but drifts the fingerprint — which the same-id
+    // branch in `apply(destination:)` is designed to surface (fresh metadata, no re-key).
     destinationObservation =
-      fingerprintPublisher
+      identityPublisher
       .removeDuplicates()
-      .sink { [weak self] fingerprint in
+      .sink { [weak self] identity in
         dispatchPrecondition(condition: .onQueue(.main))
         MainActor.assumeIsolated {
-          self?.apply(destination: DestinationIdentitySnapshot(fingerprint: fingerprint))
+          self?.apply(destination: DestinationIdentitySnapshot(identity: identity))
         }
       }
   }
