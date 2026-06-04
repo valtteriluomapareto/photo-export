@@ -19,6 +19,41 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.6.4",
+      summary:
+        "Two fixes that stop Photo Export from re-creating photos you've "
+        + "already backed up as ` (1)` duplicates — one for mixed-case "
+        + "filenames during Import Existing Backup, one for destinations "
+        + "whose export records got orphaned.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Import Existing Backup matches mixed-case filenames",
+          body:
+            "When importing an existing backup, files written with a "
+            + "lowercase extension (e.g. `IMG_1961.heic`, as Photos writes "
+            + "edited renders) failed to match Apple Photos' "
+            + "`IMG_1961.HEIC`, so they were left without an export record. "
+            + "A later export then re-created them with a ` (1)` suffix. "
+            + "The matcher now compares filenames case-insensitively on "
+            + "both sides, so already-backed-up files are recognised and "
+            + "skipped. "
+            + "Fixes [#127](https://github.com/valtteriluomapareto/photo-export/issues/127)."
+        ),
+        ReleaseNote.Bullet(
+          title: "Recover progress when export records are orphaned",
+          body:
+            "If a destination's saved export records get disconnected from "
+            + "the folder (most often after a refreshed folder bookmark), "
+            + "Photo Export used to confirm straight into a 0% re-export "
+            + "that re-created every file as a ` (1)` duplicate. It now "
+            + "detects the files-present-but-no-records state and offers to "
+            + "rebuild your progress from what's already on disk instead. "
+            + "Fixes [#129](https://github.com/valtteriluomapareto/photo-export/issues/129)."
+        ),
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.6.3",
       summary:
         "Smoother, faster browsing on large libraries, plus a fix for a "
