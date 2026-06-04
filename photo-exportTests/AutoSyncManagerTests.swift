@@ -273,6 +273,94 @@ struct AutoSyncManagerTests {
     #expect(manager.lastRunSummary == nil)
   }
 
+  // MARK: - Manager-level stable-id keying (#127)
+
+  private func lowConfidence(_ path: String) -> DestinationFingerprint {
+    .makeLow(volumeRootPath: nil, relativePathFromVolumeRoot: path, standardizedPath: path)
+  }
+
+  /// The manager loads/keys per-destination state on `snapshot.id` (the **stable id**), not the
+  /// fingerprint id. Proven by seeding the run-summary store under a stable id that deliberately
+  /// differs from the fingerprint id: if the manager keyed on `fingerprint?.id`, the load would
+  /// miss and `lastRunSummary` would be nil. A subsequent remount drift (same stable id, new
+  /// fingerprint) must NOT be treated as a destination switch, so the summary is preserved.
+  @Test func managerKeysPerDestinationStateOnStableIdAcrossRemountDrift() {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let stableId = "stable-S"
+    let fpMountA = lowConfidence("/Volumes/mount-A/backup")
+    let fpMountB = lowConfidence("/Volumes/mount-B/backup")
+    #expect(fpMountA.id != stableId)
+    #expect(fpMountB.id != stableId)
+    #expect(fpMountA.id != fpMountB.id)
+
+    let priorSummary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, reason: .appLaunch,
+        scope: .autoExport(AutoExportScopeSelection(timeline: true)), selection: .edited),
+      endedAt: Date(),
+      enqueuedCount: 4, completedCount: 4, failedCount: 0, skippedCount: 0,
+      cancelReason: nil, result: .completed)
+    try? builder.runSummaryStore.save(priorSummary, destinationId: stableId)
+
+    manager.attach(to: builder.environment)
+    builder.destination.subject.send(
+      DestinationSnapshot(
+        stableId: stableId, fingerprint: fpMountA, isAvailable: true, safety: .safe))
+    // Loaded from the stable id, not fpMountA.id (which has no summary).
+    #expect(manager.lastRunSummary == priorSummary)
+
+    // Remount drift: same stable id, drifted fingerprint → not a destination switch.
+    builder.destination.subject.send(
+      DestinationSnapshot(
+        stableId: stableId, fingerprint: fpMountB, isAvailable: true, safety: .safe))
+    #expect(manager.lastRunSummary == priorSummary)
+  }
+
+  /// The `newId == nil` clear path resets `currentRetryState` (so the Issues tab doesn't show a
+  /// removed destination's failures), alongside dropping `lastRunSummary`.
+  @Test func destinationClearedResetsCurrentRetryState() {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let destId = safeDestination().id!
+    var seeded = AutoSyncRetryState.empty
+    seeded.recordFailure(
+      scope: .timeline, assetId: "a", variant: .original,
+      category: .iCloudTransient, errorSignature: "sig",
+      at: builder.clock.now(), nextEligibleAt: nil)
+    try? builder.retryStore.save(seeded, destinationId: destId)
+
+    manager.attach(to: builder.environment)
+    builder.destination.subject.send(safeDestination())
+    #expect(!manager.currentRetryState.isEmpty)
+
+    builder.destination.subject.send(.none)
+    #expect(manager.currentRetryState.isEmpty)
+  }
+
+  /// Destination going away mid-fan-out cancels the remaining scopes (via `cancelActiveFanOut`),
+  /// proven by the current-run journal being cleared on the cancelled task's defer.
+  @Test func destinationClearedMidFanOutCancelsRemainingScopes() async {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(
+      AutoExportScopeSelection(timeline: true, favorites: true, albums: true))
+    manager.attach(to: builder.environment)
+
+    let destId = safeDestination().id!
+    builder.clock.advance(by: 10)
+    await Task.yield()
+    // Destination removed mid-fan-out.
+    builder.destination.subject.send(.none)
+    for _ in 0..<8 { await Task.yield() }
+
+    #expect(
+      builder.currentRunStore.load(destinationId: destId) == nil,
+      "Clearing the destination mid-run must cancel the fan-out; its defer clears the journal.")
+  }
+
   @Test func runCompletionPersistsRunSummaryToStore() async {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()

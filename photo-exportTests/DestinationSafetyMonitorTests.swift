@@ -263,6 +263,25 @@ struct DestinationSafetyMonitorTests {
     #expect(harness.monitor.needsSafetyConfirmation == false)
   }
 
+  /// Residual tail (#127 migration / #131 recovery): an upgrader whose path id already drifted
+  /// gets a *fresh* stable id with an empty record store. With files present and no prior
+  /// confirmation, the monitor flags for recovery (rebuild-from-disk) rather than the app
+  /// silently re-exporting. The fresh stable id deliberately differs from the fingerprint id.
+  @Test func freshlySeededIdWithFilesButNoRecordsFlagsForRecovery() async {
+    let harness = makeHarness(scanResult: true)  // files present on disk
+    defer { harness.cleanup() }
+    let fp = fingerprint(id: "drifted-mount")
+    let freshStableId = "fresh-seed-id"
+    #expect(fp.id != freshStableId)
+
+    harness.monitor.attach()
+    harness.identitySubject.send(
+      DestinationIdentity(stableId: freshStableId, fingerprint: fp))
+    await settleAsyncScan()
+
+    #expect(harness.monitor.needsSafetyConfirmation == true)
+  }
+
   @MainActor
   private final class ScanCallsRef {
     var callCount: Int = 0

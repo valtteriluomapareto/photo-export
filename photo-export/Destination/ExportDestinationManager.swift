@@ -62,6 +62,21 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// (`resolveAmbiguousSelection(for:)`).
   private let ambiguityResolver: ((URL) -> FolderSelectionDecision)?
 
+  /// Persists a security-scoped bookmark for a URL, returning success. Injectable so the
+  /// save-failure branch of `applyFolderSelection` (which must NOT drop the prior stable id) is
+  /// unit-testable; `nil` uses the production `saveBookmark(for:)`.
+  private let bookmarkSaver: ((URL) -> Bool)?
+
+  /// Acquires scoped access to the *stored* bookmark URL during evidence-gathering. Injectable
+  /// so the "resolves but can't be scoped" → `.ambiguous` branch is unit-testable; `nil` uses
+  /// `startAccessingSecurityScopedResource()`.
+  private let storedBookmarkScopeAcquirer: ((URL) -> Bool)?
+
+  /// Reads a URL's same-session file identity during evidence-gathering. Injectable so the
+  /// canonical-path fallback (file id unreadable) is unit-testable; `nil` uses
+  /// `fileResourceIdentifier(of:)`.
+  private let fileIdentifierProvider: ((URL) -> (any NSObjectProtocol)?)?
+
   /// Evidence about whether an explicitly picked folder is the same destination as the one the
   /// stored bookmark points at. Keyed on **bookmark/file identity, not path** — a network
   /// share's path is exactly the drift-prone signal, so "the path differs" must not mint a new
@@ -171,7 +186,10 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       ExportDestinationManager.computeDestinationFingerprint(for: $0)
     },
     sameFolderEvidenceProvider: ((URL) -> SameFolderEvidence)? = nil,
-    ambiguityResolver: ((URL) -> FolderSelectionDecision)? = nil
+    ambiguityResolver: ((URL) -> FolderSelectionDecision)? = nil,
+    bookmarkSaver: ((URL) -> Bool)? = nil,
+    storedBookmarkScopeAcquirer: ((URL) -> Bool)? = nil,
+    fileIdentifierProvider: ((URL) -> (any NSObjectProtocol)?)? = nil
   ) {
     self.userDefaults = userDefaults
     self.bookmarkDefaultsKey = bookmarkDefaultsKey
@@ -179,6 +197,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     self.fingerprintProvider = fingerprintProvider
     self.sameFolderEvidenceProvider = sameFolderEvidenceProvider
     self.ambiguityResolver = ambiguityResolver
+    self.bookmarkSaver = bookmarkSaver
+    self.storedBookmarkScopeAcquirer = storedBookmarkScopeAcquirer
+    self.fileIdentifierProvider = fileIdentifierProvider
     self.persistedStableId = userDefaults.string(forKey: stableIdDefaultsKey)
     if !skipRestore {
       restoreBookmarkIfAvailable()
@@ -498,7 +519,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // destination's stable id while `selectedFolderURL`/`identity` still point at it, and the
     // next validate/relaunch would reseed the old destination from a possibly-drifted
     // fingerprint and re-key its records.
-    guard saveBookmark(for: url) else {
+    guard bookmarkSaver?(url) ?? saveBookmark(for: url) else {
       statusMessage = "Failed to save access to selected folder"
       return
     }
@@ -629,8 +650,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     else {
       return .ambiguous
     }
-    let storedScoped = storedURL.startAccessingSecurityScopedResource()
-    defer { if storedScoped { storedURL.stopAccessingSecurityScopedResource() } }
+    let acquireScope = storedBookmarkScopeAcquirer ?? { $0.startAccessingSecurityScopedResource() }
+    let storedScoped = acquireScope(storedURL)
+    // Only balance a real acquire with a real release; an injected acquirer didn't actually scope.
+    defer {
+      if storedScoped, storedBookmarkScopeAcquirer == nil {
+        storedURL.stopAccessingSecurityScopedResource()
+      }
+    }
     // If scoped access can't be acquired (old drive unplugged / stale bookmark / sandbox-denied
     // — the normal re-grant-after-stale flow), the stored URL is not live: its resource-key and
     // path reads would be unreliable (and could block on kernel I/O, the #92 bail-out `validate`
@@ -640,9 +667,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // confirmation instead of guessing.
     guard storedScoped else { return .ambiguous }
 
-    if let storedFID = Self.fileResourceIdentifier(of: storedURL),
-      let pickedFID = Self.fileResourceIdentifier(of: pickedURL)
-    {
+    let fileId = fileIdentifierProvider ?? { Self.fileResourceIdentifier(of: $0) }
+    if let storedFID = fileId(storedURL), let pickedFID = fileId(pickedURL) {
       return storedFID.isEqual(pickedFID) ? .sameAsStored : .differentFromStored
     }
     // File identity unreadable (rare) — fall back to canonical path. Scoped access succeeded, so

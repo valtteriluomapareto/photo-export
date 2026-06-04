@@ -21,16 +21,21 @@
 #   - any line tagged with the marker  keying-id-ok  (the seed site that turns a freshly computed
 #     fingerprint into the *seed* for a brand-new stable id, and the no-drift convenience inits
 #     that intentionally track the fingerprint id).
-# Comment lines (`//`, `///`, `*`, `/*`) are ignored so docstrings can mention the old pattern.
+# Lines whose first non-space character begins a comment (`//`, `*`, `/*`) are ignored so
+# docstrings can mention the old pattern. (Note: a *trailing* inline comment mentioning the
+# pattern on an otherwise-code line would still match — keep such mentions on their own
+# comment line.)
+#
+# Run with `--self-test` to verify the guard itself catches a bad input and passes a good one.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-echo "Checking for fingerprint-id keying outside the fingerprint module..."
-
-matches=$(
-  grep -rn --include='*.swift' -E '\bfingerprint\??\.id\b' photo-export \
+# Emits the forbidden keying lines found under <dir>, after applying the exceptions above.
+scan() {
+  local dir="$1"
+  grep -rn --include='*.swift' -E '\bfingerprint\??\.id\b' "$dir" \
     | grep -v '/Models/DestinationFingerprint.swift:' \
     | grep -v 'keying-id-ok' \
     | awk -F: '{
@@ -40,7 +45,33 @@ matches=$(
         if (content !~ /^\/\// && content !~ /^\*/ && content !~ /^\/\*/) print
       }' \
     || true
-)
+}
+
+# Self-test: prove the guard fails on a bad fixture and passes a good one. Run in CI before the
+# real scan so a regex/awk regression that silently neuters the guard is caught.
+if [[ "${1:-}" == "--self-test" ]]; then
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  printf 'let key = snapshot.fingerprint?.id\n' > "$tmp/Bad.swift"
+  if [[ -z "$(scan "$tmp")" ]]; then
+    echo "SELF-TEST FAILED: a bad keying line ('snapshot.fingerprint?.id') was NOT caught."
+    exit 1
+  fi
+  rm "$tmp/Bad.swift"
+  printf 'let k = snapshot.fingerprint?.id  // keying-id-ok\n/// doc mentions fingerprint?.id\n' \
+    > "$tmp/Good.swift"
+  if [[ -n "$(scan "$tmp")" ]]; then
+    echo "SELF-TEST FAILED: a good fixture (marked / commented) was flagged:"
+    scan "$tmp" | sed 's/^/    /'
+    exit 1
+  fi
+  echo "Guard self-test passed."
+  exit 0
+fi
+
+echo "Checking for fingerprint-id keying outside the fingerprint module..."
+
+matches="$(scan photo-export)"
 
 if [[ -n "$matches" ]]; then
   echo

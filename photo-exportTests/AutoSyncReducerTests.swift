@@ -172,6 +172,43 @@ struct AutoSyncReducerTests {
       next.dirtyStateByDestination[stableId]?.scope(.timeline).pendingAssetIds == ["asset-1"])
   }
 
+  /// Swapping to a *different* destination while the prior one was unavailable schedules
+  /// `.destinationSelected` (3s), not `.destinationBecameAvailable` (reserved for the SAME stable
+  /// id returning). Keys the classification on stableId.
+  @Test func swappingDestinationWhileUnavailableSchedulesDestinationSelected() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    let fpA = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/a", standardizedPath: "/Volumes/A/a")
+    let fpB = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/b", standardizedPath: "/Volumes/B/b")
+    state.destination = DestinationSnapshot(
+      stableId: "id-A", fingerprint: fpA, isAvailable: false, safety: .safe)
+    state.current = .waiting(.destinationUnavailable)
+
+    let restored = DestinationSnapshot(
+      stableId: "id-B", fingerprint: fpB, isAvailable: true, safety: .safe)
+    let (next, effects) = AutoSyncReducer.reduce(
+      .destinationChanged(restored), in: state, now: now)
+
+    let fireAt = now.addingTimeInterval(3)
+    #expect(next.current == .scheduled(reason: .destinationSelected, fireAt: fireAt))
+    #expect(effects.contains(.scheduleDebounce(.destinationSelected, fireAt: fireAt)))
+  }
+
+  /// The unavailable invariant's published shape — `stableId == nil` while `isAvailable == true`
+  /// — blocks on `.destinationMissing` (the id guard precedes the availability guard). Pins the
+  /// guard order so a future reorder can't silently change behavior.
+  @Test func nilStableIdWithAvailableTrueBlocksOnDestinationMissing() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .idle
+    let snap = DestinationSnapshot(
+      stableId: nil, fingerprint: nil, isAvailable: true, safety: .safe)
+
+    let (next, _) = AutoSyncReducer.reduce(.destinationChanged(snap), in: state, now: now)
+
+    #expect(next.current == .blocked(.destinationMissing))
+  }
+
   // MARK: - scopeSelectionChanged
 
   @Test func clearingAllScopesBlocksOnNoScopesSelected() {
