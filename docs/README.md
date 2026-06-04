@@ -32,6 +32,7 @@ Current process and open work:
 - [`project/release-process.md`](project/release-process.md) — how to cut a release (version bump, tag, publish)
 - [`project/plans/ui-smoothness-plan.md`](project/plans/ui-smoothness-plan.md) — active UI smoothness and SwiftUI Observation modernization roadmap
 - [`project/plans/launch-agent-background-sync-plan.md`](project/plans/launch-agent-background-sync-plan.md) — proposed LaunchAgent for closed-app Auto Export (follow-up to the shipped MVP)
+- [`project/plans/destination-identity-simplification-plan.md`](project/plans/destination-identity-simplification-plan.md) — fix for [issue #127](https://github.com/valtteriluomapareto/photo-export/issues/127) (network-share remounts drift the destination id and trigger duplicate re-export): a stable logical destination id persisted next to the bookmark (Phase 0 hotfix), with the larger slot/scan persistence-model simplification deferred as optional.
 
 ## Maintainer notes — archive
 
