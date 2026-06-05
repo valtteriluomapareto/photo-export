@@ -19,6 +19,33 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.6.5",
+      summary:
+        "Fixes duplicate re-exports when your backup folder lives on a network "
+        + "share (NAS/SMB): reconnecting the share under a different path no "
+        + "longer makes Photo Export re-create everything you've already backed "
+        + "up as ` (1)` duplicates.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Network-share backups survive a remount without re-exporting",
+          body:
+            "Photo Export now tracks each destination by a stable identity "
+            + "saved alongside your folder bookmark, instead of the volume's "
+            + "mount path. When a network share (NAS/SMB) reconnects under a "
+            + "different path — which used to look like a brand-new, empty "
+            + "destination — your export history carries over, so "
+            + "already-backed-up photos are recognised and skipped instead of "
+            + "re-created as ` (1)` duplicates. Your existing records and "
+            + "destination files are untouched; the history migrates "
+            + "automatically. If you ever re-select a folder Photo Export "
+            + "can't automatically recognise, it now asks whether it's the "
+            + "same backup folder rather than guessing. "
+            + "Fixes [#132](https://github.com/valtteriluomapareto/photo-export/issues/132)."
+        )
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.6.4",
       summary:
         "Two fixes that stop Photo Export from re-creating photos you've "
