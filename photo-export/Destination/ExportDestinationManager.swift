@@ -11,23 +11,101 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   @Published private(set) var isAvailable: Bool = false
   @Published private(set) var isWritable: Bool = false
   @Published private(set) var statusMessage: String?
-  @Published private(set) var destinationId: String?
-  /// Structured form of the same identity carried by `destinationId`. Both are kept in sync —
-  /// `destinationFingerprint?.id == destinationId` always holds *between* mutations. The
-  /// two `@Published` writes are not transactional, so a subscriber to `$destinationFingerprint`
-  /// that reads `destinationId` synchronously may observe a brief moment where the id has not
-  /// yet caught up; downstream code should subscribe to `$destinationFingerprint` and read
-  /// the id via `fingerprint?.id` to avoid the gap. All callers inside this class go through
-  /// `setIdentity(fingerprint:)` so the field-pair stays consistent.
-  @Published private(set) var destinationFingerprint: DestinationFingerprint?
+
+  /// The destination's identity — the **stable logical id** plus the volume/path
+  /// `DestinationFingerprint` — published as one atomic value. This replaces the former
+  /// `destinationId` / `destinationFingerprint` two-`@Published` pair-write: a subscriber can
+  /// no longer observe a new fingerprint paired with a stale id. Subscribers that key
+  /// per-destination state MUST read `identity.stableId`; the fingerprint is advisory
+  /// (identity-confidence) only. See `DestinationIdentity` and
+  /// `docs/reference/architecture-conventions.md` §Destination identity.
+  @Published private(set) var identity: DestinationIdentity = .unavailable
+
+  /// Read-through of `identity.stableId` for synchronous callers (diagnostics, tests). This is
+  /// the keying id every per-destination store uses. `nil` while the destination is
+  /// unavailable, even when a stable id is persisted for reuse — the published id follows the
+  /// unavailable invariant (see `validate`).
+  var destinationId: String? { identity.stableId }
 
   // MARK: - Keys & Logger
   private let userDefaults: UserDefaults
   private let bookmarkDefaultsKey: String
+  /// UserDefaults key for the persisted stable logical destination id, stored beside the
+  /// bookmark. Survives across launches so the same destination keeps the same id even when its
+  /// fingerprint drifts (network-share remount under a new path).
+  private let stableIdDefaultsKey: String
   private let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "ExportDestination")
 
   private var volumeObservers: [NSObjectProtocol] = []
+
+  /// The **persisted** stable id, kept privately across launches for reuse. Distinct from the
+  /// published `identity.stableId` (the *active* id), which is `nil` while the destination is
+  /// unavailable. Seeded on first successful validate of a destination that has none, reused
+  /// verbatim afterwards, and refreshed only when the user explicitly picks a *different*
+  /// folder (`FolderSelectionDecision.newDestination`).
+  private var persistedStableId: String?
+
+  /// Computes the destination fingerprint for a URL. Injectable so the network-share remount
+  /// repro is a pure unit test — feed a drifted low-confidence fingerprint for the same folder
+  /// and assert the stable id holds. Defaults to the live `URLResourceValues`-backed derivation.
+  private let fingerprintProvider: (URL) -> DestinationFingerprint?
+
+  /// Gathers same-vs-different-folder evidence for an explicit pick by resolving the *stored*
+  /// bookmark and comparing it against the freshly picked folder. Injectable so the
+  /// re-selection rule is testable without round-tripping a real bookmark on a real URL.
+  /// `nil` uses `defaultSameFolderEvidence(forPicked:)`.
+  private let sameFolderEvidenceProvider: ((URL) -> SameFolderEvidence)?
+
+  /// Resolves the decision for an ambiguous pick (stored bookmark won't resolve). Injectable
+  /// so the branch is unit-testable; `nil` presents the production `NSAlert` confirmation
+  /// (`resolveAmbiguousSelection(for:)`).
+  private let ambiguityResolver: ((URL) -> FolderSelectionDecision)?
+
+  /// Persists a security-scoped bookmark for a URL, returning success. Injectable so the
+  /// save-failure branch of `applyFolderSelection` (which must NOT drop the prior stable id) is
+  /// unit-testable; `nil` uses the production `saveBookmark(for:)`.
+  private let bookmarkSaver: ((URL) -> Bool)?
+
+  /// Acquires scoped access to the *stored* bookmark URL during evidence-gathering. Injectable
+  /// so the "resolves but can't be scoped" → `.ambiguous` branch is unit-testable; `nil` uses
+  /// `startAccessingSecurityScopedResource()`.
+  private let storedBookmarkScopeAcquirer: ((URL) -> Bool)?
+
+  /// Reads a URL's same-session file identity during evidence-gathering. Injectable so the
+  /// canonical-path fallback (file id unreadable) is unit-testable; `nil` uses
+  /// `fileResourceIdentifier(of:)`.
+  private let fileIdentifierProvider: ((URL) -> (any NSObjectProtocol)?)?
+
+  /// Evidence about whether an explicitly picked folder is the same destination as the one the
+  /// stored bookmark points at. Keyed on **bookmark/file identity, not path** — a network
+  /// share's path is exactly the drift-prone signal, so "the path differs" must not mint a new
+  /// id (that would re-introduce the duplicate re-export through the picker).
+  enum SameFolderEvidence: Equatable, Sendable {
+    /// Stored bookmark resolved to the same folder as the pick (e.g. re-granting access to the
+    /// same backup folder after a stale-bookmark prompt). Keep the stable id.
+    case sameAsStored
+    /// Stored bookmark resolved to a genuinely different folder. Mint a fresh stable id.
+    case differentFromStored
+    /// No bookmark stored yet (first-ever selection). No fork risk; seed a fresh id.
+    case noStoredBookmark
+    /// The stored bookmark exists but won't resolve, so same-vs-different is unknowable. Surface
+    /// a confirmation rather than silently forking.
+    case ambiguous
+  }
+
+  /// The decision the selection flow applies once evidence is gathered (and any ambiguity is
+  /// resolved by the user).
+  enum FolderSelectionDecision: Equatable, Sendable {
+    /// Re-selecting the same destination: keep the persisted stable id and the stashed legacy id
+    /// so records stay keyed identically. This is the picker-path guard against duplicate
+    /// re-export.
+    case sameDestination
+    /// A genuinely different destination (or the first-ever selection): forget the prior stable
+    /// id and legacy directory so a fresh id is seeded and the directory coordinator does not
+    /// migrate the previous destination's records into the new one.
+    case newDestination
+  }
 
   /// Hash of the **original** bookmark bytes captured at restore time, before any stale-bookmark
   /// refresh in `restoreBookmarkIfAvailable()` overwrites the bytes in `userDefaults`. This is
@@ -102,10 +180,27 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   init(
     skipRestore: Bool = false,
     userDefaults: UserDefaults = .standard,
-    bookmarkDefaultsKey: String = "ExportDestinationBookmark"
+    bookmarkDefaultsKey: String = "ExportDestinationBookmark",
+    stableIdDefaultsKey: String = "ExportDestinationStableId",
+    fingerprintProvider: @escaping (URL) -> DestinationFingerprint? = {
+      ExportDestinationManager.computeDestinationFingerprint(for: $0)
+    },
+    sameFolderEvidenceProvider: ((URL) -> SameFolderEvidence)? = nil,
+    ambiguityResolver: ((URL) -> FolderSelectionDecision)? = nil,
+    bookmarkSaver: ((URL) -> Bool)? = nil,
+    storedBookmarkScopeAcquirer: ((URL) -> Bool)? = nil,
+    fileIdentifierProvider: ((URL) -> (any NSObjectProtocol)?)? = nil
   ) {
     self.userDefaults = userDefaults
     self.bookmarkDefaultsKey = bookmarkDefaultsKey
+    self.stableIdDefaultsKey = stableIdDefaultsKey
+    self.fingerprintProvider = fingerprintProvider
+    self.sameFolderEvidenceProvider = sameFolderEvidenceProvider
+    self.ambiguityResolver = ambiguityResolver
+    self.bookmarkSaver = bookmarkSaver
+    self.storedBookmarkScopeAcquirer = storedBookmarkScopeAcquirer
+    self.fileIdentifierProvider = fileIdentifierProvider
+    self.persistedStableId = userDefaults.string(forKey: stableIdDefaultsKey)
     if !skipRestore {
       restoreBookmarkIfAvailable()
     }
@@ -155,8 +250,41 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     panel.prompt = "Choose"
 
     if panel.runModal() == .OK, let url = panel.url {
-      setSelectedFolder(url)
+      processSelectedFolder(url)
     }
+  }
+
+  /// Resolves the same-vs-different-folder decision for an explicitly picked folder, then
+  /// applies it. Split out from `selectFolder()` (which owns the non-testable `NSOpenPanel`) so
+  /// the re-selection rule can be unit-tested via the injected `sameFolderEvidenceProvider`.
+  private func processSelectedFolder(_ url: URL) {
+    let evidence = sameFolderEvidenceProvider?(url) ?? defaultSameFolderEvidence(forPicked: url)
+    let decision: FolderSelectionDecision
+    switch evidence {
+    case .sameAsStored:
+      decision = .sameDestination
+    case .differentFromStored, .noStoredBookmark:
+      decision = .newDestination
+    case .ambiguous:
+      decision = ambiguityResolver?(url) ?? resolveAmbiguousSelection(for: url)
+    }
+    applyFolderSelection(url, decision: decision)
+  }
+
+  /// The stored bookmark won't resolve, so we can't tell whether the user re-picked the same
+  /// backup folder or a new one. Ask. Defaulting to "same folder" keeps the duplicate-re-export
+  /// (#127) failure mode off the highlighted button; the user can still choose "different".
+  private func resolveAmbiguousSelection(for url: URL) -> FolderSelectionDecision {
+    let alert = NSAlert()
+    alert.messageText = "Is this the same backup folder as before?"
+    alert.informativeText =
+      "Photo Export couldn't confirm whether \"\(url.lastPathComponent)\" is the destination you "
+      + "used previously. Choosing \"Same folder\" keeps your existing export history so nothing "
+      + "is re-exported. Choose \"Different folder\" only if this is a new backup destination."
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Same folder")
+    alert.addButton(withTitle: "Different folder")
+    return alert.runModal() == .alertFirstButtonReturn ? .sameDestination : .newDestination
   }
 
   func revealInFinder() {
@@ -169,8 +297,12 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     isAvailable = false
     isWritable = false
     statusMessage = "No export folder selected"
-    setIdentity(nil)
+    publishUnavailableIdentity()
     stashedLegacyDestinationId = nil
+    // Dropping the selection always drops the stable id — the next selection is a fresh
+    // destination as far as identity is concerned.
+    persistedStableId = nil
+    userDefaults.removeObject(forKey: stableIdDefaultsKey)
     userDefaults.removeObject(forKey: bookmarkDefaultsKey)
     logger.info("Cleared export destination selection")
   }
@@ -351,23 +483,62 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     statusMessage = nil
   }
 
-  /// Exercises the production bookmark save path for unit tests.
+  /// Exercises the production bookmark save path for unit tests as a fresh selection
+  /// (`.newDestination`), seeding a new stable id.
   func persistSelectedFolderForTesting(_ url: URL) {
-    setSelectedFolder(url)
+    applyFolderSelection(url, decision: .newDestination)
+  }
+
+  /// Drives the full selection flow (evidence → decision → apply) for unit tests, bypassing the
+  /// `NSOpenPanel`. Pair with an injected `sameFolderEvidenceProvider` to exercise the
+  /// re-selection rule.
+  func selectFolderForTesting(_ url: URL) {
+    processSelectedFolder(url)
+  }
+
+  /// Re-runs validation against the current selection, mirroring what the volume
+  /// mount/unmount notifications do. Lets tests simulate a remount — after swapping the
+  /// injected `fingerprintProvider`'s result — without posting a real `NSWorkspace`
+  /// notification.
+  func revalidateForTesting() {
+    guard let url = selectedFolderURL else { return }
+    validate(url: url)
   }
 
   // MARK: - Internal Helpers
-  private func setSelectedFolder(_ url: URL) {
-    logger.info("User selected export folder: \(url.path, privacy: .public)")
-    // Clear any stashed legacy id from a prior bookmark restore. Otherwise a sequence
-    // like "restore folder A → user picks new folder B" would leave A's legacy hash in
-    // place; the next `currentLegacyDestinationId()` call would return A's hash and the
-    // directory coordinator would migrate A's records into B's `<newId>` directory —
-    // mixing destinations and stranding A.
-    stashedLegacyDestinationId = nil
-    guard saveBookmark(for: url) else {
+
+  /// Applies an explicit folder selection. The `decision` controls stable-id continuity:
+  /// `.sameDestination` keeps the persisted stable id and stashed legacy id (re-grant of the
+  /// same folder); `.newDestination` forgets both so a fresh id is seeded by `validate`.
+  func applyFolderSelection(_ url: URL, decision: FolderSelectionDecision) {
+    logger.info(
+      "User selected export folder: \(url.path, privacy: .public) (decision: \(String(describing: decision), privacy: .public))"
+    )
+    // Save the new bookmark FIRST. Only once it succeeds do we mutate persisted identity —
+    // otherwise a failed save on a `.newDestination` pick would have already dropped the *old*
+    // destination's stable id while `selectedFolderURL`/`identity` still point at it, and the
+    // next validate/relaunch would reseed the old destination from a possibly-drifted
+    // fingerprint and re-key its records.
+    guard bookmarkSaver?(url) ?? saveBookmark(for: url) else {
       statusMessage = "Failed to save access to selected folder"
       return
+    }
+    switch decision {
+    case .newDestination:
+      // Forget the prior destination's legacy hash and stable id. Otherwise a sequence like
+      // "restore folder A → user picks new folder B" would leave A's legacy hash in place; the
+      // next `currentLegacyDestinationId()` call would return A's hash and the directory
+      // coordinator would migrate A's records into B's `<newId>` directory — mixing
+      // destinations and stranding A. Clearing the stable id lets `validate` seed a fresh one
+      // for B.
+      stashedLegacyDestinationId = nil
+      persistedStableId = nil
+      userDefaults.removeObject(forKey: stableIdDefaultsKey)
+    case .sameDestination:
+      // Re-granting access to the SAME folder. Keep the stable id (records stay keyed
+      // identically) and the stashed legacy id (so the coordinator can still find the original
+      // `ExportRecords/<oldId>/` even though the bytes were just overwritten).
+      break
     }
     selectedFolderURL = url
     validate(url: url)
@@ -385,14 +556,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Returns `nil` when no usable identity component can be read (typically because the drive
   /// is unmounted). Callers treat this as "destination not yet available" and wait for the
   /// volume to mount.
-  static func computeDestinationId(for url: URL) -> String? {
-    DestinationFingerprint.compute(for: url)?.fingerprint.id
+  nonisolated static func computeDestinationId(for url: URL) -> String? {
+    // Derives the *seed* for a fresh stable id, not a live keying read.
+    DestinationFingerprint.compute(for: url)?.fingerprint.id  // keying-id-ok
   }
 
   /// Computes the full `DestinationFingerprint` for a folder URL. Used by code paths that need
   /// identity-confidence and the structured volume/path components in addition to the id.
   /// Returns `nil` under the same conditions as `computeDestinationId(for:)`.
-  static func computeDestinationFingerprint(for url: URL) -> DestinationFingerprint? {
+  nonisolated static func computeDestinationFingerprint(for url: URL) -> DestinationFingerprint? {
     DestinationFingerprint.compute(for: url)?.fingerprint
   }
 
@@ -419,15 +591,33 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     return Self.legacyDestinationId(from: data)
   }
 
-  /// Sets `destinationFingerprint` and `destinationId` together. Pair-write helper kept
-  /// private so the class's own callers can't desynchronize the two `@Published` properties.
-  /// Note: `@Published` emits one event per write, so subscribers see two emissions per
-  /// call (fingerprint then id); by the time both have fired the pair is consistent. Mid-
-  /// emission reads must use `$destinationFingerprint` and read `fingerprint?.id` rather
-  /// than `destinationId` directly.
-  private func setIdentity(_ fingerprint: DestinationFingerprint?) {
-    destinationFingerprint = fingerprint
-    destinationId = fingerprint?.id
+  /// Publishes the identity for a reachable destination, seeding the stable id from the
+  /// freshly computed fingerprint if one isn't persisted yet (the upgrade / first-selection
+  /// path), and reusing the persisted id verbatim otherwise (the line that fixes the
+  /// network-share remount re-export). A `nil` fingerprint — drive reachable but resource keys
+  /// unreadable — must not seed: defer to the next successful validate and publish unavailable.
+  private func publishAvailableIdentity(fingerprint: DestinationFingerprint?) {
+    guard let fingerprint else {
+      publishUnavailableIdentity()
+      return
+    }
+    if persistedStableId == nil {
+      let seed = fingerprint.id  // keying-id-ok: seeds a fresh stable id
+      persistedStableId = seed
+      userDefaults.set(seed, forKey: stableIdDefaultsKey)
+      logger.info("Seeded stable destination id: \(seed, privacy: .public)")
+    }
+    let next = DestinationIdentity(stableId: persistedStableId, fingerprint: fingerprint)
+    if identity != next { identity = next }
+  }
+
+  /// Publishes the unavailable identity (no active stable id, no fingerprint). The *persisted*
+  /// stable id is intentionally left untouched for reuse when the destination returns; only the
+  /// published active id is cleared. Publishing the persisted id while unavailable would make
+  /// the lifecycle coordinator see an unchanged id on unplug and skip its
+  /// destination-unavailable handling.
+  private func publishUnavailableIdentity() {
+    if identity != .unavailable { identity = .unavailable }
   }
 
   /// Pre-Phase-0a low-confidence legacy id for the currently selected folder. Returns the
@@ -438,6 +628,65 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   func currentPreV2LowConfidenceLegacyId() -> String? {
     guard let url = selectedFolderURL else { return nil }
     return DestinationFingerprint.preV2LowConfidenceId(for: url)
+  }
+
+  /// Default same-vs-different-folder evidence: resolve the *stored* bookmark and compare it to
+  /// the freshly picked folder by **same-session file identity** (`fileResourceIdentifier`), not
+  /// path. The path is the drift-prone signal a network share changes across remount, so a
+  /// path comparison would re-introduce the picker-path duplicate re-export; the file identity
+  /// is stable for the lifetime of the mount regardless of where it mounted. Falls back to a
+  /// canonical-path comparison only when file ids are unreadable.
+  private func defaultSameFolderEvidence(forPicked pickedURL: URL) -> SameFolderEvidence {
+    guard let storedData = userDefaults.data(forKey: bookmarkDefaultsKey) else {
+      return .noStoredBookmark
+    }
+    var isStale = false
+    guard
+      let storedURL = try? URL(
+        resolvingBookmarkData: storedData,
+        options: [.withSecurityScope],
+        relativeTo: nil,
+        bookmarkDataIsStale: &isStale)
+    else {
+      return .ambiguous
+    }
+    let acquireScope = storedBookmarkScopeAcquirer ?? { $0.startAccessingSecurityScopedResource() }
+    let storedScoped = acquireScope(storedURL)
+    // Only balance a real acquire with a real release; an injected acquirer didn't actually scope.
+    defer {
+      if storedScoped, storedBookmarkScopeAcquirer == nil {
+        storedURL.stopAccessingSecurityScopedResource()
+      }
+    }
+    // If scoped access can't be acquired (old drive unplugged / stale bookmark / sandbox-denied
+    // — the normal re-grant-after-stale flow), the stored URL is not live: its resource-key and
+    // path reads would be unreliable (and could block on kernel I/O, the #92 bail-out `validate`
+    // avoids). Crucially, the canonical-path fallback below would then compare a dead stored
+    // path against the fresh pick and, for a network share remounted at a new path, classify the
+    // SAME destination as `.differentFromStored` — forking the id and re-exporting. Surface the
+    // confirmation instead of guessing.
+    guard storedScoped else { return .ambiguous }
+
+    let fileId = fileIdentifierProvider ?? { Self.fileResourceIdentifier(of: $0) }
+    if let storedFID = fileId(storedURL), let pickedFID = fileId(pickedURL) {
+      return storedFID.isEqual(pickedFID) ? .sameAsStored : .differentFromStored
+    }
+    // File identity unreadable (rare). An equal canonical path is still strong evidence it's the
+    // same folder (two folders can't share a canonical path), so keep `.sameAsStored`. But
+    // differing paths are genuinely ambiguous: it could be a genuinely different folder OR the
+    // same destination reached through a different path (the drift-prone signal). Minting a new
+    // id on a path difference would reintroduce the #127 duplicate re-export, so surface the
+    // confirmation instead of guessing `.differentFromStored`.
+    let storedPath = storedURL.resolvingSymlinksInPath().standardizedFileURL.path
+    let pickedPath = pickedURL.resolvingSymlinksInPath().standardizedFileURL.path
+    return storedPath == pickedPath ? .sameAsStored : .ambiguous
+  }
+
+  /// Same-session-stable file identity for a folder URL, used to compare two URLs for
+  /// "same folder" without trusting their paths. Returns `nil` when the resource value can't
+  /// be read.
+  private static func fileResourceIdentifier(of url: URL) -> (any NSObjectProtocol)? {
+    (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier
   }
 
   private func saveBookmark(for url: URL) -> Bool {
@@ -459,7 +708,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   private func restoreBookmarkIfAvailable() {
     guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else {
       statusMessage = "No export folder selected"
-      setIdentity(nil)
+      publishUnavailableIdentity()
       return
     }
     // Capture the legacy hash from the *original* bytes before any stale-bookmark refresh.
@@ -494,8 +743,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       selectedFolderURL = nil
       isAvailable = false
       isWritable = false
-      setIdentity(nil)
-      stashedLegacyDestinationId = nil
+      publishUnavailableIdentity()
+      // Keep `stashedLegacyDestinationId` (set above from the *original* bytes). A failed
+      // resolution is exactly when an upgrader will re-select the same folder; clearing the
+      // stash here would make `currentLegacyDestinationId()` fall back to hashing the *new*
+      // bookmark bytes, so the directory coordinator couldn't find the existing
+      // `ExportRecords/<oldBookmarkHash>/` and would orphan the records. It is cleared only on an
+      // explicit `.newDestination` selection or `clearSelection()`.
     }
   }
 
@@ -513,7 +767,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       isAvailable = false
       isWritable = false
       statusMessage = "Export folder permission needs to be re-selected"
-      setIdentity(nil)
+      publishUnavailableIdentity()
       return
     }
 
@@ -545,13 +799,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       statusMessage = nil
     }
 
-    // Derive the stable fingerprint once the volume is reachable. When the drive is
-    // unmounted, volume-resource keys are unreadable; clear both the id and the fingerprint
-    // so the rest of the app treats the destination as unavailable until the drive comes back.
+    // Publish identity once availability is known. When reachable, seed-or-reuse the stable id
+    // and carry the freshly computed fingerprint (advisory). When unavailable, publish the
+    // unavailable identity — the persisted stable id is kept privately for reuse when the drive
+    // returns, but the *active* id goes nil so the lifecycle coordinator runs its
+    // destination-unavailable handling.
     if isAvailable {
-      setIdentity(Self.computeDestinationFingerprint(for: url))
+      publishAvailableIdentity(fingerprint: fingerprintProvider(url))
     } else {
-      setIdentity(nil)
+      publishUnavailableIdentity()
     }
   }
 

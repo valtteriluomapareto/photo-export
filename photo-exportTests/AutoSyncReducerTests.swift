@@ -138,6 +138,82 @@ struct AutoSyncReducerTests {
     #expect(next.current == .blocked(.destinationUnsafe))
   }
 
+  /// #127: a network-share remount drifts the fingerprint but keeps the stable id. The reducer
+  /// must keep keying on the stable id so the destination's accumulated dirty work is preserved,
+  /// not orphaned under a new key.
+  @Test func remountWithDriftedFingerprintKeepsStableIdAndPreservesDirty() {
+    let stableId = "stable-S"
+    let fpMountA = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/backup",
+      standardizedPath: "/Volumes/mount-A/backup")
+    let fpMountB = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/backup",
+      standardizedPath: "/Volumes/mount-B/backup")
+    #expect(fpMountA.id != fpMountB.id)
+
+    var state = AutoSyncReducer.State.initial
+    state.enabled = true
+    state.scopeSelection = AutoExportScopeSelection(timeline: true)
+    state.destination = DestinationSnapshot(
+      stableId: stableId, fingerprint: fpMountA, isAvailable: true, safety: .safe)
+    state.current = .idle
+    var dirty = AutoSyncDirtyState.empty
+    var scopeState = dirty.scope(.timeline)
+    scopeState.recordPendingAssetId("asset-1", costCap: AutoSyncReducer.targetedAssetCostCap)
+    dirty.setScope(.timeline, scopeState)
+    state.dirtyStateByDestination[stableId] = dirty
+
+    let drifted = DestinationSnapshot(
+      stableId: stableId, fingerprint: fpMountB, isAvailable: true, safety: .safe)
+    let (next, effects) = AutoSyncReducer.reduce(.destinationChanged(drifted), in: state, now: now)
+
+    #expect(next.destination.id == stableId)
+    #expect(
+      next.dirtyStateByDestination[stableId]?.scope(.timeline).pendingAssetIds == ["asset-1"])
+    // A same-stable-id metadata refresh (availability + safety unchanged) is not new work: no
+    // spurious debounce, and the state stays idle.
+    #expect(effects.isEmpty)
+    #expect(next.current == .idle)
+    #expect(next.destination.fingerprint == fpMountB)  // metadata refreshed
+  }
+
+  /// Swapping to a *different* destination while the prior one was unavailable schedules
+  /// `.destinationSelected` (3s), not `.destinationBecameAvailable` (reserved for the SAME stable
+  /// id returning). Keys the classification on stableId.
+  @Test func swappingDestinationWhileUnavailableSchedulesDestinationSelected() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    let fpA = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/a", standardizedPath: "/Volumes/A/a")
+    let fpB = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/b", standardizedPath: "/Volumes/B/b")
+    state.destination = DestinationSnapshot(
+      stableId: "id-A", fingerprint: fpA, isAvailable: false, safety: .safe)
+    state.current = .waiting(.destinationUnavailable)
+
+    let restored = DestinationSnapshot(
+      stableId: "id-B", fingerprint: fpB, isAvailable: true, safety: .safe)
+    let (next, effects) = AutoSyncReducer.reduce(
+      .destinationChanged(restored), in: state, now: now)
+
+    let fireAt = now.addingTimeInterval(3)
+    #expect(next.current == .scheduled(reason: .destinationSelected, fireAt: fireAt))
+    #expect(effects.contains(.scheduleDebounce(.destinationSelected, fireAt: fireAt)))
+  }
+
+  /// The unavailable invariant's published shape — `stableId == nil` while `isAvailable == true`
+  /// — blocks on `.destinationMissing` (the id guard precedes the availability guard). Pins the
+  /// guard order so a future reorder can't silently change behavior.
+  @Test func nilStableIdWithAvailableTrueBlocksOnDestinationMissing() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .idle
+    let snap = DestinationSnapshot(
+      stableId: nil, fingerprint: nil, isAvailable: true, safety: .safe)
+
+    let (next, _) = AutoSyncReducer.reduce(.destinationChanged(snap), in: state, now: now)
+
+    #expect(next.current == .blocked(.destinationMissing))
+  }
+
   // MARK: - scopeSelectionChanged
 
   @Test func clearingAllScopesBlocksOnNoScopesSelected() {

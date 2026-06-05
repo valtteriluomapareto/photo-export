@@ -15,7 +15,7 @@ struct DestinationSafetyMonitorTests {
 
   private struct Harness {
     let monitor: DestinationSafetyMonitor
-    let fingerprintSubject: CurrentValueSubject<DestinationFingerprint?, Never>
+    let identitySubject: CurrentValueSubject<DestinationIdentity, Never>
     let recordStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let confirmationStore: InMemoryDestinationSafetyConfirmationStore
@@ -23,6 +23,12 @@ struct DestinationSafetyMonitorTests {
 
     func cleanup() {
       try? FileManager.default.removeItem(at: storeRoot)
+    }
+
+    /// Sends a no-drift identity whose stable id tracks the fingerprint id.
+    func send(_ fingerprint: DestinationFingerprint) {
+      identitySubject.send(
+        DestinationIdentity(stableId: fingerprint.id, fingerprint: fingerprint))
     }
   }
 
@@ -32,10 +38,10 @@ struct DestinationSafetyMonitorTests {
     let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     let confirmationStore = InMemoryDestinationSafetyConfirmationStore()
-    let fingerprintSubject = CurrentValueSubject<DestinationFingerprint?, Never>(nil)
+    let identitySubject = CurrentValueSubject<DestinationIdentity, Never>(.unavailable)
     let scanResultRef = ScanResultRef(value: scanResult)
     let monitor = DestinationSafetyMonitor(
-      fingerprintPublisher: fingerprintSubject.eraseToAnyPublisher(),
+      identityPublisher: identitySubject.eraseToAnyPublisher(),
       exportRecordStore: recordStore,
       collectionExportRecordStore: collectionStore,
       confirmationStore: confirmationStore,
@@ -43,7 +49,7 @@ struct DestinationSafetyMonitorTests {
     )
     return Harness(
       monitor: monitor,
-      fingerprintSubject: fingerprintSubject,
+      identitySubject: identitySubject,
       recordStore: recordStore,
       collectionStore: collectionStore,
       confirmationStore: confirmationStore,
@@ -79,7 +85,7 @@ struct DestinationSafetyMonitorTests {
     defer { harness.cleanup() }
 
     harness.monitor.attach()
-    harness.fingerprintSubject.send(nil)
+    harness.identitySubject.send(.unavailable)
     await settleAsyncScan()
 
     #expect(harness.monitor.needsSafetyConfirmation == false)
@@ -92,7 +98,7 @@ struct DestinationSafetyMonitorTests {
     try? harness.confirmationStore.confirm(destinationId: fp.id)
 
     harness.monitor.attach()
-    harness.fingerprintSubject.send(fp)
+    harness.send(fp)
     await settleAsyncScan()
 
     #expect(harness.monitor.needsSafetyConfirmation == false)
@@ -104,7 +110,7 @@ struct DestinationSafetyMonitorTests {
     let fp = fingerprint(id: "dest-C")
 
     harness.monitor.attach()
-    harness.fingerprintSubject.send(fp)
+    harness.send(fp)
     await settleAsyncScan()
 
     #expect(harness.monitor.needsSafetyConfirmation == false)
@@ -116,7 +122,7 @@ struct DestinationSafetyMonitorTests {
     let fp = fingerprint(id: "dest-D")
 
     harness.monitor.attach()
-    harness.fingerprintSubject.send(fp)
+    harness.send(fp)
     await settleAsyncScan()
 
     #expect(harness.monitor.needsSafetyConfirmation == true)
@@ -140,7 +146,7 @@ struct DestinationSafetyMonitorTests {
     harness.recordStore.flushForTesting()
 
     harness.monitor.attach()
-    harness.fingerprintSubject.send(fp)
+    harness.send(fp)
     await settleAsyncScan()
 
     #expect(harness.monitor.needsSafetyConfirmation == false)
@@ -152,7 +158,7 @@ struct DestinationSafetyMonitorTests {
     let fp = fingerprint(id: "dest-E")
 
     harness.monitor.attach()
-    harness.fingerprintSubject.send(fp)
+    harness.send(fp)
     await settleAsyncScan()
     #expect(harness.monitor.needsSafetyConfirmation == true)
 
@@ -171,14 +177,14 @@ struct DestinationSafetyMonitorTests {
     let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     let confirmationStore = InMemoryDestinationSafetyConfirmationStore()
-    let fingerprintSubject = CurrentValueSubject<DestinationFingerprint?, Never>(nil)
+    let identitySubject = CurrentValueSubject<DestinationIdentity, Never>(.unavailable)
     defer { try? FileManager.default.removeItem(at: storeRoot) }
 
     // Track which fingerprint evaluation each scan call corresponds to.
     // First call: long-suspended; second call: immediate.
     let scanCallsRef = ScanCallsRef()
     let monitor = DestinationSafetyMonitor(
-      fingerprintPublisher: fingerprintSubject.eraseToAnyPublisher(),
+      identityPublisher: identitySubject.eraseToAnyPublisher(),
       exportRecordStore: recordStore,
       collectionExportRecordStore: collectionStore,
       confirmationStore: confirmationStore,
@@ -200,13 +206,80 @@ struct DestinationSafetyMonitorTests {
     monitor.attach()
     let fp1 = fingerprint(id: "old")
     let fp2 = fingerprint(id: "new")
-    fingerprintSubject.send(fp1)
-    fingerprintSubject.send(fp2)
+    identitySubject.send(DestinationIdentity(stableId: fp1.id, fingerprint: fp1))
+    identitySubject.send(DestinationIdentity(stableId: fp2.id, fingerprint: fp2))
     // Settle everything.
     for _ in 0..<10 { await Task.yield() }
 
     // Final state reflects fp2 (empty dir → no flag), not fp1.
     #expect(monitor.needsSafetyConfirmation == false)
+  }
+
+  // MARK: - Stable-id keying (#127)
+
+  /// The confirmation must be keyed on the **stable id**, not `fingerprint?.id`. Here the
+  /// stable id deliberately differs from the fingerprint id: a destination already confirmed
+  /// under the stable id stays safe even though the fingerprint id is unconfirmed. If the
+  /// monitor still keyed on `fingerprint?.id`, the unconfirmed fingerprint id plus files
+  /// present would (wrongly) flag.
+  @Test func evaluationKeysOnStableIdNotFingerprintId() async {
+    let harness = makeHarness(scanResult: true)
+    defer { harness.cleanup() }
+    let stableId = "stable-S"
+    let fp = fingerprint(id: "mountA")  // fp.id != stableId
+    #expect(fp.id != stableId)
+    try? harness.confirmationStore.confirm(destinationId: stableId)
+
+    harness.monitor.attach()
+    harness.identitySubject.send(DestinationIdentity(stableId: stableId, fingerprint: fp))
+    await settleAsyncScan()
+
+    #expect(harness.monitor.needsSafetyConfirmation == false)
+  }
+
+  /// `confirmCurrentDestination()` persists under the stable id, and that confirmation survives
+  /// a network-share remount that drifts the fingerprint — no re-prompt on reconnect.
+  @Test func confirmationPersistsAcrossRemountDrift() async {
+    let harness = makeHarness(scanResult: true)
+    defer { harness.cleanup() }
+    let stableId = "stable-S"
+    let fpMountA = fingerprint(id: "mountA")
+    let fpMountB = fingerprint(id: "mountB")  // drifted fingerprint, same destination
+
+    harness.monitor.attach()
+    harness.identitySubject.send(
+      DestinationIdentity(stableId: stableId, fingerprint: fpMountA))
+    await settleAsyncScan()
+    #expect(harness.monitor.needsSafetyConfirmation == true)
+
+    harness.monitor.confirmCurrentDestination()
+    #expect(harness.confirmationStore.isConfirmed(destinationId: stableId))
+    #expect(harness.monitor.needsSafetyConfirmation == false)
+
+    // Remount under a drifted fingerprint but the same stable id — must not re-prompt.
+    harness.identitySubject.send(
+      DestinationIdentity(stableId: stableId, fingerprint: fpMountB))
+    await settleAsyncScan()
+    #expect(harness.monitor.needsSafetyConfirmation == false)
+  }
+
+  /// Residual tail (#127 migration / #131 recovery): an upgrader whose path id already drifted
+  /// gets a *fresh* stable id with an empty record store. With files present and no prior
+  /// confirmation, the monitor flags for recovery (rebuild-from-disk) rather than the app
+  /// silently re-exporting. The fresh stable id deliberately differs from the fingerprint id.
+  @Test func freshlySeededIdWithFilesButNoRecordsFlagsForRecovery() async {
+    let harness = makeHarness(scanResult: true)  // files present on disk
+    defer { harness.cleanup() }
+    let fp = fingerprint(id: "drifted-mount")
+    let freshStableId = "fresh-seed-id"
+    #expect(fp.id != freshStableId)
+
+    harness.monitor.attach()
+    harness.identitySubject.send(
+      DestinationIdentity(stableId: freshStableId, fingerprint: fp))
+    await settleAsyncScan()
+
+    #expect(harness.monitor.needsSafetyConfirmation == true)
   }
 
   @MainActor

@@ -38,6 +38,11 @@ struct AppLifecycleCoordinatorTests {
     return DestinationIdentitySnapshot(fingerprint: fingerprint)
   }
 
+  /// Wraps a fingerprint into a no-drift identity whose stable id tracks the fingerprint id.
+  private static func identity(_ fingerprint: DestinationFingerprint?) -> DestinationIdentity {
+    DestinationIdentity(stableId: fingerprint?.id, fingerprint: fingerprint)
+  }
+
   @Test func sameIdAssignmentIsANoOp() {
     var cancelCount = 0
     var configureCalls: [String?] = []
@@ -98,11 +103,11 @@ struct AppLifecycleCoordinatorTests {
       }
     )
 
-    let publisher = Empty<DestinationFingerprint?, Never>().eraseToAnyPublisher()
+    let publisher = Empty<DestinationIdentity, Never>().eraseToAnyPublisher()
     let snapA = Self.snapshot("dest-A")
-    coordinator.attach(initial: snapA, fingerprintPublisher: publisher)
-    coordinator.attach(initial: Self.snapshot("dest-X"), fingerprintPublisher: publisher)
-    coordinator.attach(initial: .none, fingerprintPublisher: publisher)
+    coordinator.attach(initial: snapA, identityPublisher: publisher)
+    coordinator.attach(initial: Self.snapshot("dest-X"), identityPublisher: publisher)
+    coordinator.attach(initial: .none, identityPublisher: publisher)
 
     // First attach: nil → snapA (first selection, no cancel). Subsequent attaches are
     // idempotent no-ops. cancelCount remains 0.
@@ -243,14 +248,14 @@ struct AppLifecycleCoordinatorTests {
     #expect(original.id == renamed.id)
     #expect(original != renamed)
 
-    let subject = PassthroughSubject<DestinationFingerprint?, Never>()
+    let subject = PassthroughSubject<DestinationIdentity, Never>()
     coordinator.attach(
-      initial: .none, fingerprintPublisher: subject.eraseToAnyPublisher())
+      initial: .none, identityPublisher: subject.eraseToAnyPublisher())
 
-    subject.send(original)
+    subject.send(Self.identity(original))
     #expect(coordinator.currentDestination.fingerprint == original)
 
-    subject.send(renamed)
+    subject.send(Self.identity(renamed))
     #expect(coordinator.currentDestination.fingerprint == renamed)
   }
 
@@ -266,10 +271,10 @@ struct AppLifecycleCoordinatorTests {
       }
     )
 
-    let subject = PassthroughSubject<DestinationFingerprint?, Never>()
+    let subject = PassthroughSubject<DestinationIdentity, Never>()
     coordinator.attach(
       initial: .none,
-      fingerprintPublisher: subject.eraseToAnyPublisher()
+      identityPublisher: subject.eraseToAnyPublisher()
     )
 
     let fpA = Self.snapshot("dest-A").fingerprint
@@ -277,9 +282,9 @@ struct AppLifecycleCoordinatorTests {
     let idA = fpA?.id
     let idB = fpB?.id
 
-    subject.send(fpA)
-    subject.send(fpA)  // duplicate id; removeDuplicates filters
-    subject.send(fpB)
+    subject.send(Self.identity(fpA))
+    subject.send(Self.identity(fpA))  // duplicate identity; removeDuplicates filters
+    subject.send(Self.identity(fpB))
 
     // nil → A: first selection (no cancel). A → A: filtered duplicate. A → B: true change
     // (cancel). cancelCount is 1.
@@ -308,6 +313,44 @@ struct AppLifecycleCoordinatorTests {
 
     #expect(gcCalls == ["legacy-B"])
     #expect(coordinator.migrationConflict == nil)
+  }
+
+  /// #127: a network-share remount keeps the same **stable id** but drifts the fingerprint.
+  /// That must be classified as the same destination — no `cancelActiveWork()`, no record-store
+  /// reconfigure — only a metadata refresh on `currentDestination`. Keying on `fingerprint.id`
+  /// (the old behavior) would mis-fire a destination change here and re-export everything.
+  @Test func remountWithDriftedFingerprintIsTreatedAsSameDestination() {
+    var cancelCount = 0
+    var configureCalls: [String?] = []
+    let coordinator = AppLifecycleCoordinator(
+      cancelActiveWork: { cancelCount += 1 },
+      interruptForDestinationUnavailable: {},
+      configureRecordStores: { newId in
+        configureCalls.append(newId)
+        return .success
+      }
+    )
+
+    let subject = PassthroughSubject<DestinationIdentity, Never>()
+    coordinator.attach(initial: .none, identityPublisher: subject.eraseToAnyPublisher())
+
+    let stableId = "stable-S"
+    let fpMountA = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/backup",
+      standardizedPath: "/Volumes/mount-A/backup")
+    let fpMountB = DestinationFingerprint.makeLow(
+      volumeRootPath: nil, relativePathFromVolumeRoot: "/backup",
+      standardizedPath: "/Volumes/mount-B/backup")
+    #expect(fpMountA.id != fpMountB.id)  // the drift is real
+
+    subject.send(DestinationIdentity(stableId: stableId, fingerprint: fpMountA))
+    subject.send(DestinationIdentity(stableId: stableId, fingerprint: fpMountB))
+
+    // Configured once (nil → S); the drift is a same-id metadata refresh, not a re-key.
+    #expect(configureCalls == [stableId])
+    #expect(cancelCount == 0)
+    #expect(coordinator.currentDestination.id == stableId)
+    #expect(coordinator.currentDestination.fingerprint == fpMountB)
   }
 
   @Test func clearMigrationConflictAfterReconcileIsIdempotent() {
