@@ -671,12 +671,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     if let storedFID = fileId(storedURL), let pickedFID = fileId(pickedURL) {
       return storedFID.isEqual(pickedFID) ? .sameAsStored : .differentFromStored
     }
-    // File identity unreadable (rare) — fall back to canonical path. Scoped access succeeded, so
-    // both URLs are live at selection time; this momentary path comparison is safe and is not
-    // persisted.
+    // File identity unreadable (rare). An equal canonical path is still strong evidence it's the
+    // same folder (two folders can't share a canonical path), so keep `.sameAsStored`. But
+    // differing paths are genuinely ambiguous: it could be a genuinely different folder OR the
+    // same destination reached through a different path (the drift-prone signal). Minting a new
+    // id on a path difference would reintroduce the #127 duplicate re-export, so surface the
+    // confirmation instead of guessing `.differentFromStored`.
     let storedPath = storedURL.resolvingSymlinksInPath().standardizedFileURL.path
     let pickedPath = pickedURL.resolvingSymlinksInPath().standardizedFileURL.path
-    return storedPath == pickedPath ? .sameAsStored : .differentFromStored
+    return storedPath == pickedPath ? .sameAsStored : .ambiguous
   }
 
   /// Same-session-stable file identity for a folder URL, used to compare two URLs for
@@ -741,7 +744,12 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       isAvailable = false
       isWritable = false
       publishUnavailableIdentity()
-      stashedLegacyDestinationId = nil
+      // Keep `stashedLegacyDestinationId` (set above from the *original* bytes). A failed
+      // resolution is exactly when an upgrader will re-select the same folder; clearing the
+      // stash here would make `currentLegacyDestinationId()` fall back to hashing the *new*
+      // bookmark bytes, so the directory coordinator couldn't find the existing
+      // `ExportRecords/<oldBookmarkHash>/` and would orphan the records. It is cleared only on an
+      // explicit `.newDestination` selection or `clearSelection()`.
     }
   }
 

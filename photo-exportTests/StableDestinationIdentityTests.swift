@@ -465,13 +465,15 @@ struct StableDestinationIdentityTests {
     #expect(manager.destinationId == seeded)  // resolver chose .sameDestination → kept
   }
 
-  /// When file identity is unreadable (despite scoped access), evidence falls back to a
-  /// canonical-path comparison — same path keeps the id, different path mints a new one.
+  /// When file identity is unreadable (despite scoped access), an equal canonical path still
+  /// keeps the id, but a *differing* path is `.ambiguous` (could be the same destination reached
+  /// through a different path) and goes through the resolver — it must NOT silently mint a new id
+  /// on a path difference, which would reintroduce the #127 duplicate re-export.
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on CI's macos-15 runner."))
-  func fileIdentityUnreadableFallsBackToCanonicalPath() throws {
+  func fileIdentityUnreadableKeepsIdOnSamePathAndIsAmbiguousOnDifferentPath() throws {
     let dir = try makeTempDir()
     let other = try makeTempDir()
     defer {
@@ -481,19 +483,85 @@ struct StableDestinationIdentityTests {
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
     defer { defaults.removePersistentDomain(forName: suite) }
 
+    var resolverCalls = 0
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey,
       fingerprintProvider: { url in self.lowConfidence(url.path) },
+      ambiguityResolver: { _ in
+        resolverCalls += 1
+        return .newDestination
+      },
       fileIdentifierProvider: { _ in nil })  // force the path fallback
     manager.persistSelectedFolderForTesting(dir)
     let seeded = try #require(manager.destinationId)
 
-    manager.selectFolderForTesting(dir)  // same path → .sameAsStored → keep
+    // Same canonical path → still `.sameAsStored`, no confirmation → keep id.
+    manager.selectFolderForTesting(dir)
+    #expect(resolverCalls == 0)
     #expect(manager.destinationId == seeded)
 
-    manager.selectFolderForTesting(other)  // different path → .differentFromStored → mint
-    #expect(manager.destinationId != seeded)
+    // Different canonical path with unreadable file ids → `.ambiguous` → resolver decides.
+    manager.selectFolderForTesting(other)
+    #expect(resolverCalls == 1)
+    #expect(manager.destinationId != seeded)  // resolver chose .newDestination
+  }
+
+  // MARK: - Failed-restore legacy-id retention (#127 upgrade)
+
+  /// An upgrader's old bookmark fails to resolve on launch (drive unplugged / stale). The legacy
+  /// hash (`stashedLegacyDestinationId`) must survive the failed restore so that when the user
+  /// re-selects the SAME folder (resolved as `.sameDestination` through the ambiguity prompt),
+  /// `currentLegacyDestinationId()` still returns the old bookmark hash and `configureRecordStores`
+  /// migrates the existing `ExportRecords/<oldHash>/` to the stable id instead of orphaning it.
+  @Test(
+    .disabled(
+      if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
+      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+  func failedRestoreKeepsLegacyHashSoSameFolderReselectMigrates() throws {
+    let dir = try makeTempDir()
+    let recordsRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("StableId-Records-\(UUID().uuidString)", isDirectory: true)
+    defer {
+      try? FileManager.default.removeItem(at: dir)
+      try? FileManager.default.removeItem(at: recordsRoot)
+    }
+    let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    // Upgrader's stored bookmark that won't resolve, and its legacy record dir on disk.
+    let oldBookmarkBytes = Data("old-upgrader-bookmark-\(UUID().uuidString)".utf8)
+    defaults.set(oldBookmarkBytes, forKey: bookmarkKey)
+    let oldLegacyId = ExportDestinationManager.legacyDestinationId(from: oldBookmarkBytes)
+    let timelineStore = ExportRecordStore(baseDirectoryURL: recordsRoot)
+    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: recordsRoot)
+    let legacyDir = recordsRoot.appendingPathComponent(oldLegacyId, isDirectory: true)
+    try FileManager.default.createDirectory(at: legacyDir, withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: legacyDir.appendingPathComponent("export-records.json"))
+
+    // Launch: restore resolves the (garbage) bookmark → throws → the catch must keep the stash.
+    let fp = lowConfidence("/Volumes/mount-A/backup")
+    let manager = ExportDestinationManager(
+      userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey, stableIdDefaultsKey: stableKey,
+      fingerprintProvider: { _ in fp },
+      ambiguityResolver: { _ in .sameDestination })
+    #expect(manager.currentLegacyDestinationId() == oldLegacyId)  // survived failed restore
+
+    // User re-selects the same folder; the stored bookmark won't resolve → `.ambiguous` →
+    // resolver chooses "Same folder" → `.sameDestination` keeps the stash.
+    manager.selectFolderForTesting(dir)
+    #expect(manager.currentLegacyDestinationId() == oldLegacyId)
+
+    // configureRecordStores migrates ExportRecords/<oldLegacyId>/ → ExportRecords/<stableId>/.
+    let stableId = try #require(manager.destinationId)
+    #expect(stableId != oldLegacyId)
+    let result = PhotoExportApp.configureRecordStores(
+      for: stableId, destinationManager: manager,
+      timelineStore: timelineStore, collectionStore: collectionStore)
+    #expect(result == .success)
+    let migratedDir = recordsRoot.appendingPathComponent(stableId, isDirectory: true)
+    #expect(FileManager.default.fileExists(atPath: migratedDir.path))
+    #expect(!FileManager.default.fileExists(atPath: legacyDir.path))  // renamed away, not orphaned
   }
 
   // MARK: - Value types (no filesystem)

@@ -165,11 +165,16 @@ struct AutoSyncReducerTests {
 
     let drifted = DestinationSnapshot(
       stableId: stableId, fingerprint: fpMountB, isAvailable: true, safety: .safe)
-    let (next, _) = AutoSyncReducer.reduce(.destinationChanged(drifted), in: state, now: now)
+    let (next, effects) = AutoSyncReducer.reduce(.destinationChanged(drifted), in: state, now: now)
 
     #expect(next.destination.id == stableId)
     #expect(
       next.dirtyStateByDestination[stableId]?.scope(.timeline).pendingAssetIds == ["asset-1"])
+    // A same-stable-id metadata refresh (availability + safety unchanged) is not new work: no
+    // spurious debounce, and the state stays idle.
+    #expect(effects.isEmpty)
+    #expect(next.current == .idle)
+    #expect(next.destination.fingerprint == fpMountB)  // metadata refreshed
   }
 
   /// Swapping to a *different* destination while the prior one was unavailable schedules

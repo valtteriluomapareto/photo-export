@@ -94,9 +94,22 @@ enum AutoSyncReducer {
       if destination == state.destination {
         break
       }
+      newState.destination = destination
+      // Same stable id with only fingerprint metadata drifting (availability + safety unchanged)
+      // is a *metadata refresh*, not new work — e.g. a remount that kept the stable id. The
+      // stores stay correctly keyed (dirty state is preserved because the key is unchanged), so
+      // update the snapshot but do NOT trigger a debounce/run. Mirrors
+      // AppLifecycleCoordinator's same-stable-id branch. A real remount that passed through
+      // unavailable still triggers via `.destinationBecameAvailable` below (availability changed).
+      let sameId = destination.id != nil && destination.id == state.destination.id
+      let availabilityOrSafetyChanged =
+        destination.isAvailable != state.destination.isAvailable
+        || destination.safety != state.destination.safety
+      if sameId && !availabilityOrSafetyChanged {
+        break
+      }
       let wasUnavailableOrMissing =
         !state.destination.isAvailable || state.destination.id == nil
-      newState.destination = destination
       if destination.id != nil && destination.isAvailable {
         // A destination becoming reachable, or a fresh destination being selected.
         // Either way it can host a run, so schedule a debounce.
