@@ -12,7 +12,7 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
-  @EnvironmentObject private var loginItemController: LoginItemController
+  @Environment(LoginItemController.self) private var loginItemController
   @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
   @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
 

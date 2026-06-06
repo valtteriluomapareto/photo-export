@@ -54,6 +54,25 @@ struct WhatsNewStateTests {
     #expect(state.lastSeenVersion == "0.0.1-test-prior")
   }
 
+  /// Tracking-contract gate for the `@Observable` migration (Phase 2.0
+  /// pilot). The state-machine tests in this file pass whether or not
+  /// the macro actually fired; this test mutates `shouldShow` inside an
+  /// `ObservationCounter` read closure and asserts the change is
+  /// observed, so a future refactor that breaks the macro
+  /// instrumentation (an accidental `@ObservationIgnored`, swapping the
+  /// class back to plain `class WhatsNewState`) fails loudly instead of
+  /// silently.
+  @Test func markAsSeenRegistersObservedChangeOnShouldShow() async throws {
+    let defaults = makeDefaults()
+    let state = WhatsNewState(userDefaults: defaults, bundle: .main)
+    let counter = ObservationCounter { _ = state.shouldShow }
+
+    state.markAsSeen()
+
+    let count = try await counter.waitForNextChange()
+    #expect(count == 1)
+  }
+
   @Test func markAsSeenFlipsShouldShowSynchronously() {
     let defaults = makeDefaults()
     let state = WhatsNewState(userDefaults: defaults, bundle: .main)

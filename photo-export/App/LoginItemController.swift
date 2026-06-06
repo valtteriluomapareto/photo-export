@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 import ServiceManagement
 import os
 
@@ -17,12 +18,13 @@ import os
 ///   - `notRegistered`: not in the user's login-items list
 ///   - `notFound`: app isn't installed where SMAppService can locate it
 ///     (running from Xcode's DerivedData, /private/var/folders, etc.)
+@Observable
 @MainActor
-final class LoginItemController: ObservableObject {
+final class LoginItemController {
   /// Current status. SwiftUI views observe to drive the toggle + the
   /// "Open System Settings…" hint. Refreshed in `refresh()` and after each
   /// register/unregister.
-  @Published private(set) var status: Status = .notRegistered
+  private(set) var status: Status = .notRegistered
 
   private let log: Logger
 
@@ -90,6 +92,17 @@ final class LoginItemController: ObservableObject {
       NSWorkspace.shared.open(url)
     }
   }
+
+  #if DEBUG
+    /// Test seam used by `LoginItemControllerTests` to force a known
+    /// value transition on `status`. The production mutation path
+    /// (`refresh()` reading `SMAppService.mainApp.status`) is not
+    /// controllable from tests, so the `@Observable` tracking-contract
+    /// test asserts the macro instrumentation against this seam instead.
+    func setStatusForObservationTracking(_ newStatus: Status) {
+      status = newStatus
+    }
+  #endif
 
   private static func map(_ status: SMAppService.Status) -> Status {
     switch status {
