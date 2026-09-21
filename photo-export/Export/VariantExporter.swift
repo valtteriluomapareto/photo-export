@@ -108,6 +108,36 @@ final class VariantExporter {
   ///
   /// `groupStem` is either inherited from a prior done variant record for this asset or,
   /// within the same job, pre-allocated when both variants will be written together.
+  ///
+  /// Where the stale file of a variant being re-exported lives, recorded from
+  /// the store before the rewrite. `filename` is the recorded filename;
+  /// `subfolder` the recorded placement-relative subfolder (issue #38 — a
+  /// mid-life `videoLayout` flip means the old file can live at a different
+  /// subfolder than the new write, e.g. bare path vs `videos/`).
+  struct ReplaceTarget: Equatable {
+    let filename: String
+    /// Full recorded directory (relative to the destination root, trailing
+    /// slash) where the stale file lives — the record's own relPath plus the
+    /// variant's subfolder. Deliberately NOT derived from the current job
+    /// placement: a date change can move an asset to another year, so the
+    /// stale file's home differs from the new write's destination.
+    let dirRelativePath: String
+  }
+
+  /// `replaceTarget` (Cleanup option "Replace updated files"): the recorded
+  /// location of the stale variant being re-exported, or `nil` when the
+  /// variant is being written for the first time (or the option is off).
+  /// Enables three replace behaviors the default path forbids:
+  /// 1. When the stale file sits in the *same* directory as the new write,
+  ///    the resolver may target it for in-place overwrite instead of
+  ///    suffixing a `(1)` duplicate.
+  /// 2. The atomic move replaces an existing file at the final URL when that
+  ///    file is the recorded target (the default `moveItemAtomically` throws
+  ///    on any existing destination).
+  /// 3. After a successful write under a *different* filename or subfolder
+  ///    (extension change, `videoLayout` flip), the stale recorded file is
+  ///    trashed at its recorded location so the destination doesn't
+  ///    accumulate duplicates.
   func exportSingleVariant(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -119,7 +149,8 @@ final class VariantExporter {
     pairOriginalWithSuffix: Bool,
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
-    subfolder: String? = nil
+    subfolder: String? = nil,
+    replaceTarget: ReplaceTarget? = nil
   ) async throws -> String? {
     // Renderer activity must always be cleared on the way out of this function —
     // including on throw — so a render failure or cancel does not leave the toolbar
@@ -165,7 +196,13 @@ final class VariantExporter {
       resources: resources,
       destDir: destDir,
       groupStem: groupStem,
-      pairOriginalWithSuffix: pairOriginalWithSuffix
+      pairOriginalWithSuffix: pairOriginalWithSuffix,
+      // Only the recorded file *in the same directory as the new write* is a
+      // legal overwrite target; a file recorded elsewhere (mid-life
+      // `videoLayout` flip, date change moving the asset to another year)
+      // stays untouched and is trashed after the successful write instead.
+      overwriteTargetFilename:
+        (replaceTarget?.dirRelativePath == relPath) ? replaceTarget?.filename : nil
     )
 
     let tempURL = finalURL.appendingPathExtension("tmp")
@@ -311,6 +348,23 @@ final class VariantExporter {
           self.logger.debug(
             "Move begin: \(tempURL.lastPathComponent, privacy: .public) -> \(finalURL.lastPathComponent, privacy: .public)"
           )
+          // Replace mode (Cleanup option "Replace updated files"):
+          // `moveItemAtomically` refuses any existing destination, but when the
+          // occupant is exactly the stale recorded file for this variant we are
+          // allowed to replace it. Remove first, then move — the temp file is
+          // complete at this point, so the exposed window is a single rename's
+          // length and the record hasn't been marked `.done` yet (a crash in the
+          // window leaves the variant non-`.done`, which the next run retries).
+          let overwriteTarget = (replaceTarget?.dirRelativePath == relPath)
+            ? replaceTarget?.filename : nil
+          let isRecordedReplacement =
+            overwriteTarget != nil
+            && finalURL.lastPathComponent == overwriteTarget
+          if isRecordedReplacement, fileSystem.fileExists(atPath: finalURL.path) {
+            try fileSystem.trashItem(at: finalURL)
+            self.logger.debug(
+              "Trashed replaced existing file: \(finalURL.lastPathComponent, privacy: .public)")
+          }
           try fileSystem.moveItemAtomically(from: tempURL, to: finalURL)
           self.logger.debug(
             "Move done -> \(finalURL.lastPathComponent, privacy: .public)")
@@ -340,6 +394,36 @@ final class VariantExporter {
       assetId: descriptor.id, placement: job.placement, variant: variant,
       relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date(),
       subfolder: subfolder)
+
+    // Replace-mode tail: when the re-export landed under a different filename
+    // than the stale recorded one (extension change, selection change), remove
+    // the old file so the destination doesn't accumulate a duplicate the record
+    // store no longer points at. Must run *after* the record write — the old
+    // file is only unreferenced garbage once the record names the new file.
+    if let replaceTarget,
+      replaceTarget.filename != finalURL.lastPathComponent
+        || replaceTarget.dirRelativePath != relPath
+    {
+      // The stale file lives at its RECORDED directory — which can differ
+      // from the new write's destination (videoLayout flip, date change).
+      let staleURL = exportDestination.selectedFolderURL?
+        .appendingPathComponent(replaceTarget.dirRelativePath)
+        .appendingPathComponent(replaceTarget.filename)
+      ?? destDir.appendingPathComponent(replaceTarget.filename)
+      if fileSystem.fileExists(atPath: staleURL.path) {
+        do {
+          try fileSystem.trashItem(at: staleURL)
+          logger.info(
+            "Trashed stale variant file \(replaceTarget.filename, privacy: .public) for id: \(descriptor.id, privacy: .public)"
+          )
+        } catch {
+          logger.warning(
+            "Could not trash stale variant file \(replaceTarget.filename, privacy: .public) for id: \(descriptor.id, privacy: .public): \(error.localizedDescription, privacy: .public)"
+          )
+        }
+      }
+    }
+
     inFlight = nil
     logger.info(
       "Exported \(finalURL.lastPathComponent, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"

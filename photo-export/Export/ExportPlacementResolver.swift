@@ -112,7 +112,7 @@ struct ExportPlacementResolver {
     existingPlacements: [ExportPlacement]
   ) -> ExportPlacement {
     let collectionId = descriptor.localIdentifier ?? ""
-    let displayPathHash = displayPathHash8(
+    let displayPathHash = Self.displayPathHash8(
       pathComponents: descriptor.pathComponents, title: descriptor.title)
     let candidateId =
       "collections:album:\(collectionIdHash16(for: collectionId)):\(displayPathHash)"
@@ -182,7 +182,7 @@ struct ExportPlacementResolver {
     existingPlacements: [ExportPlacement]
   ) -> ExportPlacement {
     let collectionId = descriptor.localIdentifier ?? ""
-    let displayPathHash = displayPathHash8(
+    let displayPathHash = Self.displayPathHash8(
       pathComponents: descriptor.pathComponents, title: descriptor.title)
     let candidateId =
       "collections:shared-album:\(collectionIdHash16(for: collectionId)):\(displayPathHash)"
@@ -251,7 +251,7 @@ struct ExportPlacementResolver {
         ExportPathPolicy.sanitizeComponent(other.title) == sanitizedLeaf
       }
       .filter { other in
-        let otherHash = displayPathHash8(
+        let otherHash = Self.displayPathHash8(
           pathComponents: other.pathComponents, title: other.title)
         return existingPlacements.first(where: {
           $0.kind == .sharedAlbum && $0.collectionLocalIdentifier == other.localIdentifier
@@ -362,7 +362,7 @@ struct ExportPlacementResolver {
         // If an existing placement matches `other` at its *current* path-hash, it
         // already has its bare/suffixed path locked in via `existingLeaves` above —
         // skip it to avoid double-counting.
-        let otherHash = displayPathHash8(
+        let otherHash = Self.displayPathHash8(
           pathComponents: other.pathComponents, title: other.title)
         return existingPlacements.first(where: {
           $0.kind == .album && $0.collectionLocalIdentifier == other.localIdentifier
@@ -417,11 +417,40 @@ struct ExportPlacementResolver {
 
   // MARK: - Hash helpers
 
+  /// The placement id this descriptor would resolve to *before* collision
+  /// suffixing: `collections:[shared-]album:<collectionIdHash16>:<displayPathHash8>`.
+  /// Pure — the cleanup passes recompute it for every album in the fetched
+  /// tree and compare against persisted placement ids, so a placement whose
+  /// album was **moved between folders or renamed** (path hash changed) or
+  /// **deleted** no longer matches and counts as stale.
+  ///
+  /// Matches the id shape the resolver itself persists (its Step-1 lookup
+  /// matches on exactly this triple), so an unmoved, unrenamed album's
+  /// placement always equals its candidate id.
+  static func candidatePlacementId(
+    for descriptor: PhotoCollectionDescriptor
+  ) -> String? {
+    let collectionId = descriptor.localIdentifier ?? ""
+    guard !collectionId.isEmpty else { return nil }
+    let prefix: String
+    switch descriptor.kind {
+    case .album: prefix = "collections:album:"
+    case .sharedAlbum: prefix = "collections:shared-album:"
+    case .favorites, .folder: return nil
+    }
+    let pathHash = displayPathHash8(
+      pathComponents: descriptor.pathComponents, title: descriptor.title)
+    return prefix + sha256Hex(of: collectionId, prefix: 16) + ":" + pathHash
+  }
+
   private func collectionIdHash16(for id: String) -> String {
     Self.sha256Hex(of: id, prefix: 16)
   }
 
-  private func displayPathHash8(pathComponents: [String], title: String) -> String {
+  /// NFC-normalized display-path hash for a descriptor's current location.
+  /// Static so the cleanup passes can recompute it and detect stale-path
+  /// placements (moved/renamed albums) without instantiating the resolver.
+  static func displayPathHash8(pathComponents: [String], title: String) -> String {
     // Apply Unicode NFC (canonical composition) to every component before hashing so
     // PhotoKit titles that arrive in different normalization forms across launches or
     // OS versions hash to the same value. Without this, an album titled "Café" arriving
@@ -434,7 +463,7 @@ struct ExportPlacementResolver {
     return Self.sha256Hex(of: combined, prefix: 8)
   }
 
-  fileprivate static func sha256Hex(of string: String, prefix: Int) -> String {
+  static func sha256Hex(of string: String, prefix: Int) -> String {
     let digest = SHA256.hash(data: Data(string.utf8))
     let hex = digest.map { String(format: "%02x", $0) }.joined()
     return String(hex.prefix(prefix))

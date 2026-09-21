@@ -108,4 +108,42 @@ enum ExportCompletionPolicy {
     else { return false }
     return true
   }
+
+  // MARK: - Replace-updated-files staleness rule
+
+  /// True when the asset's content in Photos changed *after* at least one of its
+  /// recorded `.done` exports was written — i.e. at least one file in the destination
+  /// is stale and the next run should re-export (replace) it.
+  ///
+  /// Decision inputs:
+  /// - `asset.modificationDate` — PhotoKit's last-content-change timestamp. `nil`
+  ///   means "unknown", which is treated as *never stale* so descriptors that don't
+  ///   model the field (tests, fakes) keep the never-replace behavior.
+  /// - Each `.done` variant's `exportDate` — when the pipeline wrote the file. A
+  ///   `.done` variant with a `nil` `exportDate` (legacy records) counts as stale:
+  ///   its write time is unknowable, so conservatism says re-export.
+  ///
+  /// Asset-level granularity is deliberate: `modificationDate` can't be attributed
+  /// to a single variant, so a changed asset re-exports its full required variant
+  /// set rather than guessing which side changed.
+  ///
+  /// Only consulted when the user turns on the "Replace updated files" cleanup
+  /// option; with the option off this helper is never called and completion checks
+  /// keep today's "every required variant `.done`" semantics.
+  static func isUpdatedAfterExport(
+    asset: AssetDescriptor,
+    variants: [ExportVariant: ExportVariantRecord]
+  ) -> Bool {
+    guard let modified = asset.modificationDate else { return false }
+    let doneExportDates = variants.values
+      .filter { $0.status == .done }
+      .map { $0.exportDate }
+    guard !doneExportDates.isEmpty else { return false }
+    // Any `.done` variant without a recorded export date (or one written before the
+    // last modification) makes the asset stale.
+    return doneExportDates.contains { date in
+      guard let date else { return true }
+      return date < modified
+    }
+  }
 }

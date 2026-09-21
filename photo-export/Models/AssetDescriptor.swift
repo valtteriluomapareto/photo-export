@@ -26,6 +26,13 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
   /// paired-video export path: an additional `.mov` resource is selected and written
   /// alongside the still image.
   let isLivePhoto: Bool
+  /// `PHAsset.modificationDate` — the last time the asset's content (including edits)
+  /// changed in Photos. `nil` when PhotoKit doesn't expose one. Drives the "Replace
+  /// updated files" cleanup option: an asset whose `modificationDate` is later than a
+  /// recorded export's `exportDate` has changed since that file was written, so the
+  /// on-disk copy is stale and the next run re-exports it. `nil` is treated as "never
+  /// stale" so fake descriptors that don't model the field keep today's behavior.
+  let modificationDate: Date?
 
   init(
     id: String,
@@ -36,7 +43,8 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
     duration: TimeInterval,
     hasAdjustments: Bool,
     originalUTI: String? = nil,
-    isLivePhoto: Bool = false
+    isLivePhoto: Bool = false,
+    modificationDate: Date? = nil
   ) {
     self.id = id
     self.creationDate = creationDate
@@ -47,6 +55,7 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
     self.hasAdjustments = hasAdjustments
     self.originalUTI = originalUTI
     self.isLivePhoto = isLivePhoto
+    self.modificationDate = modificationDate
   }
 
   /// True when the asset's original byte source is HEIC or HEIF. Drives the

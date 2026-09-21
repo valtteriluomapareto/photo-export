@@ -13,7 +13,8 @@ enum TestAssetFactory {
     duration: TimeInterval = 0,
     hasAdjustments: Bool = false,
     originalUTI: String? = nil,
-    isLivePhoto: Bool = false
+    isLivePhoto: Bool = false,
+    modificationDate: Date? = nil
   ) -> AssetDescriptor {
     AssetDescriptor(
       id: id,
@@ -24,7 +25,8 @@ enum TestAssetFactory {
       duration: duration,
       hasAdjustments: hasAdjustments,
       originalUTI: originalUTI,
-      isLivePhoto: isLivePhoto
+      isLivePhoto: isLivePhoto,
+      modificationDate: modificationDate
     )
   }
 

@@ -49,4 +49,24 @@ final class ExportProgressState: ObservableObject {
   /// its `ProgressView` for the row owning the in-flight job. AutoSync does not
   /// subscribe to it.
   @Published var currentJobPlacement: ExportPlacement?
+
+  /// Cleanup work performed during the current run ("Remove deleted files"
+  /// including the folder-structure cleanup it implies), accumulated across every scope the run
+  /// covered. Read when a run decides its empty/done toolbar message — a
+  /// mirroring run that enqueues nothing but deleted files should not read as
+  /// "already exported". Not `@Published`: the only reader polls it at message
+  /// time. Reset with the progress counters at run start.
+  var runCleanupSummary: ExportCleanupSummary = .zero
+
+  /// Destination-relative folder scopes the current run's export covers
+  /// (e.g. `2025/07` for an Export Month, the placement path for an album),
+  /// each with its deletion ceiling — the highest folder the run may prune.
+  /// Accumulated by the enqueue paths *before* job planning so an
+  /// already-complete scope still gets its empty-folder pruning, and consumed
+  /// by the run-end empty-folder walk. The ceiling is what keeps deletion
+  /// safe: a month run never removes its year folder, a single-album run
+  /// never removes `Collections/Albums`, and only the full-library run may
+  /// remove the `Collections` umbrella itself. Not `@Published`. Reset with
+  /// the progress counters at run start.
+  var runCleanupScopes: [ExportCleanupCoordinator.FolderCleanupScope] = []
 }

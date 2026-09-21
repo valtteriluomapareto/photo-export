@@ -67,6 +67,24 @@ struct FileIOService: FileSystemService {
     try FileManager.default.removeItem(at: url)
   }
 
+  /// Moves the item to the macOS Trash so cleanup deletions stay recoverable.
+  /// Some destinations (network shares, certain external formats) don't
+  /// support trashing — fall back to permanent removal there so cleanup still
+  /// makes progress; the fallback is logged.
+  func trashItem(at url: URL) throws -> URL? {
+    do {
+      var resultingItemURL: NSURL?
+      try FileManager.default.trashItem(at: url, resultingItemURL: &resultingItemURL)
+      return resultingItemURL as URL?
+    } catch {
+      Self.logger.info(
+        "Trash unavailable for \(url.path, privacy: .public): falling back to permanent removal (\(error.localizedDescription, privacy: .public))"
+      )
+      try FileManager.default.removeItem(at: url)
+      return nil
+    }
+  }
+
   func copyItem(from src: URL, to dst: URL) throws {
     try FileManager.default.copyItem(at: src, to: dst)
   }

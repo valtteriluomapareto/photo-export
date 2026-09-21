@@ -33,6 +33,8 @@ struct AdvancedSettingsView: View {
       Section("Organization") {
         videoLayoutRow
       }
+
+      dangerZoneSection
     }
     .formStyle(.grouped)
     .frame(minWidth: 460, minHeight: 460)
@@ -133,6 +135,104 @@ struct AdvancedSettingsView: View {
       + "Applies to new exports only. Videos already on disk stay where "
       + "they are; turning this on later produces a mixed layout until you "
       + "re-export."
+  }
+
+  // MARK: - Danger Zone section
+
+  /// Advanced Settings → Danger Zone. The last section, after Format and
+  /// Organization, styled like GitHub's settings danger zone (red titles):
+  /// with these options on, export runs *mutate* the destination (replace,
+  /// delete) rather than only adding to it. "Remove deleted files" requires
+  /// an explicit confirmation before its ON value is saved — it deletes
+  /// destination data permanently. Folder-structure cleanup is implied by it
+  /// and has no toggle of its own.
+  @State private var showRemoveDeletedFilesConfirmation = false
+
+  @ViewBuilder
+  private var dangerZoneSection: some View {
+    Section {
+      replaceUpdatedFilesRow
+      removeDeletedFilesRow
+    } header: {
+      Text("Danger Zone")
+        .foregroundStyle(.red)
+    }
+  }
+
+  private var replaceUpdatedFilesRow: some View {
+    Toggle(isOn: $exportManager.replaceUpdatedFiles) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Replace updated files")
+          .foregroundStyle(.red)
+        Text(replaceUpdatedFilesDescription)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .disabled(exportManager.hasActiveExportWork)
+  }
+
+  private var removeDeletedFilesRow: some View {
+    Toggle(
+      isOn: Binding(
+        get: { exportManager.removeDeletedFiles },
+        set: { enabled in
+          if enabled {
+            // Turning ON presents the confirmation first; only its
+            // destructive button persists the ON value.
+            showRemoveDeletedFilesConfirmation = true
+          } else {
+            exportManager.removeDeletedFiles = false
+          }
+        }
+      )
+    ) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Remove deleted files")
+          .foregroundStyle(.red)
+        Text(removeDeletedFilesDescription)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .disabled(exportManager.hasActiveExportWork)
+    .confirmationDialog(
+      "Remove deleted files?",
+      isPresented: $showRemoveDeletedFilesConfirmation,
+      titleVisibility: .visible
+    ) {
+      Button("Enable", role: .destructive) {
+        exportManager.removeDeletedFiles = true
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(removeDeletedFilesConfirmationMessage)
+    }
+  }
+
+  private var replaceUpdatedFilesDescription: String {
+    "Off: changes are only exported when the source file extension has "
+      + "changed.\n\n"
+      + "On: exported files are overwritten with the modified source files."
+  }
+
+  private var removeDeletedFilesDescription: String {
+    "Off: files of photos you deleted from the library (or removed from an "
+      + "album) stay in the destination.\n\n"
+      + "On: backed-up files of assets no longer present in the exported scope "
+      + "— a month, a year, Favorites, an album, a shared album, or the whole "
+      + "library — are moved to the macOS Trash. Folders of deleted albums and "
+      + "empty leftover folders are cleaned up automatically, never above the "
+      + "folder the export covers."
+  }
+
+  private var removeDeletedFilesConfirmationMessage: String {
+    "Every export will move backed-up files of assets no longer present in "
+      + "the exported scope to the macOS Trash — recoverable until the Trash "
+      + "is emptied. Folder cleanup runs automatically, never above the "
+      + "folder the export covers."
   }
 }
 

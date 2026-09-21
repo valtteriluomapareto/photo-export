@@ -1331,7 +1331,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       duration: asset.duration,
       hasAdjustments: asset.hasAdjustments,
       originalUTI: Self.originalUTI(for: asset),
-      isLivePhoto: Self.detectLivePhoto(asset: asset, useResourceFallback: useResourceFallback)
+      isLivePhoto: Self.detectLivePhoto(asset: asset, useResourceFallback: useResourceFallback),
+      modificationDate: asset.modificationDate
     )
   }
 

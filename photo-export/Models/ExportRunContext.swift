@@ -49,6 +49,12 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
   /// `failedCount` is the count of *additions* to this list during the run
   /// — they should agree, but `failures` carries the structured detail.
   let failures: [ExportRunFailureDetail]
+  /// Cleanup work performed during the run's enqueue phase (Advanced Settings →
+  /// Cleanup options). Zero for runs with the options off. Lets AutoSync's
+  /// persisted last-run summary and its Settings rendering report deletions,
+  /// not just exports. Decoded as zero for summaries persisted before the
+  /// field existed.
+  let cleanup: ExportCleanupSummary
 
   init(
     context: ExportRunContext,
@@ -59,7 +65,8 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
     skippedCount: Int,
     cancelReason: ExportCancelReason?,
     result: ExportRunResult,
-    failures: [ExportRunFailureDetail] = []
+    failures: [ExportRunFailureDetail] = [],
+    cleanup: ExportCleanupSummary = .zero
   ) {
     self.context = context
     self.endedAt = endedAt
@@ -70,6 +77,7 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
     self.cancelReason = cancelReason
     self.result = result
     self.failures = failures
+    self.cleanup = cleanup
   }
 
   /// Custom decoder so persisted summaries from before the `failures` field
@@ -89,11 +97,13 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
     self.result = try c.decode(ExportRunResult.self, forKey: .result)
     self.failures =
       (try? c.decode([ExportRunFailureDetail].self, forKey: .failures)) ?? []
+    self.cleanup =
+      (try? c.decode(ExportCleanupSummary.self, forKey: .cleanup)) ?? .zero
   }
 
   private enum CodingKeys: String, CodingKey {
     case context, endedAt, enqueuedCount, completedCount, failedCount, skippedCount,
-      cancelReason, result, failures
+      cancelReason, result, failures, cleanup
   }
 
   var duration: TimeInterval {

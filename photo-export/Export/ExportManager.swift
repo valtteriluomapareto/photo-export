@@ -13,6 +13,12 @@ final class ExportManager: ObservableObject {
   static let livePhotosPairedExportDefaultsKey = "livePhotosPairedExport"
   /// Persistence key for the videos-subfolder layout setting (issue #38).
   static let videoLayoutDefaultsKey = "exportVideoLayout"
+  /// Persistence keys for the Advanced Settings → Cleanup toggles. Both
+  /// default to `false` (`bool(forKey:)` returns `false` for an unset key), so
+  /// existing installs keep the additive "update sync" behavior until the user
+  /// opts into cleanup/mirroring.
+  static let cleanupReplaceUpdatedFilesDefaultsKey = "exportCleanupReplaceUpdatedFiles"
+  static let cleanupRemoveDeletedFilesDefaultsKey = "exportCleanupRemoveDeletedFiles"
 
   /// How long the "already exported" toolbar message stays visible before it auto-clears.
   /// Long enough to read, short enough that subsequent work doesn't show stale state.
@@ -170,6 +176,43 @@ final class ExportManager: ObservableObject {
     }
   }
 
+  /// Cleanup option (a): when on, an asset whose content changed in Photos after
+  /// its export (modification date later than a recorded export date) is
+  /// re-exported on the next run and its stale destination files are *replaced*
+  /// instead of suffixing `(1)` duplicates. With the option off, completion
+  /// checks ignore modification dates entirely — today's behavior.
+  ///
+  /// Snapshotted per job at enqueue time through the staleness check; the write
+  /// step reads the live value (`hasActiveExportWork` disables the Settings
+  /// toggles mid-run, so a mid-run flip is not a supported input).
+  @Published var replaceUpdatedFiles: Bool {
+    didSet {
+      userDefaults.set(replaceUpdatedFiles, forKey: Self.cleanupReplaceUpdatedFilesDefaultsKey)
+      // A staleness-semantics change can turn "already exported" misleading.
+      clearEmptyRunMessage()
+    }
+  }
+
+  /// Cleanup option (b): when on, each scope's export run first deletes the
+  /// on-disk files and record-store entries of assets that no longer exist in
+  /// the library (or, for albums, were removed from the album). This is the
+  /// destructive half of mirroring — the Settings caption spells out the
+  /// consequence.
+  @Published var removeDeletedFiles: Bool {
+    didSet {
+      userDefaults.set(removeDeletedFiles, forKey: Self.cleanupRemoveDeletedFilesDefaultsKey)
+      clearEmptyRunMessage()
+    }
+  }
+
+  /// True when both Cleanup options are on — the mirroring configuration:
+  /// modified files replaced, deleted files removed, and the folder structure
+  /// (stale album folders, empty directories) cleaned up automatically as
+  /// part of "Remove deleted files".
+  var isMirrorMode: Bool {
+    replaceUpdatedFiles && removeDeletedFiles
+  }
+
   // MARK: - Published State (Import)
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
@@ -294,6 +337,11 @@ final class ExportManager: ObservableObject {
     /// flips `finalizeActiveRun`'s `.completed` to `.failed` so the dirty
     /// state survives and the next change-event-driven debounce retries.
     var partialBulkScan: Bool = false
+    /// Cleanup work performed during this run's enqueue phase (mirrors
+    /// `progressState.runCleanupSummary`). Reported on the run summary so
+    /// AutoSync's persisted last-run line and the Settings → Auto Export UI
+    /// show mirroring/cleanup results, not just export counts.
+    var cleanup: ExportCleanupSummary = .zero
   }
   private var activeRunBookkeeping: ActiveRunBookkeeping?
 
@@ -408,6 +456,17 @@ final class ExportManager: ObservableObject {
   private(set) var importCoordinator: ImportCoordinator!
   private var importCancellables: Set<AnyCancellable> = []
   private var queueCancellables: Set<AnyCancellable> = []
+  /// Owns the Cleanup passes ("Remove deleted files", "Clean up folder
+  /// structure" — stale album folders + empty directories). Constructed in `init` after the queue
+  /// coordinator (it holds a weak cancellation-seam reference to it) and needs
+  /// no Host callbacks — it mutates record stores through the router and the
+  /// filesystem/destination through the injected seams.
+  ///
+  /// IUO for the same init-order reason as `queueCoordinator`: the seam
+  /// reference needs the fully-initialized manager's coordinator, and Swift
+  /// forbids touching `self` (even indirectly) before every stored property has
+  /// a value.
+  private(set) var cleanupCoordinator: ExportCleanupCoordinator!
 
   // Forwarders to the coordinator's internal state. Kept on ExportManager so existing
   // test reads (`manager.pendingJobs`, `manager.currentTask`,
@@ -518,6 +577,13 @@ final class ExportManager: ObservableObject {
     } else {
       self.videoLayout = .flat
     }
+    // Cleanup toggles (Advanced Settings → Cleanup). `bool(forKey:)` returns
+    // `false` for an unset key, so the off-by-default contract is implicit —
+    // existing installs keep the additive update-sync behavior. Assigned before
+    // any `self.` property access below (Swift requires every stored property
+    // to be initialized first).
+    self.replaceUpdatedFiles = userDefaults.bool(forKey: Self.cleanupReplaceUpdatedFilesDefaultsKey)
+    self.removeDeletedFiles = userDefaults.bool(forKey: Self.cleanupRemoveDeletedFilesDefaultsKey)
     self.convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
     self.exportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
     self.collectionExportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
@@ -535,6 +601,11 @@ final class ExportManager: ObservableObject {
     // isCurrent / throwIfCancelledOrStale) through this reference rather than
     // through their Host protocols (issue #67 item 2).
     self.queueCoordinator = ExportQueueCoordinator(host: self)
+    self.cleanupCoordinator = ExportCleanupCoordinator(
+      queueCoordinator: self.queueCoordinator,
+      recordStoreRouter: self.recordStoreRouter,
+      exportDestination: self.exportDestination,
+      fileSystem: self.fileSystem)
     self.variantExporter = VariantExporter(
       host: self,
       queueCoordinator: self.queueCoordinator,
@@ -626,8 +697,9 @@ final class ExportManager: ObservableObject {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
-          setEmptyRunMessage("This month is already exported.")
+          setEmptyRunMessage(cleanupAwareEmptyMessage("This month is already exported."))
         }
+        await self.runFolderStructureCleanup(generation: gen)
         processQueueIfNeeded()
       } catch {
         logger.error(
@@ -666,8 +738,9 @@ final class ExportManager: ObservableObject {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
-          setEmptyRunMessage("This year is already exported.")
+          setEmptyRunMessage(cleanupAwareEmptyMessage("This year is already exported."))
         }
+        await self.runFolderStructureCleanup(generation: gen)
         processQueueIfNeeded()
       } catch {
         logger.error(
@@ -718,9 +791,141 @@ final class ExportManager: ObservableObject {
             year: year, selection: selection,
             livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
         }
-        return result.completed ? .completed(result.totals) : .stale
+        guard result.completed else { return .stale }
+        // "Export All" is the one run whose scope is the whole library, so
+        // with the Cleanup options on it reconciles the entire destination —
+        // orphaned timeline months, stale album folders, favorites — without
+        // enqueueing any collection export work. This is what makes an empty
+        // library mirror to an (almost) empty destination.
+        try await self.reconcileForFullLibraryRun(availableYears: allYears, generation: gen)
+        return .completed(result.totals)
       }
     )
+  }
+
+  /// Whole-destination reconcile for the full-library run ("Export All", and
+  /// Auto Export's `.timelineFullLibrary` runs through it). Every other entry
+  /// point scopes cleanup to its own export type; this one covers all types
+  /// because its scope *is* everything:
+  ///
+  /// - Timeline months recorded under years the library no longer reports
+  ///   (with an empty library: every recorded month) are diffed against a
+  ///   fresh fetch of that month — "Remove deleted files" — and their folders
+  ///   recorded for the run-end empty-folder walk. The per-year loop above
+  ///   only visits years that still exist, so these orphans are the gap.
+  /// - Collection placements whose album no longer exists are removed with
+  ///   their files, records, and metadata — the folder-structure cleanup
+  ///   "Remove deleted files" implies.
+  /// - Every surviving collection placement (including Favorites) is diffed
+  ///   against a fresh fetch of its membership — "Remove deleted files" — and
+  ///   its folder recorded for the walk.
+  ///
+  /// No collection export work is ever enqueued here: placement resolution,
+  /// planning, and the queue stay out of this path. Runs only when at least
+  /// one Cleanup option is on and the collection store is `.ready` (its
+  /// mutation APIs trip a debug assertion otherwise).
+  private func reconcileForFullLibraryRun(
+    availableYears: [Int], generation gen: Int
+  ) async throws {
+    guard removeDeletedFiles else { return }
+    guard collectionExportRecordStore.state == .ready else {
+      logger.info(
+        "Skipping whole-destination reconcile: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
+      )
+      return
+    }
+
+    // Timeline orphan months — recorded (year, month) pairs whose year is not
+    // in the library's available years. Their folders are recorded for the
+    // walk regardless (so emptied ones are pruned); their files and records
+    // are diffed only when "Remove deleted files" is on.
+    if removeDeletedFiles {
+      let available = Set(availableYears)
+      let orphanMonths = recordStoreRouter.timelineRecordedYearMonths()
+        .filter { !available.contains($0.year) }
+      for (year, month) in orphanMonths {
+        try throwIfCancelledOrStale(gen)
+        // Ceiling: the orphan month's year folder — Export All may delete up
+        // to the year folders ("max delete all year folders"), never the
+        // destination root or the Collections area from here.
+        progressState.runCleanupScopes.append(
+          .init(
+            subtree: ExportPlacement.timeline(year: year, month: month).relativePath,
+            ancestorCeiling: String(format: "%04d", year)))
+        if removeDeletedFiles {
+          let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
+          try throwIfCancelledOrStale(gen)
+          let summary = await cleanupCoordinator.removeDeletedAssets(
+            in: .timelineMonth(
+              year: year, month: month, existingAssetIds: Set(assets.map(\.id))),
+            generation: gen)
+          try throwIfCancelledOrStale(gen)
+          accumulateRunCleanup(summary)
+        }
+      }
+    }
+
+    // Collection placements: stale ones removed outright; survivors diffed
+    // against their scope's fresh membership. "Live" = the placement id still
+    // matches the id the resolver would compute for the album's CURRENT path
+    // — a moved or renamed album's old placement is stale and goes.
+    let tree = try photoLibraryService.fetchCollectionTree()
+    try throwIfCancelledOrStale(gen)
+    let liveIds = ExportCleanupCoordinator.livePlacementIds(in: tree)
+    let isLivePlacement = { (placement: ExportPlacement) -> Bool in
+      switch placement.kind {
+      case .favorites, .timeline: return true
+      case .album, .sharedAlbum:
+        guard let collectionId = placement.collectionLocalIdentifier, !collectionId.isEmpty
+        else { return false }
+        return liveIds[collectionId] == placement.id
+      }
+    }
+
+    let placements = recordStoreRouter.collectionPlacements().filter {
+      $0.kind == .favorites || $0.kind == .album || $0.kind == .sharedAlbum
+    }
+    if removeDeletedFiles {
+      let staleCandidates = placements.filter { !isLivePlacement($0) }
+      if !staleCandidates.isEmpty {
+        // Ceiling: the Collections umbrella — the full-library run may remove
+        // it when it empties out, but never the destination root.
+        let summary = await cleanupCoordinator.removeStaleAlbumPlacements(
+          candidates: staleCandidates, tree: tree, ancestorCeiling: "Collections",
+          generation: gen)
+        try throwIfCancelledOrStale(gen)
+        accumulateRunCleanup(summary)
+      }
+    }
+
+    if removeDeletedFiles {
+      let survivors = placements.filter { isLivePlacement($0) }
+      for placement in survivors {
+        try throwIfCancelledOrStale(gen)
+        // Record the folder for the walk regardless — an emptied placement
+        // folder (existing-but-empty album, unfavorited everything) should
+        // not survive the full run. Ceiling: the Collections umbrella.
+        progressState.runCleanupScopes.append(
+          .init(subtree: placement.relativePath, ancestorCeiling: "Collections"))
+        if removeDeletedFiles {
+          let scope: PhotoFetchScope
+          switch placement.kind {
+          case .favorites: scope = .favorites
+          case .album: scope = .album(collectionId: placement.collectionLocalIdentifier ?? "")
+          case .sharedAlbum:
+            scope = .sharedAlbum(collectionId: placement.collectionLocalIdentifier ?? "")
+          case .timeline: continue
+          }
+          let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
+          try throwIfCancelledOrStale(gen)
+          let summary = await cleanupCoordinator.removeDeletedAssets(
+            in: .collection(placement: placement, existingAssetIds: Set(assets.map(\.id))),
+            generation: gen)
+          try throwIfCancelledOrStale(gen)
+          accumulateRunCleanup(summary)
+        }
+      }
+    }
   }
 
   /// Outcome of an enqueue scan over a month, year, or library. Either real work was
@@ -828,8 +1033,9 @@ final class ExportManager: ObservableObject {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
-          setEmptyRunMessage("Favorites are already exported.")
+          setEmptyRunMessage(cleanupAwareEmptyMessage("Favorites are already exported."))
         }
+        await self.runFolderStructureCleanup(generation: gen)
         processQueueIfNeeded()
       } catch {
         logger.error(
@@ -1035,12 +1241,14 @@ final class ExportManager: ObservableObject {
           self.isEnqueueingAll = false
         case .completed(let totals):
           self.isEnqueueingAll = false
+          await self.runFolderStructureCleanup(generation: gen)
           if totals.totalEnqueued == 0 && !totals.sawUnauthorized {
-            self.setEmptyRunMessage(emptyDoneMessage())
+            self.setEmptyRunMessage(cleanupAwareEmptyMessage(emptyDoneMessage()))
           }
           self.processQueueIfNeeded()
         case .completedWithCustomMessage:
           self.isEnqueueingAll = false
+          await self.runFolderStructureCleanup(generation: gen)
           self.processQueueIfNeeded()
         }
       } catch {
@@ -1178,16 +1386,25 @@ final class ExportManager: ObservableObject {
       },
       body: { [weak self] in
         guard let self else { return .stale }
+        // The fetched tree (nil for `.explicitIds`, whose per-album enqueues
+        // fetch it themselves) plus the stale-check scope this run covers.
+        var fetchedTree: [PhotoCollectionDescriptor]?
+        var staleScope: (kind: ExportPlacement.Kind, pathPrefix: String?)?
         let albumIds: [String]
         switch source {
         case .allAlbums:
           let tree = try self.photoLibraryService.fetchCollectionTree()
+          fetchedTree = tree
+          staleScope = (.album, nil)
           albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
         case .allSharedAlbums:
           let tree = try self.photoLibraryService.fetchCollectionTree()
+          fetchedTree = tree
+          staleScope = (.sharedAlbum, nil)
           albumIds = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree)
         case .folder(let folderId):
           let tree = try self.photoLibraryService.fetchCollectionTree()
+          fetchedTree = tree
           guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
             // Folder vanished between guard-pass and lookup. Surface the
             // dedicated message and signal the helper to skip its empty/done
@@ -1198,9 +1415,43 @@ final class ExportManager: ObservableObject {
             return .completedWithCustomMessage
           }
           albumIds = PhotoCollectionDescriptor.albumLocalIds(under: folder)
+          // Scoped to the folder's own on-disk subtree — placements outside
+          // it are not this run's business.
+          let folderPath =
+            (folder.pathComponents + [folder.title])
+            .map(ExportPathPolicy.sanitizeComponent)
+            .joined(separator: "/")
+          staleScope = (.album, "Collections/Albums/\(folderPath)/")
         case .explicitIds(let ids):
           albumIds = ids
         }
+
+        // Scoped stale-album check (automatic folder cleanup): bulk runs
+        // judge placements of the matching kind — for folder exports only
+        // under the folder's own subtree. Needed even though every
+        // `enqueueCollection` below checks its own album: when *every* album
+        // in scope was deleted, the loop iterates nothing and the per-album
+        // checks would never fire.
+        if self.removeDeletedFiles, let fetchedTree, let staleScope {
+          var candidates = self.recordStoreRouter.collectionPlacements().filter {
+            $0.kind == staleScope.kind
+          }
+          if let prefix = staleScope.pathPrefix {
+            candidates = candidates.filter { $0.relativePath.hasPrefix(prefix) }
+          }
+          if !candidates.isEmpty {
+            // Deletion ceiling per source: Export All Albums may remove the
+            // Albums umbrella, Export All Shared Albums the Shared Albums
+            // umbrella, and a folder export its own subtree — never anything
+            // above them.
+            let staleSummary = await self.cleanupCoordinator.removeStaleAlbumPlacements(
+              candidates: candidates, tree: fetchedTree,
+              ancestorCeiling: staleScope.pathPrefix, generation: gen)
+            guard self.isCurrent(gen) else { return .stale }
+            self.accumulateRunCleanup(staleSummary)
+          }
+        }
+
         let result = try await self.runBulkEnqueueLoop(items: albumIds, generation: gen) { id in
           try await self.enqueueCollection(
             selection: source.selection(for: id),
@@ -1213,7 +1464,8 @@ final class ExportManager: ObservableObject {
         }
         guard result.completed else { return .stale }
         if result.totals.totalEnqueued == 0 && !result.totals.sawUnauthorized {
-          self.setEmptyRunMessage(albumIds.isEmpty ? emptyMessage : allDoneMessage)
+          self.setEmptyRunMessage(
+            cleanupAwareEmptyMessage(albumIds.isEmpty ? emptyMessage : allDoneMessage))
         }
         return .completedWithCustomMessage
       }
@@ -1258,8 +1510,9 @@ final class ExportManager: ObservableObject {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
-          setEmptyRunMessage("This shared album is already exported.")
+          setEmptyRunMessage(cleanupAwareEmptyMessage("This shared album is already exported."))
         }
+        await self.runFolderStructureCleanup(generation: gen)
         processQueueIfNeeded()
       } catch {
         logger.error(
@@ -1304,8 +1557,9 @@ final class ExportManager: ObservableObject {
         case .enqueued, .unauthorized:
           break
         case .alreadyComplete:
-          setEmptyRunMessage("This album is already exported.")
+          setEmptyRunMessage(cleanupAwareEmptyMessage("This album is already exported."))
         }
+        await self.runFolderStructureCleanup(generation: gen)
         processQueueIfNeeded()
       } catch {
         logger.error(
@@ -1342,6 +1596,37 @@ final class ExportManager: ObservableObject {
     default:
       collections = []
     }
+
+    // Scoped stale-album check (automatic folder cleanup): only the
+    // placement for THIS collection id is judged against the tree — a run
+    // never cleans placements outside its own export scope. Runs before
+    // resolution so a deleted album's stale placement is removed even though
+    // the resolver is about to throw `albumNotFound`, and so a reinstated
+    // album can reclaim its bare path.
+    if removeDeletedFiles, let staleTarget = Self.staleCheckTarget(selection) {
+      let liveIds: Set<String>
+      switch staleTarget.kind {
+      case .album:
+        liveIds = Set(PhotoCollectionDescriptor.albumLocalIds(in: collections))
+      case .sharedAlbum:
+        liveIds = Set(PhotoCollectionDescriptor.sharedAlbumLocalIds(in: collections))
+      default:
+        liveIds = []
+      }
+      if !liveIds.contains(staleTarget.collectionId) {
+        let candidates = collectionExportRecordStore.placements.values.filter {
+          $0.kind == staleTarget.kind
+            && $0.collectionLocalIdentifier == staleTarget.collectionId
+        }
+        if !candidates.isEmpty {
+          let summary = await cleanupCoordinator.removeStaleAlbumPlacements(
+            candidates: candidates, tree: collections, ancestorCeiling: nil, generation: gen)
+          try throwIfCancelledOrStale(gen)
+          accumulateRunCleanup(summary)
+        }
+      }
+    }
+
     let existingPlacements = collectionExportRecordStore.placements
       .values.map { $0 }
     let resolver = ExportPlacementResolver()
@@ -1356,9 +1641,27 @@ final class ExportManager: ObservableObject {
     // no-op for `.timeline` kinds (which the collection store rejects); collection-side
     // kinds (`.favorites`, `.album`, `.sharedAlbum`) all land here.
     collectionExportRecordStore.upsertPlacement(placement)
+    // Record this placement's folder for the run-end empty-folder walk
+    // (recorded before planning so an already-complete scope is still pruned
+    // when emptied). Ceiling: the placement folder itself — a single-album
+    // run never deletes `Collections/Albums`, a Favorites run never deletes
+    // `Collections`.
+    progressState.runCleanupScopes.append(
+      .init(subtree: placement.relativePath, ancestorCeiling: nil))
 
     let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
     try throwIfCancelledOrStale(gen)
+    // Cleanup option (b): the fetched snapshot is album-membership truth. Assets
+    // recorded under this placement but absent from the fetch were removed from
+    // the album (or the library) — their files and records go too, so an
+    // exported album folder mirrors the album's current contents.
+    if removeDeletedFiles {
+      let summary = await cleanupCoordinator.removeDeletedAssets(
+        in: .collection(placement: placement, existingAssetIds: Set(assets.map(\.id))),
+        generation: gen)
+      try throwIfCancelledOrStale(gen)
+      accumulateRunCleanup(summary)
+    }
     // The Live Photo paired-video setting (issue #49) is snapshotted at click time by
     // each `start*` caller and threaded in as `livePhotosPaired`. Doing the snapshot
     // there rather than here keeps the click-time semantics in the doc comments above —
@@ -1367,7 +1670,7 @@ final class ExportManager: ObservableObject {
       assets: assets, placement: placement, selection: selectionMode,
       livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
       isExported: {
-        collectionExportRecordStore.isExported(
+        collectionIsExported(
           asset: $0, placement: placement, selection: selectionMode,
           livePhotosPaired: livePhotosPaired)
       },
@@ -1443,6 +1746,16 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Empty-run message
 
+  /// Empty-run message with cleanup context. When the run's enqueue phase
+  /// performed cleanup work (Cleanup options b/c/d), the cleanup counts are the
+  /// user-relevant fact — "Everything is already exported." next to a run that
+  /// just deleted files would be misleading. With no cleanup work the caller's
+  /// message passes through unchanged.
+  private func cleanupAwareEmptyMessage(_ fallback: String) -> String {
+    let cleanup = progressState.runCleanupSummary
+    return cleanup.isEmpty ? fallback : cleanup.userMessage
+  }
+
   /// Shows a transient message in the toolbar's progress slot for `emptyRunMessageDuration`.
   /// Replaces any previously-shown message and resets the auto-clear timer.
   ///
@@ -1517,11 +1830,24 @@ final class ExportManager: ObservableObject {
     let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
     try throwIfCancelledOrStale(gen)
     let placement = ExportPlacement.timeline(year: year, month: month)
+    // Record this scope's folder for the run-end empty-folder walk (recorded
+    // before planning so an already-complete month is still pruned when
+    // emptied). Ceiling: the month folder itself — a month run never deletes
+    // its year folder.
+    progressState.runCleanupScopes.append(
+      .init(subtree: placement.relativePath, ancestorCeiling: nil))
+    if removeDeletedFiles {
+      let summary = await cleanupCoordinator.removeDeletedAssets(
+        in: .timelineMonth(year: year, month: month, existingAssetIds: Set(assets.map(\.id))),
+        generation: gen)
+      try throwIfCancelledOrStale(gen)
+      accumulateRunCleanup(summary)
+    }
     let newJobs = ExportJobPlanner.plan(
       assets: assets, placement: placement, selection: selection,
       livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
       isExported: {
-        exportRecordStore.isExported(
+        timelineIsExported(
           asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
       },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
@@ -1539,11 +1865,38 @@ final class ExportManager: ObservableObject {
     guard photoLibraryService.isAuthorized else { return .unauthorized }
     let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
     try throwIfCancelledOrStale(gen)
+    // Record this year's folder scope for the run-end empty-folder walk.
+    // Ceiling: the year folder itself — a year run never deletes anything
+    // above it.
+    progressState.runCleanupScopes.append(
+      .init(subtree: String(format: "%04d", year), ancestorCeiling: nil))
+    if removeDeletedFiles {
+      // Bucket the fetched assets by their creation month so the year-scope
+      // cleanup can detect records whose month drifted within the year (an
+      // asset moved from January to March deletes its January backup file when
+      // the year is exported). The union set protects assets that exist but
+      // lack a creation date from being misclassified as deleted.
+      let calendar = Calendar.current
+      var idsByMonth: [Int: Set<String>] = [:]
+      var allIds: Set<String> = []
+      for asset in assets {
+        if let created = asset.creationDate {
+          let month = calendar.component(.month, from: created)
+          idsByMonth[month, default: []].insert(asset.id)
+        }
+        allIds.insert(asset.id)
+      }
+      let summary = await cleanupCoordinator.removeDeletedAssets(
+        in: .timelineYear(year: year, existingAssetIds: allIds, existingAssetIdsByMonth: idsByMonth),
+        generation: gen)
+      try throwIfCancelledOrStale(gen)
+      accumulateRunCleanup(summary)
+    }
     let newJobs = ExportJobPlanner.planTimelineYear(
       assets: assets, year: year, selection: selection,
       livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
       isExported: {
-        exportRecordStore.isExported(
+        timelineIsExported(
           asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
       },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
@@ -1704,7 +2057,8 @@ final class ExportManager: ObservableObject {
       skippedCount: bookkeeping.skippedCount,
       cancelReason: cancelReason,
       result: effectiveResult,
-      failures: bookkeeping.failures
+      failures: bookkeeping.failures,
+      cleanup: bookkeeping.cleanup
     )
     activeRunContext = nil
     activeRunBookkeeping = nil
@@ -1743,6 +2097,39 @@ final class ExportManager: ObservableObject {
   private func resetProgressCounters() {
     queueCoordinator.resetProgressCounters()
     progressState.currentAssetFilename = nil
+    progressState.runCleanupSummary = .zero
+    progressState.runCleanupScopes = []
+  }
+
+  /// Folds one cleanup pass's counts into the run-level summary (progress-state
+  /// mirror + awaitable-run bookkeeping, when the run is awaitable).
+  private func accumulateRunCleanup(_ summary: ExportCleanupSummary) {
+    progressState.runCleanupSummary = progressState.runCleanupSummary.accumulating(summary)
+    if var current = activeRunBookkeeping?.cleanup {
+      current.accumulate(summary)
+      activeRunBookkeeping?.cleanup = current
+    } else {
+      activeRunBookkeeping?.cleanup = summary
+    }
+  }
+
+  /// Empty-directory half of the automatic folder-structure cleanup (implied
+  /// by "Remove deleted files"). Inline in
+  /// the run Task after all enqueue/cleanup work and *before*
+  /// `processQueueIfNeeded()` starts the drain — the coordinator refuses to
+  /// walk while a drain is active, so this ordering is load-bearing. Scoped to
+  /// the folder subtrees the run's enqueue paths recorded (timeline runs walk
+  /// year/month dirs, album runs their own placement folder), so cleanup never
+  /// touches another export type's areas. Skipped silently when the option is
+  /// off.
+  private func runFolderStructureCleanup(generation gen: Int) async {
+    guard removeDeletedFiles else { return }
+    let scopes = progressState.runCleanupScopes
+    guard !scopes.isEmpty else { return }
+    let summary = await cleanupCoordinator.removeEmptyFolders(
+      scopes: scopes, generation: gen)
+    guard isCurrent(gen) else { return }
+    accumulateRunCleanup(summary)
   }
 
   // MARK: - Export Logic
@@ -1859,9 +2246,20 @@ final class ExportManager: ObservableObject {
         policy: job.placement.kind.variantPolicy,
         convertHEICToJPEG: convertHEICToJPEG,
         livePhotosPaired: job.livePhotosPaired)
+      // Cleanup option (a) "Replace updated files": when the asset's content
+      // changed in Photos after at least one of its exports was written, the
+      // job was enqueued to *replace* the stale files — every required variant
+      // is re-written (modificationDate can't be attributed to one variant) and
+      // the recorded filenames become overwrite targets instead of collision
+      // suffixes. Performed per job, so the enqueue-time snapshot and the write
+      // path agree even if the toggle is flipped between runs.
+      let replaceUpdated =
+        replaceUpdatedFiles
+        && ExportCompletionPolicy.isUpdatedAfterExport(
+          asset: descriptor, variants: existingVariants)
       let missing = required.filter { variant in
         let existing = existingRecord?.variants[variant]
-        if existing?.status == .done { return false }
+        if existing?.status == .done { return replaceUpdated }
         // Paired-video variants `.failed` with the unavailable sentinel are covered
         // by the policy and should NOT be re-queued. Photos still doesn't have a
         // motion file to give; re-running the variant exporter would write the
@@ -1882,6 +2280,64 @@ final class ExportManager: ObservableObject {
           "All required variants already .done for id: \(descriptor.id, privacy: .public)")
         return
       }
+      if removeDeletedFiles {
+        // The asset may carry `.done` variants the current selection no longer
+        // requires — e.g. the user **reverted an edit** (required flips from
+        // `.edited` back to `.original`, so the outdated edited file must go),
+        // an Include-originals transition, or the issue #22 `_orig` fallback
+        // file once the real edit succeeds. Trash their files and record
+        // entries so the destination matches the required set. This is the
+        // deletion half of the cleanup, so it rides on "Remove deleted
+        // files" — not on the replace flag: with replace off the outdated
+        // file is additive garbage that this option exists to remove.
+        let staleExtras = existingVariants.filter { variant, record in
+          record.status == .done && !required.contains(variant) && record.filename != nil
+        }
+        for (variant, record) in staleExtras {
+          guard let filename = record.filename else { continue }
+          let dirRelPath = ExportPlacementPathPolicy.relativePath(
+            placement: job.placement, subfolder: record.subfolder)
+          if let root = exportDestination.selectedFolderURL {
+            let staleURL = root.appendingPathComponent(dirRelPath)
+              .appendingPathComponent(filename)
+            do {
+              try fileSystem.trashItem(at: staleURL)
+              logger.info(
+                "Replaced-asset cleanup trashed stale \(variant.rawValue, privacy: .public) file \(filename, privacy: .public) for id: \(descriptor.id, privacy: .public)"
+              )
+            } catch {
+              logger.warning(
+                "Replaced-asset cleanup could not remove \(staleURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+              )
+            }
+          }
+          recordStoreRouter.removeVariantRecord(
+            assetId: descriptor.id, placement: job.placement, variant: variant)
+        }
+      }
+      // Recorded locations of the stale `.done` variants being re-written —
+      // the resolver treats the recorded file (in the new write's directory)
+      // as an allowed overwrite target, and a write under a new filename or
+      // subfolder trashes the old file at its recorded location afterwards.
+      // Recorded directory: the record's own relPath (timeline records point
+      // at the year/month folder where the file was written — which differs
+      // from the current placement after a date change moved the asset),
+      // plus the variant's subfolder.
+      let recordedDirectory =
+        recordStoreRouter.recordedDirectory(
+          assetId: descriptor.id, placement: job.placement)
+        ?? job.placement.relativePath
+      let replaceTargets: [ExportVariant: VariantExporter.ReplaceTarget] =
+        replaceUpdated
+        ? existingVariants.compactMapValues { record in
+          guard record.status == .done, let filename = record.filename else { return nil }
+          let dirRelativePath =
+            recordedDirectory
+            + (record.subfolder.map { $0 + "/" } ?? "")
+          return VariantExporter.ReplaceTarget(
+            filename: filename, dirRelativePath: dirRelativePath)
+        }
+        : [:]
 
       // Variant order: image side first within each pairing group so the motion file inherits
       // the anchored stem. For non-Live-Photo assets the paired-video filters fall away and
@@ -2001,7 +2457,8 @@ final class ExportManager: ObservableObject {
             pairOriginalWithSuffix: pairOriginalWithSuffix,
             generation: gen,
             inFlight: &inFlight,
-            subfolder: subfolder
+            subfolder: subfolder,
+            replaceTarget: replaceTargets[variant]
           )
           if let nextGroupStem { groupStem = nextGroupStem }
         } catch is CancellationError {
@@ -2031,7 +2488,7 @@ final class ExportManager: ObservableObject {
         await runEditedFallbackOriginal(
           descriptor: descriptor, resources: resources, destDir: destDir,
           relPath: relPath, job: job, generation: gen, inFlight: &inFlight,
-          subfolder: subfolder)
+          subfolder: subfolder, replaceTarget: replaceTargets[.original])
       }
     } catch is CancellationError {
       logger.info(
@@ -2074,13 +2531,15 @@ final class ExportManager: ObservableObject {
     pairOriginalWithSuffix: Bool,
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
-    subfolder: String? = nil
+    subfolder: String? = nil,
+    replaceTarget: VariantExporter.ReplaceTarget? = nil
   ) async throws -> String? {
     try await variantExporter.exportSingleVariant(
       variant: variant, descriptor: descriptor, resources: resources,
       destDir: destDir, relPath: relPath, job: job,
       groupStem: groupStem, pairOriginalWithSuffix: pairOriginalWithSuffix,
-      generation: gen, inFlight: &inFlight, subfolder: subfolder)
+      generation: gen, inFlight: &inFlight, subfolder: subfolder,
+      replaceTarget: replaceTarget)
   }
 
   // Destination resolution (URL + filename allocation, paired-stem allocation, collision
@@ -2111,7 +2570,8 @@ final class ExportManager: ObservableObject {
     job: ExportJob,
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
-    subfolder: String? = nil
+    subfolder: String? = nil,
+    replaceTarget: VariantExporter.ReplaceTarget? = nil
   ) async {
     guard
       let originalRes = ResourceSelection.selectOriginalResource(
@@ -2125,7 +2585,9 @@ final class ExportManager: ObservableObject {
     let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
     let originalExt = (originalRes.originalFilename as NSString).pathExtension
     let stem = destinationResolver.allocateUnusedOrigStem(
-      baseStem: baseStem, originalExt: originalExt, destDir: destDir)
+      baseStem: baseStem, originalExt: originalExt, destDir: destDir,
+      overwriteTargetFilename:
+        (replaceTarget?.dirRelativePath == relPath) ? replaceTarget?.filename : nil)
     do {
       try throwIfCancelledOrStale(gen)
       _ = try await exportSingleVariant(
@@ -2139,7 +2601,8 @@ final class ExportManager: ObservableObject {
         pairOriginalWithSuffix: true,
         generation: gen,
         inFlight: &inFlight,
-        subfolder: subfolder
+        subfolder: subfolder,
+        replaceTarget: replaceTarget
       )
       // Mark `.edited` with the explicit fallback sentinel so future runs
       // recognise the asset as covered without relying on the ambiguous
@@ -2252,6 +2715,51 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: Record-mutation routing
+
+  /// Enqueue-time completion check for timeline scopes, staleness-aware. With
+  /// the "Replace updated files" option on, an asset whose content changed in
+  /// Photos after its export (modification date later than a recorded export
+  /// date) reads as *not* exported so the planner re-queues it; the write path
+  /// (`export(job:)`) then replaces the stale files. With the option off this
+  /// is a plain forwarder — today's behavior.
+  private func timelineIsExported(
+    asset: AssetDescriptor, selection: ExportVersionSelection, livePhotosPaired: Bool
+  ) -> Bool {
+    let exported = exportRecordStore.isExported(
+      asset: asset, selection: selection, livePhotosPaired: livePhotosPaired)
+    guard exported, replaceUpdatedFiles else { return exported }
+    guard let record = exportRecordStore.exportInfo(assetId: asset.id) else { return true }
+    return !ExportCompletionPolicy.isUpdatedAfterExport(asset: asset, variants: record.variants)
+  }
+
+  /// Collection-side twin of `timelineIsExported`. Reads the scoped record for
+  /// the staleness check so per-placement variant state drives the decision.
+  private func collectionIsExported(
+    asset: AssetDescriptor, placement: ExportPlacement,
+    selection: ExportVersionSelection, livePhotosPaired: Bool
+  ) -> Bool {
+    let exported = collectionExportRecordStore.isExported(
+      asset: asset, placement: placement, selection: selection,
+      livePhotosPaired: livePhotosPaired)
+    guard exported, replaceUpdatedFiles else { return exported }
+    guard let record = collectionExportRecordStore.exportInfo(assetId: asset.id, placement: placement)
+    else { return true }
+    return !ExportCompletionPolicy.isUpdatedAfterExport(asset: asset, variants: record.variants)
+  }
+
+  /// The `(placement kind, collection id)` pair whose placement the scoped
+  /// stale-album check judges for a collection selection — `nil` for timeline,
+  /// favorites, and folder selections (the latter never resolves directly; its
+  /// descendant albums each carry their own check via `enqueueCollection`).
+  private static func staleCheckTarget(
+    _ selection: LibrarySelection
+  ) -> (kind: ExportPlacement.Kind, collectionId: String)? {
+    switch selection {
+    case .album(let collectionId): return (.album, collectionId)
+    case .sharedAlbum(let collectionId): return (.sharedAlbum, collectionId)
+    case .timelineMonth, .timelineYear, .favorites, .folder: return nil
+    }
+  }
 
   /// AutoSync retry-eligibility gate: returns `true` when the enqueue path
   /// should *skip* this asset because all required variants are currently

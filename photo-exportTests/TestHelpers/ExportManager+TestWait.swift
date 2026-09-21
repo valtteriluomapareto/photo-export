@@ -35,16 +35,26 @@ extension ExportManager {
     let deadline = clock.now.advanced(by: safetyTimeout)
     await Task.yield()
     let inputDeadline = clock.now.advanced(by: .milliseconds(500))
-    while clock.now < inputDeadline, !hasActiveExportWork, pendingJobs.isEmpty,
-      currentTask == nil
-    {
+    // The `currentTask == nil` guard from earlier revisions is gone
+    // deliberately: on a *repeat* export `currentTask` still points at the
+    // previous run's resolved Task, which used to skip the preamble entirely
+    // and let the main loop's exit condition fire before the just-started
+    // enqueue Task had landed on the main actor — a deterministic
+    // assert-before-work race for every second export in a test.
+    while clock.now < inputDeadline, !hasActiveExportWork, pendingJobs.isEmpty {
       try? await Task.sleep(for: .milliseconds(10))
     }
+    // Only await `currentTask` while a job is actually in flight
+    // (`isRunning`). On the empty-queue edge `currentTask` keeps pointing at
+    // the just-resolved job Task, and awaiting an already-completed Task in a
+    // loop can return without suspending — starving the main actor so a
+    // just-started enqueue Task never lands until the safety timeout. When
+    // nothing is in flight, yield instead so pending enqueue Tasks can run.
     while clock.now < deadline {
       if pendingJobs.isEmpty, !isRunning, !hasActiveExportWork {
         return
       }
-      if let task = currentTask {
+      if let task = currentTask, isRunning {
         _ = await task.value
       } else {
         await Task.yield()

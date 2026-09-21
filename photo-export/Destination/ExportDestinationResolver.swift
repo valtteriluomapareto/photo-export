@@ -42,6 +42,15 @@ struct ExportDestinationResolver: Sendable {
   /// silently splitting the pair across stems. The error domain/code/message string is
   /// preserved verbatim from the pre-Phase-2 implementation — see the
   /// `ExportDestinationEscapeProtectionTests` and the paired-pair-collision tests.
+  ///
+  /// `overwriteTargetFilename` (Cleanup option "Replace updated files"): the recorded
+  /// filename of the *stale* variant being re-exported, when the user opted into
+  /// replacement. When the computed candidate is exactly that recorded file, it may be
+  /// written over instead of suffixing/throwing — the file belongs to this asset and
+  /// this variant, so replacing it is the mirroring semantic. A candidate occupied by
+  /// any *other* file keeps today's protective behavior (suffix or throw), so a
+  /// foreign file — including one belonging to a sibling asset — is never clobbered.
+  /// `nil` preserves the never-overwrite behavior exactly.
   func resolveDestination(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -49,7 +58,8 @@ struct ExportDestinationResolver: Sendable {
     resources: [ResourceDescriptor],
     destDir: URL,
     groupStem: String?,
-    pairOriginalWithSuffix: Bool
+    pairOriginalWithSuffix: Bool,
+    overwriteTargetFilename: String? = nil
   ) throws -> (URL, String) {
     switch variant {
     case .original, .originalPairedVideo:
@@ -63,7 +73,9 @@ struct ExportDestinationResolver: Sendable {
         let filename = ExportFilenamePolicy.originalFilename(
           stem: stem, ext: origExt, withSuffix: pairOriginalWithSuffix)
         let candidate = destDir.appendingPathComponent(filename)
-        if fileSystem.fileExists(atPath: candidate.path) {
+        if fileSystem.fileExists(atPath: candidate.path),
+          candidate.lastPathComponent != overwriteTargetFilename
+        {
           throw NSError(
             domain: "Export", code: 5,
             userInfo: [
@@ -75,7 +87,9 @@ struct ExportDestinationResolver: Sendable {
       }
       // Fresh single-variant `.original`: no pairing, use uniqueFileURL collision handling.
       let (origStem, _) = Self.splitFilename(originalFilename)
-      let finalURL = uniqueFileURL(in: destDir, baseName: origStem, ext: origExt)
+      let finalURL = uniqueFileURL(
+        in: destDir, baseName: origStem, ext: origExt,
+        overwriteTargetFilename: overwriteTargetFilename)
       return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
 
     case .edited, .editedPairedVideo:
@@ -90,8 +104,11 @@ struct ExportDestinationResolver: Sendable {
         // If the inherited natural stem is already taken (post-edit case where the prior
         // `.original.done` occupies it), uniqueFileURL splits the pair onto a `(N)`
         // suffix. This is the documented one-time cost on first re-export after each new
-        // edit.
-        let finalURL = uniqueFileURL(in: destDir, baseName: base, ext: ext)
+        // edit. The overwrite target (see method docstring) is the exception: the stale
+        // file being re-exported is replaced in place.
+        let finalURL = uniqueFileURL(
+          in: destDir, baseName: base, ext: ext,
+          overwriteTargetFilename: overwriteTargetFilename)
         return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
       }
       // Fresh single-variant `.edited` (default mode adjusted asset, no prior records).
@@ -107,7 +124,9 @@ struct ExportDestinationResolver: Sendable {
       } else {
         baseStem = Self.splitFilename(originalFilename).base
       }
-      let finalURL = uniqueFileURL(in: destDir, baseName: baseStem, ext: editedExt)
+      let finalURL = uniqueFileURL(
+        in: destDir, baseName: baseStem, ext: editedExt,
+        overwriteTargetFilename: overwriteTargetFilename)
       return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
     }
   }
@@ -198,8 +217,14 @@ struct ExportDestinationResolver: Sendable {
   /// The edited-fallback only writes the original; the natural-stem edited slot is
   /// intentionally not checked because we don't know the edited extension here, and a
   /// future run that succeeds at the edit will allocate its own stem.
+  ///
+  /// `overwriteTargetFilename` (Cleanup option "Replace updated files"): when the
+  /// `_orig` slot is occupied by exactly the stale file being re-exported, its stem is
+  /// returned as-is so the replacement writes at the same name instead of suffixing to
+  /// `(1)`. Any other occupant still forces the suffix walk.
   func allocateUnusedOrigStem(
-    baseStem: String, originalExt: String, destDir: URL
+    baseStem: String, originalExt: String, destDir: URL,
+    overwriteTargetFilename: String? = nil
   ) -> String {
     var stem = baseStem
     var index = 1
@@ -207,7 +232,11 @@ struct ExportDestinationResolver: Sendable {
       let target = destDir.appendingPathComponent(
         stem + ExportFilenamePolicy.originalSuffix
       ).appendingPathExtension(originalExt)
-      if !fileSystem.fileExists(atPath: target.path) { return stem }
+      if !fileSystem.fileExists(atPath: target.path)
+        || target.lastPathComponent == overwriteTargetFilename
+      {
+        return stem
+      }
       stem = "\(baseStem) (\(index))"
       index += 1
     }
@@ -219,14 +248,23 @@ struct ExportDestinationResolver: Sendable {
   /// Returns a URL whose final path component does not already exist in `directory`.
   /// Appends ` (1)`, ` (2)`, etc. until a free slot is found, capped at 10 000 attempts.
   ///
+  /// `overwriteTargetFilename` (Cleanup option "Replace updated files"): when the
+  /// occupied candidate is exactly the recorded stale file being re-exported, return it
+  /// as-is so the caller's write step replaces it in place. Any other occupant keeps
+  /// the suffix walk — a foreign file is never overwritten.
+  ///
   /// Production callers go through `resolveDestination` — kept `internal` only as a unit
   /// test seam for `ExportDestinationResolverTests` (no-conflict, sequential conflicts,
   /// cap respected). Don't widen this surface; new production paths should compose via
   /// `resolveDestination` instead.
-  func uniqueFileURL(in directory: URL, baseName: String, ext: String) -> URL {
+  func uniqueFileURL(
+    in directory: URL, baseName: String, ext: String,
+    overwriteTargetFilename: String? = nil
+  ) -> URL {
     var candidate = directory.appendingPathComponent(baseName).appendingPathExtension(ext)
     var index = 1
     while fileSystem.fileExists(atPath: candidate.path) {
+      if candidate.lastPathComponent == overwriteTargetFilename { break }
       let nextName = "\(baseName) (\(index))"
       candidate = directory.appendingPathComponent(nextName).appendingPathExtension(ext)
       index += 1

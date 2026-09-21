@@ -51,9 +51,11 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 
 ### Format options (Settings → Advanced)
 
-Two settings under **Settings → Advanced** (Cmd+,) shape what lands on disk. A Settings
-cog in the toolbar opens the window in one click. The onboarding flow also exposes both
-toggles inline on first launch.
+Settings → Advanced (Cmd+,) groups its options into three sections: **Format**
+(what gets written per asset), **Organization** (how videos are laid out), and
+**Danger Zone** (how future runs treat files already in the destination). A
+Settings cog in the toolbar opens the window in one click. The onboarding flow
+also exposes the Format toggles inline on first launch.
 
 #### Include originals for edited photos
 
@@ -156,6 +158,68 @@ re-running Export Month alone won't rewrite them. To rebuild a month under
 the new layout, delete the existing copies on disk, run **Import Existing
 Backup** so the records reconcile against disk truth (missing variants get
 pruned), then re-run the Export action.
+
+### Danger Zone (Settings → Advanced)
+
+By default Photo Export never touches files it has already written — exports are
+additive. The **Danger Zone** section (the last one in Advanced Settings, shown
+in red like GitHub's settings danger zone) changes that: its options run as part
+of every export action (toolbar Export, sidebar Export, and Auto Export) and let
+the destination track the library instead of only accumulating. Both are off by
+default, and the toggles lock while an export is running.
+
+#### Replace updated files
+
+When an asset changes in Photos _after_ its export (an edit, a metadata or date
+change), the next export of its scope re-exports it and **replaces** the
+outdated files in the destination. With the option off, changes are only
+exported when the source file extension has changed — e.g. turning on Convert
+HEIC to JPEG re-exports already-exported HEIC photos as JPEG.
+
+#### Remove deleted files
+
+Turning this on asks for an explicit confirmation before the setting is saved.
+After that, every export removes the backed-up files (and their tracking
+records) of assets no longer present in the exported scope — a month, a year, Favorites, an album, a shared album, or
+the whole library, whichever you exported. For album scopes this also covers
+photos you removed from the album but kept in the library, so an exported album
+folder mirrors the album's current contents. Deleted files are moved to the
+macOS Trash — recoverable until the Trash is emptied.
+
+The folder-structure cleanup runs automatically as part of this option — there
+is no separate toggle — and is always **scoped to what the export covers**: a
+timeline month run only ever touches its year/month folders, an album export
+only its own folder. **Export All is the exception** — its scope is the whole
+library, so it reconciles the entire destination: orphaned timeline months,
+stale album folders, and Favorites are all cleaned, and an empty library
+mirrors to an (almost) empty destination.
+
+- Folders of albums that no longer exist in the library — or were **moved to
+  another folder or renamed** — are removed with their files, records, and
+  placement metadata (album exports). The album re-exports at its new
+  location on the next run of that album's scope.
+- Photos edits you **revert** are handled too: the outdated edited file is
+  trashed and the original takes its place on the next export of the scope.
+- Empty folders inside the exported scope are deleted bottom-up (deepest
+  first), so month and album trees don't accumulate skeletons after
+  deletions — folders holding nothing but Finder metadata (`.DS_Store`)
+  count as empty. Deletion is **capped at the node the export covers**: a
+  month run never removes its year folder, a year run never removes anything
+  above it, a single-album run stops at its own folder, Export All Albums at
+  `Collections/Albums`, Export Favorites at `Collections/Favorites` — and
+  only Export All may delete up to the year folders and the `Collections`
+  umbrella itself. The destination root is never touched.
+- Everything removed this way goes to the macOS Trash, so deletions stay
+  recoverable until the Trash is emptied.
+
+#### Mirror mode
+
+With **both** options on, an export acts as a **mirror** of the library rather
+than an additive update sync: changed files are replaced, deleted photos are
+moved to the Trash, and gone album folders and empty directories are pruned.
+Because these options remove data in the destination, treat it as fully
+managed by Photo Export — files you moved there manually are
+indistinguishable from orphans, so keep a second copy if that matters to you.
 
 ### Shared albums (reduced fidelity)
 

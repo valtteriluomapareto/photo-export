@@ -68,6 +68,23 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
     try real.removeItem(at: url)
   }
 
+  /// Hermetic stand-in for the real Trash: records the call and removes the
+  /// item, so tests never pollute the user's `~/.Trash`.
+  private var _trashCalls: [URL] = []
+  var trashCalls: [URL] {
+    lock.lock()
+    defer { lock.unlock() }
+    return _trashCalls
+  }
+
+  func trashItem(at url: URL) throws -> URL? {
+    lock.lock()
+    _trashCalls.append(url)
+    lock.unlock()
+    try real.removeItem(at: url)
+    return nil
+  }
+
   func copyItem(from src: URL, to dst: URL) throws {
     lock.lock()
     _copyCalls.append((from: src, to: dst))
