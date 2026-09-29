@@ -39,6 +39,10 @@ enum AutoSyncEvent: Sendable {
   /// full reconciliation."
   case photosChangeFetchFailed(PhotoLibraryPersistentChangeFetchError)
 
+  /// Fan-out is about to start this scope. Captures its dirty-work boundary
+  /// before the runner can suspend; repeated publisher observations are ignored.
+  case exportRunStarted(ExportRunContext, destinationId: String)
+
   /// `ExportManager`'s active-run state changed. Used to detect a run starting,
   /// completing, or being cancelled out from under the reducer.
   case exportRunStateChanged(ExportRunState)

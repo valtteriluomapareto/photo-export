@@ -46,6 +46,8 @@ If you want to run a backup right now without waiting:
 - **Settings → Auto Export → Export Now**, or
 - **Menu bar icon → Export Now** (Cmd+Shift+E). The menu bar's Export Now is greyed out unless Auto Export is idle or already scheduled — use the Settings button in other states.
 
+Photos changes received while an export is running stay pending for a follow-up run. Completing an automatic run or a compatible manual full export clears only the work covered when that run started. Newer changes, including another edit to the same photo or an album-membership change, remain queued. After a quiet follow-up finishes, Auto Export returns to idle.
+
 Manual exports (any **Export Year / Month / Folder / Album** button, in the toolbar or in a content pane) still work the same way they always have. If you click one while Auto Export is in the middle of a run, Photo Export asks whether to cancel the automatic run and start your manual one instead. Anything that was queued by the automatic run stays pending and Auto Export picks it up after your manual run finishes.
 
 ## Stopping a run

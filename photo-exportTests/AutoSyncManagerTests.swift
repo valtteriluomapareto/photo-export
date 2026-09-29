@@ -430,6 +430,9 @@ struct AutoSyncManagerTests {
       failedCount: 0, skippedCount: 0,
       cancelReason: nil, result: .completed
     )
+    builder.exportRunner.subject.send(ExportRunState(
+      activeContext: manualSummary.context, isManualActive: true, isAutoSyncActive: false))
+    builder.exportRunner.subject.send(.idle)
     builder.exportRunner.completedRunsSubject.send(manualSummary)
 
     let cleared = builder.dirtyStore.load(destinationId: destId).scope(.timeline)

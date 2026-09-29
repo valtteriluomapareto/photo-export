@@ -580,6 +580,9 @@ final class AutoSyncManager: ObservableObject {
           selection: spec.selection,
           startedAt: environment.clock.now()
         )
+        if let destinationId {
+          self?.dispatch(.exportRunStarted(context, destinationId: destinationId))
+        }
         let summary = await environment.exportRunner.runExport(context: context)
         // Check cancellation again after the await — the user may have
         // toggled off / switched destinations during the run.
