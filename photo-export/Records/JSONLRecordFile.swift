@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import os
 
@@ -15,10 +16,9 @@ import os
 ///   and the `RecordStoreState` machine.
 ///
 /// Phase 0/1 of `docs/project/archive/collections-export-plan.md` motivates this extraction.
-/// Two stores compose one each; both inherit the corrected fsync discipline (the existing
-/// timeline `writeSnapshotAndTruncate` skipped both renames' parent-dir fsyncs, which under
-/// power loss could leave a snapshot durable while the log still contained pre-snapshot
-/// mutations — replaying mutations already in the snapshot on next load).
+/// Both stores share the same commit order: synchronize the replacement snapshot,
+/// atomically rename it over the old snapshot, synchronize its directory, then truncate
+/// the log. An interruption before log truncation leaves a replayable log intact.
 ///
 /// `@MainActor` isolates the calling-actor side: every entry point (`load`, `append`,
 /// `writeSnapshot`, `resetToEmpty`, `clearOnDiskState`, `flushForTesting`) and every
@@ -43,6 +43,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   private let logger: Logger
   private let dateEncodingStrategy: JSONEncoder.DateEncodingStrategy
   private let dateDecodingStrategy: JSONDecoder.DateDecodingStrategy
+  private let fileReplacer: any AtomicFileReplacing
   private let fileManager = FileManager.default
 
   // MARK: - Mutation-count state
@@ -57,7 +58,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     ioQueue: DispatchQueue,
     logger: Logger,
     dateEncodingStrategy: JSONEncoder.DateEncodingStrategy = .iso8601,
-    dateDecodingStrategy: JSONDecoder.DateDecodingStrategy = .iso8601
+    dateDecodingStrategy: JSONDecoder.DateDecodingStrategy = .iso8601,
+    fileReplacer: any AtomicFileReplacing = FileIOService()
   ) {
     self.snapshotURL = snapshotURL
     self.logURL = logURL
@@ -65,6 +67,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     self.logger = logger
     self.dateEncodingStrategy = dateEncodingStrategy
     self.dateDecodingStrategy = dateDecodingStrategy
+    self.fileReplacer = fileReplacer
   }
 
   // MARK: - Load
@@ -255,6 +258,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let snapshotURL = self.snapshotURL
     let logger = self.logger
     let dateEncodingStrategy = self.dateEncodingStrategy
+    let fileReplacer = self.fileReplacer
 
     ioQueue.async { [weak self] in
       do {
@@ -293,7 +297,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
 
       do {
         try Self.writeSnapshotAndTruncate(
-          snapshotData: snapshotData, snapshotURL: snapshotURL, logURL: logURL)
+          snapshotData: snapshotData, snapshotURL: snapshotURL, logURL: logURL,
+          fileReplacer: fileReplacer)
       } catch {
         logger.error(
           "Failed to compact \(snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
@@ -313,8 +318,15 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = dateEncodingStrategy
     let data = try encoder.encode(snapshot)
-    try Self.writeSnapshotAndTruncate(
-      snapshotData: data, snapshotURL: snapshotURL, logURL: logURL)
+    // Serialize explicit snapshots with queued appends and automatic compactions.
+    let snapshotURL = self.snapshotURL
+    let logURL = self.logURL
+    let fileReplacer = self.fileReplacer
+    try ioQueue.sync {
+      try Self.writeSnapshotAndTruncate(
+        snapshotData: data, snapshotURL: snapshotURL, logURL: logURL,
+        fileReplacer: fileReplacer)
+    }
     mutationCountSinceCompact = 0
   }
 
@@ -351,31 +363,31 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
 
   /// Writes `snapshotData` atomically and truncates the log.
   ///
-  /// Both renames (snapshot and log truncation) use `.tmp` + rename, and we explicitly
-  /// `fsync` the parent directory after each rename so the rename itself is durable.
-  /// Without the parent-dir fsync, a power loss between the snapshot rename and the log
-  /// truncation could leave the snapshot durable on disk while the log still contained
-  /// pre-snapshot mutations — replaying mutations already in the snapshot on next load.
+  /// The snapshot's bytes and directory entry must be synchronized before truncating
+  /// the log. Never unlink the previous snapshot: one rename replaces it so a process
+  /// interruption leaves either the previous snapshot + log or the new snapshot + log.
+  /// Replaying the untruncated log is safe because record mutations are idempotent.
   ///
-  /// (`Data(...).write(to: ..., options: .atomic)` writes via `.tmp` + rename internally
-  /// and fsyncs the file but **does not** fsync the parent directory.)
+  /// A leftover `.tmp` is not authoritative; the next attempt replaces it. We do not
+  /// adopt temporary bytes during load or change either store's on-disk format.
   /// `nonisolated` because this is called from inside `append`'s `ioQueue.async` block.
   /// Pure file I/O against URLs passed in by value; touches no actor state.
   nonisolated private static func writeSnapshotAndTruncate(
-    snapshotData: Data, snapshotURL: URL, logURL: URL
+    snapshotData: Data, snapshotURL: URL, logURL: URL,
+    fileReplacer: any AtomicFileReplacing
   ) throws {
-    let fileManager = FileManager.default
-
-    // 1) Write the snapshot atomically (file fsynced; parent-dir fsync after).
+    // 1) Prepare and synchronize the replacement while the old snapshot stays intact.
     let snapshotTmpURL = snapshotURL.appendingPathExtension("tmp")
     try snapshotData.write(to: snapshotTmpURL, options: .atomic)
-    if fileManager.fileExists(atPath: snapshotURL.path) {
-      try fileManager.removeItem(at: snapshotURL)
-    }
-    try fileManager.moveItem(at: snapshotTmpURL, to: snapshotURL)
+    let handle = try FileHandle(forWritingTo: snapshotTmpURL)
+    defer { try? handle.close() }
+    try handle.synchronize()
+
+    // 2) One rename replaces the snapshot. On failure, keep the old snapshot and log.
+    try fileReplacer.replaceItemAtomically(from: snapshotTmpURL, to: snapshotURL)
     try fsyncDirectory(snapshotURL.deletingLastPathComponent())
 
-    // 2) Truncate the log atomically (also `.tmp` + rename internally; same parent dir).
+    // 3) Only now may the log be truncated. A prior error must leave it untouched.
     try Data().write(to: logURL, options: .atomic)
     try fsyncDirectory(logURL.deletingLastPathComponent())
   }
@@ -383,9 +395,15 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// `nonisolated` for the same reason as `writeSnapshotAndTruncate`.
   nonisolated private static func fsyncDirectory(_ url: URL) throws {
     let fd = open(url.path, O_RDONLY)
-    if fd < 0 { return }
+    guard fd >= 0 else {
+      throw NSError(
+        domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSFilePathErrorKey: url.path])
+    }
     defer { close(fd) }
-    _ = fsync(fd)
+    guard fsync(fd) == 0 else {
+      throw NSError(
+        domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSFilePathErrorKey: url.path])
+    }
   }
 
   /// `nonisolated` for the same reason as `writeSnapshotAndTruncate`.
