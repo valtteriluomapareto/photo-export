@@ -450,24 +450,9 @@ struct MonthViewModelTests {
     #expect(!assetsBefore.isEmpty)
   }
 
-  /// Stale-frame regression for the scope-switch race. The synchronous
-  /// prefix of `loadAssets(for:)` must clear `assets`, `selectedAssetId`,
-  /// and set `isLoading` before reaching its first `await` — otherwise a
-  /// SwiftUI body re-evaluation between the scope-switch click and the
-  /// first batch would render scope A's covers under scope B's selection
-  /// (the §1.7 flash). 1.2's removal of `thumbnailsById` and 1.3's
-  /// cell-scoped thumbnail cancellation close the secondary late-write
-  /// race the plan also worried about.
-  ///
-  /// Why `Task.yield()` instead of gating on the stream's first batch:
-  /// a gate fires only after the stream task has progressed through its
-  /// own internal `await self.fetchAssets(...)` plus several scheduler
-  /// turns, by which point `await preflight(); assets = []` would also
-  /// pass. Yielding once gives the child task exactly one task-turn —
-  /// enough to run its synchronous prefix and hit its first await — so
-  /// any future `await` introduced before the clear would suspend the
-  /// child before `assets` is blanked, leaving scope A's data visible
-  /// and failing the post-yield assertions.
+  /// Switching scopes must clear the old assets and selection while the new
+  /// scope's first batch is pending. Synchronize on the fake's checkpoint:
+  /// Task.yield() does not guarantee that the child task has started.
   @Test func loadAssetsClearsAssetsBeforeFirstBatch() async throws {
     let svc = FakePhotoLibraryService()
     let albumA = (0..<100).map { makeAsset(id: "a-\($0)") }
@@ -480,9 +465,7 @@ struct MonthViewModelTests {
     #expect(vm.assets.count == 100)
     #expect(vm.selectedAssetId == "a-0")
 
-    // Gate B's first batch so the second load doesn't race the post-yield
-    // assertions to completion (which would let scope B's data overwrite
-    // the cleared state we're trying to observe).
+    // Hold B's first batch so the cleared state remains observable.
     let gate = AsyncCheckpoint()
     svc.progressiveCheckpointByScopeKey["album:B"] = gate
 
@@ -492,13 +475,12 @@ struct MonthViewModelTests {
     // run — scope A is still fully visible.
     #expect(vm.assets.count == 100, "child task scheduled but not started")
 
-    // One yield gives the child task exactly one MainActor turn — enough
-    // to run its synchronous prefix and hit its first await.
-    await Task.yield()
+    // Wait until B has started loading but cannot deliver any assets yet.
+    await gate.waitForEnter(count: 1)
 
     #expect(
       vm.assets.isEmpty,
-      "scope switch must blank assets before any await in loadAssets(for:)")
+      "scope switch must blank old assets while the first batch is pending")
     #expect(vm.selectedAssetId == nil)
     #expect(vm.isLoading)
 
