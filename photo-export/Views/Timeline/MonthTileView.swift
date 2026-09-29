@@ -105,7 +105,7 @@ struct MonthTileView: View {
       if let single = displayed.first {
         Image(nsImage: single)
           .resizable()
-          .aspectRatio(contentMode: .fill)
+          .scaledToFill()
           .frame(width: Self.tileSide, height: Self.tileSide)
           .clipped()
       }
@@ -129,7 +129,7 @@ struct MonthTileView: View {
     if index < covers.count {
       Image(nsImage: covers[index])
         .resizable()
-        .aspectRatio(contentMode: .fill)
+        .scaledToFill()
         .frame(width: cellSide, height: cellSide)
         .clipped()
     } else {

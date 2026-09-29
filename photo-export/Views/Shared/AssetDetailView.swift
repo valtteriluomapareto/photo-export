@@ -22,7 +22,7 @@ struct AssetDetailView: View {
           if let fullImage {
             Image(nsImage: fullImage)
               .resizable()
-              .aspectRatio(contentMode: .fit)
+              .scaledToFit()
               .frame(maxWidth: .infinity, maxHeight: .infinity)
           } else if isLoading {
             Rectangle()

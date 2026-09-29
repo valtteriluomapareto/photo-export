@@ -30,7 +30,7 @@ struct ThumbnailView: View {
       if let image {
         Image(nsImage: NSImage(cgImage: image, size: .zero))
           .resizable()
-          .aspectRatio(contentMode: .fill)
+          .scaledToFill()
           .frame(width: 100, height: 100)
           .clipped()
       } else if failed {
