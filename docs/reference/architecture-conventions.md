@@ -105,6 +105,12 @@ queueCoordinator.$queueCount
 
 Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
 
+### AutoSync dirty-work acknowledgement
+
+`AutoSyncReducer` captures a `RunDirtyBoundary` (run context, stable destination ID, and scopes changed since start). The fan-out sends `exportRunStarted` before each scope's `await runExport`; synchronous `exportRunStateChanged` observations capture manual runs and never reset an existing boundary for the same run ID. Keep the boundary across the idle publication: the completion summary arrives afterward.
+
+Every export-relevant Photos event invalidates the affected scopes, including repeated changes to the same asset, changes while full reconciliation is already pending, and collection-only changes for album scopes. Successful completion acknowledges only covered, selected scopes that have not changed since the matching run began. Unknown, failed, or destination-mismatched completions cannot clear pending work. The boundary is transient: the existing persisted dirty state remains authoritative after restart, so no persistence migration or counter is needed.
+
 ## Host protocol pattern
 
 > The cancellation-seam methods (`isCurrent` / `throwIfCancelledOrStale` / `generation` / `bumpGeneration`) are no longer on any Host protocol — that move landed in issue #67 item 2. Collaborators that need the seam inject `ExportQueueCoordinator` directly. The remaining Host methods are UI-state mirrors and dependency forwarders, all stable.

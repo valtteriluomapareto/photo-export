@@ -10,6 +10,15 @@ import Foundation
 /// History fields like `lastRunSummary` live on `AutoSyncManager`, not the reducer
 /// state, since they're persisted via effects rather than computed.
 enum AutoSyncReducer {
+  /// A single active run only covers work known at its start. A scope is
+  /// invalidated by every subsequent change, even if its pending ID set is
+  /// unchanged. This is a per-run revision boundary; nothing new is persisted.
+  struct RunDirtyBoundary: Equatable, Sendable {
+    let context: ExportRunContext
+    let destinationId: String
+    var changedScopes: Set<AutoExportLibraryScope> = []
+  }
+
   struct State: Equatable, Sendable {
     var current: AutoSyncState
     var enabled: Bool
@@ -35,6 +44,9 @@ enum AutoSyncReducer {
     /// (appLaunch, scope change, version change) aren't silently lost. Cleared on
     /// fire or on superseding trigger.
     var pendingTriggerReason: AutoSyncReason?
+    /// Retained through the idle publication until the matching summary arrives.
+    /// Replaced by the next run; an unknown/older completion cannot acknowledge work.
+    var runDirtyBoundary: RunDirtyBoundary?
 
     static let initial = State(
       current: .disabled,
@@ -142,6 +154,11 @@ enum AutoSyncReducer {
     case .importStateChanged(let isImporting):
       newState.importActive = isImporting
 
+    case .exportRunStarted(let context, let destinationId):
+      captureRunBoundary(context, destinationId: destinationId, in: &newState)
+      // A bookkeeping signal, not an idle/active transition or a new trigger.
+      return (newState, [])
+
     case .exportRunStateChanged(let runState):
       // Just track the run state — dirty-clearing is gated on the auto-sync run's
       // *result* and arrives via a separate `.autoSyncRunCompleted(summary)` event
@@ -149,6 +166,9 @@ enum AutoSyncReducer {
       // we'd clear dirty on cancelled/interrupted/failed runs and lose pending
       // work the run never actually exported.
       newState.exportRunState = runState
+      if let context = runState.activeContext, let destinationId = newState.destination.id {
+        captureRunBoundary(context, destinationId: destinationId, in: &newState)
+      }
 
     case .autoSyncRunCompleted(let summary):
       // The summary's `result` distinguishes a clean run (where the full
@@ -166,28 +186,7 @@ enum AutoSyncReducer {
         effects.append(
           .recordRetryFailures(summary.failures, destinationId: destinationId))
       }
-      if summary.result == .completed,
-        let destinationId = newState.destination.id
-      {
-        // Clear dirty only for the scope the summary actually covered. The
-        // manager's autoExport fan-out dispatches one `autoSyncRunCompleted`
-        // per scope, so a Timeline-only summary must not clear Favorites
-        // dirty (which Favorites' own run will handle). For the legacy
-        // `.autoExport(scopes)` summary shape (still used by tests and any
-        // future single-pass runner), clear all selected scopes that the
-        // umbrella scope set covers.
-        let coveredScopes = Self.coveredScopes(
-          summary: summary, currentSelection: newState.scopeSelection)
-        var dirty = newState.dirtyStateByDestination[destinationId] ?? .empty
-        for scope in coveredScopes {
-          var scopeState = dirty.scope(scope)
-          scopeState.clearAfterSuccessfulFullReconciliation()
-          dirty.setScope(scope, scopeState)
-        }
-        dirty.markUpdated(at: now)
-        newState.dirtyStateByDestination[destinationId] = dirty
-        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
-      }
+      acknowledgeRun(summary, in: &newState, now: now, effects: &effects)
 
     case .debounceFired(let reason):
       // Honor the timer only if the state still expects this reason. A debounce
@@ -256,6 +255,11 @@ enum AutoSyncReducer {
             {
               scopeState.pendingPlacementReconciliation = true
             }
+            if !changedIds.isEmpty
+              || ((scope == .albums || scope == .sharedAlbums) && event.collectionChangesPresent)
+            {
+              invalidateRunBoundary(scope, destinationId: destinationId, in: &newState)
+            }
             dirty.setScope(scope, scopeState)
           }
           dirty.markUpdated(at: now)
@@ -294,6 +298,7 @@ enum AutoSyncReducer {
           var scopeState = dirty.scope(scope)
           scopeState.pendingFullReconciliation = true
           scopeState.pendingAssetIds.removeAll()
+          invalidateRunBoundary(scope, destinationId: destinationId, in: &newState)
           dirty.setScope(scope, scopeState)
         }
         dirty.markUpdated(at: now)
@@ -324,29 +329,8 @@ enum AutoSyncReducer {
       // versionSelection. Targeted asset runs and partial-failure runs leave
       // dirty state untouched: they didn't process the full scope, so pending
       // assets that *weren't* in their target list are still pending.
-      guard summary.result == .completed,
-        summary.context.source == .manual,
-        summary.context.selection == newState.versionSelection,
-        let destinationId = newState.destination.id
-      else { break }
-
-      let coveredScopes: Set<AutoExportLibraryScope> =
-        summary.context.scope.clearableScope.map { [$0] } ?? []
-      guard !coveredScopes.isEmpty else { break }
-
-      var dirty = newState.dirtyStateByDestination[destinationId] ?? .empty
-      var changed = false
-      for scope in coveredScopes where newState.scopeSelection.includes(scope) {
-        var scopeState = dirty.scope(scope)
-        scopeState.clearAfterSuccessfulFullReconciliation()
-        dirty.setScope(scope, scopeState)
-        changed = true
-      }
-      if changed {
-        dirty.markUpdated(at: now)
-        newState.dirtyStateByDestination[destinationId] = dirty
-        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
-      }
+      guard summary.context.source == .manual else { break }
+      acknowledgeRun(summary, in: &newState, now: now, effects: &effects)
 
     case .runNowRequested:
       // The user clicked Export Now. Route through the existing
@@ -363,10 +347,13 @@ enum AutoSyncReducer {
       // Manager dispatches this on destination-change before
       // `destinationChanged`, so the reducer's `dirtyStateByDestination` cache
       // is populated for the new destination *before* downstream events
-      // (photosChanged, debounce) consult it. Idempotent: re-loading the same
-      // state is a byte-identical merge, and the recompute pass below has no
-      // input changes to react to.
+      // (photosChanged, debounce) consult it. Loading/reloading during a run
+      // invalidates that run's boundary: its scan cannot acknowledge work
+      // from a newly loaded persistence snapshot.
       newState.dirtyStateByDestination[destinationId] = dirty
+      for scope in AutoExportLibraryScope.allCases {
+        invalidateRunBoundary(scope, destinationId: destinationId, in: &newState)
+      }
     }
 
     // Save the trigger reason for resume *before* recompute decides whether to
@@ -418,6 +405,56 @@ enum AutoSyncReducer {
     }
 
     return (newState, effects)
+  }
+
+  private static func captureRunBoundary(
+    _ context: ExportRunContext, destinationId: String, in state: inout State
+  ) {
+    // Combine emits several state changes for the same run. Never move its
+    // boundary forward when those repeated observations arrive.
+    guard state.runDirtyBoundary?.context.runId != context.runId else { return }
+    state.runDirtyBoundary = RunDirtyBoundary(context: context, destinationId: destinationId)
+  }
+
+  private static func invalidateRunBoundary(
+    _ scope: AutoExportLibraryScope, destinationId: String, in state: inout State
+  ) {
+    guard state.runDirtyBoundary?.destinationId == destinationId else { return }
+    state.runDirtyBoundary?.changedScopes.insert(scope)
+  }
+
+  private static func acknowledgeRun(
+    _ summary: ExportRunSummary, in state: inout State, now: Date,
+    effects: inout [AutoSyncEffect]
+  ) {
+    guard let boundary = state.runDirtyBoundary,
+      boundary.context == summary.context
+    else { return }
+    state.runDirtyBoundary = nil
+    guard summary.result == .completed,
+      boundary.destinationId == state.destination.id,
+      summary.context.selection == state.versionSelection
+    else { return }
+
+    let covered: Set<AutoExportLibraryScope> =
+      summary.context.source == .manual
+      ? (summary.context.scope.clearableScope.map { [$0] } ?? [])
+      : coveredScopes(summary: summary, currentSelection: state.scopeSelection)
+    let scopes = covered.intersection(Set(state.scopeSelection.enabledScopes))
+      .subtracting(boundary.changedScopes)
+    var dirty = state.dirtyStateByDestination[boundary.destinationId] ?? .empty
+    var changed = false
+    for scope in scopes where !dirty.scope(scope).isEmpty {
+      var scopeState = dirty.scope(scope)
+      scopeState.clearAfterSuccessfulFullReconciliation()
+      dirty.setScope(scope, scopeState)
+      changed = true
+    }
+    if changed {
+      dirty.markUpdated(at: now)
+      state.dirtyStateByDestination[boundary.destinationId] = dirty
+      effects.append(.persistDirtyState(dirty, destinationId: boundary.destinationId))
+    }
   }
 
   /// Whether the previous state was a blocking-then-resumable state (transitioning
