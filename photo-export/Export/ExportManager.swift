@@ -677,18 +677,21 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  func startExportAll(selectionOverride: ExportVersionSelection? = nil) {
+  /// Returns the enqueue task so callers can await its completion independently
+  /// of the queue drain. Ignoring the handle preserves fire-and-forget dispatch.
+  @discardableResult
+  func startExportAll(selectionOverride: ExportVersionSelection? = nil) -> Task<Void, Never>? {
     guard !isImporting else {
       logger.warning("startExportAll ignored: import in progress")
-      return
+      return nil
     }
     guard canExportTimeline else {
       logger.error(
         "startExportAll ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public)"
       )
-      return
+      return nil
     }
-    guard !isEnqueueingAll else { return }
+    guard !isEnqueueingAll else { return nil }
     // selectionOverride lets `runExport(context:)` honor the run context's selection
     // without mutating the user-visible toolbar `versionSelection`.
     let selection = selectionOverride ?? versionSelection
@@ -703,7 +706,7 @@ final class ExportManager: ObservableObject {
     // should cancel first.
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
-    runBulkExportTask(
+    return runBulkExportTask(
       generation: gen,
       logTag: "startExportAll",
       emptyDoneMessage: { "Everything in this destination is already exported." },
@@ -1003,7 +1006,7 @@ final class ExportManager: ObservableObject {
   /// (`startExportAll`, `startExportTimelineSelection`,
   /// `startExportCollectionsSelection`, `enqueueBulkAlbumExport`) was
   /// duplicating: the `Task { [weak self] in }` wrapper, the
-  /// `isEnqueueingAll = false` teardown on every exit path, the success
+  /// `isEnqueueingAll = false` teardown for the owning generation, the success
   /// finalize (empty/done message + `processQueueIfNeeded()`), and the
   /// partial-failure recovery on throw (queue warning + `partialBulkScan` +
   /// drain if any jobs already queued; otherwise finalize as failed).
@@ -1013,26 +1016,26 @@ final class ExportManager: ObservableObject {
   /// when nothing was enqueued, and (c) the partial-scan warning factory used
   /// when the body throws after partial progress. Issue #67 item 5.
   ///
-  /// Cancellation is the body's responsibility: capture `gen`, call
-  /// `isCurrent(gen)` after every `await`, return `.stale` if a check fails.
-  /// The helper's outer guard catches staleness *before* the body runs.
+  /// The body checks `gen` after each await to protect its enqueue work.
+  /// This wrapper independently checks ownership before starting and after the
+  /// body returns or throws. Stale tasks must not clean up a replacement run;
+  /// the cancellation/supersession path has already cleared their old state.
+  @discardableResult
   private func runBulkExportTask(
     generation gen: Int,
     logTag: String,
     emptyDoneMessage: @escaping @MainActor () -> String,
     partialScanWarning: @escaping @MainActor () -> String,
     body: @escaping @MainActor () async throws -> BulkExportOutcome
-  ) {
+  ) -> Task<Void, Never> {
     Task { [weak self] in
-      guard let self, self.isCurrent(gen) else {
-        self?.isEnqueueingAll = false
-        return
-      }
+      guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await body()
+        guard self.isCurrent(gen) else { return }
         switch outcome {
         case .stale:
-          self.isEnqueueingAll = false
+          return
         case .completed(let totals):
           self.isEnqueueingAll = false
           if totals.totalEnqueued == 0 && !totals.sawUnauthorized {
@@ -1044,6 +1047,7 @@ final class ExportManager: ObservableObject {
           self.processQueueIfNeeded()
         }
       } catch {
+        guard self.isCurrent(gen) else { return }
         self.isEnqueueingAll = false
         self.logger.error(
           "\(logTag, privacy: .public) failed: \(String(describing: error), privacy: .public)"
