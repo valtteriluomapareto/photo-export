@@ -1,7 +1,8 @@
+import Darwin
 import Foundation
 import os
 
-struct FileIOService: FileSystemService {
+struct FileIOService: FileSystemService, AtomicFileReplacing {
   private static let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "FileIO")
 
@@ -69,5 +70,16 @@ struct FileIOService: FileSystemService {
 
   func copyItem(from src: URL, to dst: URL) throws {
     try FileManager.default.copyItem(at: src, to: dst)
+  }
+
+  /// Only for replaceable persistence files. Exported media must continue to use
+  /// `moveItemAtomically`, which refuses to overwrite an existing destination.
+  func replaceItemAtomically(from source: URL, to destination: URL) throws {
+    guard rename(source.path, destination.path) == 0 else {
+      let code = errno
+      throw NSError(
+        domain: NSPOSIXErrorDomain, code: Int(code),
+        userInfo: [NSFilePathErrorKey: destination.path])
+    }
   }
 }

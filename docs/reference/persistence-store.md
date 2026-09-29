@@ -128,7 +128,16 @@ compaction.
 ## Crash Safety
 
 - Mutations are fsynced to the log upon append; after a crash, the log is replayed.
-- Snapshot creation writes to a temporary file and atomically replaces the old snapshot to avoid corruption.
+- Snapshot creation writes and synchronizes a temporary file, then replaces the old
+  snapshot with a single atomic rename (without first deleting the old snapshot).
+  The containing directory is synchronized before the log is truncated. If preparing,
+  replacing, or synchronizing the snapshot fails, the log is left intact.
+- An interruption before replacement leaves the previous snapshot plus the log; an
+  interruption after replacement but before truncation leaves the new snapshot plus
+  the log. Replaying the idempotent record mutations reconstructs the same state.
+- Explicit snapshot writes run on the same serial IO queue as appends and automatic
+  compaction. Leftover temporary snapshots are not used during load; a subsequent
+  write replaces them. Neither store's file format changes.
 
 ## Querying Status
 

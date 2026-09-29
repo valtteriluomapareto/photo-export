@@ -182,6 +182,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 - Every exported asset is tracked by its Photos library identifier
 - Per-destination tracking — switching destinations reconfigures automatically
 - Resume-safe: interrupted exports pick up where they left off without re-copying
+- Tracking snapshots are replaced atomically, preserving previous export history if the replacement is interrupted
 - Sidebar badges update as exports complete
 
 ## Queue controls
