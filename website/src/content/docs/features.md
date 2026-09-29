@@ -188,6 +188,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 ## Queue controls
 
 - Pause and resume the export queue at any time
+- Cancel and restart exports safely: a cancelled scan cannot change the new run’s progress or completion
 - Cancel and clear the entire batch
 - Queue progress visible in the toolbar
 

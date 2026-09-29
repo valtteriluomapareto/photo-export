@@ -72,6 +72,119 @@ struct ExportManagerRunExportTests {
     )
   }
 
+  // MARK: - Stale bulk-task ownership (issue #140)
+
+  /// A normal late fetch result and a late fetch error both belong to A.
+  /// Await A's actual enqueue task before inspecting B, so the assertions
+  /// cannot pass merely because A's epilogue has not run yet.
+  @Test(arguments: [false, true], [false, true])
+  func staleBulkFetchCannotMutateReplacementRun(throwsError: Bool, hasQueuedJobs: Bool) async throws
+  {
+    let harness = makeHarness()
+    let manager = harness.manager
+    let oldFetch = AsyncCheckpoint()
+    let newFetch = AsyncCheckpoint()
+    let writerGate = AsyncCheckpoint()
+    harness.writer.checkpoint = writerGate
+    defer {
+      Task {
+        await oldFetch.releaseAll()
+        await newFetch.releaseAll()
+        await harness.cleanup()
+      }
+    }
+
+    harness.photoLib.yearCounts = [(2023, 1)]
+    harness.photoLib.fetchAssetsCheckpointByYear[2023] = oldFetch
+    if throwsError {
+      harness.photoLib.fetchAssetsErrorByYear[2023] = NSError(domain: "OldFetch", code: 1)
+    }
+    let oldTask = try #require(manager.startExportAll())
+    await oldFetch.waitForEnter(count: 1)
+    manager.cancelAndClear()
+
+    let asset = TestAssetFactory.makeAsset(id: "replacement", creationDate: makeDate(2025, 1, 1))
+    harness.photoLib.assetsByYearMonth["2025-1"] = [asset]
+    harness.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "replacement.JPG")
+    ]
+    harness.photoLib.yearCounts = hasQueuedJobs ? [(2025, 1), (2024, 0)] : [(2025, 1)]
+    harness.photoLib.fetchAssetsCheckpointByYear[hasQueuedJobs ? 2024 : 2025] = newFetch
+    let context = makeContext(scope: .timelineFullLibrary)
+    var completions: [ExportRunSummary] = []
+    let subscription = manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
+    async let replacement = manager.runExport(context: context)
+    await newFetch.waitForEnter(count: 1)
+
+    let pendingJobs = manager.pendingJobs
+    let generation = manager.generation
+    #expect(pendingJobs.count == (hasQueuedJobs ? 1 : 0))
+    #expect(manager.isEnqueueingAll)
+    #expect(manager.activeRunContext == context)
+    await oldFetch.releaseAll()
+    await oldTask.value
+
+    #expect(manager.generation == generation)
+    #expect(manager.isEnqueueingAll)
+    #expect(manager.activeRunContext == context)
+    #expect(manager.pendingJobs == pendingJobs)
+    #expect(manager.queueCount == pendingJobs.count)
+    #expect(manager.totalJobsEnqueued == pendingJobs.count)
+    #expect(manager.totalJobsCompleted == 0)
+    #expect(!manager.isRunning)
+    #expect(!manager.isProcessing)
+    #expect(manager.queueWarningMessage == nil)
+    #expect(manager.emptyRunMessage == nil)
+    #expect(completions.isEmpty, "A must not resolve B's continuation")
+
+    await newFetch.releaseAll()
+    await writerGate.releaseAll()
+    let summary = await replacement
+    #expect(summary.context == context)
+    #expect(summary.result == .completed, "A must not mark B as a partial scan")
+    #expect(summary.enqueuedCount == 1)
+    #expect(summary.completedCount == 1)
+    #expect(summary.failedCount == 0)
+    #expect(summary.failures.isEmpty)
+    #expect(completions == [summary], "B must complete exactly once")
+  }
+
+  @Test(arguments: [false, true])
+  func bulkTaskCancelledBeforeStartingCannotClearReplacementEnqueueFlag(supersede: Bool)
+    async throws
+  {
+    let harness = makeHarness()
+    let gate = AsyncCheckpoint()
+    defer {
+      Task {
+        await gate.releaseAll()
+        await harness.cleanup()
+      }
+    }
+    harness.photoLib.yearCounts = [(2025, 0)]
+    harness.photoLib.fetchAssetsCheckpointByYear[2025] = gate
+
+    // All three calls are synchronous on MainActor: A cannot start before
+    // cancellation and B's enqueue flag is set before we yield to A.
+    let oldTask = try #require(harness.manager.startExportAll())
+    if supersede {
+      harness.manager.supersedeForManualRun()
+    } else {
+      harness.manager.cancelAndClear()
+    }
+    let replacementTask = try #require(harness.manager.startExportAll())
+    await oldTask.value
+    #expect(harness.manager.isEnqueueingAll)
+    await gate.waitForEnter(count: 1)
+    #expect(harness.photoLib.fetchAssetsCalls.count == 1, "Only B should fetch")
+    #expect(harness.manager.isEnqueueingAll)
+    await gate.releaseAll()
+    await replacementTask.value
+    #expect(!harness.manager.isEnqueueingAll)
+    #expect(!harness.manager.hasActiveExportWork)
+  }
+
   // MARK: - Bookkeeping integrity
 
   /// Phase 3a regression gate: `VariantExporter` routes its sentinel-message failure

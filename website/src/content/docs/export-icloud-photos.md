@@ -89,5 +89,5 @@ When Photos can't provide the edited version of an asset (`Edited resource unava
 
 - **Organized folders**: Photos are automatically sorted into `Year/Month/` folders instead of dumped into one giant directory.
 - **Tracks what's exported**: The app remembers what's been exported. Run it again and it skips already-exported photos.
-- **Pause and resume**: Long exports can be paused and picked up later.
+- **Pause and resume**: Long exports can be paused and picked up later. Cancelling and starting a new export keeps any unfinished scan from the cancelled run from affecting the new run.
 - **Open source**: No subscription, no account, no ads. MIT licensed. Free on GitHub, or [support the project on the Mac App Store](https://apps.apple.com/app/photo-export-local-backup/id6761410742).
