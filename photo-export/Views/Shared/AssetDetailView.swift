@@ -1,7 +1,6 @@
 import AppKit
 import Photos
 import SwiftUI
-import os
 
 struct AssetDetailView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
@@ -9,26 +8,23 @@ struct AssetDetailView: View {
 
   let asset: AssetDescriptor?
 
-  @State private var fullImage: NSImage?
-  @State private var isLoading: Bool = false
-  @State private var errorMessage: String?
-
-  private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "UI.Detail")
+  @StateObject private var imageLoader = AssetDetailImageLoader()
 
   var body: some View {
     VStack(spacing: 12) {
       if let asset {
+        let preview = imageLoader.state(for: asset.id)
         ZStack {
-          if let fullImage {
+          if let fullImage = preview.image {
             Image(nsImage: fullImage)
               .resizable()
               .scaledToFit()
               .frame(maxWidth: .infinity, maxHeight: .infinity)
-          } else if isLoading {
+          } else if preview.isLoading {
             Rectangle()
               .fill(Color.gray.opacity(0.15))
               .overlay(ProgressView())
-          } else if let errorMessage {
+          } else if let errorMessage = preview.errorMessage {
             Rectangle()
               .fill(Color.gray.opacity(0.15))
               .overlay(Text(errorMessage).foregroundColor(.red))
@@ -54,41 +50,9 @@ struct AssetDetailView: View {
       }
     }
     .task(id: asset?.id) {
-      await loadFullImage()
+      await imageLoader.load(for: asset?.id, using: photoLibraryManager)
     }
-  }
-
-  private func loadFullImage() async {
-    guard let asset else {
-      fullImage = nil
-      isLoading = false
-      errorMessage = nil
-      return
-    }
-    isLoading = true
-    errorMessage = nil
-    fullImage = nil
-    logger.debug(
-      "Preview start id: \(asset.id, privacy: .public) dims: \(asset.pixelWidth)x\(asset.pixelHeight)"
-    )
-    do {
-      let image = try await photoLibraryManager.requestFullImage(for: asset.id)
-      await MainActor.run {
-        fullImage = image
-        isLoading = false
-      }
-      logger.debug(
-        "Preview loaded id: \(asset.id, privacy: .public) size: \(Int(image.size.width))x\(Int(image.size.height))"
-      )
-    } catch {
-      await MainActor.run {
-        isLoading = false
-        errorMessage = "Failed to load image: \(error.localizedDescription)"
-      }
-      logger.error(
-        "Preview failed id: \(asset.id, privacy: .public) error: \(error.localizedDescription, privacy: .public)"
-      )
-    }
+    .onDisappear { imageLoader.clear() }
   }
 
   private func metadataView(for asset: AssetDescriptor) -> some View {

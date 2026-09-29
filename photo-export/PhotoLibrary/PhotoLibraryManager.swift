@@ -799,21 +799,24 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Request a full-size image for an asset
   func requestFullImage(for assetId: String) async throws -> NSImage {
     if let s = overrideService { return try await s.requestFullImage(for: assetId) }
+    try Task.checkCancellation()
     guard let asset = cachedOrFetchPHAsset(id: assetId) else {
       throw PhotoLibraryError.assetUnavailable
     }
-    return try await withCheckedThrowingContinuation { continuation in
-      let options = PHImageRequestOptions()
-      options.deliveryMode = .highQualityFormat
-      options.isNetworkAccessAllowed = true
-      options.isSynchronous = false
+    let options = PHImageRequestOptions()
+    options.deliveryMode = .highQualityFormat
+    options.isNetworkAccessAllowed = true
+    options.isSynchronous = false
 
-      self.logger.debug(
-        "requestFullImage start id: \(assetId, privacy: .public) size: \(asset.pixelWidth)x\(asset.pixelHeight)"
-      )
-
-      let resumed = OSAllocatedUnfairLock(initialState: false)
-
+    logger.debug(
+      "requestFullImage start id: \(assetId, privacy: .public) size: \(asset.pixelWidth)x\(asset.pixelHeight)"
+    )
+    let logger = self.logger
+    let missingImageError: Error = PhotoLibraryError.assetUnavailable
+    let bridge = FullImageRequestBridge { requestID in
+      PHImageManager.default().cancelImageRequest(requestID)
+    }
+    return try await bridge.request { callback in
       PHImageManager.default().requestImage(
         for: asset,
         targetSize: PHImageManagerMaximumSize,
@@ -825,42 +828,13 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
         let isCancelled = (info?[PHImageCancelledKey] as? NSNumber)?.boolValue ?? false
         let requestID = (info?[PHImageResultRequestIDKey] as? NSNumber)?.intValue ?? 0
         let error = info?[PHImageErrorKey] as? NSError
-        self.logger.debug(
+        logger.debug(
           "requestFullImage callback id: \(assetId, privacy: .public) requestID: \(requestID) degraded: \(isDegraded) inCloud: \(isInCloud) cancelled: \(isCancelled) imageNil: \((image == nil)) error: \(String(describing: error?.localizedDescription), privacy: .public)"
         )
 
-        if isCancelled || error != nil {
-          guard
-            resumed.withLock({
-              let was = $0
-              $0 = true
-              return !was
-            })
-          else { return }
-          if let error = error as? Error {
-            continuation.resume(throwing: error)
-          } else {
-            continuation.resume(throwing: PhotoLibraryError.assetUnavailable)
-          }
-          return
-        }
-
-        if isDegraded { return }
-
-        guard
-          resumed.withLock({
-            let was = $0
-            $0 = true
-            return !was
-          })
-        else { return }
-
-        guard let image = image else {
-          continuation.resume(throwing: PhotoLibraryError.assetUnavailable)
-          return
-        }
-
-        continuation.resume(returning: image)
+        callback(
+          FullImageRequestBridge.response(
+            image: image, info: info, missingImageError: missingImageError))
       }
     }
   }

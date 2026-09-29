@@ -76,6 +76,8 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// cancellation or pause.
   var fetchAssetsCheckpointByYear: [Int: AsyncCheckpoint] = [:]
   var requestFullImageError: Error?
+  /// Deferred requests let preview tests control completion order and cancellation.
+  var fullImageRequestOverride: (@MainActor (String) async throws -> NSImage)?
 
   func requestAuthorization() async -> Bool { isAuthorized }
 
@@ -422,6 +424,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   func requestFullImage(for assetId: String) async throws -> NSImage {
+    if let fullImageRequestOverride { return try await fullImageRequestOverride(assetId) }
     if let error = requestFullImageError { throw error }
     guard let image = fullImagesByAssetId[assetId] else {
       throw NSError(domain: "Test", code: 1, userInfo: [NSLocalizedDescriptionKey: "No image"])
