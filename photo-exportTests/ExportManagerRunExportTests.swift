@@ -11,6 +11,22 @@ import Testing
 @MainActor
 struct ExportManagerRunExportTests {
 
+  enum FullScope: CaseIterable, Sendable {
+    case timeline
+    case favorites
+    case albums
+    case sharedAlbums
+
+    var runScope: ExportRunScope {
+      switch self {
+      case .timeline: .timelineFullLibrary
+      case .favorites: .favoritesFull
+      case .albums: .allAlbumsFull
+      case .sharedAlbums: .allSharedAlbumsFull
+      }
+    }
+  }
+
   @MainActor
   private struct Harness {
     let manager: ExportManager
@@ -29,6 +45,7 @@ struct ExportManagerRunExportTests {
       }
       manager.cancelAndClear()
       store.flushForTesting()
+      collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
       UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
@@ -70,6 +87,44 @@ struct ExportManagerRunExportTests {
       scope: scope,
       selection: .edited
     )
+  }
+
+  private func seedAssets(_ assets: [AssetDescriptor], for scope: FullScope, in harness: Harness) {
+    switch scope {
+    case .timeline:
+      harness.photoLib.yearCounts = [(2025, assets.count)]
+      harness.photoLib.assetsByYearMonth["2025-1"] = assets
+    case .favorites:
+      harness.photoLib.favoritesAssets = assets
+    case .albums, .sharedAlbums:
+      let shared = scope == .sharedAlbums
+      let id = shared ? "shared-1" : "album-1"
+      harness.photoLib.collectionTree = [
+        PhotoCollectionDescriptor(
+          id: "\(shared ? "shared-album" : "album"):\(id)",
+          localIdentifier: id, title: "Test album",
+          kind: shared ? .sharedAlbum : .album, pathComponents: [], children: [])
+      ]
+      if shared {
+        harness.photoLib.assetsBySharedAlbumLocalId[id] = assets
+      } else {
+        harness.photoLib.assetsByAlbumLocalId[id] = assets
+      }
+    }
+    for asset in assets {
+      harness.photoLib.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(originalFilename: "\(asset.id).JPG")
+      ]
+    }
+  }
+
+  private func startLegacyExport(for scope: FullScope, in harness: Harness) {
+    switch scope {
+    case .timeline: harness.manager.startExportAll()
+    case .favorites: harness.manager.startExportFavorites()
+    case .albums: harness.manager.startExportAllAlbums()
+    case .sharedAlbums: harness.manager.startExportAllSharedAlbums()
+    }
   }
 
   // MARK: - Stale bulk-task ownership (issue #140)
@@ -259,48 +314,208 @@ struct ExportManagerRunExportTests {
     #expect(harness.writer.writeCalls.count == 1)
   }
 
-  // MARK: - Empty library
+  // MARK: - Full-scope run characterization (issue #153)
 
-  /// `runExport` against an empty Photos library resolves immediately with `.completed`
-  /// — `processQueueIfNeeded` early-returns on the empty queue and finalizes the run.
-  @Test func timelineFullLibraryEmptyResolvesCompleted() async {
+  /// Every supported full scope must resolve an empty scan once. This also pins
+  /// the zero-count baseline captured after synchronous start* dispatch.
+  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  func emptyFullScopeCompletesExactlyOnce(scope: FullScope) async {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
-    // Empty `yearCounts` → availableYears() returns []; nothing to enqueue.
+    let context = makeContext(scope: scope.runScope)
+    var completions: [ExportRunSummary] = []
+    let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
 
-    let summary = await harness.manager.runExport(
-      context: makeContext(scope: .timelineFullLibrary))
+    let summary = await harness.manager.runExport(context: context)
 
+    #expect(summary.context == context)
     #expect(summary.result == .completed)
     #expect(summary.cancelReason == nil)
     #expect(summary.enqueuedCount == 0)
     #expect(summary.completedCount == 0)
+    #expect(summary.failedCount == 0)
+    #expect(completions == [summary])
     #expect(harness.manager.activeRunContext == nil)
   }
 
-  /// `.favoritesFull` against an empty favorites collection resolves immediately.
-  @Test func favoritesFullEmptyResolvesCompleted() async {
+  /// The next run's summary must exclude the previous run's progress counters.
+  /// A new asset on the same scope forces another real job after the reset.
+  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  func fullScopeSummaryUsesFreshCounterBaseline(scope: FullScope) async {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
-    // `favoritesAssets` is empty by default.
+    let asset = TestAssetFactory.makeAsset(
+      id: "baseline-\(scope)", creationDate: makeDate(2025, 1, 1))
+    seedAssets([asset], for: scope, in: harness)
+    let context = makeContext(scope: scope.runScope)
+    var completions: [ExportRunSummary] = []
+    let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
 
-    let summary = await harness.manager.runExport(
-      context: makeContext(scope: .favoritesFull))
+    let first = await harness.manager.runExport(context: context)
+    let nextAsset = TestAssetFactory.makeAsset(
+      id: "next-\(scope)", creationDate: makeDate(2025, 1, 2))
+    seedAssets([nextAsset], for: scope, in: harness)
+    let second = await harness.manager.runExport(context: context)
 
-    #expect(summary.result == .completed)
+    #expect(first.result == .completed)
+    #expect(first.enqueuedCount == 1)
+    #expect(first.completedCount == 1)
+    #expect(second.result == .completed)
+    #expect(second.enqueuedCount == 1)
+    #expect(second.completedCount == 1)
+    #expect(completions == [first, second])
+    #expect(harness.writer.writeCalls.count == 2)
+  }
+
+  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  func importingRejectsEveryFullScopeWithoutStrandingAwaiter(scope: FullScope) async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+    harness.manager.startImport()
+    #expect(harness.manager.isImporting)
+    let context = makeContext(scope: scope.runScope)
+    var completions: [ExportRunSummary] = []
+    let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
+
+    let summary = await harness.manager.runExport(context: context)
+    harness.manager.cancelImport()
+
+    #expect(summary.context == context)
+    #expect(summary.result == .failed)
+    #expect(summary.enqueuedCount == 0)
+    #expect(summary.completedCount == 0)
+    #expect(completions == [summary])
     #expect(harness.manager.activeRunContext == nil)
   }
 
-  /// `.allAlbumsFull` against an empty album set resolves immediately.
-  @Test func allAlbumsFullEmptyResolvesCompleted() async {
+  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  func unavailableRelevantStoreRejectsEveryFullScope(scope: FullScope) async {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
-    // `collectionTree` is empty by default.
+    if scope == .timeline {
+      harness.store.configure(for: nil)
+      #expect(harness.manager.canExportCollection)
+    } else {
+      harness.collectionStore.configure(for: nil)
+      #expect(harness.manager.canExportTimeline)
+    }
+    let context = makeContext(scope: scope.runScope)
+    var completions: [ExportRunSummary] = []
+    let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
 
-    let summary = await harness.manager.runExport(
-      context: makeContext(scope: .allAlbumsFull))
+    let summary = await harness.manager.runExport(context: context)
 
+    #expect(summary.context == context)
+    #expect(summary.result == .failed)
+    #expect(summary.enqueuedCount == 0)
+    #expect(summary.completedCount == 0)
+    #expect(completions == [summary])
+    #expect(harness.manager.activeRunContext == nil)
+  }
+
+  /// A legacy fire-and-forget export has no `activeRunContext`, but it still
+  /// occupies the queue and must cause `runExport` to fail fast.
+  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  func busyLegacyQueueRejectsEveryFullScope(scope: FullScope) async {
+    let harness = makeHarness()
+    let gate = AsyncCheckpoint()
+    harness.writer.checkpoint = gate
+    defer { Task { await harness.cleanup() } }
+    let asset = TestAssetFactory.makeAsset(id: "busy-\(scope)", creationDate: makeDate(2025, 1, 1))
+    seedAssets([asset], for: scope, in: harness)
+    startLegacyExport(for: scope, in: harness)
+    await gate.waitForEnter(count: 1)
+    let legacyTask = harness.manager.currentTask
+    #expect(harness.manager.activeRunContext == nil)
+    let context = makeContext(scope: scope.runScope)
+    var completions: [ExportRunSummary] = []
+    let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
+
+    let summary = await harness.manager.runExport(context: context)
+
+    #expect(summary.context == context)
+    #expect(summary.result == .failed)
+    #expect(summary.enqueuedCount == 0)
+    #expect(summary.completedCount == 0)
+    #expect(completions == [summary])
+    #expect(harness.manager.activeRunContext == nil)
+    await gate.releaseAll()
+    await legacyTask?.value
+    #expect(completions == [summary], "the legacy queue must not publish another summary")
+  }
+
+  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  func cancellationCompletesEveryFullScopeExactlyOnce(scope: FullScope) async {
+    let harness = makeHarness()
+    let gate = AsyncCheckpoint()
+    harness.writer.checkpoint = gate
+    defer { Task { await harness.cleanup() } }
+    let asset = TestAssetFactory.makeAsset(
+      id: "cancel-\(scope)", creationDate: makeDate(2025, 1, 1))
+    seedAssets([asset], for: scope, in: harness)
+    let context = makeContext(scope: scope.runScope)
+    var completions: [ExportRunSummary] = []
+    let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
+    let run = Task { await harness.manager.runExport(context: context) }
+    await gate.waitForEnter(count: 1)
+    let writerTask = harness.manager.currentTask
+
+    harness.manager.cancelAndClear()
+    let summary = await run.value
+    await gate.releaseAll()
+    await writerTask?.value
+
+    #expect(summary.context == context)
+    #expect(summary.result == .cancelled)
+    #expect(summary.cancelReason == .userCancelled)
+    #expect(summary.enqueuedCount == 0, "cancellation clears progress counters before finalizing")
+    #expect(summary.completedCount == 0)
+    #expect(completions == [summary])
+    #expect(harness.manager.activeRunContext == nil)
+  }
+
+  /// Pause with one job in the writer and one pending. The awaiter remains
+  /// active until resume drains the second job, including across bulk scopes.
+  @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
+  func pauseAndResumeCompletesEveryFullScope(scope: FullScope) async {
+    let harness = makeHarness()
+    let gate = AsyncCheckpoint()
+    harness.writer.checkpoint = gate
+    defer { Task { await harness.cleanup() } }
+    let assets = (1...2).map {
+      TestAssetFactory.makeAsset(id: "paused-\(scope)-\($0)", creationDate: makeDate(2025, 1, $0))
+    }
+    seedAssets(assets, for: scope, in: harness)
+    let context = makeContext(scope: scope.runScope)
+    var completions: [ExportRunSummary] = []
+    let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
+    let run = Task { await harness.manager.runExport(context: context) }
+    await gate.waitForEnter(count: 1)
+    let firstWriterTask = harness.manager.currentTask
+
+    harness.manager.pause()
+    await gate.release()
+    await firstWriterTask?.value
+    #expect(harness.manager.isPaused)
+    #expect(harness.manager.pendingJobs.count == 1)
+    #expect(harness.manager.totalJobsCompleted == 1)
+    #expect(completions.isEmpty)
+    #expect(harness.manager.activeRunContext == context)
+
+    await gate.releaseAll()
+    harness.manager.resume()
+    let summary = await run.value
     #expect(summary.result == .completed)
+    #expect(summary.enqueuedCount == 2)
+    #expect(summary.completedCount == 2)
+    #expect(completions == [summary])
     #expect(harness.manager.activeRunContext == nil)
   }
 
