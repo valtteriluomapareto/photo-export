@@ -120,25 +120,32 @@ struct LibraryGridSelectionLifecycleTests {
 
   /// SwiftUI schedules render passes independently of the stream producer. The
   /// deadline bounds a failed observation; stream continuations control all races.
+  /// Allow CI's parallel MainActor tests to finish before the first render pass.
   private func observe(_ condition: () -> Bool) async -> Bool {
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(3))
-    while !condition(), clock.now < deadline {
+    let deadline = clock.now.advanced(by: .seconds(15))
+    while !condition(), !Task.isCancelled, clock.now < deadline {
       try? await Task.sleep(for: .milliseconds(10))
     }
     return condition()
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Grid.allCases)
+  @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func firstBatchSelectsDetailBeforeStreamFinishesAndKeepsUserChoice(grid: Grid) async throws {
     let fixture = Fixture(grid: grid)
     let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
-    fixture.service.progressiveStreamOverride = { _ in stream.stream }
+    var requested = false
+    fixture.service.progressiveStreamOverride = { _ in
+      requested = true
+      return stream.stream
+    }
     defer {
       stream.continuation.finish()
       fixture.close()
     }
     fixture.show()
+    let began = await observe { requested }
+    try #require(began)
     let first = TestAssetFactory.makeAsset(id: "first")
     let chosen = TestAssetFactory.makeAsset(id: "chosen")
     stream.continuation.yield([first, chosen])
@@ -157,7 +164,7 @@ struct LibraryGridSelectionLifecycleTests {
     #expect(fixture.selection.asset == chosen)
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Grid.allCases)
+  @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func rapidScopeChangesDoNotSelectAssetsFromObsoleteLoads(grid: Grid) async throws {
     let fixture = Fixture(grid: grid)
     let first = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
