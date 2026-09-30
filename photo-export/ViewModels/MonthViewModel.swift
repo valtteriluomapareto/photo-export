@@ -39,12 +39,14 @@ final class MonthViewModel: ObservableObject {
   /// bounded.
   private var cachedAssets: [AssetDescriptor] = []
 
-  /// The scope this view model is currently displaying. Written *synchronously* at the
-  /// top of `loadAssets(for:)` so any in-flight `refresh(for:)` task can detect a
-  /// navigation that happened during its `await` and bail before clobbering the new
-  /// scope's state. Reads inside `refresh` use this as the "is what I fetched still
-  /// what the user is looking at?" gate.
+  /// The displayed scope and its request owner. Scope alone cannot distinguish
+  /// two overlapping requests for the same scope, including A → B → A navigation.
   private var currentScope: PhotoFetchScope?
+  private var requestGeneration: UInt64 = 0
+
+  private func ownsRequest(_ generation: UInt64, scope: PhotoFetchScope) -> Bool {
+    !Task.isCancelled && requestGeneration == generation && currentScope == scope
+  }
 
   init(photoLibraryService: any PhotoLibraryService) {
     self.photoLibraryService = photoLibraryService
@@ -59,9 +61,11 @@ final class MonthViewModel: ObservableObject {
   /// the view model (used when `LibrarySelection` is nil — e.g. before any collection is
   /// selected).
   func loadAssets(for scope: PhotoFetchScope?) async {
-    // Claim the scope *before* the first await so a parallel `refresh(for:)`
-    // that's mid-fetch sees the new scope and discards its result instead of
-    // overwriting.
+    guard !Task.isCancelled else { return }
+    // Claim ownership before the first await, even when navigating back to a
+    // scope whose older request is still in flight.
+    requestGeneration &+= 1
+    let generation = requestGeneration
     currentScope = scope
     isLoading = true
     errorMessage = nil
@@ -81,26 +85,21 @@ final class MonthViewModel: ObservableObject {
       in: scope, mediaType: nil, batchSize: progressiveBatchSize)
     do {
       for try await batch in stream {
-        // Bail if the parent Task was cancelled (the cell scrolled off, the
-        // window closed) or if a new scope claimed `currentScope` during the
-        // await.
-        if Task.isCancelled { return }
-        guard currentScope == scope else { return }
+        guard ownsRequest(generation, scope: scope) else { return }
         let wasEmpty = assets.isEmpty
         assets.append(contentsOf: batch)
         if wasEmpty {
           isLoading = false
-          if let first = batch.first { selectedAssetId = first.id }
+          if selectedAssetId == nil, let first = batch.first { selectedAssetId = first.id }
         }
       }
     } catch {
-      guard currentScope == scope else { return }
+      guard ownsRequest(generation, scope: scope) else { return }
       errorMessage = error.localizedDescription
       isLoading = false
       return
     }
-    if Task.isCancelled { return }
-    if currentScope != scope { return }
+    guard ownsRequest(generation, scope: scope) else { return }
     isLoading = false
 
     // Preheat the windowed prefix once the full asset list has settled.
@@ -126,23 +125,24 @@ final class MonthViewModel: ObservableObject {
   ///
   /// `scope == nil` is a no-op.
   func refresh(for scope: PhotoFetchScope?) async {
-    guard let scope else { return }
+    guard !Task.isCancelled, let scope, currentScope == scope else { return }
+    requestGeneration &+= 1
+    let generation = requestGeneration
     var collected: [AssetDescriptor] = []
     let stream = photoLibraryService.fetchAssetsProgressive(
       in: scope, mediaType: nil, batchSize: progressiveBatchSize)
     do {
       for try await batch in stream {
-        if Task.isCancelled { return }
-        guard currentScope == scope else { return }
+        guard ownsRequest(generation, scope: scope) else { return }
         collected.append(contentsOf: batch)
       }
     } catch {
-      guard currentScope == scope else { return }
+      guard ownsRequest(generation, scope: scope) else { return }
       errorMessage = error.localizedDescription
+      isLoading = false
       return
     }
-    if Task.isCancelled { return }
-    guard currentScope == scope else { return }
+    guard ownsRequest(generation, scope: scope) else { return }
 
     // Window the cache delta the same way `loadAssets` does — diff between
     // the *windowed* prefix of new vs old, not the full scopes. Without this,
@@ -163,6 +163,16 @@ final class MonthViewModel: ObservableObject {
     }
     cachedAssets = newCachingWindow
     assets = collected
+    errorMessage = nil
+    isLoading = false
+    if selectedAssetId == nil { selectedAssetId = collected.first?.id }
+  }
+
+  /// Returns a selection only when the requested view scope still owns the
+  /// model and the selected asset is present in its current snapshot.
+  func selectedAsset(for scope: PhotoFetchScope) -> AssetDescriptor? {
+    guard currentScope == scope, let selectedAssetId else { return nil }
+    return assets.first { $0.id == selectedAssetId }
   }
 
   func select(assetId: String?) {

@@ -80,11 +80,10 @@ struct CollectionContentView: View {
     .overlay(overlayViews)
     .task(id: scopeTaskId) {
       await viewModel.loadAssets(for: scope)
-      if selectedAsset == nil,
-        let id = viewModel.selectedAssetId,
-        let initialAsset = viewModel.assets.first(where: { $0.id == id })
-      {
-        selectedAsset = initialAsset
+    }
+    .onChange(of: initialAssetSelection, initial: true) { _, asset in
+      if selectedAsset == nil, let asset {
+        selectedAsset = asset
       }
     }
     // Same iCloud-sync / Photos.app-edit refresh path as `MonthContentView`. The
@@ -95,6 +94,13 @@ struct CollectionContentView: View {
       Task { await viewModel.refresh(for: scope) }
     }
     .measureBodyInvalidations("CollectionContentView")
+  }
+
+  // Observe the first batch rather than waiting for the entire progressive load.
+  // A scope check prevents an old pane's selection from reaching the detail binding.
+  private var initialAssetSelection: AssetDescriptor? {
+    guard selectedAsset == nil else { return nil }
+    return viewModel.selectedAsset(for: scope)
   }
 
   // MARK: - Scope plumbing
@@ -180,9 +186,8 @@ struct CollectionContentView: View {
   /// `photoLibraryDidChange` (favoriting a single photo elsewhere, adding to an
   /// unrelated album) would otherwise blank the entire grid through the `assets = []`
   /// path inside `MonthViewModel.loadAssets(for:)` while a fresh fetch loads. The
-  /// sidebar's count refresh and tree refresh still observe `libraryRevision`; the user
-  /// can re-select the album to force a grid refetch when they know the contents
-  /// changed.
+  /// sidebar's count refresh and tree refresh still observe `libraryRevision`, while
+  /// the grid refreshes its assets in place through the separate observer above.
   private var scopeTaskId: String { scopeKey }
 
   private var scopeKey: String {
