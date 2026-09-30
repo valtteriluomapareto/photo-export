@@ -163,14 +163,13 @@ compaction.
 
 ## Error Handling
 
-- If the log contains an invalid line, it is skipped and logged. The rest of the log is still applied.
-- If snapshot loading fails, the store transitions to `RecordStoreState.failed` and
-  rejects further writes. The corrupt snapshot is **not** renamed automatically — the
-  in-app `RecordStoreAlertHost` surfaces a recovery alert with a Reset action that
-  renames the corrupt file aside (`<name>.broken-<ISO8601>`) and starts the store with
-  an empty snapshot. Choosing Cancel leaves both the snapshot and the user's exported
-  files on disk untouched. Each store presents its alert independently — only the
-  failed store's records are reset.
+- A missing snapshot or log is normal. An unreadable file is an IO failure, never an empty history.
+- Invalid JSONL lines are skipped and logged, preserving truncated-final-line recovery.
+- Snapshot decoding failure enters `.failed`. Reset Records explicitly moves the corrupt snapshot aside and starts empty; Quit preserves it.
+- Log read or append/open/write/synchronize failure enters `.persistenceFailed` and blocks new exports through the affected store. The other store remains independent. The recovery alert offers Retry rather than destructive reset.
+- In-memory mutations are provisional until `flush()` successfully acknowledges all preceding queued writes and synchronization. Export jobs await this boundary before work and before completion; import also flushes before reporting success. No extra fsync is performed per UI notification.
+- After an append failure, the primitive stops subsequent queued appends and compactions. The store retains its in-memory history, including final filenames from an in-flight export. Retry saves this history with an atomic snapshot before returning to ready. Keep the app open until retry succeeds; unacknowledged progress can be lost on quit. Destination switches retain failed histories in memory until the user returns and retries.
+- After a read failure, Retry reloads the original files; it never replaces unreadable history with an empty snapshot. Callbacks belonging to a previous destination cannot change the current store's health.
 
 ## Migrations
 

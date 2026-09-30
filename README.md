@@ -42,6 +42,8 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 - Save a diagnostic report (Help menu) listing failed and in-progress exports with their error messages, for attaching to bug reports
 - If Photos can't provide an asset's edited version, fall back to writing the original with a `_orig` suffix so the asset still gets backed up
 
+- Detect export-history storage failures and offer non-destructive Retry; completion waits for record writes.
+
 ## Known limitations
 
 - Requires **macOS 15.0** or later.

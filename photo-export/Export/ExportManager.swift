@@ -1355,12 +1355,6 @@ final class ExportManager: ObservableObject {
       existingPlacements: Array(existingPlacements)
     )
 
-    // Persist the placement metadata so subsequent runs can match on the same
-    // (kind, collectionLocalIdentifier, displayPathHash8) triple. `upsertPlacement` is a
-    // no-op for `.timeline` kinds (which the collection store rejects); collection-side
-    // kinds (`.favorites`, `.album`, `.sharedAlbum`) all land here.
-    collectionExportRecordStore.upsertPlacement(placement)
-
     let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
     try throwIfCancelledOrStale(gen)
     // The Live Photo paired-video setting (issue #49) is snapshotted at click time by
@@ -1376,6 +1370,9 @@ final class ExportManager: ObservableObject {
           livePhotosPaired: livePhotosPaired)
       },
       shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
+    // Placement metadata is needed only when writing records. Avoid an unacknowledged
+    // metadata append on the empty-queue completion path; real jobs flush it before IO.
+    if !newJobs.isEmpty { collectionExportRecordStore.upsertPlacement(placement) }
     queueCoordinator.enqueue(newJobs)
     logger.info(
       "Enqueued \(newJobs.count) assets for export to \(placement.relativePath, privacy: .public)"
@@ -2228,7 +2225,21 @@ final class ExportManager: ObservableObject {
   /// existing `export(job:gen:)` body so the coordinator's drain loop doesn't need to
   /// know about it.
   func performExport(job: ExportJob, generation gen: Int) async {
-    await export(job: job, generation: gen)
+    do {
+      try await recordStoreRouter.flush(placement: job.placement)
+      guard isCurrent(gen) else { return }
+      await export(job: job, generation: gen)
+      guard isCurrent(gen) else { return }
+      try await recordStoreRouter.flush(placement: job.placement)
+    } catch {
+      guard isCurrent(gen) else { return }
+      logger.error(
+        "Stopping export because progress could not be saved: \(error.localizedDescription, privacy: .public)"
+      )
+      // Preserve final-file records retained by the store for non-destructive Retry.
+      teardownActiveWork()
+      finalizeActiveRun(result: .failed, cancelReason: nil)
+    }
   }
 
   /// Called by the coordinator's drain loop on the "queue empty after a job ran" edge.

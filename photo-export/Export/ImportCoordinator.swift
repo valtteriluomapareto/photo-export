@@ -108,7 +108,9 @@ final class ImportCoordinator: ObservableObject {
     let importGen = queueCoordinator?.generation ?? 0
 
     importTask = Task { [weak self, weak host] in
-      guard let self, let host else { return }
+      guard let self, let host,
+        self.queueCoordinator?.isCurrent(importGen) == true, !Task.isCancelled
+      else { return }
 
       do {
         guard let scopedURL = host.exportDestination.beginScopedAccess() else {
@@ -232,6 +234,7 @@ final class ImportCoordinator: ObservableObject {
           self.importStage = nil
           return
         }
+        let reconciledCollections = host.collectionExportRecordStore.state == .ready
         let collectionSummary = await host.collectionExportRecordStore
           .reconcileAgainstFilesystem(at: rootURL)
         try Task.checkCancellation()
@@ -239,6 +242,13 @@ final class ImportCoordinator: ObservableObject {
           self.isImporting = false
           self.importStage = nil
           return
+        }
+
+        try await host.exportRecordStore.flush()
+        guard self.queueCoordinator?.isCurrent(importGen) == true else { return }
+        if reconciledCollections {
+          try await host.collectionExportRecordStore.flush()
+          guard self.queueCoordinator?.isCurrent(importGen) == true else { return }
         }
 
         let totalPrunedVariants =
@@ -263,10 +273,12 @@ final class ImportCoordinator: ObservableObject {
           "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
         )
       } catch is CancellationError {
+        guard self.queueCoordinator?.isCurrent(importGen) == true else { return }
         self.logger.info("Import task cancelled")
         self.isImporting = false
         self.importStage = nil
       } catch {
+        guard self.queueCoordinator?.isCurrent(importGen) == true else { return }
         self.logger.error(
           "Import failed: \(error.localizedDescription, privacy: .public)")
         self.isImporting = false

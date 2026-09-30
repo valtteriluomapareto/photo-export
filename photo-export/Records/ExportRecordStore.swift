@@ -90,10 +90,13 @@ final class ExportRecordStore: ObservableObject {
   }
   private var monthCounters: [MonthKey: MonthCounters] = [:]
 
-  /// Per-store load state. See `RecordStoreState` for semantics. The corruption alert UI
-  /// that drives `resetToEmpty()` lives in Phase 4; before then, a `.failed` state is
-  /// observable in logs and tests but not surfaced to the user.
+  /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
   @Published private(set) var state: RecordStoreState = .unconfigured
+  @Published private(set) var persistenceError: String?
+  private var hasUnsavedChanges = false
+  private var configuredDestinationId: String?
+  // Failed writes must survive destination switches until the user can retry saving.
+  private var pendingRecovery: [String: [String: ExportRecord]] = [:]
 
   // Published bump used to notify SwiftUI of logical changes
   @Published private(set) var mutationCounter: Int = 0
@@ -152,6 +155,15 @@ final class ExportRecordStore: ObservableObject {
     let signpost = AppDiagnostics.beginConfigure(label: "timeline")
     defer { signpost.end() }
 
+    // Finish the old destination's queued writes before replacing its file owner.
+    jsonl?.flushForTesting()
+    if hasUnsavedChanges, let id = configuredDestinationId {
+      pendingRecovery[id] = recordsById
+    }
+    configuredDestinationId = destinationId
+    persistenceError = nil
+    hasUnsavedChanges = false
+
     // Reset in-memory state
     recordsById = [:]
     monthCounters = [:]
@@ -174,8 +186,29 @@ final class ExportRecordStore: ObservableObject {
       logger: logger
     )
     jsonl = file
+    file.onPersistenceFailure = { [weak self, weak file] error in
+      guard let self, let file, self.jsonl === file else { return }
+      self.hasUnsavedChanges = true
+      self.persistenceError = error.localizedDescription
+      self.state = .persistenceFailed
+    }
 
+    if let retained = pendingRecovery[destinationId] {
+      recordsById = retained
+      rebuildCountersFromRecords()
+      hasUnsavedChanges = true
+      persistenceError = "Progress from this destination still needs to be saved."
+      state = .persistenceFailed
+      mutationCounter &+= 1
+      return
+    }
     let loaded = file.load()
+    if let error = loaded.ioFailure {
+      persistenceError = error.localizedDescription
+      state = .persistenceFailed
+      mutationCounter &+= 1
+      return
+    }
     switch loaded.snapshotStatus {
     case .corrupt:
       // Deferred-rename rule: leave the corrupt snapshot at its original path on disk so
@@ -203,6 +236,34 @@ final class ExportRecordStore: ObservableObject {
       state = .ready
     }
     mutationCounter &+= 1
+  }
+
+  /// Retry storage access without resetting export history. After an append failure,
+  /// save the retained in-memory state; after a read failure, reload the original files.
+  func retryPersistence() {
+    guard state == .persistenceFailed else { return }
+    guard hasUnsavedChanges, let jsonl else {
+      configure(for: configuredDestinationId)
+      return
+    }
+    do {
+      try jsonl.writeSnapshot(recordsById)
+      hasUnsavedChanges = false
+      if let id = configuredDestinationId { pendingRecovery.removeValue(forKey: id) }
+      persistenceError = nil
+      state = .ready
+      mutationCounter &+= 1
+    } catch {
+      persistenceError = error.localizedDescription
+    }
+  }
+
+  /// Acknowledges all preceding record writes, including their synchronization.
+  func flush() async throws {
+    guard let file = jsonl else { throw RecordPersistenceUnavailable() }
+    try await file.flush()
+    guard jsonl === file else { throw CancellationError() }
+    guard state == .ready else { throw RecordPersistenceUnavailable() }
   }
 
   /// Renames a corrupt snapshot to `<name>.broken-<ISO8601>` and reinitializes the store
@@ -735,15 +796,9 @@ final class ExportRecordStore: ObservableObject {
 
   // MARK: - Internals
   private func append(_ mutation: ExportRecordMutation) {
-    // RecordStoreState guard: writes only land when `.ready`. `.failed` means the snapshot
-    // is corrupt (deferred-rename rule); `.unconfigured` means no destination is selected.
-    // Either case: no-op. Debug builds trip an `assertionFailure` so a routing bug shows up
-    // in tests; release silently drops to avoid crashing on a benign race during state
-    // transitions.
-    guard state == .ready else {
-      assertionFailure(
-        "ExportRecordStore.append called while state == \(state); ExportManager should have routed via canExport."
-      )
+    // Keep an in-flight export's final filename in memory after a write failure,
+    // so Retry can save it without exporting the file again. Failed loads stay read-only.
+    guard state == .ready || (state == .persistenceFailed && hasUnsavedChanges) else {
       return
     }
 
@@ -752,7 +807,7 @@ final class ExportRecordStore: ObservableObject {
     scheduleCoalescedNotify()
 
     // If not configured to any destination, do not persist
-    guard let jsonl else { return }
+    guard state == .ready, let jsonl else { return }
     jsonl.append(mutation, currentSnapshot: { self.recordsById })
   }
 
@@ -870,6 +925,6 @@ final class ExportRecordStore: ObservableObject {
   // MARK: - Testing helpers
   /// Blocks until all pending IO operations are flushed.
   func flushForTesting() {
-    ioQueue.sync {}
+    jsonl?.flushForTesting()
   }
 }

@@ -209,6 +209,8 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 - **Help → Save Diagnostic Report…** writes a plain-text file listing every photo whose export is in `failed` or `in-progress` state with its underlying error message — attach it to a bug report so the cause is visible. If a prior Auto Export run was interrupted mid-flight by the operating system, the report names which scope (timeline / favorites / albums / shared albums) was in flight at the time
 - When Photos can't provide an asset's edited version (`Edited resource unavailable`), the app **falls back to writing the original** with a `_orig` suffix so the asset still gets bytes on disk; the diagnostic report annotates the affected entries
 
+Export progress storage errors stop further exports using the affected records and show a Retry action. Restore storage access or free disk space, then retry while the app remains open to save retained progress without resetting history. Export runs acknowledge record writes before reporting completion.
+
 ## Current boundaries
 
 - macOS only (15.0+)
