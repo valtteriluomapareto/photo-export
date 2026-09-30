@@ -1567,12 +1567,10 @@ final class ExportManager: ObservableObject {
   /// flight per `ExportManager`, and the await resolves when the run reaches a terminal
   /// state — completed, cancelled, or failed.
   ///
-  /// MVP scope coverage: `.timelineFullLibrary`, `.favoritesFull`, `.allAlbumsFull` map
-  /// to the existing manual-export entry points. Targeted asset-id scopes
-  /// (`.timelineAssets`, `.favoritesAssets`, `.allAlbumsAssets`) and the umbrella
-  /// `.autoExport` scope land in subsequent Phase 0a slices; for now they resolve
-  /// immediately with `.failed` so callers see a deterministic outcome rather than a
-  /// hang.
+  /// Full timeline, Favorites, albums, and shared-album scopes map to the existing
+  /// manual-export entry points. Targeted asset-id scopes and the umbrella
+  /// `.autoExport` scope resolve immediately with `.failed`; AutoSync expands its
+  /// umbrella scope into supported full-scope runs before calling this method.
   ///
   /// **Awaiter behavior under pause**: `pause()` while a `runExport` is active leaves
   /// the queue parked and the awaitable suspended until either `resume()` drains the
@@ -1587,91 +1585,45 @@ final class ExportManager: ObservableObject {
       (continuation: CheckedContinuation<ExportRunSummary, Never>) in
       activeRunContext = context
 
-      // Bookkeeping is captured *after* dispatch because the start* methods call
-      // `resetProgressCounters()` synchronously when the queue is idle. Capturing
-      // before dispatch would snapshot stale totals from a prior run, producing a
-      // negative-clamped delta on the next finalize.
-      //
-      // The fail-fast guards block dispatch when the manager isn't idle. Without
-      // `!hasActiveExportWork`, a fire-and-forget run already in flight would
-      // silently no-op the dispatched `start*` (its `isEnqueueingAll` guard returns
-      // early) and the awaiter would hang forever.
-      switch context.scope {
-      case .timelineFullLibrary:
-        if !isImporting && canExportTimeline && !hasActiveExportWork {
-          startExportAll(selectionOverride: context.selection)
-          activeRunBookkeeping = ActiveRunBookkeeping(
-            totalJobsEnqueuedAtStart: totalJobsEnqueued,
-            totalJobsCompletedAtStart: totalJobsCompleted,
-            continuation: continuation
-          )
-        } else {
-          activeRunBookkeeping = ActiveRunBookkeeping(
-            totalJobsEnqueuedAtStart: totalJobsEnqueued,
-            totalJobsCompletedAtStart: totalJobsCompleted,
-            continuation: continuation
-          )
-          finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
-      case .favoritesFull:
-        if !isImporting && canExportCollection && !hasActiveExportWork {
-          startExportFavorites(selectionOverride: context.selection)
-          activeRunBookkeeping = ActiveRunBookkeeping(
-            totalJobsEnqueuedAtStart: totalJobsEnqueued,
-            totalJobsCompletedAtStart: totalJobsCompleted,
-            continuation: continuation
-          )
-        } else {
-          activeRunBookkeeping = ActiveRunBookkeeping(
-            totalJobsEnqueuedAtStart: totalJobsEnqueued,
-            totalJobsCompletedAtStart: totalJobsCompleted,
-            continuation: continuation
-          )
-          finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
-      case .allAlbumsFull:
-        if !isImporting && canExportCollection && !hasActiveExportWork {
-          startExportAllAlbums(selectionOverride: context.selection)
-          activeRunBookkeeping = ActiveRunBookkeeping(
-            totalJobsEnqueuedAtStart: totalJobsEnqueued,
-            totalJobsCompletedAtStart: totalJobsCompleted,
-            continuation: continuation
-          )
-        } else {
-          activeRunBookkeeping = ActiveRunBookkeeping(
-            totalJobsEnqueuedAtStart: totalJobsEnqueued,
-            totalJobsCompletedAtStart: totalJobsCompleted,
-            continuation: continuation
-          )
-          finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
-      case .allSharedAlbumsFull:
-        if !isImporting && canExportCollection && !hasActiveExportWork {
-          startExportAllSharedAlbums(selectionOverride: context.selection)
-          activeRunBookkeeping = ActiveRunBookkeeping(
-            totalJobsEnqueuedAtStart: totalJobsEnqueued,
-            totalJobsCompletedAtStart: totalJobsCompleted,
-            continuation: continuation
-          )
-        } else {
-          activeRunBookkeeping = ActiveRunBookkeeping(
-            totalJobsEnqueuedAtStart: totalJobsEnqueued,
-            totalJobsCompletedAtStart: totalJobsCompleted,
-            continuation: continuation
-          )
-          finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
-      case .timelineAssets, .favoritesAssets, .allAlbumsAssets,
-        .allSharedAlbumsAssets, .autoExport:
-        // Targeted asset-id and autoExport scopes land in subsequent Phase 0a slices.
-        activeRunBookkeeping = ActiveRunBookkeeping(
-          totalJobsEnqueuedAtStart: totalJobsEnqueued,
-          totalJobsCompletedAtStart: totalJobsCompleted,
-          continuation: continuation
-        )
+      let didDispatch = dispatchFullScopeRun(context)
+
+      // start* resets progress counters synchronously. Capture their new baseline
+      // before its Task can enqueue work; do not move this ahead of dispatch.
+      activeRunBookkeeping = ActiveRunBookkeeping(
+        totalJobsEnqueuedAtStart: totalJobsEnqueued,
+        totalJobsCompletedAtStart: totalJobsCompleted,
+        continuation: continuation
+      )
+      if !didDispatch {
         finalizeActiveRun(result: .failed, cancelReason: nil)
       }
     }
+  }
+
+  /// Synchronous dispatch keeps counter reset, bookkeeping, and task launch in one
+  /// MainActor turn. A rejected or unsupported scope must still resolve its awaiter.
+  private func dispatchFullScopeRun(_ context: ExportRunContext) -> Bool {
+    // Legacy fire-and-forget work has no run context. Without this busy guard a
+    // start* could silently return, leaving the awaitable run suspended forever.
+    guard !isImporting, !hasActiveExportWork else { return false }
+    switch context.scope {
+    case .timelineFullLibrary:
+      guard canExportTimeline else { return false }
+      startExportAll(selectionOverride: context.selection)
+    case .favoritesFull:
+      guard canExportCollection else { return false }
+      startExportFavorites(selectionOverride: context.selection)
+    case .allAlbumsFull:
+      guard canExportCollection else { return false }
+      startExportAllAlbums(selectionOverride: context.selection)
+    case .allSharedAlbumsFull:
+      guard canExportCollection else { return false }
+      startExportAllSharedAlbums(selectionOverride: context.selection)
+    case .timelineAssets, .favoritesAssets, .allAlbumsAssets,
+      .allSharedAlbumsAssets, .autoExport:
+      return false
+    }
+    return true
   }
 
   /// Resolves the awaitable run's continuation if one is active. Idempotent — second
