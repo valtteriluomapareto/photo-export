@@ -34,6 +34,9 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
   /// If set, the next `runExport` returns this summary. Otherwise a default
   /// `.completed` summary is constructed from the requested context.
   var nextRunSummary: ExportRunSummary?
+  /// Optional deterministic gate for a given invocation number (one-based).
+  /// Tests release selected runs in any order to expose late task cleanup.
+  var gateForInvocation: ((Int) -> AsyncCheckpoint?)?
   /// Contexts the manager passed in. Tests assert on this.
   var receivedContexts: [ExportRunContext] = []
   /// Predicate that selects which contexts cause `runExport` to park on a
@@ -50,6 +53,9 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
 
   func runExport(context: ExportRunContext) async -> ExportRunSummary {
     receivedContexts.append(context)
+    if let gate = gateForInvocation?(receivedContexts.count) {
+      await gate.enter()
+    }
     if shouldHang(context) {
       return await withCheckedContinuation { continuation in
         hangedContinuations.append(continuation)
@@ -57,7 +63,14 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
     }
     if let summary = nextRunSummary {
       nextRunSummary = nil
-      return summary
+      // Preserve the runner contract: the summary belongs to the requested run,
+      // even when a test provides only its desired counts/failures.
+      return ExportRunSummary(
+        context: context, endedAt: summary.endedAt,
+        enqueuedCount: summary.enqueuedCount, completedCount: summary.completedCount,
+        failedCount: summary.failedCount, skippedCount: summary.skippedCount,
+        cancelReason: summary.cancelReason, result: summary.result,
+        failures: summary.failures)
     }
     return ExportRunSummary(
       context: context,
@@ -82,10 +95,12 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
   /// received context. Convenience for tests that just want to unblock a
   /// hang without constructing a synthetic summary themselves.
   func makeDefaultCompletedSummary() -> ExportRunSummary {
-    let context = receivedContexts.last ?? ExportRunContext(
-      runId: UUID(), source: .autoSync, visibility: .background,
-      reason: .appLaunch, scope: .timelineFullLibrary, selection: .edited,
-      startedAt: Date())
+    let context =
+      receivedContexts.last
+      ?? ExportRunContext(
+        runId: UUID(), source: .autoSync, visibility: .background,
+        reason: .appLaunch, scope: .timelineFullLibrary, selection: .edited,
+        startedAt: Date())
     return ExportRunSummary(
       context: context, endedAt: Date(),
       enqueuedCount: 0, completedCount: 0, failedCount: 0, skippedCount: 0,

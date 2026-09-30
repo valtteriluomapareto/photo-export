@@ -51,7 +51,9 @@ enum AutoSyncEvent: Sendable {
   /// `result` distinguishes successful completion from `.failed` / `.cancelled` /
   /// `.interrupted`; the reducer only clears dirty work on `.completed` so
   /// transient failures keep their pending IDs intact for retry.
-  case autoSyncRunCompleted(ExportRunSummary)
+  /// The stable destination captured before `runExport` suspended. It is transient
+  /// event metadata, not part of the persisted summary or run context format.
+  case autoSyncRunCompleted(ExportRunSummary, destinationId: String)
 
   /// Import Existing Backup started or finished. AutoSync defers while import is
   /// active and re-evaluates afterward.

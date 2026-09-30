@@ -37,6 +37,12 @@ struct AutoSyncRunDirtyBoundaryTests {
   {
     var state = state
     if context.source == .autoSync { state.current = .running(reason: .photosChanged) }
+    if context.source == .autoSync {
+      state =
+        AutoSyncReducer.reduce(
+          .exportRunStarted(context, destinationId: state.destination.id!), in: state, now: now
+        ).0
+    }
     return AutoSyncReducer.reduce(
       .exportRunStateChanged(
         ExportRunState(
@@ -55,7 +61,8 @@ struct AutoSyncRunDirtyBoundaryTests {
       failedCount: 0, skippedCount: 0, cancelReason: nil, result: result)
     return AutoSyncReducer.reduce(
       context.source == .manual
-        ? .manualFullExportCompleted(summary) : .autoSyncRunCompleted(summary),
+        ? .manualFullExportCompleted(summary)
+        : .autoSyncRunCompleted(summary, destinationId: state.destination.id!),
       in: idle, now: now
     ).0
   }
