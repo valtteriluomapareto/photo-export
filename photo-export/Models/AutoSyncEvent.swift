@@ -63,9 +63,13 @@ enum AutoSyncEvent: Sendable {
   /// `scheduleDebounce` effect that scheduled it.
   case debounceFired(AutoSyncReason)
 
-  /// The retry timer fired. Used when at least one variant is in retry backoff and
-  /// the next eligible time has arrived.
+  /// The retry timer fired for the current destination. Due entries are consumed
+  /// transiently so an unchanged failure cannot schedule an immediate loop.
   case retryTimerFired
+
+  /// The manager loaded or saved retry entries for a stable destination ID.
+  /// This is a transient reducer mirror; the persisted retry format is unchanged.
+  case retryStateChanged(destinationId: String, retryState: AutoSyncRetryState)
 
   /// A user-visible manual full export finished — clears compatible pending auto-sync
   /// dirty work for the same destination/selection/scope.

@@ -51,6 +51,31 @@ final class RecordStoreRouter {
     }
   }
 
+  /// Retry history is sparse, so inspect only recorded retry tuples after a run.
+  /// A failed store cannot acknowledge success using provisional in-memory records.
+  func isRetryVariantDone(scope: AutoSyncRetryScopeKey, assetId: String, variant: ExportVariant)
+    -> Bool
+  {
+    switch scope {
+    case .timeline:
+      return timelineStore.hasDurableRecords
+        && timelineStore.exportInfo(assetId: assetId)?.variants[variant]?.status == .done
+    case .favorites:
+      return collectionVariantIsDone(
+        placementId: ExportPlacement.favorites().id, assetId: assetId, variant: variant)
+    case .album(let placementId), .sharedAlbum(let placementId):
+      return collectionVariantIsDone(placementId: placementId, assetId: assetId, variant: variant)
+    }
+  }
+
+  private func collectionVariantIsDone(placementId: String, assetId: String, variant: ExportVariant)
+    -> Bool
+  {
+    collectionStore.hasDurableRecords
+      && collectionStore.recordBodies[placementId]?[assetId]?.variants[variant.rawValue]?.status
+        == .done
+  }
+
   // MARK: - Writes
 
   func markVariantInProgress(

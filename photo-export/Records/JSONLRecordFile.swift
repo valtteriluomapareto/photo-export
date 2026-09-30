@@ -91,6 +91,12 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   // MARK: - Mutation-count state
 
   private var mutationCountSinceCompact: Int = 0
+  private var submittedRevision = 0
+  private var flushedRevision = 0
+
+  /// A ready store may still contain pending writes. A flush acknowledges only
+  /// mutations submitted before its await, never newer mutations queued during it.
+  var hasUnflushedChanges: Bool { submittedRevision != flushedRevision }
 
   // MARK: - Init
 
@@ -273,6 +279,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   ///   already on disk in this case (encode runs *after* a successful log append) — the
   ///   store is durable, the snapshot is just stale until the next compaction lands.
   func append(_ op: LogOp, currentSnapshot: () -> Snapshot) {
+    submittedRevision += 1
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = dateEncodingStrategy
     let opData: Data
@@ -384,12 +391,14 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
       ioFailureState.clear()
     }
     mutationCountSinceCompact = 0
+    flushedRevision = submittedRevision
   }
 
   /// Acknowledges all appends queued before this call only after their file writes and
   /// `fsync` calls have completed. Failure delivery is synchronous on the main actor
   /// before throwing, so the owner cannot report success while its state is still ready.
   func flush() async throws {
+    let revision = submittedRevision
     let state = ioFailureState
     let failure: (any Error)? = await withCheckedContinuation { continuation in
       ioQueue.async {
@@ -398,6 +407,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     }
     deliverPendingFailure()
     if let failure { throw failure }
+    flushedRevision = max(flushedRevision, revision)
   }
 
   /// Removes the snapshot and log files (best effort). Used by `resetToEmpty()` after the
@@ -424,6 +434,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   func flushForTesting() {
     ioQueue.sync {}
     deliverPendingFailure()
+    if ioFailureState.currentFailure() == nil { flushedRevision = submittedRevision }
   }
 
   // MARK: - Internal helpers

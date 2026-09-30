@@ -62,6 +62,25 @@ struct RecordStorePersistenceHealthTests {
   }
 
   @Test(arguments: [false, true])
+  func pendingDoneRecordCannotAcknowledgeRetryBeforeFlush(isCollection: Bool) async throws {
+    let stores = Stores(isCollection: isCollection)
+    defer { stores.cleanup() }
+    let router = RecordStoreRouter(
+      timelineStore: stores.timeline, collectionStore: stores.collection)
+    let scope: AutoSyncRetryScopeKey = isCollection ? .favorites : .timeline
+    stores.write("pending")
+    #expect(stores.state == .ready)
+    #expect(stores.hasRecord("pending"))
+    #expect(!router.isRetryVariantDone(scope: scope, assetId: "pending", variant: .original))
+    try await stores.flush()
+    #expect(router.isRetryVariantDone(scope: scope, assetId: "pending", variant: .original))
+    stores.write("newer")
+    #expect(!router.isRetryVariantDone(scope: scope, assetId: "newer", variant: .original))
+    try await stores.flush()
+    #expect(router.isRetryVariantDone(scope: scope, assetId: "newer", variant: .original))
+  }
+
+  @Test(arguments: [false, true])
   func unreadableLogBlocksStoreAndRetryPreservesHistory(isCollection: Bool) async throws {
     let stores = Stores(isCollection: isCollection)
     defer { stores.cleanup() }
@@ -97,6 +116,10 @@ struct RecordStorePersistenceHealthTests {
     // A file already being exported can finish after the IO failure is delivered.
     stores.write("inflight")
     #expect(stores.hasRecord("inflight"))
+    let router = RecordStoreRouter(
+      timelineStore: stores.timeline, collectionStore: stores.collection)
+    let scope: AutoSyncRetryScopeKey = isCollection ? .favorites : .timeline
+    #expect(!router.isRetryVariantDone(scope: scope, assetId: "inflight", variant: .original))
     stores.retry()
     #expect(stores.state == .persistenceFailed)
     try FileManager.default.removeItem(at: stores.log)
@@ -105,6 +128,7 @@ struct RecordStorePersistenceHealthTests {
     try await stores.flush()
     stores.configure("A")
     for id in ["saved", "pending", "inflight"] { #expect(stores.hasRecord(id)) }
+    #expect(router.isRetryVariantDone(scope: scope, assetId: "inflight", variant: .original))
   }
 
   @Test(arguments: [false, true])

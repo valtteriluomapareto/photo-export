@@ -58,9 +58,11 @@ Switching to another destination stops the old automatic run. Each destination k
 
 ## Failed exports and retry
 
-Some failures are transient — Photos is busy, an iCloud original isn't ready to download, the network blinked. Auto Export records them per photo and **retries automatically, waiting longer between each attempt**: 30 seconds, then 2 minutes, then 10 minutes, then 1 hour, then every 6 hours.
+Some failures are transient — Photos is busy, an iCloud original isn't ready to download, the network blinked. Auto Export records them per destination, collection, photo, and version and **retries automatically when due, waiting longer between each attempt**: 30 seconds, then 2 minutes, then 10 minutes, then 1 hour, then every 6 hours.
 
-Other failures need your attention — the destination drive is full, you've revoked write permission on the export folder, an asset has been deleted from Photos. Auto Export records these but won't retry on its own; you fix the underlying condition (free up space, restore permissions, etc.) and Photo Export picks the work back up on its next run. The **Retry** button described below works for any failure, but it only succeeds when the underlying problem is actually resolved — for a still-disconnected drive, the row will just fail again immediately.
+Each missing version has its own retry time. For example, an original can finish while an edited version waits for its retry; an already-exported original does not let the edited version retry early. Due retries run while Auto Export is enabled and the destination is ready, without needing a new Photos change. They wait for any current export or import to finish.
+
+Other failures need your attention — the destination drive is full, you've revoked write permission on the export folder, an asset has been deleted from Photos. Auto Export records these but won't retry on its own; fix the underlying condition (free up space, restore permissions, etc.), then use **Retry** or start a manual export. The **Retry** button described below works for any failure, but it only succeeds when the underlying problem is actually resolved — for a still-disconnected drive, the row will just fail again immediately.
 
 Either way you can see everything that's failed in **Settings → Export Issues**, grouped by category:
 
@@ -72,7 +74,7 @@ Either way you can see everything that's failed in **Settings → Export Issues*
 - _Photos Library Transient_ — Photos was momentarily unavailable
 - _iCloud / Network_ — couldn't download an iCloud-only original
 
-Each row shows what was being exported, when it last failed, how many attempts have happened, and when the next automatic retry will fire. The **Retry** button next to a row clears that failure from the retry policy and kicks off an immediate run.
+Each row shows what was being exported, when it last failed, how many attempts have happened, and when the next automatic retry will fire. The **Retry** button next to a row clears that failure from the retry policy and kicks off an immediate run. Manual exports also bypass automatic backoff. A failure disappears from the list once its version has exported successfully and its export record has been saved.
 
 ## Safety
 

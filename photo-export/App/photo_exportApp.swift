@@ -169,7 +169,7 @@ struct PhotoExportApp: App {
     // AutoSyncManager.currentRetryState — kept up-to-date by the manager
     // after every .recordRetryFailures effect and on destination change.
     // Plan §"Retry and Failure Policy": retry evaluation belongs at
-    // enqueue time. `[weak asm]` so the closure doesn't keep the manager
+    // enqueue time and immediately before each variant attempt. `[weak asm]` so the closure doesn't keep the manager
     // alive past app teardown.
     em.autoSyncEligibilityCheck = { [weak asm] assetId, placement, variant, now in
       guard let asm else { return true }

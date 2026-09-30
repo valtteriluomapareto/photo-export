@@ -280,7 +280,7 @@ final class ExportManager: ObservableObject {
     /// category. Mirror of `failedCount` but with full context — count
     /// should equal `failures.count` modulo any legacy sentinel paths.
     var failures: [ExportRunFailureDetail] = []
-    /// Asset count skipped at enqueue time by the AutoSync retry-eligibility
+    /// Asset count skipped at enqueue or before execution by the AutoSync retry-eligibility
     /// gate (plan §"Phase 3"): "ineligible variants count as `skippedCount`
     /// with a retry reason in the run summary." Reported on the summary;
     /// the per-variant detail is reconstructable from `AutoSyncRetryState`.
@@ -1369,7 +1369,10 @@ final class ExportManager: ObservableObject {
           asset: $0, placement: placement, selection: selectionMode,
           livePhotosPaired: livePhotosPaired)
       },
-      shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
+      shouldSkipForRetry: {
+        skipForAutoSyncRetry(
+          asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired)
+      })
     // Placement metadata is needed only when writing records. Avoid an unacknowledged
     // metadata append on the empty-queue completion path; real jobs flush it before IO.
     if !newJobs.isEmpty { collectionExportRecordStore.upsertPlacement(placement) }
@@ -1525,7 +1528,10 @@ final class ExportManager: ObservableObject {
         exportRecordStore.isExported(
           asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
       },
-      shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
+      shouldSkipForRetry: {
+        skipForAutoSyncRetry(
+          asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired)
+      })
     queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
@@ -1547,7 +1553,10 @@ final class ExportManager: ObservableObject {
         exportRecordStore.isExported(
           asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
       },
-      shouldSkipForRetry: { skipForAutoSyncRetry(asset: $0, placement: $1, selection: $2) })
+      shouldSkipForRetry: {
+        skipForAutoSyncRetry(
+          asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired)
+      })
     queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
@@ -1860,24 +1869,8 @@ final class ExportManager: ObservableObject {
         policy: job.placement.kind.variantPolicy,
         convertHEICToJPEG: convertHEICToJPEG,
         livePhotosPaired: job.livePhotosPaired)
-      let missing = required.filter { variant in
-        let existing = existingRecord?.variants[variant]
-        if existing?.status == .done { return false }
-        // Paired-video variants `.failed` with the unavailable sentinel are covered
-        // by the policy and should NOT be re-queued. Photos still doesn't have a
-        // motion file to give; re-running the variant exporter would write the
-        // same sentinel again. If Photos later materializes the resource,
-        // `libraryRevision` bumps and the next fetch builds a fresh asset
-        // descriptor — the planner re-evaluates required variants from scratch
-        // and will attempt the paired video again.
-        if variant.isPairedVideo,
-          existing?.status == .failed,
-          existing?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage
-        {
-          return false
-        }
-        return true
-      }
+      let missing = ExportCompletionPolicy.missingVariants(
+        required: required, variants: existingVariants)
       if missing.isEmpty {
         logger.debug(
           "All required variants already .done for id: \(descriptor.id, privacy: .public)")
@@ -1988,7 +1981,13 @@ final class ExportManager: ObservableObject {
         }
       }
 
+      var attemptedVariant = false
       for variant in orderedVariants {
+        guard
+          isAutoSyncVariantEligible(
+            assetId: descriptor.id, placement: job.placement, variant: variant)
+        else { continue }
+        attemptedVariant = true
         do {
           try throwIfCancelledOrStale(gen)
           let nextGroupStem = try await exportSingleVariant(
@@ -2016,6 +2015,11 @@ final class ExportManager: ObservableObject {
             error: error, at: Date())
           inFlight = nil
         }
+      }
+
+      if !attemptedVariant {
+        activeRunBookkeeping?.skippedCount += 1
+        return
       }
 
       // Issue #22 fallback: when the user asked for `.edited` only (no
@@ -2114,6 +2118,10 @@ final class ExportManager: ObservableObject {
     inFlight: inout (assetId: String, variant: ExportVariant)?,
     subfolder: String? = nil
   ) async {
+    guard
+      isAutoSyncVariantEligible(
+        assetId: descriptor.id, placement: job.placement, variant: .original)
+    else { return }
     guard
       let originalRes = ResourceSelection.selectOriginalResource(
         from: resources, mediaType: descriptor.mediaType)
@@ -2277,26 +2285,43 @@ final class ExportManager: ObservableObject {
   /// when the closure isn't installed.
   private func skipForAutoSyncRetry(
     asset: AssetDescriptor, placement: ExportPlacement,
-    selection: ExportVersionSelection
+    selection: ExportVersionSelection, livePhotosPaired: Bool
   ) -> Bool {
     guard activeRunContext?.source == .autoSync,
       let check = autoSyncEligibilityCheck
     else { return false }
-    // `livePhotosPairedExport` is read live (not snapshotted onto the job) — this predicate
-    // runs at enqueue time, before any in-flight work, so the current setting is the
-    // right value to gate against.
     let required = requiredVariants(
       for: asset, selection: selection, policy: placement.kind.variantPolicy,
       convertHEICToJPEG: convertHEICToJPEG,
-      livePhotosPaired: livePhotosPairedExport)
+      livePhotosPaired: livePhotosPaired)
     let now = Date()
-    let hasEligible = required.contains { variant in
+    let missing = ExportCompletionPolicy.missingVariants(
+      required: required,
+      variants: recordStoreRouter.variants(forAssetId: asset.id, placement: placement))
+    let hasEligible = missing.contains { variant in
       check(asset.id, placement, variant, now)
     }
     if !hasEligible {
       activeRunBookkeeping?.skippedCount += 1
     }
     return !hasEligible
+  }
+
+  /// Recheck at each attempt so a job waiting in the queue cannot bypass a new backoff.
+  /// Manual exports remain the explicit override of Auto Export retry policy.
+  private func isAutoSyncVariantEligible(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant
+  ) -> Bool {
+    guard activeRunContext?.source == .autoSync, let check = autoSyncEligibilityCheck else {
+      return true
+    }
+    return check(assetId, placement, variant, Date())
+  }
+
+  func isRetryVariantDone(scope: AutoSyncRetryScopeKey, assetId: String, variant: ExportVariant)
+    -> Bool
+  {
+    recordStoreRouter.isRetryVariantDone(scope: scope, assetId: assetId, variant: variant)
   }
 
   private func recordVariantFailed(

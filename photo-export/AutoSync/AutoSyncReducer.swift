@@ -10,6 +10,12 @@ import Foundation
 /// History fields like `lastRunSummary` live on `AutoSyncManager`, not the reducer
 /// state, since they're persisted via effects rather than computed.
 enum AutoSyncReducer {
+  struct RetryPosition: Hashable, Sendable {
+    let scope: AutoSyncRetryScopeKey
+    let assetId: String
+    let variant: ExportVariant
+  }
+
   /// A single active run only covers work known at its start. A scope is
   /// invalidated by every subsequent change, even if its pending ID set is
   /// unchanged. This is a per-run revision boundary; nothing new is persisted.
@@ -50,6 +56,9 @@ enum AutoSyncReducer {
     /// Run IDs invalidated by a stable destination switch. Transient process state:
     /// late publisher emissions must not recreate A's boundary after A→B→A.
     var invalidatedRunIds: Set<UUID> = []
+    var retryStateByDestination: [String: AutoSyncRetryState] = [:]
+    var consumedRetryEntries: [RetryPosition: RetryEntry] = [:]
+    var retryTimerFireAt: Date?
 
     static let initial = State(
       current: .disabled,
@@ -99,6 +108,7 @@ enum AutoSyncReducer {
       // to enabled. A republished settings observation that re-emits the current
       // value should not cancel-and-replace any active debounce.
       if enabled && !state.enabled {
+        newState.consumedRetryEntries.removeAll()
         triggerReason = .appLaunch
       }
 
@@ -110,6 +120,7 @@ enum AutoSyncReducer {
         break
       }
       if destination.id != state.destination.id {
+        newState.consumedRetryEntries.removeAll()
         if let boundary = state.runDirtyBoundary {
           newState.invalidatedRunIds.insert(boundary.context.runId)
         }
@@ -147,6 +158,7 @@ enum AutoSyncReducer {
     case .scopeSelectionChanged(let scopes):
       let scopesAdded = scopes.enabledScopes.contains { !state.scopeSelection.includes($0) }
       newState.scopeSelection = scopes
+      if scopes != state.scopeSelection { newState.consumedRetryEntries.removeAll() }
       if scopesAdded {
         triggerReason = .scopeSelectionChanged
       }
@@ -154,12 +166,14 @@ enum AutoSyncReducer {
     case .versionSelectionChanged(let selection):
       newState.versionSelection = selection
       if selection != state.versionSelection {
+        newState.consumedRetryEntries.removeAll()
         triggerReason = .versionSelectionChanged
       }
 
     case .convertHEICToJPEGChanged(let value):
       newState.convertHEICToJPEG = value
       if value != state.convertHEICToJPEG {
+        newState.consumedRetryEntries.removeAll()
         triggerReason = .convertHEICToJPEGChanged
       }
 
@@ -183,6 +197,16 @@ enum AutoSyncReducer {
       // we'd clear dirty on cancelled/interrupted/failed runs and lose pending
       // work the run never actually exported.
       newState.exportRunState = runState
+      // Toolbar/fire-and-forget manual exports have no ExportRunContext and do
+      // not publish a completion summary. Check durable records on idle; a
+      // cancelled run's pending writes must not acknowledge retry success.
+      if state.exportRunState.isManualActive,
+        state.exportRunState.activeContext == nil,
+        !runState.isManualActive,
+        let destinationId = newState.destination.id
+      {
+        effects.append(.pruneDoneRetryEntries(destinationId: destinationId))
+      }
       // AutoSync emits `exportRunStarted` before awaiting the runner. Rebinding an
       // auto context from a later publisher emission would assign an old run to
       // whichever destination happened to be selected by then.
@@ -207,11 +231,12 @@ enum AutoSyncReducer {
       if !summary.failures.isEmpty {
         // Route per-variant failures into AutoSyncRetryState so the Issues UI
         // and (Slice C) the enqueue-time eligibility check can see them.
-        // Slice B records the failure with `nextEligibleAt = nil`; the
-        // backoff schedule lands in Slice C alongside enqueue gating.
+        // The effect runner records the failure with its category-specific
+        // backoff deadline, then feeds the updated retry state back here.
         effects.append(
           .recordRetryFailures(summary.failures, destinationId: destinationId))
       }
+      effects.append(.pruneDoneRetryEntries(destinationId: destinationId))
       acknowledgeRun(summary, in: &newState, now: now, effects: &effects)
 
     case .debounceFired(let reason):
@@ -337,14 +362,24 @@ enum AutoSyncReducer {
       }
 
     case .retryTimerFired:
-      // Plan §"Retry and Failure Policy" — retry eligibility lives at enqueue
-      // time inside `ExportManager`, not here. The reducer's role is to fall
-      // through to the recompute pass so any state that became eligible in the
-      // wall-clock interval since the timer was scheduled is re-evaluated.
-      // Dirty-state mutation and run-start decisions hang off the existing
-      // recompute path; nothing reducer-side has to change for the timer
-      // itself.
-      break
+      let due = retryCandidates(in: newState).filter { _, entry in
+        (entry.nextEligibleAt ?? .distantFuture) <= now
+      }
+      guard !due.isEmpty else { return (state, []) }
+      newState.retryTimerFireAt = nil
+      for (position, entry) in due {
+        newState.consumedRetryEntries[position] = entry
+      }
+      triggerReason = .retryBackoff
+
+    case .retryStateChanged(let destinationId, let retryState):
+      newState.retryStateByDestination[destinationId] = retryState
+      if destinationId == newState.destination.id {
+        newState.consumedRetryEntries = newState.consumedRetryEntries.filter { position, entry in
+          retryState.entry(
+            scope: position.scope, assetId: position.assetId, variant: position.variant) == entry
+        }
+      }
 
     case .manualFullExportCompleted(let summary):
       // Plan §"Dirty State": "A manual full export for the same destination /
@@ -356,6 +391,12 @@ enum AutoSyncReducer {
       // dirty state untouched: they didn't process the full scope, so pending
       // assets that *weren't* in their target list are still pending.
       guard summary.context.source == .manual else { break }
+      if let boundary = newState.runDirtyBoundary,
+        boundary.context == summary.context,
+        boundary.destinationId == newState.destination.id
+      {
+        effects.append(.pruneDoneRetryEntries(destinationId: boundary.destinationId))
+      }
       acknowledgeRun(summary, in: &newState, now: now, effects: &effects)
 
     case .runNowRequested:
@@ -400,8 +441,6 @@ enum AutoSyncReducer {
     // pendingTriggerReason. Same for direct .running transitions.
     if case .scheduled = newState.current {
       newState.pendingTriggerReason = nil
-    } else if case .running = newState.current {
-      newState.pendingTriggerReason = nil
     }
 
     // Work-preservation hook. If we just landed in `.idle` from a state that paused
@@ -430,6 +469,7 @@ enum AutoSyncReducer {
       }
     }
 
+    reconcileRetryTimer(in: &newState, previous: state, effects: &effects)
     return (newState, effects)
   }
 
@@ -585,6 +625,14 @@ enum AutoSyncReducer {
       break
     }
 
+    // Disabling the fan-out does not forcibly stop the export runner. On a quick
+    // re-enable, preserve pending triggers until that old run really becomes idle.
+    if state.exportRunState.isAutoSyncActive {
+      cancelAnyScheduledDebounce(from: previous, into: &effects)
+      if case .running(let reason) = previous { return .running(reason: reason) }
+      return .running(reason: state.exportRunState.activeContext?.reason ?? .appLaunch)
+    }
+
     // Eligibility met. Decide between scheduled / running / idle based on the
     // previous state and the trigger reason.
     if case .running(let reason) = previous {
@@ -640,6 +688,53 @@ enum AutoSyncReducer {
     }
   }
 
+  private static func retryCandidates(
+    in state: State
+  ) -> [(RetryPosition, RetryEntry)] {
+    guard state.enabled, let destinationId = state.destination.id,
+      let retry = state.retryStateByDestination[destinationId]
+    else { return [] }
+
+    var candidates: [(RetryPosition, RetryEntry)] = []
+    for (rawScope, assets) in retry.entriesByPlacement {
+      guard let scope = AutoSyncRetryScopeKey(rawValue: rawScope) else { continue }
+      let libraryScope: AutoExportLibraryScope
+      switch scope {
+      case .timeline: libraryScope = .timeline
+      case .favorites: libraryScope = .favorites
+      case .album: libraryScope = .albums
+      case .sharedAlbum: libraryScope = .sharedAlbums
+      }
+      guard state.scopeSelection.includes(libraryScope) else { continue }
+      for (assetId, variants) in assets {
+        for (rawVariant, entry) in variants {
+          guard let variant = ExportVariant(rawValue: rawVariant),
+            entry.category.isAutomaticallyRetryable,
+            entry.nextEligibleAt != nil
+          else { continue }
+          let position = RetryPosition(scope: scope, assetId: assetId, variant: variant)
+          if state.consumedRetryEntries[position] != entry {
+            candidates.append((position, entry))
+          }
+        }
+      }
+    }
+    return candidates
+  }
+
+  private static func reconcileRetryTimer(
+    in state: inout State, previous: State, effects: inout [AutoSyncEffect]
+  ) {
+    let next = retryCandidates(in: state).compactMap { $0.1.nextEligibleAt }.min()
+    guard next != state.retryTimerFireAt else { return }
+    state.retryTimerFireAt = next
+    if let next {
+      effects.append(.scheduleRetryTimer(fireAt: next))
+    } else if previous.retryTimerFireAt != nil {
+      effects.append(.cancelRetryTimer)
+    }
+  }
+
   /// Plan §"Trigger and Debounce Rules". Single source of truth for per-reason
   /// debounce delays; tests pin specific values, the runner reads them via
   /// `scheduleDebounce` effects.
@@ -657,6 +752,8 @@ enum AutoSyncReducer {
       return 120
     case .userExportNow:
       // Plan: "manual Export Now: no debounce after guard checks." Modeled as 0.
+      return 0
+    case .retryBackoff:
       return 0
     }
   }
