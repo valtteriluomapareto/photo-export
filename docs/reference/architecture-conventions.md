@@ -111,6 +111,17 @@ Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so th
 
 Every export-relevant Photos event invalidates the affected scopes, including repeated changes to the same asset, changes while full reconciliation is already pending, and collection-only changes for album scopes. Successful completion acknowledges only covered, selected scopes that have not changed since the matching run began. Unknown, failed, or destination-mismatched completions cannot clear pending work. The boundary is transient: the existing persisted dirty state remains authoritative after restart, so no persistence migration or counter is needed.
 
+### AutoSync destination ownership
+
+Each AutoSync fan-out captures the stable destination ID and a transient task identity.
+Completion events carry the originating destination and are accepted only for the current
+matching run boundary. Every destination identity change cancels the old fan-out and invalidates
+its boundary. Returning to the same destination does not revive an abandoned run.
+
+Task-handle and diagnostic-journal cleanup must verify ownership before clearing state.
+An old task exiting after a replacement starts must leave the replacement's handle and journal intact.
+These guards are transient; persisted run-summary, retry, and dirty-state formats stay unchanged.
+
 ## Host protocol pattern
 
 > The cancellation-seam methods (`isCurrent` / `throwIfCancelledOrStale` / `generation` / `bumpGeneration`) are no longer on any Host protocol — that move landed in issue #67 item 2. Collaborators that need the seam inject `ExportQueueCoordinator` directly. The remaining Host methods are UI-state mirrors and dependency forwarders, all stable.

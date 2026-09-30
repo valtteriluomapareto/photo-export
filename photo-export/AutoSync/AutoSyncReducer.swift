@@ -47,6 +47,9 @@ enum AutoSyncReducer {
     /// Retained through the idle publication until the matching summary arrives.
     /// Replaced by the next run; an unknown/older completion cannot acknowledge work.
     var runDirtyBoundary: RunDirtyBoundary?
+    /// Run IDs invalidated by a stable destination switch. Transient process state:
+    /// late publisher emissions must not recreate A's boundary after A→B→A.
+    var invalidatedRunIds: Set<UUID> = []
 
     static let initial = State(
       current: .disabled,
@@ -105,6 +108,15 @@ enum AutoSyncReducer {
       // same state) would cancel the active debounce and re-arm a fresh one.
       if destination == state.destination {
         break
+      }
+      if destination.id != state.destination.id {
+        if let boundary = state.runDirtyBoundary {
+          newState.invalidatedRunIds.insert(boundary.context.runId)
+        }
+        if let activeContext = state.exportRunState.activeContext {
+          newState.invalidatedRunIds.insert(activeContext.runId)
+        }
+        newState.runDirtyBoundary = nil
       }
       newState.destination = destination
       // Same stable id with only fingerprint metadata drifting (availability + safety unchanged)
@@ -166,19 +178,28 @@ enum AutoSyncReducer {
       // we'd clear dirty on cancelled/interrupted/failed runs and lose pending
       // work the run never actually exported.
       newState.exportRunState = runState
-      if let context = runState.activeContext, let destinationId = newState.destination.id {
+      // AutoSync emits `exportRunStarted` before awaiting the runner. Rebinding an
+      // auto context from a later publisher emission would assign an old run to
+      // whichever destination happened to be selected by then.
+      if let context = runState.activeContext, context.source == .manual,
+        let destinationId = newState.destination.id
+      {
         captureRunBoundary(context, destinationId: destinationId, in: &newState)
       }
 
-    case .autoSyncRunCompleted(let summary):
+    case .autoSyncRunCompleted(let summary, let destinationId):
+      guard destinationId == newState.destination.id,
+        let boundary = newState.runDirtyBoundary,
+        boundary.destinationId == destinationId,
+        boundary.context == summary.context,
+        summary.context.source == .autoSync
+      else { return (state, []) }
       // The summary's `result` distinguishes a clean run (where the full
       // reconciliation processed everything in scope) from a transient failure
       // (where pending IDs must remain queued for retry). Persist the summary in
       // either case so the UI can surface "last ran X ago, with N failures."
-      if let destinationId = newState.destination.id {
-        effects.append(.persistRunSummary(summary, destinationId: destinationId))
-      }
-      if !summary.failures.isEmpty, let destinationId = newState.destination.id {
+      effects.append(.persistRunSummary(summary, destinationId: destinationId))
+      if !summary.failures.isEmpty {
         // Route per-variant failures into AutoSyncRetryState so the Issues UI
         // and (Slice C) the enqueue-time eligibility check can see them.
         // Slice B records the failure with `nextEligibleAt = nil`; the
@@ -410,6 +431,9 @@ enum AutoSyncReducer {
   private static func captureRunBoundary(
     _ context: ExportRunContext, destinationId: String, in state: inout State
   ) {
+    guard destinationId == state.destination.id,
+      !state.invalidatedRunIds.contains(context.runId)
+    else { return }
     // Combine emits several state changes for the same run. Never move its
     // boundary forward when those repeated observations arrive.
     guard state.runDirtyBoundary?.context.runId != context.runId else { return }

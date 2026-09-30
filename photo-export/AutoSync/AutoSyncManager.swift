@@ -47,7 +47,11 @@ final class AutoSyncManager: ObservableObject {
   /// clear / teardown so a long multi-scope run doesn't keep firing
   /// scopes after the user toggled off Auto Export. `nil` when no
   /// fan-out is in flight.
-  private var activeRunFanOutTask: Task<Void, Never>?
+  /// Internal read access lets integration tests await a specific old task's exit
+  /// after ownership has moved to a newer fan-out.
+  private(set) var activeRunFanOutTask: Task<Void, Never>?
+  private var activeRunFanOutID: UUID?
+  private var activeRunFanOutDestinationId: String?
   private var isAttached = false
   /// Serializes event dispatch — events produced by an effect (e.g. an export run
   /// completing while we're in the middle of a `photosChanged` reduce) must be
@@ -209,6 +213,11 @@ final class AutoSyncManager: ObservableObject {
     // same key and pending work is not orphaned.
     let newId = snapshot.id
     let oldId = reducerState.destination.id
+    if newId != oldId {
+      // Cancel before loading B's UI state. A's suspended runner may still return,
+      // but it no longer owns a completion or the current-run journal.
+      cancelActiveFanOut()
+    }
     if let newId, newId != oldId {
       let dirty = environment.dirtyStateStore.load(destinationId: newId)
       dispatch(.destinationDirtyStateLoaded(destinationId: newId, dirtyState: dirty))
@@ -238,9 +247,6 @@ final class AutoSyncManager: ObservableObject {
       if !currentRetryState.isEmpty {
         currentRetryState = .empty
       }
-      // Destination went away mid-run — stop the fan-out so subsequent
-      // scopes don't fail-fast against the missing destination.
-      cancelActiveFanOut()
     }
     dispatch(.destinationChanged(snapshot))
   }
@@ -482,7 +488,7 @@ final class AutoSyncManager: ObservableObject {
     // Cancel any prior fan-out before starting a new one. The reducer's
     // single-active-run invariants should already prevent overlap, but
     // belt-and-braces: a misroute would never silently chain two fan-outs.
-    activeRunFanOutTask?.cancel()
+    cancelActiveFanOut()
 
     // For an `.autoExport(scopes)` spec, fan out to one `runExport` call per
     // enabled scope and dispatch `autoSyncRunCompleted` after each. The
@@ -506,60 +512,50 @@ final class AutoSyncManager: ObservableObject {
     // Task can build a new struct from it without capturing a mutable
     // `var` across the Task boundary. `AutoSyncRunJournal` is `Sendable`,
     // so the immutable capture is concurrency-clean.
-    let destinationId = reducerState.destination.id
+    guard let destinationId = reducerState.destination.id else { return }
+    let fanOutID = UUID()
+    activeRunFanOutID = fanOutID
+    activeRunFanOutDestinationId = destinationId
     let fanOutStartedAt = environment.clock.now()
     let plannedScopeRawValues = runScopes.compactMap { $0.clearableScope?.rawValue }
-    let initialJournal: AutoSyncRunJournal? = destinationId.map { _ in
-      AutoSyncRunJournal(
-        startedAt: fanOutStartedAt,
-        trigger: spec.reason.rawValue,
-        scopes: plannedScopeRawValues,
-        currentScope: nil,
-        currentScopeStartedAt: nil
+    let initialJournal = AutoSyncRunJournal(
+      startedAt: fanOutStartedAt,
+      trigger: spec.reason.rawValue,
+      scopes: plannedScopeRawValues,
+      currentScope: nil,
+      currentScopeStartedAt: nil
+    )
+    do {
+      try environment.currentRunStore.save(initialJournal, destinationId: destinationId)
+    } catch {
+      log.error(
+        "Failed to write current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
       )
-    }
-    if let destinationId, let initialJournal {
-      do {
-        try environment.currentRunStore.save(initialJournal, destinationId: destinationId)
-      } catch {
-        log.error(
-          "Failed to write current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
-        )
-      }
     }
 
     activeRunFanOutTask = Task { @MainActor [weak self] in
-      defer { self?.activeRunFanOutTask = nil }
       defer {
-        // Clean up the journal on every exit path — clean completion,
-        // cancellation, and the `break` on a non-`.completed` summary all
-        // reach this defer. `clear` is a no-op when the file is absent
-        // (the early-return-before-loop cases), so repeated calls and
-        // missing-destination paths are safe.
-        if let destinationId {
-          do {
-            try environment.currentRunStore.clear(destinationId: destinationId)
-          } catch {
-            self?.log.error(
-              "Failed to clear current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
-            )
-          }
+        // Cancellation clears the old journal immediately. A late A task must
+        // never clear a newer A journal after A→B→A or nil a newer task handle.
+        if let self, self.activeRunFanOutID == fanOutID {
+          self.activeRunFanOutTask = nil
+          self.activeRunFanOutID = nil
+          self.activeRunFanOutDestinationId = nil
+          self.clearRunJournal(destinationId: destinationId)
         }
       }
       for runScope in runScopes {
-        if Task.isCancelled { return }
+        guard !Task.isCancelled, self?.activeRunFanOutID == fanOutID else { return }
         // Update the journal with the sub-scope about to start. Done
         // *before* the `await` so a SIGKILL during the await leaves the
         // journal pointing at the in-flight scope, not the previous one.
         // Builds a new struct from `initialJournal` rather than mutating
         // a captured var — keeps the closure concurrency-clean.
-        if let destinationId, let base = initialJournal,
-          let scopeRaw = runScope.clearableScope?.rawValue
-        {
+        if let scopeRaw = runScope.clearableScope?.rawValue {
           let updated = AutoSyncRunJournal(
-            startedAt: base.startedAt,
-            trigger: base.trigger,
-            scopes: base.scopes,
+            startedAt: initialJournal.startedAt,
+            trigger: initialJournal.trigger,
+            scopes: initialJournal.scopes,
             currentScope: scopeRaw,
             currentScopeStartedAt: environment.clock.now()
           )
@@ -580,14 +576,14 @@ final class AutoSyncManager: ObservableObject {
           selection: spec.selection,
           startedAt: environment.clock.now()
         )
-        if let destinationId {
-          self?.dispatch(.exportRunStarted(context, destinationId: destinationId))
-        }
+        self?.dispatch(.exportRunStarted(context, destinationId: destinationId))
         let summary = await environment.exportRunner.runExport(context: context)
         // Check cancellation again after the await — the user may have
         // toggled off / switched destinations during the run.
-        guard !Task.isCancelled else { return }
-        self?.dispatch(.autoSyncRunCompleted(summary))
+        guard !Task.isCancelled, self?.activeRunFanOutID == fanOutID,
+          self?.reducerState.destination.id == destinationId
+        else { return }
+        self?.dispatch(.autoSyncRunCompleted(summary, destinationId: destinationId))
         if summary.result != .completed {
           // Stop the chain on the first non-completion so a destination that
           // went unavailable mid-run doesn't churn through the remaining
@@ -601,11 +597,27 @@ final class AutoSyncManager: ObservableObject {
   }
 
   /// Cancel any in-flight fan-out task. Called from disable / destination-
-  /// clear paths so a long multi-scope run stops at the next await boundary
+  /// identity-change paths so a long multi-scope run stops at the next await boundary
   /// instead of continuing scopes the user no longer cares about.
   private func cancelActiveFanOut() {
     activeRunFanOutTask?.cancel()
     activeRunFanOutTask = nil
+    activeRunFanOutID = nil
+    if let destinationId = activeRunFanOutDestinationId {
+      clearRunJournal(destinationId: destinationId)
+    }
+    activeRunFanOutDestinationId = nil
+  }
+
+  private func clearRunJournal(destinationId: String) {
+    guard let environment else { return }
+    do {
+      try environment.currentRunStore.clear(destinationId: destinationId)
+    } catch {
+      log.error(
+        "Failed to clear current-run journal for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+      )
+    }
   }
 
   /// Expands an `.autoExport(scopes)` spec scope into per-scope full-scope

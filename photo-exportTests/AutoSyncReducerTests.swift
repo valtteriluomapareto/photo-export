@@ -635,7 +635,8 @@ struct AutoSyncReducerTests {
     // helper but the autoSync variant is where the umbrella matters in
     // production.
     let (next, _) = AutoSyncReducer.reduce(
-      .autoSyncRunCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .autoSyncRunCompleted(summary, destinationId: state.destination.id!),
+      in: stateWithRunBoundary(summary.context, in: state), now: now)
     let nextDirty = next.dirtyStateByDestination[destId]
 
     // .timeline cleared (still selected); .sharedAlbums preserved (user
@@ -679,7 +680,8 @@ struct AutoSyncReducerTests {
     )
 
     let (next, _) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     let nextDirty = next.dirtyStateByDestination[destId]
     #expect(nextDirty?.scope(.sharedAlbums).pendingFullReconciliation == false)
@@ -708,10 +710,17 @@ struct AutoSyncReducerTests {
       source: .autoSync, visibility: .background, reason: .appLaunch,
       scope: .autoExport(state.scopeSelection), selection: state.versionSelection)
     state.current = .running(reason: .appLaunch)
-    state = AutoSyncReducer.reduce(
-      .exportRunStateChanged(ExportRunState(
-        activeContext: runContext, isManualActive: false, isAutoSyncActive: true)),
-      in: state, now: now).0
+    state =
+      AutoSyncReducer.reduce(
+        .exportRunStarted(runContext, destinationId: state.destination.id!), in: state, now: now
+      ).0
+    state =
+      AutoSyncReducer.reduce(
+        .exportRunStateChanged(
+          ExportRunState(
+            activeContext: runContext, isManualActive: false, isAutoSyncActive: true)),
+        in: state, now: now
+      ).0
 
     let event = PhotoLibraryPersistentChangeEvent(
       insertedLocalIdentifiers: ["mid-run-asset"], observedAt: now)
@@ -725,11 +734,14 @@ struct AutoSyncReducerTests {
       enqueuedCount: 1, completedCount: 1, failedCount: 0, skippedCount: 0,
       cancelReason: nil, result: .completed)
     let (afterCompletion, effects) = AutoSyncReducer.reduce(
-      .autoSyncRunCompleted(summary), in: afterIdle, now: now)
-    #expect(afterCompletion.dirtyStateByDestination[destId]?.scope(.timeline)
-      .pendingAssetIds == ["mid-run-asset"])
-    #expect(afterCompletion.current == .scheduled(
-      reason: .photosChanged, fireAt: now.addingTimeInterval(30)))
+      .autoSyncRunCompleted(summary, destinationId: state.destination.id!), in: afterIdle, now: now)
+    #expect(
+      afterCompletion.dirtyStateByDestination[destId]?.scope(.timeline)
+        .pendingAssetIds == ["mid-run-asset"])
+    #expect(
+      afterCompletion.current
+        == .scheduled(
+          reason: .photosChanged, fireAt: now.addingTimeInterval(30)))
     #expect(!effects.contains(.cancelDebounce(.photosChanged)))
   }
 
@@ -788,7 +800,8 @@ struct AutoSyncReducerTests {
       enqueuedCount: 1, completedCount: 0, failedCount: 1, skippedCount: 0,
       cancelReason: nil, result: .failed)
     let (next, effects) = AutoSyncReducer.reduce(
-      .autoSyncRunCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .autoSyncRunCompleted(summary, destinationId: state.destination.id!),
+      in: stateWithRunBoundary(summary.context, in: state), now: now)
 
     #expect(
       next.dirtyStateByDestination[destId]?.scope(.timeline).pendingAssetIds == ["preserve-me"])
@@ -822,7 +835,8 @@ struct AutoSyncReducerTests {
         enqueuedCount: 0, completedCount: 0, failedCount: 0, skippedCount: 0,
         cancelReason: nil, result: result)
       let (next, _) = AutoSyncReducer.reduce(
-        .autoSyncRunCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+        .autoSyncRunCompleted(summary, destinationId: state.destination.id!),
+        in: stateWithRunBoundary(summary.context, in: state), now: now)
 
       #expect(
         next.dirtyStateByDestination[destId]?.scope(.timeline).pendingAssetIds == ["preserve-me"],
@@ -1108,7 +1122,8 @@ struct AutoSyncReducerTests {
     _ context: ExportRunContext, in state: AutoSyncReducer.State
   ) -> AutoSyncReducer.State {
     AutoSyncReducer.reduce(
-      .exportRunStarted(context, destinationId: state.destination.id!), in: state, now: now).0
+      .exportRunStarted(context, destinationId: state.destination.id!), in: state, now: now
+    ).0
   }
 
   /// Builds a manual run summary at `scope` that just completed cleanly.
@@ -1154,7 +1169,8 @@ struct AutoSyncReducerTests {
     let summary = manualFullSummary(scope: .timelineFullLibrary)
 
     let (next, effects) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     let destId = state.destination.id!
     let cleared = next.dirtyStateByDestination[destId]?.scope(.timeline)
@@ -1173,7 +1189,8 @@ struct AutoSyncReducerTests {
     let summary = manualFullSummary(scope: .allAlbumsFull)
 
     let (next, _) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     let cleared = next.dirtyStateByDestination[state.destination.id!]?.scope(.albums)
     #expect(cleared?.pendingFullReconciliation == false)
@@ -1185,7 +1202,8 @@ struct AutoSyncReducerTests {
     let summary = manualFullSummary(scope: .favoritesFull)
 
     let (next, _) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     let cleared = next.dirtyStateByDestination[state.destination.id!]?.scope(.favorites)
     #expect(cleared?.pendingFullReconciliation == false)
@@ -1197,7 +1215,8 @@ struct AutoSyncReducerTests {
     let summary = manualFullSummary(scope: .timelineFullLibrary, result: .failed)
 
     let (next, effects) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
     #expect(untouched?.pendingFullReconciliation == true)
@@ -1212,7 +1231,8 @@ struct AutoSyncReducerTests {
     let summary = manualFullSummary(scope: .timelineFullLibrary, source: .autoSync)
 
     let (next, effects) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
     #expect(untouched?.pendingFullReconciliation == true)
@@ -1227,7 +1247,8 @@ struct AutoSyncReducerTests {
       scope: .timelineFullLibrary, selection: .edited)
 
     let (next, effects) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
     #expect(untouched?.pendingFullReconciliation == true)
@@ -1242,7 +1263,8 @@ struct AutoSyncReducerTests {
     let summary = manualFullSummary(scope: .timelineAssets(["seed-1"]))
 
     let (next, effects) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
     #expect(untouched?.pendingFullReconciliation == true)
@@ -1270,7 +1292,8 @@ struct AutoSyncReducerTests {
     )
 
     let (_, effects) = AutoSyncReducer.reduce(
-      .autoSyncRunCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .autoSyncRunCompleted(summary, destinationId: state.destination.id!),
+      in: stateWithRunBoundary(summary.context, in: state), now: now)
 
     #expect(
       effects.contains(.recordRetryFailures([failure], destinationId: destId)))
@@ -1289,7 +1312,8 @@ struct AutoSyncReducerTests {
     )
 
     let (_, effects) = AutoSyncReducer.reduce(
-      .autoSyncRunCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .autoSyncRunCompleted(summary, destinationId: state.destination.id!),
+      in: stateWithRunBoundary(summary.context, in: state), now: now)
 
     #expect(
       !effects.contains(where: {
@@ -1325,7 +1349,8 @@ struct AutoSyncReducerTests {
     )
 
     let (next, _) = AutoSyncReducer.reduce(
-      .autoSyncRunCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .autoSyncRunCompleted(summary, destinationId: state.destination.id!),
+      in: stateWithRunBoundary(summary.context, in: state), now: now)
 
     let cleared = next.dirtyStateByDestination[destId]!
     #expect(cleared.scope(.timeline).pendingFullReconciliation == false)
@@ -1353,7 +1378,8 @@ struct AutoSyncReducerTests {
     let summary = manualFullSummary(scope: .timelineFullLibrary)
 
     let (next, effects) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     #expect(next.current == .idle)
     #expect(effects.contains(.cancelDebounce(.photosChanged)))
@@ -1377,7 +1403,8 @@ struct AutoSyncReducerTests {
     let summary = manualFullSummary(scope: .timelineFullLibrary)
 
     let (next, effects) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     #expect(next.current == .scheduled(reason: .appLaunch, fireAt: fireAt))
     #expect(!effects.contains(.cancelDebounce(.appLaunch)))
@@ -1392,7 +1419,8 @@ struct AutoSyncReducerTests {
     let summary = manualFullSummary(scope: .timelineFullLibrary)
 
     let (next, effects) = AutoSyncReducer.reduce(
-      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state), now: now)
+      .manualFullExportCompleted(summary), in: stateWithRunBoundary(summary.context, in: state),
+      now: now)
 
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.favorites)
     #expect(untouched?.pendingFullReconciliation == true)
