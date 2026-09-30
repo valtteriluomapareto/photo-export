@@ -101,6 +101,18 @@ struct JSONLRecordFileIOFailureTests {
     #expect(loaded.ioFailure is InjectedError)
   }
 
+  @Test func danglingLogSymlinkIsNotMistakenForMissingLog() throws {
+    let directory = try makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let linkURL = directory.appendingPathComponent("log.jsonl")
+    try FileManager.default.createSymbolicLink(
+      at: linkURL, withDestinationURL: directory.appendingPathComponent("missing-target"))
+    let loaded = makeFile(at: directory).load()
+    #expect(loaded.ops.isEmpty)
+    #expect(loaded.ioFailure != nil)
+  }
+
   @Test func unreadableSnapshotIsIOFailureButMalformedSnapshotIsCorruption() throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

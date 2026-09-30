@@ -16,7 +16,7 @@ struct ProductionJSONLRecordLogIO: JSONLRecordLogIO {
     do {
       return try Data(contentsOf: url)
     } catch {
-      if Self.isMissingFile(error) { return nil }
+      if Self.isMissingFile(error) && Self.isAbsentEntry(at: url) { return nil }
       throw error
     }
   }
@@ -45,6 +45,18 @@ struct ProductionJSONLRecordLogIO: JSONLRecordLogIO {
       return isMissingFile(underlying)
     }
     return false
+  }
+
+  /// ENOENT also describes a dangling symlink or a missing parent directory. Neither
+  /// is a normal absent log inside a configured records directory.
+  private static func isAbsentEntry(at url: URL) -> Bool {
+    var metadata = stat()
+    if lstat(url.path, &metadata) == 0 { return false }
+    guard errno == ENOENT else { return false }
+    var isDirectory: ObjCBool = false
+    let parent = url.deletingLastPathComponent().path
+    return FileManager.default.fileExists(atPath: parent, isDirectory: &isDirectory)
+      && isDirectory.boolValue
   }
 
   private static func posixError(for url: URL) -> NSError {

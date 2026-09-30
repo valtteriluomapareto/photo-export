@@ -279,19 +279,19 @@ struct DecodedThumbnailCacheTests {
   }
 
   @Test func clearMidFlightDropsStaleDecodeFromCache() async {
+    let decodeEntered = AsyncCheckpoint()
     let cache = DecodedThumbnailCache(decode: { _ in
-      try? await Task.sleep(for: .milliseconds(50))
+      await decodeEntered.enter()
       return Self.makeCGImage()
     })
 
     async let loadResult = cache.image(for: key())
-    // Let `image(for:)` register the in-flight slot before we clear.
-    await Task.yield()
+    await decodeEntered.waitForEnter(count: 1)
     cache.clear()
+    await decodeEntered.releaseAll()
     let decoded = await loadResult
 
-    // The decode succeeded (the caller still sees a CGImage) but the cache
-    // does not retain the post-clear bytes — a subsequent request re-decodes.
+    // The caller still receives its image, but a cleared generation cannot refill the cache.
     #expect(decoded != nil)
     #expect(cache.cached(for: key()) == nil)
   }
