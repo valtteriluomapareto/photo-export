@@ -115,11 +115,10 @@ struct MonthContentView: View, Equatable {
     .overlay(overlayViews)
     .task(id: "\(year)-\(month)") {
       await viewModel.loadAssets(forYear: year, month: month)
-      if selectedAsset == nil,
-        let id = viewModel.selectedAssetId,
-        let initialAsset = viewModel.assets.first(where: { $0.id == id })
-      {
-        selectedAsset = initialAsset
+    }
+    .onChange(of: initialAssetSelection, initial: true) { _, asset in
+      if selectedAsset == nil, let asset {
+        selectedAsset = asset
       }
     }
     // Photos library mutations (most commonly iCloud sync landing newly synced assets,
@@ -133,6 +132,13 @@ struct MonthContentView: View, Equatable {
       Task { await viewModel.refresh(for: .timeline(year: year, month: month)) }
     }
     .measureBodyInvalidations("MonthContentView")
+  }
+
+  // Observe the first batch rather than waiting for the entire progressive load.
+  // A scope check prevents an old pane's selection from reaching the detail binding.
+  private var initialAssetSelection: AssetDescriptor? {
+    guard selectedAsset == nil else { return nil }
+    return viewModel.selectedAsset(for: .timeline(year: year, month: month))
   }
 
   private var overlayViews: some View {

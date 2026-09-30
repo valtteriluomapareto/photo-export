@@ -13,6 +13,24 @@ import Testing
 @MainActor
 struct MonthViewModelTests {
 
+  @MainActor
+  private final class ControlledStreams {
+    typealias Stream = AsyncThrowingStream<[AssetDescriptor], any Error>
+    let started = AsyncCheckpoint()
+    private(set) var requests: [(scope: PhotoFetchScope, continuation: Stream.Continuation)] = []
+
+    func make(for scope: PhotoFetchScope) -> Stream {
+      Stream { continuation in
+        requests.append((scope, continuation))
+        Task { await started.enter() }
+      }
+    }
+
+    func finishAll() {
+      for request in requests { request.continuation.finish() }
+    }
+  }
+
   // MARK: - Fixtures
 
   private func makeAsset(id: String, hasAdjustments: Bool = false) -> AssetDescriptor {
@@ -164,6 +182,221 @@ struct MonthViewModelTests {
 
   // MARK: - refresh(for:)
 
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func lateFirstLoadCannotReplaceReturnedScope(lateError: Bool) async throws {
+    let svc = FakePhotoLibraryService()
+    let streams = ControlledStreams()
+    svc.progressiveStreamOverride = { streams.make(for: $0) }
+    defer {
+      streams.finishAll()
+      Task { await streams.started.releaseAll() }
+    }
+    let vm = MonthViewModel(photoLibraryService: svc)
+    let scopeA: PhotoFetchScope = .album(collectionId: "A")
+    let scopeB: PhotoFetchScope = .album(collectionId: "B")
+
+    let firstA = Task { await vm.loadAssets(for: scopeA) }
+    await streams.started.waitForEnter(count: 1)
+    let firstB = Task { await vm.loadAssets(for: scopeB) }
+    await streams.started.waitForEnter(count: 2)
+    let b = try #require(streams.requests.dropFirst().first?.continuation)
+    b.yield([makeAsset(id: "B")])
+    b.finish()
+    await firstB.value
+
+    let newestA = Task { await vm.loadAssets(for: scopeA) }
+    await streams.started.waitForEnter(count: 3)
+    let current = try #require(streams.requests.dropFirst(2).first?.continuation)
+    current.yield([makeAsset(id: "new-A")])
+    current.finish()
+    await newestA.value
+
+    let old = try #require(streams.requests.first?.continuation)
+    if lateError {
+      old.finish(throwing: NSError(domain: "LateA", code: 1))
+    } else {
+      old.yield([makeAsset(id: "old-A")])
+      old.finish()
+    }
+    await firstA.value
+
+    #expect(vm.assets.map(\.id) == ["new-A"])
+    #expect(vm.selectedAsset(for: scopeA)?.id == "new-A")
+    #expect(vm.selectedAsset(for: scopeB) == nil)
+    #expect(vm.errorMessage == nil)
+    #expect(!vm.isLoading)
+    #expect(svc.startCachingCalls.last?.map(\.id) == ["new-A"])
+  }
+
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func lateSameScopeRefreshCannotReplaceNewerRefresh(lateError: Bool) async throws {
+    let svc = FakePhotoLibraryService()
+    let base = makeAsset(id: "base")
+    svc.favoritesAssets = [base]
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+    let streams = ControlledStreams()
+    svc.progressiveStreamOverride = { streams.make(for: $0) }
+    defer {
+      streams.finishAll()
+      Task { await streams.started.releaseAll() }
+    }
+
+    let older = Task { await vm.refresh(for: .favorites) }
+    await streams.started.waitForEnter(count: 1)
+    let newer = Task { await vm.refresh(for: .favorites) }
+    await streams.started.waitForEnter(count: 2)
+    let newest = try #require(streams.requests.dropFirst().first?.continuation)
+    newest.yield([base, makeAsset(id: "new")])
+    newest.finish()
+    await newer.value
+
+    let stale = try #require(streams.requests.first?.continuation)
+    if lateError {
+      stale.finish(throwing: NSError(domain: "LateRefresh", code: 1))
+    } else {
+      stale.yield([base, makeAsset(id: "old")])
+      stale.finish()
+    }
+    await older.value
+
+    #expect(vm.assets.map(\.id) == ["base", "new"])
+    #expect(vm.errorMessage == nil)
+    #expect(vm.selectedAsset(for: .favorites)?.id == "base")
+    #expect(svc.startCachingCalls.last?.map(\.id) == ["new"])
+  }
+
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func refreshSupersedingInitialLoadSettlesLoadingAndSelection(refreshError: Bool) async throws {
+    let svc = FakePhotoLibraryService()
+    let streams = ControlledStreams()
+    svc.progressiveStreamOverride = { streams.make(for: $0) }
+    defer {
+      streams.finishAll()
+      Task { await streams.started.releaseAll() }
+    }
+    let vm = MonthViewModel(photoLibraryService: svc)
+    let initial = Task { await vm.loadAssets(for: .favorites) }
+    await streams.started.waitForEnter(count: 1)
+    #expect(vm.isLoading)
+    let refresh = Task { await vm.refresh(for: .favorites) }
+    await streams.started.waitForEnter(count: 2)
+    let current = try #require(streams.requests.dropFirst().first?.continuation)
+    if refreshError {
+      current.finish(
+        throwing: NSError(
+          domain: "Refresh", code: 1,
+          userInfo: [NSLocalizedDescriptionKey: "refresh failed"]))
+    } else {
+      current.yield([makeAsset(id: "fresh")])
+      current.finish()
+    }
+    await refresh.value
+    let old = try #require(streams.requests.first?.continuation)
+    old.yield([makeAsset(id: "obsolete")])
+    old.finish()
+    await initial.value
+
+    #expect(!vm.isLoading)
+    #expect(vm.assets.map(\.id) == (refreshError ? [] : ["fresh"]))
+    #expect(vm.selectedAssetId == (refreshError ? nil : "fresh"))
+    #expect(vm.errorMessage == (refreshError ? "refresh failed" : nil))
+  }
+
+  @Test(arguments: [false, true])
+  func successfulRefreshClearsEarlierOwnedFailure(initialLoadFails: Bool) async throws {
+    let svc = FakePhotoLibraryService()
+    let asset = makeAsset(id: "healthy")
+    svc.favoritesAssets = [asset]
+    let vm = MonthViewModel(photoLibraryService: svc)
+    if !initialLoadFails { await vm.loadAssets(for: .favorites) }
+    svc.fetchAssetsError = NSError(
+      domain: "Refresh", code: 1,
+      userInfo: [NSLocalizedDescriptionKey: "earlier request failed"])
+    if initialLoadFails {
+      await vm.loadAssets(for: .favorites)
+    } else {
+      await vm.refresh(for: .favorites)
+    }
+    #expect(vm.errorMessage == "earlier request failed")
+
+    svc.fetchAssetsError = nil
+    await vm.refresh(for: .favorites)
+
+    #expect(vm.assets == [asset])
+    #expect(vm.errorMessage == nil)
+    #expect(!vm.isLoading)
+    #expect(vm.selectedAssetId == asset.id)
+  }
+
+  @Test(.timeLimit(.minutes(1)))
+  func refreshSupersedesLoadAfterFirstProgressiveBatch() async throws {
+    let svc = FakePhotoLibraryService()
+    let streams = ControlledStreams()
+    svc.progressiveStreamOverride = { streams.make(for: $0) }
+    defer {
+      streams.finishAll()
+      Task { await streams.started.releaseAll() }
+    }
+    let vm = MonthViewModel(photoLibraryService: svc)
+    let firstVisible = AsyncCheckpoint()
+    let subscription = vm.$selectedAssetId.sink { id in
+      if id == "first" { Task { await firstVisible.enter() } }
+    }
+    defer {
+      subscription.cancel()
+      Task { await firstVisible.releaseAll() }
+    }
+    let load = Task { await vm.loadAssets(for: .favorites) }
+    await streams.started.waitForEnter(count: 1)
+    let old = try #require(streams.requests.first?.continuation)
+    old.yield([makeAsset(id: "first")])
+    await firstVisible.waitForEnter(count: 1)
+    #expect(vm.assets.map(\.id) == ["first"])
+
+    let refresh = Task { await vm.refresh(for: .favorites) }
+    await streams.started.waitForEnter(count: 2)
+    let current = try #require(streams.requests.dropFirst().first?.continuation)
+    current.yield([makeAsset(id: "first"), makeAsset(id: "fresh")])
+    current.finish()
+    await refresh.value
+    old.yield([makeAsset(id: "stale")])
+    old.finish()
+    await load.value
+
+    #expect(vm.assets.map(\.id) == ["first", "fresh"])
+    #expect(vm.selectedAsset(for: .favorites)?.id == "first")
+    #expect(!vm.isLoading)
+    #expect(svc.startCachingCalls.last?.map(\.id) == ["first", "fresh"])
+  }
+
+  @Test(.timeLimit(.minutes(1)))
+  func wrongScopeRefreshDoesNotInvalidateCurrentLoad() async throws {
+    let svc = FakePhotoLibraryService()
+    let streams = ControlledStreams()
+    svc.progressiveStreamOverride = { streams.make(for: $0) }
+    defer {
+      streams.finishAll()
+      Task { await streams.started.releaseAll() }
+    }
+    let vm = MonthViewModel(photoLibraryService: svc)
+    let scope: PhotoFetchScope = .album(collectionId: "A")
+    let load = Task { await vm.loadAssets(for: scope) }
+    await streams.started.waitForEnter(count: 1)
+
+    await vm.refresh(for: .album(collectionId: "B"))
+    let current = try #require(streams.requests.first?.continuation)
+    current.yield([makeAsset(id: "A")])
+    current.finish()
+    await load.value
+
+    #expect(streams.requests.count == 1)
+    #expect(vm.assets.map(\.id) == ["A"])
+    #expect(vm.selectedAsset(for: scope)?.id == "A")
+    #expect(vm.selectedAsset(for: .album(collectionId: "B")) == nil)
+    #expect(!vm.isLoading)
+  }
+
   /// Refresh keeps existing assets in place and adds newcomers without
   /// blanking the grid. Mirrors the iCloud-sync case where the user is
   /// watching a month grid as new photos land in the library. The newcomer
@@ -301,7 +534,6 @@ struct MonthViewModelTests {
     #expect(svc.stopCachingCalls.count == stopCachingCountAfterLoad + 1)
     #expect(svc.stopCachingCalls.last?.map(\.id) == ["a", "b"])
   }
-
 
   // MARK: - Progressive streaming
 

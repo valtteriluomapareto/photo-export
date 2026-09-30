@@ -235,6 +235,15 @@ final class FakePhotoLibraryService: PhotoLibraryService {
           continuation.finish()
           return
         }
+        if let stream = self.progressiveStreamOverride?(scope) {
+          do {
+            for try await batch in stream { continuation.yield(batch) }
+            continuation.finish()
+          } catch {
+            continuation.finish(throwing: error)
+          }
+          return
+        }
         let all: [AssetDescriptor]
         do {
           all = try await self.fetchAssets(in: scope, mediaType: mediaType)
@@ -268,6 +277,12 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// observe partial state. Same shape as
   /// `fetchAssetsCheckpointByAlbumId` / `fetchAssetsCheckpointByYear`.
   var progressiveCheckpointByScopeKey: [String: AsyncCheckpoint] = [:]
+
+  /// Test-only stream factory, invoked separately for each request on the main
+  /// actor. Controlled continuations let race tests complete same-scope requests
+  /// out of order, which a per-scope checkpoint cannot distinguish.
+  var progressiveStreamOverride:
+    (@MainActor (PhotoFetchScope) -> AsyncThrowingStream<[AssetDescriptor], any Error>?)?
 
   nonisolated fileprivate static func progressiveScopeKey(for scope: PhotoFetchScope)
     -> String

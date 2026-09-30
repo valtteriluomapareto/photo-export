@@ -27,7 +27,8 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
   - **Collections**: Favorites plus the user's albums and folders, grouped by Photos hierarchy
 - Export status indicators at both year and month level (not started, in progress with percentage, fully exported with checkmark)
 - **Year overview** — selecting a year in the Timeline sidebar opens a Photos.app-style grid of month tiles (four cover thumbnails per month, a green checkmark when fully exported). Click a tile to drill into that month.
-- Fast thumbnail grid with in-memory caching
+- Fast thumbnail grid with in-memory caching; the first available asset opens in the detail panel while the rest of the grid loads. Choosing another asset keeps your selection.
+- Photos changes refresh the grid in place without blanking it; older refreshes cannot replace newer results
 - Full-size preview for any selected photo or video; switching selections or closing the detail view cancels obsolete preview requests, and late responses cannot replace the current preview
 - Detail panel showing original filename, creation date, dimensions, file size, media type, and export status
 
