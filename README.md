@@ -25,7 +25,8 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 - Browse your library two ways via a Timeline / Collections segmented control
   - **Timeline** — by year and month
   - **Collections** — Favorites plus your Photos albums and folders
-- Preview thumbnails and selected assets as the first batch loads; Photos changes refresh the grid in place, and older refreshes cannot replace newer results
+- Preview thumbnails and selected assets as the first batch loads
+- Photos changes refresh the grid in place, including edited thumbnails already on screen; older refreshes and image responses cannot replace newer results
 - Export a month, a year, an album, or the full queue without overwriting existing files
 - Cmd/Shift-click rows in either sidebar to enqueue a mix in one run (e.g. multiple years on the Timeline, or Favorites + several albums + a folder on Collections). Selected folders expand to their nested albums; a selected year supersedes any individual month in it
 - Export Favorites or any album you've created in Photos to `Collections/Favorites/` or `Collections/Albums/<Album>/`, individually or via **Export All Albums** in the toolbar. Select a folder in the Collections sidebar to flip the primary action to **Export Folder** (every descendant album), or Cmd/Shift-click album tiles to enqueue an explicit selection

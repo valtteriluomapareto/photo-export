@@ -25,7 +25,21 @@ struct ThumbnailView: View {
   /// fanout on flick-scrolls.
   private static let hqLingerDelay: Duration = .milliseconds(150)
 
+  private struct LoadIdentity: Hashable {
+    let assetId: String
+    let contentRevision: Int
+    let retryToken: Int
+  }
+
+  private var loadIdentity: LoadIdentity {
+    LoadIdentity(
+      assetId: asset.id,
+      contentRevision: photoLibraryManager.thumbnailContentRevision(for: asset.id),
+      retryToken: retryToken)
+  }
+
   var body: some View {
+    let identity = loadIdentity
     ZStack {
       if let image {
         Image(nsImage: NSImage(cgImage: image, size: .zero))
@@ -100,13 +114,20 @@ struct ThumbnailView: View {
     .accessibilityLabel(accessibilityLabel)
     .accessibilityHint("Open details")
     .accessibilityAddTraits(accessibilityTraits)
-    .task(id: "\(asset.id)#\(retryToken)") {
-      await loadThumbnail()
+    .task(id: identity) {
+      await loadThumbnail(for: identity)
     }
   }
 
-  private func loadThumbnail() async {
+  private func ownsLoad(_ identity: LoadIdentity) -> Bool {
+    !Task.isCancelled && identity == loadIdentity
+  }
+
+  private func loadThumbnail(for identity: LoadIdentity) async {
+    guard ownsLoad(identity) else { return }
     failed = false
+    var receivedCurrentImage = false
+    // Retain the displayed image while replacing it after a same-ID edit.
     // Cached probes first so a re-mount on warm scroll skips PhotoKit.
     if let hq = photoLibraryManager.cachedDecodedThumbnail(
       for: asset.id, quantizedSize: Self.targetSize, deliveryMode: .highQuality)
@@ -118,21 +139,28 @@ struct ThumbnailView: View {
       for: asset.id, quantizedSize: Self.targetSize, deliveryMode: .fast)
     {
       image = cachedFast
-    } else if let fast = await photoLibraryManager.decodedThumbnail(
-      for: asset.id, quantizedSize: Self.targetSize, deliveryMode: .fast)
-    {
-      image = fast
+      receivedCurrentImage = true
+    } else {
+      let fast = await photoLibraryManager.decodedThumbnail(
+        for: identity.assetId, quantizedSize: Self.targetSize, deliveryMode: .fast)
+      guard ownsLoad(identity) else { return }
+      if let fast {
+        image = fast
+        receivedCurrentImage = true
+      }
     }
     // Linger so cells that flick past in <150 ms never spend an HQ decode.
     try? await Task.sleep(for: Self.hqLingerDelay)
-    guard !Task.isCancelled else { return }
-    if let hq = await photoLibraryManager.decodedThumbnail(
-      for: asset.id, quantizedSize: Self.targetSize, deliveryMode: .highQuality)
-    {
+    guard ownsLoad(identity) else { return }
+    let hq = await photoLibraryManager.decodedThumbnail(
+      for: identity.assetId, quantizedSize: Self.targetSize, deliveryMode: .highQuality)
+    guard ownsLoad(identity) else { return }
+    if let hq {
       image = hq
-    } else if image == nil, !Task.isCancelled {
+    } else if !receivedCurrentImage {
       // Both fast and HQ legs returned nil; only surface the Retry tile now,
       // so a transient fast-format miss doesn't flash it before HQ rescues.
+      image = nil
       failed = true
     }
   }

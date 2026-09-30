@@ -12,6 +12,17 @@ final class DecodedThumbnailCache {
     let assetId: String
     let quantizedSize: CGSize
     let deliveryMode: ThumbnailDeliveryMode
+    let contentRevision: Int
+
+    init(
+      assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode,
+      contentRevision: Int = 0
+    ) {
+      self.assetId = assetId
+      self.quantizedSize = quantizedSize
+      self.deliveryMode = deliveryMode
+      self.contentRevision = contentRevision
+    }
   }
 
   typealias Decode = @MainActor (Key) async -> CGImage?

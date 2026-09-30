@@ -155,7 +155,11 @@ inline `OSAllocatedUnfairLock<PHImageRequestID?>`. Pre-cancel and post-set
 re-checks around the request keep the cancellation race tight.
 
 `ThumbnailView` (`photo-export/Views/Shared/ThumbnailView.swift`) owns its
-own `@State` and drives loading via `.task(id: "\(asset.id)#\(retry)")`.
+own `@State` and drives loading via `.task(id:)` keyed by asset ID, thumbnail
+content revision, and retry token. Content revisions also key the decoded cache
+(issue #146); known edits reload only affected cells, while unknown changes use a
+bounded global fallback. Both awaited image legs reject obsolete results, and
+the prior image remains visible while a replacement loads.
 Render order: cached HQ → cached fast → async fast → 150 ms linger →
 async HQ. The linger keeps flick-scrolls from firing HQ at all; `failed`
 is only set after both legs return nil, so a fresh iCloud asset where fast

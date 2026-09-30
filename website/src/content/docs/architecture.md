@@ -28,7 +28,7 @@ The major UI-facing managers retain their original names:
 
 ### PhotoLibraryManager
 
-Handles Photos authorization and asset fetching. Uses `PHCachingImageManager` for thumbnail work.
+Handles Photos authorization and asset fetching. Uses `PHCachingImageManager` for thumbnail work. Thumbnail tasks and decoded cache entries share a content revision, so an edit reloads an already-visible cell and obsolete responses are discarded. PhotoKit content changes target individual assets; bounded tracking falls back to a global revision when affected IDs are unknown. Unrelated thumbnails keep their warm cache entries.
 
 - Queries assets grouped by year and month
 - Provides both thumbnail and full-size image loading
