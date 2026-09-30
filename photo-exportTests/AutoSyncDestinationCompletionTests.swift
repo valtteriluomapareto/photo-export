@@ -163,6 +163,7 @@ struct AutoSyncDestinationCompletionTests {
         in: state, now: now
       ).0
     #expect(state.runDirtyBoundary == nil)
+    #expect(state.exportRunState == .idle)
     state =
       AutoSyncReducer.reduce(
         .destinationChanged(destination("A")), in: state, now: now
@@ -181,6 +182,14 @@ struct AutoSyncDestinationCompletionTests {
       .autoSyncRunCompleted(oldSummary, destinationId: "A"), in: state, now: now)
     #expect(next == state)
     #expect(effects.isEmpty)
+
+    let (_, debounceEffects) = AutoSyncReducer.reduce(
+      .debounceFired(.destinationSelected), in: next, now: now.addingTimeInterval(10))
+    #expect(
+      debounceEffects.contains { effect in
+        if case .startRun = effect { return true }
+        return false
+      })
   }
 
   @Test func manualRunFromPriorDestinationCannotRebindAfterSwitch() {

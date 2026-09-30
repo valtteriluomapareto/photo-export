@@ -172,6 +172,11 @@ enum AutoSyncReducer {
       return (newState, [])
 
     case .exportRunStateChanged(let runState):
+      if let context = runState.activeContext,
+        newState.invalidatedRunIds.contains(context.runId)
+      {
+        return (state, [])
+      }
       // Just track the run state — dirty-clearing is gated on the auto-sync run's
       // *result* and arrives via a separate `.autoSyncRunCompleted(summary)` event
       // dispatched by the manager after the run task returns. Without that signal
