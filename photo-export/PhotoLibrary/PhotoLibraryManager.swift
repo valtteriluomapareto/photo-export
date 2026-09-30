@@ -68,10 +68,26 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `photoLibraryDidChange` so subsequent reads re-fetch.
   nonisolated let collectionCountCache = CollectionCountCache()
 
-  /// Bounded `CGImage` cache for thumbnail renders. Cleared by
-  /// `invalidateCache()`. Set in init via `setupDecodedThumbnailCache()` so
-  /// the decode closure can capture `[weak self]`.
+  /// Bounded `CGImage` cache for thumbnail renders, keyed by content revision.
+  /// Known edits supersede only their asset's entries; unknown changes clear
+  /// the cache. Set up after init so the decode closure captures `[weak self]`.
   private(set) var decodedThumbnailCache: DecodedThumbnailCache!
+
+  /// Only thumbnail-requested PHAssets are inspected on a PhotoKit change.
+  /// Bulk library fetches can cache tens of thousands of objects, so scanning
+  /// `phAssetCache` on every callback would stall the main actor. If this bound
+  /// is exceeded or an asset lookup fails, the next change uses the
+  /// conservative global invalidation.
+  private static let thumbnailTrackingLimit = 512
+  private var observedThumbnailAssets: [String: PHAsset] = [:]
+  private var thumbnailTrackingIncomplete = false
+
+  /// Stable task/cache identity for edited content. The global value covers
+  /// changes whose affected IDs are unknown; per-asset values avoid restarting
+  /// unrelated visible thumbnails when PhotoKit identifies changed content.
+  private var nextThumbnailContentRevision = 0
+  private var globalThumbnailContentRevision = 0
+  private var assetThumbnailContentRevisions: [String: Int] = [:]
 
   /// Optional injection point that replaces the production PhotoKit implementation on
   /// every `PhotoLibraryService` method. Set at init time and never mutated. The
@@ -137,7 +153,11 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       return await s.decodedThumbnail(
         for: key.assetId, quantizedSize: key.quantizedSize, deliveryMode: key.deliveryMode)
     }
-    guard let asset = cachedOrFetchPHAsset(id: key.assetId) else { return nil }
+    guard let asset = cachedOrFetchPHAsset(id: key.assetId) else {
+      thumbnailTrackingIncomplete = true
+      return nil
+    }
+    observeThumbnailAsset(asset)
     let options = PHImageRequestOptions()
     switch key.deliveryMode {
     case .fast:
@@ -189,8 +209,13 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     quantizedSize: CGSize,
     deliveryMode: ThumbnailDeliveryMode
   ) async -> CGImage? {
-    await decodedThumbnailCache.image(
-      for: .init(assetId: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode))
+    let revision = thumbnailContentRevision(for: assetId)
+    let image = await decodedThumbnailCache.image(
+      for: .init(
+        assetId: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode,
+        contentRevision: revision))
+    guard !Task.isCancelled, revision == thumbnailContentRevision(for: assetId) else { return nil }
+    return image
   }
 
   func cachedDecodedThumbnail(
@@ -199,7 +224,13 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     deliveryMode: ThumbnailDeliveryMode
   ) -> CGImage? {
     decodedThumbnailCache.cached(
-      for: .init(assetId: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode))
+      for: .init(
+        assetId: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode,
+        contentRevision: thumbnailContentRevision(for: assetId)))
+  }
+
+  func thumbnailContentRevision(for assetId: String) -> Int {
+    max(globalThumbnailContentRevision, assetThumbnailContentRevisions[assetId] ?? 0)
   }
 
   /// Performs the PhotoKit authorization probe and registers as a
@@ -900,15 +931,68 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     return result.firstObject
   }
 
-  /// Clears the entire PHAsset cache (called on library changes). Non-private so
-  /// `PhotoLibraryPersistentChangeAdapter` can wake the UI side after a
-  /// safety-net reconcile turns up changes that PhotoKit's normal
-  /// `photoLibraryDidChange` callback missed (issue #69).
-  func invalidateCache() {
+  private func observeThumbnailAsset(_ asset: PHAsset) {
+    let id = asset.localIdentifier
+    if observedThumbnailAssets[id] != nil
+      || observedThumbnailAssets.count < Self.thumbnailTrackingLimit
+    {
+      observedThumbnailAssets[id] = asset
+    } else {
+      thumbnailTrackingIncomplete = true
+    }
+  }
+
+  /// PhotoKit supplies details only for objects we previously fetched. Keep
+  /// their after-change snapshots for the next callback. An empty or incomplete
+  /// registry cannot establish which visible thumbnails changed, so callers
+  /// fall back to a global content revision.
+  private func changedThumbnailAssetIDs(in change: PHChange) -> Set<String>? {
+    guard !thumbnailTrackingIncomplete, !observedThumbnailAssets.isEmpty else { return nil }
+    var changedIDs: Set<String> = []
+    let before = observedThumbnailAssets
+    for (id, asset) in before {
+      guard let details = change.changeDetails(for: asset) else { continue }
+      if details.assetContentChanged || details.objectWasDeleted {
+        changedIDs.insert(id)
+      }
+      if details.objectWasDeleted {
+        observedThumbnailAssets.removeValue(forKey: id)
+      } else if let updated = details.objectAfterChanges {
+        observedThumbnailAssets[id] = updated
+      }
+    }
+    return changedIDs
+  }
+
+  /// Invalidates library metadata and optionally known changed thumbnail
+  /// content. A no-argument call is the conservative path used when a
+  /// persistent-change catch-up has no PhotoKit object details (issue #69).
+  func invalidateCache(changedThumbnailAssetIDs: Set<String>? = nil) {
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil
-    decodedThumbnailCache.clear()
+    if let changedThumbnailAssetIDs,
+      assetThumbnailContentRevisions.count
+        + changedThumbnailAssetIDs.subtracting(assetThumbnailContentRevisions.keys).count
+        <= Self.thumbnailTrackingLimit
+    {
+      if !changedThumbnailAssetIDs.isEmpty {
+        nextThumbnailContentRevision &+= 1
+        for id in changedThumbnailAssetIDs {
+          assetThumbnailContentRevisions[id] = nextThumbnailContentRevision
+        }
+      }
+    } else {
+      // Unknown IDs or a revision-map overflow: restart visible thumbnails
+      // and clear the bounded decoded cache. Existing per-asset values are
+      // subsumed by the newer global revision.
+      nextThumbnailContentRevision &+= 1
+      globalThumbnailContentRevision = nextThumbnailContentRevision
+      assetThumbnailContentRevisions.removeAll()
+      observedThumbnailAssets.removeAll()
+      thumbnailTrackingIncomplete = false
+      decodedThumbnailCache.clear()
+    }
     libraryRevision &+= 1
     // Cancel any in-flight count tasks and drop cached counts so the next sidebar read
     // re-fetches against the updated library state.
@@ -1353,7 +1437,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 extension PhotoLibraryManager: @preconcurrency PHPhotoLibraryChangeObserver {
   nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
     Task { @MainActor in
-      self.invalidateCache()
+      let changedIDs = self.changedThumbnailAssetIDs(in: changeInstance)
+      self.invalidateCache(changedThumbnailAssetIDs: changedIDs)
     }
   }
 }

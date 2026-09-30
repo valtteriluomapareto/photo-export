@@ -416,10 +416,18 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     hqThumbnailsByAssetId[assetId]
   }
 
+  var decodedThumbnailCalls: [(assetId: String, deliveryMode: ThumbnailDeliveryMode)] = []
+  var decodedThumbnailOverride:
+    (@MainActor (String, CGSize, ThumbnailDeliveryMode) async -> CGImage?)?
+
   func decodedThumbnail(
     for assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
   ) async -> CGImage? {
-    cachedDecodedThumbnail(
+    decodedThumbnailCalls.append((assetId, deliveryMode))
+    if let decodedThumbnailOverride {
+      return await decodedThumbnailOverride(assetId, quantizedSize, deliveryMode)
+    }
+    return cachedDecodedThumbnail(
       for: assetId, quantizedSize: quantizedSize, deliveryMode: deliveryMode)
   }
 

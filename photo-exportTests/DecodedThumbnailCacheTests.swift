@@ -82,6 +82,27 @@ struct DecodedThumbnailCacheTests {
     #expect(recorded.contains(key(delivery: .highQuality)))
   }
 
+  @Test func contentRevisionsKeepSameAssetDecodesSeparate() async {
+    var decodedRevisions: [Int] = []
+    let cache = DecodedThumbnailCache(decode: { key in
+      decodedRevisions.append(key.contentRevision)
+      return Self.makeCGImage(gray: key.contentRevision == 0 ? 32 : 224)
+    })
+    let original = key()
+    let edited = DecodedThumbnailCache.Key(
+      assetId: original.assetId, quantizedSize: original.quantizedSize,
+      deliveryMode: original.deliveryMode, contentRevision: 1)
+    let oldImage = await cache.image(for: original)
+    let newImage = await cache.image(for: edited)
+
+    #expect(original.contentRevision == 0)
+    #expect(decodedRevisions == [0, 1])
+    #expect(oldImage !== newImage)
+    #expect(cache.cached(for: edited) === newImage)
+    #expect(await cache.image(for: edited) === newImage)
+    #expect(decodedRevisions == [0, 1], "A warm edited revision should not decode again")
+  }
+
   // MARK: - Clear behavior
 
   @Test func clearForcesReDecodeOnNextRequest() async {
