@@ -211,11 +211,52 @@ struct ExportManagerRunExportTests {
       context: makeContext(scope: .favoritesFull))
 
     // Per-variant record AND ExportRunSummary bookkeeping must both reflect the failure.
-    #expect(summary.failedCount == 1,
-      "VariantExporter.Host.recordVariantFailed must increment failedCount; got \(summary.failedCount)")
-    #expect(!summary.failures.isEmpty,
+    #expect(
+      summary.failedCount == 1,
+      "VariantExporter.Host.recordVariantFailed must increment failedCount; got \(summary.failedCount)"
+    )
+    #expect(
+      !summary.failures.isEmpty,
       "summary.failures must contain the per-variant failure detail; got \(summary.failures.count)")
     #expect(summary.failures.first?.assetId == "no-resource")
+  }
+
+  @Test func persistenceFailureCannotReportSuccessfulRun() async throws {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+    let checkpoint = AsyncCheckpoint()
+    harness.writer.checkpoint = checkpoint
+    let asset = TestAssetFactory.makeAsset(id: "persistence-failure")
+    harness.photoLib.favoritesAssets = [asset]
+    harness.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "A.jpg")
+    ]
+    let task = Task { await harness.manager.runExport(context: makeContext(scope: .favoritesFull)) }
+    await checkpoint.waitForEnter(count: 1)
+    try await harness.collectionStore.flush()
+    let log = harness.storeRoot.appendingPathComponent("test/collection-records.jsonl")
+    try FileManager.default.removeItem(at: log)
+    try FileManager.default.createDirectory(at: log, withIntermediateDirectories: false)
+    await checkpoint.releaseAll()
+    let summary = await task.value
+    #expect(summary.result == .failed)
+    #expect(harness.collectionStore.state == .persistenceFailed)
+    #expect(!harness.manager.canExportCollection)
+    #expect(harness.manager.canExportTimeline)
+    #expect(!harness.manager.hasActiveExportWork)
+    #expect(
+      harness.collectionStore.exportInfo(assetId: asset.id, placement: .favorites())?
+        .variants[.original]?.status == .done)
+    try FileManager.default.removeItem(at: log)
+    harness.collectionStore.retryPersistence()
+    #expect(harness.collectionStore.state == .ready)
+    harness.collectionStore.configure(for: "test")
+    #expect(
+      harness.collectionStore.exportInfo(assetId: asset.id, placement: .favorites())?
+        .variants[.original]?.status == .done)
+    let retry = await harness.manager.runExport(context: makeContext(scope: .favoritesFull))
+    #expect(retry.result == .completed)
+    #expect(harness.writer.writeCalls.count == 1)
   }
 
   // MARK: - Empty library
@@ -462,9 +503,12 @@ struct ExportManagerRunExportTests {
         scope: .timelineFullLibrary,
         selection: .edited))
 
-    #expect(!eligibilityCalls.contains("already-done"),
-      "skipForAutoSyncRetry must NOT be called for already-exported assets; got calls: \(eligibilityCalls)")
-    #expect(summary.skippedCount == 0,
+    #expect(
+      !eligibilityCalls.contains("already-done"),
+      "skipForAutoSyncRetry must NOT be called for already-exported assets; got calls: \(eligibilityCalls)"
+    )
+    #expect(
+      summary.skippedCount == 0,
       "already-exported asset must be filtered by isExported, not counted as a retry skip")
     #expect(summary.enqueuedCount == 0)
     #expect(summary.result == .completed)
@@ -833,12 +877,15 @@ struct ExportManagerRunExportTests {
 
     let root = harness.dest.rootURL
     let fm = FileManager.default
-    #expect(fm.fileExists(
-      atPath: root.appendingPathComponent("2025/03/MARCH.HEIC").path))
-    #expect(fm.fileExists(
-      atPath: root.appendingPathComponent("2025/06/JUNE.HEIC").path))
-    #expect(fm.fileExists(
-      atPath: root.appendingPathComponent("2025/09/SEPT.HEIC").path))
+    #expect(
+      fm.fileExists(
+        atPath: root.appendingPathComponent("2025/03/MARCH.HEIC").path))
+    #expect(
+      fm.fileExists(
+        atPath: root.appendingPathComponent("2025/06/JUNE.HEIC").path))
+    #expect(
+      fm.fileExists(
+        atPath: root.appendingPathComponent("2025/09/SEPT.HEIC").path))
 
     // Per-record year/month must match the asset's creationDate, not the year arg —
     // a planner bug that planted every job under `2025/01/` would still satisfy the

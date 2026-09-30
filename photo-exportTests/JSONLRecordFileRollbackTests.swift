@@ -4,14 +4,13 @@ import os
 
 @testable import Photo_Export
 
-/// Closes two P0 coverage gaps in `JSONLRecordFile.append`: the snapshot
-/// encode-failure rollback (`JSONLRecordFile.swift:275-285`) and the log-write
-/// failure rollback (`JSONLRecordFile.swift:255-263`). Neither path is exercised
-/// by the existing happy-path round-trip tests; a regression that dropped the
-/// rollback would silently delay or skip compaction.
+/// Covers snapshot encode-failure rollback and the failed-append recovery latch.
+/// Neither path is exercised by happy-path round-trip tests: losing the rollback
+/// delays compaction, while retrying appends after a missing log op could discard
+/// state that only the composing store still holds in memory.
 ///
-/// Both rollbacks run via `Task { @MainActor [weak self] in self?.rollbackMutationCount(...) }`
-/// inside `ioQueue.async`, so observing them from a `@MainActor` test requires
+/// The compaction rollback runs via `Task { @MainActor }` inside `ioQueue.async`,
+/// so observing it from a `@MainActor` test requires
 /// (a) `flushForTesting()` to drain the queue and (b) an `await Task.yield()`
 /// to let the queued main-actor Task run.
 @MainActor
@@ -165,13 +164,12 @@ struct JSONLRecordFileRollbackTests {
   /// Force `appendLogLine` to throw by pointing the JSONLRecordFile at a
   /// non-existent parent directory. The first append's `FileHandle(forWritingTo:)`
   /// throws (it can't open the file because the parent directory is gone).
-  /// The rollback resets the mutation counter to its pre-append value
-  /// (`nextMutationCount - 1`), so subsequent appends are not blocked.
+  /// The failed operation is retained by the owner in memory. Later appends must remain
+  /// blocked until the owner writes a complete recovery snapshot.
   ///
-  /// The observable distinction here is that the **op data does NOT land on
-  /// disk** (no log file at all), and the in-memory counter doesn't advance —
-  /// a subsequent append against a *valid* path would proceed normally.
-  @Test func logWriteFailureRollbackKeepsCounterRecoverable() async throws {
+  /// The observable distinction here is that the **op data does NOT land on disk**;
+  /// an explicit snapshot retry is required before later appends can be acknowledged.
+  @Test func logWriteFailureRequiresSnapshotRecoveryBeforeLaterAppend() async throws {
     // A directory that does not exist on disk. `appendLogLine` will fail to
     // open a FileHandle to a path inside it.
     let nonexistentDir = FileManager.default.temporaryDirectory
@@ -201,20 +199,24 @@ struct JSONLRecordFileRollbackTests {
     #expect(loaded.ops.isEmpty)
     #expect(loaded.malformedLineCount == 0)
 
-    // Subsequent recovery: if we now create the parent directory, an append
-    // succeeds without any leftover counter drift. The counter was rolled back
-    // to its pre-append value (0), so this single append is the first of a new
-    // window — no spurious compaction triggers.
+    // Merely restoring the parent directory cannot make a later operation durable:
+    // the missing first operation still exists only in the owner's memory.
     try FileManager.default.createDirectory(
       at: nonexistentDir, withIntermediateDirectories: true)
     let recovered = Op(key: "ok", value: "v")
     file.append(recovered, currentSnapshot: { ConditionalSnapshot() })
     await drainIOAndRollbacks(file)
+    #expect(file.load().ops.isEmpty)
+
+    // The owner retries by saving its complete retained state. Subsequent appends now
+    // proceed, and reopening recovers both the originally failed and later operation.
+    try file.writeSnapshot(ConditionalSnapshot(records: ["k": "v", "ok": "v"]))
+    let afterRecovery = Op(key: "later", value: "v")
+    file.append(afterRecovery, currentSnapshot: { ConditionalSnapshot() })
+    await drainIOAndRollbacks(file)
 
     let loadedAfterRecovery = file.load()
-    #expect(loadedAfterRecovery.ops == [recovered])
-    #expect(
-      loadedAfterRecovery.snapshot == nil,
-      "no compaction expected — counter rolled back to 0, not advanced")
+    #expect(loadedAfterRecovery.snapshot?.records == ["k": "v", "ok": "v"])
+    #expect(loadedAfterRecovery.ops == [afterRecovery])
   }
 }

@@ -41,6 +41,16 @@ final class RecordStoreRouter {
     }
   }
 
+  /// Waits for preceding mutations in the affected store to become durable.
+  func flush(placement: ExportPlacement) async throws {
+    switch placement.kind {
+    case .timeline:
+      try await timelineStore.flush()
+    case .favorites, .album, .sharedAlbum:
+      try await collectionStore.flush()
+    }
+  }
+
   // MARK: - Writes
 
   func markVariantInProgress(

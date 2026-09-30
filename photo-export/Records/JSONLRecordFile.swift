@@ -2,6 +2,42 @@ import Darwin
 import Foundation
 import os
 
+/// Shared only with the serial IO queue. A failure stays latched until a complete snapshot
+/// succeeds, because appending later operations across a missing log line would make a
+/// subsequent compaction discard history that exists only in memory.
+private final class JSONLIOFailureState: @unchecked Sendable {
+  private let lock = NSLock()
+  private var failure: (any Error)?
+  private var notified = false
+
+  func currentFailure() -> (any Error)? {
+    lock.lock()
+    defer { lock.unlock() }
+    return failure
+  }
+
+  func fail(_ error: any Error) {
+    lock.lock()
+    defer { lock.unlock() }
+    if failure == nil { failure = error }
+  }
+
+  func takeUnnotifiedFailure() -> (any Error)? {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !notified, let failure else { return nil }
+    notified = true
+    return failure
+  }
+
+  func clear() {
+    lock.lock()
+    defer { lock.unlock() }
+    failure = nil
+    notified = false
+  }
+}
+
 /// Reusable persistence component that backs both the timeline `ExportRecordStore` and the
 /// new `CollectionExportRecordStore`. Owns the JSONL+snapshot machinery (atomic writes, log
 /// replay with malformed-line skip, compaction at a mutation-count threshold) and leaves the
@@ -44,7 +80,13 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   private let dateEncodingStrategy: JSONEncoder.DateEncodingStrategy
   private let dateDecodingStrategy: JSONDecoder.DateDecodingStrategy
   private let fileReplacer: any AtomicFileReplacing
+  private let logIO: any JSONLRecordLogIO
+  private let ioFailureState = JSONLIOFailureState()
   private let fileManager = FileManager.default
+
+  /// Called on the main actor once for a persistence failure, including asynchronous
+  /// append and compaction failures. The owner must retain its in-memory records for retry.
+  var onPersistenceFailure: ((any Error) -> Void)?
 
   // MARK: - Mutation-count state
 
@@ -59,7 +101,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     logger: Logger,
     dateEncodingStrategy: JSONEncoder.DateEncodingStrategy = .iso8601,
     dateDecodingStrategy: JSONDecoder.DateDecodingStrategy = .iso8601,
-    fileReplacer: any AtomicFileReplacing = FileIOService()
+    fileReplacer: any AtomicFileReplacing = FileIOService(),
+    logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
   ) {
     self.snapshotURL = snapshotURL
     self.logURL = logURL
@@ -68,6 +111,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     self.dateEncodingStrategy = dateEncodingStrategy
     self.dateDecodingStrategy = dateDecodingStrategy
     self.fileReplacer = fileReplacer
+    self.logIO = logIO
   }
 
   // MARK: - Load
@@ -76,7 +120,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// this — a corrupt snapshot transitions the store to `.failed` per *Recovery on
   /// Corruption*, while an absent snapshot is normal (legitimate before the first
   /// compaction).
-  enum SnapshotStatus: Equatable {
+  enum SnapshotStatus: Equatable, Sendable {
     /// No snapshot file on disk. Normal first-launch / pre-first-compaction state.
     case absent
     /// Snapshot file present and decoded. The decoded value is in `LoadResult.snapshot`.
@@ -94,6 +138,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let snapshotStatus: SnapshotStatus
     let ops: [LogOp]
     let malformedLineCount: Int
+    /// A failed snapshot or log read. A missing file is normal and has no error.
+    let ioFailure: (any Error)?
   }
 
   /// Reads the snapshot (if any) and the log file (if any). The composing store applies
@@ -103,32 +149,38 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   func load() -> LoadResult {
     var snapshot: Snapshot?
     var snapshotStatus: SnapshotStatus = .absent
-    if fileManager.fileExists(atPath: snapshotURL.path) {
-      do {
-        let data = try Data(contentsOf: snapshotURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = dateDecodingStrategy
-        snapshot = try decoder.decode(Snapshot.self, from: data)
-        snapshotStatus = .loaded
-      } catch {
-        snapshotStatus = .corrupt
-        logger.error(
-          "Failed to read snapshot at \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
-        )
+    var ioFailure: (any Error)?
+    do {
+      if let data = try ProductionJSONLRecordLogIO().readIfPresent(at: snapshotURL) {
+        do {
+          let decoder = JSONDecoder()
+          decoder.dateDecodingStrategy = dateDecodingStrategy
+          snapshot = try decoder.decode(Snapshot.self, from: data)
+          snapshotStatus = .loaded
+        } catch {
+          snapshotStatus = .corrupt
+          logger.error(
+            "Failed to decode snapshot at \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+          )
+        }
       }
+    } catch {
+      ioFailure = error
+      logger.error(
+        "Failed to read snapshot at \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+      )
     }
 
     var ops: [LogOp] = []
     var malformedLineCount = 0
-    if fileManager.fileExists(atPath: logURL.path) {
-      do {
+    do {
+      if let fileData = try logIO.readIfPresent(at: logURL) {
         // Bulk-read the log instead of one FileHandle.read(upToCount: 1) per
         // byte. Cold-start measurement on a 184 KB log showed ~270 ms of
         // pure syscall overhead from the per-byte reader; one Data(contentsOf:)
         // brings that to single-digit ms. `split(separator: 0x0A,
         // omittingEmptySubsequences: true)` already drops trailing-newline
         // empties; explicit isEmpty skip handles back-to-back newlines too.
-        let fileData = try Data(contentsOf: logURL)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = dateDecodingStrategy
         for lineSlice in fileData.split(separator: 0x0A) {
@@ -144,16 +196,17 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
             )
           }
         }
-      } catch {
-        logger.error(
-          "Failed to read log at \(self.logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
-        )
       }
+    } catch {
+      ioFailure = error
+      logger.error(
+        "Failed to read log at \(self.logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+      )
     }
 
     return LoadResult(
       snapshot: snapshot, snapshotStatus: snapshotStatus, ops: ops,
-      malformedLineCount: malformedLineCount)
+      malformedLineCount: malformedLineCount, ioFailure: ioFailure)
   }
 
   /// Renames the corrupt snapshot to `<name>.broken-<ISO8601>` and writes a fresh empty
@@ -212,17 +265,9 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   ///   but **encoded** off-main on `ioQueue`. At ~150 MB JSON for a 500k-record library
   ///   the encode itself was the dominant main-actor stall during compaction; moving it
   ///   off-main is the entire point of this split.
-  /// - On log-write failure, the mutation count is rolled back via `max(...)` so it
-  ///   does not regress below the live counter (which subsequent appends may have
-  ///   already advanced). Two cases:
-  ///   - Non-threshold append failed: target is `nextMutationCount - 1` = the
-  ///     pre-append value. Subsequent appends re-attempt the threshold check.
-  ///   - Threshold-crossing append failed: the synchronous path already set
-  ///     `mutationCountSinceCompact = 0` before dispatch, so the rollback target
-  ///     `nextMutationCount - 1` (= 999) actually *advances* the counter to one shy
-  ///     of the threshold. That is intentional: the log line did not land, so no
-  ///     compaction is owed for it, but the next append should re-cross the threshold
-  ///     and re-attempt compaction.
+  /// - On log-write failure, further queued appends are skipped until a complete
+  ///   snapshot of the owner's retained in-memory state succeeds. This prevents a
+  ///   later compaction from crossing an operation absent from the durable log.
   /// - On compaction encode-or-write failure, the count is rolled back to one shy of the
   ///   threshold so the next append re-triggers compaction. The log line itself is
   ///   already on disk in this case (encode runs *after* a successful log append) — the
@@ -237,6 +282,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
       logger.error(
         "Failed to encode log op for \(self.logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
       )
+      ioFailureState.fail(error)
+      deliverPendingFailure()
       return
     }
 
@@ -259,16 +306,22 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let logger = self.logger
     let dateEncodingStrategy = self.dateEncodingStrategy
     let fileReplacer = self.fileReplacer
+    let logIO = self.logIO
+    let ioFailureState = self.ioFailureState
 
     ioQueue.async { [weak self] in
+      // The owner may already have applied a failed operation in memory. No later log
+      // append or compaction may claim that state is durable before snapshot recovery.
+      guard ioFailureState.currentFailure() == nil else { return }
       do {
-        try Self.appendLogLine(data: opData, to: logURL)
+        try Self.appendLogLine(data: opData, to: logURL, logIO: logIO)
       } catch {
         logger.error(
           "Failed to append log line to \(logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
         )
+        ioFailureState.fail(error)
         Task { @MainActor [weak self] in
-          self?.rollbackMutationCount(to: nextMutationCount - 1)
+          self?.deliverPendingFailure()
         }
         return
       }
@@ -303,8 +356,9 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
         logger.error(
           "Failed to compact \(snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
         )
+        ioFailureState.fail(error)
         Task { @MainActor [weak self] in
-          self?.rollbackMutationCount(to: Constants.compactEveryNMutations - 1)
+          self?.deliverPendingFailure()
         }
       }
     }
@@ -322,12 +376,28 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let snapshotURL = self.snapshotURL
     let logURL = self.logURL
     let fileReplacer = self.fileReplacer
+    let ioFailureState = self.ioFailureState
     try ioQueue.sync {
       try Self.writeSnapshotAndTruncate(
         snapshotData: data, snapshotURL: snapshotURL, logURL: logURL,
         fileReplacer: fileReplacer)
+      ioFailureState.clear()
     }
     mutationCountSinceCompact = 0
+  }
+
+  /// Acknowledges all appends queued before this call only after their file writes and
+  /// `fsync` calls have completed. Failure delivery is synchronous on the main actor
+  /// before throwing, so the owner cannot report success while its state is still ready.
+  func flush() async throws {
+    let state = ioFailureState
+    let failure: (any Error)? = await withCheckedContinuation { continuation in
+      ioQueue.async {
+        continuation.resume(returning: state.currentFailure())
+      }
+    }
+    deliverPendingFailure()
+    if let failure { throw failure }
   }
 
   /// Removes the snapshot and log files (best effort). Used by `resetToEmpty()` after the
@@ -353,12 +423,19 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// Blocks until pending IO is flushed.
   func flushForTesting() {
     ioQueue.sync {}
+    deliverPendingFailure()
   }
 
   // MARK: - Internal helpers
 
   private func rollbackMutationCount(to value: Int) {
     mutationCountSinceCompact = max(mutationCountSinceCompact, value)
+  }
+
+  private func deliverPendingFailure() {
+    if let failure = ioFailureState.takeUnnotifiedFailure() {
+      onPersistenceFailure?(failure)
+    }
   }
 
   /// Writes `snapshotData` atomically and truncates the log.
@@ -406,16 +483,14 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     }
   }
 
-  /// `nonisolated` for the same reason as `writeSnapshotAndTruncate`.
-  nonisolated private static func appendLogLine(data: Data, to url: URL) throws {
-    if !FileManager.default.fileExists(atPath: url.path) {
-      FileManager.default.createFile(atPath: url.path, contents: nil)
-    }
-    let handle = try FileHandle(forWritingTo: url)
+  nonisolated private static func appendLogLine(
+    data: Data, to url: URL, logIO: any JSONLRecordLogIO
+  ) throws {
+    let handle = try logIO.openForAppending(at: url)
     defer { try? handle.close() }
-    try handle.seekToEnd()
-    try handle.write(contentsOf: data)
-    try handle.write(contentsOf: Data([0x0A]))  // newline
-    try handle.synchronize()
+    try logIO.write(data, to: handle)
+    try logIO.write(Data([0x0A]), to: handle)
+    try logIO.synchronize(handle)
   }
+
 }
