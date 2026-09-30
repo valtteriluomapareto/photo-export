@@ -34,6 +34,9 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
   /// If set, the next `runExport` returns this summary. Otherwise a default
   /// `.completed` summary is constructed from the requested context.
   var nextRunSummary: ExportRunSummary?
+  var retryVariantDone: (AutoSyncRetryScopeKey, String, ExportVariant) -> Bool = { _, _, _ in
+    false
+  }
   /// Optional deterministic gate for a given invocation number (one-based).
   /// Tests release selected runs in any order to expose late task cleanup.
   var gateForInvocation: ((Int) -> AsyncCheckpoint?)?
@@ -78,6 +81,12 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
       enqueuedCount: 0, completedCount: 0, failedCount: 0, skippedCount: 0,
       cancelReason: nil, result: .completed
     )
+  }
+
+  func isRetryVariantDone(
+    scope: AutoSyncRetryScopeKey, assetId: String, variant: ExportVariant
+  ) -> Bool {
+    retryVariantDone(scope, assetId, variant)
   }
 
   /// Resumes every parked `runExport` call with `summary`. Call from the

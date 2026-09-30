@@ -122,6 +122,14 @@ Task-handle and diagnostic-journal cleanup must verify ownership before clearing
 An old task exiting after a replacement starts must leave the replacement's handle and journal intact.
 These guards are transient; persisted run-summary, retry, and dirty-state formats stay unchanged.
 
+### AutoSync retry lifecycle
+
+Retry eligibility is per destination, placement, asset, and variant. Enqueue checks only missing variants; execution checks again immediately before each variant attempt, including an edited export's original fallback. Manual runs bypass automatic backoff. Keep the full required-variant set for filename pairing and completion policy even when only one variant is eligible.
+
+The reducer schedules the earliest automatically retryable entry in enabled scopes. Firing consumes the exact entry in transient state so a removed asset or deselected variant cannot cause a zero-delay loop. Changed failures and settings can make work eligible again. A due retry waits for manual work, imports, and the entire current automatic fan-out; switching destinations or disabling Auto Export cancels its ownership.
+
+Matched completion prunes only sparse retry tuples that `AutoSyncExportRunning.isRetryVariantDone` confirms in a healthy, fully flushed record store. Legacy manual runs use their idle transition as a cleanup opportunity; cancellation can also publish idle, so unacknowledged writes must keep retry entries intact. The JSONL layer tracks submitted and flushed revisions in memory so an append during an async flush cannot be mistaken for an acknowledged write. A completed summary alone cannot prove that every failed variant was selected or saved. Existing retry JSON and record formats remain unchanged, and unknown scope or variant keys are preserved.
+
 ## Host protocol pattern
 
 > The cancellation-seam methods (`isCurrent` / `throwIfCancelledOrStale` / `generation` / `bumpGeneration`) are no longer on any Host protocol — that move landed in issue #67 item 2. Collaborators that need the seam inject `ExportQueueCoordinator` directly. The remaining Host methods are UI-state mirrors and dependency forwarders, all stable.
@@ -294,7 +302,7 @@ The names below are also pinned by [`scripts/ci/check-regression-gates.sh`](../.
 `ExportPlacement.Kind` is a closed enum — the compiler will guide you to every switch that needs to handle the new case. Touch points:
 
 1. **`ExportPlacement.Kind`** ([Models](../../photo-export/Models/ExportPlacement.swift)) — add the case. The `variantPolicy` switch on `Kind` itself (same file) also needs to handle the new case — required-variants policy lives there.
-2. **`RecordStoreRouter`** ([Records](../../photo-export/Records/RecordStoreRouter.swift)) — every `switch placement.kind` in the router must handle the new case (today there are six: `variants`, `markVariantInProgress`, `markVariantExported`, `markVariantFailed`, `removeInProgressVariant`, plus the reuse-source probe). The closed enum will force you to update each one.
+2. **`RecordStoreRouter`** ([Records](../../photo-export/Records/RecordStoreRouter.swift)) — every `switch placement.kind` in the router must handle the new case (today there are six: `variants`, `markVariantInProgress`, `markVariantExported`, `markVariantFailed`, `removeInProgressVariant`, plus the reuse-source probe). The closed enum will force you to update each one. If the new kind has its own retry scope, extend `AutoSyncRetryScopeKey`, its library-scope mapping, and the router’s `isRetryVariantDone` query too.
 3. **`ExportCompletionPolicy`** ([Records](../../photo-export/Records/ExportCompletionPolicy.swift)) — handle the new kind in `requiredVariants`, edited-fallback, and asset-complete checks.
 4. **`ExportPlacementResolver`** and any **`startExport*` entry point** that constructs an `ExportPlacement` for this kind from a `LibrarySelection`. If the new kind also needs a UI route, add corresponding cases to `LibrarySelection` and `PhotoFetchScope`.
 

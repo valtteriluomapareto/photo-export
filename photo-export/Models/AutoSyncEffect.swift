@@ -56,10 +56,14 @@ enum AutoSyncEffect: Equatable, Sendable {
   case advancePersistentChangeToken(Data, destinationId: String)
 
   /// Record per-variant failure detail into `AutoSyncRetryState` for the
-  /// destination. The runner loads the current state, applies `recordFailure`
-  /// for each detail (with `nextEligibleAt = nil` until Phase 3 Slice C wires
-  /// retry-backoff calculation), and saves. Plan §"Retry and Failure Policy".
+  /// destination. The runner applies `recordFailure` with category-specific
+  /// backoff deadlines, saves, and reports the updated state to the reducer.
   case recordRetryFailures([ExportRunFailureDetail], destinationId: String)
+
+  /// Remove only retry entries whose exact recorded variant is now done in the
+  /// record store. Runs after matched auto or manual completion, even if the run
+  /// had other failures.
+  case pruneDoneRetryEntries(destinationId: String)
 }
 
 /// Parameters needed to construct an `ExportRunContext`. The runner adds `runId` and

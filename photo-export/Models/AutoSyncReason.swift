@@ -28,6 +28,8 @@ enum AutoSyncReason: String, Codable, Equatable, Sendable {
   case photosChangeFallback
   /// User invoked `Export Now` from the menu, status item, or Settings.
   case userExportNow
+  /// A recorded transient failure reached its retry eligibility time.
+  case retryBackoff
 
   /// User-facing short label. Single source of truth — main-window pill,
   /// menu bar item, and Settings status row all read this rather than
@@ -45,6 +47,7 @@ enum AutoSyncReason: String, Codable, Equatable, Sendable {
     case .photosChanged: return "library changed"
     case .photosChangeFallback: return "library catch-up"
     case .userExportNow: return "Export Now"
+    case .retryBackoff: return "retry ready"
     }
   }
 }

@@ -121,6 +121,29 @@ struct RecordStoreRouterTests {
     #expect(record?.relPath == "2019/12/")
   }
 
+  @Test func retryCompletionIsSpecificToScopeAndVariant() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    let placements = [timeline(), favorites(), album("one"), sharedAlbum("two")]
+    for placement in placements {
+      if placement.kind != .timeline { h.collection.upsertPlacement(placement) }
+      h.router.markVariantExported(
+        assetId: "asset", placement: placement, variant: .original,
+        relPath: "2025/07/", filename: "saved.jpg", exportedAt: Date())
+    }
+    try await h.timeline.flush()
+    try await h.collection.flush()
+    for placement in placements {
+      let scope = AutoSyncManager.retryScopeKey(for: placement)
+      #expect(h.router.isRetryVariantDone(scope: scope, assetId: "asset", variant: .original))
+      #expect(!h.router.isRetryVariantDone(scope: scope, assetId: "asset", variant: .edited))
+      #expect(!h.router.isRetryVariantDone(scope: scope, assetId: "other", variant: .original))
+    }
+    #expect(
+      !h.router.isRetryVariantDone(
+        scope: .album(placementId: "another"), assetId: "asset", variant: .original))
+  }
+
   // MARK: - Writes — dispatch coverage
 
   @Test func markVariantInProgress_dispatchesByPlacementKind() {
@@ -139,8 +162,9 @@ struct RecordStoreRouterTests {
     h.router.markVariantInProgress(
       assetId: "fav", placement: fav, variant: .original,
       relPath: fav.relativePath, filename: "FAV.HEIC")
-    #expect(h.collection.exportInfo(assetId: "fav", placement: fav)?.variants[.original]?.status
-      == .inProgress)
+    #expect(
+      h.collection.exportInfo(assetId: "fav", placement: fav)?.variants[.original]?.status
+        == .inProgress)
     #expect(h.timeline.exportInfo(assetId: "fav") == nil)
   }
 
@@ -218,8 +242,9 @@ struct RecordStoreRouterTests {
       relPath: alb.relativePath, filename: "K.HEIC", exportedAt: Date())
     h.router.removeInProgressVariant(
       assetId: "kept", placement: alb, variant: .original)
-    #expect(h.collection.exportInfo(assetId: "kept", placement: alb)?
-      .variants[.original]?.status == .done)
+    #expect(
+      h.collection.exportInfo(assetId: "kept", placement: alb)?
+        .variants[.original]?.status == .done)
   }
 
   @Test func removeInProgressVariant_missingRecord_isNoOp() {
@@ -253,8 +278,9 @@ struct RecordStoreRouterTests {
       error: "asset missing", at: Date())
     h.router.removeInProgressVariant(
       assetId: "cf", placement: alb, variant: .original)
-    #expect(h.collection.exportInfo(assetId: "cf", placement: alb)?
-      .variants[.original]?.status == .failed)
+    #expect(
+      h.collection.exportInfo(assetId: "cf", placement: alb)?
+        .variants[.original]?.status == .failed)
   }
 
   // MARK: - Reuse-source lookup
@@ -273,7 +299,8 @@ struct RecordStoreRouterTests {
     let reuse = h.router.findReuseSource(
       assetId: "shared", variant: .original, currentPlacement: alb)
     #expect(reuse?.filename == "X.HEIC")
-    if case .timeline = reuse?.placement.kind {} else {
+    if case .timeline = reuse?.placement.kind {
+    } else {
       Issue.record("Expected timeline placement; got \(String(describing: reuse?.placement))")
     }
   }
@@ -320,8 +347,9 @@ struct RecordStoreRouterTests {
   @Test func findReuseSource_returnsNilWhenNoDoneRecord() {
     let h = makeHarness()
     defer { h.cleanup() }
-    #expect(h.router.findReuseSource(
-      assetId: "nothing", variant: .original, currentPlacement: timeline()) == nil)
+    #expect(
+      h.router.findReuseSource(
+        assetId: "nothing", variant: .original, currentPlacement: timeline()) == nil)
   }
 
   @Test func findReuseSource_prefersTimelineOverCollection() {

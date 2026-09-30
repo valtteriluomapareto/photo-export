@@ -74,6 +74,34 @@ struct JSONLRecordFileIOFailureTests {
       logIO: logIO)
   }
 
+  @Test(.timeLimit(.minutes(1)))
+  func flushCannotAcknowledgeMutationSubmittedDuringItsAwait() async throws {
+    let directory = try makeDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let queue = DispatchQueue(label: "JSONL-flush-boundary")
+    let file = JSONLRecordFile<Snapshot, Mutation>(
+      snapshotURL: directory.appendingPathComponent("snapshot.json"),
+      logURL: directory.appendingPathComponent("log.jsonl"), ioQueue: queue,
+      logger: Logger(subsystem: "test", category: "JSONLFlushBoundary"))
+    queue.suspend()
+    file.append(Mutation(key: "first", value: "1"), currentSnapshot: { Snapshot(values: [:]) })
+    var flushTask: Task<Void, Error>?
+    await withCheckedContinuation { (started: CheckedContinuation<Void, Never>) in
+      flushTask = Task { @MainActor in
+        started.resume()
+        // The parent cannot run again until this child suspends in flush.
+        try await file.flush()
+      }
+    }
+    file.append(Mutation(key: "second", value: "2"), currentSnapshot: { Snapshot(values: [:]) })
+    queue.resume()
+    try await flushTask?.value
+    #expect(file.hasUnflushedChanges)
+    try await file.flush()
+    #expect(!file.hasUnflushedChanges)
+    #expect(file.load().ops.count == 2)
+  }
+
   @Test func missingLogIsHealthyButUnreadableLogIsNot() throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }

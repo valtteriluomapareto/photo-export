@@ -258,6 +258,11 @@ final class ExportRecordStore: ObservableObject {
     }
   }
 
+  /// True only when the current in-memory records have a successful write barrier.
+  var hasDurableRecords: Bool {
+    state == .ready && jsonl?.hasUnflushedChanges == false
+  }
+
   /// Acknowledges all preceding record writes, including their synchronization.
   func flush() async throws {
     guard let file = jsonl else { throw RecordPersistenceUnavailable() }

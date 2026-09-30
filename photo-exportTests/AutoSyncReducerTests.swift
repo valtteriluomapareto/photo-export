@@ -1220,7 +1220,7 @@ struct AutoSyncReducerTests {
 
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
     #expect(untouched?.pendingFullReconciliation == true)
-    #expect(effects.isEmpty)
+    #expect(effects == [.pruneDoneRetryEntries(destinationId: state.destination.id!)])
   }
 
   @Test func manualFullExportFromAutoSyncSourceDoesNotClearDirty() {
@@ -1252,7 +1252,7 @@ struct AutoSyncReducerTests {
 
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
     #expect(untouched?.pendingFullReconciliation == true)
-    #expect(effects.isEmpty)
+    #expect(effects == [.pruneDoneRetryEntries(destinationId: state.destination.id!)])
   }
 
   @Test func manualTargetedAssetsRunDoesNotClearDirty() {
@@ -1268,7 +1268,7 @@ struct AutoSyncReducerTests {
 
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.timeline)
     #expect(untouched?.pendingFullReconciliation == true)
-    #expect(effects.isEmpty)
+    #expect(effects == [.pruneDoneRetryEntries(destinationId: state.destination.id!)])
   }
 
   @Test func autoSyncRunCompletedWithFailuresEmitsRecordRetryFailures() {
@@ -1424,6 +1424,6 @@ struct AutoSyncReducerTests {
 
     let untouched = next.dirtyStateByDestination[state.destination.id!]?.scope(.favorites)
     #expect(untouched?.pendingFullReconciliation == true)
-    #expect(effects.isEmpty)
+    #expect(effects == [.pruneDoneRetryEntries(destinationId: state.destination.id!)])
   }
 }

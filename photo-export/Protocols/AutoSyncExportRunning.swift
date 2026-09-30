@@ -27,6 +27,13 @@ protocol AutoSyncExportRunning: AnyObject {
   /// `ExportRunContext` (incl. UUID + startedAt) and awaits the terminal summary.
   func runExport(context: ExportRunContext) async -> ExportRunSummary
 
+  /// Whether this exact recorded variant is complete for its placement. Used to
+  /// prune retry entries after a matched run; a successful run summary alone cannot
+  /// prove that every previously failed variant was selected and written.
+  func isRetryVariantDone(
+    scope: AutoSyncRetryScopeKey, assetId: String, variant: ExportVariant
+  ) -> Bool
+
   /// Stream of every run that finished through `runExport(context:)`, regardless
   /// of source. AutoSync filters to `.manual` and dispatches
   /// `manualFullExportCompleted` for the dirty-state-clearing rule in plan

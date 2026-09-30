@@ -39,6 +39,7 @@ final class AutoSyncManager: ObservableObject {
   private var subscriptions: Set<AnyCancellable> = []
   private var debounceTokens: [AutoSyncReason: AutoSyncCancellable] = [:]
   private var retryTimerToken: AutoSyncCancellable?
+  private var retryTimerDeferredDestinationId: String?
   /// Tracks the active per-spec fan-out Task launched by `startRun`. A
   /// single-active-run gate inside ExportManager already prevents
   /// concurrent runs, but the *manager-side* fan-out across scopes (for
@@ -214,6 +215,7 @@ final class AutoSyncManager: ObservableObject {
     let newId = snapshot.id
     let oldId = reducerState.destination.id
     if newId != oldId {
+      retryTimerDeferredDestinationId = nil
       // Cancel before loading B's UI state. A's suspended runner may still return,
       // but it no longer owns a completion or the current-run journal.
       cancelActiveFanOut()
@@ -237,6 +239,7 @@ final class AutoSyncManager: ObservableObject {
       if currentRetryState != retry {
         currentRetryState = retry
       }
+      dispatch(.retryStateChanged(destinationId: newId, retryState: retry))
     } else if newId == nil {
       if lastRunSummary != nil {
         // Destination cleared (drive removed, user de-selected). Drop the
@@ -292,6 +295,7 @@ final class AutoSyncManager: ObservableObject {
     if currentRetryState != retry {
       currentRetryState = retry
     }
+    dispatch(.retryStateChanged(destinationId: destinationId, retryState: retry))
     dispatch(.runNowRequested)
   }
 
@@ -302,6 +306,7 @@ final class AutoSyncManager: ObservableObject {
       isEnabled = enabled
     }
     if !enabled {
+      retryTimerDeferredDestinationId = nil
       // Disable while a multi-scope fan-out is mid-chain: stop the chain
       // at the next await boundary rather than letting it run remaining
       // scopes the user no longer wants.
@@ -365,13 +370,21 @@ final class AutoSyncManager: ObservableObject {
       case .scheduleRetryTimer(let fireAt):
         retryTimerToken?.cancel()
         let delay = max(0, fireAt.timeIntervalSince(environment.clock.now()))
+        let destinationId = reducerState.destination.id
         retryTimerToken = environment.clock.schedule(after: delay) { [weak self] in
-          self?.dispatch(.retryTimerFired)
+          guard let self, self.reducerState.destination.id == destinationId else { return }
+          self.retryTimerToken = nil
+          if self.activeRunFanOutID != nil {
+            self.retryTimerDeferredDestinationId = destinationId
+          } else {
+            self.dispatch(.retryTimerFired)
+          }
         }
 
       case .cancelRetryTimer:
         retryTimerToken?.cancel()
         retryTimerToken = nil
+        retryTimerDeferredDestinationId = nil
 
       case .startRun(let spec):
         startRun(spec: spec)
@@ -438,13 +451,13 @@ final class AutoSyncManager: ObservableObject {
           : environment.retryStateStore.load(destinationId: destinationId)
         for failure in failures {
           let scope = Self.retryScopeKey(for: failure.placement)
-          let priorAttempts =
-            retry.entry(scope: scope, assetId: failure.assetId, variant: failure.variant)?
-            .attemptCount ?? 0
-          // recordFailure increments to `priorAttempts + 1` (when signature
-          // matches) or resets to 1 (signature differs). For backoff
-          // purposes the next-attempt count is `priorAttempts + 1`.
-          let nextAttempt = priorAttempts + 1
+          let prior = retry.entry(
+            scope: scope, assetId: failure.assetId, variant: failure.variant)
+          // Match `recordFailure` exactly: category or signature changes reset
+          // the attempt count, so the backoff starts again at 30 seconds.
+          let nextAttempt =
+            prior?.category == failure.category && prior?.errorSignature == failure.errorSignature
+            ? (prior?.attemptCount ?? 0) + 1 : 1
           let nextEligibleAt = failure.category.nextEligibleAt(
             attemptCount: nextAttempt, from: failure.failedAt)
           retry.recordFailure(
@@ -467,6 +480,37 @@ final class AutoSyncManager: ObservableObject {
         if isHotPath, currentRetryState != retry {
           currentRetryState = retry
         }
+        dispatch(.retryStateChanged(destinationId: destinationId, retryState: retry))
+
+      case .pruneDoneRetryEntries(let destinationId):
+        // The runner query reads only the currently configured record stores.
+        // Never use it to judge another destination's retry entries.
+        guard reducerState.destination.id == destinationId else { continue }
+        var retry = currentRetryState
+        let before = retry
+        for (rawScope, assets) in before.entriesByPlacement {
+          guard let scope = AutoSyncRetryScopeKey(rawValue: rawScope) else { continue }
+          for (assetId, variants) in assets {
+            for rawVariant in variants.keys {
+              guard let variant = ExportVariant(rawValue: rawVariant) else { continue }
+              if environment.exportRunner.isRetryVariantDone(
+                scope: scope, assetId: assetId, variant: variant)
+              {
+                retry.removeEntry(scope: scope, assetId: assetId, variant: variant)
+              }
+            }
+          }
+        }
+        guard retry != before else { continue }
+        do {
+          try environment.retryStateStore.save(retry, destinationId: destinationId)
+        } catch {
+          log.error(
+            "Failed to persist completed retry cleanup for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
+          )
+        }
+        currentRetryState = retry
+        dispatch(.retryStateChanged(destinationId: destinationId, retryState: retry))
       }
     }
   }
@@ -538,10 +582,17 @@ final class AutoSyncManager: ObservableObject {
         // Cancellation clears the old journal immediately. A late A task must
         // never clear a newer A journal after A→B→A or nil a newer task handle.
         if let self, self.activeRunFanOutID == fanOutID {
+          let fireDeferredRetry = self.retryTimerDeferredDestinationId == destinationId
+          self.retryTimerDeferredDestinationId = nil
           self.activeRunFanOutTask = nil
           self.activeRunFanOutID = nil
           self.activeRunFanOutDestinationId = nil
           self.clearRunJournal(destinationId: destinationId)
+          if fireDeferredRetry, self.reducerState.destination.id == destinationId,
+            self.reducerState.enabled
+          {
+            self.dispatch(.retryTimerFired)
+          }
         }
       }
       for runScope in runScopes {

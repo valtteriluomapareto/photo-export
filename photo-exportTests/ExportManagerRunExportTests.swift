@@ -543,6 +543,176 @@ struct ExportManagerRunExportTests {
     #expect(summary.enqueuedCount == 1)
   }
 
+  @Test(arguments: [false, true])
+  func autoSyncOnlyAttemptsEligibleMissingVariants(originalAlreadyDone: Bool) async throws {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+    let asset = TestAssetFactory.makeAsset(id: "mixed-retry", hasAdjustments: true)
+    let placement = ExportPlacement.favorites()
+    harness.photoLib.favoritesAssets = [asset]
+    harness.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "A.JPG"),
+      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "A-edit.JPG"),
+    ]
+    if originalAlreadyDone {
+      harness.collectionStore.upsertPlacement(placement)
+      harness.collectionStore.markVariantExported(
+        assetId: asset.id, placement: placement, variant: .original,
+        filename: "A_orig.JPG", exportedAt: Date())
+      try await harness.collectionStore.flush()
+    }
+    var editedEligible = false
+    harness.manager.autoSyncEligibilityCheck = { _, _, variant, _ in
+      variant == .original || editedEligible
+    }
+    func context() -> ExportRunContext {
+      ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .favoritesFull,
+        selection: .editedWithOriginals)
+    }
+    let first = await harness.manager.runExport(context: context())
+    #expect(first.skippedCount == (originalAlreadyDone ? 1 : 0))
+    #expect(harness.writer.writeCalls.count == (originalAlreadyDone ? 0 : 1))
+    #expect(harness.writer.writeCalls.allSatisfy { $0.resource.type == .photo })
+    #expect(
+      harness.collectionStore.exportInfo(assetId: asset.id, placement: placement)?.variants[.edited]
+        == nil)
+
+    editedEligible = true
+    let retry = await harness.manager.runExport(context: context())
+    #expect(retry.result == .completed)
+    #expect(harness.writer.writeCalls.count == (originalAlreadyDone ? 1 : 2))
+    #expect(harness.writer.writeCalls.last?.resource.type == .fullSizePhoto)
+    #expect(
+      harness.collectionStore.exportInfo(assetId: asset.id, placement: placement)?.variants[
+        .edited]?.status == .done)
+  }
+
+  @Test(arguments: [false, true])
+  func mixedLivePhotoEligibilityPreservesPairingAndManualOverride(manual: Bool) async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+    let asset = TestAssetFactory.makeAsset(id: "live-retry", isLivePhoto: true)
+    harness.photoLib.favoritesAssets = [asset]
+    harness.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "LIVE.HEIC"),
+      TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "LIVE.MOV"),
+    ]
+    harness.manager.livePhotosPairedExport = true
+    harness.manager.autoSyncEligibilityCheck = { _, _, variant, _ in variant == .original }
+    let result = await harness.manager.runExport(
+      context: ExportRunContext(
+        source: manual ? .manual : .autoSync, visibility: .userVisible,
+        scope: .favoritesFull, selection: .edited))
+    #expect(result.result == .completed)
+    #expect(harness.writer.writeCalls.count == (manual ? 2 : 1))
+    #expect(harness.writer.writeCalls.first?.resource.type == .photo)
+    if manual {
+      let names = harness.writer.writeCalls.map {
+        $0.url.deletingPathExtension().deletingPathExtension().lastPathComponent
+      }
+      #expect(Set(names).count == 1)
+    }
+  }
+
+  @Test(.timeLimit(.minutes(1)))
+  func variantEligibilityIsRecheckedAfterEarlierVariantSuspends() async {
+    let harness = makeHarness()
+    let gate = AsyncCheckpoint()
+    defer {
+      Task {
+        await gate.releaseAll()
+        await harness.cleanup()
+      }
+    }
+    let asset = TestAssetFactory.makeAsset(id: "queued-retry", hasAdjustments: true)
+    harness.photoLib.favoritesAssets = [asset]
+    harness.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "A.JPG"),
+      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "A-edit.JPG"),
+    ]
+    var editedEligible = true
+    harness.manager.autoSyncEligibilityCheck = { _, _, variant, _ in
+      variant == .original || editedEligible
+    }
+    harness.writer.checkpoint = gate
+    let run = Task {
+      await harness.manager.runExport(
+        context: ExportRunContext(
+          source: .autoSync, visibility: .background, scope: .favoritesFull,
+          selection: .editedWithOriginals))
+    }
+    await gate.waitForEnter(count: 1)
+    editedEligible = false
+    await gate.releaseAll()
+    _ = await run.value
+    #expect(harness.writer.writeCalls.count == 1)
+    #expect(harness.writer.writeCalls.first?.resource.type == .photo)
+  }
+
+  @Test func editedFallbackCannotBypassOriginalBackoff() async {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+    let asset = TestAssetFactory.makeAsset(id: "fallback-retry", hasAdjustments: true)
+    harness.photoLib.favoritesAssets = [asset]
+    harness.photoLib.resourcesByAssetId[asset.id] = [TestAssetFactory.makeResource()]
+    harness.manager.autoSyncEligibilityCheck = { _, _, variant, _ in variant == .edited }
+    let result = await harness.manager.runExport(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .favoritesFull, selection: .edited))
+    #expect(result.result == .failed)
+    #expect(harness.writer.writeCalls.isEmpty)
+    #expect(
+      harness.collectionStore.exportInfo(assetId: asset.id, placement: .favorites())?.variants[
+        .original] == nil)
+  }
+
+  @Test(.timeLimit(.minutes(1)))
+  func legacyManualExportPrunesRetryAfterDurableCompletion() async throws {
+    let harness = makeHarness()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let autoSync = AutoSyncManager()
+    let gate = AsyncCheckpoint()
+    harness.writer.checkpoint = gate
+    defer { Task { await harness.cleanup() } }
+    let asset = TestAssetFactory.makeAsset(id: "manual-retry", creationDate: makeDate(2025, 1, 1))
+    harness.photoLib.favoritesAssets = [asset]
+    harness.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "manual-retry.JPG")
+    ]
+    var retry = AutoSyncRetryState.empty
+    retry.recordFailure(
+      scope: .favorites, assetId: asset.id, variant: .original,
+      category: .destinationNoSpace, errorSignature: "full", at: builder.clock.now(),
+      nextEligibleAt: nil)
+    try builder.retryStore.save(retry, destinationId: "test")
+    builder.destination.subject.send(
+      DestinationSnapshot(stableId: "test", fingerprint: nil, isAvailable: true, safety: .safe))
+    autoSync.attach(
+      to: AutoSyncEnvironment(
+        exportRunner: harness.manager, destination: builder.destination, scopes: builder.scopes,
+        photos: builder.photos, importing: harness.manager, dirtyStateStore: builder.dirtyStore,
+        retryStateStore: builder.retryStore, runSummaryStore: builder.runSummaryStore,
+        perDestinationTokenStore: builder.perDestinationTokenStore,
+        currentRunStore: builder.currentRunStore, clock: builder.clock,
+        userDefaults: builder.userDefaults))
+
+    // Normal UI entry point has no awaitable run context or completion summary.
+    harness.manager.startExportFavorites()
+    await gate.waitForEnter(count: 1)
+    let job = try #require(harness.manager.currentTask)
+    #expect(harness.manager.activeRunContext == nil)
+    #expect(!autoSync.currentRetryState.isEmpty)
+    await gate.releaseAll()
+    await job.value
+
+    #expect(
+      harness.collectionStore.exportInfo(assetId: asset.id, placement: .favorites())?
+        .variants[.original]?.status == .done)
+    #expect(autoSync.currentRetryState.isEmpty)
+    #expect(builder.retryStore.load(destinationId: "test").isEmpty)
+  }
+
   private func makeDate(_ y: Int, _ m: Int, _ d: Int) -> Date {
     var components = DateComponents()
     components.year = y

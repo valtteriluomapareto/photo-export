@@ -15,6 +15,20 @@ import Foundation
 /// `ExportVariant.swift` and is not duplicated, so it is not re-exposed here.
 enum ExportCompletionPolicy {
 
+  /// Required variants whose bytes are still missing. Accepted unavailable paired
+  /// videos retain their existing completion semantics at enqueue and execution.
+  static func missingVariants(
+    required: Set<ExportVariant>, variants: [ExportVariant: ExportVariantRecord]
+  ) -> Set<ExportVariant> {
+    required.filter { variant in
+      let record = variants[variant]
+      if record?.status == .done { return false }
+      return
+        !(variant.isPairedVideo && record?.status == .failed
+        && record?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage)
+    }
+  }
+
   /// True when every required variant for `asset` under `(selection, policy)` is `.done`,
   /// OR the asset is covered by the edited-fallback case (see `satisfiesEditedFallback`).
   ///
@@ -38,21 +52,7 @@ enum ExportCompletionPolicy {
       for: asset, selection: selection, policy: policy,
       convertHEICToJPEG: convertHEICToJPEG,
       livePhotosPaired: livePhotosPaired)
-    let allSatisfied = required.allSatisfy { variant in
-      // `.done` always counts. Paired-video variants additionally count when
-      // they're `.failed` with the `pairedVideoUnavailableMessage` sentinel — a
-      // known iCloud data-availability state where the still side is on disk
-      // and Photos genuinely cannot deliver the motion file. Mirrors the
-      // `editedFallbackCovered` pattern for the `_orig`-rescue case.
-      if variants[variant]?.status == .done { return true }
-      if variant.isPairedVideo,
-        variants[variant]?.status == .failed,
-        variants[variant]?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage
-      {
-        return true
-      }
-      return false
-    }
+    let allSatisfied = missingVariants(required: required, variants: variants).isEmpty
     if allSatisfied { return true }
     return satisfiesEditedFallback(variants: variants, asset: asset, selection: selection)
   }
