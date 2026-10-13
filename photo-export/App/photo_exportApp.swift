@@ -38,6 +38,8 @@ struct PhotoExportApp: App {
 
   init() {
     AppDiagnostics.beginLaunch()
+    // Close the Settings window on ESC (see the monitor's doc comment).
+    EscapeToCloseSettingsMonitor.install()
     // Screenshot mode (`--screenshot-mode` launch arg) swaps the real Photos
     // backing for a curated synthetic library so marketing screenshots don't
     // leak the maintainer's personal Photos library. The subclass shape lets
