@@ -12,7 +12,7 @@ struct LibraryRootView: View {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var whatsNewState: WhatsNewState
+  @Environment(WhatsNewState.self) private var whatsNewState
 
   @State private var section: LibrarySection
 
@@ -119,9 +119,9 @@ struct LibraryRootView: View {
     // First launch on a new app version shows a brief "What's New" sheet
     // explaining new UI surfaces and reassuring the user about file safety.
     // Attached here (not on `ContentView`) so it only renders post-auth /
-    // post-onboarding, when the user is in the main library view. The
-    // sheet's @Published `shouldShow` flips to false on dismiss, so the
-    // binding doesn't re-present.
+    // post-onboarding, when the user is in the main library view.
+    // `shouldShow` flips to false on dismiss (Observation-tracked), so
+    // the binding doesn't re-present.
     .sheet(
       isPresented: Binding(
         get: {
