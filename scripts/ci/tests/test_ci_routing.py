@@ -71,7 +71,8 @@ class GitRoutingTests(unittest.TestCase):
         event_path = self.root.parent / "event.json"
         event_path.write_text(json.dumps(event))
         result = subprocess.run([sys.executable, "-B", str(SCRIPT), "route", "--event-name", kind,
-                                 "--event-path", str(event_path), "--repo", str(self.root)],
+                                 "--event-path", str(event_path), "--repo", str(self.root),
+                                 "--output", str(self.root.parent / "routing-output")],
                                 text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         value = json.loads(result.stdout)

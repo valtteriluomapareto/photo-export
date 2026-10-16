@@ -63,6 +63,30 @@ python3 -B -m unittest discover -s scripts/ci/tests -p test_ci_routing.py
 
 These tests also run in the Linux routing job on every CI run, even website-only work.
 
+### Advisory coverage summary
+
+After the macOS unit-test step, `ci/coverage_summary.py` reads the existing xcresult
+using `xcrun xccov view --report --json`. It prints a table to the job log and appends
+the same Markdown to the GitHub step summary. The exact `Photo Export.app` target and
+Swift files inside the checked-out app source root are included; test targets and
+generated files outside that root are excluded. Totals sum covered/executable lines,
+not file percentages. Unlisted sources are not inferred as zero coverage.
+
+The report is advisory: no percentage threshold changes CI status. Failed, skipped,
+or cancelled test outcomes label available counts as partial; missing/malformed
+results explain why coverage is unavailable. Reporting errors cannot override the
+test/build failure, and the original xcresult artifact upload remains available.
+
+```bash
+python3 -B scripts/ci/coverage_summary.py --result-bundle TestResults.xcresult \
+  --source-root "$PWD/photo-export" --test-outcome success
+python3 -B -m unittest discover -s scripts/ci/tests -p 'test_ci_*.py'
+```
+
+For offline reproduction, use `--report-json` with the recorded fixture described in
+[`ci/tests/fixtures/README.md`](ci/tests/fixtures/README.md). CI-tool tests run in the
+Linux routing job as well as the existing guard test runner.
+
 The Photos guard rejects exact PhotoKit change/creation request and `performChanges` identifiers in production Swift sources. It ignores nested comments and ordinary/raw/multiline string literals (including interpolation bodies), preserves source line numbers, and fails on missing/empty input. It has no inline bypass marker. This is a lexical tripwire: aliases, dynamic calls, and code inside string interpolation need review; it does not replace Swift compilation or behavioral tests. Python 3 is required; only its standard library is used. Self-tests invoke the real scanners against temporary fixtures and preserve the existing destination-keying self-test.
 
 The regression-symbol guard uses the same lexical masking and matches complete `struct` and ordinary `func name(...)` declarations, rather than substring mentions. `test-guards.sh` covers clean inputs, missing files/declarations, suffix renames, and comment/string-only symbols before CI runs the real scans. When changing a guard, add a clean fixture and a violation fixture that asserts the intended diagnostic, not just a nonzero exit. Keep gate names synchronized with `docs/reference/architecture-conventions.md`; runtime ordering and cancellation still require the behavioral tests.

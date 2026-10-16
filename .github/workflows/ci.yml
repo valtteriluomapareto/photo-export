@@ -24,8 +24,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Test area routing and result gates
-        run: python3 -B -m unittest discover -s scripts/ci/tests -p test_ci_routing.py
+      - name: Test CI routing and reporting tools
+        run: python3 -B -m unittest discover -s scripts/ci/tests -p 'test_ci_*.py'
 
       - name: Select validation areas
         id: route
@@ -150,6 +150,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Run Unit Tests (Debug, with coverage)
+        id: unit-tests
         run: |
           echo "::group::Unit tests"
           echo "Running unit tests with code coverage enabled..."
@@ -169,6 +170,17 @@ jobs:
           echo "Unit tests passed."
           echo "Result bundle: $(du -sh TestResults.xcresult)"
           echo "::endgroup::"
+
+      - name: Publish advisory app coverage
+        if: always()
+        continue-on-error: true
+        env:
+          TEST_OUTCOME: ${{ steps.unit-tests.outcome }}
+        run: >-
+          python3 -B scripts/ci/coverage_summary.py
+          --result-bundle TestResults.xcresult
+          --source-root "$GITHUB_WORKSPACE/photo-export"
+          --test-outcome "$TEST_OUTCOME"
 
       - name: Upload test results
         if: always()

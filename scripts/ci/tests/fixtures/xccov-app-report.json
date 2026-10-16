@@ -1,0 +1,802 @@
+{
+  "targets": [
+    {
+      "buildProductPath": "/fixture/workspace/photo-export/build/DerivedData/Build/Products/Debug/Photo Export.app/Contents/MacOS/Photo Export",
+      "coveredLines": 15829,
+      "executableLines": 24408,
+      "files": [
+        {
+          "coveredLines": 96,
+          "executableLines": 114,
+          "lineCoverage": 0.8421052631578947,
+          "name": "AutoSyncStatusPill.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Shared/AutoSyncStatusPill.swift"
+        },
+        {
+          "coveredLines": 21,
+          "executableLines": 21,
+          "lineCoverage": 1,
+          "name": "AutoSyncFailureCategory.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/AutoSyncFailureCategory.swift"
+        },
+        {
+          "coveredLines": 383,
+          "executableLines": 419,
+          "lineCoverage": 0.9140811455847255,
+          "name": "ImportCoordinator.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ImportCoordinator.swift"
+        },
+        {
+          "coveredLines": 58,
+          "executableLines": 325,
+          "lineCoverage": 0.17846153846153845,
+          "name": "ProductionMediaRenderer.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ProductionMediaRenderer.swift"
+        },
+        {
+          "coveredLines": 280,
+          "executableLines": 521,
+          "lineCoverage": 0.5374280230326296,
+          "name": "LibraryRootView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Shared/LibraryRootView.swift"
+        },
+        {
+          "coveredLines": 184,
+          "executableLines": 207,
+          "lineCoverage": 0.8888888888888888,
+          "name": "DiagnosticReporter.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/App/DiagnosticReporter.swift"
+        },
+        {
+          "coveredLines": 14,
+          "executableLines": 14,
+          "lineCoverage": 1,
+          "name": "DestinationSnapshot.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/DestinationSnapshot.swift"
+        },
+        {
+          "coveredLines": 16,
+          "executableLines": 660,
+          "lineCoverage": 0.024242424242424242,
+          "name": "CollectionsSidebarView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Collections/CollectionsSidebarView.swift"
+        },
+        {
+          "coveredLines": 156,
+          "executableLines": 157,
+          "lineCoverage": 0.9936305732484076,
+          "name": "FullImageRequestBridge.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/PhotoLibrary/FullImageRequestBridge.swift"
+        },
+        {
+          "coveredLines": 123,
+          "executableLines": 125,
+          "lineCoverage": 0.984,
+          "name": "RecordStoreRouter.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Records/RecordStoreRouter.swift"
+        },
+        {
+          "coveredLines": 277,
+          "executableLines": 310,
+          "lineCoverage": 0.8935483870967742,
+          "name": "TimelineSidebarView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Timeline/TimelineSidebarView.swift"
+        },
+        {
+          "coveredLines": 6,
+          "executableLines": 75,
+          "lineCoverage": 0.08,
+          "name": "AboutView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Settings/AboutView.swift"
+        },
+        {
+          "coveredLines": 21,
+          "executableLines": 40,
+          "lineCoverage": 0.525,
+          "name": "GlobalPhotoChangeTokenStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/Stores/GlobalPhotoChangeTokenStore.swift"
+        },
+        {
+          "coveredLines": 8,
+          "executableLines": 8,
+          "lineCoverage": 1,
+          "name": "EditedProducer.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/EditedProducer.swift"
+        },
+        {
+          "coveredLines": 66,
+          "executableLines": 66,
+          "lineCoverage": 1,
+          "name": "ReconciliationScheduler.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/PhotoLibrary/ReconciliationScheduler.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 499,
+          "lineCoverage": 0,
+          "name": "DestinationRecordRecoveryView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Settings/DestinationRecordRecoveryView.swift"
+        },
+        {
+          "coveredLines": 443,
+          "executableLines": 466,
+          "lineCoverage": 0.9506437768240343,
+          "name": "ExportPlacementResolver.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportPlacementResolver.swift"
+        },
+        {
+          "coveredLines": 272,
+          "executableLines": 467,
+          "lineCoverage": 0.582441113490364,
+          "name": "ExportToolbarView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Export/ExportToolbarView.swift"
+        },
+        {
+          "coveredLines": 115,
+          "executableLines": 136,
+          "lineCoverage": 0.8455882352941176,
+          "name": "RecordStoreAlertHost.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Export/RecordStoreAlertHost.swift"
+        },
+        {
+          "coveredLines": 65,
+          "executableLines": 128,
+          "lineCoverage": 0.5078125,
+          "name": "ProductionAssetResourceWriter.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ProductionAssetResourceWriter.swift"
+        },
+        {
+          "coveredLines": 289,
+          "executableLines": 321,
+          "lineCoverage": 0.9003115264797508,
+          "name": "MonthContentView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Timeline/MonthContentView.swift"
+        },
+        {
+          "coveredLines": 246,
+          "executableLines": 375,
+          "lineCoverage": 0.656,
+          "name": "ScreenshotPhotoLibraryService.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/PhotoLibrary/ScreenshotPhotoLibraryService.swift"
+        },
+        {
+          "coveredLines": 50,
+          "executableLines": 50,
+          "lineCoverage": 1,
+          "name": "DestinationSnapshotAdapter.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Destination/DestinationSnapshotAdapter.swift"
+        },
+        {
+          "coveredLines": 125,
+          "executableLines": 125,
+          "lineCoverage": 1,
+          "name": "AutoSyncRetryState.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/AutoSyncRetryState.swift"
+        },
+        {
+          "coveredLines": 33,
+          "executableLines": 33,
+          "lineCoverage": 1,
+          "name": "FileBackedDestinationSafetyConfirmationStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Destination/FileBackedDestinationSafetyConfirmationStore.swift"
+        },
+        {
+          "coveredLines": 6,
+          "executableLines": 6,
+          "lineCoverage": 1,
+          "name": "DirectoryFsyncing.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Protocols/DirectoryFsyncing.swift"
+        },
+        {
+          "coveredLines": 2,
+          "executableLines": 2,
+          "lineCoverage": 1,
+          "name": "ExportProgressState.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/ExportProgressState.swift"
+        },
+        {
+          "coveredLines": 2,
+          "executableLines": 5,
+          "lineCoverage": 0.4,
+          "name": "RecordStoreState.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Records/RecordStoreState.swift"
+        },
+        {
+          "coveredLines": 51,
+          "executableLines": 51,
+          "lineCoverage": 1,
+          "name": "AutoSyncDirtyState.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/AutoSyncDirtyState.swift"
+        },
+        {
+          "coveredLines": 146,
+          "executableLines": 174,
+          "lineCoverage": 0.8390804597701149,
+          "name": "DestinationSafetyMonitor.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Destination/DestinationSafetyMonitor.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 252,
+          "lineCoverage": 0,
+          "name": "MonthTileView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Timeline/MonthTileView.swift"
+        },
+        {
+          "coveredLines": 24,
+          "executableLines": 24,
+          "lineCoverage": 1,
+          "name": "AutoSyncJSONFile.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/Stores/AutoSyncJSONFile.swift"
+        },
+        {
+          "coveredLines": 3,
+          "executableLines": 3,
+          "lineCoverage": 1,
+          "name": "PhotoLibraryService.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Protocols/PhotoLibraryService.swift"
+        },
+        {
+          "coveredLines": 72,
+          "executableLines": 74,
+          "lineCoverage": 0.972972972972973,
+          "name": "TimelineSidebarCounts.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/ViewModels/TimelineSidebarCounts.swift"
+        },
+        {
+          "coveredLines": 640,
+          "executableLines": 657,
+          "lineCoverage": 0.974124809741248,
+          "name": "ExportRecordStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Records/ExportRecordStore.swift"
+        },
+        {
+          "coveredLines": 44,
+          "executableLines": 44,
+          "lineCoverage": 1,
+          "name": "ExportJobPlanner.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportJobPlanner.swift"
+        },
+        {
+          "coveredLines": 1862,
+          "executableLines": 2042,
+          "lineCoverage": 0.9118511263467189,
+          "name": "ExportManager.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportManager.swift"
+        },
+        {
+          "coveredLines": 625,
+          "executableLines": 682,
+          "lineCoverage": 0.9164222873900293,
+          "name": "CollectionExportRecordStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Records/CollectionExportRecordStore.swift"
+        },
+        {
+          "coveredLines": 32,
+          "executableLines": 32,
+          "lineCoverage": 1,
+          "name": "ExportVariantReason.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/ExportVariantReason.swift"
+        },
+        {
+          "coveredLines": 392,
+          "executableLines": 419,
+          "lineCoverage": 0.9355608591885441,
+          "name": "JSONLRecordFile.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Records/JSONLRecordFile.swift"
+        },
+        {
+          "coveredLines": 340,
+          "executableLines": 364,
+          "lineCoverage": 0.9340659340659341,
+          "name": "VariantExporter.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/VariantExporter.swift"
+        },
+        {
+          "coveredLines": 45,
+          "executableLines": 45,
+          "lineCoverage": 1,
+          "name": "ExportCompletionPolicy.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Records/ExportCompletionPolicy.swift"
+        },
+        {
+          "coveredLines": 834,
+          "executableLines": 1631,
+          "lineCoverage": 0.5113427345187002,
+          "name": "PhotoLibraryManager.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/PhotoLibrary/PhotoLibraryManager.swift"
+        },
+        {
+          "coveredLines": 31,
+          "executableLines": 32,
+          "lineCoverage": 0.96875,
+          "name": "ExportVariant.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/ExportVariant.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 326,
+          "lineCoverage": 0,
+          "name": "ImportView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Export/ImportView.swift"
+        },
+        {
+          "coveredLines": 69,
+          "executableLines": 69,
+          "lineCoverage": 1,
+          "name": "PhotoCollectionDescriptor.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/PhotoCollectionDescriptor.swift"
+        },
+        {
+          "coveredLines": 123,
+          "executableLines": 124,
+          "lineCoverage": 0.9919354838709677,
+          "name": "ExportRecord.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/ExportRecord.swift"
+        },
+        {
+          "coveredLines": 272,
+          "executableLines": 277,
+          "lineCoverage": 0.9819494584837545,
+          "name": "ThumbnailView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Shared/ThumbnailView.swift"
+        },
+        {
+          "coveredLines": 17,
+          "executableLines": 48,
+          "lineCoverage": 0.3541666666666667,
+          "name": "LoginItemController.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/App/LoginItemController.swift"
+        },
+        {
+          "coveredLines": 32,
+          "executableLines": 32,
+          "lineCoverage": 1,
+          "name": "FileBackedAutoSyncDirtyStateStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/Stores/FileBackedAutoSyncDirtyStateStore.swift"
+        },
+        {
+          "coveredLines": 41,
+          "executableLines": 44,
+          "lineCoverage": 0.9318181818181818,
+          "name": "AutoExportLibraryScope.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/AutoExportLibraryScope.swift"
+        },
+        {
+          "coveredLines": 18,
+          "executableLines": 18,
+          "lineCoverage": 1,
+          "name": "PhotoLibraryPersistentChangeEvent.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/PhotoLibraryPersistentChangeEvent.swift"
+        },
+        {
+          "coveredLines": 182,
+          "executableLines": 275,
+          "lineCoverage": 0.6618181818181819,
+          "name": "WhatsNewView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Settings/WhatsNewView.swift"
+        },
+        {
+          "coveredLines": 8,
+          "executableLines": 8,
+          "lineCoverage": 1,
+          "name": "ExportPlacementPathPolicy.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportPlacementPathPolicy.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 368,
+          "lineCoverage": 0,
+          "name": "ExportIssuesView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Export/ExportIssuesView.swift"
+        },
+        {
+          "coveredLines": 184,
+          "executableLines": 241,
+          "lineCoverage": 0.7634854771784232,
+          "name": "AssetDetailView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Shared/AssetDetailView.swift"
+        },
+        {
+          "coveredLines": 116,
+          "executableLines": 116,
+          "lineCoverage": 1,
+          "name": "DecodedThumbnailCache.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/PhotoLibrary/DecodedThumbnailCache.swift"
+        },
+        {
+          "coveredLines": 40,
+          "executableLines": 52,
+          "lineCoverage": 0.7692307692307693,
+          "name": "AutoSyncAwareExportButton.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Export/AutoSyncAwareExportButton.swift"
+        },
+        {
+          "coveredLines": 33,
+          "executableLines": 40,
+          "lineCoverage": 0.825,
+          "name": "FileBackedAutoSyncPerDestinationTokenStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/Stores/FileBackedAutoSyncPerDestinationTokenStore.swift"
+        },
+        {
+          "coveredLines": 40,
+          "executableLines": 47,
+          "lineCoverage": 0.851063829787234,
+          "name": "FileBackedAutoSyncCurrentRunStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/Stores/FileBackedAutoSyncCurrentRunStore.swift"
+        },
+        {
+          "coveredLines": 73,
+          "executableLines": 91,
+          "lineCoverage": 0.8021978021978022,
+          "name": "ProductionImageConverter.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ProductionImageConverter.swift"
+        },
+        {
+          "coveredLines": 44,
+          "executableLines": 44,
+          "lineCoverage": 1,
+          "name": "FileBackedAutoSyncRunSummaryStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/Stores/FileBackedAutoSyncRunSummaryStore.swift"
+        },
+        {
+          "coveredLines": 22,
+          "executableLines": 25,
+          "lineCoverage": 0.88,
+          "name": "AutoSyncMetadataFileIO.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Protocols/AutoSyncMetadataFileIO.swift"
+        },
+        {
+          "coveredLines": 261,
+          "executableLines": 321,
+          "lineCoverage": 0.8130841121495327,
+          "name": "ContentView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/ContentView.swift"
+        },
+        {
+          "coveredLines": 783,
+          "executableLines": 815,
+          "lineCoverage": 0.9607361963190184,
+          "name": "AutoSyncManager.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/AutoSyncManager.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 324,
+          "lineCoverage": 0,
+          "name": "FolderTileView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Collections/FolderTileView.swift"
+        },
+        {
+          "coveredLines": 23,
+          "executableLines": 23,
+          "lineCoverage": 1,
+          "name": "AutoSyncClock.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Protocols/AutoSyncClock.swift"
+        },
+        {
+          "coveredLines": 12,
+          "executableLines": 35,
+          "lineCoverage": 0.34285714285714286,
+          "name": "UserDefaultsAutoExportScopeStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/Stores/UserDefaultsAutoExportScopeStore.swift"
+        },
+        {
+          "coveredLines": 129,
+          "executableLines": 129,
+          "lineCoverage": 1,
+          "name": "MonthViewModel.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/ViewModels/MonthViewModel.swift"
+        },
+        {
+          "coveredLines": 29,
+          "executableLines": 29,
+          "lineCoverage": 1,
+          "name": "CollectionCountCache.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/PhotoLibrary/CollectionCountCache.swift"
+        },
+        {
+          "coveredLines": 219,
+          "executableLines": 359,
+          "lineCoverage": 0.6100278551532033,
+          "name": "PhotoLibraryPersistentChangeAdapter.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift"
+        },
+        {
+          "coveredLines": 49,
+          "executableLines": 55,
+          "lineCoverage": 0.8909090909090909,
+          "name": "ExportRecordsDirectoryCoordinator.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportRecordsDirectoryCoordinator.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 258,
+          "lineCoverage": 0,
+          "name": "YearContentView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Timeline/YearContentView.swift"
+        },
+        {
+          "coveredLines": 155,
+          "executableLines": 175,
+          "lineCoverage": 0.8857142857142857,
+          "name": "ResourceSelection.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ResourceSelection.swift"
+        },
+        {
+          "coveredLines": 38,
+          "executableLines": 38,
+          "lineCoverage": 1,
+          "name": "ExportRunContext.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/ExportRunContext.swift"
+        },
+        {
+          "coveredLines": 75,
+          "executableLines": 76,
+          "lineCoverage": 0.9868421052631579,
+          "name": "ScreenshotSurfaceResolver.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Helpers/ScreenshotSurfaceResolver.swift"
+        },
+        {
+          "coveredLines": 23,
+          "executableLines": 23,
+          "lineCoverage": 1,
+          "name": "BodyInvalidationCounter.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/App/BodyInvalidationCounter.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 255,
+          "lineCoverage": 0,
+          "name": "AdvancedSettingsView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Settings/AdvancedSettingsView.swift"
+        },
+        {
+          "coveredLines": 157,
+          "executableLines": 167,
+          "lineCoverage": 0.9401197604790419,
+          "name": "ExportDestinationResolver.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Destination/ExportDestinationResolver.swift"
+        },
+        {
+          "coveredLines": 110,
+          "executableLines": 159,
+          "lineCoverage": 0.6918238993710691,
+          "name": "DestinationFingerprint.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/DestinationFingerprint.swift"
+        },
+        {
+          "coveredLines": 41,
+          "executableLines": 45,
+          "lineCoverage": 0.9111111111111111,
+          "name": "ExportPlacement.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/ExportPlacement.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 956,
+          "lineCoverage": 0,
+          "name": "AutoExportSettingsView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Settings/AutoExportSettingsView.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 520,
+          "lineCoverage": 0,
+          "name": "FolderContentView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Collections/FolderContentView.swift"
+        },
+        {
+          "coveredLines": 52,
+          "executableLines": 76,
+          "lineCoverage": 0.6842105263157895,
+          "name": "AutoSyncFailureCategory+Classification.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/AutoSyncFailureCategory+Classification.swift"
+        },
+        {
+          "coveredLines": 11,
+          "executableLines": 11,
+          "lineCoverage": 1,
+          "name": "ExportRunScope.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/ExportRunScope.swift"
+        },
+        {
+          "coveredLines": 485,
+          "executableLines": 594,
+          "lineCoverage": 0.8164983164983165,
+          "name": "ExportDestinationManager.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Destination/ExportDestinationManager.swift"
+        },
+        {
+          "coveredLines": 5,
+          "executableLines": 5,
+          "lineCoverage": 1,
+          "name": "FirstRunWindowSizing.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Shared/FirstRunWindowSizing.swift"
+        },
+        {
+          "coveredLines": 19,
+          "executableLines": 223,
+          "lineCoverage": 0.08520179372197309,
+          "name": "ExportProgressBar.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Export/ExportProgressBar.swift"
+        },
+        {
+          "coveredLines": 833,
+          "executableLines": 926,
+          "lineCoverage": 0.8995680345572354,
+          "name": "BackupScanner.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/BackupScanner.swift"
+        },
+        {
+          "coveredLines": 41,
+          "executableLines": 42,
+          "lineCoverage": 0.9761904761904762,
+          "name": "WhatsNewState.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/App/WhatsNewState.swift"
+        },
+        {
+          "coveredLines": 49,
+          "executableLines": 64,
+          "lineCoverage": 0.765625,
+          "name": "FileIOService.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/FileIOService.swift"
+        },
+        {
+          "coveredLines": 20,
+          "executableLines": 24,
+          "lineCoverage": 0.8333333333333334,
+          "name": "AppDiagnostics.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/App/AppDiagnostics.swift"
+        },
+        {
+          "coveredLines": 16,
+          "executableLines": 22,
+          "lineCoverage": 0.7272727272727273,
+          "name": "AssetDescriptor.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/AssetDescriptor.swift"
+        },
+        {
+          "coveredLines": 19,
+          "executableLines": 19,
+          "lineCoverage": 1,
+          "name": "ReleaseNotesCatalog.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/ReleaseNotesCatalog.swift"
+        },
+        {
+          "coveredLines": 30,
+          "executableLines": 30,
+          "lineCoverage": 1,
+          "name": "ExportPathPolicy.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportPathPolicy.swift"
+        },
+        {
+          "coveredLines": 10,
+          "executableLines": 11,
+          "lineCoverage": 0.9090909090909091,
+          "name": "MonthFormatting.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Helpers/MonthFormatting.swift"
+        },
+        {
+          "coveredLines": 146,
+          "executableLines": 158,
+          "lineCoverage": 0.9240506329113924,
+          "name": "ExportQueueCoordinator.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportQueueCoordinator.swift"
+        },
+        {
+          "coveredLines": 70,
+          "executableLines": 80,
+          "lineCoverage": 0.875,
+          "name": "AutoSyncMenuBarContent.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Shared/AutoSyncMenuBarContent.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 27,
+          "lineCoverage": 0,
+          "name": "AutoSyncReason.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/AutoSyncReason.swift"
+        },
+        {
+          "coveredLines": 33,
+          "executableLines": 33,
+          "lineCoverage": 1,
+          "name": "ThumbnailPreheatRegistrations.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/PhotoLibrary/ThumbnailPreheatRegistrations.swift"
+        },
+        {
+          "coveredLines": 425,
+          "executableLines": 448,
+          "lineCoverage": 0.9486607142857143,
+          "name": "CollectionContentView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Collections/CollectionContentView.swift"
+        },
+        {
+          "coveredLines": 604,
+          "executableLines": 793,
+          "lineCoverage": 0.7616645649432535,
+          "name": "photo_exportApp.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/App/photo_exportApp.swift"
+        },
+        {
+          "coveredLines": 129,
+          "executableLines": 133,
+          "lineCoverage": 0.9699248120300752,
+          "name": "AppLifecycleCoordinator.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/App/AppLifecycleCoordinator.swift"
+        },
+        {
+          "coveredLines": 0,
+          "executableLines": 558,
+          "lineCoverage": 0,
+          "name": "OnboardingView.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Views/Settings/OnboardingView.swift"
+        },
+        {
+          "coveredLines": 32,
+          "executableLines": 32,
+          "lineCoverage": 1,
+          "name": "FileBackedAutoSyncRetryStateStore.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/Stores/FileBackedAutoSyncRetryStateStore.swift"
+        },
+        {
+          "coveredLines": 44,
+          "executableLines": 46,
+          "lineCoverage": 0.9565217391304348,
+          "name": "AssetDetailImageLoader.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/ViewModels/AssetDetailImageLoader.swift"
+        },
+        {
+          "coveredLines": 92,
+          "executableLines": 93,
+          "lineCoverage": 0.989247311827957,
+          "name": "LibrarySelection.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Models/LibrarySelection.swift"
+        },
+        {
+          "coveredLines": 46,
+          "executableLines": 46,
+          "lineCoverage": 1,
+          "name": "JSONLRecordLogIO.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Protocols/JSONLRecordLogIO.swift"
+        },
+        {
+          "coveredLines": 51,
+          "executableLines": 52,
+          "lineCoverage": 0.9807692307692307,
+          "name": "ExportFilenamePolicy.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportFilenamePolicy.swift"
+        },
+        {
+          "coveredLines": 649,
+          "executableLines": 652,
+          "lineCoverage": 0.995398773006135,
+          "name": "AutoSyncReducer.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/AutoSync/AutoSyncReducer.swift"
+        },
+        {
+          "coveredLines": 2,
+          "executableLines": 2,
+          "lineCoverage": 1,
+          "name": "PHAssetCacheControlling.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Protocols/PHAssetCacheControlling.swift"
+        }
+      ],
+      "lineCoverage": 0.64851687971157,
+      "name": "Photo Export.app"
+    },
+    {
+      "files": [
+        {
+          "coveredLines": 353,
+          "executableLines": 357,
+          "lineCoverage": 0.988795518207283,
+          "name": "ExportManagerVideoRenderTests.swift",
+          "path": "/fixture/workspace/photo-export/photo-exportTests/ExportManagerVideoRenderTests.swift"
+        }
+      ],
+      "name": "photo-exportTests.xctest"
+    }
+  ]
+}
