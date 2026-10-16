@@ -124,6 +124,21 @@ and `website` check names remain conclusive result gates, including when unrelat
 validation is skipped. Shared/unknown paths select both. See the [routing rules and
 local tests](scripts/README.md#ci-area-routing); release workflow triggers are unchanged.
 
+Main branch protection requires the final `build-and-test` and `website` checks,
+both from GitHub Actions (app ID `15368`). Conditional validator jobs and release
+workflows are not required checks. Pending, failed or cancelled required results
+block the normal protected merge path.
+
+Branch freshness is deliberately loose (`strict=false`): a PR may have an older
+base without rebasing solely because main advanced. Its current head must still
+pass CI. Administrator enforcement remains disabled (`enforce_admins=false`), so
+GitHub allows administrators to bypass protection. Ordinary work, including
+agents acting as administrators, follows the review and current-head CI workflow
+above. An emergency bypass requires explicit human instruction, a recorded reason
+and a follow-up plan on the PR; it is not an automatic response to failing CI.
+See the [read-only protection recheck](scripts/README.md#main-branch-protection)
+when auditing or changing this mutable repository setting.
+
 The macOS test job publishes [advisory app-area coverage](scripts/README.md#advisory-coverage-summary)
 to its log and step summary. Coverage percentages do not gate merges; the tests and
 builds remain authoritative, and the xcresult artifact remains available for inspection.
