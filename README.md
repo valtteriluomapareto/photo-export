@@ -44,6 +44,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 - If Photos can't provide an asset's edited version, fall back to writing the original with a `_orig` suffix so the asset still gets backed up
 
 - Detect export-history storage failures and offer non-destructive Retry; completion waits for record writes.
+- Recover conservatively from damaged Auto Export metadata: preserve invalid files before replacement, rescan uncertain scopes, and retain known retry history when storage access returns. Exact retry counts cannot be reconstructed from unreadable history.
 
 ## Known limitations
 

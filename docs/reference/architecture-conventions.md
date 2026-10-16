@@ -149,6 +149,22 @@ Per-destination tokens are currently loaded but do not drive fetching. Unsaved s
 and the failure block do not survive process exit; an enabled, eligible app launch uses
 the existing full-scope reconciliation. Persisted file formats remain unchanged.
 
+Dirty/retry metadata loads throw on corrupt or inaccessible files; only missing files
+are empty. Uncertain dirty loads retain known reducer state and mark all recognized
+scopes for full reconciliation, blocked from acknowledgement until that snapshot saves.
+Every metadata save preflights the source. Readable invalid bytes are copied to a unique
+sibling before atomic replacement; an unreadable source or failed preservation prevents
+replacement. The source stays present if the recovery write fails.
+
+Retry recovery uses the existing reducer cache. Restored raw scope/asset/variant keys
+are unioned with known memory, including unknown keys. For the same category/signature,
+retain maximum known attempts, earliest first failure, latest last failure, and the
+latest known/computed deadline. Different failures prefer the latest timestamp, with
+memory winning ties. Deadlines use failure time, never recovery time, so merging is
+idempotent. Exact inaccessible-interval counts are not reconstructed. Retry removals
+are published only after saving; unavailable baselines defer cleanup. Recovery retries
+on existing run starts, reconnection, and retry mutation, without a new timer or journal.
+
 ## Host protocol pattern
 
 > The cancellation-seam methods (`isCurrent` / `throwIfCancelledOrStale` / `generation` / `bumpGeneration`) are no longer on any Host protocol — that move landed in issue #67 item 2. Collaborators that need the seam inject `ExportQueueCoordinator` directly. The remaining Host methods are UI-state mirrors and dependency forwarders, all stable.

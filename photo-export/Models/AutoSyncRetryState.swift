@@ -87,6 +87,48 @@ struct AutoSyncRetryState: Codable, Equatable, Sendable {
 
   var isEmpty: Bool { entriesByPlacement.isEmpty }
 
+  /// Recovery unions raw keys, including future scope/variant names. Counts are
+  /// the maximum known history, not a reconstruction of inaccessible attempts.
+  /// Uses failure times (never recovery time), so repeated merging is idempotent.
+  func mergingRecovery(_ memory: AutoSyncRetryState) -> AutoSyncRetryState {
+    var result = self
+    for (scope, assets) in memory.entriesByPlacement {
+      for (asset, variants) in assets {
+        for (variant, entry) in variants {
+          let saved = result.entriesByPlacement[scope]?[asset]?[variant]
+          let merged: RetryEntry
+          if saved == entry {
+            // Repeated loading contributes no information. Preserve legacy nil
+            // deadlines and unknown-key tuples exactly in this case.
+            merged = entry
+          } else if let saved, saved.category == entry.category,
+            saved.errorSignature == entry.errorSignature
+          {
+            let count = max(saved.attemptCount, entry.attemptCount)
+            let last = max(saved.lastFailedAt, entry.lastFailedAt)
+            let deadline =
+              entry.category.isAutomaticallyRetryable
+              ? [
+                saved.nextEligibleAt, entry.nextEligibleAt,
+                entry.category.nextEligibleAt(attemptCount: count, from: last),
+              ].compactMap { $0 }.max()
+              : nil
+            merged = RetryEntry(
+              category: entry.category, errorSignature: entry.errorSignature, attemptCount: count,
+              firstFailedAt: min(saved.firstFailedAt, entry.firstFailedAt), lastFailedAt: last,
+              nextEligibleAt: deadline)
+          } else if let saved, saved.lastFailedAt > entry.lastFailedAt {
+            merged = saved
+          } else {
+            merged = entry
+          }
+          result.entriesByPlacement[scope, default: [:]][asset, default: [:]][variant] = merged
+        }
+      }
+    }
+    return result
+  }
+
   /// Looks up the entry for a (scope, asset, variant) tuple. Returns `nil` when no
   /// failure has been recorded yet.
   func entry(

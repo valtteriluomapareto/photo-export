@@ -17,7 +17,7 @@ struct FileBackedAutoSyncDirtyStateStoreTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let store = FileBackedAutoSyncDirtyStateStore(baseDirectoryURL: root)
 
-    #expect(store.load(destinationId: "dest-A") == .empty)
+    #expect(try store.load(destinationId: "dest-A") == .empty)
   }
 
   @Test func saveAndLoadRoundTripPreservesState() throws {
@@ -34,7 +34,7 @@ struct FileBackedAutoSyncDirtyStateStoreTests {
 
     try store.save(state, destinationId: "dest-A")
 
-    let loaded = store.load(destinationId: "dest-A")
+    let loaded = try store.load(destinationId: "dest-A")
     #expect(loaded == state)
   }
 
@@ -60,7 +60,7 @@ struct FileBackedAutoSyncDirtyStateStoreTests {
     try store.save(AutoSyncDirtyState(), destinationId: "dest-A")
     try store.deleteState(destinationId: "dest-A")
 
-    #expect(store.load(destinationId: "dest-A") == .empty)
+    #expect(try store.load(destinationId: "dest-A") == .empty)
   }
 
   @Test func deleteIsNoOpWhenFileMissing() throws {
@@ -73,7 +73,7 @@ struct FileBackedAutoSyncDirtyStateStoreTests {
     }
   }
 
-  @Test func corruptFileDecodesAsEmpty() throws {
+  @Test func corruptFileThrowsWithoutReplacingSource() throws {
     let root = try makeRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let store = FileBackedAutoSyncDirtyStateStore(baseDirectoryURL: root)
@@ -83,7 +83,7 @@ struct FileBackedAutoSyncDirtyStateStoreTests {
     try Data("not valid json".utf8).write(
       to: dir.appendingPathComponent("dirtyState.json"))
 
-    #expect(store.load(destinationId: "dest-A") == .empty)
+    #expect(throws: AutoSyncMetadataCorruption.self) { try store.load(destinationId: "dest-A") }
   }
 
   @Test func twoDestinationsAreIsolated() throws {
@@ -104,8 +104,8 @@ struct FileBackedAutoSyncDirtyStateStoreTests {
     try store.save(stateA, destinationId: "dest-A")
     try store.save(stateB, destinationId: "dest-B")
 
-    #expect(store.load(destinationId: "dest-A") == stateA)
-    #expect(store.load(destinationId: "dest-B") == stateB)
+    #expect(try store.load(destinationId: "dest-A") == stateA)
+    #expect(try store.load(destinationId: "dest-B") == stateB)
   }
 }
 
@@ -123,7 +123,7 @@ struct FileBackedAutoSyncRetryStateStoreTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let store = FileBackedAutoSyncRetryStateStore(baseDirectoryURL: root)
 
-    #expect(store.load(destinationId: "dest-A") == .empty)
+    #expect(try store.load(destinationId: "dest-A") == .empty)
   }
 
   @Test func saveAndLoadRoundTripPreservesState() throws {
@@ -141,7 +141,7 @@ struct FileBackedAutoSyncRetryStateStoreTests {
 
     try store.save(state, destinationId: "dest-A")
 
-    #expect(store.load(destinationId: "dest-A") == state)
+    #expect(try store.load(destinationId: "dest-A") == state)
   }
 
   @Test func deleteRemovesFile() throws {
@@ -152,10 +152,10 @@ struct FileBackedAutoSyncRetryStateStoreTests {
     try store.save(AutoSyncRetryState(), destinationId: "dest-A")
     try store.deleteState(destinationId: "dest-A")
 
-    #expect(store.load(destinationId: "dest-A") == .empty)
+    #expect(try store.load(destinationId: "dest-A") == .empty)
   }
 
-  @Test func corruptFileDecodesAsEmpty() throws {
+  @Test func corruptFileThrowsWithoutReplacingSource() throws {
     let root = try makeRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let store = FileBackedAutoSyncRetryStateStore(baseDirectoryURL: root)
@@ -165,6 +165,6 @@ struct FileBackedAutoSyncRetryStateStoreTests {
     try Data("garbage".utf8).write(
       to: dir.appendingPathComponent("retryState.json"))
 
-    #expect(store.load(destinationId: "dest-A") == .empty)
+    #expect(throws: AutoSyncMetadataCorruption.self) { try store.load(destinationId: "dest-A") }
   }
 }

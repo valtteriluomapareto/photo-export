@@ -6,8 +6,8 @@ import Foundation
 /// without disk IO.
 @MainActor
 protocol AutoSyncDirtyStateStore: AnyObject {
-  /// Loads the state for a destination, returning `.empty` when no record exists.
-  func load(destinationId: String) -> AutoSyncDirtyState
+  /// Only a missing file is empty. Corruption and inaccessible IO throw.
+  func load(destinationId: String) throws -> AutoSyncDirtyState
 
   /// Persists `state` for `destinationId`, replacing any prior value. Throws when the
   /// underlying store cannot complete the write (e.g., disk full); the caller decides

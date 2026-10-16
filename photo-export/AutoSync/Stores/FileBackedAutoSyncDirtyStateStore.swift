@@ -1,19 +1,14 @@
 import Foundation
 import os
 
-/// Production `AutoSyncDirtyStateStore` backed by JSON files under
-/// `AutoSync/destinations/<destinationId>/dirtyState.json`. The file is rewritten
-/// atomically on every save (write-temp + rename) so a crash mid-write either keeps the
-/// previous version or has no file at all — never a half-written one.
-///
-/// Decoding errors are surfaced as `.empty` rather than thrown so a corrupt or
-/// schema-mismatched file does not block the AutoSync state machine on launch. The
-/// failure is logged via `os.Logger`; the next successful save replaces the bad file.
+/// Main-actor DirtyState persistence. Missing files are empty; failures throw.
+/// Corrupt bytes are preserved before replacement; unreadable sources cannot be replaced.
 @MainActor
 final class FileBackedAutoSyncDirtyStateStore: AutoSyncDirtyStateStore {
   private let baseDirectoryURL: URL
   private let fileManager: FileManager
   private let logger: Logger
+  private let io: any AutoSyncMetadataFileIO
 
   /// `baseDirectoryURL` is the root for AutoSync persistence — typically
   /// `<App Support>/<bundle-id>/AutoSync/destinations/`. The store appends
@@ -21,37 +16,31 @@ final class FileBackedAutoSyncDirtyStateStore: AutoSyncDirtyStateStore {
   init(
     baseDirectoryURL: URL,
     fileManager: FileManager = .default,
+    io: any AutoSyncMetadataFileIO = ProductionAutoSyncMetadataFileIO(),
     logger: Logger = Logger(
       subsystem: "com.valtteriluoma.photo-export", category: "AutoSyncDirtyStore")
   ) {
     self.baseDirectoryURL = baseDirectoryURL
     self.fileManager = fileManager
     self.logger = logger
+    self.io = io
   }
 
-  func load(destinationId: String) -> AutoSyncDirtyState {
-    let url = fileURL(for: destinationId)
-    guard fileManager.fileExists(atPath: url.path) else { return .empty }
+  func load(destinationId: String) throws -> AutoSyncDirtyState {
     do {
-      let data = try Data(contentsOf: url)
-      return try JSONDecoder().decode(AutoSyncDirtyState.self, from: data)
+      return try file(for: destinationId).load() ?? .empty
     } catch {
-      logger.error(
-        "Failed to decode dirty state at \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public). Returning .empty; next save will overwrite."
-      )
-      return .empty
+      logger.error("Failed to load Auto Export metadata: \(error.localizedDescription, privacy: .public). Original preserved.")
+      throw error
     }
   }
 
   func save(_ state: AutoSyncDirtyState, destinationId: String) throws {
-    let url = fileURL(for: destinationId)
-    try ensureDirectoryExists(for: url)
-    let encoder = JSONEncoder()
-    // Stable byte order — same `state` re-encoded yields the same bytes, so diffing
-    // tooling and any future "skip write if equal" optimization stay meaningful.
-    encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-    let data = try encoder.encode(state)
-    try data.write(to: url, options: .atomic)
+    try file(for: destinationId).save(state)
+  }
+
+  private func file(for destinationId: String) -> AutoSyncJSONFile<AutoSyncDirtyState> {
+    AutoSyncJSONFile(url: fileURL(for: destinationId), fileManager: fileManager, io: io)
   }
 
   func deleteState(destinationId: String) throws {
@@ -66,10 +55,4 @@ final class FileBackedAutoSyncDirtyStateStore: AutoSyncDirtyStateStore {
       .appendingPathComponent("dirtyState.json")
   }
 
-  private func ensureDirectoryExists(for fileURL: URL) throws {
-    let dir = fileURL.deletingLastPathComponent()
-    if !fileManager.fileExists(atPath: dir.path) {
-      try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-    }
-  }
 }

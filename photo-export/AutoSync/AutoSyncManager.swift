@@ -44,6 +44,9 @@ final class AutoSyncManager: ObservableObject {
   /// failed empty cleanup writes. Do not acknowledge or reload older disk state
   /// until a later dirty save succeeds. Transient: startup still reconciles fully.
   private var failedDirtyStateDestinationIds: Set<String> = []
+  /// The reducer cache remains authoritative for observations made while the
+  /// saved retry baseline could not be read or updated. Merge before replacement.
+  private var retryStateRecoveryDestinationIds: Set<String> = []
   /// Tracks the active per-spec fan-out Task launched by `startRun`. A
   /// single-active-run gate inside ExportManager already prevents
   /// concurrent runs, but the *manager-side* fan-out across scopes (for
@@ -228,8 +231,27 @@ final class AutoSyncManager: ObservableObject {
       // A failed save left the latest snapshot in the reducer, even across
       // A→B→A. Reloading older disk state here would discard that unsaved work.
       if !failedDirtyStateDestinationIds.contains(newId) {
-        let dirty = environment.dirtyStateStore.load(destinationId: newId)
+        let dirty: AutoSyncDirtyState
+        do {
+          dirty = try environment.dirtyStateStore.load(destinationId: newId)
+        } catch {
+          var fallback = reducerState.dirtyStateByDestination[newId] ?? .empty
+          for scope in AutoExportLibraryScope.allCases {
+            var pending = fallback.scope(scope)
+            pending.pendingFullReconciliation = true
+            fallback.setScope(scope, pending)
+          }
+          fallback.markUpdated(at: environment.clock.now())
+          dirty = fallback
+          failedDirtyStateDestinationIds.insert(newId)
+          log.error(
+            "Dirty metadata could not be loaded; retaining full reconciliation: \(error.localizedDescription, privacy: .public)"
+          )
+        }
         dispatch(.destinationDirtyStateLoaded(destinationId: newId, dirtyState: dirty))
+        if failedDirtyStateDestinationIds.contains(newId) {
+          runEffects([.persistDirtyState(dirty, destinationId: newId)])
+        }
       }
 
       let summary = environment.runSummaryStore.load(destinationId: newId)
@@ -242,11 +264,17 @@ final class AutoSyncManager: ObservableObject {
 
       // Refresh retry state for the new destination so the Issues UI shows
       // this destination's failures immediately, not the previous one's.
-      let retry = environment.retryStateStore.load(destinationId: newId)
+      let snapshot = retrySnapshot(destinationId: newId, reload: true)
+      let retry = snapshot.state
+      if retryStateRecoveryDestinationIds.contains(newId), snapshot.canSave {
+        _ = saveRetrySnapshot(retry, destinationId: newId)
+      }
       if currentRetryState != retry {
         currentRetryState = retry
       }
       dispatch(.retryStateChanged(destinationId: newId, retryState: retry))
+    } else if let newId, retryStateRecoveryDestinationIds.contains(newId) {
+      recoverRetrySnapshot(destinationId: newId)
     } else if newId == nil {
       if lastRunSummary != nil {
         // Destination cleared (drive removed, user de-selected). Drop the
@@ -282,23 +310,17 @@ final class AutoSyncManager: ObservableObject {
   func retryFailedVariant(
     scope: AutoSyncRetryScopeKey, assetId: String, variant: ExportVariant
   ) {
-    guard let environment = environment,
-      let destinationId = reducerState.destination.id
+    guard let destinationId = reducerState.destination.id
     else { return }
     // Mutate the in-memory snapshot, then persist. Avoids a disk-reload
     // that could miss a concurrent mutation from the
     // `.recordRetryFailures` effect handler — both paths now operate on
     // `currentRetryState` so successive mutations compose correctly.
-    var retry = currentRetryState
+    let snapshot = retrySnapshot(destinationId: destinationId)
+    guard snapshot.canSave else { return }
+    var retry = snapshot.state
     retry.removeEntry(scope: scope, assetId: assetId, variant: variant)
-    do {
-      try environment.retryStateStore.save(retry, destinationId: destinationId)
-    } catch {
-      log.error(
-        "Failed to persist retry-state cleanup for manual retry: \(error.localizedDescription, privacy: .public)"
-      )
-      return
-    }
+    guard saveRetrySnapshot(retry, destinationId: destinationId) else { return }
     if currentRetryState != retry {
       currentRetryState = retry
     }
@@ -437,30 +459,9 @@ final class AutoSyncManager: ObservableObject {
         }
 
       case .recordRetryFailures(let failures, let destinationId):
-        // Two paths:
-        //
-        // (a) Hot path — `destinationId` matches the currently-active
-        //     destination. Use the in-memory `currentRetryState` as the
-        //     source of truth and mutate-then-persist. This closes a
-        //     subtle race where the user pressed Retry in the Issues UI
-        //     between two scope iterations of a multi-scope fan-out: a
-        //     disk-reload here would re-read the user's just-cleared
-        //     entry and re-record the failure on top, silently losing
-        //     the clear. Both paths (this one and `retryFailedVariant`)
-        //     now use the in-memory snapshot, so successive mutations
-        //     compose correctly.
-        //
-        // (b) Cold path — `destinationId` is some other destination
-        //     (user switched between dispatch and effect-run). Disk-
-        //     load is correct here because `currentRetryState` is for
-        //     a different destination; clobbering it with a stale read
-        //     would be wrong. The cold path doesn't touch
-        //     `currentRetryState`.
-        let isHotPath = (reducerState.destination.id == destinationId)
-        var retry =
-          isHotPath
-          ? currentRetryState
-          : environment.retryStateStore.load(destinationId: destinationId)
+        let isHotPath = reducerState.destination.id == destinationId
+        let snapshot = retrySnapshot(destinationId: destinationId)
+        var retry = snapshot.state
         for failure in failures {
           let scope = Self.retryScopeKey(for: failure.placement)
           let prior = retry.entry(
@@ -482,12 +483,8 @@ final class AutoSyncManager: ObservableObject {
             nextEligibleAt: nextEligibleAt
           )
         }
-        do {
-          try environment.retryStateStore.save(retry, destinationId: destinationId)
-        } catch {
-          log.error(
-            "Failed to persist retry state for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
-          )
+        if snapshot.canSave {
+          _ = saveRetrySnapshot(retry, destinationId: destinationId)
         }
         if isHotPath, currentRetryState != retry {
           currentRetryState = retry
@@ -498,7 +495,9 @@ final class AutoSyncManager: ObservableObject {
         // The runner query reads only the currently configured record stores.
         // Never use it to judge another destination's retry entries.
         guard reducerState.destination.id == destinationId else { continue }
-        var retry = currentRetryState
+        let snapshot = retrySnapshot(destinationId: destinationId)
+        guard snapshot.canSave else { continue }
+        var retry = snapshot.state
         let before = retry
         for (rawScope, assets) in before.entriesByPlacement {
           guard let scope = AutoSyncRetryScopeKey(rawValue: rawScope) else { continue }
@@ -514,17 +513,58 @@ final class AutoSyncManager: ObservableObject {
           }
         }
         guard retry != before else { continue }
-        do {
-          try environment.retryStateStore.save(retry, destinationId: destinationId)
-        } catch {
-          log.error(
-            "Failed to persist completed retry cleanup for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
-          )
-        }
+        guard saveRetrySnapshot(retry, destinationId: destinationId) else { continue }
         currentRetryState = retry
         dispatch(.retryStateChanged(destinationId: destinationId, retryState: retry))
       }
     }
+  }
+
+  /// Reload only when recovery is required; healthy hot paths keep their current
+  /// in-memory source so a manual clear cannot be resurrected by an older disk read.
+  private func retrySnapshot(
+    destinationId: String, reload: Bool = false
+  ) -> (state: AutoSyncRetryState, canSave: Bool) {
+    guard let environment else { return (.empty, false) }
+    // Effects from one completion share a synchronous hot-path authority.
+    // The reducer mirror may still be queued behind this effect batch.
+    let cached: AutoSyncRetryState? =
+      reducerState.destination.id == destinationId
+      ? currentRetryState : reducerState.retryStateByDestination[destinationId]
+    let recovering = retryStateRecoveryDestinationIds.contains(destinationId)
+    if !reload, !recovering, let cached { return (cached, true) }
+    do {
+      let saved = try environment.retryStateStore.load(destinationId: destinationId)
+      return (recovering ? saved.mergingRecovery(cached ?? .empty) : saved, true)
+    } catch {
+      retryStateRecoveryDestinationIds.insert(destinationId)
+      log.error("Retry metadata recovery pending: \(error.localizedDescription, privacy: .public)")
+      // Invalid readable bytes can be preserved by save preflight. An unreadable
+      // baseline must be loaded successfully before any replacement is allowed.
+      return (cached ?? .empty, error is AutoSyncMetadataCorruption)
+    }
+  }
+
+  private func saveRetrySnapshot(_ retry: AutoSyncRetryState, destinationId: String) -> Bool {
+    guard let environment else { return false }
+    do {
+      try environment.retryStateStore.save(retry, destinationId: destinationId)
+      retryStateRecoveryDestinationIds.remove(destinationId)
+      return true
+    } catch {
+      retryStateRecoveryDestinationIds.insert(destinationId)
+      log.error("Retry metadata save failed: \(error.localizedDescription, privacy: .public)")
+      return false
+    }
+  }
+
+  private func recoverRetrySnapshot(destinationId: String) {
+    let snapshot = retrySnapshot(destinationId: destinationId, reload: true)
+    if snapshot.canSave { _ = saveRetrySnapshot(snapshot.state, destinationId: destinationId) }
+    if reducerState.destination.id == destinationId, currentRetryState != snapshot.state {
+      currentRetryState = snapshot.state
+    }
+    dispatch(.retryStateChanged(destinationId: destinationId, retryState: snapshot.state))
   }
 
   private func scheduleDebounce(
@@ -541,6 +581,16 @@ final class AutoSyncManager: ObservableObject {
 
   private func startRun(spec: StartRunSpec) {
     guard let environment else { return }
+    if let destinationId = reducerState.destination.id {
+      if retryStateRecoveryDestinationIds.contains(destinationId) {
+        recoverRetrySnapshot(destinationId: destinationId)
+      }
+      if failedDirtyStateDestinationIds.contains(destinationId),
+        let dirty = reducerState.dirtyStateByDestination[destinationId]
+      {
+        runEffects([.persistDirtyState(dirty, destinationId: destinationId)])
+      }
+    }
     // Cancel any prior fan-out before starting a new one. The reducer's
     // single-active-run invariants should already prevent overlap, but
     // belt-and-braces: a misroute would never silently chain two fan-outs.

@@ -78,6 +78,10 @@ Each row shows what was being exported, when it last failed, how many attempts h
 
 ## Safety
 
+If Auto Export cannot read its saved pending-work state, it schedules full reconciliation of the affected library scopes. Missing metadata files remain a normal first-run state. Invalid metadata is preserved in a separate file before replacement; an unreadable file is left untouched until access returns.
+
+When retry-history access returns, Auto Export combines saved history with failures still known in memory, preserving known attempt counts and conservative retry times. Exact attempts made while history was inaccessible cannot be reconstructed. Corrupt retry history is preserved before rebuilding it; unavailable historical counts cannot be recovered from a library scan. Recovery is retried on reconnection, existing automatic run starts, or the next retry action. Keep the app open to retain observations that have not yet been saved.
+
 Photo Export will **never delete or overwrite** files at your destination. This holds for both manual and Auto Export runs.
 
 If you point Photo Export at a folder that already contains user-visible files (an existing backup, a folder with unrelated content), the app pauses and asks you to **confirm this destination** before it adds anything. Hidden system files like `.DS_Store` don't trigger the prompt. The confirmation persists for that destination — switching to it again later won't re-prompt. If you cancel, Auto Export stays blocked until you confirm or pick a different folder.
