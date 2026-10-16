@@ -12,7 +12,7 @@ protocol FileSystemService: Sendable {
   /// destination), `FileManager.copyItem(at:to:)` performs copy-on-write at the
   /// filesystem layer, so duplicates use no extra bytes until either copy is modified.
   /// On non-APFS destinations this is a real copy. The reuse-source path in
-  /// `ExportManager.exportSingleVariant` calls this when an asset is already exported
-  /// elsewhere, avoiding a PhotoKit re-fetch.
+  /// `VariantExporter` invokes this synchronous primitive on an explicit utility
+  /// worker and awaits physical completion before releasing destination access.
   func copyItem(from src: URL, to dst: URL) throws
 }

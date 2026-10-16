@@ -45,6 +45,17 @@ func bumpGeneration()
 
 ### 2. Actor isolation policy
 
+Reuse-source filesystem copies run on an explicit utility Dispatch worker through the
+Sendable filesystem seam. Cancellation waits for physical IO to finish before releasing
+security-scoped access, then rejects stale success/errors before fallback or commit.
+Each reuse attempt owns a short hidden adjacent staging file through fallback and the
+existing no-overwrite move; late cleanup cannot remove a replacement attempt's temp.
+Normal/error/cancel exits attempt to remove their stage. A process crash, unavailable
+volume, or removal failure can leave a hidden unique stage; automatic scavenging is not
+implemented. Legacy fixed
+`.tmp` cleanup remains immediate. Queue identifier and render-activity cleanup must check
+the owning generation before changing UI state.
+
 | Type kind | Isolation | Examples |
 | --- | --- | --- |
 | `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager`, `ExportRecordStore`, `CollectionExportRecordStore` |

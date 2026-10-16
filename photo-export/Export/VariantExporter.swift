@@ -124,7 +124,9 @@ final class VariantExporter {
     // Renderer activity must always be cleared on the way out of this function —
     // including on throw — so a render failure or cancel does not leave the toolbar
     // showing `(rendering…)` forever.
-    defer { host?.clearRenderActivity() }
+    defer {
+      if queueCoordinator?.isCurrent(gen) == true { host?.clearRenderActivity() }
+    }
 
     // Single point of byte-source dispatch: `ResourceSelection.selectProducer` returns
     // the same `EditedProducer` enum for every variant (issue #49 — keep the seam
@@ -168,13 +170,31 @@ final class VariantExporter {
       pairOriginalWithSuffix: pairOriginalWithSuffix
     )
 
-    let tempURL = finalURL.appendingPathExtension("tmp")
-
-    // Clean up any stale .tmp sibling for this target filename. Covers crash leftovers
-    // that a prior defer could not clean up.
-    if fileSystem.fileExists(atPath: tempURL.path) {
-      try? fileSystem.removeItem(at: tempURL)
+    let reuseSource: (url: URL, relativePath: String)?
+    if let reuse = recordStoreRouter.findReuseSource(
+      assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
+      let destinationRoot = exportDestination.selectedFolderURL
+    {
+      let sourceRelPath = ExportPlacementPathPolicy.relativePath(
+        placement: reuse.placement, subfolder: reuse.subfolder)
+      reuseSource = (
+        destinationRoot.appendingPathComponent(sourceRelPath, isDirectory: true)
+          .appendingPathComponent(reuse.filename), sourceRelPath
+      )
+    } else {
+      reuseSource = nil
     }
+
+    let legacyTempURL = finalURL.appendingPathExtension("tmp")
+    if fileSystem.fileExists(atPath: legacyTempURL.path) {
+      try? fileSystem.removeItem(at: legacyTempURL)
+    }
+    // A cancelled copy can finish after a replacement starts. It owns a short,
+    // unique stage throughout copy/fallback/commit, never the replacement's tmp.
+    let tempURL =
+      reuseSource == nil
+      ? legacyTempURL
+      : destDir.appendingPathComponent(".photo-export-reuse-\(UUID().uuidString).tmp")
     defer {
       if fileSystem.fileExists(atPath: tempURL.path) {
         try? fileSystem.removeItem(at: tempURL)
@@ -198,30 +218,36 @@ final class VariantExporter {
     // byte source is a static resource or a rendered edit — once a placement has the
     // file, all other placements just clone it.
     var didCopyFromReuseSource = false
-    if let reuse = recordStoreRouter.findReuseSource(
-      assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
-      let destinationRoot = exportDestination.selectedFolderURL
-    {
+    if let reuseSource {
       // Issue #38: the source file lives at the placement path plus the *source
       // variant's* persisted `subfolder` — NOT recomputed from the current
       // `videoLayout` setting. A mid-life-toggle source could have been written
       // under `.flat` (subfolder == nil) and now we're under `.subfolder`, or vice
       // versa; reading the stored value pins the source to where the writer
       // originally put it.
-      let sourceRelPath = ExportPlacementPathPolicy.relativePath(
-        placement: reuse.placement, subfolder: reuse.subfolder)
-      let sourceURL =
-        destinationRoot
-        .appendingPathComponent(sourceRelPath, isDirectory: true)
-        .appendingPathComponent(reuse.filename)
+      let sourceRelPath = reuseSource.relativePath
+      let sourceURL = reuseSource.url
       do {
-        try fileSystem.copyItem(from: sourceURL, to: tempURL)
+        // Wait for physical IO even on cancellation. The surrounding export owns
+        // security-scoped access until this continuation finishes.
+        try await withCheckedThrowingContinuation {
+          (continuation: CheckedContinuation<Void, Error>) in
+          DispatchQueue.global(qos: .utility).async { [fileSystem] in
+            continuation.resume(
+              with: Result { try fileSystem.copyItem(from: sourceURL, to: tempURL) })
+          }
+        }
+        try queueCoordinator?.throwIfCancelledOrStale(gen)
         didCopyFromReuseSource = true
         logger.debug(
           "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(sourceRelPath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
         )
       } catch {
+        try queueCoordinator?.throwIfCancelledOrStale(gen)
         if Self.isSourceSideCopyError(error) {
+          if fileSystem.fileExists(atPath: tempURL.path) {
+            try fileSystem.removeItem(at: tempURL)
+          }
           // Source missing/unreadable: prior `.done` record is stale. Fall through to
           // PhotoKit re-export. We do NOT mutate the stale record — that placement's
           // corruption surfaces on its next export run.

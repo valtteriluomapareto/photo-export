@@ -44,6 +44,8 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
   /// suspended (otherwise a `cancelAndClear()` from the manager strands the
   /// write task forever).
   var checkpoint: AsyncCheckpoint?
+  var afterWriteCheckpoint: AsyncCheckpoint?
+  var requiresUnusedDestination = false
 
   func writeResource(_ resource: ResourceDescriptor, forAssetId assetId: String, to url: URL)
     async throws
@@ -59,8 +61,12 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
       try await Task.sleep(nanoseconds: UInt64(writeDelaySeconds * 1_000_000_000))
     }
     if let error = writeError { throw error }
+    if requiresUnusedDestination, FileManager.default.fileExists(atPath: url.path) {
+      throw CocoaError(.fileWriteFileExists)
+    }
     if shouldCreateFile {
       FileManager.default.createFile(atPath: url.path, contents: Data("fake-content".utf8))
     }
+    if let afterWriteCheckpoint { await afterWriteCheckpoint.enter() }
   }
 }
