@@ -94,6 +94,9 @@ final class ExportRecordStore: ObservableObject {
   @Published private(set) var state: RecordStoreState = .unconfigured
   @Published private(set) var persistenceError: String?
   private var hasUnsavedChanges = false
+  // Immediate ownership token, separate from coalesced UI notifications. Any
+  // configuration, accepted mutation, reset or newer reconciliation invalidates probes.
+  private var reconciliationRevision: UInt64 = 0
   private var configuredDestinationId: String?
   var destinationId: String? { configuredDestinationId }
   // Failed writes must survive destination switches until the user can retry saving.
@@ -120,6 +123,7 @@ final class ExportRecordStore: ObservableObject {
   private var notifyWorkItem: DispatchWorkItem?
 
   private let fileManager = FileManager.default
+  private let reconciliationFileChecker: any ReconciliationFileChecking
   /// Base directory containing per-destination subdirectories
   /// (`<App Support>/<bundleId>/ExportRecords/`). Exposed for
   /// `ExportRecordsDirectoryCoordinator`, which needs to manage
@@ -131,6 +135,7 @@ final class ExportRecordStore: ObservableObject {
   private var jsonl: JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>?
 
   init() {
+    self.reconciliationFileChecker = ReconciliationFileChecker()
     let appSupport = try! fileManager.url(
       for: .applicationSupportDirectory,
       in: .userDomainMask,
@@ -145,7 +150,11 @@ final class ExportRecordStore: ObservableObject {
   }
 
   // Test-only/init-injection: allow specifying a base directory for the store root
-  init(baseDirectoryURL: URL) {
+  init(
+    baseDirectoryURL: URL,
+    reconciliationFileChecker: any ReconciliationFileChecking = ReconciliationFileChecker()
+  ) {
+    self.reconciliationFileChecker = reconciliationFileChecker
     self.storeRootURL = baseDirectoryURL
     createDirectoryIfNeeded(baseDirectoryURL)
   }
@@ -153,6 +162,7 @@ final class ExportRecordStore: ObservableObject {
   // MARK: - Destination configuration
   /// Points the store at a specific destination id (subdirectory). Passing nil clears state (shows empty).
   func configure(for destinationId: String?) {
+    reconciliationRevision &+= 1
     let signpost = AppDiagnostics.beginConfigure(label: "timeline")
     defer { signpost.end() }
 
@@ -281,6 +291,7 @@ final class ExportRecordStore: ObservableObject {
   /// generic alert handler without first checking).
   func resetToEmpty() {
     guard state == .failed else { return }
+    reconciliationRevision &+= 1
     guard let jsonl else { return }
     do {
       try jsonl.resetToEmpty(emptySnapshot: [:])
@@ -690,9 +701,14 @@ final class ExportRecordStore: ObservableObject {
   /// Two-phase to respect the `@MainActor` isolation: snapshot on main, file checks
   /// off-main via `Task.detached`, mutations applied on main. Callers must run this
   /// only when no export is active (the import flow already gates on
-  /// `!hasActiveExportWork`); concurrent mutation would invalidate the snapshot.
-  func reconcileAgainstFilesystem(at root: URL) async -> ReconcileSummary {
-    guard state == .ready else { return .zero }
+  /// `!hasActiveExportWork`). Reconfiguration, concurrent mutations, replacement
+  /// reconciliation, Task cancellation or loss of caller ownership discard the batch.
+  func reconcileAgainstFilesystem(
+    at root: URL, isCurrent: @MainActor () -> Bool = { true }
+  ) async -> ReconcileSummary {
+    guard isCurrent(), !Task.isCancelled, state == .ready else { return .zero }
+    reconciliationRevision &+= 1
+    let revision = reconciliationRevision
 
     // Phase 1 (main): snapshot every .done variant's expected on-disk path.
     struct Probe: Sendable {
@@ -726,22 +742,26 @@ final class ExportRecordStore: ObservableObject {
     // Phase 2 (off-main): file checks. `fileExists(atPath:isDirectory:)` rejects a
     // directory standing in for the expected file.
     let probesCopy = probes
+    let fileChecker = reconciliationFileChecker
     let toPrune: [(assetId: String, variant: ExportVariant)] = await Task.detached {
-      let fm = FileManager.default
       var keys: [(assetId: String, variant: ExportVariant)] = []
       for probe in probesCopy {
         if probe.isCorrupt {
           keys.append((probe.assetId, probe.variant))
           continue
         }
-        var isDir: ObjCBool = false
-        let exists = fm.fileExists(atPath: probe.path, isDirectory: &isDir)
-        if !exists || isDir.boolValue {
+        if await !fileChecker.isFile(atPath: probe.path) {
           keys.append((probe.assetId, probe.variant))
         }
       }
       return keys
     }.value
+
+    // Evaluate caller ownership first; then reject configuration/mutation changes
+    // before the whole synchronous commit (whose own appends advance the revision).
+    guard isCurrent(), !Task.isCancelled, state == .ready,
+      reconciliationRevision == revision
+    else { return .zero }
 
     // Phase 3 (main): apply mutations.
     var prunedVariants = 0
@@ -812,6 +832,7 @@ final class ExportRecordStore: ObservableObject {
       return
     }
 
+    reconciliationRevision &+= 1
     apply(mutation)
     // Coalesce notifications to avoid excessive UI churn during exports
     scheduleCoalescedNotify()

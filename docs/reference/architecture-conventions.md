@@ -176,6 +176,26 @@ idempotent. Exact inaccessible-interval counts are not reconstructed. Retry remo
 are published only after saving; unavailable baselines defer cleanup. Recovery retries
 on existing run starts, reconnection, and retry mutation, without a new timer or journal.
 
+### Record reconciliation ownership
+
+Both record stores snapshot reconciliation candidates on MainActor, await file checks
+through `ReconciliationFileChecking` in a detached worker, then apply one synchronous
+prune batch. The production checker preserves `fileExists && !isDirectory`, including
+existing symbolic-link behavior.
+
+Each store owns a private immediate reconciliation revision, separate from its
+coalesced `mutationCounter`. Configuration (including nil and same-ID reloads), accepted
+record/placement mutations, reset and a new reconciliation invalidate older probes.
+After all physical probes finish, the store checks caller ownership, Task cancellation,
+readiness and the captured revision before **any** deletion. Reconciliation's own appends
+advance the revision but must not interrupt the rest of that synchronous batch.
+
+`ImportCoordinator` supplies its captured queue-generation predicate to both stores;
+checking only after the awaited store call is too late to protect persisted history.
+An invalid snapshot returns zero without changes. The whole batch is discarded even
+when an unrelated record changed; a later import can reconcile again. No ownership
+metadata is persisted. Physical probes finish before the import releases scoped access.
+
 ## Host protocol pattern
 
 > The cancellation-seam methods (`isCurrent` / `throwIfCancelledOrStale` / `generation` / `bumpGeneration`) are no longer on any Host protocol — that move landed in issue #67 item 2. Collaborators that need the seam inject `ExportQueueCoordinator` directly. The remaining Host methods are UI-state mirrors and dependency forwarders, all stable.
