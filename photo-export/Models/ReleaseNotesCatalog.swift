@@ -334,7 +334,7 @@ enum ReleaseNotesCatalog {
       ],
       learnMore:
         "The [Auto Export guide](https://valtteriluomapareto.github.io/photo-export/auto-export/) has the full walkthrough, including an Upgrading section with troubleshooting for the rare cases."
-    )
+    ),
   ]
 
   /// Returns the notes a user upgrading from `lastSeen` to `current`

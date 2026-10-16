@@ -25,8 +25,8 @@ swiftlint --strict
 swiftlint --strict --cache-path build/swiftlint-cache  # sandboxed alternative
 
 # Format check / auto-fix
-swift-format lint --recursive photo-export
-swift-format format --recursive --in-place photo-export
+swift-format lint --strict --configuration .swift-format.json --recursive photo-export
+swift-format format --configuration .swift-format.json --recursive --in-place photo-export
 ```
 
 UI tests exist in `photo-exportUITests/` but are skipped by default in the shared scheme.
@@ -164,5 +164,5 @@ Do **not** use Kimi K2.6 (or accept its output unverified) for:
 - Use `.task(id:)` for cancellation-aware async loading in **views** (Swift Task cancellation). For **`ExportManager` background work**, the cancellation model is different — it uses the cooperative `generation` seam (`isCurrent(_:)` / `throwIfCancelledOrStale(_:)`), not `Task.checkCancellation()`. See [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Cancellation contract.
 - New code that touches Photos, the filesystem, or the export destination should go through the `Protocols/` seams so it can be unit-tested with fakes.
 - SwiftLint config (`.swiftlint.yml`): line length 140, several rules disabled (see file). CI runs `--strict`.
-- swift-format config (`.swift-format.json`): 4-space indentation, 120-char line length.
+- swift-format config (`.swift-format.json`): 2-space indentation, 100-char line length. Pass `--configuration .swift-format.json` explicitly; this filename is not auto-discovered. CI checks only `photo-export` and uses `--strict` so warnings fail.
 - Website uses Prettier (with `prettier-plugin-astro`) and oxlint. Run `npm run format:check` and `npm run lint` from `website/`. Both are enforced in CI.

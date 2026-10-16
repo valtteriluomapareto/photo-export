@@ -124,6 +124,13 @@ The version validator checks every `MARKETING_VERSION` assignment line in `proje
 
 The release-safety fixtures also run through `test-guards.sh`. They extract the actual workflow context, version-check, duplicate-check and publication steps, then execute only those selected steps in disposable directories. A restricted command path stubs `gh release` and the App Store upload helper; no signing, credentials or network access is used. The event/ref/input matrix covers safe manual tag builds, explicit publication, beta versions, version mismatch and existing releases. Unexpected selected-step structure or expressions fail the test. Build-only workflow semantics are documented in [Release Process](../docs/project/release-process.md#dry-run).
 
+The formatter fixtures execute the actual CI format-check block against disposable
+Swift files. They verify warnings fail before the success message, explicit config
+overrides conflicting auto-discovery, and test sources stay outside the app-source
+scope. Only absence of the optional local `swift-format` tool skips these fixtures;
+configuration and formatter failures are errors. CI installs/verifies the formatter
+before running the guard suite. See the [matching local commands](../CONTRIBUTING.md#local-setup).
+
 | Script | Used by workflow |
 | --- | --- |
 | `archive-appstore.sh` | `release-app-store.yml` |

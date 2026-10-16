@@ -873,7 +873,9 @@ struct BackupScanner {
         }
         if !matches.isEmpty { return matches }
       }
-      return fp.pairedVideoResources.filter { $0.filename.lowercased() == file.filename.lowercased() }
+      return fp.pairedVideoResources.filter {
+        $0.filename.lowercased() == file.filename.lowercased()
+      }
     case .editedPairedVideo:
       // Natural-stem `.mov` with an `_orig.mov` sibling: the byte source is the
       // edited-side `.fullSizePairedVideo` when present, otherwise it's the same
@@ -883,7 +885,9 @@ struct BackupScanner {
         ($0.filename as NSString).pathExtension.lowercased() == file.fileExtension
       }
       if !editedMatches.isEmpty { return editedMatches }
-      return fp.pairedVideoResources.filter { $0.filename.lowercased() == file.filename.lowercased() }
+      return fp.pairedVideoResources.filter {
+        $0.filename.lowercased() == file.filename.lowercased()
+      }
     }
   }
 

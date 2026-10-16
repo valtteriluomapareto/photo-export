@@ -49,6 +49,19 @@ Optional tools:
 - `brew install swiftlint`
 - `brew install swift-format`
 
+Run the same enforcing style checks as CI from the repository root:
+
+```bash
+swiftlint --strict
+swift-format lint --strict --configuration .swift-format.json --recursive photo-export
+```
+
+The formatter uses two-space indentation and 100 columns, preserving the style
+previously applied by its defaults. `.swift-format.json` must be passed explicitly;
+automatic discovery uses a different filename. To apply formatting, run
+`swift-format format --configuration .swift-format.json --recursive --in-place photo-export`
+and review the diff. The formatter check covers app sources only.
+
 Docs website setup:
 
 ```bash
