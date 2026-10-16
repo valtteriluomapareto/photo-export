@@ -3,6 +3,8 @@ import Photos
 import SwiftUI
 
 struct AssetDetailView: View {
+  @Environment(\.screenshotSession) private var screenshotSession
+
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
@@ -50,6 +52,8 @@ struct AssetDetailView: View {
       }
     }
     .task(id: asset?.id) {
+      let captureWork = screenshotSession?.beginWork("AssetDetailView")
+      defer { screenshotSession?.finishWork(captureWork) }
       await imageLoader.load(for: asset?.id, using: photoLibraryManager)
     }
     .onDisappear { imageLoader.clear() }

@@ -113,7 +113,7 @@ Include the following in your pull request description:
 - how you tested it
 - whether documentation was updated
 
-For UI changes, include a screenshot or short recording when practical.
+For UI changes, include a screenshot or short recording when practical. Follow the [screenshot verification loop](docs/project/screenshot-verification.md) to capture isolated synthetic states, inspect the PNGs, and attach evidence to the PR.
 
 ## Automation Dependencies
 

@@ -6,6 +6,8 @@ import SwiftUI
 /// cancels the in-flight PhotoKit request when the cell scrolls off-screen
 /// or is reused.
 struct ThumbnailView: View {
+  @Environment(\.screenshotSession) private var screenshotSession
+
   let asset: AssetDescriptor
   let isSelected: Bool
   let isExported: Bool
@@ -115,6 +117,8 @@ struct ThumbnailView: View {
     .accessibilityHint("Open details")
     .accessibilityAddTraits(accessibilityTraits)
     .task(id: identity) {
+      let captureWork = screenshotSession?.beginWork("ThumbnailView")
+      defer { screenshotSession?.finishWork(captureWork) }
       await loadThumbnail(for: identity)
     }
   }

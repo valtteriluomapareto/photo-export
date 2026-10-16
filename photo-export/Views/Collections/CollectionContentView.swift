@@ -10,6 +10,8 @@ import SwiftUI
 /// MonthContentView, `.equatable()` at every call site filters fresh action closures
 /// on unrelated queue publications. Record/library/destination observations stay live.
 struct CollectionContentView: View, Equatable {
+  @Environment(\.screenshotSession) private var screenshotSession
+
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
@@ -102,7 +104,10 @@ struct CollectionContentView: View, Equatable {
     .padding(.horizontal)
     .overlay(overlayViews)
     .task(id: scopeTaskId) {
+      let captureWork = screenshotSession?.beginWork("CollectionContentView")
+      defer { screenshotSession?.finishWork(captureWork) }
       await viewModel.loadAssets(for: scope)
+      if !Task.isCancelled { screenshotSession?.contentLoaded() }
     }
     .onDisappear { viewModel.deactivate() }
     .onChange(of: initialAssetSelection, initial: true) { _, asset in

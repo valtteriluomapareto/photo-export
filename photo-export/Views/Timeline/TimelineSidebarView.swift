@@ -10,6 +10,7 @@ import SwiftUI
 /// `selection: Binding<LibrarySelection?>` so the content view receives a unified
 /// selection regardless of which section is active.
 struct TimelineSidebarView: View {
+  @Environment(\.screenshotSession) private var screenshotSession
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
@@ -136,7 +137,9 @@ struct TimelineSidebarView: View {
     // badges populate as their data arrives. The current year (if selected)
     // goes first so its data is ready by the time the user might expand it.
     let yearsCopy = years
+    let captureWork = screenshotSession?.beginWork("TimelineSidebarCounts")
     Task { [counts] in
+      defer { screenshotSession?.finishWork(captureWork) }
       await counts.loadCounts(forYears: yearsCopy, preferredYear: preferredYear)
     }
   }

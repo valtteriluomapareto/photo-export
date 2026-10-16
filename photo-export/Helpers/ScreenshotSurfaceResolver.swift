@@ -57,7 +57,7 @@ enum ScreenshotSurfaceResolver {
     else { return nil }
     let key = String(raw.split(separator: "=", maxSplits: 1).last ?? "")
     switch key {
-    case "timeline":
+    case "timeline", "dev-empty", "dev-destination-unavailable", "dev-paused":
       let cal = Calendar(identifier: .gregorian)
       return Surface(
         section: .timeline,
