@@ -8,7 +8,7 @@ import Foundation
 /// - Reserved Windows/exFAT names (`AUX`, `CON`, `LPT1`): vanishingly rare album names; if a
 ///   user hits one and exports to a Windows-formatted drive, the OS refuses the directory
 ///   creation and the placement-level error path surfaces it once.
-/// - Cross-tree case-fold collisions: sibling-only collisions (two albums with the same name
+/// - Cross-tree case-fold collisions: sibling-only collisions (including case-only names
 ///   under the same parent folder) are handled by `ExportPlacementResolver`'s suffix
 ///   disambiguation; cross-tree case-only collisions are not detected.
 /// - Component length: common filesystems allow 255 bytes per component; album titles longer
