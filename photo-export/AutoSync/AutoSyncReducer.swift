@@ -290,8 +290,8 @@ enum AutoSyncReducer {
         // for MVP." A deleted-only event (no inserts/updates) — and one whose
         // collection-only signal isn't relevant to a selected scope — produces no
         // export work, so skip dirty mutation, persistence, and the debounce. Token
-        // advancement still fires below so the persistent-change cursor moves
-        // forward.
+        // acknowledgement is still emitted below; the manager withholds it
+        // while an earlier dirty snapshot for this destination remains unsaved.
         let producesExportWork = !changedIds.isEmpty || albumsRelevantCollectionChange
 
         if producesExportWork {
@@ -319,9 +319,9 @@ enum AutoSyncReducer {
           triggerReason = .photosChanged
         }
 
-        // Token advances regardless of whether the event produced work for this
-        // selection — the persistent-change cursor must move forward to avoid
-        // re-receiving the same range on the next fetch.
+        // Emit advisory destination acknowledgement even for a no-work event.
+        // The manager gates it on successful dirty persistence across events.
+        // PhotoKit fetching uses the adapter's independent global cursor.
         if let nextToken = event.nextToken {
           effects.append(
             .advancePersistentChangeToken(nextToken, destinationId: destinationId))
@@ -330,8 +330,7 @@ enum AutoSyncReducer {
 
     case .photosChangeFetchFailed(let failure):
       // Plan §"Photo Library Changes": all three failure modes (tokenExpired,
-      // tokenInvalid, detailsUnavailable) reset the affected destination's
-      // lastDurablyRecordedToken and schedule one bounded full reconciliation. The
+      // tokenInvalid, detailsUnavailable) schedule one bounded full reconciliation. The
       // 2-minute photosChangeFallback debounce gives the system a quiet window
       // before the recovery run.
       //
@@ -339,11 +338,8 @@ enum AutoSyncReducer {
       if state.enabled, let destinationId = state.destination.id,
         !state.scopeSelection.isEmpty
       {
-        // Mark every selected scope as needing full reconciliation. The runner
-        // resets the per-destination token snapshot to the current global token
-        // when it sees the matching `lastDurablyRecordedToken` reset path; the
-        // reducer's contribution is to flip the dirty flags and trigger the
-        // fallback debounce.
+        // Mark every selected scope as needing full reconciliation. No destination
+        // token is reset here; the adapter independently rebases its global cursor.
         var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
         for scope in state.scopeSelection.enabledScopes {
           var scopeState = dirty.scope(scope)

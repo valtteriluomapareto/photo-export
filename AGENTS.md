@@ -124,8 +124,15 @@ When changing user-visible behavior, update both the root `README.md` and the ma
 
 ## Workflow
 
-- Open an issue or draft PR before a large feature or architecture change.
-- After a non-trivial change, run a code review pass before requesting human review. If your harness exposes a slash-command or subagent for AI review (e.g. `/codex-review`, `/review`), use it; otherwise re-read your own diff against [`docs/reference/swift-swiftui-best-practices.md`](docs/reference/swift-swiftui-best-practices.md) and the conventions below.
+- Follow this workflow for every PR unless the user explicitly requests a different flow:
+  1. Write the implementation plan in the relevant GitHub issue body or a comment before implementing. Include scope, compatibility constraints, and validation.
+  2. Have three subagents review the plan as **Senior Architect**, **Senior Tester**, and **Pragmatic Developer**. The Pragmatic Developer challenges unnecessary abstractions and keeps the solution focused on getting the work done.
+  3. Update the issue plan from their feedback and record the decisions before implementing.
+  4. Implement and run appropriate tests and checks, preserving the architecture contracts below.
+  5. Reuse the **same three reviewer agents** to review the implementation. Address actionable findings, obtain follow-up review where needed, and record outcomes on the issue or PR.
+  6. Push the branch, open the PR, and merge only when CI for the PR's **current head commit** is green and actionable review findings are resolved. The user's requested workflow authorizes this merge; do not stop for another confirmation unless an applicable approval rule requires it.
+- Keep PRs focused. An existing unrelated PR still needs this workflow before merging; do not infer that an old passing check validates new changes.
+- If reviewer subagents are unavailable, explain the limitation instead of presenting a self-review as the requested three-agent review.
 - **Releasing:** always run `scripts/bump-version.sh <version>` before pushing a tag. Pushing a `v*` tag triggers both release pipelines (`release-direct.yml` and `release-app-store.yml`) and they validate that the tag matches `MARKETING_VERSION`. See [`docs/project/release-process.md`](docs/project/release-process.md).
 
 ### Delegating to opencode / Kimi K2.6 (scout model)

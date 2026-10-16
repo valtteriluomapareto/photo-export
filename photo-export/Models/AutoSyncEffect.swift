@@ -15,11 +15,10 @@ import Foundation
 /// order returned. The reducer relies on this for at least one durability invariant:
 /// when a `photosChanged` event produces both `persistDirtyState` and
 /// `advancePersistentChangeToken`, the persist effect is emitted *before* the token
-/// advance. Plan §"Photo Library Changes": "Advance the token only after a dirty
-/// event has been durably recorded" — if the token were advanced first and the
-/// process crashed before the dirty write committed, the next launch would skip the
-/// range without recording the dirty IDs. Pinned by reducer tests that assert effect
-/// list equality (not just `.contains`).
+/// advance. The runner must also withhold that destination's acknowledgement after
+/// a failed dirty save, including token-only events in later effect batches. These
+/// destination snapshots are advisory; the Photos adapter owns an independent global
+/// fetch cursor, so this ordering does not establish crash-safe PhotoKit replay.
 enum AutoSyncEffect: Equatable, Sendable {
   /// Schedule a debounce timer for `reason` to fire at `fireAt`. If a debounce for the
   /// same reason is already scheduled, the runner replaces it (the most recent
@@ -52,7 +51,7 @@ enum AutoSyncEffect: Equatable, Sendable {
 
   /// Advance the per-destination persistent-change token snapshot. Called after the
   /// destination has durably recorded its dirty IDs / full-reconciliation intent for
-  /// the change set, per the plan's "advance only after durable record" ordering.
+  /// the change set. The runner withholds it while a dirty-state save is outstanding.
   case advancePersistentChangeToken(Data, destinationId: String)
 
   /// Record per-variant failure detail into `AutoSyncRetryState` for the

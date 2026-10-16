@@ -40,6 +40,10 @@ final class AutoSyncManager: ObservableObject {
   private var debounceTokens: [AutoSyncReason: AutoSyncCancellable] = [:]
   private var retryTimerToken: AutoSyncCancellable?
   private var retryTimerDeferredDestinationId: String?
+  /// The reducer retains these destinations' latest dirty snapshots, including
+  /// failed empty cleanup writes. Do not acknowledge or reload older disk state
+  /// until a later dirty save succeeds. Transient: startup still reconciles fully.
+  private var failedDirtyStateDestinationIds: Set<String> = []
   /// Tracks the active per-spec fan-out Task launched by `startRun`. A
   /// single-active-run gate inside ExportManager already prevents
   /// concurrent runs, but the *manager-side* fan-out across scopes (for
@@ -205,8 +209,8 @@ final class AutoSyncManager: ObservableObject {
   /// `lastRunSummary` is loaded directly into the manager's `@Published` field
   /// rather than flowing through the reducer — the reducer doesn't read it,
   /// and the UI consumes it via observation. The per-destination
-  /// `lastDurablyRecordedToken` is loaded but currently unused; Phase 3 retry
-  /// / resume logic will read it.
+  /// `lastDurablyRecordedToken` is advisory and currently unused for fetching;
+  /// the Photos adapter owns its independent global fetch cursor.
   private func handleDestinationSnapshot(_ snapshot: DestinationSnapshot) {
     guard let environment else { return }
     // Key on the stable logical id, not `fingerprint?.id` — a network-share remount drifts the
@@ -221,16 +225,19 @@ final class AutoSyncManager: ObservableObject {
       cancelActiveFanOut()
     }
     if let newId, newId != oldId {
-      let dirty = environment.dirtyStateStore.load(destinationId: newId)
-      dispatch(.destinationDirtyStateLoaded(destinationId: newId, dirtyState: dirty))
+      // A failed save left the latest snapshot in the reducer, even across
+      // A→B→A. Reloading older disk state here would discard that unsaved work.
+      if !failedDirtyStateDestinationIds.contains(newId) {
+        let dirty = environment.dirtyStateStore.load(destinationId: newId)
+        dispatch(.destinationDirtyStateLoaded(destinationId: newId, dirtyState: dirty))
+      }
 
       let summary = environment.runSummaryStore.load(destinationId: newId)
       if lastRunSummary != summary {
         lastRunSummary = summary
       }
-      // Per-destination token is loaded for resume detection in Phase 3; the
-      // load itself surfaces decode failures in logs at the right moment
-      // (destination switch) rather than first time we'd want to use it.
+      // Advisory acknowledgement only; it does not drive PhotoKit fetching.
+      // Loading still surfaces read failures in logs on destination switches.
       _ = environment.perDestinationTokenStore.load(destinationId: newId)
 
       // Refresh retry state for the new destination so the Issues UI shows
@@ -392,7 +399,9 @@ final class AutoSyncManager: ObservableObject {
       case .persistDirtyState(let dirtyState, let destinationId):
         do {
           try environment.dirtyStateStore.save(dirtyState, destinationId: destinationId)
+          failedDirtyStateDestinationIds.remove(destinationId)
         } catch {
+          failedDirtyStateDestinationIds.insert(destinationId)
           log.error(
             "Failed to persist dirty state for \(destinationId, privacy: .public): \(error.localizedDescription, privacy: .public)"
           )
@@ -416,6 +425,9 @@ final class AutoSyncManager: ObservableObject {
         }
 
       case .advancePersistentChangeToken(let token, let destinationId):
+        // A later token-only event must not bypass an earlier failed dirty save.
+        // Another destination's successful save cannot release this gate.
+        guard !failedDirtyStateDestinationIds.contains(destinationId) else { continue }
         do {
           try environment.perDestinationTokenStore.save(token, destinationId: destinationId)
         } catch {

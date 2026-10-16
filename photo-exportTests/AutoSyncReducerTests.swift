@@ -1055,8 +1055,8 @@ struct AutoSyncReducerTests {
 
   /// Plan §"Photo Library Changes": "Advance the token only after a dirty event has
   /// been durably recorded." The reducer returns persistDirtyState BEFORE
-  /// advancePersistentChangeToken in the effects list; the runner is required to
-  /// process effects in list order. Pinned by exact equality (not `.contains`).
+  /// advancePersistentChangeToken. Manager-level fault-injection tests additionally
+  /// pin successful persistence before advisory destination acknowledgement.
   @Test func photosChangedEmitsPersistBeforeTokenAdvance() {
     let state = enabledStateWithSafeDestinationAndScope()
     let token = Data([0x01])

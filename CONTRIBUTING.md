@@ -96,6 +96,15 @@ If a change affects setup, behavior, limitations, or project structure, update t
 
 ## Pull Requests
 
+Agent-authored PRs follow the repository's three-reviewer workflow:
+
+1. Post the implementation plan on the relevant GitHub issue, including scope, compatibility, and validation.
+2. Have three subagents review it as Senior Architect, Senior Tester, and Pragmatic Developer. The Pragmatic Developer keeps the solution practical and challenges unnecessary complexity.
+3. Update the issue plan from the feedback before implementing.
+4. Implement and validate the change.
+5. Reuse the same three agents to review the implementation, resolve actionable findings, and record the review outcomes.
+6. Push and open the PR. Merge after CI passes for its current head commit and actionable findings are resolved, unless the user requests a different flow.
+
 Include the following in your pull request description:
 
 - what changed
