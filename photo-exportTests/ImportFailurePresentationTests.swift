@@ -180,7 +180,8 @@ import Testing
       reopenedCollections.flushForTesting()
       guard await shows("Import Failed", in: f) else { return }
       #expect(f.counter.renderedText["import-progress"] == ["false"])
-      #expect(f.counter.renderedText["import-message"] == [try #require(f.manager.importError)])
+      let importError = try #require(f.manager.importError)
+      #expect(f.counter.renderedText["import-message"] == [importError])
       #expect(f.counter.renderedActions["import-close"] != nil)
       let failure = f.manager.importError
       f.timeline.configure(for: nil)
