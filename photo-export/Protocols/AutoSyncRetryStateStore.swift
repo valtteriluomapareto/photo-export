@@ -5,8 +5,8 @@ import Foundation
 /// in `photo-exportTests/TestHelpers/`.
 @MainActor
 protocol AutoSyncRetryStateStore: AnyObject {
-  /// Loads the state for a destination, returning `.empty` when no record exists.
-  func load(destinationId: String) -> AutoSyncRetryState
+  /// Only a missing file is empty. Corruption and inaccessible IO throw.
+  func load(destinationId: String) throws -> AutoSyncRetryState
 
   /// Persists `state` for `destinationId`, replacing any prior value.
   func save(_ state: AutoSyncRetryState, destinationId: String) throws

@@ -171,6 +171,21 @@ compaction.
 - After an append failure, the primitive stops subsequent queued appends and compactions. The store retains its in-memory history, including final filenames from an in-flight export. Retry saves this history with an atomic snapshot before returning to ready. Keep the app open until retry succeeds; unacknowledged progress can be lost on quit. Destination switches retain failed histories in memory until the user returns and retries.
 - After a read failure, Retry reloads the original files; it never replaces unreadable history with an empty snapshot. Callbacks belonging to a previous destination cannot change the current store's health.
 
+## Auto Export metadata recovery
+
+The separate `dirtyState.json` and `retryState.json` files keep their existing JSON
+formats. Loads return empty only when the file is missing; corruption and IO failures
+are distinct errors. Before replacing readable invalid JSON, the writer preserves its
+exact bytes in a unique `.corrupt-<UUID>` sibling. The original remains until atomic
+replacement succeeds. If reading or preservation fails, replacement is refused.
+
+Unknown dirty state requires full reconciliation of recognized scopes. Retry recovery
+merges saved and in-memory raw keys, retaining maximum known attempts and conservative
+deadlines based on the latest failure time. It cannot reconstruct exact attempts from
+inaccessible or corrupt history. Unknown scope and variant keys survive valid recovery.
+Failed removals remain published until persistence succeeds; pending in-memory history
+does not survive quitting before a successful save.
+
 ## Migrations
 
 - Schema changes are handled by reading both the snapshot and the log using compatible

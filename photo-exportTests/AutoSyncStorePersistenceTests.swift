@@ -13,11 +13,9 @@ import Testing
 ///     NSKeyedArchiver-archived `PHPersistentChangeToken` blob
 ///   - `photo-library-change-token.data` — same blob format, globally scoped
 ///
-/// Each store decodes failures into `.empty` / `nil` rather than throwing so a
-/// corrupt or schema-mismatched file does not block AutoSync on launch. That
-/// recovery path is good for *unrecoverable* drift, but a *silent* format
-/// regression would leave existing users with `.empty` dirty/retry state and
-/// re-export their entire library with no warning.
+/// Dirty/retry stores throw on corrupt or inaccessible metadata so the manager
+/// can reconcile conservatively; other auxiliary stores retain their nil fallback.
+/// These fixtures pin valid historical data independently of recovery policy.
 ///
 /// Each store gets three classes of test:
 ///   1. **Fixture decode** — a known-good JSON byte sequence (committed inline
@@ -109,7 +107,7 @@ struct AutoSyncStorePersistenceTests {
 
       try store.save(state, destinationId: "dest-1")
 
-      #expect(store.load(destinationId: "dest-1") == state)
+      #expect(try store.load(destinationId: "dest-1") == state)
       let expectedURL = dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("dirtyState.json")
@@ -125,7 +123,8 @@ struct AutoSyncStorePersistenceTests {
   @Test func dirtyStateReturnsEmptyForMissingFile() throws {
     try withTempDirectory { dir in
       let store = FileBackedAutoSyncDirtyStateStore(baseDirectoryURL: dir)
-      #expect(store.load(destinationId: "never-written") == .empty)
+      let loaded = try store.load(destinationId: "never-written")
+      #expect(loaded == .empty)
     }
   }
 
@@ -275,7 +274,7 @@ struct AutoSyncStorePersistenceTests {
 
       try store.save(state, destinationId: "dest-1")
 
-      #expect(store.load(destinationId: "dest-1") == state)
+      #expect(try store.load(destinationId: "dest-1") == state)
       let expectedURL = dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("retryState.json")
@@ -288,7 +287,8 @@ struct AutoSyncStorePersistenceTests {
   @Test func retryStateReturnsEmptyForMissingFile() throws {
     try withTempDirectory { dir in
       let store = FileBackedAutoSyncRetryStateStore(baseDirectoryURL: dir)
-      #expect(store.load(destinationId: "never-written") == .empty)
+      let loaded = try store.load(destinationId: "never-written")
+      #expect(loaded == .empty)
     }
   }
 
