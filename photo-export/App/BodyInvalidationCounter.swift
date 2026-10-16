@@ -6,15 +6,34 @@ import SwiftUI
     static let shared = BodyInvalidationCounter()
 
     private var countsByKey: [String: Int] = [:]
-    private init() {}
+    private(set) var renderedActions: [String: () -> Void] = [:]
+    init() {}
 
     func record(_ key: String) {
       countsByKey[key, default: 0] += 1
     }
 
     func count(for key: String) -> Int { countsByKey[key] ?? 0 }
+    func recordAction(_ key: String, action: @escaping () -> Void) {
+      renderedActions[key] = action
+    }
     func snapshot() -> [String: Int] { countsByKey }
-    func reset() { countsByKey.removeAll() }
+    func reset() {
+      countsByKey.removeAll()
+      renderedActions.removeAll()
+    }
+  }
+
+  private struct BodyInvalidationCounterKey: EnvironmentKey {
+    static let defaultValue: BodyInvalidationCounter? = nil
+  }
+
+  extension EnvironmentValues {
+    /// Optional per-host instrumentation; isolated from the shared counter/reset.
+    var bodyInvalidationCounter: BodyInvalidationCounter? {
+      get { self[BodyInvalidationCounterKey.self] }
+      set { self[BodyInvalidationCounterKey.self] = newValue }
+    }
   }
 #endif
 
