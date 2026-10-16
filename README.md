@@ -25,7 +25,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 - Browse your library two ways via a Timeline / Collections segmented control
   - **Timeline** — by year and month
   - **Collections** — Favorites plus your Photos albums and folders
-- Preview thumbnails and selected assets as the first batch loads
+- Preview thumbnails and selected assets as the first batch loads. Detail export status follows the current Timeline, Favorites, album, or Shared Album placement, including recorded converted versions and recovery messages
 - Photos changes refresh the grid in place, including edited thumbnails already on screen; older refreshes and image responses cannot replace newer results
 - Export a month, a year, an album, or the full queue without overwriting existing files
 - Export preparation uses progressive Photos enumeration and yields between planning slices of at most 200 assets. Each scope commits after its scan succeeds; preparation can still retain scope-sized data.

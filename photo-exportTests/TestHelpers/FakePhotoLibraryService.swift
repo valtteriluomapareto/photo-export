@@ -24,6 +24,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   var assetsBySharedAlbumLocalId: [String: [AssetDescriptor]] = [:]
   /// Canned collection tree returned by `fetchCollectionTree()`. Empty by default.
   var collectionTree: [PhotoCollectionDescriptor] = []
+  var collectionTreeError: Error?
   /// Asset IDs that fetchAssetDescriptor should treat as missing, even if they
   /// are present in assetsByYearMonth. Simulates an asset being deleted from the
   /// Photos library after it was enqueued for export.
@@ -166,7 +167,8 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   // MARK: - Phase 2: Collections
 
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
-    collectionTree
+    if let error = collectionTreeError { throw error }
+    return collectionTree
   }
 
   func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws

@@ -24,13 +24,14 @@ struct AssetDetailViewLifecycleTests {
     @ObservedObject var selection: Selection
     let photoLibraryManager: PhotoLibraryManager
     let exportRecordStore: ExportRecordStore
+    let collectionStore: CollectionExportRecordStore
 
     var body: some View {
       Group {
         if selection.showsDetail {
-          AssetDetailView(asset: selection.asset)
+          AssetDetailView(asset: selection.asset, placement: .timeline(year: 2025, month: 1))
             .environmentObject(photoLibraryManager)
-            .environmentObject(exportRecordStore)
+            .environmentObject(exportRecordStore).environmentObject(collectionStore)
         } else {
           Color.clear
         }
@@ -81,11 +82,13 @@ struct AssetDetailViewLifecycleTests {
       .appendingPathComponent("AssetDetailLifecycle-\(UUID().uuidString)", isDirectory: true)
     let exportRecordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     exportRecordStore.configure(for: "detail-test")
+    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    collectionStore.configure(for: "detail-test")
     let selection = Selection(asset: first)
     let hostingView = NSHostingView(
       rootView: HostedDetail(
         selection: selection, photoLibraryManager: photoLibraryManager,
-        exportRecordStore: exportRecordStore))
+        exportRecordStore: exportRecordStore, collectionStore: collectionStore))
     let window = NSWindow(
       contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 400),
       styleMask: [.borderless], backing: .buffered, defer: false)
@@ -100,6 +103,7 @@ struct AssetDetailViewLifecycleTests {
         await secondGate.releaseAll()
       }
       exportRecordStore.flushForTesting()
+      collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
     }
     window.orderFront(nil)

@@ -104,6 +104,52 @@ struct ExportPlacementResolver {
     }
   }
 
+  /// Read-only lookup for the current collection descriptor/path identity. Unlike
+  /// placement(for:), this never allocates a new folder or fabricates persisted history.
+  func existingCollectionPlacement(
+    for selection: LibrarySelection, collections: [PhotoCollectionDescriptor],
+    existingPlacements: [ExportPlacement]
+  ) -> ExportPlacement? {
+    let descriptor: PhotoCollectionDescriptor?
+    let kind: ExportPlacement.Kind
+    switch selection {
+    case .favorites:
+      return existingPlacements.first {
+        $0.kind == .favorites && $0.id == ExportPlacement.favorites().id
+      }
+    case .album(let id):
+      descriptor = findAlbum(collectionId: id, in: collections)
+      kind = .album
+    case .sharedAlbum(let id):
+      descriptor = findSharedAlbum(collectionId: id, in: collections)
+      kind = .sharedAlbum
+    case .timelineYear, .timelineMonth, .folder:
+      return nil
+    }
+    guard let descriptor else { return nil }
+    return matchingPlacement(
+      kind: kind, collectionId: descriptor.localIdentifier ?? "",
+      displayPathHash: displayPathHash8(
+        pathComponents: descriptor.pathComponents, title: descriptor.title),
+      existingPlacements: existingPlacements)
+  }
+
+  private func matchingPlacement(
+    kind: ExportPlacement.Kind, collectionId: String, displayPathHash: String,
+    existingPlacements: [ExportPlacement]
+  ) -> ExportPlacement? {
+    let matches = existingPlacements.filter {
+      $0.kind == kind && $0.collectionLocalIdentifier == collectionId
+        && $0.id.hasSuffix(":\(displayPathHash)")
+    }
+    if matches.count > 1 {
+      logger.warning(
+        "Found \(matches.count) \(kind.rawValue, privacy: .public) placements matching collection \(collectionId, privacy: .public) with displayPathHash \(displayPathHash, privacy: .public); picking latest createdAt"
+      )
+    }
+    return matches.max(by: { $0.createdAt < $1.createdAt })
+  }
+
   // MARK: - Album resolution
 
   private func resolveAlbum(
@@ -120,20 +166,11 @@ struct ExportPlacementResolver {
     // Step 1: look for an existing placement that matches this exact triple
     // `(kind=.album, collectionLocalIdentifier, displayPathHash8)`. If found, return it
     // unchanged so callers see the persisted createdAt and relativePath.
-    let matches = existingPlacements.filter {
-      $0.kind == .album && $0.collectionLocalIdentifier == collectionId
-        && $0.id.hasSuffix(":\(displayPathHash)")
-    }
-    if matches.count == 1 {
-      return matches[0]
-    } else if matches.count > 1 {
-      // Defensive: shouldn't happen but a buggy past write could produce duplicates.
-      // Pick the latest createdAt and log so the issue surfaces.
-      logger.warning(
-        "Found \(matches.count) placements matching collection \(collectionId, privacy: .public) with displayPathHash \(displayPathHash, privacy: .public); picking latest createdAt"
-      )
-      let latest = matches.max(by: { $0.createdAt < $1.createdAt })!
-      return latest
+    if let existing = matchingPlacement(
+      kind: .album, collectionId: collectionId, displayPathHash: displayPathHash,
+      existingPlacements: existingPlacements)
+    {
+      return existing
     }
 
     // Step 2: build the candidate relative path and check for sibling collisions.
@@ -188,18 +225,11 @@ struct ExportPlacementResolver {
       "collections:shared-album:\(collectionIdHash16(for: collectionId)):\(displayPathHash)"
 
     // Step 1: look for an existing placement that matches the exact triple.
-    let matches = existingPlacements.filter {
-      $0.kind == .sharedAlbum && $0.collectionLocalIdentifier == collectionId
-        && $0.id.hasSuffix(":\(displayPathHash)")
-    }
-    if matches.count == 1 {
-      return matches[0]
-    } else if matches.count > 1 {
-      logger.warning(
-        "Found \(matches.count) shared-album placements matching collection \(collectionId, privacy: .public) with displayPathHash \(displayPathHash, privacy: .public); picking latest createdAt"
-      )
-      let latest = matches.max(by: { $0.createdAt < $1.createdAt })!
-      return latest
+    if let existing = matchingPlacement(
+      kind: .sharedAlbum, collectionId: collectionId, displayPathHash: displayPathHash,
+      existingPlacements: existingPlacements)
+    {
+      return existing
     }
 
     // Step 2: build the candidate path under Shared Albums/ and apply sibling
