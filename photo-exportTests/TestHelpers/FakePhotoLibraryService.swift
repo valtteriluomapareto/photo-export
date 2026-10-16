@@ -9,6 +9,8 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   var isAuthorized: Bool = true
   var authorizationStatus: PHAuthorizationStatus = .authorized
 
+  var cachedCountOverride: (@MainActor (PhotoFetchScope, Bool) async throws -> Int)?
+
   // Canned data
   var assetsByYearMonth: [String: [AssetDescriptor]] = [:]
   /// Canned favorites assets returned by `.favorites` scope fetches.
@@ -327,7 +329,8 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   nonisolated let collectionCountCache = CollectionCountCache()
 
   nonisolated func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int {
-    try await collectionCountCache.count(
+    if let override = await cachedCountOverride { return try await override(scope, false) }
+    return try await collectionCountCache.count(
       for: Self.cacheKey(for: scope, adjusted: false)
     ) {
       try await self.countAssets(in: scope)
@@ -335,7 +338,8 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
-    try await collectionCountCache.count(
+    if let override = await cachedCountOverride { return try await override(scope, true) }
+    return try await collectionCountCache.count(
       for: Self.cacheKey(for: scope, adjusted: true)
     ) {
       try await self.countAdjustedAssets(in: scope)

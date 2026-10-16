@@ -68,6 +68,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Phase 3 collection-count cache. Keyed by scope. Invalidated on
   /// `photoLibraryDidChange` so subsequent reads re-fetch.
   nonisolated let collectionCountCache = CollectionCountCache()
+  private var countInvalidation: Task<Void, Never>?
+  private var countInvalidationGeneration = 0
+  private var countInvalidationOverride: (@Sendable () async -> Void)?
+  private var countInvalidationWaitObserver: (@MainActor () -> Void)?
 
   /// Bounded `CGImage` cache for thumbnail renders, keyed by content revision.
   /// Known edits supersede only their asset's entries; unknown changes clear
@@ -130,8 +134,14 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `PhotoLibraryService` method on this manager. PhotoKit registration is skipped
   /// when an override is set — the curated service produces its own content and any
   /// observer firing would overwrite it.
-  init(overrideService: any PhotoLibraryService) {
+  init(
+    overrideService: any PhotoLibraryService,
+    countInvalidationOverride: (@Sendable () async -> Void)? = nil,
+    countInvalidationWaitObserver: (@MainActor () -> Void)? = nil
+  ) {
     self.overrideService = overrideService
+    self.countInvalidationOverride = countInvalidationOverride
+    self.countInvalidationWaitObserver = countInvalidationWaitObserver
     super.init()
     // Sync the UI-facing auth state from the injected service so the onboarding
     // gate (`ContentView`) sees the right gating value. Subsequent changes to the
@@ -539,6 +549,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   nonisolated func cachedCountAssets(in scope: PhotoFetchScope) async throws -> Int {
+    try await awaitCountInvalidation()
     if let s = overrideService { return try await s.cachedCountAssets(in: scope) }
     let key = Self.cacheKey(for: scope, adjusted: false)
     return try await collectionCountCache.count(for: key) {
@@ -547,11 +558,23 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
+    try await awaitCountInvalidation()
     if let s = overrideService { return try await s.cachedCountAdjustedAssets(in: scope) }
     let key = Self.cacheKey(for: scope, adjusted: true)
     return try await collectionCountCache.count(for: key) {
       try await self.countAdjustedAssets(in: scope)
     }
+  }
+
+  private func awaitCountInvalidation() async throws {
+    while let pending = countInvalidation {
+      let gen = countInvalidationGeneration
+      countInvalidationWaitObserver?()
+      await pending.value
+      try Task.checkCancellation()
+      if gen == countInvalidationGeneration { return }
+    }
+    try Task.checkCancellation()
   }
 
   /// Number of assets in a fetch scope whose `hasAdjustments` is `true`. Iterates the
@@ -996,12 +1019,17 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       thumbnailTrackingIncomplete = false
       decodedThumbnailCache.clear()
     }
-    libraryRevision &+= 1
-    // Cancel any in-flight count tasks and drop cached counts so the next sidebar read
-    // re-fetches against the updated library state.
-    Task { [collectionCountCache] in
+    // Install the barrier before observers can start a count refresh. Chain changes
+    // so completion of an older invalidation cannot expose an intermediate cache.
+    let previous = countInvalidation
+    let invalidate = countInvalidationOverride
+    countInvalidationGeneration &+= 1
+    countInvalidation = Task { [collectionCountCache] in
+      await previous?.value
+      if let invalidate { await invalidate() }
       await collectionCountCache.invalidateAll()
     }
+    libraryRevision &+= 1
   }
 
   /// Drops only the PHAsset cache. Unlike `invalidateCache()` it does not

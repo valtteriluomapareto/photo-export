@@ -24,6 +24,7 @@ actor CollectionCountCache {
 
   private var inFlight: [String: InFlight] = [:]
   private var values: [String: Int] = [:]
+  private var generation = 0
 
   /// Returns the cached count for `key` if known. Otherwise starts a fetch task (or
   /// joins an existing in-flight one for the same key) and awaits it.
@@ -36,12 +37,18 @@ actor CollectionCountCache {
     -> Int
   {
     if let cached = values[key] { return cached }
-    if let existing = inFlight[key] { return try await existing.task.value }
+    let gen = generation
+    if let existing = inFlight[key] {
+      let value = try await existing.task.value
+      guard gen == generation else { throw CancellationError() }
+      return value
+    }
     let token = UUID()
     let task = Task<Int, Error>(operation: fetch)
     inFlight[key] = InFlight(token: token, task: task)
     do {
       let value = try await task.value
+      guard gen == generation else { throw CancellationError() }
       // Only persist if we're still the current entry. If `invalidateAll` ran (or a new
       // fetch started for the same key) our token won't match — discard the result.
       if inFlight[key]?.token == token {
@@ -61,6 +68,7 @@ actor CollectionCountCache {
   /// `PHPhotoLibraryChangeObserver.photoLibraryDidChange` so subsequent `count(for:fetch:)`
   /// calls re-fetch fresh data.
   func invalidateAll() {
+    generation &+= 1
     for (_, entry) in inFlight { entry.task.cancel() }
     inFlight.removeAll()
     values.removeAll()
