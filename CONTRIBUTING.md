@@ -64,6 +64,7 @@ npm run dev
 - Add or update tests for bug fixes and behavior changes where practical.
 - Use `os.Logger` for production logging.
 - Preserve the no-overwrite export behavior and the `PHAsset.localIdentifier` tracking model.
+- Keep Photos access read-only. Run `scripts/ci/test-guards.sh` and `python3 scripts/ci/check-read-only-photos.py` before changing Photos integration; see [`scripts/README.md`](scripts/README.md) for the guard's scope and limitations.
 
 ## Developing new features
 

@@ -87,6 +87,11 @@ jobs:
           ./scripts/ci/check-regression-gates.sh
           echo "::endgroup::"
 
+      - name: Check read-only Photos access and guard self-tests
+        run: |
+          ./scripts/ci/test-guards.sh
+          python3 scripts/ci/check-read-only-photos.py
+
       - name: Check destination-identity keying
         run: |
           echo "::group::Destination-identity keying guard"
