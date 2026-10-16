@@ -124,6 +124,10 @@ and `website` check names remain conclusive result gates, including when unrelat
 validation is skipped. Shared/unknown paths select both. See the [routing rules and
 local tests](scripts/README.md#ci-area-routing); release workflow triggers are unchanged.
 
+The macOS test job publishes [advisory app-area coverage](scripts/README.md#advisory-coverage-summary)
+to its log and step summary. Coverage percentages do not gate merges; the tests and
+builds remain authoritative, and the xcresult artifact remains available for inspection.
+
 When updating a pin manually, verify the commit and its `action.yml` in the upstream repository, retain the version comment, and preserve workflow permissions, triggers, environments, and release controls. For website dependency updates, commit both `website/package.json` and `website/package-lock.json` as applicable and run the website format, lint, and validation commands. App runtime dependencies remain unchanged.
 
 ## Release and Project Notes
