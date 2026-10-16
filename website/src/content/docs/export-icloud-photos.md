@@ -91,5 +91,5 @@ Export progress storage errors stop further exports using the affected records a
 
 - **Organized folders**: Photos are automatically sorted into `Year/Month/` folders instead of dumped into one giant directory.
 - **Tracks what's exported**: The app remembers what's been exported. Run it again and it skips already-exported photos.
-- **Pause and resume**: Long exports can be paused and picked up later. Cancelling and starting a new export keeps any unfinished scan from the cancelled run from affecting the new run.
+- **Pause and resume**: Long exports can be paused and picked up later. Cancelling and starting a new export keeps any unfinished scan from the cancelled run from affecting the new run. If a file has already moved into place, its history update finishes for the original destination before the next export proceeds, so cancellation and retry do not copy it again.
 - **Open source**: No subscription, no account, no ads. MIT licensed. Free on GitHub, or [support the project on the Mac App Store](https://apps.apple.com/app/photo-export-local-backup/id6761410742).

@@ -114,6 +114,24 @@ final class RecordStoreRouter {
     }
   }
 
+  /// Retains the destination that owns an imminent final file commit.
+  func captureFinalCommit(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant,
+    relPath: String, filename: String, subfolder: String?, acceptsEditedFallback: Bool
+  ) throws -> (_ committed: Bool) async -> Void {
+    switch placement.kind {
+    case .timeline:
+      let (year, month) = placement.timelineYearMonth ?? (0, 0)
+      return try timelineStore.captureFinalCommit(
+        assetId: assetId, variant: variant, year: year, month: month, relPath: relPath,
+        filename: filename, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback)
+    case .favorites, .album, .sharedAlbum:
+      return try collectionStore.captureFinalCommit(
+        assetId: assetId, variant: variant, placement: placement,
+        filename: filename, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback)
+    }
+  }
+
   func markVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     error: String, reason: ExportVariantReason? = nil, at date: Date

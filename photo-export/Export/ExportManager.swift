@@ -2111,13 +2111,15 @@ final class ExportManager: ObservableObject {
     pairOriginalWithSuffix: Bool,
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
-    subfolder: String? = nil
+    subfolder: String? = nil,
+    acceptsEditedFallback: Bool = false
   ) async throws -> String? {
     try await variantExporter.exportSingleVariant(
       variant: variant, descriptor: descriptor, resources: resources,
       destDir: destDir, relPath: relPath, job: job,
       groupStem: groupStem, pairOriginalWithSuffix: pairOriginalWithSuffix,
-      generation: gen, inFlight: &inFlight, subfolder: subfolder)
+      generation: gen, inFlight: &inFlight, subfolder: subfolder,
+      acceptsEditedFallback: acceptsEditedFallback)
   }
 
   // Destination resolution (URL + filename allocation, paired-stem allocation, collision
@@ -2180,7 +2182,8 @@ final class ExportManager: ObservableObject {
         pairOriginalWithSuffix: true,
         generation: gen,
         inFlight: &inFlight,
-        subfolder: subfolder
+        subfolder: subfolder,
+        acceptsEditedFallback: true
       )
       // Mark `.edited` with the explicit fallback sentinel so future runs
       // recognise the asset as covered without relying on the ambiguous
@@ -2262,11 +2265,16 @@ final class ExportManager: ObservableObject {
   /// `generation` and `isCurrent(_:)` are already declared above; the protocol witness
   /// picks them up here. `isEnqueueingAll` is the existing stored property.
 
+  /// Internal observation seam for deterministic tests of final-commit admission.
+  var finalCommitWaitObserver: (() -> Void)?
+
   /// Drives the per-job export pipeline on behalf of the coordinator. Wraps the
   /// existing `export(job:gen:)` body so the coordinator's drain loop doesn't need to
   /// know about it.
   func performExport(job: ExportJob, generation gen: Int) async {
     do {
+      await variantExporter.waitForFinalCommit(onWait: finalCommitWaitObserver)
+      try throwIfCancelledOrStale(gen)
       try await recordStoreRouter.flush(placement: job.placement)
       guard isCurrent(gen) else { return }
       await export(job: job, generation: gen)

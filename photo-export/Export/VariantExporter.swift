@@ -77,6 +77,15 @@ final class VariantExporter {
   private static let heicJPEGQuality: Double = 0.85
   private let fileSystem: any FileSystemService
   private let exportDestination: any ExportDestination
+  // Physical final IO outlives queue teardown. Replacement jobs await its history barrier.
+  private var finalCommitTask: Task<Result<Void, Error>, Never>?
+
+  func waitForFinalCommit(onWait: (() -> Void)?) async {
+    while let task = finalCommitTask {
+      onWait?()
+      _ = await task.value
+    }
+  }
 
   init(
     host: Host,
@@ -120,7 +129,8 @@ final class VariantExporter {
     pairOriginalWithSuffix: Bool,
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
-    subfolder: String? = nil
+    subfolder: String? = nil,
+    acceptsEditedFallback: Bool = false
   ) async throws -> String? {
     // Renderer activity must always be cleared on the way out of this function —
     // including on throw — so a render failure or cancel does not leave the toolbar
@@ -200,8 +210,9 @@ final class VariantExporter {
       reuseSource == nil
       ? legacyTempURL
       : destDir.appendingPathComponent(".photo-export-reuse-\(UUID().uuidString).tmp")
+    var ownsTempCleanup = true
     defer {
-      if fileSystem.fileExists(atPath: tempURL.path) {
+      if ownsTempCleanup, fileSystem.fileExists(atPath: tempURL.path) {
         try? fileSystem.removeItem(at: tempURL)
       }
     }
@@ -325,42 +336,46 @@ final class VariantExporter {
     // by `defer`, but only if we throw before the move.
     try queueCoordinator?.throwIfCancelledOrStale(gen)
 
-    try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<Void, Error>) in
-      DispatchQueue.global(qos: .utility).async { [fileSystem] in
-        do {
-          self.logger.debug(
-            "Move begin: \(tempURL.lastPathComponent, privacy: .public) -> \(finalURL.lastPathComponent, privacy: .public)"
-          )
-          try fileSystem.moveItemAtomically(from: tempURL, to: finalURL)
-          self.logger.debug(
-            "Move done -> \(finalURL.lastPathComponent, privacy: .public)")
-          continuation.resume(returning: ())
-        } catch {
-          self.logger.error("Move failed: \(error.localizedDescription, privacy: .public)")
-          continuation.resume(throwing: error)
-        }
-      }
-    }
-    try queueCoordinator?.throwIfCancelledOrStale(gen)
-
-    if let createdAt = descriptor.creationDate {
-      await withCheckedContinuation { continuation in
-        DispatchQueue.global(qos: .utility).async { [fileSystem] in
-          fileSystem.applyTimestamps(creationDate: createdAt, to: finalURL)
-          self.logger.debug(
-            "Applied timestamps for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
-          )
-          continuation.resume()
-        }
-      }
-      try queueCoordinator?.throwIfCancelledOrStale(gen)
-    }
-
-    recordStoreRouter.markVariantExported(
+    let acknowledge = try recordStoreRouter.captureFinalCommit(
       assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent, exportedAt: Date(),
-      subfolder: subfolder)
+      relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder,
+      acceptsEditedFallback: acceptsEditedFallback)
+    ownsTempCleanup = false
+    let commit = Task { [fileSystem] () -> Result<Void, Error> in
+      defer {
+        if fileSystem.fileExists(atPath: tempURL.path) { try? fileSystem.removeItem(at: tempURL) }
+        finalCommitTask = nil
+      }
+      do {
+        try await withCheckedThrowingContinuation {
+          (continuation: CheckedContinuation<Void, Error>) in
+          DispatchQueue.global(qos: .utility).async {
+            continuation.resume(
+              with: Result { try fileSystem.moveItemAtomically(from: tempURL, to: finalURL) })
+          }
+        }
+      } catch {
+        await acknowledge(false)
+        return .failure(error)
+      }
+      // The file is now committed. Finish this bounded acknowledgement even when
+      // its run was cancelled or its store switched destinations during physical IO.
+      if let createdAt = descriptor.creationDate {
+        await withCheckedContinuation { continuation in
+          DispatchQueue.global(qos: .utility).async {
+            fileSystem.applyTimestamps(creationDate: createdAt, to: finalURL)
+            continuation.resume()
+          }
+        }
+      }
+      await acknowledge(true)
+      return .success(())
+    }
+    finalCommitTask = commit
+    let result = await commit.value
+    // Stale errors and successes cannot reach replacement bookkeeping or UI.
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
+    try result.get()
     inFlight = nil
     logger.info(
       "Exported \(finalURL.lastPathComponent, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"

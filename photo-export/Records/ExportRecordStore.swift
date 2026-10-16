@@ -97,6 +97,10 @@ final class ExportRecordStore: ObservableObject {
   // Immediate ownership token, separate from coalesced UI notifications. Any
   // configuration, accepted mutation, reset or newer reconciliation invalidates probes.
   private var reconciliationRevision: UInt64 = 0
+  private var finalCommitContext: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>?
+  // Only completion deltas survive a corrupt load; full snapshots must not bypass
+  // the corruption alert or its explicit reset/forensic-backup path.
+  private var deferredFinalCompletions: [String: [() -> Void]] = [:]
   private var configuredDestinationId: String?
   var destinationId: String? { configuredDestinationId }
   // Failed writes must survive destination switches until the user can retry saving.
@@ -123,6 +127,7 @@ final class ExportRecordStore: ObservableObject {
   private var notifyWorkItem: DispatchWorkItem?
 
   private let fileManager = FileManager.default
+  private let recordLogIO: any JSONLRecordLogIO
   private let reconciliationFileChecker: any ReconciliationFileChecking
   /// Base directory containing per-destination subdirectories
   /// (`<App Support>/<bundleId>/ExportRecords/`). Exposed for
@@ -135,6 +140,7 @@ final class ExportRecordStore: ObservableObject {
   private var jsonl: JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>?
 
   init() {
+    self.recordLogIO = ProductionJSONLRecordLogIO()
     self.reconciliationFileChecker = ReconciliationFileChecker()
     let appSupport = try! fileManager.url(
       for: .applicationSupportDirectory,
@@ -152,8 +158,10 @@ final class ExportRecordStore: ObservableObject {
   // Test-only/init-injection: allow specifying a base directory for the store root
   init(
     baseDirectoryURL: URL,
-    reconciliationFileChecker: any ReconciliationFileChecking = ReconciliationFileChecker()
+    reconciliationFileChecker: any ReconciliationFileChecking = ReconciliationFileChecker(),
+    recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
   ) {
+    self.recordLogIO = recordLogIO
     self.reconciliationFileChecker = reconciliationFileChecker
     self.storeRootURL = baseDirectoryURL
     createDirectoryIfNeeded(baseDirectoryURL)
@@ -168,6 +176,17 @@ final class ExportRecordStore: ObservableObject {
 
     // Finish the old destination's queued writes before replacing its file owner.
     jsonl?.flushForTesting()
+    // A parked final commit can fail while another destination is active. Deliver
+    // that owner's failure before consulting pendingRecovery or loading it again.
+    if let context = finalCommitContext {
+      if context.file !== jsonl { context.file.flushForTesting() }
+      if context.destinationId == configuredDestinationId,
+        state == .ready || hasUnsavedChanges, let file = jsonl
+      {
+        context.file = file
+        context.snapshot = recordsById
+      }
+    }
     if hasUnsavedChanges, let id = configuredDestinationId {
       pendingRecovery[id] = recordsById
     }
@@ -194,11 +213,16 @@ final class ExportRecordStore: ObservableObject {
       snapshotURL: dir.appendingPathComponent(Constants.snapshotFileName),
       logURL: dir.appendingPathComponent(Constants.logFileName),
       ioQueue: ioQueue,
-      logger: logger
+      logger: logger,
+      logIO: recordLogIO
     )
     jsonl = file
     file.onPersistenceFailure = { [weak self, weak file] error in
-      guard let self, let file, self.jsonl === file else { return }
+      guard let self, let file else { return }
+      if let context = self.finalCommitContext, context.file === file {
+        self.retainFinalCommitFailure(error, context: context)
+      }
+      guard self.jsonl === file else { return }
       self.hasUnsavedChanges = true
       self.persistenceError = error.localizedDescription
       self.state = .persistenceFailed
@@ -246,6 +270,10 @@ final class ExportRecordStore: ObservableObject {
       rebuildCountersFromRecords()
       state = .ready
     }
+    if state == .failed, finalCommitContext?.destinationId == configuredDestinationId {
+      finalCommitContext?.needsCorruptionRecovery = true
+    }
+    replayFinalCompletions()
     mutationCounter &+= 1
   }
 
@@ -263,6 +291,7 @@ final class ExportRecordStore: ObservableObject {
       if let id = configuredDestinationId { pendingRecovery.removeValue(forKey: id) }
       persistenceError = nil
       state = .ready
+      replayFinalCompletions()
       mutationCounter &+= 1
     } catch {
       persistenceError = error.localizedDescription
@@ -298,6 +327,7 @@ final class ExportRecordStore: ObservableObject {
       recordsById = [:]
       monthCounters = [:]
       state = .ready
+      replayFinalCompletions()
       mutationCounter &+= 1
     } catch {
       logger.error(
@@ -824,6 +854,111 @@ final class ExportRecordStore: ObservableObject {
     )
   }
 
+  /// Captures the existing writer before physical final IO. A successful move is
+  /// acknowledged even after cancellation; failure retains history for Retry.
+  func captureFinalCommit(
+    assetId: String, variant: ExportVariant, year: Int, month: Int, relPath: String,
+    filename: String, subfolder: String?, acceptsEditedFallback: Bool
+  ) throws -> (_ committed: Bool) async -> Void {
+    guard state == .ready, let destinationId = configuredDestinationId, let file = jsonl else {
+      throw RecordPersistenceUnavailable()
+    }
+    precondition(finalCommitContext == nil, "Final commits must be serialized")
+    let context = FinalCommitContext(
+      destinationId: destinationId, file: file, snapshot: [:])
+    finalCommitContext = context
+    let applyCompletion = { [weak self] in
+      guard let self else { return }
+      let date = Date()
+      self.markVariantExported(
+        assetId: assetId, variant: variant, year: year, month: month, relPath: relPath,
+        filename: filename, exportedAt: date, subfolder: subfolder)
+      if acceptsEditedFallback {
+        self.markVariantFailed(
+          assetId: assetId, variant: .edited,
+          error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+          reason: .editedUnavailableOriginalBackedUp, at: date)
+      }
+    }
+    return { [self] committed in
+      defer { if finalCommitContext === context { finalCommitContext = nil } }
+      guard committed else { return }
+      let exportedAt = Date()
+      if context.needsCorruptionRecovery
+        || (configuredDestinationId == destinationId && state == .failed)
+      {
+        deferredFinalCompletions[destinationId, default: []].append(applyCompletion)
+        return
+      }
+      if configuredDestinationId == destinationId {
+        if state == .persistenceFailed && !hasUnsavedChanges {
+          // The known pre-switch history is intact in the parked owner, even
+          // when its later reload was unreadable. Retry must retain the new file.
+          recordsById = context.snapshot
+          rebuildCountersFromRecords()
+          hasUnsavedChanges = true
+        }
+        applyCompletion()
+        if state == .persistenceFailed {
+          retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
+          return
+        }
+      } else {
+        let done = ExportVariantRecord(
+          filename: filename, status: .done, exportDate: exportedAt, lastError: nil,
+          subfolder: subfolder)
+        var record =
+          context.snapshot[assetId]
+          ?? ExportRecord(id: assetId, year: year, month: month, relPath: relPath)
+        record.year = year
+        record.month = month
+        record.relPath = relPath
+        record.variants[variant] = done
+        if acceptsEditedFallback {
+          var edited = record.variants[.edited] ?? done
+          edited.status = .failed
+          edited.exportDate = exportedAt
+          edited.lastError = ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
+          edited.reason = .editedUnavailableOriginalBackedUp
+          record.variants[.edited] = edited
+        }
+        context.snapshot[assetId] = record
+        context.file.append(.upsert(record), currentSnapshot: { context.snapshot })
+      }
+      do {
+        try await context.file.flush()
+      } catch {
+        retainFinalCommitFailure(error, context: context)
+      }
+    }
+  }
+
+  private func replayFinalCompletions() {
+    guard state == .ready, let id = configuredDestinationId else { return }
+    if finalCommitContext?.destinationId == id {
+      finalCommitContext?.needsCorruptionRecovery = false
+    }
+    let completions = deferredFinalCompletions.removeValue(forKey: id) ?? []
+    for completion in completions { completion() }
+  }
+
+  private func retainFinalCommitFailure(
+    _ error: any Error, context: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>
+  ) {
+    if configuredDestinationId == context.destinationId {
+      // Active state is already current; snapshot only on failure, avoiding a full
+      // dictionary CoW on every ordinary successful file commit.
+      context.snapshot = recordsById
+    }
+    pendingRecovery[context.destinationId] = context.snapshot
+    guard configuredDestinationId == context.destinationId else { return }
+    reconciliationRevision &+= 1
+    hasUnsavedChanges = true
+    persistenceError = error.localizedDescription
+    state = .persistenceFailed
+    mutationCounter &+= 1
+  }
+
   // MARK: - Internals
   private func append(_ mutation: ExportRecordMutation) {
     // Keep an in-flight export's final filename in memory after a write failure,
@@ -834,6 +969,11 @@ final class ExportRecordStore: ObservableObject {
 
     reconciliationRevision &+= 1
     apply(mutation)
+    if let context = finalCommitContext, context.destinationId == configuredDestinationId,
+      let file = jsonl
+    {
+      context.file = file
+    }
     // Coalesce notifications to avoid excessive UI churn during exports
     scheduleCoalescedNotify()
 
