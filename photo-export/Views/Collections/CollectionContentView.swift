@@ -50,6 +50,7 @@ struct CollectionContentView: View, Equatable {
   }
 
   var body: some View {
+    let placement = currentPlacement
     #if DEBUG
       // Required as a declaration inside the ViewBuilder.
       // swiftlint:disable:next redundant_discardable_let
@@ -68,7 +69,7 @@ struct CollectionContentView: View, Equatable {
       }
 
       HStack {
-        exportSummaryView
+        exportSummaryView(placement: placement)
         Spacer()
         AutoSyncAwareExportButton(exportButtonTitle) {
           onExportCollection()
@@ -87,7 +88,7 @@ struct CollectionContentView: View, Equatable {
             ThumbnailView(
               asset: asset,
               isSelected: asset.id == selectedAsset?.id,
-              isExported: isExported(asset: asset)
+              isExported: isExported(asset: asset, placement: placement)
             )
             .frame(width: 120, height: 120)
             .onTapGesture {
@@ -247,22 +248,18 @@ struct CollectionContentView: View, Equatable {
   /// Persisted placement for this selection, if any. Nil before the first export run
   /// against a freshly-discovered album. The summary header treats nil as
   /// "no records yet" so the count shows `0/N`.
-  private var placement: ExportPlacement? {
-    switch selection {
-    case .favorites:
-      return collectionExportRecordStore.placement(id: ExportPlacement.favorites().id)
-    case .album(let id):
-      return collectionExportRecordStore.placements(matching: .album)
-        .first(where: { $0.collectionLocalIdentifier == id })
-    case .sharedAlbum(let id):
-      return collectionExportRecordStore.placements(matching: .sharedAlbum)
-        .first(where: { $0.collectionLocalIdentifier == id })
-    case .timelineMonth, .timelineYear, .folder:
-      return nil
+  private var currentPlacement: ExportPlacement? {
+    let tree: [PhotoCollectionDescriptor]
+    if selection == .favorites {
+      tree = []
+    } else {
+      guard let current = try? photoLibraryManager.fetchCollectionTree() else { return nil }
+      tree = current
     }
+    return collectionExportRecordStore.currentPlacement(for: selection, collections: tree)
   }
 
-  private func isExported(asset: AssetDescriptor) -> Bool {
+  private func isExported(asset: AssetDescriptor, placement: ExportPlacement?) -> Bool {
     guard let placement else { return false }
     return collectionExportRecordStore.isExported(
       asset: asset, placement: placement, selection: versionSelection,
@@ -271,10 +268,12 @@ struct CollectionContentView: View, Equatable {
 
   // MARK: - Header summary
 
-  private var exportSummaryView: some View {
-    let summary = makeSummary()
+  private func exportSummaryView(placement: ExportPlacement?) -> some View {
+    let summary = makeSummary(placement: placement)
     #if DEBUG
       bodyCounter?.record("summary:\(summary.exportedCount)/\(summary.totalCount)")
+      bodyCounter?.recordText(
+        ["\(summary.exportedCount)/\(summary.totalCount)"], for: "collection-summary")
     #endif
     return HStack(spacing: 8) {
       switch summary.status {
@@ -297,7 +296,7 @@ struct CollectionContentView: View, Equatable {
     .font(.subheadline)
   }
 
-  private func makeSummary() -> MonthStatusSummary {
+  private func makeSummary(placement: ExportPlacement?) -> MonthStatusSummary {
     if let placement {
       #if DEBUG
         bodyCounter?.record("summaryScan")

@@ -13,6 +13,10 @@ struct FolderContentView: View {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
   let folderId: String
   let title: String
   @Binding var selection: LibrarySelection?
@@ -180,6 +184,9 @@ struct FolderContentView: View {
     let albumCount = albumIds.count
     let exported = exportedPhotoCount(albumIds: albumIds)
     let total = totalPhotoCount(albumIds: albumIds)
+    #if DEBUG
+      bodyCounter?.recordText(["\(exported)/\(total)"], for: "folder-summary")
+    #endif
 
     return HStack(spacing: 8) {
       Image(systemName: summaryIconName(exported: exported, total: total))
@@ -389,12 +396,11 @@ struct FolderContentView: View {
   /// render as "5012/4812 exported".
   private func exportedPhotoCount(albumIds: [String]) -> Int {
     var total = 0
-    let albumPlacements = collectionExportRecordStore.placements(matching: .album)
+    guard let folder else { return 0 }
     for id in albumIds {
       guard
-        let placement = albumPlacements.first(where: {
-          $0.collectionLocalIdentifier == id
-        })
+        let placement = collectionExportRecordStore.currentPlacement(
+          for: .album(collectionId: id), collections: [folder])
       else { continue }
       let recorded = collectionExportRecordStore.summary(for: placement).exportedCount
       let live = countsByDescriptorId["album:\(id)"] ?? recorded
@@ -418,8 +424,8 @@ struct FolderContentView: View {
     guard descriptor.kind == .album,
       let albumId = descriptor.localIdentifier,
       let live = countsByDescriptorId[descriptor.id], live > 0,
-      let placement = collectionExportRecordStore.placements(matching: .album)
-        .first(where: { $0.collectionLocalIdentifier == albumId })
+      let placement = collectionExportRecordStore.currentPlacement(
+        for: .album(collectionId: albumId), collections: [descriptor])
     else { return false }
     let exported = collectionExportRecordStore.summary(for: placement).exportedCount
     return exported >= live
