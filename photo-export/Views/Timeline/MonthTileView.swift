@@ -13,6 +13,8 @@ import SwiftUI
 /// `PhotoLibraryService.fetchAssets(year:month:)`, which is the same API the year/month
 /// content panes use.
 struct MonthTileView: View {
+  @Environment(\.screenshotSession) private var screenshotSession
+
   /// Side length of the tile's image area. Larger than `FolderTileView.tileSide` (144)
   /// because the year overview has a fixed cardinality of 12 children — there's
   /// breathing room to give each cover more real estate without the grid feeling sparse.
@@ -71,6 +73,8 @@ struct MonthTileView: View {
     // Note: the wrapping `Button` in `YearContentView` already supplies `.isButton`,
     // so the trait isn't repeated here.
     .task(id: "\(year)-\(month)") {
+      let captureWork = screenshotSession?.beginWork("MonthTileView")
+      defer { screenshotSession?.finishWork(captureWork) }
       await loadCovers()
     }
   }

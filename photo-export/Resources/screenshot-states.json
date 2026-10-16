@@ -1,0 +1,16 @@
+[
+  {"key":"timeline","filename":"01-timeline","kind":"marketing","default":true},
+  {"key":"timeline-multi-select","filename":"02-timeline-multi-select","kind":"marketing","default":true},
+  {"key":"collections-favorites","filename":"03-collections-favorites","kind":"marketing","default":true},
+  {"key":"collections-album-family","filename":"04-collections-album-family","kind":"marketing","default":true},
+  {"key":"collections-album-porvoo","filename":"05-collections-album-porvoo","kind":"marketing","default":true},
+  {"key":"collections-folder-trips","filename":"06-collections-folder-trips","kind":"marketing","default":true},
+  {"key":"collections-multi-select","filename":"07-collections-multi-select","kind":"marketing","default":true},
+  {"key":"collections-album-london","filename":"08-collections-album-london","kind":"marketing","default":true},
+  {"key":"collections-shared-album-family-stream","filename":"09-collections-shared-album-family-stream","kind":"marketing","default":true},
+  {"key":"collections-album-paris","filename":"10-collections-album-paris","kind":"marketing","default":false},
+  {"key":"dev-onboarding","filename":"dev-onboarding","kind":"development","default":false},
+  {"key":"dev-empty","filename":"dev-empty","kind":"development","default":false},
+  {"key":"dev-destination-unavailable","filename":"dev-destination-unavailable","kind":"development","default":false},
+  {"key":"dev-paused","filename":"dev-paused","kind":"development","default":false}
+]

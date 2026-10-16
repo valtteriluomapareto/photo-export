@@ -9,6 +9,8 @@ import SwiftUI
 /// Cover thumbnails are loaded lazily via `.task` so a folder with many albums only
 /// fetches covers for tiles that scroll into view (`LazyVGrid` semantics).
 struct FolderTileView: View {
+  @Environment(\.screenshotSession) private var screenshotSession
+
   /// Side length of the tile's image area. Tile total height grows by ~36pt to fit the
   /// title + count caption beneath.
   static let tileSide: CGFloat = 144
@@ -71,6 +73,8 @@ struct FolderTileView: View {
     .accessibilityLabel(accessibilityLabel)
     .accessibilityAddTraits(accessibilityTraits)
     .task(id: descriptor.id) {
+      let captureWork = screenshotSession?.beginWork("FolderTileView")
+      defer { screenshotSession?.finishWork(captureWork) }
       // Subfolders never need a cover fetch.
       guard descriptor.kind == .album else { return }
       guard case .idle = coverState else { return }

@@ -21,6 +21,8 @@ import SwiftUI
 /// the closure and the binding wrapper are excluded so SwiftUI short-circuits the
 /// LazyVGrid re-evaluation when those rendering inputs are unchanged.
 struct MonthContentView: View, Equatable {
+  @Environment(\.screenshotSession) private var screenshotSession
+
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
@@ -114,7 +116,10 @@ struct MonthContentView: View, Equatable {
     .padding(.horizontal)
     .overlay(overlayViews)
     .task(id: "\(year)-\(month)") {
+      let captureWork = screenshotSession?.beginWork("MonthContentView")
+      defer { screenshotSession?.finishWork(captureWork) }
       await viewModel.loadAssets(forYear: year, month: month)
+      if !Task.isCancelled { screenshotSession?.contentLoaded() }
     }
     .onDisappear { viewModel.deactivate() }
     .onChange(of: initialAssetSelection, initial: true) { _, asset in

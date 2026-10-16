@@ -9,6 +9,8 @@ import SwiftUI
 /// exported" badge agrees with the sidebar's `YearRow` / `MonthRow` badges without us
 /// having to re-derive the formula.
 struct YearContentView: View {
+  @Environment(\.screenshotSession) private var screenshotSession
+
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
@@ -69,9 +71,12 @@ struct YearContentView: View {
     .padding(.horizontal)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .task(id: "\(year)|\(photoLibraryManager.libraryRevision)") {
+      let captureWork = screenshotSession?.beginWork("YearContentView")
+      defer { screenshotSession?.finishWork(captureWork) }
       totalCount = (try? photoLibraryManager.countAssets(year: year))
       selectedAsset = nil
       await counts.loadCounts(forYears: [year])
+      if !Task.isCancelled { screenshotSession?.contentLoaded() }
     }
   }
 

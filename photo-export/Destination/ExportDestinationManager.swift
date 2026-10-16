@@ -28,6 +28,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   var destinationId: String? { identity.stableId }
 
   // MARK: - Keys & Logger
+  private let volumeNotificationCenter: NotificationCenter
   private let userDefaults: UserDefaults
   private let bookmarkDefaultsKey: String
   /// UserDefaults key for the persisted stable logical destination id, stored beside the
@@ -179,6 +180,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   // MARK: - Lifecycle
   init(
     skipRestore: Bool = false,
+    observeVolumeChanges: Bool = true,
+    volumeNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
     userDefaults: UserDefaults = .standard,
     bookmarkDefaultsKey: String = "ExportDestinationBookmark",
     stableIdDefaultsKey: String = "ExportDestinationStableId",
@@ -191,6 +194,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     storedBookmarkScopeAcquirer: ((URL) -> Bool)? = nil,
     fileIdentifierProvider: ((URL) -> (any NSObjectProtocol)?)? = nil
   ) {
+    self.volumeNotificationCenter = volumeNotificationCenter
     self.userDefaults = userDefaults
     self.bookmarkDefaultsKey = bookmarkDefaultsKey
     self.stableIdDefaultsKey = stableIdDefaultsKey
@@ -204,12 +208,12 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     if !skipRestore {
       restoreBookmarkIfAvailable()
     }
-    observeVolumeChanges()
+    if observeVolumeChanges { self.observeVolumeChanges() }
   }
 
   deinit {
     for observer in volumeObservers {
-      NotificationCenter.default.removeObserver(observer)
+      volumeNotificationCenter.removeObserver(observer)
     }
   }
 
@@ -229,14 +233,18 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// treat the destination as empty (no actual files to enumerate). The
   /// destination identity is set to `nil` so the record stores stay
   /// unconfigured — screenshot launches never write export records.
-  func configureForScreenshotMode(displayName: String = "Backup Folder") {
-    let url = URL(
-      fileURLWithPath: "/private/var/photo-export-screenshot-mode/\(displayName)",
-      isDirectory: true)
+  func configureForScreenshotMode(
+    displayName: String = "Backup Folder", folderURL: URL? = nil, available: Bool = true
+  ) {
+    let url =
+      folderURL
+      ?? URL(
+        fileURLWithPath: "/private/var/photo-export-screenshot-mode/\(displayName)",
+        isDirectory: true)
     selectedFolderURL = url
-    isAvailable = true
-    isWritable = true
-    statusMessage = nil
+    isAvailable = available
+    isWritable = available
+    statusMessage = available ? nil : "Destination is unavailable. Reconnect the drive to continue."
   }
 
   func selectFolder() {
@@ -812,7 +820,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   private func observeVolumeChanges() {
-    let center = NSWorkspace.shared.notificationCenter
+    let center = volumeNotificationCenter
     let mountObs = center.addObserver(
       forName: NSWorkspace.didMountNotification,
       object: nil,

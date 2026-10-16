@@ -59,6 +59,8 @@ enum SharedAlbumsSectionMode: Equatable {
 /// counts come from `cachedCountAssets(in:)` so concurrent sidebar reads share one
 /// fetch and the cache is cleared on the same change observer.
 struct CollectionsSidebarView: View {
+  @Environment(\.screenshotSession) private var screenshotSession
+
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
@@ -90,6 +92,8 @@ struct CollectionsSidebarView: View {
         )
         .tag(LibrarySelection.favorites)
         .task(id: photoLibraryManager.libraryRevision) {
+          let captureWork = screenshotSession?.beginWork("CollectionsSidebarView")
+          defer { screenshotSession?.finishWork(captureWork) }
           await loadCount(for: .favorites, descriptorId: favoritesDescriptor.id)
         }
       }
@@ -130,6 +134,8 @@ struct CollectionsSidebarView: View {
     }
     .navigationTitle("Photo Export")
     .task(id: photoLibraryManager.libraryRevision) {
+      let captureWork = screenshotSession?.beginWork("CollectionsSidebarView")
+      defer { screenshotSession?.finishWork(captureWork) }
       reloadTree()
     }
     .measureBodyInvalidations("CollectionsSidebarView")
@@ -188,6 +194,8 @@ struct CollectionsSidebarView: View {
       )
       .tag(LibrarySelection.album(collectionId: descriptor.localIdentifier ?? ""))
       .task(id: descriptor.id + "|\(photoLibraryManager.libraryRevision)") {
+        let captureWork = screenshotSession?.beginWork("CollectionsSidebarView")
+        defer { screenshotSession?.finishWork(captureWork) }
         if let id = descriptor.localIdentifier {
           await loadCount(for: .album(collectionId: id), descriptorId: descriptor.id)
         }
@@ -199,6 +207,8 @@ struct CollectionsSidebarView: View {
       )
       .tag(LibrarySelection.sharedAlbum(collectionId: descriptor.localIdentifier ?? ""))
       .task(id: descriptor.id + "|\(photoLibraryManager.libraryRevision)") {
+        let captureWork = screenshotSession?.beginWork("CollectionsSidebarView")
+        defer { screenshotSession?.finishWork(captureWork) }
         if let id = descriptor.localIdentifier {
           await loadCount(
             for: .sharedAlbum(collectionId: id), descriptorId: descriptor.id)
@@ -232,6 +242,8 @@ struct CollectionsSidebarView: View {
         )
         .tag(LibrarySelection.folder(collectionId: descriptor.localIdentifier ?? ""))
         .task(id: descriptor.id + "|\(photoLibraryManager.libraryRevision)") {
+          let captureWork = screenshotSession?.beginWork("CollectionsSidebarView")
+          defer { screenshotSession?.finishWork(captureWork) }
           await loadFolderCount(descriptor: descriptor)
         }
       }

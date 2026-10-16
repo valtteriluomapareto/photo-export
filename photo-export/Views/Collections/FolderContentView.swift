@@ -8,6 +8,8 @@ import SwiftUI
 /// its own existing album placement, so the on-disk layout matches what the user
 /// gets from per-album exports today.
 struct FolderContentView: View {
+  @Environment(\.screenshotSession) private var screenshotSession
+
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
@@ -71,12 +73,15 @@ struct FolderContentView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(keyboardShortcutsHost)
     .task(id: folderId + "|\(photoLibraryManager.libraryRevision)") {
+      let captureWork = screenshotSession?.beginWork("FolderContentView")
+      defer { screenshotSession?.finishWork(captureWork) }
       folder = findFolder(folderId: folderId)
       // Selection is per-folder; clear it whenever the visible folder changes so a
       // stale anchor from a previous folder doesn't drive Shift-extend in the new one.
       selectedChildIds.removeAll()
       selectionAnchorId = nil
       await loadCounts()
+      if !Task.isCancelled { screenshotSession?.contentLoaded() }
     }
   }
 

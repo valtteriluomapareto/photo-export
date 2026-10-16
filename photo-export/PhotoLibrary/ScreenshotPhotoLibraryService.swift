@@ -41,7 +41,10 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   /// "<assetId>|<width>x<height>".
   private var placeholderCache: [String: NSImage] = [:]
 
-  override init() {
+  private let empty: Bool
+
+  init(empty: Bool = false) {
+    self.empty = empty
     super.init()
   }
 
@@ -189,6 +192,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   func fetchAssets(
     year: Int, month: Int? = nil, mediaType: PHAssetMediaType? = nil
   ) async throws -> [AssetDescriptor] {
+    guard !empty else { return [] }
     let ids: [String]
     if let month {
       ids = Self.timelineAssetsByMonth["\(year)-\(month)"] ?? []
@@ -202,15 +206,16 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   }
 
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
-    Self.makeDescriptor(id: assetId)
+    empty ? nil : Self.makeDescriptor(id: assetId)
   }
 
   func countAssets(year: Int, month: Int) throws -> Int {
-    Self.timelineAssetsByMonth["\(year)-\(month)"]?.count ?? 0
+    empty ? 0 : Self.timelineAssetsByMonth["\(year)-\(month)"]?.count ?? 0
   }
 
   func countAssets(year: Int) throws -> Int {
-    Self.timelineAssetsByMonth
+    guard !empty else { return 0 }
+    return Self.timelineAssetsByMonth
       .filter { $0.key.hasPrefix("\(year)-") }
       .reduce(0) { $0 + $1.value.count }
   }
@@ -228,6 +233,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   }
 
   func availableYears() throws -> [Int] {
+    guard !empty else { return [] }
     let years = Set(
       Self.timelineAssetsByMonth.keys.compactMap { Int($0.split(separator: "-").first ?? "") }
     )
@@ -243,12 +249,13 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   // MARK: - PhotoLibraryService overrides — collections
 
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
-    Self.tree
+    empty ? [] : Self.tree
   }
 
   func fetchAssets(
     in scope: PhotoFetchScope, mediaType: PHAssetMediaType?
   ) async throws -> [AssetDescriptor] {
+    guard !empty else { return [] }
     let ids: [String]
     switch scope {
     case .timeline(let year, let month):
@@ -266,6 +273,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
     // so the `nonisolated` contract on the protocol holds while still letting us
     // read the curated data.
     await Task { @MainActor in
+      guard !self.empty else { return 0 }
       switch scope {
       case .timeline(let year, let month):
         if let month {
@@ -366,7 +374,8 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   // MARK: - PhotoLibraryService overrides — resources / details
 
   func resources(for assetId: String) -> [ResourceDescriptor] {
-    [
+    guard !empty else { return [] }
+    return [
       ResourceDescriptor(
         type: .photo, originalFilename: "\(assetId).HEIC",
         fileSize: 2_400_000)
@@ -374,7 +383,8 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   }
 
   func assetDetails(for assetId: String) -> AssetDetails? {
-    AssetDetails(
+    guard !empty else { return nil }
+    return AssetDetails(
       originalFilename: "\(assetId).HEIC",
       fileSize: 2_400_000,
       resources: resources(for: assetId)
@@ -408,6 +418,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   /// indexing). This lets 27 bundled photos populate ~120 grid tiles without
   /// the user noticing repeats unless they look hard.
   private func image(for assetId: String, size: CGSize) -> NSImage? {
+    guard !empty else { return nil }
     let resourceName = Self.bundledImageName(for: assetId) ?? assetId
     for ext in Self.bundledImageExtensions {
       if let url = Bundle.main.url(forResource: resourceName, withExtension: ext),
