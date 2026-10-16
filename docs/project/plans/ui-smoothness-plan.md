@@ -100,6 +100,15 @@ counts SwiftUI body re-evaluations for the four wired views:
 `CollectionsSidebarView`. Read from a debug REPL with
 `po BodyInvalidationCounter.shared.snapshot()`.
 
+Issue #149 extends the collection pane's existing narrow-input precedent to Favorites,
+albums, and shared albums. An optional DEBUG `bodyInvalidationCounter` environment value
+supports isolated hosted measurements of bodies, actual summary scans, rendering inputs,
+and rendered actions. The hosted regression uses a real placement and 10,000 synthetic
+assets: ten acknowledged unrelated queue publications caused ten extra bodies/scans
+before the fix and zero afterward (macOS 26.6.2, Xcode 27). This is a deterministic count
+measurement, not an Instruments trace or a real-library throughput benchmark. The pane
+keeps observing record, destination, and library changes; no summary cache is introduced.
+
 To capture a run: cold-start the app → select a ~10k-asset month → trigger
 "Export Month" (or stop after ~200 jobs) → record the `AppLaunch` duration,
 the `ExportRun` duration, and a body-counter snapshot. Scroll sessions have

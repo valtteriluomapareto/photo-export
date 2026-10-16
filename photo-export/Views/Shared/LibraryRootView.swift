@@ -313,9 +313,13 @@ struct LibraryRootView: View {
     case .favorites:
       CollectionContentView(
         selection: .favorites, title: "Favorites",
+        versionSelection: exportManager.versionSelection,
+        livePhotosPaired: exportManager.livePhotosPairedExport,
+        onExportCollection: { exportManager.startExportFavorites() },
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
+      .equatable()
       .environmentObject(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -323,9 +327,13 @@ struct LibraryRootView: View {
       CollectionContentView(
         selection: .album(collectionId: collectionId),
         title: albumTitle(forCollectionId: collectionId),
+        versionSelection: exportManager.versionSelection,
+        livePhotosPaired: exportManager.livePhotosPairedExport,
+        onExportCollection: { exportManager.startExportAlbum(collectionId: collectionId) },
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
+      .equatable()
       .environmentObject(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -333,9 +341,13 @@ struct LibraryRootView: View {
       CollectionContentView(
         selection: .sharedAlbum(collectionId: collectionId),
         title: sharedAlbumTitle(forCollectionId: collectionId),
+        versionSelection: exportManager.versionSelection,
+        livePhotosPaired: exportManager.livePhotosPairedExport,
+        onExportCollection: { exportManager.startExportSharedAlbum(collectionId: collectionId) },
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
+      .equatable()
       .environmentObject(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 

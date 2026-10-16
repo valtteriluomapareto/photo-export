@@ -63,7 +63,10 @@ struct LibraryGridSelectionLifecycleTests {
       } else {
         CollectionContentView(
           selection: grid.selection(selection.scopeIndex), title: "Test collection",
-          selectedAsset: $selection.asset, photoLibraryService: service)
+          versionSelection: .edited, livePhotosPaired: false, onExportCollection: {},
+          selectedAsset: $selection.asset, photoLibraryService: service
+        )
+        .equatable()
       }
     }
   }

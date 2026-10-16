@@ -6,32 +6,55 @@ import SwiftUI
 /// Shares `MonthViewModel`'s scope-based loader; mirrors `MonthContentView`'s layout but
 /// reads export status from `CollectionExportRecordStore` and starts collection-aware
 /// exports.
-struct CollectionContentView: View {
+/// Receives only rendering settings/actions from the manager-owning parent. As in
+/// MonthContentView, `.equatable()` at every call site filters fresh action closures
+/// on unrelated queue publications. Record/library/destination observations stay live.
+struct CollectionContentView: View, Equatable {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
 
   @StateObject private var viewModel: MonthViewModel
 
   let selection: LibrarySelection
   let title: String
+  let versionSelection: ExportVersionSelection
+  let livePhotosPaired: Bool
+  let onExportCollection: () -> Void
+  // Capture the value at construction: comparing two live Binding getters would
+  // read the same current value after a parent selection mutation.
+  private let selectedAssetId: String?
   @Binding var selectedAsset: AssetDescriptor?
 
   init(
     selection: LibrarySelection,
     title: String,
+    versionSelection: ExportVersionSelection,
+    livePhotosPaired: Bool,
+    onExportCollection: @escaping () -> Void,
     selectedAsset: Binding<AssetDescriptor?>,
     photoLibraryService: any PhotoLibraryService
   ) {
     self.selection = selection
     self.title = title
+    self.versionSelection = versionSelection
+    self.livePhotosPaired = livePhotosPaired
+    self.onExportCollection = onExportCollection
+    self.selectedAssetId = selectedAsset.wrappedValue?.id
     self._selectedAsset = selectedAsset
     _viewModel = StateObject(
       wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
   var body: some View {
+    #if DEBUG
+      // Required as a declaration inside the ViewBuilder.
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = recordRenderingInputs()
+    #endif
     VStack(alignment: .leading, spacing: 12) {
       Text(title)
         .font(.title2)
@@ -48,7 +71,7 @@ struct CollectionContentView: View {
         exportSummaryView
         Spacer()
         AutoSyncAwareExportButton(exportButtonTitle) {
-          startExport()
+          onExportCollection()
         }
         .buttonStyle(.bordered)
         .disabled(!canExport)
@@ -97,6 +120,18 @@ struct CollectionContentView: View {
     .measureBodyInvalidations("CollectionContentView")
   }
 
+  #if DEBUG
+    private func recordRenderingInputs() {
+      bodyCounter?.record("collectionBody")
+      bodyCounter?.record("scope:\(scopeTaskId)")
+      bodyCounter?.recordAction("collectionExport", action: onExportCollection)
+      bodyCounter?.record("selected:\(selectedAsset?.id ?? "")")
+      bodyCounter?.record("title:\(title)")
+      bodyCounter?.record("banner:\(showsReducedQualityBanner)")
+      bodyCounter?.record("canExport:\(canExport)")
+    }
+  #endif
+
   // Observe the first batch rather than waiting for the entire progressive load.
   // A scope check prevents an old pane's selection from reaching the detail binding.
   private var initialAssetSelection: AssetDescriptor? {
@@ -139,7 +174,7 @@ struct CollectionContentView: View {
   /// owned-library assets, so the banner would be noise. Users who want the full
   /// caveat in writing still get it from the website's Features page.
   private var showsReducedQualityBanner: Bool {
-    isSharedAlbum && exportManager.versionSelection == .editedWithOriginals
+    isSharedAlbum && versionSelection == .editedWithOriginals
   }
 
   /// Caution-style banner shown above the export controls when the user has
@@ -225,14 +260,17 @@ struct CollectionContentView: View {
   private func isExported(asset: AssetDescriptor) -> Bool {
     guard let placement else { return false }
     return collectionExportRecordStore.isExported(
-      asset: asset, placement: placement, selection: exportManager.versionSelection,
-      livePhotosPaired: exportManager.livePhotosPairedExport)
+      asset: asset, placement: placement, selection: versionSelection,
+      livePhotosPaired: livePhotosPaired)
   }
 
   // MARK: - Header summary
 
   private var exportSummaryView: some View {
     let summary = makeSummary()
+    #if DEBUG
+      bodyCounter?.record("summary:\(summary.exportedCount)/\(summary.totalCount)")
+    #endif
     return HStack(spacing: 8) {
       switch summary.status {
       case .complete:
@@ -256,10 +294,13 @@ struct CollectionContentView: View {
 
   private func makeSummary() -> MonthStatusSummary {
     if let placement {
+      #if DEBUG
+        bodyCounter?.record("summaryScan")
+      #endif
       return collectionExportRecordStore.monthSummary(
         assets: viewModel.assets, placement: placement,
-        selection: exportManager.versionSelection,
-        livePhotosPaired: exportManager.livePhotosPairedExport)
+        selection: versionSelection,
+        livePhotosPaired: livePhotosPaired)
     }
     return MonthStatusSummary(
       year: 0, month: 0, exportedCount: 0,
@@ -269,7 +310,7 @@ struct CollectionContentView: View {
   // MARK: - Export button
 
   private var canExport: Bool {
-    exportDestinationManager.canExportNow && exportManager.canExportCollection
+    exportDestinationManager.canExportNow && collectionExportRecordStore.state == .ready
   }
 
   private var exportButtonTitle: String {
@@ -287,27 +328,10 @@ struct CollectionContentView: View {
     if !exportDestinationManager.canExportNow {
       return "Select a writable export folder first"
     }
-    if !exportManager.canExportCollection {
+    if collectionExportRecordStore.state != .ready {
       return "Collections store is not ready"
     }
     return "Export every photo in this collection that isn't already exported."
-  }
-
-  private func startExport() {
-    switch selection {
-    case .favorites:
-      exportManager.startExportFavorites()
-    case .album(let id):
-      exportManager.startExportAlbum(collectionId: id)
-    case .sharedAlbum(let id):
-      exportManager.startExportSharedAlbum(collectionId: id)
-    case .timelineMonth(let year, let month):
-      exportManager.startExportMonth(year: year, month: month)
-    case .timelineYear(let year):
-      exportManager.startExportYear(year: year)  // Unreachable; see `scope`.
-    case .folder:
-      break  // Unreachable; see `scope`.
-    }
   }
 
   private var overlayViews: some View {
@@ -327,4 +351,13 @@ struct CollectionContentView: View {
       }
     }
   }
+
+  static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.selection == rhs.selection
+      && lhs.title == rhs.title
+      && lhs.versionSelection == rhs.versionSelection
+      && lhs.livePhotosPaired == rhs.livePhotosPaired
+      && lhs.selectedAssetId == rhs.selectedAssetId
+  }
+
 }
