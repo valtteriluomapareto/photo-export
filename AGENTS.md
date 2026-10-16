@@ -133,7 +133,7 @@ When changing user-visible behavior, update both the root `README.md` and the ma
   6. Push the branch, open the PR, and merge only when CI for the PR's **current head commit** is green and actionable review findings are resolved. The user's requested workflow authorizes this merge; do not stop for another confirmation unless an applicable approval rule requires it.
 - Keep PRs focused. An existing unrelated PR still needs this workflow before merging; do not infer that an old passing check validates new changes.
 - If reviewer subagents are unavailable, explain the limitation instead of presenting a self-review as the requested three-agent review.
-- **Releasing:** always run `scripts/bump-version.sh <version>` before pushing a tag. Pushing a `v*` tag triggers both release pipelines (`release-direct.yml` and `release-app-store.yml`) and they validate that the tag matches `MARKETING_VERSION`. See [`docs/project/release-process.md`](docs/project/release-process.md).
+- **Releasing:** always run `scripts/bump-version.sh <version>` and complete the [candidate Photos validation and evidence](docs/project/release-validation.md) before pushing a tag. Pushing a `v*` tag triggers both release pipelines (`release-direct.yml` and `release-app-store.yml`) and they validate that the tag matches `MARKETING_VERSION`. See [`docs/project/release-process.md`](docs/project/release-process.md).
 
 ### Delegating to opencode / Kimi K2.6 (scout model)
 

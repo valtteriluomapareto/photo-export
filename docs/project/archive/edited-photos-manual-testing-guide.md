@@ -1,8 +1,10 @@
 # Manual Testing Guide — Edited Photos Export
 
 Date: 2026-04-27
-Feature: [issue #13 — Support exporting edited photos](https://github.com/valtteriluomapareto/photo-export/conversations/issues/13)
+Feature: [issue #13 — Support exporting edited photos](https://github.com/valtteriluomapareto/photo-export/issues/13)
 Parent plan: `edited-photos-modes-redesign-plan.md`
+
+**Historical guide.** The active release gate is [pre-release Photos validation](../release-validation.md). The A1–A4/B1 byte-selection exercises remain useful with the corrections below; other UI, re-edit, import, and recovery scenarios describe the original rollout and require checking against current code before reuse.
 
 ## Goal
 
@@ -33,10 +35,10 @@ Run from Xcode (**Run** ⌘R) or launch the built `Photo Export.app`.
 
 ## Prerequisites
 
-- **macOS 15.0+**, Photos with iCloud Photos enabled, assets downloaded
-  locally. iCloud-only assets whose originals aren't on the Mac may show
-  `"Edited version was not provided by Photos. Future exports will try
-  again."` — that's iCloud, not the app.
+- **macOS 15.0+**, with a dedicated test account/library. Use local assets for
+  local cases and verify the nonlocal precondition for iCloud-only cases.
+  Download or edited-resource failures require evidence and investigation;
+  do not assume iCloud is the cause or count a fallback as normal success.
 - **Two empty folders** as test destinations. Switch between them when a
   scenario needs a clean slate.
 - A small set of seed assets in Photos. Suggested:
@@ -78,9 +80,9 @@ Toggle **Include originals** OFF.
 
 ### A4 — Edited video writes the edited bytes
 1. Export PA-4.
-2. Expected: destination has `IMG_<n>.MOV` (or whatever the original
-   extension is — the rendered edit keeps the source container). No
-   `_orig`. The toolbar may briefly show `(downloading…)` while Photos
+2. For a MOV fixture, expect a playable `IMG_<n>.MOV` showing the edit. Verify
+   the actual container; unsupported source extensions can fall back to MOV.
+   No `_orig`. The toolbar may briefly show `(downloading…)` while Photos
    prepares the source, then `(rendering…)` while AVFoundation writes
    the edit.
 
@@ -88,8 +90,8 @@ Toggle **Include originals** OFF.
 1. Toggle **Include originals** ON.
 2. Export PA-4.
 3. Expected: destination has both `IMG_<n>.MOV` (rendered edit) and
-   `IMG_<n>_orig.MOV` (original bytes). Both files share the same
-   container; `_orig` suffix is the only filename difference. First plays
+   `IMG_<n>_orig.MOV` (original bytes) for the MOV fixture. Do not assume
+   every source/render combination keeps the same container. First plays
    the edit, second plays the full original.
 
 ### A4c — Edited iCloud-only video

@@ -4,6 +4,8 @@ Date: 2026-04-30
 Feature: Collections export (Favorites + user albums)
 Parent plan: `collections-export-plan.md`
 
+**Historical guide.** Use [pre-release Photos validation](../release-validation.md) for release evidence. Favorites/nested-album exercises remain useful; original rollout UI and corruption-recovery instructions require checking against the current build and a disposable test account before reuse.
+
 ## Goal
 
 Verify by hand that the new Collections section behaves correctly across the cases unit tests cannot cover: PhotoKit integration, the segmented sidebar selector, sibling-collision behavior on the filesystem, rename behavior, and the corruption-recovery alert.
@@ -65,9 +67,9 @@ Then run the resulting `Photo Export.app` from the build output.
 
 1. In Photos.app create two albums with identical titles in the same folder (e.g. two `Trips` albums at the root).
 2. Export both, in any order.
-   - Expected: the first export gets the bare path (`Collections/Albums/Trips/`), the second gets `Collections/Albums/Trips_2/`. The on-disk paths are stable across subsequent exports of the same album.
+   - Expected: paths are distinct and stable (`Collections/Albums/Trips/`, `Collections/Albums/Trips_2/`). Existing placements keep their claims; newly discovered colliding siblings are assigned by stable collection-ID order, not export order.
 3. Re-export the first one.
-   - Expected: still lands at the bare path; nothing moves.
+   - Expected: still lands at its previously assigned path; nothing moves.
 
 ### 5. Album rename
 
@@ -106,11 +108,16 @@ Then run the resulting `Photo Export.app` from the build output.
 
 ### 9. Limited Photos access
 
-1. Toggle Photos access for the app to "Selected Photos…" with a small subset.
+This is conditional on the OS exposing limited-library controls. Do not assume
+macOS offers a "Selected Photos…" control; the required macOS denial/regrant
+case is in the active matrix. Record this historical scenario as unexercised
+if the OS does not support it.
+
+1. If available, grant access to a small selected subset.
 2. Verify that the Collections sidebar reflects only the visible assets:
    - Favorites count = favorites within the selected subset.
    - Albums show counts only for the selected subset.
-3. Re-grant full access; counts update without restart.
+3. Re-grant full access and record whether the OS requires relaunch; verify the visible subset and counts afterward.
 
 ## Regression checks
 

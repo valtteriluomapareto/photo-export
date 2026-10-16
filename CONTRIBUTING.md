@@ -123,4 +123,6 @@ When updating a pin manually, verify the commit and its `action.yml` in the upst
 
 ## Release and Project Notes
 
+Before pushing a release tag, follow the [release process](docs/project/release-process.md), including the [real-Photos candidate validation](docs/project/release-validation.md). Record unexercised cases explicitly; passing hermetic CI does not replace that evidence.
+
 Longer-lived project notes live under [`docs/`](docs/README.md). Keep the repo root reserved for the files people expect in an open source project.
