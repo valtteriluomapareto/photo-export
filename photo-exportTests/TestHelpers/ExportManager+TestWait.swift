@@ -1,3 +1,5 @@
+import Testing
+
 @testable import Photo_Export
 
 /// Deterministic completion helpers that replace the `Task.sleep` polling loops
@@ -24,23 +26,18 @@ extension ExportManager {
   /// final iteration, starving the actual export work that runs on the same
   /// `@MainActor` and forcing every test to hit the safety timeout.
   ///
-  /// The input-side preamble covers the gap until `startExport*()`'s unstored
-  /// enqueue Task lands on the main actor: before that Task runs, `currentTask`
-  /// is `nil`, `pendingJobs` is empty, and the exit check would return
-  /// immediately. The bounded loop exits as soon as work signals appear — so a
-  /// fast machine pays only one yield, while a slow machine gets up to 500 ms
-  /// of headroom without inflating the happy path.
+  /// Preparation handles replace the old 500 ms startup guess. Await only the
+  /// current generation, rechecking after each snapshot. Direct task awaits are
+  /// bounded by the test runner, not the queue-loop deadline below.
   func waitForQueueDrained(safetyTimeout: Duration = .seconds(60)) async {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: safetyTimeout)
-    await Task.yield()
-    let inputDeadline = clock.now.advanced(by: .milliseconds(500))
-    while clock.now < inputDeadline, !hasActiveExportWork, pendingJobs.isEmpty,
-      currentTask == nil
-    {
-      try? await Task.sleep(for: .milliseconds(10))
-    }
     while clock.now < deadline {
+      let preparations = currentPreparationTasks
+      if !preparations.isEmpty {
+        for task in preparations { await task.value }
+        continue
+      }
       if pendingJobs.isEmpty, !isRunning, !hasActiveExportWork {
         return
       }
@@ -50,6 +47,7 @@ extension ExportManager {
         await Task.yield()
       }
     }
+    Issue.record("Export queue did not drain before the safety deadline")
   }
 
   /// Blocks until the current import (if any) has finished. `importTask` is

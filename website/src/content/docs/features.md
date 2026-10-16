@@ -184,6 +184,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 - Per-destination tracking — switching destinations reconfigures automatically
 - Resume-safe: interrupted exports pick up where they left off without re-copying
 - Tracking snapshots are replaced atomically, preserving previous export history if the replacement is interrupted
+- Export preparation uses progressive Photos enumeration and yields between planning slices of at most 200 assets. Each scope commits after its scan succeeds. This bounds planning work per turn; buffers and staged jobs can still grow with the scope. Large-library responsiveness still needs real Photos validation.
 - Sidebar badges update as exports complete
 
 ## Queue controls

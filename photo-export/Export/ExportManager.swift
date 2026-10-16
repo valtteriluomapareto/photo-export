@@ -385,6 +385,26 @@ final class ExportManager: ObservableObject {
     collectionExportRecordStore.state == .ready
   }
 
+  // Unpublished lifetime handles for deterministic preparation completion.
+  // These do not participate in UI/AutoSync admission or publications.
+  private var preparationTasks: [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
+  var currentPreparationTasks: [Task<Void, Never>] {
+    preparationTasks.values.filter { $0.generation == generation }.map(\.task)
+  }
+
+  @discardableResult
+  private func trackPreparation(
+    generation gen: Int, operation: @escaping @MainActor () async -> Void
+  ) -> Task<Void, Never> {
+    let id = UUID()
+    let task = Task { [weak self] in
+      defer { self?.preparationTasks[id] = nil }
+      await operation()
+    }
+    preparationTasks[id] = (gen, task)
+    return task
+  }
+
   // MARK: - Internals
 
   /// Owns `pendingJobs`, `isProcessing`, `currentTask`, the per-placement queue
@@ -615,7 +635,7 @@ final class ExportManager: ObservableObject {
     // paused jobs first.
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
-    Task { [weak self] in
+    trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueMonth(
@@ -630,6 +650,7 @@ final class ExportManager: ObservableObject {
         }
         processQueueIfNeeded()
       } catch {
+        guard self.isCurrent(gen) else { return }
         logger.error(
           "Failed to enqueue month export: \(String(describing: error), privacy: .public)"
         )
@@ -655,7 +676,7 @@ final class ExportManager: ObservableObject {
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
-    Task { [weak self] in
+    trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueYear(
@@ -670,6 +691,7 @@ final class ExportManager: ObservableObject {
         }
         processQueueIfNeeded()
       } catch {
+        guard self.isCurrent(gen) else { return }
         logger.error(
           "Failed to enqueue year export: \(String(describing: error), privacy: .public)"
         )
@@ -820,7 +842,7 @@ final class ExportManager: ObservableObject {
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
-    Task { [weak self] in
+    trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
@@ -835,6 +857,7 @@ final class ExportManager: ObservableObject {
         }
         processQueueIfNeeded()
       } catch {
+        guard self.isCurrent(gen) else { return }
         logger.error(
           "Failed to enqueue favorites export: \(String(describing: error), privacy: .public)"
         )
@@ -1028,7 +1051,7 @@ final class ExportManager: ObservableObject {
     partialScanWarning: @escaping @MainActor () -> String,
     body: @escaping @MainActor () async throws -> BulkExportOutcome
   ) -> Task<Void, Never> {
-    Task { [weak self] in
+    trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await body()
@@ -1246,7 +1269,7 @@ final class ExportManager: ObservableObject {
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
-    Task { [weak self] in
+    trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
@@ -1266,6 +1289,7 @@ final class ExportManager: ObservableObject {
         }
         processQueueIfNeeded()
       } catch {
+        guard self.isCurrent(gen) else { return }
         logger.error(
           "Failed to enqueue shared-album export: \(String(describing: error), privacy: .public)"
         )
@@ -1292,7 +1316,7 @@ final class ExportManager: ObservableObject {
     clearQueueWarningMessage()
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
     let gen = generation
-    Task { [weak self] in
+    trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
@@ -1312,6 +1336,7 @@ final class ExportManager: ObservableObject {
         }
         processQueueIfNeeded()
       } catch {
+        guard self.isCurrent(gen) else { return }
         logger.error(
           "Failed to enqueue album export: \(String(describing: error), privacy: .public)"
         )
@@ -1355,24 +1380,28 @@ final class ExportManager: ObservableObject {
       existingPlacements: Array(existingPlacements)
     )
 
-    let assets = try await photoLibraryService.fetchAssets(in: scope, mediaType: nil)
-    try throwIfCancelledOrStale(gen)
     // The Live Photo paired-video setting (issue #49) is snapshotted at click time by
     // each `start*` caller and threaded in as `livePhotosPaired`. Doing the snapshot
     // there rather than here keeps the click-time semantics in the doc comments above —
     // a toggle flip during the `await fetchAssets` window cannot change what gets queued.
-    let newJobs = ExportJobPlanner.plan(
-      assets: assets, placement: placement, selection: selectionMode,
-      livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
-      isExported: {
-        collectionExportRecordStore.isExported(
-          asset: $0, placement: placement, selection: selectionMode,
-          livePhotosPaired: livePhotosPaired)
-      },
-      shouldSkipForRetry: {
-        skipForAutoSyncRetry(
-          asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired)
-      })
+    var skippedCount = 0
+    let newJobs = try await planAssetsProgressively(in: scope, generation: gen) { assets in
+      ExportJobPlanner.plan(
+        assets: assets, placement: placement, selection: selectionMode,
+        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
+        isExported: {
+          collectionExportRecordStore.isExported(
+            asset: $0, placement: placement, selection: selectionMode,
+            livePhotosPaired: livePhotosPaired)
+        },
+        shouldSkipForRetry: {
+          skipForAutoSyncRetry(
+            asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired,
+            skippedCount: &skippedCount)
+        })
+    }
+    try throwIfCancelledOrStale(gen)
+    activeRunBookkeeping?.skippedCount += skippedCount
     // Placement metadata is needed only when writing records. Avoid an unacknowledged
     // metadata append on the empty-queue completion path; real jobs flush it before IO.
     if !newJobs.isEmpty { collectionExportRecordStore.upsertPlacement(placement) }
@@ -1437,6 +1466,7 @@ final class ExportManager: ObservableObject {
     currentJobVariant = nil
     currentJobPlacement = nil
     queueCoordinator.bumpGeneration()
+    preparationTasks.removeAll()
     queueCoordinator.teardownQueue()
     queueCoordinator.resetProgressCounters()
     isEnqueueingAll = false
@@ -1519,20 +1549,26 @@ final class ExportManager: ObservableObject {
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return .unauthorized }
-    let assets = try await photoLibraryService.fetchAssets(year: year, month: month)
-    try throwIfCancelledOrStale(gen)
     let placement = ExportPlacement.timeline(year: year, month: month)
-    let newJobs = ExportJobPlanner.plan(
-      assets: assets, placement: placement, selection: selection,
-      livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
-      isExported: {
-        exportRecordStore.isExported(
-          asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
-      },
-      shouldSkipForRetry: {
-        skipForAutoSyncRetry(
-          asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired)
-      })
+    var skippedCount = 0
+    let newJobs = try await planAssetsProgressively(
+      in: .timeline(year: year, month: month), generation: gen
+    ) { assets in
+      ExportJobPlanner.plan(
+        assets: assets, placement: placement, selection: selection,
+        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
+        isExported: {
+          exportRecordStore.isExported(
+            asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
+        },
+        shouldSkipForRetry: {
+          skipForAutoSyncRetry(
+            asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired,
+            skippedCount: &skippedCount)
+        })
+    }
+    try throwIfCancelledOrStale(gen)
+    activeRunBookkeeping?.skippedCount += skippedCount
     queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
@@ -1545,22 +1581,53 @@ final class ExportManager: ObservableObject {
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else { return .unauthorized }
-    let assets = try await photoLibraryService.fetchAssets(year: year, month: nil)
+    var skippedCount = 0
+    let newJobs = try await planAssetsProgressively(
+      in: .timeline(year: year, month: nil), generation: gen
+    ) { assets in
+      ExportJobPlanner.planTimelineYear(
+        assets: assets, year: year, selection: selection,
+        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
+        isExported: {
+          exportRecordStore.isExported(
+            asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
+        },
+        shouldSkipForRetry: {
+          skipForAutoSyncRetry(
+            asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired,
+            skippedCount: &skippedCount)
+        })
+    }
     try throwIfCancelledOrStale(gen)
-    let newJobs = ExportJobPlanner.planTimelineYear(
-      assets: assets, year: year, selection: selection,
-      livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
-      isExported: {
-        exportRecordStore.isExported(
-          asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
-      },
-      shouldSkipForRetry: {
-        skipForAutoSyncRetry(
-          asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired)
-      })
+    activeRunBookkeeping?.skippedCount += skippedCount
     queueCoordinator.enqueue(newJobs)
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
+  }
+
+  /// Preserve scope-atomic enqueue while keeping each planning turn small. Buffers
+  /// and staged jobs remain lossless and can still grow to the size of the scope.
+  private func planAssetsProgressively(
+    in scope: PhotoFetchScope, generation gen: Int,
+    plan: ([AssetDescriptor]) -> [ExportJob]
+  ) async throws -> [ExportJob] {
+    try throwIfCancelledOrStale(gen)
+    var jobs: [ExportJob] = []
+    for try await batch in photoLibraryService.fetchAssetsProgressive(
+      in: scope, mediaType: nil, batchSize: 200)
+    {
+      try throwIfCancelledOrStale(gen)
+      var index = 0
+      while index < batch.count {
+        let end = min(index + 200, batch.count)
+        jobs.append(contentsOf: plan(Array(batch[index..<end])))
+        await Task.yield()
+        try throwIfCancelledOrStale(gen)
+        index = end
+      }
+    }
+    try throwIfCancelledOrStale(gen)
+    return jobs
   }
 
   /// Runs an export and returns its terminal summary. Wraps the existing fire-and-forget
@@ -2233,13 +2300,13 @@ final class ExportManager: ObservableObject {
   /// AutoSync retry-eligibility gate: returns `true` when the enqueue path
   /// should *skip* this asset because all required variants are currently
   /// in retry backoff (or hard-blocked needing user action). Called from
-  /// each of the three enqueue helpers; bumps `skippedCount` as a side
+  /// each of the three enqueue helpers; stages `skippedCount` as a side
   /// effect so the call site can simply `if skipForAutoSync(...) { continue }`.
   /// No-op for manual runs (`activeRunContext?.source != .autoSync`) and
   /// when the closure isn't installed.
   private func skipForAutoSyncRetry(
     asset: AssetDescriptor, placement: ExportPlacement,
-    selection: ExportVersionSelection, livePhotosPaired: Bool
+    selection: ExportVersionSelection, livePhotosPaired: Bool, skippedCount: inout Int
   ) -> Bool {
     guard activeRunContext?.source == .autoSync,
       let check = autoSyncEligibilityCheck
@@ -2256,7 +2323,7 @@ final class ExportManager: ObservableObject {
       check(asset.id, placement, variant, now)
     }
     if !hasEligible {
-      activeRunBookkeeping?.skippedCount += 1
+      skippedCount += 1
     }
     return !hasEligible
   }
