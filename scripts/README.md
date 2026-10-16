@@ -22,11 +22,14 @@ The structural guards also run locally without signing credentials:
 ```bash
 scripts/ci/test-guards.sh
 python3 scripts/ci/check-read-only-photos.py
+python3 scripts/ci/check-version.py
 ```
 
 The Photos guard rejects exact PhotoKit change/creation request and `performChanges` identifiers in production Swift sources. It ignores nested comments and ordinary/raw/multiline string literals (including interpolation bodies), preserves source line numbers, and fails on missing/empty input. It has no inline bypass marker. This is a lexical tripwire: aliases, dynamic calls, and code inside string interpolation need review; it does not replace Swift compilation or behavioral tests. Python 3 is required; only its standard library is used. Self-tests invoke the real scanners against temporary fixtures and preserve the existing destination-keying self-test.
 
 The regression-symbol guard uses the same lexical masking and matches complete `struct` and ordinary `func name(...)` declarations, rather than substring mentions. `test-guards.sh` covers clean inputs, missing files/declarations, suffix renames, and comment/string-only symbols before CI runs the real scans. When changing a guard, add a clean fixture and a violation fixture that asserts the intended diagnostic, not just a nonzero exit. Keep gate names synchronized with `docs/reference/architecture-conventions.md`; runtime ordering and cancellation still require the behavioral tests.
+
+The version validator checks every `MARKETING_VERSION` assignment line in `project.pbxproj` for syntax, supported stable/prerelease format, and consistency. Empty/malformed assignments are errors even when other entries are valid. Both release workflows run it before signing; only actual tag events supply `--expected <full-version>`. Direct-distribution main dry runs keep their `0.0.0-dev` context without comparing it to the app version. The validator never edits versions or creates tags; `bump-version.sh` remains the version mutation entry point. Its fixture tests run through `test-guards.sh`.
 
 | Script | Used by workflow |
 | --- | --- |

@@ -92,6 +92,9 @@ jobs:
           ./scripts/ci/test-guards.sh
           python3 scripts/ci/check-read-only-photos.py
 
+      - name: Check project version consistency
+        run: python3 scripts/ci/check-version.py
+
       - name: Check regression-gate symbols
         run: |
           echo "::group::Regression-gate symbol check"

@@ -36,6 +36,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Check project version consistency
+        run: python3 scripts/ci/check-version.py
+
       - name: Determine build context
         id: ctx
         run: |
@@ -67,16 +70,9 @@ jobs:
 
       - name: Verify MARKETING_VERSION matches tag
         if: steps.ctx.outputs.is_tag == 'true'
-        run: |
-          TAG_VERSION="${{ steps.ctx.outputs.version }}"
-          PROJECT_VERSION=$(grep -m1 'MARKETING_VERSION' photo-export.xcodeproj/project.pbxproj | sed 's/.*= *\(.*\);/\1/')
-          echo "Tag version:     ${TAG_VERSION}"
-          echo "Project version: ${PROJECT_VERSION}"
-          if [[ "$TAG_VERSION" != "$PROJECT_VERSION" ]]; then
-            echo "::error::Tag v${TAG_VERSION} does not match MARKETING_VERSION ${PROJECT_VERSION} in project.pbxproj. Run scripts/bump-version.sh ${TAG_VERSION} before tagging."
-            exit 1
-          fi
-          echo "Versions match."
+        env:
+          EXPECTED_TAG_VERSION: ${{ steps.ctx.outputs.version }}
+        run: python3 scripts/ci/check-version.py --expected "$EXPECTED_TAG_VERSION"
 
       - name: Check for existing GitHub Release
         if: steps.ctx.outputs.is_tag == 'true'
