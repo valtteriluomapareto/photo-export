@@ -84,6 +84,9 @@ extension AutoSyncFailureCategory {
       default:
         return .iCloudTransient
       }
+    case "CloudPhotoLibraryErrorDomain":
+      // Observed iCloud download failure; private neighboring codes remain unknown.
+      return code == 1005 ? .iCloudTransient : .unknown
     case PHPhotosErrorDomain:
       guard let phCode = PHPhotosError.Code(rawValue: code) else { return .unknown }
       return categoryForPhotosError(phCode)

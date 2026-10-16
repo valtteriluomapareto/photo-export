@@ -348,6 +348,8 @@ struct PhotoExportApp: App {
       .environmentObject(autoSyncScopeStore)
       .environmentObject(exportDestinationManager)
       .environmentObject(exportManager)
+      .environmentObject(exportRecordStore)
+      .environmentObject(collectionExportRecordStore)
       .environmentObject(lifecycleCoordinator)
       .environmentObject(loginItemController)
       .environmentObject(destinationSafetyMonitor)

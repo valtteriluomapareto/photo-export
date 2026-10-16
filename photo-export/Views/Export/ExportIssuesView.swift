@@ -1,59 +1,80 @@
 import SwiftUI
 
-/// Settings → Export Issues tab. Plan §"Settings UX" / §"Phase 4":
-/// "automatic export failures grouped by destination/scope/asset, retry
-/// status, next eligible retry time, actions to retry, ignore/suppress an
-/// issue, or reveal diagnostics."
-///
-/// MVP read-only view: shows the current destination's retry-state entries
-/// grouped by `AutoSyncFailureCategory`, then by placement scope, then by
-/// asset. Retry / ignore actions land with Phase 3 Slice C (retry-
-/// eligibility) — without it, the only meaningful action would be "wait."
+/// Failed variants from current export records, with matching Auto Export retry history.
 struct ExportIssuesView: View {
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
+  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+
+  private var snapshot: ExportIssuesProjection.Snapshot {
+    ExportIssuesProjection.snapshot(
+      destinationId: exportDestinationManager.destinationId,
+      timeline: exportRecordStore, collections: collectionExportRecordStore,
+      retryState: autoSyncManager.currentRetryState,
+      retryDestinationId: autoSyncManager.currentRetryDestinationId)
+  }
 
   var body: some View {
-    Group {
-      if autoSyncManager.currentRetryState.isEmpty {
-        emptyState
+    let current = snapshot
+    VStack(spacing: 0) {
+      if !current.unavailableStores.isEmpty {
+        Text(
+          exportDestinationManager.destinationId == nil
+            ? "Choose an export destination to view its issues."
+            : "\(current.unavailableStores.joined(separator: " and ")) records are unavailable or unsaved. This list may be incomplete."
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .padding()
+      }
+      if current.rows.isEmpty {
+        if current.unavailableStores.isEmpty {
+          emptyState
+        } else {
+          Spacer()
+          Text("Export issue information is unavailable.").foregroundStyle(.secondary)
+          Spacer()
+        }
       } else {
-        issuesList
+        issuesList(
+          current.rows,
+          canRetry: current.unavailableStores.isEmpty
+            && autoSyncManager.isEnabled && exportDestinationManager.canExportNow)
       }
     }
     .frame(minWidth: 460, minHeight: 460)
   }
 
-  // MARK: - Empty state
-
   private var emptyState: some View {
     VStack(spacing: 12) {
-      Image(systemName: "checkmark.seal")
-        .font(.system(size: 48))
-        .foregroundStyle(.secondary)
-      Text("No Export Issues")
-        .font(.headline)
-      Text("Nothing has failed for the current destination.")
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
+      Image(systemName: "checkmark.seal").font(.system(size: 48)).foregroundStyle(.secondary)
+      Text("No Export Issues").font(.headline)
+      Text("No failed versions are recorded for the current destination.")
+        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .padding(40)
   }
 
-  // MARK: - Issues list
-
-  private var issuesList: some View {
-    Form {
-      ForEach(groupedByCategory, id: \.category) { group in
-        Section(header: Self.header(for: group.category, count: group.entries.count)) {
-          ForEach(group.entries, id: \.id) { entry in
-            FailureRow(entry: entry) {
-              autoSyncManager.retryFailedVariant(
-                scope: entry.scopeKey,
-                assetId: entry.assetId,
-                variant: entry.variant
-              )
+  private func issuesList(_ rows: [ExportIssue], canRetry: Bool) -> some View {
+    let grouped = Dictionary(grouping: rows, by: \.category)
+    return Form {
+      ForEach(AutoSyncFailureCategory.allCases, id: \.self) { category in
+        if let entries = grouped[category] {
+          Section(header: Self.header(for: category, count: entries.count)) {
+            ForEach(entries) { entry in
+              FailureRow(
+                entry: entry, canRetry: canRetry, autoExportEnabled: autoSyncManager.isEnabled
+              ) {
+                // A rendered closure can outlive a destination switch or a new failure.
+                guard snapshot.rows.contains(entry), let scope = entry.scopeKey,
+                  let variant = entry.variant, let retry = entry.retry
+                else { return }
+                autoSyncManager.retryFailedVariant(
+                  scope: scope, assetId: entry.assetId, variant: variant,
+                  expectedDestinationId: entry.destinationId, expectedEntry: retry)
+              }
             }
           }
         }
@@ -108,172 +129,69 @@ struct ExportIssuesView: View {
     }
   }
 
-  // MARK: - Grouping
-
-  private struct CategoryGroup {
-    let category: AutoSyncFailureCategory
-    let entries: [FlatFailure]
-  }
-
-  /// One row in the issues list. Flattens the `[scopeKey: [assetId:
-  /// [variant: entry]]]` nesting so SwiftUI's `ForEach` has a stable
-  /// identifier.
-  fileprivate struct FlatFailure: Identifiable {
-    let id: String  // "<scope>/<assetId>/<variant>"
-    let scopeKey: AutoSyncRetryScopeKey
-    let assetId: String
-    let variant: ExportVariant
-    let entry: RetryEntry
-  }
-
-  private var groupedByCategory: [CategoryGroup] {
-    let flat = Self.flatten(autoSyncManager.currentRetryState)
-    let grouped = Dictionary(grouping: flat) { $0.entry.category }
-    return AutoSyncFailureCategory.allCases.compactMap { category -> CategoryGroup? in
-      guard let entries = grouped[category], !entries.isEmpty else { return nil }
-      // Sort within group: most-recent-failure first, then by asset id.
-      let sorted = entries.sorted { a, b in
-        if a.entry.lastFailedAt != b.entry.lastFailedAt {
-          return a.entry.lastFailedAt > b.entry.lastFailedAt
-        }
-        return a.assetId < b.assetId
-      }
-      return CategoryGroup(category: category, entries: sorted)
-    }
-  }
-
-  private static func flatten(_ retry: AutoSyncRetryState) -> [FlatFailure] {
-    var out: [FlatFailure] = []
-    for (scopeRaw, byAsset) in retry.entriesByPlacement {
-      guard let scopeKey = AutoSyncRetryScopeKey(rawValue: scopeRaw) else { continue }
-      for (assetId, byVariant) in byAsset {
-        for (variantRaw, entry) in byVariant {
-          guard let variant = ExportVariant(rawValue: variantRaw) else { continue }
-          out.append(
-            FlatFailure(
-              id: "\(scopeRaw)/\(assetId)/\(variantRaw)",
-              scopeKey: scopeKey,
-              assetId: assetId,
-              variant: variant,
-              entry: entry
-            ))
-        }
-      }
-    }
-    return out
-  }
 }
 
 private struct FailureRow: View {
-  let entry: ExportIssuesView.FlatFailure
+  let entry: ExportIssue
+  let canRetry: Bool
+  let autoExportEnabled: Bool
   let onRetry: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack {
-        Text(scopeLabel)
-          .font(.callout)
-          .foregroundStyle(.secondary)
-        Text("•")
-          .foregroundStyle(.tertiary)
-        Text(entry.variant.rawValue)
-          .font(.callout.monospaced())
-          .foregroundStyle(.secondary)
+        Text(entry.scopeLabel).font(.callout).foregroundStyle(.secondary)
+        Text("•").foregroundStyle(.tertiary)
+        Text(entry.id.variantRaw).font(.callout.monospaced()).foregroundStyle(.secondary)
         Spacer()
-        if entry.entry.attemptCount > 1 {
-          Text("\(entry.entry.attemptCount) attempts")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+        if let attempts = entry.retry?.attemptCount, attempts > 1 {
+          Text("\(attempts) attempts").font(.caption).foregroundStyle(.secondary)
         }
       }
-      Text(entry.assetId)
-        .font(.caption.monospaced())
-        .foregroundStyle(.tertiary)
-        .lineLimit(1)
-        .truncationMode(.middle)
-      Text(failureMessage)
-        .font(.callout)
-        .fixedSize(horizontal: false, vertical: true)
+      Text(entry.assetId).font(.caption.monospaced()).foregroundStyle(.tertiary)
+        .lineLimit(1).truncationMode(.middle)
+      Text(
+        ExportVariantRecovery.friendlyCopy(for: entry.reason, label: entry.id.variantRaw)
+          ?? entry.message
+      )
+      .font(.callout).fixedSize(horizontal: false, vertical: true)
       HStack {
-        Text(timeFooter)
-          .font(.caption)
-          .foregroundStyle(.tertiary)
+        Text(timeFooter).font(.caption).foregroundStyle(.tertiary)
         Spacer()
-        Button("Retry", action: onRetry)
-          .controlSize(.small)
+        if entry.retry != nil, entry.scopeKey != nil, entry.variant != nil, !entry.isCovered {
+          Button("Retry", action: onRetry).controlSize(.small).disabled(!canRetry)
+            .help(
+              "Retries using your configured Auto Export scopes. You can also export this item manually."
+            )
+        }
+      }
+      if !entry.isCovered, entry.retry == nil {
+        Text(
+          entry.scopeKey != nil && entry.variant != nil
+            ? "Use a manual export to retry this item." : "This item can't be retried here."
+        )
+        .font(.caption).foregroundStyle(.secondary)
       }
     }
     .padding(.vertical, 2)
   }
 
-  private var scopeLabel: String {
-    switch entry.scopeKey {
-    case .timeline: return "Timeline"
-    case .favorites: return "Favorites"
-    case .album(let placementId):
-      return "Album: \(collectionHashPrefix(of: placementId))…"
-    case .sharedAlbum(let placementId):
-      return "Shared Album: \(collectionHashPrefix(of: placementId))…"
-    }
-  }
-
-  /// Extracts the 8-character collection-id hash from a collection-placement id
-  /// (format: `collections:<kind>:<hash16>:<hash8>`). Used as a stable short label
-  /// so distinct albums in the failure list are visually distinguishable. Falls
-  /// back to the raw id's first 8 chars when the format is unrecognised (which
-  /// would render the same `collecti…` for every row — a known weakness of the
-  /// fallback, only reachable if a future placement-id format change leaves a
-  /// retry entry in the persisted store under an old shape).
-  private func collectionHashPrefix(of placementId: String) -> Substring {
-    let parts = placementId.split(separator: ":")
-    if parts.count >= 4 { return parts[2].prefix(8) }
-    return placementId.prefix(8)
-  }
-
-  /// Human-readable description for this failure. Per-category copy mirrors
-  /// the section header so the row reads even when the user can't see the
-  /// section context (VoiceOver linear traversal, narrow window). The
-  /// underlying `errorSignature` is "<domain>:<code>" — useful for log
-  /// hunting but opaque to end-users — exposed under "Show details".
-  private var failureMessage: String {
-    switch entry.entry.category {
-    case .destinationUnavailable: return "Couldn't reach the destination drive."
-    case .destinationPermission:
-      return "The destination drive rejected the write."
-    case .destinationNoSpace:
-      return "The destination drive ran out of space."
-    case .assetMissing:
-      return "The photo couldn't be found in your Photos library."
-    case .resourceMissing:
-      return "The required file inside Photos wasn't available."
-    case .photoKitTransient:
-      return "Photos library was temporarily unavailable."
-    case .iCloudTransient:
-      return "iCloud download or network access failed."
-    case .unknown:
-      return "Couldn't export — \(entry.entry.errorSignature)"
-    }
-  }
-
   private var timeFooter: String {
+    guard let date = entry.failedAt else { return "Failure time unavailable" }
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .short
-    let last = formatter.localizedString(
-      for: entry.entry.lastFailedAt, relativeTo: Date())
-    let retryClause: String
-    if let nextEligibleAt = entry.entry.nextEligibleAt {
-      if nextEligibleAt > Date() {
-        let inWhen = formatter.localizedString(for: nextEligibleAt, relativeTo: Date())
-        retryClause = " · auto-retry \(inWhen)"
-      } else {
-        retryClause = " · eligible to retry now"
-      }
-    } else if entry.entry.category.isAutomaticallyRetryable {
-      // Shouldn't happen — auto-retryable always gets a nextEligibleAt.
-      retryClause = ""
-    } else {
-      retryClause = " · needs action"
+    let now = Date()
+    var result = "Last failed \(formatter.localizedString(for: date, relativeTo: now))"
+    if !entry.isCovered, entry.retry != nil, !autoExportEnabled {
+      result += " · Auto Export is off"
+    } else if !entry.isCovered, let next = entry.retry?.nextEligibleAt {
+      result +=
+        next > now
+        ? " · auto-retry \(formatter.localizedString(for: next, relativeTo: now))"
+        : " · eligible to retry now"
+    } else if !entry.isCovered, entry.retry != nil {
+      result += " · needs action"
     }
-    return "Last failed \(last)\(retryClause)"
+    return result
   }
 }

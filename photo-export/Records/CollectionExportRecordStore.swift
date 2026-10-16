@@ -143,6 +143,7 @@ final class CollectionExportRecordStore: ObservableObject {
   @Published private(set) var persistenceError: String?
   private var hasUnsavedChanges = false
   private var configuredDestinationId: String?
+  var destinationId: String? { configuredDestinationId }
   // Failed writes must survive destination switches until the user can retry saving.
   private var pendingRecovery: [String: Snapshot] = [:]
 

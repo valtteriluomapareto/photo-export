@@ -10,6 +10,14 @@ import Testing
 /// without misclassification.
 struct AutoSyncFailureCategoryClassificationTests {
 
+  @Test func observedPrivateCloudDownloadCodeOnly() {
+    for code in [1004, 1005, 1006] {
+      let signal = AutoSyncFailureCategory.classify(NSError(domain: "CloudPhotoLibraryErrorDomain", code: code))
+      #expect(signal.category == (code == 1005 ? .iCloudTransient : .unknown))
+      #expect(signal.errorSignature == "CloudPhotoLibraryErrorDomain:\(code)")
+    }
+  }
+
   @Test func cocoaOutOfSpaceMapsToDestinationNoSpace() {
     let error = NSError(
       domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError,

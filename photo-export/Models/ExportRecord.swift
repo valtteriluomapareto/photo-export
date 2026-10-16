@@ -41,6 +41,9 @@ struct ExportVariantRecord: Codable, Equatable {
     self.reason = reason
   }
 
+  /// Interrupted recovery may retain an earlier success date; its failure time is unknown.
+  var failureDate: Date? { status == .failed && reason != .interrupted ? exportDate : nil }
+
   private enum CodingKeys: String, CodingKey {
     case filename, status, exportDate, lastError, subfolder, reason
   }

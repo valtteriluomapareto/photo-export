@@ -125,7 +125,7 @@ struct DiagnosticReporter {
             filename: variantRecord.filename,
             lastError: variantRecord.lastError,
             reason: variantRecord.reason,
-            exportDate: variantRecord.exportDate,
+            exportDate: target == .failed ? variantRecord.failureDate : variantRecord.exportDate,
             fallbackFilename: editedFallbackFilename(
               variant: variant, variantRecord: variantRecord,
               originalRecord: record.variants[.original])))
@@ -151,7 +151,7 @@ struct DiagnosticReporter {
               filename: variantRecord.filename,
               lastError: variantRecord.lastError,
               reason: variantRecord.reason,
-              exportDate: variantRecord.exportDate,
+              exportDate: target == .failed ? variantRecord.failureDate : variantRecord.exportDate,
               fallbackFilename: editedFallbackFilename(
                 variant: variant, variantRecord: variantRecord,
                 originalRecord: body.variants[ExportVariant.original.rawValue])))
