@@ -116,6 +116,7 @@ struct MonthContentView: View, Equatable {
     .task(id: "\(year)-\(month)") {
       await viewModel.loadAssets(forYear: year, month: month)
     }
+    .onDisappear { viewModel.deactivate() }
     .onChange(of: initialAssetSelection, initial: true) { _, asset in
       if selectedAsset == nil, let asset {
         selectedAsset = asset

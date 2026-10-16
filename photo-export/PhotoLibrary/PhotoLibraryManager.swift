@@ -53,6 +53,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
   /// Shared caching image manager for thumbnails
   private static let cachingImageManager = PHCachingImageManager()
+  private static var thumbnailPreheatRegistrations = ThumbnailPreheatRegistrations<PHAsset>()
 
   /// Long-lived cache of PHAsset objects keyed by `localIdentifier`. Populated
   /// additively by `cacheAssets(_:)` from `fetchAssets(in:)`. Cleared by
@@ -699,8 +700,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       s.startCachingThumbnails(for: assets)
       return
     }
-    // Use cached PHAssets (populated by the preceding fetchAssets call)
-    let phAssets = assets.compactMap { phAssetCache[$0.id] }
+    // Retain the PHAssets and balance overlapping consumers of the shared manager.
+    let phAssets = Self.thumbnailPreheatRegistrations.register(assets.map(\.id)) {
+      self.phAssetCache[$0]
+    }
     guard !phAssets.isEmpty else { return }
     let options = PHImageRequestOptions()
     options.deliveryMode = .opportunistic
@@ -716,7 +719,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       s.stopCachingThumbnails(for: assets)
       return
     }
-    let phAssets = assets.compactMap { phAssetCache[$0.id] }
+    let phAssets = Self.thumbnailPreheatRegistrations.release(assets.map(\.id))
     guard !phAssets.isEmpty else { return }
     let options = PHImageRequestOptions()
     options.deliveryMode = .opportunistic

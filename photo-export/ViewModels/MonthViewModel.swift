@@ -52,6 +52,21 @@ final class MonthViewModel: ObservableObject {
     self.photoLibraryService = photoLibraryService
   }
 
+  /// A disappearing grid relinquishes both its requests and preheat registrations.
+  /// Reloading on appearance activates the scope again; late responses stay stale.
+  func deactivate() {
+    requestGeneration &+= 1
+    currentScope = nil
+    stopPreheating()
+    isLoading = false
+  }
+
+  private func stopPreheating() {
+    let previous = cachedAssets
+    cachedAssets = []
+    if !previous.isEmpty { photoLibraryService.stopCachingThumbnails(for: previous) }
+  }
+
   /// Timeline-scope wrapper kept for the existing `MonthContentView` call site.
   func loadAssets(forYear year: Int, month: Int) async {
     await loadAssets(for: .timeline(year: year, month: month))
@@ -69,10 +84,7 @@ final class MonthViewModel: ObservableObject {
     currentScope = scope
     isLoading = true
     errorMessage = nil
-    if !cachedAssets.isEmpty {
-      photoLibraryService.stopCachingThumbnails(for: cachedAssets)
-      cachedAssets = []
-    }
+    stopPreheating()
     assets = []
     selectedAssetId = nil
 

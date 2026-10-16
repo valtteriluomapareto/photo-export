@@ -76,6 +76,8 @@ protocol PhotoLibraryService: AnyObject {
   /// Cached version of `countAdjustedAssets(in:)`.
   nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int
 
+  /// Each consumer balances start/stop calls for its window. Duplicate IDs within
+  /// one batch count once; overlapping consumers retain independent registrations.
   func startCachingThumbnails(for assets: [AssetDescriptor])
   func stopCachingThumbnails(for assets: [AssetDescriptor])
   func loadThumbnail(for assetId: String, allowNetwork: Bool) async -> NSImage?
