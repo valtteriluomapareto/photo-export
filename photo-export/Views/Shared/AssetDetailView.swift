@@ -5,8 +5,23 @@ import SwiftUI
 struct AssetDetailView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
 
   let asset: AssetDescriptor?
+  let placement: ExportPlacement?
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
+  init(asset: AssetDescriptor?, placement: ExportPlacement?) {
+    self.asset = asset
+    self.placement = placement
+  }
+
+  private struct StatusRow {
+    let text: String
+    let color: Color
+  }
 
   @StateObject private var imageLoader = AssetDetailImageLoader()
 
@@ -57,6 +72,10 @@ struct AssetDetailView: View {
 
   private func metadataView(for asset: AssetDescriptor) -> some View {
     let details = photoLibraryManager.assetDetails(for: asset.id)
+    let rows = statusRows(for: asset)
+    #if DEBUG
+      bodyCounter?.recordText(rows.map(\.text), for: "asset-detail-status")
+    #endif
 
     return VStack(alignment: .leading, spacing: 6) {
       if let name = details?.originalFilename {
@@ -76,50 +95,48 @@ struct AssetDetailView: View {
         Text("Duration: \(durationString)")
       }
       Text(asset.hasAdjustments ? "Edits: Available in Photos" : "Edits: None in Photos")
-      if let export = exportRecordStore.exportInfo(assetId: asset.id) {
-        variantStatusView(export.variants[.original], label: "Original")
-        if asset.isLivePhoto {
-          variantStatusView(export.variants[.originalPairedVideo], label: "Live Photo video")
-        }
-        if asset.hasAdjustments {
-          variantStatusView(export.variants[.edited], label: "Edited")
-          if asset.isLivePhoto {
-            variantStatusView(
-              export.variants[.editedPairedVideo], label: "Edited Live Photo video")
-          }
-        }
+      ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+        Text(row.text).foregroundColor(row.color)
       }
     }
     .font(.footnote)
   }
 
-  @ViewBuilder
-  private func variantStatusView(_ variant: ExportVariantRecord?, label: String) -> some View {
-    if let variant {
-      switch variant.status {
-      case .done:
-        if let when = variant.exportDate {
-          Text("\(label): Exported \(dateTimeFormatter.string(from: when))")
-        } else {
-          Text("\(label): Exported")
-        }
-      case .inProgress:
-        Text("\(label): In progress")
-      case .failed:
-        if let friendly = ExportVariantRecovery.friendlyCopy(
-          for: variant.reason, label: label)
-        {
-          // Named recoverable case — render in secondary color with copy that doesn't
-          // imply user action or guarantee recovery, just describes the retry behaviour.
-          Text(friendly)
-            .foregroundColor(.secondary)
-        } else {
-          Text("\(label) failed: \(variant.lastError ?? "Unknown error")")
-            .foregroundColor(.red)
-        }
-      case .pending:
-        Text("\(label): Pending")
+  private func statusRows(for asset: AssetDescriptor) -> [StatusRow] {
+    guard let placement else { return [] }
+    let variants = RecordStoreRouter(
+      timelineStore: exportRecordStore, collectionStore: collectionExportRecordStore
+    ).variants(forAssetId: asset.id, placement: placement)
+    var labels: [(ExportVariant, String)] = [(.original, "Original")]
+    if placement.kind.variantPolicy != .singleResource {
+      if asset.isLivePhoto || variants[.originalPairedVideo] != nil {
+        labels.append((.originalPairedVideo, "Live Photo video"))
       }
+      if asset.hasAdjustments || variants[.edited] != nil { labels.append((.edited, "Edited")) }
+      if asset.isLivePhoto || variants[.editedPairedVideo] != nil {
+        labels.append((.editedPairedVideo, "Edited Live Photo video"))
+      }
+    }
+    return labels.compactMap { variant, label in
+      variants[variant].map { statusRow($0, label: label) }
+    }
+  }
+
+  private func statusRow(_ variant: ExportVariantRecord, label: String) -> StatusRow {
+    switch variant.status {
+    case .done:
+      let suffix = variant.exportDate.map { " " + dateTimeFormatter.string(from: $0) } ?? ""
+      return StatusRow(text: "\(label): Exported\(suffix)", color: .primary)
+    case .inProgress:
+      return StatusRow(text: "\(label): In progress", color: .primary)
+    case .failed:
+      if let friendly = ExportVariantRecovery.friendlyCopy(for: variant.reason, label: label) {
+        return StatusRow(text: friendly, color: .secondary)
+      }
+      return StatusRow(
+        text: "\(label) failed: \(variant.lastError ?? "Unknown error")", color: .red)
+    case .pending:
+      return StatusRow(text: "\(label): Pending", color: .primary)
     }
   }
 

@@ -98,7 +98,7 @@ struct LibraryRootView: View {
           }
       },
       detail: {
-        AssetDetailView(asset: selectedAsset)
+        AssetDetailView(asset: selectedAsset, placement: detailPlacement)
           .environmentObject(photoLibraryManager)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
@@ -167,6 +167,21 @@ struct LibraryRootView: View {
     // for the detail pane to render a useful asset preview.
     .frame(minWidth: 1100, minHeight: 700)
     .background(Color(.windowBackgroundColor))
+  }
+
+  private var detailPlacement: ExportPlacement? {
+    guard let focusedSelection else { return nil }
+    switch focusedSelection {
+    case .timelineMonth(let year, let month):
+      return .timeline(year: year, month: month)
+    case .favorites:
+      return collectionExportRecordStore.currentPlacement(for: focusedSelection, collections: [])
+    case .album, .sharedAlbum:
+      guard let tree = try? photoLibraryManager.fetchCollectionTree() else { return nil }
+      return collectionExportRecordStore.currentPlacement(for: focusedSelection, collections: tree)
+    case .timelineYear, .folder:
+      return nil
+    }
   }
 
   // MARK: - Section picker

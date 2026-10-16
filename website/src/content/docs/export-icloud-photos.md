@@ -37,6 +37,8 @@ Browse your library two ways via the **Timeline / Collections** segmented contro
 - **Timeline** — your library by year and month. Click a month to preview its thumbnails and full-size photos.
 - **Collections** — your **Favorites**, every album and folder you've created in Photos, and any **iCloud shared albums** you participate in. Click an album to preview its contents. Shared albums sit in their own sidebar section because they export at reduced quality — see [Shared albums (reduced fidelity)](/photo-export/features/#shared-albums-reduced-fidelity). (Smart albums other than Favorites aren't included.)
 
+The selected asset’s detail pane shows export history for the scope you are browsing. An album’s history is separate from its Timeline and Favorites copies; after an album rename or move, details refer to the current export folder.
+
 New sibling albums with case-only names, such as `Trip` and `trip`, receive separate export
 folders; Shared Albums follow the same rule. Previously tracked folders keep their paths.
 For an older mixed backup, export the affected albums to a **new empty destination folder**

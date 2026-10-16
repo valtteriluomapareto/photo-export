@@ -406,6 +406,15 @@ final class CollectionExportRecordStore: ObservableObject {
     append(.deletePlacement(placementId: id))
   }
 
+  /// Current persisted collection slot; caller supplies the Photos tree so this
+  /// query remains read-only and never performs framework IO or allocates a placement.
+  func currentPlacement(
+    for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
+  ) -> ExportPlacement? {
+    ExportPlacementResolver().existingCollectionPlacement(
+      for: selection, collections: collections, existingPlacements: Array(placements.values))
+  }
+
   func placement(id: String) -> ExportPlacement? {
     placements[id]
   }
