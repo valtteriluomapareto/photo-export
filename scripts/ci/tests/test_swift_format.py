@@ -53,7 +53,8 @@ class SwiftFormatGateTests(unittest.TestCase):
 
     def test_formatting_warning_fails_before_the_success_message(self):
         result = self.run_step("struct Fixture{let value=1}\n")
-        self.assertRegex(result.stderr, r"Fixture.swift:\d+:\d+: warning: \[\w+\]")
+        # Formatter versions differ in whether strict mode promotes diagnostic severity.
+        self.assertRegex(result.stderr, r"Fixture.swift:\d+:\d+: (?:warning|error): \[Spacing\]")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("swift-format lint passed.", result.stdout)
 
