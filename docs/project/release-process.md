@@ -20,6 +20,8 @@ Forgetting this step is non-fatal: the sheet falls back to a generic "Photo Expo
 
 Keep older entries in the catalog — users skipping multiple releases see the combined set for everything between their last-seen version and the current bundle version.
 
+Commit the catalog and all intended candidate changes before bumping the version; start step 2 with a clean checkout. The bump script commits only the project/version files and marketing layout, so uncommitted release notes would otherwise be absent from its tag.
+
 ### 2. Bump the version
 
 ```bash
@@ -36,7 +38,13 @@ To set the version without committing or tagging:
 scripts/bump-version.sh 1.2.0 --no-tag
 ```
 
-### 3. Push the tag
+### 3. Validate the final candidate before tag push
+
+Complete the [pre-release Photos smoke matrix and evidence record](release-validation.md) against the final version-bumped commit. Record the app artifact and candidate commit in the release issue or PR. Failed cases block release; each unexercised case needs a reason, residual risk, and an explicit release-owner decision. CI does not substitute for real-library evidence.
+
+If the candidate changes, rebuild and repeat relevant checks before pushing its tag. This gate applies to betas, stable promotions, and code changes after App Review rejection. Keep the tag local until the release decision is recorded, and verify it points to the approved candidate.
+
+### 4. Push the tag
 
 Check that all project configurations agree with the version you are about to push:
 
@@ -61,13 +69,13 @@ Pushing the `v*` tag triggers the **release-direct** workflow which:
 7. Creates a **draft** GitHub Release with auto-generated notes
 8. Attaches the DMG and SHA-256 checksum to the release
 
-### 4. Review and publish the GitHub Release
+### 5. Review and publish the GitHub Release
 
 1. Go to **Releases** on GitHub
 2. Review the draft release — edit the notes if needed
 3. Click **Publish release**
 
-### 5. Submit to App Store
+### 6. Submit to App Store
 
 The same `v*` tag also triggers `release-app-store.yml`, which archives, signs, and uploads to App Store Connect automatically. Once the build appears in App Store Connect, submit for App Review manually.
 
@@ -88,7 +96,7 @@ xcodebuild archive \
 
 Upload via Xcode Organizer (Distribute App > App Store Connect) or Transporter.
 
-### 6. Verify
+### 7. Verify distribution artifacts
 
 **GitHub Release:**
 
@@ -125,6 +133,11 @@ For seeding a build to a small group of testers from `main` without committing t
 
 ```bash
 scripts/bump-version.sh 1.3.0-beta.1
+```
+
+Complete step 3's pre-tag validation for this candidate, then push:
+
+```bash
 git push && git push origin v1.3.0-beta.1
 ```
 
@@ -140,6 +153,11 @@ To promote a beta to stable, bump again with the bare version and re-tag:
 
 ```bash
 scripts/bump-version.sh 1.3.0
+```
+
+Apply step 3's candidate diff assessment and validation to the stable version before pushing:
+
+```bash
 git push && git push origin v1.3.0
 ```
 
@@ -159,18 +177,18 @@ The stable tag goes through both channels (GitHub Release + App Store) as usual.
 1. Delete the draft GitHub Release and the tag (if the GitHub Release was already published, the semver is burned — use a new semver instead)
 2. Fix the issue on `main`
 3. Re-run `bump-version.sh` with the same semver (or a new one if the old version was published)
-4. Tag the new commit and push
+4. Complete step 3's validation for the new candidate before pushing its tag
 5. A new draft GitHub Release is created; submit the new App Store build
 
 ## Rollback
 
-**Bad GitHub draft**: Delete the draft release and the tag, fix the issue, then re-tag.
+**Bad GitHub draft**: Delete the draft release and the tag, fix the issue, then re-tag and complete pre-tag validation before pushing.
 
 **Bad published GitHub release**: Ship a patch version (preferred) or delete the release.
 
 **Critical bug in a live App Store release**:
 
 1. Remove the build from sale in App Store Connect immediately
-2. Fix the bug, bump semver, tag, and submit a new build
+2. Fix the bug, bump semver, complete pre-tag validation, then push the tag and submit a new build
 3. Request expedited App Review if the bug is severe
 4. The GitHub Release can go live immediately; the App Store fix is gated by review (typically 24-48h)
