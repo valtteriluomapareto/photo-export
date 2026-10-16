@@ -257,8 +257,10 @@ struct ExportManagerVideoRenderTests {
 
     h.manager.startExportMonth(year: 2025, month: 11)
     await entered.wait()
+    let inFlight = try #require(h.manager.currentTask)
     h.manager.cancelAndClear()
     latch.signal()
+    await inFlight.value
     await h.manager.waitForQueueDrained()
 
     // Pin that the cleanup path actually ran. Without this assertion the test

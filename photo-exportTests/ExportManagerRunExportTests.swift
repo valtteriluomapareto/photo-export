@@ -127,14 +127,229 @@ struct ExportManagerRunExportTests {
     }
   }
 
+  enum ProgressiveScope: CaseIterable, Sendable { case month, year, favorites, album, shared }
+
+  @Test(arguments: ProgressiveScope.allCases)
+  func enqueueUsesProgressiveAssetsAcrossEveryScope(scope: ProgressiveScope) async throws {
+    let harness = makeHarness()
+    let gate = AsyncCheckpoint()
+    harness.writer.checkpoint = gate
+    let assets = ["stream-a", "stream-b", "legacy-only"].map {
+      TestAssetFactory.makeAsset(id: $0, creationDate: makeDate(2025, 1, 1))
+    }
+    let full: FullScope =
+      switch scope {
+      case .month, .year: .timeline
+      case .favorites: .favorites
+      case .album: .albums
+      case .shared: .sharedAlbums
+      }
+    seedAssets(assets, for: full, in: harness)
+    harness.photoLib.progressiveStreamOverride = { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield([assets[0]])
+        continuation.yield([assets[1]])
+        continuation.finish()
+      }
+    }
+    switch scope {
+    case .month: harness.manager.startExportMonth(year: 2025, month: 1)
+    case .year: harness.manager.startExportYear(year: 2025)
+    case .favorites: harness.manager.startExportFavorites()
+    case .album: harness.manager.startExportAlbum(collectionId: "album-1")
+    case .shared: harness.manager.startExportSharedAlbum(collectionId: "shared-1")
+    }
+    await gate.waitForEnter(count: 1)
+    let manager = harness.manager
+    manager.pause()
+    let ids = Set(
+      manager.pendingJobs.map(\.assetLocalIdentifier) + [manager.currentJobAssetId ?? ""])
+    #expect(ids == ["stream-a", "stream-b"])
+    #expect(manager.totalJobsEnqueued == 2)
+    if let queued = manager.pendingJobs.first {
+      let expected: ExportPlacement.Kind =
+        switch scope {
+        case .month, .year: .timeline
+        case .favorites: .favorites
+        case .album: .album
+        case .shared: .sharedAlbum
+        }
+      #expect(queued.placement.kind == expected)
+    }
+    await gate.releaseAll()
+    manager.resume()
+    await manager.waitForQueueDrained()
+    await harness.cleanup()
+  }
+
+  @Test func progressiveLateFailureDoesNotCommitJobsMetadataOrRetrySkips() async {
+    let harness = makeHarness()
+    let assets = ["eligible", "blocked"].map {
+      TestAssetFactory.makeAsset(id: $0, creationDate: makeDate(2025, 1, 1))
+    }
+    seedAssets(assets, for: .albums, in: harness)
+    harness.photoLib.progressiveStreamOverride = { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(assets)
+        continuation.finish(throwing: CocoaError(.fileReadUnknown))
+      }
+    }
+    harness.manager.autoSyncEligibilityCheck = { id, _, _, _ in id != "blocked" }
+    let context = ExportRunContext(
+      source: .autoSync, visibility: .background, scope: .allAlbumsFull, selection: .edited)
+    let summary = await harness.manager.runExport(context: context)
+    #expect(summary.result == .failed)
+    #expect(summary.enqueuedCount == 0)
+    #expect(summary.skippedCount == 0)
+    #expect(harness.collectionStore.placements.isEmpty)
+    #expect(harness.writer.writeCalls.isEmpty)
+    await harness.cleanup()
+  }
+
+  @Test func oversizedProgressiveBatchYieldsBeforePlanningEveryAsset() async {
+    let harness = makeHarness()
+    let assets = (0..<501).map {
+      TestAssetFactory.makeAsset(id: "large-\($0)", creationDate: makeDate(2025, 1, 1))
+    }
+    seedAssets(assets, for: .favorites, in: harness)
+    let terminated = AsyncStream<Bool>.makeStream()
+    var heldContinuation: AsyncThrowingStream<[AssetDescriptor], any Error>.Continuation?
+    harness.photoLib.progressiveStreamOverride = { _ in
+      AsyncThrowingStream { continuation in
+        heldContinuation = continuation
+        continuation.onTermination = { _ in terminated.continuation.yield(true) }
+        continuation.yield(assets)
+      }
+    }
+    var probes = 0
+    var probesAtHeartbeat = 0
+    harness.manager.autoSyncEligibilityCheck = { _, _, _, _ in
+      probes += 1
+      if probes == 1 {
+        Task(priority: .high) { @MainActor in
+          probesAtHeartbeat = probes
+          harness.manager.cancelAndClear()
+        }
+      }
+      return false
+    }
+    let context = ExportRunContext(
+      source: .autoSync, visibility: .background, scope: .favoritesFull, selection: .edited)
+    let run = Task(priority: .background) { await harness.manager.runExport(context: context) }
+    let summary = await run.value
+    #expect(probesAtHeartbeat > 0 && probesAtHeartbeat < assets.count)
+    #expect(probes < 501)
+    #expect(summary.result == .cancelled)
+    #expect(
+      summary.skippedCount == 0, "uncommitted staged skip counts belong to the abandoned scope")
+    #expect(harness.manager.pendingJobs.isEmpty)
+    let timeout = Task {
+      do {
+        try await Task.sleep(for: .seconds(5))
+        terminated.continuation.yield(false)
+      } catch {}
+    }
+    var terminationIterator = terminated.stream.makeAsyncIterator()
+    #expect(await terminationIterator.next() == true, "stale consumer must terminate its producer")
+    timeout.cancel()
+    heldContinuation?.finish()
+    await harness.cleanup()
+  }
+
+  @Test func progressiveScopeCommitsOnlyAfterCompletionAndKeepsClickTimeSettings() async {
+    let harness = makeHarness()
+    let assets = ["first", "second"].map {
+      TestAssetFactory.makeAsset(id: $0, creationDate: makeDate(2025, 1, 1), isLivePhoto: true)
+    }
+    seedAssets(assets, for: .albums, in: harness)
+    let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
+    harness.photoLib.progressiveStreamOverride = { _ in stream.stream }
+    let planned = AsyncCheckpoint()
+    harness.manager.autoSyncEligibilityCheck = { _, _, _, _ in
+      Task { await planned.enter() }
+      return true
+    }
+    let finished = AsyncStream<Void>.makeStream()
+    let observation = harness.manager.$isEnqueueingAll.dropFirst().filter { !$0 }.sink { _ in
+      finished.continuation.yield(())
+    }
+    harness.manager.livePhotosPairedExport = true
+    harness.manager.videoLayout = .subfolder
+    let context = ExportRunContext(
+      source: .autoSync, visibility: .background, scope: .allAlbumsFull,
+      selection: .editedWithOriginals)
+    let task = Task { await harness.manager.runExport(context: context) }
+    stream.continuation.yield([assets[0]])
+    await planned.waitForEnter(count: 1)
+    harness.manager.queueCoordinator.pause()
+    #expect(harness.manager.pendingJobs.isEmpty)
+    #expect(harness.collectionStore.placements.isEmpty)
+    harness.manager.livePhotosPairedExport = false
+    harness.manager.videoLayout = .flat
+    harness.manager.versionSelection = .edited
+    stream.continuation.yield([assets[1]])
+    stream.continuation.finish()
+    var iterator = finished.stream.makeAsyncIterator()
+    _ = await iterator.next()
+    #expect(harness.manager.pendingJobs.map(\.assetLocalIdentifier) == ["first", "second"])
+    #expect(
+      harness.manager.pendingJobs.allSatisfy {
+        $0.selection == .editedWithOriginals && $0.livePhotosPaired && $0.videoLayout == .subfolder
+      })
+    #expect(harness.collectionStore.placements.count == 1)
+    observation.cancel()
+    await planned.releaseAll()
+    harness.manager.cancelAndClear()
+    _ = await task.value
+    await harness.cleanup()
+  }
+
+  @Test func preparationHandlesCoverOverlappingScopesCompletingOutOfOrder() async throws {
+    let harness = makeHarness()
+    let oldGate = AsyncCheckpoint()
+    let freshGate = AsyncCheckpoint()
+    let writerGate = AsyncCheckpoint()
+    harness.writer.checkpoint = writerGate
+    harness.photoLib.fetchAssetsCheckpointByYear = [2024: oldGate, 2025: freshGate]
+    for year in [2024, 2025] {
+      let asset = TestAssetFactory.makeAsset(id: "\(year)", creationDate: makeDate(year, 1, 1))
+      harness.photoLib.assetsByYearMonth["\(year)-1"] = [asset]
+      harness.photoLib.resourcesByAssetId[asset.id] = [TestAssetFactory.makeResource()]
+    }
+    harness.manager.startExportMonth(year: 2024, month: 1)
+    harness.manager.startExportMonth(year: 2025, month: 1)
+    #expect(harness.manager.currentPreparationTasks.count == 2)
+    await oldGate.waitForEnter(count: 1)
+    await freshGate.waitForEnter(count: 1)
+    await freshGate.releaseAll()
+    await writerGate.waitForEnter(count: 1)
+    #expect(harness.manager.currentPreparationTasks.count == 1)
+    let remaining = try #require(harness.manager.currentPreparationTasks.first)
+    let drain = Task { await harness.manager.waitForQueueDrained() }
+    await oldGate.releaseAll()
+    await remaining.value
+    #expect(harness.manager.currentPreparationTasks.isEmpty)
+    await writerGate.releaseAll()
+    await drain.value
+    #expect(harness.manager.totalJobsCompleted == 2)
+    await harness.cleanup()
+  }
+
   // MARK: - Stale bulk-task ownership (issue #140)
 
   /// A normal late fetch result and a late fetch error both belong to A.
   /// Await A's actual enqueue task before inspecting B, so the assertions
   /// cannot pass merely because A's epilogue has not run yet.
-  @Test(arguments: [false, true], [false, true])
-  func staleBulkFetchCannotMutateReplacementRun(throwsError: Bool, hasQueuedJobs: Bool) async throws
+  enum LateFetchMode: CaseIterable, Sendable {
+    case legacySuccess, legacyFailure, streamSuccess, streamFailure
+  }
+
+  @Test(arguments: LateFetchMode.allCases, [false, true])
+  func staleBulkFetchCannotMutateReplacementRun(mode: LateFetchMode, hasQueuedJobs: Bool)
+    async throws
   {
+    let throwsError = mode == .legacyFailure || mode == .streamFailure
+    let progressive = mode == .streamSuccess || mode == .streamFailure
     let harness = makeHarness()
     let manager = harness.manager
     let oldFetch = AsyncCheckpoint()
@@ -151,6 +366,30 @@ struct ExportManagerRunExportTests {
 
     harness.photoLib.yearCounts = [(2023, 1)]
     harness.photoLib.fetchAssetsCheckpointByYear[2023] = oldFetch
+    if progressive {
+      harness.photoLib.progressiveStreamOverride = { scope in
+        guard scope == .timeline(year: 2023, month: nil) else { return nil }
+        return AsyncThrowingStream { continuation in
+          let producer = Task {
+            continuation.yield([
+              TestAssetFactory.makeAsset(
+                id: "staged-old", creationDate: makeDate(2023, 1, 1))
+            ])
+            await oldFetch.enter()
+            if throwsError {
+              continuation.finish(throwing: CocoaError(.fileReadUnknown))
+            } else {
+              continuation.yield([
+                TestAssetFactory.makeAsset(
+                  id: "late-old", creationDate: makeDate(2023, 1, 1))
+              ])
+              continuation.finish()
+            }
+          }
+          continuation.onTermination = { _ in producer.cancel() }
+        }
+      }
+    }
     if throwsError {
       harness.photoLib.fetchAssetsErrorByYear[2023] = NSError(domain: "OldFetch", code: 1)
     }
@@ -181,6 +420,7 @@ struct ExportManagerRunExportTests {
     await oldTask.value
 
     #expect(manager.generation == generation)
+    #expect(manager.currentPreparationTasks.count == 1, "A must leave B preparation registered")
     #expect(manager.isEnqueueingAll)
     #expect(manager.activeRunContext == context)
     #expect(manager.pendingJobs == pendingJobs)

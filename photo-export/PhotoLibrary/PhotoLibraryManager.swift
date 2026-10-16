@@ -471,12 +471,17 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
           // descriptor(from:) is @MainActor (inherits from PLM); fold the
           // cache update + descriptor mapping into one main-actor hop.
           let descriptors = await MainActor.run {
+            guard !Task.isCancelled else { return [AssetDescriptor]() }
             self.cacheAssets(phAssets)
             return phAssets.map {
               Self.descriptor(from: $0, useResourceFallback: useResourceFallback)
             }
           }
-          continuation.yield(descriptors)
+          guard !Task.isCancelled else {
+            continuation.finish()
+            return
+          }
+          if case .terminated = continuation.yield(descriptors) { return }
           index = end
         }
         continuation.finish()
