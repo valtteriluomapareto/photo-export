@@ -63,6 +63,35 @@ python3 -B -m unittest discover -s scripts/ci/tests -p test_ci_routing.py
 
 These tests also run in the Linux routing job on every CI run, even website-only work.
 
+### Main branch protection
+
+The repository setting requires the conclusive `build-and-test` and `website`
+checks from GitHub Actions (app ID `15368`). Require these final gates rather than
+the conditional `app-validation` / `website-validation` jobs: an unrelated area
+must finish with a successful final gate after its validator is skipped. Pending,
+failed and cancelled required results block the normal protected merge path.
+
+The configured freshness policy is `strict=false` (an older base is allowed;
+current-head CI is still required). `enforce_admins=false` retains administrator
+bypass for emergencies. The [contributor workflow](../CONTRIBUTING.md#automation-dependencies)
+requires explicit human instruction, a recorded reason and follow-up for a bypass;
+agents and administrators use ordinary green-CI merges for normal work.
+
+These are live settings, not settings applied by a workflow. Recheck without
+changing protection:
+
+```bash
+gh api repos/valtteriluomapareto/photo-export/branches/main/protection
+gh api repos/valtteriluomapareto/photo-export/rulesets
+```
+
+Verify `required_status_checks.checks` contains both names bound to `app_id: 15368`,
+`required_status_checks.strict` and `enforce_admins.enabled` match the policy above,
+and unrelated protection/rulesets are preserved. The existing review requirement
+has zero required approvals; preserve its object when updating settings rather
+than replacing it with `null`, which would remove the PR requirement. For a policy
+change, record fresh before/after API evidence and rerun the routing/result tests.
+
 ### Advisory coverage summary
 
 After the macOS unit-test step, `ci/coverage_summary.py` reads the existing xcresult
