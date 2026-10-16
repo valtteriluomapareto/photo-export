@@ -84,6 +84,10 @@ xcodebuild \
 
 Run unit tests:
 
+The shared scheme includes native hosted SwiftUI behavior tests and fake platform-service tests.
+Login-item tests never change System Settings; volume tests use isolated notifications and temporary folders.
+The CI XCUITest onboarding/navigation smoke remains deferred in [#108](https://github.com/valtteriluomapareto/photo-export/issues/108).
+
 ```bash
 xcodebuild \
   -project photo-export.xcodeproj \

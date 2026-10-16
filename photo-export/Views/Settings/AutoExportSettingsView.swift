@@ -107,7 +107,7 @@ struct AutoExportSettingsView: View {
           Button("Export Now") {
             autoSyncManager.runNow()
           }
-          .disabled(!canRunNow)
+          .disabled(!autoSyncManager.state.canRunNow)
         }
       } footer: {
         Text(exportNowFooter)
@@ -130,7 +130,7 @@ struct AutoExportSettingsView: View {
         ) {
           VStack(alignment: .leading, spacing: 2) {
             Text("Open Photo Export at login")
-            Text(loginItemFooter)
+            Text(loginItemController.status.footerText)
               .font(.caption)
               .foregroundStyle(.secondary)
           }
@@ -223,34 +223,6 @@ struct AutoExportSettingsView: View {
           }
         }
       }
-    }
-  }
-
-  // MARK: - Run Now eligibility
-
-  private var canRunNow: Bool {
-    switch autoSyncManager.state {
-    case .disabled, .blocked, .running:
-      return false
-    case .idle, .scheduled, .waiting:
-      return true
-    }
-  }
-
-  private var loginItemFooter: String {
-    switch loginItemController.status {
-    case .enabled:
-      return "Photo Export will start automatically when you log in."
-    case .requiresApproval:
-      return
-        "macOS is waiting for you to confirm in System Settings → Login Items."
-    case .notRegistered:
-      return "Photo Export won't auto-start at login."
-    case .notFound:
-      return
-        "Move Photo Export into your Applications folder to enable launch at login."
-    case .unknown:
-      return "Status unknown — check System Settings → Login Items."
     }
   }
 
@@ -514,7 +486,8 @@ private struct LastCatchUpRow: View {
 
   private var label: String {
     let durationMs = Int(summary.duration * 1000)
-    let durationText = durationMs < 1000 ? "\(durationMs) ms" : String(format: "%.1f s", summary.duration)
+    let durationText =
+      durationMs < 1000 ? "\(durationMs) ms" : String(format: "%.1f s", summary.duration)
     switch summary.result {
     case .capturedBaseline:
       return "Last library check: captured baseline in \(durationText)"

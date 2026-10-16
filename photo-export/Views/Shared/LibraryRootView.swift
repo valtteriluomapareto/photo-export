@@ -315,7 +315,7 @@ struct LibraryRootView: View {
         selection: .favorites, title: "Favorites",
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
-        onExportCollection: { exportManager.startExportFavorites() },
+        onExportCollection: { exportManager.startExport(selection: .favorites) },
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
@@ -329,7 +329,9 @@ struct LibraryRootView: View {
         title: albumTitle(forCollectionId: collectionId),
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
-        onExportCollection: { exportManager.startExportAlbum(collectionId: collectionId) },
+        onExportCollection: {
+          exportManager.startExport(selection: .album(collectionId: collectionId))
+        },
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
@@ -343,7 +345,9 @@ struct LibraryRootView: View {
         title: sharedAlbumTitle(forCollectionId: collectionId),
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
-        onExportCollection: { exportManager.startExportSharedAlbum(collectionId: collectionId) },
+        onExportCollection: {
+          exportManager.startExport(selection: .sharedAlbum(collectionId: collectionId))
+        },
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )

@@ -606,6 +606,18 @@ final class ExportManager: ObservableObject {
   // type that cannot be `weak`-referenced).
 
   // MARK: - Public API
+  /// UI selection routing only; admission and click-time snapshots stay in start*.
+  func startExport(selection: LibrarySelection) {
+    switch selection {
+    case .timelineYear(let year): startExportYear(year: year)
+    case .timelineMonth(let year, let month): startExportMonth(year: year, month: month)
+    case .favorites: startExportFavorites()
+    case .album(let id): startExportAlbum(collectionId: id)
+    case .sharedAlbum(let id): startExportSharedAlbum(collectionId: id)
+    case .folder(let id): startExportFolder(folderId: id)
+    }
+  }
+
   func startExportMonth(year: Int, month: Int) {
     guard !isImporting else {
       logger.warning("startExportMonth ignored: import in progress")

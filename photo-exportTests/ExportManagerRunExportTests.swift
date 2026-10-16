@@ -335,6 +335,60 @@ struct ExportManagerRunExportTests {
     await harness.cleanup()
   }
 
+  @Test(arguments: [
+    LibrarySelection.timelineYear(year: 2025), .timelineMonth(year: 2025, month: 1),
+    .favorites, .album(collectionId: "album"), .sharedAlbum(collectionId: "shared"),
+    .folder(collectionId: "folder"),
+  ])
+  func selectionDispatcherUsesLiteralPlacements(selection: LibrarySelection) async {
+    let harness = makeHarness()
+    let january = TestAssetFactory.makeAsset(id: "same", creationDate: makeDate(2025, 1, 1))
+    let february = TestAssetFactory.makeAsset(id: "feb", creationDate: makeDate(2025, 2, 1))
+    harness.photoLib.assetsByYearMonth = ["2025-1": [january], "2025-2": [february]]
+    harness.photoLib.favoritesAssets = [january]
+    harness.photoLib.assetsByAlbumLocalId = ["album": [january], "child": [january]]
+    harness.photoLib.assetsBySharedAlbumLocalId = ["shared": [january]]
+    let album = PhotoCollectionDescriptor(
+      id: "album:album", localIdentifier: "album", title: "Owned",
+      kind: .album, pathComponents: [], children: [])
+    let child = PhotoCollectionDescriptor(
+      id: "album:child", localIdentifier: "child", title: "Nested",
+      kind: .album, pathComponents: ["Folder"], children: [])
+    harness.photoLib.collectionTree = [
+      album,
+      PhotoCollectionDescriptor(
+        id: "shared-album:shared", localIdentifier: "shared", title: "Shared",
+        kind: .sharedAlbum, pathComponents: [], children: []),
+      PhotoCollectionDescriptor(
+        id: "folder:folder", localIdentifier: "folder", title: "Folder",
+        kind: .folder, pathComponents: [], children: [child]),
+    ]
+    harness.manager.queueCoordinator.pause()
+    harness.manager.startExport(selection: selection)
+    for task in harness.manager.currentPreparationTasks { await task.value }
+    let expected: Set<String> =
+      switch selection {
+      case .timelineYear: ["2025/01/|same", "2025/02/|feb"]
+      case .timelineMonth: ["2025/01/|same"]
+      case .favorites: ["Collections/Favorites/|same"]
+      case .album: ["Collections/Albums/Owned/|same"]
+      case .sharedAlbum: ["Collections/Shared Albums/Shared/|same"]
+      case .folder: ["Collections/Albums/Folder/Nested/|same"]
+      }
+    #expect(
+      Set(
+        harness.manager.pendingJobs.map {
+          $0.placement.relativePath + "|" + $0.assetLocalIdentifier
+        }) == expected)
+    if case .sharedAlbum = selection {
+      #expect(
+        harness.manager.pendingJobs.allSatisfy {
+          $0.placement.kind.variantPolicy == .singleResource
+        })
+    }
+    await harness.cleanup()
+  }
+
   // MARK: - Stale bulk-task ownership (issue #140)
 
   /// A normal late fetch result and a late fetch error both belong to A.

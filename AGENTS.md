@@ -43,13 +43,13 @@ To preview the first-run `OnboardingView` from a Debug build, pass `--force-onbo
 
 Source code under `photo-export/` is organized as follows:
 
-- `App/` — app entry point (`photo_exportApp.swift`) plus lifecycle/process-level services: `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
+- `App/` — app entry point (`photo_exportApp.swift`) plus lifecycle/process-level services: `LoginItemController`, `SystemLoginItemService`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
 - `Export/` — the export façade and its collaborators: `ExportManager`, `ExportManager+AutoSyncConformance`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, plus the helper-policy types (`ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`)
 - `Destination/` — destination concerns: `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`
 - `Records/` — record stores (timeline + collection), the shared `JSONLRecordFile` persistence primitive, `RecordStoreRouter` (single placement-kind dispatch), and `ExportCompletionPolicy` (single completion/edited-fallback rule)
 - `AutoSync/` — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, with `AutoSync/Stores/` for the file-backed persistence (dirty state, per-destination tokens, retry state, run summary, scope, photo change token)
 - `PhotoLibrary/` — `PhotoLibraryManager`, `ScreenshotPhotoLibraryService`, `PhotoLibraryPersistentChangeAdapter`, `CollectionCountCache`
-- `Protocols/` — test seams: `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, `ExportDestination`, `MediaRenderer`. Add a new protocol here when you need to inject a fake.
+- `Protocols/` — test seams: `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, `ExportDestination`, `MediaRenderer`, `LoginItemService`. Add a new protocol here when you need to inject a fake.
 - `Models/` — value types: `AssetDescriptor`, `AssetDetails`, `ExportRecord`, `ExportVariant`, `ExportPlacement`, `LibrarySelection`, `PhotoCollectionDescriptor`
 - `Views/` — SwiftUI views, grouped by feature: `Timeline/`, `Collections/`, `Export/`, `Settings/`, `Shared/`
 - `ViewModels/` — `MonthViewModel`
@@ -62,7 +62,7 @@ The Phase-7 folder split (issue #67 item 3) landed in May 2026, replacing the pr
 - **Host-driven collaborators of `ExportManager`** (`@MainActor final class`, in `Export/`): `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`. Each holds a narrow `Host` protocol back to the manager for a few UI-state mutations; the cancellation seam routes through the queue coordinator directly (issue #67 item 2).
 - **Pure helpers / policy** (plain `struct` or `enum`, `Sendable` where it crosses tasks): `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver` (in `Export/`); `ExportDestinationResolver` (in `Destination/`); `ResourceSelection`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` (in `Export/`).
 - **Destination services** (`@MainActor`, in `Destination/`): `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`.
-- **App-level services** (`@MainActor`, in `App/`): `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`.
+- **App-level services** (`@MainActor`, in `App/`): `LoginItemController`, `SystemLoginItemService`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`.
 
 **App entry point** (`App/photo_exportApp.swift`): creates five `@StateObject` dependencies and injects them as `@EnvironmentObject` into the view hierarchy:
 

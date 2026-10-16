@@ -135,3 +135,18 @@ When updating a pin manually, verify the commit and its `action.yml` in the upst
 Before pushing a release tag, follow the [release process](docs/project/release-process.md), including the [real-Photos candidate validation](docs/project/release-validation.md). Record unexercised cases explicitly; passing hermetic CI does not replace that evidence.
 
 Longer-lived project notes live under [`docs/`](docs/README.md). Keep the repo root reserved for the files people expect in an open source project.
+
+### UI behavior test strategy
+
+Keep combinatorial rules in pure policy tests and use the existing native `NSHostingView`
+behavior tests for SwiftUI bindings and rendered actions. Platform services use injected
+fakes; login-item tests never change System Settings and volume tests use isolated
+notification centers, preferences and temporary folders. No view-inspection or snapshot
+package is required.
+
+The dedicated CI XCUITest onboarding/navigation smoke remains deferred in
+[issue #108](https://github.com/valtteriluomapareto/photo-export/issues/108).
+The current desktop host has not produced an interactive window during the #177 capture
+validation, so this batch cannot validate that automation. Hosted/policy tests do not
+claim native launch or desktop navigation coverage. The default shared-scheme command
+runs unit/hosted tests; the UI-test target remains excluded.
