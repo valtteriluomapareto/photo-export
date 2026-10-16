@@ -43,6 +43,19 @@ func bumpGeneration()
 
 **Collaborator seam**: `VariantExporter` and `ImportCoordinator` hold a direct (weak) reference to `ExportQueueCoordinator` for the cancellation helpers; their `Host` protocols no longer carry `isCurrent`, `throwIfCancelledOrStale`, `generation`, or `bumpGeneration` (issue #67 item 2 landed in May 2026). The coordinator's own dispatch loop reads its own `generation` / `isCurrent` directly. New collaborators that need the seam should inject `ExportQueueCoordinator` the same way, not route through `Host`.
 
+### Preview content ownership
+
+Thumbnail and detail tasks use asset ID plus the existing
+`PhotoLibraryManager.thumbnailContentRevision(for:)` value, not broad `libraryRevision`.
+Known content edits invalidate only affected IDs; unknown changes and bounded-tracking overflow
+use the existing global fallback. Placement/history changes do not change preview identity.
+The detail loader checks its captured revision predicate before installing a request and before
+publishing success or error, in addition to UUID and Task cancellation guards. This rejects a
+superseded response even before SwiftUI starts the replacement task. Same-asset replacement
+retains the displayed image while loading; other selected IDs hide prior content immediately.
+A current failure clears retained bytes to expose the existing error message. Grid descriptor
+refresh remains owned by `MonthViewModel` and its parent selection binding.
+
 ### Final file commit boundary
 
 `VariantExporter` checks generation immediately before admitting the final atomic move.

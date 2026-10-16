@@ -28,16 +28,22 @@ final class AssetDetailImageLoader: ObservableObject {
     state = State()
   }
 
-  func load(for assetId: String?, using service: any PhotoLibraryService) async {
-    guard !Task.isCancelled else { return }
+  /// The predicate rejects a revised asset even before SwiftUI starts the next
+  /// task. UUID ownership still rejects overlapping requests for the same revision.
+  func load(
+    for assetId: String?, using service: any PhotoLibraryService,
+    isCurrent: @MainActor () -> Bool = { true }
+  ) async {
+    guard !Task.isCancelled, isCurrent() else { return }
     let request = UUID()
     activeRequest = request
-    state = State(assetId: assetId, isLoading: assetId != nil)
+    let retainedImage = state.assetId == assetId ? state.image : nil
+    state = State(assetId: assetId, image: retainedImage, isLoading: assetId != nil)
     guard let assetId else { return }
     logger.debug("Preview start id: \(assetId, privacy: .public)")
     do {
       let image = try await service.requestFullImage(for: assetId)
-      guard activeRequest == request else { return }
+      guard activeRequest == request, isCurrent() else { return }
       guard !Task.isCancelled else {
         state = State(assetId: assetId)
         return
@@ -45,7 +51,7 @@ final class AssetDetailImageLoader: ObservableObject {
       state = State(assetId: assetId, image: image)
       logger.debug("Preview loaded id: \(assetId, privacy: .public)")
     } catch {
-      guard activeRequest == request else { return }
+      guard activeRequest == request, isCurrent() else { return }
       guard !Task.isCancelled, !(error is CancellationError) else {
         state = State(assetId: assetId)
         return
