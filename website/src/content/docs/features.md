@@ -25,7 +25,7 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - Two sidebar sections via a Timeline / Collections segmented control
   - **Timeline**: year/month tree with asset counts and per-month export status
   - **Collections**: Favorites plus the user's albums and folders, grouped by Photos hierarchy
-- Export status indicators at both year and month level (not started, in progress with percentage, fully exported with checkmark)
+- Export status indicators at both year and month level (not started, in progress with percentage, fully exported with checkmark). After Photos changes, badges wait for fresh count pairs while month rows remain visible. Obsolete refreshes cannot overwrite newer counts. Historical sidebar summaries still approximate coverage from export records: deleting exported photos and adding new ones at unchanged counts can overstate completion.
 - **Year overview** — selecting a year in the Timeline sidebar opens a Photos.app-style grid of month tiles (four cover thumbnails per month, a green checkmark when fully exported). Click a tile to drill into that month.
 - Fast thumbnail grid with in-memory caching; the first available asset opens in the detail panel while the rest of the grid loads. Choosing another asset keeps your selection.
 - Photos changes refresh the grid in place without blanking it. Edits update thumbnails already on screen without navigating away; the current image stays visible while its replacement loads, and older refreshes or image responses cannot replace newer results

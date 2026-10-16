@@ -37,6 +37,7 @@ final class TimelineSidebarCounts: ObservableObject {
   @Published private(set) var lastError: Error?
 
   private let service: any PhotoLibraryService
+  private var generation = 0
 
   init(service: any PhotoLibraryService) {
     self.service = service
@@ -57,9 +58,16 @@ final class TimelineSidebarCounts: ObservableObject {
   /// Across years, loading is sequential — that keeps the in-flight count
   /// bounded at 12 fetches at a time even on 30-year libraries.
   func loadCounts(forYears years: [Int], preferredYear: Int? = nil) async {
+    guard !Task.isCancelled else { return }
+    generation &+= 1
+    let gen = generation
+    // Keep month rows stable, but do not pair old adjusted counts with new totals.
+    adjustedCountsByYearMonth = [:]
+    lastError = nil
     let ordered = orderYears(years, preferredYear: preferredYear)
     for year in ordered {
-      await loadYear(year)
+      guard isCurrent(gen) else { return }
+      await loadYear(year, generation: gen)
     }
   }
 
@@ -68,6 +76,7 @@ final class TimelineSidebarCounts: ObservableObject {
   /// iCloud account in Photos.app). The next `loadCounts(forYears:)` will
   /// repopulate from scratch.
   func reset() {
+    generation &+= 1
     assetCountsByYearMonth = [:]
     adjustedCountsByYearMonth = [:]
     lastError = nil
@@ -94,11 +103,11 @@ final class TimelineSidebarCounts: ObservableObject {
   /// dicts, but the underlying `cachedCount*` calls dispatch detached
   /// tasks internally — so the actual PhotoKit fetches run concurrently
   /// on the global executor.
-  private func loadYear(_ year: Int) async {
+  private func loadYear(_ year: Int, generation: Int) async {
     await withTaskGroup(of: Void.self) { group in
       for month in 1...12 {
         group.addTask { [weak self] in
-          await self?.loadMonth(year: year, month: month)
+          await self?.loadMonth(year: year, month: month, generation: generation)
         }
       }
     }
@@ -108,25 +117,36 @@ final class TimelineSidebarCounts: ObservableObject {
   /// them to the published dicts. The two fetches are dispatched
   /// concurrently via `async let`; if either throws, the failure is
   /// recorded in `lastError` but the other still lands.
-  private func loadMonth(year: Int, month: Int) async {
+  private func loadMonth(year: Int, month: Int, generation: Int) async {
+    guard isCurrent(generation) else { return }
     async let totalTask = service.cachedCountAssets(
       in: .timeline(year: year, month: month))
     async let adjustedTask = service.cachedCountAdjustedAssets(
       in: .timeline(year: year, month: month))
 
     let key = "\(year)-\(month)"
+    var hasFreshTotal = false
     do {
       let total = try await totalTask
+      guard isCurrent(generation) else { return }
       assetCountsByYearMonth[key] = total
+      hasFreshTotal = true
     } catch {
+      guard isCurrent(generation) else { return }
       lastError = error
     }
     do {
       let adjusted = try await adjustedTask
-      adjustedCountsByYearMonth[key] = adjusted
+      guard isCurrent(generation) else { return }
+      if hasFreshTotal { adjustedCountsByYearMonth[key] = adjusted }
     } catch {
+      guard isCurrent(generation) else { return }
       lastError = error
     }
+  }
+
+  private func isCurrent(_ gen: Int) -> Bool {
+    gen == generation && !Task.isCancelled
   }
 
   private func orderYears(_ years: [Int], preferredYear: Int?) -> [Int] {
