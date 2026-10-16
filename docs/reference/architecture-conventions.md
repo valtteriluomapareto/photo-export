@@ -43,6 +43,25 @@ func bumpGeneration()
 
 **Collaborator seam**: `VariantExporter` and `ImportCoordinator` hold a direct (weak) reference to `ExportQueueCoordinator` for the cancellation helpers; their `Host` protocols no longer carry `isCurrent`, `throwIfCancelledOrStale`, `generation`, or `bumpGeneration` (issue #67 item 2 landed in May 2026). The coordinator's own dispatch loop reads its own `generation` / `isCurrent` directly. New collaborators that need the seam should inject `ExportQueueCoordinator` the same way, not route through `Host`.
 
+### Final file commit boundary
+
+`VariantExporter` checks generation immediately before admitting the final atomic move.
+After admission, a short-lived task owns the physical move, timestamps, record acknowledgement,
+and staging cleanup. A successful move is acknowledged to its captured logical destination even
+if the run becomes stale. `RecordStoreRouter` captures that store's existing JSONL owner; each
+store parks its latest snapshot only when switching away, merges the completed variant, and
+retains write failures through the existing non-destructive persistence recovery path. A corrupt
+load keeps its alert and bytes intact; only the known completion delta is deferred until a valid
+load or explicit reset. Collection acknowledgements restore missing placement metadata without
+replacing newer metadata. No persisted schema changes or crash-atomicity guarantee is implied.
+
+Queue teardown remains synchronous and does not discard this task. Replacement jobs await its
+barrier before their initial record flush, history reads, or filename allocation, then recheck
+generation and persistence health. Commit-owned staging cleanup finishes before the barrier is
+released. Ordinary generation checks resume immediately afterwards, before additional variants,
+fallback bookkeeping, or UI changes. Security-scoped access remains held by the original export
+until the complete bounded commit finishes.
+
 ### 2. Actor isolation policy
 
 Reuse-source filesystem copies run on an explicit utility Dispatch worker through the
