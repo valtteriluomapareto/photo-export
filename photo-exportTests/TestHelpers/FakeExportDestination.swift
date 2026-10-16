@@ -18,6 +18,7 @@ final class FakeExportDestination: ExportDestination {
   var closedScopeURLs: [URL] = []
 
   // Error injection
+  var scopedAccessAvailable = true
   var urlForMonthError: Error?
   var urlForRelativeDirectoryError: Error?
 
@@ -50,6 +51,7 @@ final class FakeExportDestination: ExportDestination {
 
   func beginScopedAccess() -> URL? {
     beginScopedAccessCount += 1
+    guard scopedAccessAvailable else { return nil }
     if let selectedFolderURL { openedScopeURLs.append(selectedFolderURL) }
     return selectedFolderURL
   }

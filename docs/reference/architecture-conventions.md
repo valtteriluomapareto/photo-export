@@ -61,6 +61,18 @@ not queue binding writes through `onChange`/task identities. A completed snapsho
 (first survivor or empty clears); unfinished enumeration preserves a choice still awaiting its
 batch. Failed or obsolete refreshes do not emit a selection update.
 
+### Import outcome ownership
+
+`ImportCoordinator` owns transient `isImporting`, `importStage` and `importError`; the manager
+mirrors them with synchronous sinks. Writable `importResult` remains a Host callback. A private
+operation UUID owns UI outcomes separately from the queue generation: destination teardown may
+invalidate the generation without cancelling the task. Progress/results/errors require current
+UUID and generation; deferred stale cleanup may settle only its own UUID. Cancel invalidates UUID
+before clearing state. Publish error/report/stage before setting activity false, and perform no
+old-operation state writes after that publication. Scope release still waits for physical work.
+Retry preserves timeline-only compatibility when the collection store is unconfigured, but waits
+for recovery if either history store has failed. Scanner matching error propagation is unchanged.
+
 ### Final file commit boundary
 
 `VariantExporter` checks generation immediately before admitting the final atomic move.
