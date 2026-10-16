@@ -142,6 +142,9 @@ final class CollectionExportRecordStore: ObservableObject {
   @Published private(set) var state: RecordStoreState = .unconfigured
   @Published private(set) var persistenceError: String?
   private var hasUnsavedChanges = false
+  // Immediate ownership token, separate from coalesced UI notifications. Any
+  // configuration, accepted mutation, reset or newer reconciliation invalidates probes.
+  private var reconciliationRevision: UInt64 = 0
   private var configuredDestinationId: String?
   var destinationId: String? { configuredDestinationId }
   // Failed writes must survive destination switches until the user can retry saving.
@@ -162,6 +165,7 @@ final class CollectionExportRecordStore: ObservableObject {
   private var notifyWorkItem: DispatchWorkItem?
 
   private let fileManager = FileManager.default
+  private let reconciliationFileChecker: any ReconciliationFileChecking
   let storeRootURL: URL
   private var currentStoreDirURL: URL?
   private var jsonl: JSONLRecordFile<Snapshot, LogOp>?
@@ -169,6 +173,7 @@ final class CollectionExportRecordStore: ObservableObject {
   // MARK: - Init
 
   init() {
+    self.reconciliationFileChecker = ReconciliationFileChecker()
     let appSupport = try! fileManager.url(
       for: .applicationSupportDirectory,
       in: .userDomainMask,
@@ -183,7 +188,11 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   /// Test-only: allow specifying a base directory for the store root.
-  init(baseDirectoryURL: URL) {
+  init(
+    baseDirectoryURL: URL,
+    reconciliationFileChecker: any ReconciliationFileChecking = ReconciliationFileChecker()
+  ) {
+    self.reconciliationFileChecker = reconciliationFileChecker
     self.storeRootURL = baseDirectoryURL
     createDirectoryIfNeeded(baseDirectoryURL)
   }
@@ -193,6 +202,7 @@ final class CollectionExportRecordStore: ObservableObject {
   /// Points the store at a specific destination id (subdirectory). Passing `nil` clears
   /// in-memory state and detaches from any on-disk files.
   func configure(for destinationId: String?) {
+    reconciliationRevision &+= 1
     let signpost = AppDiagnostics.beginConfigure(label: "collection")
     defer { signpost.end() }
 
@@ -327,6 +337,7 @@ final class CollectionExportRecordStore: ObservableObject {
   /// pattern; the timeline and collection stores recover identically.
   func resetToEmpty() {
     guard state == .failed else { return }
+    reconciliationRevision &+= 1
     guard let jsonl else { return }
     do {
       try jsonl.resetToEmpty(emptySnapshot: Snapshot.empty)
@@ -491,9 +502,14 @@ final class CollectionExportRecordStore: ObservableObject {
   /// unreconcilable garbage with no path to check.
   ///
   /// Two-phase: snapshot on main, file checks off-main, mutations on main. Callers
-  /// must run this only when no export is active.
-  func reconcileAgainstFilesystem(at root: URL) async -> ReconcileSummary {
-    guard state == .ready else { return .zero }
+  /// must run this only when no export is active. Obsolete configurations, mutations,
+  /// replacement reconciliation or cancelled callers cannot apply the snapshot.
+  func reconcileAgainstFilesystem(
+    at root: URL, isCurrent: @MainActor () -> Bool = { true }
+  ) async -> ReconcileSummary {
+    guard isCurrent(), !Task.isCancelled, state == .ready else { return .zero }
+    reconciliationRevision &+= 1
+    let revision = reconciliationRevision
 
     struct Probe: Sendable {
       let placementId: String
@@ -541,23 +557,27 @@ final class CollectionExportRecordStore: ObservableObject {
 
     // Phase 2 (off-main): file checks.
     let probesCopy = probes
+    let fileChecker = reconciliationFileChecker
     let toPrune: [(placementId: String, assetId: String, variantKey: String)] = await Task.detached
     {
-      let fm = FileManager.default
       var keys: [(placementId: String, assetId: String, variantKey: String)] = []
       for probe in probesCopy {
         if probe.isCorrupt {
           keys.append((probe.placementId, probe.assetId, probe.variantKey))
           continue
         }
-        var isDir: ObjCBool = false
-        let exists = fm.fileExists(atPath: probe.path, isDirectory: &isDir)
-        if !exists || isDir.boolValue {
+        if await !fileChecker.isFile(atPath: probe.path) {
           keys.append((probe.placementId, probe.assetId, probe.variantKey))
         }
       }
       return keys
     }.value
+
+    // Evaluate caller ownership first; then reject configuration/mutation changes
+    // before the whole synchronous commit (whose own appends advance the revision).
+    guard isCurrent(), !Task.isCancelled, state == .ready,
+      reconciliationRevision == revision
+    else { return .zero }
 
     // Phase 3 (main): apply mutations. Orphan bodies first, then variant prunes.
     var prunedVariants = 0
@@ -747,6 +767,7 @@ final class CollectionExportRecordStore: ObservableObject {
     guard state == .ready || (state == .persistenceFailed && hasUnsavedChanges) else {
       return
     }
+    reconciliationRevision &+= 1
     apply(op)
     scheduleCoalescedNotify()
     guard state == .ready, let jsonl else { return }

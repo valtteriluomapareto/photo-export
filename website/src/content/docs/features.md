@@ -198,7 +198,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 
 - Rebuild local export state from an existing backup folder via **File → Import Existing Backup...** (Cmd+Shift+I)
 - Five-stage process: scan backup folder, read Photos library, match files, rebuild state, reconcile against disk
-- The reconcile step **prunes records for files that no longer exist** at the destination, so a re-run after deleting some exports always reflects current disk contents
+- The reconcile step **prunes records for files that no longer exist** at the destination. Cancelled or superseded scans discard their results; switching destinations cannot apply an old scan to the replacement destination’s history, and newer record changes are preserved
 - Shows a detailed report with matched, ambiguous, unmatched, and pruned counts
 - Continue exporting on a fresh install without re-copying known assets
 

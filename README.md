@@ -41,7 +41,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 - Track exported assets per destination so interrupted exports resume safely; replacing a tracking snapshot preserves the previous history until the replacement is ready
 - Browse full-size previews with cancellation when selection changes; late responses cannot replace the current preview
 - Pause, resume, cancel, and clear queued work; cancelled scans cannot alter a replacement export
-- Import an existing backup folder to rebuild local export state, pruning records for files no longer present on disk
+- Import an existing backup folder to rebuild local export state, pruning records for files no longer present on disk. Cancelled or superseded reconciliation cannot remove history from a replacement destination or overwrite newer record changes
 - Save a diagnostic report (Help menu) listing failed and in-progress exports with their error messages, for attaching to bug reports
 - If Photos can't provide an asset's edited version, fall back to writing the original with a `_orig` suffix so the asset still gets backed up
 

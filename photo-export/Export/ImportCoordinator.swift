@@ -227,7 +227,8 @@ final class ImportCoordinator: ObservableObject {
         self.importStage = .reconcilingDiskState
         try Task.checkCancellation()
         let timelineSummary = await host.exportRecordStore.reconcileAgainstFilesystem(
-          at: rootURL)
+          at: rootURL,
+          isCurrent: { [weak self] in self?.queueCoordinator?.isCurrent(importGen) == true })
         try Task.checkCancellation()
         guard self.queueCoordinator?.isCurrent(importGen) == true else {
           self.isImporting = false
@@ -236,7 +237,9 @@ final class ImportCoordinator: ObservableObject {
         }
         let reconciledCollections = host.collectionExportRecordStore.state == .ready
         let collectionSummary = await host.collectionExportRecordStore
-          .reconcileAgainstFilesystem(at: rootURL)
+          .reconcileAgainstFilesystem(
+            at: rootURL,
+            isCurrent: { [weak self] in self?.queueCoordinator?.isCurrent(importGen) == true })
         try Task.checkCancellation()
         guard self.queueCoordinator?.isCurrent(importGen) == true else {
           self.isImporting = false
