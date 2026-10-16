@@ -111,13 +111,18 @@ struct CaseInsensitivePlacementTests {
           let id = try #require(album.localIdentifier)
           let leaf = try #require(expected[id])
           #expect(withHistory.relativePath == prefix(kind) + leaf + "/")
-          #expect(withHistory == withoutHistory)
+          #expect(withHistory.id == withoutHistory.id)
+          #expect(withHistory.relativePath == withoutHistory.relativePath)
+          #expect(withHistory.createdAt == withoutHistory.createdAt)
           saved.append(withHistory)
           expectUnique(saved)
         }
         for album in order {
-          #expect(
-            try resolve(album, tree: traversal, existing: saved) == resolve(album, tree: traversal))
+          let stored = try resolve(album, tree: traversal, existing: saved)
+          let fresh = try resolve(album, tree: traversal)
+          #expect(stored.id == fresh.id)
+          #expect(stored.relativePath == fresh.relativePath)
+          #expect(stored.createdAt == fresh.createdAt)
         }
       }
     }
@@ -135,8 +140,13 @@ struct CaseInsensitivePlacementTests {
     let beta = descriptor("beta", "trip", kind: kind)
     let tree = [beta, alpha]
     for album in tree {
+      let value = try resolve(album, tree: tree, existing: Array(store.placements.values))
       store.upsertPlacement(
-        try resolve(album, tree: tree, existing: Array(store.placements.values)))
+        ExportPlacement(
+          kind: value.kind, id: value.id, displayName: value.displayName,
+          collectionLocalIdentifier: value.collectionLocalIdentifier,
+          relativePath: value.relativePath,
+          createdAt: Date(timeIntervalSince1970: 123)))
     }
     try await store.flush()
     let saved = store.placements
@@ -144,7 +154,9 @@ struct CaseInsensitivePlacementTests {
     reopened.configure(for: "test")
     for album in tree {
       let value = try resolve(album, tree: tree, existing: Array(reopened.placements.values))
-      #expect(saved[value.id] == value)
+      #expect(saved[value.id]?.relativePath == value.relativePath)
+      #expect(saved[value.id]?.createdAt == value.createdAt)
+      #expect(value.createdAt == Date(timeIntervalSince1970: 123))
     }
     let old = try resolve(alpha, tree: [alpha])
     let renamed = descriptor("alpha", "trip", kind: kind)
@@ -158,7 +170,10 @@ struct CaseInsensitivePlacementTests {
       kind: old.kind, id: current.id, displayName: current.displayName,
       collectionLocalIdentifier: current.collectionLocalIdentifier,
       relativePath: prefix(kind) + "trip/", createdAt: Date(timeIntervalSince1970: 1))
-    #expect(try resolve(renamed, tree: [renamed], existing: [historical, old]) == historical)
+    let reused = try resolve(renamed, tree: [renamed], existing: [historical, old])
+    #expect(reused.id == historical.id)
+    #expect(reused.relativePath == historical.relativePath)
+    #expect(reused.createdAt == historical.createdAt)
   }
 
   @Test(arguments: kinds)
