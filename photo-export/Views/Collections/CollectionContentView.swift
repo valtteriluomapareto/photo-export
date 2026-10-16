@@ -81,6 +81,7 @@ struct CollectionContentView: View {
     .task(id: scopeTaskId) {
       await viewModel.loadAssets(for: scope)
     }
+    .onDisappear { viewModel.deactivate() }
     .onChange(of: initialAssetSelection, initial: true) { _, asset in
       if selectedAsset == nil, let asset {
         selectedAsset = asset

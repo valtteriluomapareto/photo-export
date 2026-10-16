@@ -86,6 +86,85 @@ struct MonthViewModelTests {
 
   // MARK: - Scope switching + caching lifecycle
 
+  @Test func deactivationReleasesOnceAndSameScopeLoadReactivates() async {
+    let svc = FakePhotoLibraryService()
+    let assets = [makeAsset(id: "A"), makeAsset(id: "B")]
+    svc.favoritesAssets = assets
+    let vm = MonthViewModel(photoLibraryService: svc)
+    await vm.loadAssets(for: .favorites)
+    vm.deactivate()
+    vm.deactivate()
+    #expect(svc.stopCachingCalls.map { $0.map(\.id) } == [["A", "B"]])
+    #expect(vm.selectedAsset(for: .favorites) == nil)
+    var requests = 0
+    svc.progressiveStreamOverride = { _ in
+      requests += 1
+      return AsyncThrowingStream { continuation in
+        continuation.yield(assets)
+        continuation.finish()
+      }
+    }
+    await vm.refresh(for: .favorites)
+    #expect(requests == 0, "An inactive grid must not fetch or re-register its window")
+    #expect(svc.startCachingCalls.count == 1)
+    await vm.loadAssets(for: .favorites)
+    #expect(requests == 1)
+    #expect(svc.startCachingCalls.map { $0.map(\.id) } == [["A", "B"], ["A", "B"]])
+    vm.deactivate()
+    #expect(svc.stopCachingCalls.count == 2)
+  }
+
+  @Test(
+    .timeLimit(.minutes(1)),
+    arguments: [(false, false), (false, true), (true, false), (true, true)], [false, true])
+  func deactivationRejectsLateLoadOrRefresh(
+    response: (isRefresh: Bool, lateError: Bool), reactivateBeforeResponse: Bool
+  ) async throws {
+    let (isRefresh, lateError) = response
+    let svc = FakePhotoLibraryService()
+    svc.favoritesAssets = [makeAsset(id: "base")]
+    let vm = MonthViewModel(photoLibraryService: svc)
+    if isRefresh { await vm.loadAssets(for: .favorites) }
+    let expectedAssets = vm.assets
+    let startsBefore = svc.startCachingCalls.count
+    let streams = ControlledStreams()
+    svc.progressiveStreamOverride = { streams.make(for: $0) }
+    defer {
+      streams.finishAll()
+      Task { await streams.started.releaseAll() }
+      vm.deactivate()
+    }
+    let old = Task {
+      if isRefresh {
+        await vm.refresh(for: .favorites)
+      } else {
+        await vm.loadAssets(for: .favorites)
+      }
+    }
+    await streams.started.waitForEnter(count: 1)
+    vm.deactivate()
+    svc.progressiveStreamOverride = nil
+    svc.favoritesAssets = [makeAsset(id: "current")]
+    if reactivateBeforeResponse { await vm.loadAssets(for: .favorites) }
+    let response = try #require(streams.requests.first?.continuation)
+    if lateError {
+      response.finish(throwing: NSError(domain: "DisappearedGrid", code: 1))
+    } else {
+      response.yield([makeAsset(id: "obsolete")])
+      response.finish()
+    }
+    await old.value
+    #expect(vm.assets == (reactivateBeforeResponse ? svc.favoritesAssets : expectedAssets))
+    #expect(vm.errorMessage == nil)
+    #expect(!vm.isLoading)
+    #expect(svc.startCachingCalls.count == startsBefore + (reactivateBeforeResponse ? 1 : 0))
+    #expect(svc.stopCachingCalls.count == (isRefresh ? 1 : 0))
+
+    if !reactivateBeforeResponse { await vm.loadAssets(for: .favorites) }
+    #expect(vm.assets.map(\.id) == ["current"])
+    #expect(svc.startCachingCalls.last?.map(\.id) == ["current"])
+  }
+
   /// `PHCachingImageManager` lifecycle: when the user switches scope, the
   /// previous scope's preheating must stop *before* the new scope's
   /// preheating starts. A regression that drops the stop call would leak

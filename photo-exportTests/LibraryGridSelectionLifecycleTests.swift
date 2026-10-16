@@ -35,6 +35,7 @@ struct LibraryGridSelectionLifecycleTests {
   private final class Selection: ObservableObject {
     @Published var scopeIndex = 0
     @Published var asset: AssetDescriptor?
+    @Published var isVisible = true
 
     func switchScope(to index: Int) {
       scopeIndex = index
@@ -49,7 +50,9 @@ struct LibraryGridSelectionLifecycleTests {
     @ObservedObject var selection: Selection
 
     var body: some View {
-      if grid == .timeline {
+      if !selection.isVisible {
+        Color.clear
+      } else if grid == .timeline {
         MonthContentView(
           year: 2026, month: selection.scopeIndex + 1,
           versionSelection: .edited, livePhotosPaired: false,
@@ -75,6 +78,7 @@ struct LibraryGridSelectionLifecycleTests {
     let defaults: UserDefaults
     let defaultsName: String
     let window: NSWindow
+    let hostingView: NSView
 
     init(grid: Grid) {
       root = FileManager.default.temporaryDirectory
@@ -97,6 +101,7 @@ struct LibraryGridSelectionLifecycleTests {
           .environmentObject(collectionStore)
           .environmentObject(manager)
           .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults)))
+      hostingView = hosted
       window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 400),
         styleMask: [.borderless], backing: .buffered, defer: false)
@@ -128,6 +133,95 @@ struct LibraryGridSelectionLifecycleTests {
       try? await Task.sleep(for: .milliseconds(10))
     }
     return condition()
+  }
+
+  @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
+  func disappearingGridReleasesItsPreheatWindowAndReappears(grid: Grid) async throws {
+    let fixture = Fixture(grid: grid)
+    let assets = [
+      TestAssetFactory.makeAsset(id: "first"), TestAssetFactory.makeAsset(id: "second"),
+    ]
+    fixture.service.progressiveStreamOverride = { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield(assets)
+        continuation.finish()
+      }
+    }
+    defer { fixture.close() }
+    fixture.show()
+    let loaded = await observe { fixture.service.startCachingCalls.count == 1 }
+    try #require(loaded)
+    fixture.selection.isVisible = false
+    let stopped = await observe { fixture.service.stopCachingCalls.count == 1 }
+    try #require(stopped, "Removing a loaded grid must release its preheat registrations")
+    #expect(fixture.service.stopCachingCalls[0].map(\.id) == assets.map(\.id))
+
+    fixture.selection.isVisible = true
+    let reloaded = await observe { fixture.service.startCachingCalls.count == 2 }
+    try #require(reloaded)
+    #expect(fixture.service.startCachingCalls[1].map(\.id) == assets.map(\.id))
+    fixture.selection.isVisible = false
+    let stoppedAgain = await observe { fixture.service.stopCachingCalls.count == 2 }
+    #expect(stoppedAgain)
+  }
+
+  @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
+  func removingGridDuringLoadCannotRegisterItsLateWindow(grid: Grid) async throws {
+    let fixture = Fixture(grid: grid)
+    let old = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
+    let terminated = AsyncCheckpoint()
+    old.continuation.onTermination = { _ in Task { await terminated.enter() } }
+    var requests = 0
+    let current = TestAssetFactory.makeAsset(id: "current")
+    fixture.service.progressiveStreamOverride = { _ in
+      requests += 1
+      if requests == 1 { return old.stream }
+      return AsyncThrowingStream { continuation in
+        continuation.yield([current])
+        continuation.finish()
+      }
+    }
+    defer {
+      old.continuation.finish()
+      Task { await terminated.releaseAll() }
+      fixture.close()
+    }
+    fixture.show()
+    let began = await observe { requests == 1 }
+    try #require(began)
+    old.continuation.yield([TestAssetFactory.makeAsset(id: "obsolete")])
+    fixture.selection.isVisible = false
+    await terminated.waitForEnter(count: 1)
+    await terminated.releaseAll()
+    old.continuation.finish()
+    fixture.selection.isVisible = true
+    let loaded = await observe { fixture.service.startCachingCalls.count == 1 }
+    try #require(loaded)
+    #expect(fixture.service.startCachingCalls[0].map(\.id) == ["current"])
+  }
+
+  @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
+  func retainedGridRestartsPreheatAfterReattachingToWindow(grid: Grid) async throws {
+    let fixture = Fixture(grid: grid)
+    let asset = TestAssetFactory.makeAsset(id: "same-grid")
+    fixture.service.progressiveStreamOverride = { _ in
+      AsyncThrowingStream { continuation in
+        continuation.yield([asset])
+        continuation.finish()
+      }
+    }
+    defer { fixture.close() }
+    fixture.show()
+    let loaded = await observe { fixture.service.startCachingCalls.count == 1 }
+    try #require(loaded)
+    fixture.window.contentView = nil
+    let stopped = await observe { fixture.service.stopCachingCalls.count == 1 }
+    try #require(stopped)
+    // Preserve the hosting view and its StateObject rather than recreate the grid.
+    fixture.window.contentView = fixture.hostingView
+    let reloaded = await observe { fixture.service.startCachingCalls.count == 2 }
+    try #require(reloaded)
+    #expect(fixture.service.startCachingCalls[1].map(\.id) == ["same-grid"])
   }
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
