@@ -31,7 +31,7 @@ jobs:
     # Skip the App Store path for pre-release tags (e.g. v1.3.0-beta.1).
     # App Store Connect rejects hyphen-suffixed CFBundleShortVersionString,
     # so betas ship through the direct-distribution channel only.
-    if: github.event_name != 'push' || !contains(github.ref, '-')
+    if: "!startsWith(github.ref, 'refs/tags/v') || !contains(github.ref, '-')"
     runs-on: macos-15
     environment: app-store-release
     steps:
@@ -44,6 +44,8 @@ jobs:
 
       - name: Determine build context
         id: ctx
+        env:
+          INPUT_SKIP_UPLOAD: ${{ github.event.inputs.skip_upload }}
         run: |
           echo "::group::Build context"
           IS_TAG="false"
@@ -52,15 +54,7 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             IS_TAG="true"
             VERSION="${GITHUB_REF#refs/tags/v}"
-            SHOULD_UPLOAD="true"
-            echo "Tag push detected: v${VERSION}"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "workflow_dispatch detected (skip_upload=${{ github.event.inputs.skip_upload }})"
-            if [[ "${{ github.event.inputs.skip_upload }}" != "true" ]]; then
-              SHOULD_UPLOAD="true"
-            fi
-          else
-            echo "Unknown trigger — treating as dry run"
+            echo "Version tag selected: v${VERSION}"
           fi
 
           # For non-tag runs, read version from project.pbxproj
@@ -69,7 +63,19 @@ jobs:
             echo "Using MARKETING_VERSION from project: ${VERSION}"
           fi
 
-          BUILD_NUMBER="${{ github.run_number }}.${{ github.run_attempt }}"
+          # Only an automatic tag push or an explicit manual opt-in may upload.
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$IS_TAG" == "true" ]]; then
+            SHOULD_UPLOAD="true"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "${INPUT_SKIP_UPLOAD:-}" == "false" \
+            && ( "$IS_TAG" == "true" || "$GITHUB_REF" == refs/heads/* ) ]]; then
+            SHOULD_UPLOAD="true"
+          fi
+          # Branch dispatches can also contain a prerelease project version.
+          if [[ "$VERSION" == *-* ]]; then
+            SHOULD_UPLOAD="false"
+          fi
+
+          BUILD_NUMBER="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
 
           echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"

@@ -52,7 +52,7 @@ Check that all project configurations agree with the version you are about to pu
 python3 scripts/ci/check-version.py --expected 1.2.0
 ```
 
-Use the full suffixed version for a beta tag. Ordinary CI and both release workflows also run this read-only validator; release tag comparisons remain limited to actual tag events, so main-branch dry runs keep their existing behavior.
+Use the full suffixed version for a beta tag. Ordinary CI and both release workflows also run this read-only validator. Version-tag refs are compared with the project version, including manual build-only runs on a tag; branch runs have no tag comparison.
 
 ```bash
 git push && git push origin v1.2.0
@@ -126,6 +126,28 @@ To test the GitHub workflow without creating a release:
 1. Go to **Actions > release-direct** on GitHub
 2. Click **Run workflow** from `main` with `dry_run: true`
 3. Download the DMG artifact from the workflow run
+
+The safe inputs default to true. A manual dispatch on a version tag also honors
+`dry_run: true` (direct) or `skip_upload: true` (App Store): it cannot create a
+GitHub Release or upload to App Store Connect. Direct build-only runs still sign,
+notarize and upload Actions artifacts; App Store build-only runs still sign and
+upload the package as an Actions artifact. These modes require signing secrets
+and are not offline tests.
+
+Only explicit `false` opts a manual run into publication. On a stable version tag,
+direct distribution checks for an existing release and creates a new draft only
+when none exists; the Store workflow uploads the build. A build-only direct tag
+run may rebuild even if a release already exists. On a branch, direct distribution
+retains its `0.0.0-dev` artifact version and never creates a release, while the
+Store workflow may upload the project's stable version with `skip_upload: false`.
+Prerelease tags skip the Store job for both push and dispatch; branch builds with
+a prerelease project version also cannot upload to the Store. Direct prerelease
+tag publication creates a draft marked as a prerelease.
+
+Missing/invalid safety inputs, unsupported events and refs other than branches
+or `v*` tags do not enable publication. Automatic version-tag pushes retain the
+release behavior described above. To test these decisions offline without
+signing, uploads or tag creation, run `scripts/ci/test-guards.sh`.
 
 ## Beta / pre-release tags
 
