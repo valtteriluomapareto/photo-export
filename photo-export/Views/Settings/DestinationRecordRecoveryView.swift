@@ -207,17 +207,21 @@ struct DestinationRecordRecoveryView: View {
       )
       .font(.callout)
 
-      Text("If you've exported to this folder before — for example after updating the app or reconnecting the drive — **Rebuild Records from Destination** to restore your progress and avoid creating duplicate files.")
-        .font(.callout)
+      Text(
+        "If you've exported to this folder before — for example after updating the app or reconnecting the drive — **Rebuild Records from Destination** to restore your progress and avoid creating duplicate files."
+      )
+      .font(.callout)
       Text(
         "Rebuilding scans the drive's actual contents and rebuilds the record store from what's already there. Your exported files are not touched."
       )
       .font(.caption)
       .foregroundStyle(.secondary)
 
-      Text("If these are genuinely new files you placed here yourself, choose **Use This Destination** instead.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+      Text(
+        "If these are genuinely new files you placed here yourself, choose **Use This Destination** instead."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
 
       if !canReconcile {
         Label(

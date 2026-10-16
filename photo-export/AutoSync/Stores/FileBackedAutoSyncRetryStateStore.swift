@@ -27,7 +27,9 @@ final class FileBackedAutoSyncRetryStateStore: AutoSyncRetryStateStore {
     do {
       return try file(for: destinationId).load() ?? .empty
     } catch {
-      logger.error("Failed to load Auto Export metadata: \(error.localizedDescription, privacy: .public). Original preserved.")
+      logger.error(
+        "Failed to load Auto Export metadata: \(error.localizedDescription, privacy: .public). Original preserved."
+      )
       throw error
     }
   }

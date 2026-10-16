@@ -1,14 +1,13 @@
 {
   "version": 1,
   "indentation": {
-    "spaces": 4
+    "spaces": 2
   },
-  "lineLength": 120,
+  "lineLength": 100,
   "respectsExistingLineBreaks": true,
   "rules": {
     "DoNotUseSemicolons": true,
     "NoAssignmentInExpressions": true,
-    "NeverUseForceTry": false,
-    "NeverUseForceUnwrap": false
+    "NeverUseForceTry": false
   }
 }
