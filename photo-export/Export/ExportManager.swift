@@ -1441,6 +1441,7 @@ final class ExportManager: ObservableObject {
     queueCoordinator.resetProgressCounters()
     isEnqueueingAll = false
     progressState.currentAssetFilename = nil
+    clearRenderActivity()
     clearEmptyRunMessage()
     clearQueueWarningMessage()
   }

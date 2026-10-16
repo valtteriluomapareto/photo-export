@@ -14,6 +14,8 @@ final class FakeExportDestination: ExportDestination {
   // Call tracking
   var beginScopedAccessCount = 0
   var endScopedAccessCount = 0
+  var openedScopeURLs: [URL] = []
+  var closedScopeURLs: [URL] = []
 
   // Error injection
   var urlForMonthError: Error?
@@ -48,11 +50,13 @@ final class FakeExportDestination: ExportDestination {
 
   func beginScopedAccess() -> URL? {
     beginScopedAccessCount += 1
+    if let selectedFolderURL { openedScopeURLs.append(selectedFolderURL) }
     return selectedFolderURL
   }
 
   func endScopedAccess(for url: URL) {
     endScopedAccessCount += 1
+    closedScopeURLs.append(url)
   }
 
   func cleanup() {

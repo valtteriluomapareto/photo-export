@@ -10,6 +10,13 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   private var _moveCalls: [(from: URL, to: URL)] = []
   private var _timestampCalls: [(date: Date, url: URL)] = []
   private var _copyCalls: [(from: URL, to: URL)] = []
+  private var _copyHook: (@Sendable (URL, URL) throws -> Void)?
+
+  /// Configured before an export. The callback runs without the tracking lock held.
+  var copyHook: (@Sendable (URL, URL) throws -> Void)? {
+    get { lock.withLock { _copyHook } }
+    set { lock.withLock { _copyHook = newValue } }
+  }
 
   var moveCalls: [(from: URL, to: URL)] {
     lock.lock()
@@ -73,6 +80,7 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
     _copyCalls.append((from: src, to: dst))
     lock.unlock()
 
+    try copyHook?(src, dst)
     if let error = copyError { throw error }
     try real.copyItem(from: src, to: dst)
   }

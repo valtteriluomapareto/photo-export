@@ -282,8 +282,8 @@ final class ExportQueueCoordinator: ObservableObject {
     currentTask = Task { [weak self, weak host] in
       await host?.performExport(job: job, generation: currentGen)
       await MainActor.run { [weak self] in
-        host?.clearCurrentJobIdentifiers()
         guard let self, self.isCurrent(currentGen) else { return }
+        host?.clearCurrentJobIdentifiers()
         self.totalJobsCompleted += 1
         self.processNext()
       }
