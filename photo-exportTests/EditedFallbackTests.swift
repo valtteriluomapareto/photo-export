@@ -92,6 +92,7 @@ struct EditedFallbackTests {
         == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage)
     #expect(record?.variants[.original]?.status == .done)
     #expect(record?.variants[.original]?.filename == "IMG_8000_orig.HEIC")
+    #expect(record?.variants[.edited]?.reason == .editedUnavailableOriginalBackedUp)
 
     // The asset must now count as exported under the .edited selection so a
     // subsequent Export All doesn't re-queue it forever.
@@ -215,6 +216,7 @@ struct EditedFallbackTests {
     let pairedRecord = h.store.exportInfo(assetId: asset.id)?.variants[.originalPairedVideo]
     #expect(pairedRecord?.status == .failed)
     #expect(pairedRecord?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage)
+    #expect(pairedRecord?.reason == .pairedVideoUnavailable)
     #expect(
       h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: true),
       "Asset must be recognised as paired-video-unavailable-covered before the second run")
@@ -248,6 +250,7 @@ struct EditedFallbackTests {
     h.store.markVariantFailed(
       assetId: asset.id, variant: .edited,
       error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      reason: .editedUnavailableOriginalBackedUp,
       at: Date())
 
     #expect(h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
@@ -273,6 +276,7 @@ struct EditedFallbackTests {
     h.store.markVariantFailed(
       assetId: asset.id, variant: .edited,
       error: ExportVariantRecovery.editedResourceUnavailableMessage,
+      reason: .editedResourceUnavailable,
       at: Date())
 
     #expect(!h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
@@ -330,6 +334,7 @@ struct EditedFallbackTests {
     h.store.markVariantFailed(
       assetId: "fallback", variant: .edited,
       error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      reason: .editedUnavailableOriginalBackedUp,
       at: now)
 
     h.store.markVariantExported(
@@ -365,7 +370,8 @@ struct EditedFallbackTests {
       filename: "GEN_orig.HEIC", exportedAt: now)
     h.store.markVariantFailed(
       assetId: "generic", variant: .edited,
-      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: now)
+      error: ExportVariantRecovery.editedResourceUnavailableMessage,
+      reason: .editedResourceUnavailable, at: now)
 
     #expect(h.store.recordCountEditedFallback(year: yr, month: mo) == 0)
   }
@@ -392,6 +398,7 @@ struct EditedFallbackTests {
     h.store.markVariantFailed(
       assetId: "fb", variant: .edited,
       error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      reason: .editedUnavailableOriginalBackedUp,
       at: now)
 
     let summary = h.store.sidebarSummary(
@@ -431,6 +438,7 @@ struct EditedFallbackTests {
     h.collectionStore.markVariantFailed(
       assetId: asset.id, placement: placement, variant: .edited,
       error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      reason: .editedUnavailableOriginalBackedUp,
       at: Date())
 
     #expect(
@@ -466,7 +474,8 @@ struct EditedFallbackTests {
       filename: "IMG_A_orig.HEIC", exportedAt: Date())
     h.collectionStore.markVariantFailed(
       assetId: asset.id, placement: placement, variant: .edited,
-      error: ExportVariantRecovery.editedResourceUnavailableMessage, at: Date())
+      error: ExportVariantRecovery.editedResourceUnavailableMessage,
+      reason: .editedResourceUnavailable, at: Date())
 
     #expect(
       !h.collectionStore.isExported(
@@ -642,5 +651,47 @@ struct EditedFallbackTests {
         ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage))
     #expect(report.contains("fallback: original exported as IMG_X_orig.HEIC"))
     #expect(report.contains("of which fallback-covered (original written as _orig): 1"))
+  }
+}
+
+extension EditedFallbackTests {
+  @Test func genericErrorWithMatchingTextAndDomainDoesNotAcquireReason() async {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.manager.versionSelection = .edited
+    let asset = TestAssetFactory.makeAsset(id: "ordinary-error", hasAdjustments: true)
+    h.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    h.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG.HEIC"),
+      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "IMG.JPG"),
+    ]
+    h.writer.writeError = NSError(
+      domain: "Export", code: 9,
+      userInfo: [NSLocalizedDescriptionKey: "Edited resource unavailable"])
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await h.manager.waitForQueueDrained()
+    let record = h.store.exportInfo(assetId: asset.id)
+    #expect(record?.variants[.edited]?.reason == nil)
+    #expect(record?.variants[.edited]?.status == .failed)
+    #expect(record?.variants[.original] == nil)
+    #expect(h.writer.writeCalls.count == 1)
+  }
+
+  @Test func failedOriginalFallbackDoesNotAcquireSavedReason() async {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.manager.versionSelection = .edited
+    let asset = TestAssetFactory.makeAsset(id: "fallback-fails", hasAdjustments: true)
+    h.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    h.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG.HEIC")
+    ]
+    h.writer.writeError = NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError)
+    h.manager.startExportMonth(year: 2025, month: 7)
+    await h.manager.waitForQueueDrained()
+    #expect(
+      h.store.exportInfo(assetId: asset.id)?.variants[.edited]?.reason == .editedResourceUnavailable
+    )
+    #expect(!h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 }

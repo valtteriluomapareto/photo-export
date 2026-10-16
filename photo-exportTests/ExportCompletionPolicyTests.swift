@@ -23,8 +23,11 @@ struct ExportCompletionPolicyTests {
     ExportVariantRecord(filename: filename, status: .done, exportDate: Date(), lastError: nil)
   }
 
-  private func failedVariant(message: String) -> ExportVariantRecord {
-    ExportVariantRecord(filename: nil, status: .failed, exportDate: nil, lastError: message)
+  private func failedVariant(message: String, reason: ExportVariantReason? = nil)
+    -> ExportVariantRecord
+  {
+    ExportVariantRecord(
+      filename: nil, status: .failed, exportDate: nil, lastError: message, reason: reason)
   }
 
   private func inProgressVariant() -> ExportVariantRecord {
@@ -86,7 +89,8 @@ struct ExportCompletionPolicyTests {
     let asset = TestAssetFactory.makeAsset(hasAdjustments: true)
     let variants: [ExportVariant: ExportVariantRecord] = [
       .original: doneVariant(filename: "vacation_orig.JPG"),
-      .edited: failedVariant(message: Self.editedFallbackSucceededMessage),
+      .edited: failedVariant(
+        message: Self.editedFallbackSucceededMessage, reason: .editedUnavailableOriginalBackedUp),
     ]
     #expect(
       ExportCompletionPolicy.isComplete(
@@ -99,7 +103,8 @@ struct ExportCompletionPolicyTests {
     let asset = TestAssetFactory.makeAsset(hasAdjustments: true)
     let variants: [ExportVariant: ExportVariantRecord] = [
       .original: doneVariant(),
-      .edited: failedVariant(message: Self.editedFallbackSucceededMessage),
+      .edited: failedVariant(
+        message: Self.editedFallbackSucceededMessage, reason: .editedUnavailableOriginalBackedUp),
     ]
     #expect(
       ExportCompletionPolicy.satisfiesEditedFallback(
@@ -110,7 +115,8 @@ struct ExportCompletionPolicyTests {
     let asset = TestAssetFactory.makeAsset(hasAdjustments: false)
     let variants: [ExportVariant: ExportVariantRecord] = [
       .original: doneVariant(),
-      .edited: failedVariant(message: Self.editedFallbackSucceededMessage),
+      .edited: failedVariant(
+        message: Self.editedFallbackSucceededMessage, reason: .editedUnavailableOriginalBackedUp),
     ]
     #expect(
       !ExportCompletionPolicy.satisfiesEditedFallback(
@@ -122,7 +128,8 @@ struct ExportCompletionPolicyTests {
     let asset = TestAssetFactory.makeAsset(hasAdjustments: true)
     let variants: [ExportVariant: ExportVariantRecord] = [
       .original: doneVariant(),
-      .edited: failedVariant(message: Self.editedFallbackSucceededMessage),
+      .edited: failedVariant(
+        message: Self.editedFallbackSucceededMessage, reason: .editedUnavailableOriginalBackedUp),
     ]
     #expect(
       !ExportCompletionPolicy.satisfiesEditedFallback(
@@ -133,7 +140,8 @@ struct ExportCompletionPolicyTests {
     let asset = TestAssetFactory.makeAsset(hasAdjustments: true)
     let variants: [ExportVariant: ExportVariantRecord] = [
       .original: failedVariant(message: "disk full"),
-      .edited: failedVariant(message: Self.editedFallbackSucceededMessage),
+      .edited: failedVariant(
+        message: Self.editedFallbackSucceededMessage, reason: .editedUnavailableOriginalBackedUp),
     ]
     #expect(
       !ExportCompletionPolicy.satisfiesEditedFallback(
@@ -172,7 +180,8 @@ struct ExportCompletionPolicyTests {
     let asset = TestAssetFactory.makeAsset(hasAdjustments: true)
     let variants: [ExportVariant: ExportVariantRecord] = [
       .original: doneVariant(),
-      .edited: failedVariant(message: Self.editedFailedRecoveryMessage),
+      .edited: failedVariant(
+        message: Self.editedFailedRecoveryMessage, reason: .editedResourceUnavailable),
     ]
     #expect(
       !ExportCompletionPolicy.satisfiesEditedFallback(
@@ -183,7 +192,8 @@ struct ExportCompletionPolicyTests {
 
   @Test func shouldRunEditedFallback_happyPath_returnsTrue() {
     let variants: [ExportVariant: ExportVariantRecord] = [
-      .edited: failedVariant(message: Self.editedFailedRecoveryMessage)
+      .edited: failedVariant(
+        message: Self.editedFailedRecoveryMessage, reason: .editedResourceUnavailable)
     ]
     #expect(
       ExportCompletionPolicy.shouldRunEditedFallback(
@@ -194,7 +204,8 @@ struct ExportCompletionPolicyTests {
     // Recovery is gated to the `.edited`-only case. When `.editedWithOriginals` requires
     // both variants, the user can already see the original — no recovery needed.
     let variants: [ExportVariant: ExportVariantRecord] = [
-      .edited: failedVariant(message: Self.editedFailedRecoveryMessage)
+      .edited: failedVariant(
+        message: Self.editedFailedRecoveryMessage, reason: .editedResourceUnavailable)
     ]
     #expect(
       !ExportCompletionPolicy.shouldRunEditedFallback(
@@ -231,7 +242,8 @@ struct ExportCompletionPolicyTests {
     // upstream failure sentinel — using the success one would re-run the recovery on
     // every future export.
     let variants: [ExportVariant: ExportVariantRecord] = [
-      .edited: failedVariant(message: Self.editedFallbackSucceededMessage)
+      .edited: failedVariant(
+        message: Self.editedFallbackSucceededMessage, reason: .editedUnavailableOriginalBackedUp)
     ]
     #expect(
       !ExportCompletionPolicy.shouldRunEditedFallback(
@@ -250,7 +262,8 @@ struct ExportCompletionPolicyTests {
     let variants: [ExportVariant: ExportVariantRecord] = [
       .original: doneVariant(filename: "IMG_0001.HEIC"),
       .originalPairedVideo: failedVariant(
-        message: ExportVariantRecovery.pairedVideoUnavailableMessage),
+        message: ExportVariantRecovery.pairedVideoUnavailableMessage,
+        reason: .pairedVideoUnavailable),
     ]
     #expect(
       ExportCompletionPolicy.isComplete(
@@ -296,7 +309,8 @@ struct ExportCompletionPolicyTests {
       .edited: doneVariant(filename: "IMG_0001.HEIC"),
       .originalPairedVideo: doneVariant(filename: "IMG_0001_orig.MOV"),
       .editedPairedVideo: failedVariant(
-        message: ExportVariantRecovery.pairedVideoUnavailableMessage),
+        message: ExportVariantRecovery.pairedVideoUnavailableMessage,
+        reason: .pairedVideoUnavailable),
     ]
     #expect(
       ExportCompletionPolicy.isComplete(

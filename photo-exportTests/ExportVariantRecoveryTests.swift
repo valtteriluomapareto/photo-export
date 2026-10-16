@@ -1,60 +1,29 @@
-import Foundation
 import Testing
 
 @testable import Photo_Export
 
-/// Table-driven coverage of `ExportVariantRecovery` — the named recoverable failure
-/// cases we recognise in the UI to render with non-promising, secondary-coloured copy.
 struct ExportVariantRecoveryTests {
-
-  // MARK: - isRecoverable
-
-  @Test func interruptedMessageIsRecoverable() {
-    #expect(ExportVariantRecovery.isRecoverable(ExportVariantRecovery.interruptedMessage))
-  }
-
-  @Test func editedResourceUnavailableMessageIsRecoverable() {
+  @Test func typedReasonsSelectExistingFriendlyCopy() {
     #expect(
-      ExportVariantRecovery.isRecoverable(
-        ExportVariantRecovery.editedResourceUnavailableMessage))
-  }
-
-  @Test func unknownMessageIsNotRecoverable() {
-    #expect(!ExportVariantRecovery.isRecoverable("Disk full"))
-    #expect(!ExportVariantRecovery.isRecoverable("Permission denied"))
-    #expect(!ExportVariantRecovery.isRecoverable(""))
-    #expect(!ExportVariantRecovery.isRecoverable(nil))
-  }
-
-  // MARK: - friendlyCopy
-
-  @Test func friendlyCopyForInterruptedMessage() {
-    let copy = ExportVariantRecovery.friendlyCopy(
-      for: ExportVariantRecovery.interruptedMessage, label: "Original")
-    #expect(copy == "Original: Will retry on next export")
-  }
-
-  @Test func friendlyCopyForEditedResourceUnavailable() {
-    let copy = ExportVariantRecovery.friendlyCopy(
-      for: ExportVariantRecovery.editedResourceUnavailableMessage, label: "Edited")
+      ExportVariantRecovery.friendlyCopy(for: .interrupted, label: "Original")
+        == "Original: Will retry on next export")
     #expect(
-      copy
+      ExportVariantRecovery.friendlyCopy(for: .editedResourceUnavailable, label: "Edited")
         == "Edited version could not be exported this time. Future exports will try again.")
-  }
-
-  @Test func friendlyCopyReturnsNilForUnknownMessages() {
-    #expect(ExportVariantRecovery.friendlyCopy(for: "Disk full", label: "Original") == nil)
+    #expect(
+      ExportVariantRecovery.friendlyCopy(for: .editedUnavailableOriginalBackedUp, label: "Edited")
+        == "Edited version was unavailable. The original was saved as a `_orig` companion.")
+    #expect(
+      ExportVariantRecovery.friendlyCopy(for: .pairedVideoUnavailable, label: "Original")
+        == "Original: Photos doesn't currently expose a paired video for this Live Photo. The still was exported."
+    )
+    #expect(ExportVariantRecovery.isRecoverable(.interrupted))
+    #expect(ExportVariantRecovery.isRecoverable(.editedResourceUnavailable))
+    let unknown = ExportVariantReason(rawValue: "future")
+    let recoverable = ExportVariantRecovery.isRecoverable(unknown)
+    #expect(recoverable == false)
+    #expect(
+      ExportVariantRecovery.friendlyCopy(for: .init(rawValue: "future"), label: "Edited") == nil)
     #expect(ExportVariantRecovery.friendlyCopy(for: nil, label: "Edited") == nil)
-  }
-
-  // MARK: - Pipeline regression
-
-  @Test func pipelineUsesEditedResourceUnavailableConstant() {
-    // The export pipeline writes this exact string into `lastError` for an adjusted asset
-    // whose edited resource cannot be selected. Round-tripping through `friendlyCopy`
-    // proves the constant matches what the pipeline emits — protects against drift.
-    let recordedError = ExportVariantRecovery.editedResourceUnavailableMessage
-    #expect(ExportVariantRecovery.isRecoverable(recordedError))
-    #expect(ExportVariantRecovery.friendlyCopy(for: recordedError, label: "Edited") != nil)
   }
 }

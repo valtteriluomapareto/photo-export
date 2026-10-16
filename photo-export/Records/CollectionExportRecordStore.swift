@@ -410,6 +410,7 @@ final class CollectionExportRecordStore: ObservableObject {
     variantRecord.filename = filename
     variantRecord.status = .inProgress
     variantRecord.lastError = nil
+    variantRecord.reason = nil
     variantRecord.subfolder = subfolder
     body.variants[variant.rawValue] = variantRecord
     append(.upsertRecord(placementId: placement.id, assetId: assetId, body: body))
@@ -437,6 +438,7 @@ final class CollectionExportRecordStore: ObservableObject {
     placement: ExportPlacement,
     variant: ExportVariant,
     error: String,
+    reason: ExportVariantReason? = nil,
     at date: Date
   ) {
     guard accept(placement) else { return }
@@ -447,6 +449,7 @@ final class CollectionExportRecordStore: ObservableObject {
     variantRecord.status = .failed
     variantRecord.exportDate = date
     variantRecord.lastError = error
+    variantRecord.reason = reason
     body.variants[variant.rawValue] = variantRecord
     append(.upsertRecord(placementId: placement.id, assetId: assetId, body: body))
   }
@@ -813,6 +816,7 @@ final class CollectionExportRecordStore: ObservableObject {
           var next = variantRecord
           next.status = .failed
           next.lastError = ExportVariantRecovery.interruptedMessage
+          next.reason = .interrupted
           mutated.variants[rawKey] = next
           changed = true
         }

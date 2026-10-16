@@ -304,6 +304,7 @@ final class ExportRecordStore: ObservableObject {
         var next = variantRecord
         next.status = .failed
         next.lastError = ExportVariantRecovery.interruptedMessage
+        next.reason = .interrupted
         mutated.variants[variant] = next
         changed = true
       }
@@ -343,6 +344,7 @@ final class ExportRecordStore: ObservableObject {
     variantRecord.filename = filename
     variantRecord.status = .inProgress
     variantRecord.lastError = nil
+    variantRecord.reason = nil
     variantRecord.subfolder = subfolder
     record.variants[variant] = variantRecord
     append(.upsert(record))
@@ -380,6 +382,7 @@ final class ExportRecordStore: ObservableObject {
     assetId: String,
     variant: ExportVariant,
     error: String,
+    reason: ExportVariantReason? = nil,
     at date: Date
   ) {
     var record =
@@ -393,6 +396,7 @@ final class ExportRecordStore: ObservableObject {
     variantRecord.status = .failed
     variantRecord.exportDate = date
     variantRecord.lastError = error
+    variantRecord.reason = reason
     record.variants[variant] = variantRecord
     append(.upsert(record))
   }
@@ -872,19 +876,18 @@ final class ExportRecordStore: ObservableObject {
     if originalDone,
       let editedRecord = record.variants[.edited],
       editedRecord.status == .failed,
-      editedRecord.lastError
-        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
+      editedRecord.reason == .editedUnavailableOriginalBackedUp
     {
       counters.editedFallbackCovered += sign
     }
-    // A `.failed` paired-video with the `pairedVideoUnavailableMessage` sentinel is
+    // A `.failed` paired-video with the `pairedVideoUnavailable` reason is
     // covered (the still landed, Photos has no motion file to give). Mirrors the
     // `editedFallbackCovered` handling — a record whose only "incompleteness" is
-    // that sentinel must NOT count against the sidebar's exported total.
+    // that reason must NOT count against the sidebar's exported total.
     let hasIncompletePairedVideo = record.variants.contains { variant, vr in
       guard variant.isPairedVideo, vr.status != .done else { return false }
       if vr.status == .failed,
-        vr.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage
+        vr.reason == .pairedVideoUnavailable
       {
         return false
       }

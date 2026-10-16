@@ -60,6 +60,9 @@ compacted snapshot — implemented by the shared `JSONLRecordFile` component.
   - `status` (String) — `pending` | `inProgress` | `done` | `failed`
   - `exportDate` (ISO8601 date)
   - `lastError` (String?)
+  - `reason` (String or explicit null) — stable domain reason, separate from error copy.
+    Known codes are `interrupted`, `editedResourceUnavailable`,
+    `editedUnavailableOriginalBackedUp`, and `pairedVideoUnavailable`.
 - `ExportRecordMutation` (JSON Lines):
   - `op` — `upsert` | `delete`
   - `id` — asset id
@@ -111,6 +114,26 @@ recoverable after crashes and force-quits.
 
 Encoding always emits the current schema. Legacy fields are dropped on the next write or
 compaction.
+
+### Stable variant reasons
+
+Completion, edited fallback, counters, and friendly recovery copy use `reason`, never
+`lastError`. New writers supply reasons explicitly and always encode the field, including
+null for ordinary failures. Starting or succeeding clears an old reason; a new generic
+failure also clears it. Restart recovery sets `interrupted`.
+
+When the field is absent, decoding a failed legacy variant maps only the four exact,
+frozen historical messages. Explicit null and unknown codes suppress this legacy mapping,
+even if the error text matches an old sentinel. Unknown strings round-trip unchanged,
+remain ordinary incomplete failures, and appear in saved diagnostic reports. Malformed
+non-string codes fail decoding through the existing corruption-recovery path.
+
+Existing files are upgraded only through ordinary writes/compaction. The immutable
+[historical fixtures](../project/historical-persistence-fixtures.md) pin pre-reason
+snapshot/log completion semantics. Older releases ignore the additive field and may
+discard it when rewriting; after a downgrade, their completion rules still depend on text.
+Known sentinel retry identities remain the frozen historical strings, and edited
+render/conversion failures retain the `Export:9` retry identity.
 
 ## Lifecycle
 

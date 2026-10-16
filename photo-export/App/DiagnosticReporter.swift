@@ -106,6 +106,7 @@ struct DiagnosticReporter {
     let variant: ExportVariant
     let filename: String?
     let lastError: String?
+    let reason: ExportVariantReason?
     let exportDate: Date?
     /// When this is a `.failed` `.edited` variant covered by the issue #22
     /// `_orig` fallback (matching record has `.original` `.done`), this holds
@@ -123,6 +124,7 @@ struct DiagnosticReporter {
             assetId: record.id, variant: variant,
             filename: variantRecord.filename,
             lastError: variantRecord.lastError,
+            reason: variantRecord.reason,
             exportDate: variantRecord.exportDate,
             fallbackFilename: editedFallbackFilename(
               variant: variant, variantRecord: variantRecord,
@@ -148,6 +150,7 @@ struct DiagnosticReporter {
               variant: variant,
               filename: variantRecord.filename,
               lastError: variantRecord.lastError,
+              reason: variantRecord.reason,
               exportDate: variantRecord.exportDate,
               fallbackFilename: editedFallbackFilename(
                 variant: variant, variantRecord: variantRecord,
@@ -172,8 +175,7 @@ struct DiagnosticReporter {
   ) -> String? {
     guard variant == .edited,
       variantRecord.status == .failed,
-      variantRecord.lastError
-        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      variantRecord.reason == .editedUnavailableOriginalBackedUp,
       let original = originalRecord,
       original.status == .done,
       let filename = original.filename
@@ -197,6 +199,9 @@ struct DiagnosticReporter {
         lines.append("  filename: \(filename)")
       }
       lines.append("  error: \(problem.lastError ?? "<no error message>")")
+      if let reason = problem.reason {
+        lines.append("  reason: \(reason.rawValue)")
+      }
       if let date = problem.exportDate {
         lines.append("  date: \(Self.formatter.string(from: date))")
       }
@@ -259,7 +264,8 @@ struct DiagnosticReporter {
     case .emittedChanges(let count):
       lines.append("Result:    emitted \(count) change(s)")
     case .detailsUnavailable(let failures):
-      lines.append("Result:    per-change details unavailable (\(failures) failure(s)); token rebased")
+      lines.append(
+        "Result:    per-change details unavailable (\(failures) failure(s)); token rebased")
     case .fetchError(let description):
       lines.append("Result:    fetch error: \(description); token rebased")
     }
