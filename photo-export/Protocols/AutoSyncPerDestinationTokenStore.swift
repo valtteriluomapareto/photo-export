@@ -2,9 +2,9 @@ import Foundation
 
 /// Persists per-destination `lastDurablyRecordedToken` snapshots. Plan
 /// §"Persistence Keys": `AutoSync/destinations/<destinationId>/lastDurablyRecordedToken.data`.
-/// The token is the cursor each destination has caught up to; on resume, the
-/// reducer compares it against the global token to decide whether the
-/// destination needs a backfill or can pick up incrementally.
+/// The token records advisory acknowledgement after dirty-state persistence.
+/// It is currently loaded but does not drive fetching or resume decisions;
+/// the PhotoKit adapter owns an independent global cursor.
 ///
 /// Stored as raw `Data` (NSKeyedArchiver bytes from the global adapter) so the
 /// store doesn't depend on PhotoKit types — the reducer treats it opaquely.

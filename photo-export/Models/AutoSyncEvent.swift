@@ -32,11 +32,8 @@ enum AutoSyncEvent: Sendable {
   case photosChanged(PhotoLibraryPersistentChangeEvent)
 
   /// `PHPhotoLibrary.fetchPersistentChanges(since:)` failed for the current
-  /// persistent-change token. Plan §"Photo Library Changes": "Distinguish three
-  /// failure modes from `fetchPersistentChanges(since:)` and route each explicitly:
-  /// token-expired, token-invalid, and details-unavailable. All three reset the
-  /// affected destination's `lastDurablyRecordedToken` ... and schedule one bounded
-  /// full reconciliation."
+  /// global cursor. The adapter rebases that cursor independently; the reducer
+  /// requests bounded full reconciliation without resetting destination tokens.
   case photosChangeFetchFailed(PhotoLibraryPersistentChangeFetchError)
 
   /// Fan-out is about to start this scope. Captures its dirty-work boundary

@@ -130,6 +130,25 @@ The reducer schedules the earliest automatically retryable entry in enabled scop
 
 Matched completion prunes only sparse retry tuples that `AutoSyncExportRunning.isRetryVariantDone` confirms in a healthy, fully flushed record store. Legacy manual runs use their idle transition as a cleanup opportunity; cancellation can also publish idle, so unacknowledged writes must keep retry entries intact. The JSONL layer tracks submitted and flushed revisions in memory so an append during an async flush cannot be mistaken for an acknowledged write. A completed summary alone cannot prove that every failed variant was selected or saved. Existing retry JSON and record formats remain unchanged, and unknown scope or variant keys are preserved.
 
+### AutoSync dirty-state persistence acknowledgement
+
+The effect runner saves a destination's dirty snapshot before writing its advisory
+`lastDurablyRecordedToken`. A failed dirty save blocks that destination's token writes
+across later events, including events that produce no export work. Only a successful
+dirty-state save for the same stable destination releases the block. Other destinations
+continue independently; existing export and debounce effects still run.
+
+While persistence is blocked, the reducer's latest snapshot remains authoritative in
+memory, including an empty snapshot after valid completion. Returning to that destination
+must not replace it with older disk state. A later existing save recovers persistence;
+there is no additional retry timer or deferred-token queue.
+
+This guarantee applies to per-destination acknowledgement, not PhotoKit fetching. The
+PhotoKit adapter independently saves the global fetch cursor before emitting a change.
+Per-destination tokens are currently loaded but do not drive fetching. Unsaved snapshots
+and the failure block do not survive process exit; an enabled, eligible app launch uses
+the existing full-scope reconciliation. Persisted file formats remain unchanged.
+
 ## Host protocol pattern
 
 > The cancellation-seam methods (`isCurrent` / `throwIfCancelledOrStale` / `generation` / `bumpGeneration`) are no longer on any Host protocol — that move landed in issue #67 item 2. Collaborators that need the seam inject `ExportQueueCoordinator` directly. The remaining Host methods are UI-state mirrors and dependency forwarders, all stable.
