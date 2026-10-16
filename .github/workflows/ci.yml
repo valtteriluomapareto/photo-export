@@ -42,6 +42,12 @@ jobs:
         run: npm run validate
         working-directory: website
 
+      - name: Test and check built website links
+        run: |
+          npm run test:links
+          npm run check:links
+        working-directory: website
+
   build-and-test:
     runs-on: macos-15
     steps:

@@ -12,6 +12,8 @@
 		"preview": "astro preview",
 		"check": "astro check",
 		"validate": "astro check && astro build",
+		"check:links": "node scripts/check-links.mjs",
+		"test:links": "node --test scripts/check-links.test.mjs",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
 		"lint": "oxlint",
@@ -24,6 +26,7 @@
 	},
 	"devDependencies": {
 		"@astrojs/check": "^0.9.8",
+		"linkinator": "7.6.1",
 		"oxlint": "^1.57.0",
 		"prettier": "^3.8.1",
 		"prettier-plugin-astro": "^0.14.1",
