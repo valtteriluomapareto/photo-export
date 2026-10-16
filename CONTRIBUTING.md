@@ -101,7 +101,7 @@ Agent-authored PRs follow the repository's three-reviewer workflow:
 1. Post the implementation plan on the relevant GitHub issue, including scope, compatibility, and validation.
 2. Have three subagents review it as Senior Architect, Senior Tester, and Pragmatic Developer. The Pragmatic Developer keeps the solution practical and challenges unnecessary complexity.
 3. Update the issue plan from the feedback before implementing.
-4. Implement and validate the change.
+4. Write or update meaningful tests before changing production code whenever practical. For bug fixes, demonstrate that the regression test fails against the previous implementation for the expected behavioral reason, then apply the fix and rerun the relevant checks. Briefly explain exceptions in the issue or PR when a meaningful failing test is impractical, such as documentation-only changes; avoid tests that merely mirror the implementation or prose.
 5. Reuse the same three agents to review the implementation, resolve actionable findings, and record the review outcomes.
 6. Push and open the PR. Merge after CI passes for its current head commit and actionable findings are resolved, unless the user requests a different flow.
 
