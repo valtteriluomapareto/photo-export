@@ -157,6 +157,7 @@ Do **not** use Kimi K2.6 (or accept its output unverified) for:
 
 ## Key Conventions
 
+- Photos access is read-only. Run `scripts/ci/test-guards.sh` and `python3 scripts/ci/check-read-only-photos.py`; see [`scripts/README.md`](scripts/README.md) for the lexical guard's supported syntax and limitations.
 - Log with `os.Logger` (subsystem `com.valtteriluoma.photo-export`), not `print`.
 - The five UI-injected managers (`PhotoLibraryManager`, `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore`, `ExportDestinationManager`) are `@MainActor`. The Host-driven collaborators of `ExportManager` (`ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`) are `@MainActor final class`. `JSONLRecordFile` (under `Records/`) is also `@MainActor` because both composing stores call into it from the main actor and it owns mutable state (`mutationCountSinceCompact`); its IO-queue-bound static helpers are explicitly `nonisolated`. `RecordStoreRouter` is `@MainActor`. `CollectionCountCache` is an actor. Pure helpers (`FileIOService`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ResourceSelection`, `ProductionAssetResourceWriter`, `BackupScanner`, `ExportPlacementResolver`, `ExportRecordsDirectoryCoordinator`, `ExportCompletionPolicy`, `ExportJobPlanner`, `ExportDestinationResolver`) are plain types — do not add `@MainActor` reflexively. Full isolation policy: [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Actor isolation policy.
 - Track exports by `PHAsset.localIdentifier`; never overwrite existing files.

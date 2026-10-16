@@ -17,6 +17,15 @@ Small development utilities for this project. CI-only steps live under [`ci/`](c
 
 These are wrappers around `xcodebuild` / signing / App Store Connect that the release workflows call. They are not meant to be run interactively unless you are reproducing a CI failure locally — they expect environment variables that the workflows inject.
 
+The structural guards also run locally without signing credentials:
+
+```bash
+scripts/ci/test-guards.sh
+python3 scripts/ci/check-read-only-photos.py
+```
+
+The Photos guard rejects exact PhotoKit change/creation request and `performChanges` identifiers in production Swift sources. It ignores nested comments and ordinary/raw/multiline string literals (including interpolation bodies), preserves source line numbers, and fails on missing/empty input. It has no inline bypass marker. This is a lexical tripwire: aliases, dynamic calls, and code inside string interpolation need review; it does not replace Swift compilation or behavioral tests. Python 3 is required; only its standard library is used. Self-tests invoke the real scanners against temporary fixtures and preserve the existing destination-keying self-test.
+
 | Script | Used by workflow |
 | --- | --- |
 | `archive-appstore.sh` | `release-app-store.yml` |
