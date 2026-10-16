@@ -1,6 +1,4 @@
-import AppKit
 import Foundation
-import ServiceManagement
 import os
 
 /// Wraps `SMAppService.mainApp` so the Settings UI can present "Open Photo
@@ -25,6 +23,7 @@ final class LoginItemController: ObservableObject {
   @Published private(set) var status: Status = .notRegistered
 
   private let log: Logger
+  private let service: any LoginItemService
 
   enum Status: Equatable, Sendable {
     case enabled
@@ -32,12 +31,31 @@ final class LoginItemController: ObservableObject {
     case notRegistered
     case notFound
     case unknown
+
+    var footerText: String {
+      switch self {
+      case .enabled:
+        return "Photo Export will start automatically when you log in."
+      case .requiresApproval:
+        return
+          "macOS is waiting for you to confirm in System Settings → Login Items."
+      case .notRegistered:
+        return "Photo Export won't auto-start at login."
+      case .notFound:
+        return
+          "Move Photo Export into your Applications folder to enable launch at login."
+      case .unknown:
+        return "Status unknown — check System Settings → Login Items."
+      }
+    }
   }
 
   init(
+    service: (any LoginItemService)? = nil,
     log: Logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "LoginItem")
   ) {
     self.log = log
+    self.service = service ?? SystemLoginItemService()
     refresh()
   }
 
@@ -45,14 +63,14 @@ final class LoginItemController: ObservableObject {
   /// becoming-key so the UI reflects out-of-band changes (user opened
   /// System Settings → Login Items and toggled the entry).
   func refresh() {
-    status = Self.map(SMAppService.mainApp.status)
+    status = service.status
   }
 
   /// User flipped the toggle on. Attempts to register the app. If the
   /// service was already registered, this is a no-op-with-success.
   func register() {
     do {
-      try SMAppService.mainApp.register()
+      try service.register()
       log.info("Registered for login items")
     } catch {
       log.error(
@@ -69,7 +87,7 @@ final class LoginItemController: ObservableObject {
   /// window becomes key."
   func unregister() {
     do {
-      try SMAppService.mainApp.unregister()
+      try service.unregister()
       log.info("Unregistered login item")
     } catch {
       log.error(
@@ -84,20 +102,7 @@ final class LoginItemController: ObservableObject {
   /// `.enabled`, surface a 'Still showing in Login Items? Open Login
   /// Items…' hint because System Settings does not notify the app."
   func openSystemLoginItems() {
-    if let url = URL(
-      string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
-    {
-      NSWorkspace.shared.open(url)
-    }
+    service.openSystemLoginItems()
   }
 
-  private static func map(_ status: SMAppService.Status) -> Status {
-    switch status {
-    case .enabled: return .enabled
-    case .requiresApproval: return .requiresApproval
-    case .notRegistered: return .notRegistered
-    case .notFound: return .notFound
-    @unknown default: return .unknown
-    }
-  }
 }

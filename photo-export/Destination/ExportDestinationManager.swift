@@ -38,6 +38,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     subsystem: "com.valtteriluoma.photo-export", category: "ExportDestination")
 
   private var volumeObservers: [NSObjectProtocol] = []
+  private let volumeNotificationCenter: NotificationCenter
+  private let validationScopeAcquirer: ((URL) -> Bool)?
+  private let validationScopeReleaser: ((URL) -> Void)?
 
   /// The **persisted** stable id, kept privately across launches for reuse. Distinct from the
   /// published `identity.stableId` (the *active* id), which is `nil` while the destination is
@@ -189,8 +192,18 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     ambiguityResolver: ((URL) -> FolderSelectionDecision)? = nil,
     bookmarkSaver: ((URL) -> Bool)? = nil,
     storedBookmarkScopeAcquirer: ((URL) -> Bool)? = nil,
-    fileIdentifierProvider: ((URL) -> (any NSObjectProtocol)?)? = nil
+    fileIdentifierProvider: ((URL) -> (any NSObjectProtocol)?)? = nil,
+    volumeNotificationCenter: NotificationCenter? = nil,
+    validationScopeAcquirer: ((URL) -> Bool)? = nil,
+    validationScopeReleaser: ((URL) -> Void)? = nil
   ) {
+    precondition(
+      (validationScopeAcquirer == nil) == (validationScopeReleaser == nil),
+      "Validation scope acquisition and release must be injected together")
+    self.volumeNotificationCenter =
+      volumeNotificationCenter ?? NSWorkspace.shared.notificationCenter
+    self.validationScopeAcquirer = validationScopeAcquirer
+    self.validationScopeReleaser = validationScopeReleaser
     self.userDefaults = userDefaults
     self.bookmarkDefaultsKey = bookmarkDefaultsKey
     self.stableIdDefaultsKey = stableIdDefaultsKey
@@ -209,7 +222,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   deinit {
     for observer in volumeObservers {
-      NotificationCenter.default.removeObserver(observer)
+      volumeNotificationCenter.removeObserver(observer)
     }
   }
 
@@ -755,8 +768,16 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private func validate(url: URL) {
     // Temporarily acquire access for validation
-    let didStart = url.startAccessingSecurityScopedResource()
-    defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+    let didStart = validationScopeAcquirer?(url) ?? url.startAccessingSecurityScopedResource()
+    defer {
+      if didStart {
+        if let release = validationScopeReleaser {
+          release(url)
+        } else {
+          url.stopAccessingSecurityScopedResource()
+        }
+      }
+    }
 
     // When scoped access can't be acquired — typically because the bookmark
     // is stale, sandbox-denied, or the underlying volume is unreachable —
@@ -812,7 +833,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   private func observeVolumeChanges() {
-    let center = NSWorkspace.shared.notificationCenter
+    let center = volumeNotificationCenter
     let mountObs = center.addObserver(
       forName: NSWorkspace.didMountNotification,
       object: nil,

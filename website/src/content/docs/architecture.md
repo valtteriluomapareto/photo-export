@@ -218,3 +218,11 @@ The export record store keeps per-destination state under Application Support. A
 - **Asset identity:** Tracked by `PHAsset.localIdentifier`. Existing files in the destination are never overwritten — re-running an export resumes where it left off.
 
 Contributor-facing conventions (linting rules, formatting, the SwiftUI + Managers code style) live in the [contributor guide](https://github.com/valtteriluomapareto/photo-export/blob/main/CONTRIBUTING.md) and [`AGENTS.md`](https://github.com/valtteriluomapareto/photo-export/blob/main/AGENTS.md).
+
+### Platform service seams
+
+`LoginItemController` delegates system registration and Settings opening through
+`LoginItemService`, implemented by `SystemLoginItemService`. Tests use a fake service.
+Destination volume observers accept a private notification center for deterministic
+reconnect tests and remove their tokens from the same center. UI eligibility and export
+selection routing have unit tests alongside the native hosted SwiftUI behavior tests.

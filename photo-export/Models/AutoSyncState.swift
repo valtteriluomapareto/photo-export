@@ -43,4 +43,11 @@ enum AutoSyncState: Equatable, Sendable {
   /// to mock UUID generation. Returns to `.idle` when the matching
   /// `exportRunStateChanged(.idle)` arrives.
   case running(reason: AutoSyncReason)
+  var canRunNow: Bool {
+    switch self {
+    case .disabled, .blocked, .running: return false
+    case .idle, .scheduled, .waiting: return true
+    }
+  }
+
 }
