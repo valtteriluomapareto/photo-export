@@ -373,6 +373,9 @@ struct CollectionsSidebarView: View {
 // MARK: - Rows
 
 private struct CollectionRow: View {
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
 
@@ -406,9 +409,14 @@ private struct CollectionRow: View {
       // originals off and later toggled it on. Surfacing that gap
       // requires the asset list + version selection in the sidebar;
       // tracked as a separate follow-up.
-      switch CollectionSidebarBadge.state(
+      let state = CollectionSidebarBadge.state(
         liveCount: count, exportedRecords: summary.exportedCount)
-      {
+      #if DEBUG
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = bodyCounter?.recordText(
+          [String(describing: state)], for: "collection-sidebar:\(descriptor.id)")
+      #endif
+      switch state {
       case .complete:
         Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
       case .partial(let exported, let total):
@@ -417,28 +425,30 @@ private struct CollectionRow: View {
         Text("\(total)").foregroundColor(.secondary).font(.caption)
       }
     } else if let count {
+      #if DEBUG
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = bodyCounter?.recordText(
+          ["count:\(count)"], for: "collection-sidebar:\(descriptor.id)")
+      #endif
       Text("\(count)").foregroundColor(.secondary).font(.caption)
     }
   }
 
-  /// Looks up the persisted placement for this descriptor (if any) so the sidebar can
-  /// show partial-export progress before the user starts a new run. Favorites resolves
-  /// to the canonical placement id; albums match on `collectionLocalIdentifier`.
+  /// Read the current descriptor/path slot; historical renamed/moved paths
+  /// remain intact but do not describe the next export target.
   private func matchingPlacement() -> ExportPlacement? {
+    let selection: LibrarySelection
     switch descriptor.kind {
-    case .favorites:
-      return collectionExportRecordStore.placement(id: ExportPlacement.favorites().id)
+    case .favorites: selection = .favorites
     case .album:
       guard let id = descriptor.localIdentifier else { return nil }
-      return collectionExportRecordStore.placements(matching: .album)
-        .first(where: { $0.collectionLocalIdentifier == id })
+      selection = .album(collectionId: id)
     case .sharedAlbum:
       guard let id = descriptor.localIdentifier else { return nil }
-      return collectionExportRecordStore.placements(matching: .sharedAlbum)
-        .first(where: { $0.collectionLocalIdentifier == id })
-    case .folder:
-      return nil
+      selection = .sharedAlbum(collectionId: id)
+    case .folder: return nil
     }
+    return collectionExportRecordStore.currentPlacement(for: selection, collections: [descriptor])
   }
 
   private var tooltip: String {
@@ -450,6 +460,9 @@ private struct CollectionRow: View {
 }
 
 private struct FolderRow: View {
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
@@ -515,10 +528,14 @@ private struct FolderRow: View {
   @ViewBuilder
   private var countBadge: some View {
     if let photoCount, photoCount > 0, albumCount > 0 {
-      switch CollectionSidebarBadge.state(
-        liveCount: photoCount,
-        exportedRecords: aggregateExportedCount()
-      ) {
+      let state = CollectionSidebarBadge.state(
+        liveCount: photoCount, exportedRecords: aggregateExportedCount())
+      #if DEBUG
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = bodyCounter?.recordText(
+          [String(describing: state)], for: "folder-sidebar:\(descriptor.id)")
+      #endif
+      switch state {
       case .complete:
         Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
       case .partial(let exported, let total):
@@ -537,11 +554,12 @@ private struct FolderRow: View {
   /// "stale-records-after-deletion" case at the aggregate level.
   private func aggregateExportedCount() -> Int {
     let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: descriptor.children)
-    let placements = collectionExportRecordStore.placements(matching: .album)
     var sum = 0
     for id in albumIds {
-      if let p = placements.first(where: { $0.collectionLocalIdentifier == id }) {
-        sum += collectionExportRecordStore.summary(for: p).exportedCount
+      if let placement = collectionExportRecordStore.currentPlacement(
+        for: .album(collectionId: id), collections: [descriptor])
+      {
+        sum += collectionExportRecordStore.summary(for: placement).exportedCount
       }
     }
     return sum

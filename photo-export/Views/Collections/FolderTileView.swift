@@ -39,7 +39,16 @@ struct FolderTileView: View {
     case failed
   }
 
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText(
+        [String(isFullyExported)], for: "folder-tile-exported:\(descriptor.id)")
+    #endif
     VStack(alignment: .leading, spacing: 6) {
       coverArea
         .frame(width: Self.tileSide, height: Self.tileSide)

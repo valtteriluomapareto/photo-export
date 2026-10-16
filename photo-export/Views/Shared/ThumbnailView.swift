@@ -38,7 +38,15 @@ struct ThumbnailView: View {
       retryToken: retryToken)
   }
 
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([String(isExported)], for: "thumbnail-exported:\(asset.id)")
+    #endif
     let identity = loadIdentity
     ZStack {
       if let image {

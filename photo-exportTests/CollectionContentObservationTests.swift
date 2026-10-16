@@ -210,10 +210,14 @@ import Testing
       try #require(refreshed)
       #expect(f.navigation.asset == live)
 
-      let shared = ExportPlacement(
-        kind: .sharedAlbum, id: "shared-fixture", displayName: "Shared",
-        collectionLocalIdentifier: "shared", relativePath: "Collections/Shared Albums/Shared/",
-        createdAt: Date())
+      let descriptor = PhotoCollectionDescriptor(
+        id: "shared:shared", localIdentifier: "shared", title: "Shared", kind: .sharedAlbum,
+        pathComponents: [], children: [])
+      f.service.collectionTree.append(descriptor)
+      f.library.invalidateCache(changedThumbnailAssetIDs: [])
+      let shared = try ExportPlacementResolver().placement(
+        for: .sharedAlbum(collectionId: "shared"), collections: [descriptor], existingPlacements: []
+      )
       f.records.upsertPlacement(shared)
       f.records.markVariantExported(
         assetId: adjusted.id, placement: shared, variant: .original,
