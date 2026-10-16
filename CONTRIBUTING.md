@@ -119,6 +119,11 @@ For UI changes, include a screenshot or short recording when practical.
 
 External GitHub Actions are pinned to upstream commit SHAs with version comments. Dependabot proposes weekly Action updates and website npm updates; routine minor/patch website updates are grouped, while major updates remain separate. Maintainers review these PRs and merge only after current-head CI passes. No automatic merging is enabled.
 
+CI selects app and website validation by changed area. The existing `build-and-test`
+and `website` check names remain conclusive result gates, including when unrelated
+validation is skipped. Shared/unknown paths select both. See the [routing rules and
+local tests](scripts/README.md#ci-area-routing); release workflow triggers are unchanged.
+
 When updating a pin manually, verify the commit and its `action.yml` in the upstream repository, retain the version comment, and preserve workflow permissions, triggers, environments, and release controls. For website dependency updates, commit both `website/package.json` and `website/package-lock.json` as applicable and run the website format, lint, and validation commands. App runtime dependencies remain unchanged.
 
 ## Release and Project Notes
