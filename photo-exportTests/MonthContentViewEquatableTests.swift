@@ -55,8 +55,12 @@ struct MonthContentViewEquatableTests {
   /// on every body re-run, so without this exclusion `.equatable()` would never
   /// short-circuit during an active export.
   @Test func equalEvenWhenOnExportMonthClosureDiffers() {
-    let a = makeView(action: { /* noop a */ })
-    let b = makeView(action: { /* noop b — different instance */ })
+    let a = makeView(action: {
+      // First action instance.
+    })
+    let b = makeView(action: {
+      // Different action instance.
+    })
     #expect(a == b)
   }
 
@@ -106,4 +110,18 @@ struct MonthContentViewEquatableTests {
     let b = makeView(selected: nil)
     #expect(a != b)
   }
+  @Test func selectionChangeThroughTheSameBindingInvalidatesOldView() {
+    var selected: AssetDescriptor? = makeAsset(id: "A")
+    let binding = Binding(get: { selected }, set: { selected = $0 })
+    func view() -> MonthContentView {
+      MonthContentView(
+        year: 2026, month: 1, versionSelection: .edited, livePhotosPaired: false,
+        onExportMonth: {}, selectedAsset: binding,
+        photoLibraryService: FakePhotoLibraryService())
+    }
+    let before = view()
+    selected = makeAsset(id: "B")
+    #expect(before != view())
+  }
+
 }

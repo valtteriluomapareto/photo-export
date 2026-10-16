@@ -105,9 +105,16 @@ struct CollectionContentView: View, Equatable {
       await viewModel.loadAssets(for: scope)
     }
     .onDisappear { viewModel.deactivate() }
-    .onChange(of: initialAssetSelection, initial: true) { _, asset in
-      if selectedAsset == nil, let asset {
-        selectedAsset = asset
+    .onReceive(viewModel.selectionUpdates) { _ in
+      // The model emits after an owned commit. Derive from the live binding
+      // and write synchronously, so no queued pane can undo newer navigation.
+      guard
+        let update = viewModel.selectionUpdate(
+          for: scope, preferredAssetId: selectedAsset?.id)
+      else { return }
+      if selectedAsset != update.asset { selectedAsset = update.asset }
+      if viewModel.selectedAssetId != update.asset?.id {
+        viewModel.select(assetId: update.asset?.id)
       }
     }
     // Same iCloud-sync / Photos.app-edit refresh path as `MonthContentView`. The
@@ -115,7 +122,12 @@ struct CollectionContentView: View, Equatable {
     // view model's `refresh(for:)` updates `assets` in place rather than clearing
     // first, so adding the observer here is now safe.
     .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
-      Task { await viewModel.refresh(for: scope) }
+      Task {
+        await viewModel.refresh(for: scope)
+        #if DEBUG
+          bodyCounter?.record("grid-refresh-finished")
+        #endif
+      }
     }
     .measureBodyInvalidations("CollectionContentView")
   }
@@ -131,13 +143,6 @@ struct CollectionContentView: View, Equatable {
       bodyCounter?.record("canExport:\(canExport)")
     }
   #endif
-
-  // Observe the first batch rather than waiting for the entire progressive load.
-  // A scope check prevents an old pane's selection from reaching the detail binding.
-  private var initialAssetSelection: AssetDescriptor? {
-    guard selectedAsset == nil else { return nil }
-    return viewModel.selectedAsset(for: scope)
-  }
 
   // MARK: - Scope plumbing
 
