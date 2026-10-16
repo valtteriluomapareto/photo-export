@@ -299,6 +299,7 @@ private struct SequenceGenerator {
 private struct SequenceTrace: CustomStringConvertible {
   let seed: UInt64
   private var actions: [String] = []
+  init(seed: UInt64) { self.seed = seed }
   mutating func append(_ action: String) { actions.append(action) }
   var description: String { "seed=\(seed); " + actions.suffix(64).joined(separator: " → ") }
 }
