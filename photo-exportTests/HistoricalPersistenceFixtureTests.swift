@@ -1,0 +1,270 @@
+import CryptoKit
+import Foundation
+import Testing
+
+@testable import Photo_Export
+
+@MainActor
+struct HistoricalPersistenceFixtureTests {
+  private static let checkout = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent()
+  private static let fixtureRoot = checkout.appendingPathComponent("test-fixtures/persistence")
+  private static let tags = ["v1.0.3", "v1.6.5"]
+  private let date = Date(timeIntervalSince1970: 1_700_000_000)
+
+  private struct Manifest: Decodable {
+    struct Release: Decodable {
+      let commit: String
+      let releaseURL: String
+      let sources: [String: String]
+      let harnessSHA256: String
+      let files: [String: String]
+    }
+    let schemaVersion: Int
+    let toolchain: String
+    let target: String
+    let hostRuntime: String
+    let releases: [String: Release]
+  }
+
+  private static func digest(_ bytes: Data) -> String {
+    SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+  }
+
+  private static func manifest() throws -> Manifest {
+    let path = fixtureRoot.appendingPathComponent("manifest.json")
+    try #require(
+      FileManager.default.fileExists(atPath: path.path),
+      "Tests require the checkout fixture directory: \(path.path)")
+    return try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: path))
+  }
+
+  @MainActor
+  private struct Fixture {
+    let root: URL
+    let originals: [URL: Data]
+
+    init(tag: String) throws {
+      let release = try #require(try HistoricalPersistenceFixtureTests.manifest().releases[tag])
+      let source = HistoricalPersistenceFixtureTests.fixtureRoot.appendingPathComponent(tag)
+      var bytes: [URL: Data] = [:]
+      for (relative, expected) in release.files {
+        let url = source.appendingPathComponent(relative)
+        let data = try Data(contentsOf: url)
+        try #require(
+          HistoricalPersistenceFixtureTests.digest(data) == expected,
+          "Changed immutable fixture: \(url.path)")
+        bytes[url] = data
+      }
+      originals = bytes
+      root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "Historical-\(UUID().uuidString)")
+      try FileManager.default.copyItem(at: source, to: root)
+    }
+
+    func cleanup() {
+      for (url, expected) in originals {
+        #expect(
+          (try? Data(contentsOf: url)) == expected,
+          "The original fixture must remain unchanged: \(url.path)")
+      }
+      try? FileManager.default.removeItem(at: root)
+    }
+  }
+
+  @Test func provenanceAndFileInventoryArePinned() throws {
+    let manifest = try Self.manifest()
+    #expect(manifest.schemaVersion == 1)
+    #expect(!manifest.toolchain.isEmpty)
+    #expect(!manifest.target.isEmpty)
+    #expect(!manifest.hostRuntime.isEmpty)
+    #expect(Set(manifest.releases.keys) == Set(Self.tags))
+    #expect(manifest.releases["v1.0.3"]?.commit == "a85100a7b0c734a0f492f5d76f5317c6c599d38f")
+    #expect(manifest.releases["v1.6.5"]?.commit == "0b0eb9b786311a961f9051d14e2e93cb0ecca135")
+    for tag in Self.tags {
+      let release = try #require(manifest.releases[tag])
+      #expect(
+        release.releaseURL
+          == "https://github.com/valtteriluomapareto/photo-export/releases/tag/\(tag)")
+      let harness = Self.checkout.appendingPathComponent("scripts/fixtures/\(tag).swift")
+      #expect(Self.digest(try Data(contentsOf: harness)) == release.harnessSHA256)
+      let root = Self.fixtureRoot.appendingPathComponent(tag)
+      let paths = try FileManager.default.subpathsOfDirectory(atPath: root.path)
+      let files = Set(
+        paths.filter {
+          (try? root.appendingPathComponent($0).resourceValues(forKeys: [.isRegularFileKey])
+            .isRegularFile) == true
+        })
+      #expect(files == Set(release.files.keys))
+      for (path, expected) in release.files {
+        #expect(Self.digest(try Data(contentsOf: root.appendingPathComponent(path))) == expected)
+      }
+    }
+  }
+
+  @Test(arguments: tags)
+  func timelineSnapshotReplayAndReopenPreserveHistoricalSemantics(tag: String) throws {
+    let fixture = try Fixture(tag: tag)
+    defer { fixture.cleanup() }
+    for _ in 0..<2 {
+      // A fresh instance repeats only production loading; no test save or forced
+      // compaction can mask a missing load/replay operation.
+      let a = ExportRecordStore(baseDirectoryURL: fixture.root)
+      let b = ExportRecordStore(baseDirectoryURL: fixture.root)
+      a.configure(for: "A")
+      b.configure(for: "B")
+      #expect(a.state == .ready)
+      #expect(b.state == .ready)
+      let expectedIds: Set<String> =
+        tag == "v1.0.3"
+        ? ["shared", "snapshot-only", "log-only", "interrupted", "raw-failure"]
+        : ["shared", "snapshot-only", "log-only", "interrupted", "fallback", "live", "video"]
+      #expect(Set(a.recordsById.keys) == expectedIds)
+      #expect(Set(b.recordsById.keys) == ["shared"])
+      for (id, filename) in [
+        ("shared", "REPLAY.JPG"), ("snapshot-only", "SNAP.JPG"), ("log-only", "LOG.JPG"),
+      ] {
+        let record = try #require(a.exportInfo(assetId: id))
+        #expect(record.year == 2024 && record.month == 4 && record.relPath == "2024/04/")
+        #expect(record.variants[.original]?.filename == filename)
+        #expect(record.variants[.original]?.status == .done)
+        #expect(record.variants[.original]?.exportDate == date)
+        #expect(record.variants[.original]?.subfolder == nil)
+        #expect(
+          a.isExported(
+            asset: TestAssetFactory.makeAsset(id: id), selection: .edited, livePhotosPaired: false))
+        #expect(
+          ExportCompletionPolicy.missingVariants(required: [.original], variants: record.variants)
+            .isEmpty)
+      }
+      let interrupted = try #require(a.exportInfo(assetId: "interrupted"))
+      #expect(interrupted.variants[.original]?.filename == "PARTIAL.JPG")
+      #expect(interrupted.variants[.original]?.status == .failed)
+      #expect(interrupted.variants[.original]?.lastError == "Interrupted before completion")
+      #expect(interrupted.variants[.original]?.exportDate == nil)
+      #expect(
+        ExportCompletionPolicy.missingVariants(
+          required: [.original], variants: interrupted.variants) == [.original])
+      let other = try #require(b.exportInfo(assetId: "shared"))
+      #expect(other.year == 2030 && other.month == 1 && other.relPath == "2030/01/")
+      #expect(other.variants[.original]?.filename == "OTHER.JPG")
+      #expect(other.variants[.original]?.status == .failed)
+      #expect(other.variants[.original]?.lastError == "Other destination")
+      #expect(
+        !b.isExported(
+          asset: TestAssetFactory.makeAsset(id: "shared"), selection: .edited,
+          livePhotosPaired: false))
+      if tag == "v1.0.3" {
+        #expect(
+          a.exportInfo(assetId: "raw-failure")?.variants[.original]?.lastError
+            == "Legacy disk error")
+      } else {
+        let fallback = try #require(a.exportInfo(assetId: "fallback"))
+        #expect(
+          fallback.variants[.edited]?.lastError
+            == "Edited resource unavailable; original backed up as _orig")
+        #expect(fallback.variants[.original]?.filename == "F_orig.HEIC")
+        #expect(
+          a.isExported(
+            asset: TestAssetFactory.makeAsset(id: "fallback", hasAdjustments: true),
+            selection: .edited, livePhotosPaired: false))
+        #expect(
+          !a.isExported(
+            asset: TestAssetFactory.makeAsset(id: "fallback", hasAdjustments: true),
+            selection: .editedWithOriginals, livePhotosPaired: false))
+        let live = try #require(a.exportInfo(assetId: "live"))
+        #expect(
+          live.variants[.originalPairedVideo]?.lastError
+            == "Photos has no exportable paired video resource for this Live Photo")
+        #expect(
+          ExportCompletionPolicy.missingVariants(
+            required: [.original, .originalPairedVideo], variants: live.variants
+          ).isEmpty)
+        #expect(a.exportInfo(assetId: "video")?.variants[.original]?.subfolder == "videos")
+      }
+      a.flushForTesting()
+      b.flushForTesting()
+    }
+  }
+
+  @Test func collectionSnapshotReplayAndReopenPreservePlacementOwnership() throws {
+    let fixture = try Fixture(tag: "v1.6.5")
+    defer { fixture.cleanup() }
+    for _ in 0..<2 {
+      let a = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
+      let b = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
+      a.configure(for: "A")
+      b.configure(for: "B")
+      #expect(a.state == .ready && b.state == .ready)
+      #expect(
+        Set(a.placements.keys) == ["collections:favorites", "fixture-album", "fixture-shared"])
+      let favorites = try #require(a.placements["collections:favorites"])
+      let album = try #require(a.placements["fixture-album"])
+      let shared = try #require(a.placements["fixture-shared"])
+      #expect(favorites.relativePath == "Collections/Favorites/")
+      #expect(album.relativePath == "Collections/Albums/Nested/Album/")
+      #expect(shared.relativePath == "Collections/Shared Albums/Shared/")
+      #expect(favorites.createdAt == date && album.createdAt == date && shared.createdAt == date)
+      #expect(
+        a.exportInfo(assetId: "shared", placement: favorites)?.variants[.original]?.filename
+          == "REPLAY-FAV.JPG")
+      #expect(
+        a.exportInfo(assetId: "shared", placement: album)?.variants[.original]?.lastError
+          == "Album disk error")
+      #expect(
+        a.exportInfo(assetId: "shared", placement: shared)?.variants[.original]?.filename
+          == "SHARED.JPG")
+      let asset = TestAssetFactory.makeAsset(id: "shared")
+      #expect(
+        a.isExported(
+          asset: asset, placement: favorites, selection: .edited, livePhotosPaired: false))
+      #expect(
+        !a.isExported(asset: asset, placement: album, selection: .edited, livePhotosPaired: false))
+      #expect(
+        a.isExported(
+          asset: asset, placement: shared, selection: .editedWithOriginals, livePhotosPaired: false)
+      )
+      #expect(a.exportInfo(assetId: "deleted", placement: favorites) == nil)
+      #expect(
+        a.exportInfo(assetId: "snapshot-only", placement: favorites)?.variants[.original]?.filename
+          == "SNAP.JPG")
+      #expect(
+        a.exportInfo(assetId: "log-only", placement: album)?.variants[.original]?.filename
+          == "LOG.JPG")
+      let interrupted = try #require(a.exportInfo(assetId: "interrupted", placement: album))
+      #expect(interrupted.variants[.original]?.status == .failed)
+      #expect(interrupted.variants[.original]?.lastError == "Interrupted before completion")
+      #expect(
+        a.exportInfo(assetId: "video", placement: album)?.variants[.original]?.subfolder == "videos"
+      )
+      #expect(
+        a.exportInfo(assetId: "shared", placement: favorites)?.variants[.original]?.subfolder == nil
+      )
+      let fallback = TestAssetFactory.makeAsset(id: "fallback", hasAdjustments: true)
+      #expect(
+        a.isExported(asset: fallback, placement: album, selection: .edited, livePhotosPaired: false)
+      )
+      #expect(
+        !a.isExported(
+          asset: fallback, placement: album, selection: .editedWithOriginals,
+          livePhotosPaired: false))
+      let live = try #require(a.exportInfo(assetId: "live", placement: album))
+      #expect(
+        live.variants[.originalPairedVideo]?.lastError
+          == "Photos has no exportable paired video resource for this Live Photo")
+      #expect(
+        ExportCompletionPolicy.missingVariants(
+          required: [.original, .originalPairedVideo], variants: live.variants
+        ).isEmpty)
+      #expect(Set(b.placements.keys) == ["collections:favorites"])
+      #expect(
+        b.exportInfo(assetId: "shared", placement: favorites)?.variants[.original]?.lastError
+          == "Other destination")
+      #expect(
+        !b.isExported(
+          asset: asset, placement: favorites, selection: .edited, livePhotosPaired: false))
+      a.flushForTesting()
+      b.flushForTesting()
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{"op":"upsert","id":"snapshot-only","record":{"exportDate":"2023-11-14T22:13:20Z","month":4,"filename":"SNAP.JPG","id":"snapshot-only","relPath":"2024\/04\/","status":"done","year":2024}}
+{"record":{"exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG","year":2024,"relPath":"2024\/04\/","month":4,"status":"done","id":"snapshot-only"},"op":"upsert","id":"snapshot-only"}
+{"op":"upsert","id":"snapshot-only","record":{"exportDate":"2023-11-14T22:13:20Z","month":4,"filename":"SNAP.JPG","id":"snapshot-only","relPath":"2024\/04\/","status":"done","year":2024}}
+{"record":{"exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG","year":2024,"relPath":"2024\/04\/","month":4,"status":"done","id":"snapshot-only"},"op":"upsert","id":"snapshot-only"}
+{"op":"upsert","record":{"exportDate":"2023-11-14T22:13:20Z","month":4,"filename":"REPLAY.JPG","id":"shared","relPath":"2024\/04\/","status":"done","year":2024},"id":"shared"}
+{"op":"delete","id":"deleted"}
+{"op":"upsert","record":{"exportDate":"2023-11-14T22:13:20Z","filename":"LOG.JPG","year":2024,"relPath":"2024\/04\/","month":4,"status":"done","id":"log-only"},"id":"log-only"}
+{"op":"upsert","id":"raw-failure","record":{"month":4,"filename":"FAIL.JPG","status":"inProgress","year":2024,"relPath":"2024\/04\/","id":"raw-failure"}}
+{"op":"upsert","record":{"exportDate":"2023-11-14T22:13:20Z","lastError":"Legacy disk error","month":4,"filename":"FAIL.JPG","id":"raw-failure","relPath":"2024\/04\/","status":"failed","year":2024},"id":"raw-failure"}

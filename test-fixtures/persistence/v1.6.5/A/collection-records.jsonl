@@ -1,0 +1,18 @@
+{"op":"upsertRecord","placementId":"collections:favorites","assetId":"snapshot-only","record":{"variants":{"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG"}}}}
+{"placementId":"collections:favorites","op":"upsertRecord","assetId":"snapshot-only","record":{"variants":{"original":{"filename":"SNAP.JPG","status":"done","exportDate":"2023-11-14T22:13:20Z"}}}}
+{"record":{"variants":{"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG"}}},"op":"upsertRecord","placementId":"collections:favorites","assetId":"snapshot-only"}
+{"op":"upsertRecord","assetId":"snapshot-only","record":{"variants":{"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG"}}},"placementId":"collections:favorites"}
+{"record":{"variants":{"original":{"exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG","status":"done"}}},"placementId":"collections:favorites","assetId":"snapshot-only","op":"upsertRecord"}
+{"op":"upsertRecord","placementId":"collections:favorites","assetId":"snapshot-only","record":{"variants":{"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG"}}}}
+{"placementId":"collections:favorites","op":"upsertRecord","assetId":"snapshot-only","record":{"variants":{"original":{"filename":"SNAP.JPG","status":"done","exportDate":"2023-11-14T22:13:20Z"}}}}
+{"record":{"variants":{"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG"}}},"op":"upsertRecord","placementId":"collections:favorites","assetId":"snapshot-only"}
+{"op":"upsertRecord","assetId":"snapshot-only","record":{"variants":{"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG"}}},"placementId":"collections:favorites"}
+{"record":{"variants":{"original":{"exportDate":"2023-11-14T22:13:20Z","filename":"SNAP.JPG","status":"done"}}},"placementId":"collections:favorites","assetId":"snapshot-only","op":"upsertRecord"}
+{"placementId":"collections:favorites","record":{"variants":{"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"REPLAY-FAV.JPG"}}},"op":"upsertRecord","assetId":"shared"}
+{"placementId":"collections:favorites","op":"deleteRecord","assetId":"deleted"}
+{"record":{"variants":{"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"LOG.JPG"}}},"placementId":"fixture-album","assetId":"log-only","op":"upsertRecord"}
+{"placementId":"fixture-album","record":{"variants":{"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"VIDEO.MOV","subfolder":"videos"}}},"op":"upsertRecord","assetId":"video"}
+{"record":{"variants":{"original":{"filename":"F_orig.HEIC","status":"done","exportDate":"2023-11-14T22:13:20Z"}}},"op":"upsertRecord","placementId":"fixture-album","assetId":"fallback"}
+{"op":"upsertRecord","placementId":"fixture-album","assetId":"fallback","record":{"variants":{"original":{"filename":"F_orig.HEIC","exportDate":"2023-11-14T22:13:20Z","status":"done"},"edited":{"exportDate":"2023-11-14T22:13:20Z","lastError":"Edited resource unavailable; original backed up as _orig","status":"failed"}}}}
+{"placementId":"fixture-album","op":"upsertRecord","assetId":"live","record":{"variants":{"original":{"exportDate":"2023-11-14T22:13:20Z","filename":"LIVE.HEIC","status":"done"}}}}
+{"record":{"variants":{"originalPairedVideo":{"lastError":"Photos has no exportable paired video resource for this Live Photo","exportDate":"2023-11-14T22:13:20Z","status":"failed"},"original":{"status":"done","exportDate":"2023-11-14T22:13:20Z","filename":"LIVE.HEIC"}}},"placementId":"fixture-album","assetId":"live","op":"upsertRecord"}
