@@ -38,6 +38,14 @@ scripts/bump-version.sh 1.2.0 --no-tag
 
 ### 3. Push the tag
 
+Check that all project configurations agree with the version you are about to push:
+
+```bash
+python3 scripts/ci/check-version.py --expected 1.2.0
+```
+
+Use the full suffixed version for a beta tag. Ordinary CI and both release workflows also run this read-only validator; release tag comparisons remain limited to actual tag events, so main-branch dry runs keep their existing behavior.
+
 ```bash
 git push && git push origin v1.2.0
 ```
