@@ -1,5 +1,9 @@
 # scripts/
 
+Historical persistence fixture generation is offline development tooling, excluded from
+normal CI. See [the fixture guide](../docs/project/historical-persistence-fixtures.md) for
+pinned sources, the fresh-output command, and the immutable-byte policy.
+
 Small development utilities for this project. CI-only steps live under [`ci/`](ci/) and are invoked from the GitHub Actions workflows in `.github/workflows/`.
 
 ## Top-level scripts

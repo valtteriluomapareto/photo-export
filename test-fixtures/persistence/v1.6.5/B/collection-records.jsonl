@@ -1,0 +1,2 @@
+{"op":"upsertPlacement","placement":{"relativePath":"Collections\/Favorites\/","kind":"favorites","id":"collections:favorites","displayName":"Favorites","createdAt":"2023-11-14T22:13:20Z"},"placementId":"collections:favorites"}
+{"op":"upsertRecord","placementId":"collections:favorites","assetId":"shared","record":{"variants":{"original":{"exportDate":"2023-11-14T22:13:20Z","lastError":"Other destination","status":"failed"}}}}

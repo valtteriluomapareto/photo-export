@@ -1,0 +1,50 @@
+{
+  "hostRuntime": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+  "releases": {
+    "v1.0.3": {
+      "commit": "a85100a7b0c734a0f492f5d76f5317c6c599d38f",
+      "files": {
+        "A/export-records.json": "7b6e355c625abe970dddf8c8eb2742d4efc4227e6d8ec87b73c48769a56170b5",
+        "A/export-records.jsonl": "f1094f2f15adb42f773ad86592aeb7efaa611c7f20296106897eae6f80c5b1de",
+        "B/export-records.jsonl": "8f3a18c19b334fce2323c365e5d8f345def686f351e761f6d173fc90e4143a9f"
+      },
+      "harnessSHA256": "4dd9d16c7ccf679890c17e18724089cd840bcbbc6f29b132eae832fbd51115eb",
+      "releaseURL": "https://github.com/valtteriluomapareto/photo-export/releases/tag/v1.0.3",
+      "sources": {
+        "photo-export/Managers/ExportRecordStore.swift": "33fc5afae02812a5916334361eecebafd8a47a9a6e9f3d7ff29271ebc5fa0ee3",
+        "photo-export/Models/ExportRecord.swift": "3f816297257bbe6800e326b1d82c9a0c75bafeb91186d0e1897c2aa6521f13a9"
+      }
+    },
+    "v1.6.5": {
+      "commit": "0b0eb9b786311a961f9051d14e2e93cb0ecca135",
+      "files": {
+        "A/collection-records.json": "0d2923be3181f61cf5a06c2a39c758ff8b2e3cf59b0d5a04f00965f518a607f2",
+        "A/collection-records.jsonl": "3c7ea3d3f098913d02078768c41e6f150c6e4120588b5952c7f99848ea85c17b",
+        "A/export-records.json": "5bb9f647a12559774e9ec3f0443c89cd0747b2cf13b58e8b5bfbd4c845ba9a6c",
+        "A/export-records.jsonl": "144f0c56e71393fb4e078dd64c65575eae3ab4af3f95a71625c882cb6bf7cfb9",
+        "B/collection-records.jsonl": "ea1a1e5bfd3202df9988d3c88be5804805fb2cb42ad6c900d6c29d9331902fc7",
+        "B/export-records.jsonl": "de34bbdd44e66874dbd5b0e25126919ac1150ccbb0e9504187361677e57cc2ce"
+      },
+      "harnessSHA256": "41ad7f0544089c79246ff70e974cb434400a33c2290b60cdd55ffdf2dee82999",
+      "releaseURL": "https://github.com/valtteriluomapareto/photo-export/releases/tag/v1.6.5",
+      "sources": {
+        "photo-export/App/AppDiagnostics.swift": "25405c16f71e7bcdc42575a11f979cead816bc38e03fe24d68112f6b1ce68dcf",
+        "photo-export/Export/ExportFilenamePolicy.swift": "dfcf89df1dd8be3443cb9b0ab9e96e80d44667f3b86c1db4c69188983f1c3ef4",
+        "photo-export/Export/ExportPlacementPathPolicy.swift": "f920faaa4535227d0bc971ebf55175e8aabb68449ad43a038a70169d43c4ed9d",
+        "photo-export/Models/AssetDescriptor.swift": "97a2ff693d2214a603ecbc166edd69326eba6f8fe8ca4b377d4fb3f7bd8ced94",
+        "photo-export/Models/ExportPlacement.swift": "bd28de784668ac2f33df5a68c59e2d097e1a9f94fa2211cc229611b2971bcc67",
+        "photo-export/Models/ExportRecord.swift": "b6b51b1608bcefb826795d7e9994da5bb795e9fd9f1134f5641cdd8d5e71b6c4",
+        "photo-export/Models/ExportVariant.swift": "4505294b381eb7590ebd2483684a2b31874bdd76f36f16a862a6734fea89edd8",
+        "photo-export/Models/ExportVideoLayout.swift": "500624f7e2eff3a9089378764568fe2140cec555f30bef0c7aec3d7b24211828",
+        "photo-export/Records/CollectionExportRecordStore.swift": "dbd8350d75772dbee87d65d312363b5ca4ec27d69b2eebe0329ec824d5258317",
+        "photo-export/Records/ExportCompletionPolicy.swift": "0c23c3ea1ad384798109657a71ca1222563f52cef723a65d472c4d76be34cbec",
+        "photo-export/Records/ExportRecordStore.swift": "07c3c4505cd1bce8639b52de9eee8acb0ca6cf33a63379e88922032e7b26e350",
+        "photo-export/Records/JSONLRecordFile.swift": "9583218fa5f14f15eae9579642cb592469d5679708002bfe7309c8357904a884",
+        "photo-export/Records/RecordStoreState.swift": "2a7a85ba37dc77c4b4c2a1609d367f047bd793f135839050a5b63d0e1517bc94"
+      }
+    }
+  },
+  "schemaVersion": 1,
+  "target": "arm64-apple-macos15.0",
+  "toolchain": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx26.0"
+}

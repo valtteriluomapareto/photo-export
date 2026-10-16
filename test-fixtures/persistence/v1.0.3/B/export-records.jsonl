@@ -1,0 +1,2 @@
+{"record":{"month":1,"filename":"OTHER.JPG","status":"inProgress","year":2030,"relPath":"2030\/01\/","id":"shared"},"op":"upsert","id":"shared"}
+{"op":"upsert","record":{"exportDate":"2023-11-14T22:13:20Z","filename":"OTHER.JPG","year":2030,"relPath":"2030\/01\/","month":1,"status":"failed","lastError":"Other destination","id":"shared"},"id":"shared"}
