@@ -30,6 +30,7 @@ final class AutoSyncManager: ObservableObject {
   /// `.recordRetryFailures` effect plus on destination change. Empty for a
   /// brand-new destination or when no destination is selected.
   @Published private(set) var currentRetryState: AutoSyncRetryState = .empty
+  var currentRetryDestinationId: String? { reducerState.destination.id }
 
   // MARK: - Private state
 
@@ -308,9 +309,11 @@ final class AutoSyncManager: ObservableObject {
   /// store still has it as `.failed` for that variant — `isExported`
   /// returns false, and now the retry-eligibility check returns true.
   func retryFailedVariant(
-    scope: AutoSyncRetryScopeKey, assetId: String, variant: ExportVariant
+    scope: AutoSyncRetryScopeKey, assetId: String, variant: ExportVariant,
+    expectedDestinationId: String? = nil, expectedEntry: RetryEntry? = nil
   ) {
-    guard let destinationId = reducerState.destination.id
+    guard let destinationId = reducerState.destination.id,
+      expectedDestinationId == nil || expectedDestinationId == destinationId
     else { return }
     // Mutate the in-memory snapshot, then persist. Avoids a disk-reload
     // that could miss a concurrent mutation from the
@@ -318,6 +321,11 @@ final class AutoSyncManager: ObservableObject {
     // `currentRetryState` so successive mutations compose correctly.
     let snapshot = retrySnapshot(destinationId: destinationId)
     guard snapshot.canSave else { return }
+    if let expectedEntry,
+      snapshot.state.entry(scope: scope, assetId: assetId, variant: variant) != expectedEntry
+    {
+      return
+    }
     var retry = snapshot.state
     retry.removeEntry(scope: scope, assetId: assetId, variant: variant)
     guard saveRetrySnapshot(retry, destinationId: destinationId) else { return }
@@ -746,7 +754,7 @@ final class AutoSyncManager: ObservableObject {
   /// suppress a different album or Favorites." `internal` (default) so
   /// `PhotoExportApp` can construct the eligibility-check closure that
   /// reads `currentRetryState` for `ExportManager`.
-  static func retryScopeKey(for placement: ExportPlacement) -> AutoSyncRetryScopeKey {
+  nonisolated static func retryScopeKey(for placement: ExportPlacement) -> AutoSyncRetryScopeKey {
     switch placement.kind {
     case .timeline: return .timeline
     case .favorites: return .favorites

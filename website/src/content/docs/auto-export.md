@@ -62,9 +62,9 @@ Some failures are transient — Photos is busy, an iCloud original isn't ready t
 
 Each missing version has its own retry time. For example, an original can finish while an edited version waits for its retry; an already-exported original does not let the edited version retry early. Due retries run while Auto Export is enabled and the destination is ready, without needing a new Photos change. They wait for any current export or import to finish.
 
-Other failures need your attention — the destination drive is full, you've revoked write permission on the export folder, an asset has been deleted from Photos. Auto Export records these but won't retry on its own; fix the underlying condition (free up space, restore permissions, etc.), then use **Retry** or start a manual export. The **Retry** button described below works for any failure, but it only succeeds when the underlying problem is actually resolved — for a still-disconnected drive, the row will just fail again immediately.
+Other failures need your attention — the destination drive is full, you've revoked write permission on the export folder, an asset has been deleted from Photos. Auto Export records these but won't retry on its own; fix the underlying condition (free up space, restore permissions, etc.), then use **Retry** or start a manual export. For a failure with current Auto Export retry history, use **Retry** while Auto Export is enabled; otherwise start a manual export. Fix the underlying problem first.
 
-Either way you can see everything that's failed in **Settings → Export Issues**, grouped by category:
+You can see failed versions recorded by both manual and automatic exports in **Settings → Export Issues**, grouped by category:
 
 - _Destination Unavailable_ — drive went away mid-run
 - _Destination Permission_ — folder is read-only or write access has been revoked
@@ -74,7 +74,11 @@ Either way you can see everything that's failed in **Settings → Export Issues*
 - _Photos Library Transient_ — Photos was momentarily unavailable
 - _iCloud / Network_ — couldn't download an iCloud-only original
 
-Each row shows what was being exported, when it last failed, how many attempts have happened, and when the next automatic retry will fire. The **Retry** button next to a row clears that failure from the retry policy and kicks off an immediate run. Manual exports also bypass automatic backoff. A failure disappears from the list once its version has exported successfully and its export record has been saved.
+Each row shows the saved failure and its last recorded failure time. Matching Auto Export history adds attempt counts, retry eligibility, and a **Retry** button that clears backoff and requests a run using your configured Auto Export scopes. This button is available while Auto Export is enabled and the destination records are ready. For other failures, start a normal manual export, which bypasses automatic backoff. Clearing retry history alone does not remove a failed record from the list; the row disappears when its version succeeds or its record is removed.
+
+Versions covered by an original fallback or an unavailable Live Photo paired video remain visible with their coverage explanation. They keep their existing completion rules; a normal export may skip these accepted states. Recovered interrupted exports show an unknown failure time when the saved date belongs to a previous attempt. Older record files retain only whole-second timestamps, so matching retry history has that precision after reopening.
+
+If records are unavailable or unsaved, the list warns that it may be incomplete and retains known failures from the readable store. It does not claim there are no failures until both stores are ready.
 
 ## Safety
 
@@ -173,4 +177,4 @@ If in 1.2.3 you chose **Select Photos** rather than full Photos access, that lim
 - **"Action needed — destination needs review"** — the safety scan found pre-existing files at the destination. Click **Review…** in Settings. If you've exported to this folder before, choose **Rebuild Records from Destination** to restore your progress; otherwise choose **Use This Destination** if those files are yours to keep.
 - **"Action needed — pick what to export"** — open Settings → Auto Export and tick at least one category.
 - **Auto Export status stays at "Waiting"** — usually the drive is disconnected or a manual export is in progress. The status row will tell you which. Reconnect the drive or wait for the manual run to finish.
-- **A run failed but I fixed the underlying problem** — open Settings → Export Issues and click **Retry** on the affected row. If the entire destination changed (e.g. the drive was reformatted), use **File → Import Existing Backup…** to rebuild the local records first.
+- **A run failed but I fixed the underlying problem** — open Settings → Export Issues and use **Retry** when available, or start a manual export. If the entire destination changed (e.g. the drive was reformatted), use **File → Import Existing Backup…** to rebuild the local records first.
