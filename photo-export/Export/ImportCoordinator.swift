@@ -8,7 +8,7 @@ import OSLog
 /// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 5, this
 /// extraction:
 /// - Moves the ~190-line `startImport` body (and `cancelImport`) out of `ExportManager`.
-/// - Owns the published mirrors `isImporting` + `importStage` directly; ExportManager
+/// - Owns the published mirrors `isImporting`, `importStage` + `importError` directly; ExportManager
 ///   sinks them onto its own `@Published` properties so `isImportingPublisher`
 ///   subscribers and SwiftUI view bindings keep emitting from the same source.
 /// - Reaches the Phase-0 cancellation seam (`isCurrent` / `throwIfCancelledOrStale` /
@@ -52,10 +52,29 @@ final class ImportCoordinator: ObservableObject {
 
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
+  @Published private(set) var importError: String?
 
   /// Handle to the in-flight import Task. Same-module readers (the test target via
   /// `@testable import`) can `await importTask?.value` for deterministic completion.
   private(set) var importTask: Task<Void, Never>?
+  // UI ownership is separate from queue validity: destination teardown can
+  // invalidate generation without cancelling this Task or starting a replacement.
+  private var activeImportID: UUID?
+
+  private func isCurrentImport(_ id: UUID, generation: Int) -> Bool {
+    activeImportID == id && queueCoordinator?.isCurrent(generation) == true && !Task.isCancelled
+  }
+
+  private func finishOwnedImport(
+    _ id: UUID, error: String? = nil, stage: BackupScanner.ImportStage? = nil
+  ) {
+    guard activeImportID == id else { return }
+    activeImportID = nil
+    importError = error
+    importStage = stage
+    // Publish activity last; synchronous subscribers may start replacement work.
+    isImporting = false
+  }
 
   // MARK: - Dependencies
 
@@ -101,22 +120,25 @@ final class ImportCoordinator: ObservableObject {
       return
     }
 
-    isImporting = true
-    importStage = .scanningBackupFolder
-    host.setImportResult(nil)
-
     let importGen = queueCoordinator?.generation ?? 0
+    let operationID = UUID()
+    activeImportID = operationID
+    importError = nil
+    host.setImportResult(nil)
+    importStage = .scanningBackupFolder
+    isImporting = true
 
     importTask = Task { [weak self, weak host] in
-      guard let self, let host,
-        self.queueCoordinator?.isCurrent(importGen) == true, !Task.isCancelled
-      else { return }
+      guard let self, let host else { return }
+      // A generation-only interruption still settles its own UI, including
+      // invalidation before Task entry. A replacement UUID remains untouched.
+      defer { self.finishOwnedImport(operationID) }
+      guard self.isCurrentImport(operationID, generation: importGen) else { return }
 
       do {
         guard let scopedURL = host.exportDestination.beginScopedAccess() else {
           self.logger.error("Failed to acquire security-scoped access for import")
-          self.isImporting = false
-          self.importStage = nil
+          self.finishOwnedImport(operationID, error: "Could not access the export folder.")
           return
         }
         defer { host.exportDestination.endScopedAccess(for: scopedURL) }
@@ -132,8 +154,8 @@ final class ImportCoordinator: ObservableObject {
         } catch {
           self.logger.error(
             "Import root unreachable: \(error.localizedDescription, privacy: .public)")
-          self.isImporting = false
-          self.importStage = nil
+          self.finishOwnedImport(
+            operationID, error: "Could not read the backup folder: \(error.localizedDescription)")
           return
         }
 
@@ -144,11 +166,7 @@ final class ImportCoordinator: ObservableObject {
         }.value
 
         try Task.checkCancellation()
-        guard self.queueCoordinator?.isCurrent(importGen) == true else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
+        guard self.isCurrentImport(operationID, generation: importGen) else { return }
 
         // No early return on `scannedFiles.isEmpty` — an empty destination still needs
         // reconcile so existing records get pruned to match disk truth. The bulk-import
@@ -159,15 +177,12 @@ final class ImportCoordinator: ObservableObject {
           scannedFiles,
           photoLibraryService: host.photoLibraryService
         ) { [weak self] stage in
-          self?.importStage = stage
+          guard let self, self.isCurrentImport(operationID, generation: importGen) else { return }
+          self.importStage = stage
         }
 
         try Task.checkCancellation()
-        guard self.queueCoordinator?.isCurrent(importGen) == true else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
+        guard self.isCurrentImport(operationID, generation: importGen) else { return }
 
         self.importStage = .rebuildingLocalState
 
@@ -215,11 +230,7 @@ final class ImportCoordinator: ObservableObject {
 
         host.exportRecordStore.bulkImportRecords(records)
 
-        guard self.queueCoordinator?.isCurrent(importGen) == true else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
+        guard self.isCurrentImport(operationID, generation: importGen) else { return }
 
         // Reconcile both stores after bulkImport so the final state reflects disk
         // truth at the latest possible moment. Closes the TOCTOU window where a file
@@ -230,28 +241,20 @@ final class ImportCoordinator: ObservableObject {
           at: rootURL,
           isCurrent: { [weak self] in self?.queueCoordinator?.isCurrent(importGen) == true })
         try Task.checkCancellation()
-        guard self.queueCoordinator?.isCurrent(importGen) == true else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
+        guard self.isCurrentImport(operationID, generation: importGen) else { return }
         let reconciledCollections = host.collectionExportRecordStore.state == .ready
         let collectionSummary = await host.collectionExportRecordStore
           .reconcileAgainstFilesystem(
             at: rootURL,
             isCurrent: { [weak self] in self?.queueCoordinator?.isCurrent(importGen) == true })
         try Task.checkCancellation()
-        guard self.queueCoordinator?.isCurrent(importGen) == true else {
-          self.isImporting = false
-          self.importStage = nil
-          return
-        }
+        guard self.isCurrentImport(operationID, generation: importGen) else { return }
 
         try await host.exportRecordStore.flush()
-        guard self.queueCoordinator?.isCurrent(importGen) == true else { return }
+        guard self.isCurrentImport(operationID, generation: importGen) else { return }
         if reconciledCollections {
           try await host.collectionExportRecordStore.flush()
-          guard self.queueCoordinator?.isCurrent(importGen) == true else { return }
+          guard self.isCurrentImport(operationID, generation: importGen) else { return }
         }
 
         let totalPrunedVariants =
@@ -269,23 +272,20 @@ final class ImportCoordinator: ObservableObject {
             prunedRecords: totalPrunedRecords
           ))
 
-        self.importStage = .done
-        self.isImporting = false
+        self.finishOwnedImport(operationID, stage: .done)
 
         self.logger.info(
           "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
         )
       } catch is CancellationError {
-        guard self.queueCoordinator?.isCurrent(importGen) == true else { return }
+        guard self.isCurrentImport(operationID, generation: importGen) else { return }
         self.logger.info("Import task cancelled")
-        self.isImporting = false
-        self.importStage = nil
+        self.finishOwnedImport(operationID)
       } catch {
-        guard self.queueCoordinator?.isCurrent(importGen) == true else { return }
+        guard self.isCurrentImport(operationID, generation: importGen) else { return }
         self.logger.error(
           "Import failed: \(error.localizedDescription, privacy: .public)")
-        self.isImporting = false
-        self.importStage = nil
+        self.finishOwnedImport(operationID, error: "Import failed: \(error.localizedDescription)")
       }
     }
   }
@@ -294,12 +294,14 @@ final class ImportCoordinator: ObservableObject {
   /// late-completing import work gates out via `isCurrent` checks.
   func cancelImport() {
     guard isImporting else { return }
+    activeImportID = nil
     importTask?.cancel()
     importTask = nil
     queueCoordinator?.bumpGeneration()
-    isImporting = false
-    importStage = nil
     host?.setImportResult(nil)
+    importError = nil
+    importStage = nil
+    isImporting = false
     logger.info("Import cancelled")
   }
 }

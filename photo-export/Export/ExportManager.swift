@@ -173,6 +173,7 @@ final class ExportManager: ObservableObject {
   // MARK: - Published State (Import)
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
+  @Published private(set) var importError: String?
   @Published var importResult: ImportReport?
 
   // MARK: - Awaitable run lifecycle (auto-sync Phase 0a)
@@ -420,8 +421,8 @@ final class ExportManager: ObservableObject {
   /// — `self` must be fully initialized before the coordinator can hold it as Host.
   private(set) var queueCoordinator: ExportQueueCoordinator!
 
-  /// Owns the Import Existing Backup flow. Phase 5 extraction. `isImporting` and
-  /// `importStage` on this manager are sink-driven mirrors of the coordinator's
+  /// Owns the Import Existing Backup flow. Phase 5 extraction. `isImporting`,
+  /// `importStage` and `importError` on this manager are sink-driven mirrors of the coordinator's
   /// publishers (same shape as the queue coordinator mirrors). `importResult` stays
   /// writable on the manager because external callers (test code) sometimes reset it
   /// directly; the coordinator writes through `Host.setImportResult`.
@@ -590,6 +591,9 @@ final class ExportManager: ObservableObject {
       .store(in: &importCancellables)
     self.importCoordinator.$importStage
       .sink { [weak self] in self?.importStage = $0 }
+      .store(in: &importCancellables)
+    self.importCoordinator.$importError
+      .sink { [weak self] in self?.importError = $0 }
       .store(in: &importCancellables)
   }
 

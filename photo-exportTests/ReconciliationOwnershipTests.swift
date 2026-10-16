@@ -286,6 +286,7 @@ struct ReconciliationOwnershipTests {
     #expect(fixture.info() == expected)
     #expect(fixture.reopenedInfo("A") == expected)
     #expect(manager.importResult == nil)
+    #expect(!manager.isImporting && manager.importStage == nil && manager.importError == nil)
     #expect(destination.endScopedAccessCount == 1)
   }
 
