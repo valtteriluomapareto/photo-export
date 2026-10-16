@@ -30,7 +30,7 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - Fast thumbnail grid with in-memory caching; the first available asset opens in the detail panel while the rest of the grid loads. Choosing another asset keeps your selection.
 - Photos changes refresh the grid in place without blanking it. Edits update thumbnails already on screen without navigating away; the current image stays visible while its replacement loads, and older refreshes or image responses cannot replace newer results
 - Export status in the detail pane follows the current Timeline, Favorites, album, or Shared Album placement. Renamed or moved albums show history only for their current folder, and recorded converted versions and recovery messages stay visible
-- Full-size preview for any selected photo or video; switching selections or closing the detail view cancels obsolete preview requests, and late responses cannot replace the current preview
+- Full-size preview for any selected photo or video. Editing or reverting the selected asset in Photos refreshes the preview without changing selection; the existing image stays visible while replacement loads. Editing another asset leaves the selected preview stable. Switching selections or closing the detail view cancels obsolete requests, and late responses cannot replace revised content. If loading fails, the preview shows retry guidance
 - Detail panel showing original filename, creation date, dimensions, file size, media type, and export status
 
 ## Export

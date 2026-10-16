@@ -25,7 +25,23 @@ struct AssetDetailView: View {
 
   @StateObject private var imageLoader = AssetDetailImageLoader()
 
+  private struct LoadIdentity: Hashable {
+    let assetId: String?
+    let contentRevision: Int
+  }
+
+  private var loadIdentity: LoadIdentity {
+    LoadIdentity(
+      assetId: asset?.id,
+      contentRevision: asset.map { photoLibraryManager.thumbnailContentRevision(for: $0.id) } ?? 0)
+  }
+
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("asset-detail-body")
+    #endif
+    let identity = loadIdentity
     VStack(spacing: 12) {
       if let asset {
         let preview = imageLoader.state(for: asset.id)
@@ -64,8 +80,11 @@ struct AssetDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .task(id: asset?.id) {
-      await imageLoader.load(for: asset?.id, using: photoLibraryManager)
+    .task(id: identity) {
+      await imageLoader.load(for: identity.assetId, using: photoLibraryManager) {
+        guard let id = identity.assetId else { return true }
+        return photoLibraryManager.thumbnailContentRevision(for: id) == identity.contentRevision
+      }
     }
     .onDisappear { imageLoader.clear() }
   }

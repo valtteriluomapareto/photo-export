@@ -41,6 +41,7 @@ Quit any installed copy and launch `build/ReleaseValidation/Build/Products/Relea
 | --- | --- | --- |
 | Local originals / HEIC conversion | Export the local month with defaults. On fresh destinations enable HEIC conversion, then conversion plus Include originals. | Defaults preserve original JPEG/HEIC bytes at natural filenames. Conversion writes a decodable JPEG; adding Include originals retains `<name>_orig.HEIC`. JPEG input is unaffected. |
 | Edited still and video | Export with Include originals off, then on to a fresh destination; enable video subfolders on the latter run. | Natural-stem files show the edit and play the trimmed video. `_orig` companions preserve unmodified bytes. Standalone videos and companions share `videos/` when enabled. Verify actual container and duration, not just extension. |
+| Selected preview edit/revert | Keep the edited still selected in Photo Export; edit and revert it in the dedicated Photos library without navigating away, then change an unrelated fixture. | The selected full-size preview follows the edited and reverted content, retaining its image while replacement loads. Unrelated edits leave the displayed selection stable. Record actual before/after content; synthetic image-request tests do not satisfy this row. |
 | iCloud-only delivery | Export the verified nonlocal fixture with network available. | A nonempty original arrives, opens, and matches its unmodified reference. Download/render errors are failures to investigate. If the nonlocal precondition/network is unavailable, record unexercised. |
 | Live Photo pairing | Export with pairing off, then on to a fresh destination; explicitly enable video subfolders for the latter. | Off writes the still only. On writes still plus playable paired video at the same stem, using the resource's extension. Both stay adjacent in the month folder, outside `videos/`. |
 | Collections | Export known Favorites, nested-album, and available Shared Album subsets. | Correct placement counts and files under `Collections/Favorites/`, `Collections/Albums/<folder>/<album>/`, and `Collections/Shared Albums/<album>/`. Shared Albums use served reduced-quality resources; no `_orig` or paired-video promise. |
@@ -70,6 +71,7 @@ CI run URL and head commit (hermetic evidence):
 Case | settings + fixture IDs | pass/fail/unexercised | actual result + artifact
 Local originals / HEIC conversion |
 Edited still and video |
+Selected preview edit/revert |
 iCloud-only delivery |
 Live Photo pairing |
 Collections |
