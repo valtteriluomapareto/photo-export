@@ -10,10 +10,11 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
+SOURCE_MASKER="scripts/ci/swift_source.py"
 
 echo "Checking regression-gate test symbols against photo-exportTests/..."
 
-# Each entry is "<test file>|<grep needle>".
+# Each entry is "<test file>|<declaration>".
 # Class-level gates use "struct <Name>"; method-level gates use "func <name>".
 # Method-level entries also pin the containing class via a separate row so a
 # class rename is caught even if a same-named method survives in another file.
@@ -37,7 +38,17 @@ for entry in "${GATES[@]}"; do
     failed=1
     continue
   fi
-  if ! grep -q -- "$needle" "$file"; then
+  # Mask comments/string literals and require a complete identifier, so a
+  # commented-out declaration or NameExtra cannot keep a deleted gate green.
+  kind="${needle%% *}"
+  symbol="${needle#* }"
+  if [[ "$kind" == "func" ]]; then
+    pattern="(^|[[:space:]])func[[:space:]]+${symbol}[[:space:]]*\\("
+  else
+    pattern="(^|[[:space:]])struct[[:space:]]+${symbol}([[:space:]]|[:{])"
+  fi
+  code="$(python3 "$SOURCE_MASKER" "$file")"
+  if ! grep -Eq -- "$pattern" <<< "$code"; then
     echo "  MISSING SYMBOL: '$needle' not found in $file"
     failed=1
     continue
