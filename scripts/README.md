@@ -29,6 +29,40 @@ python3 scripts/ci/check-read-only-photos.py
 python3 scripts/ci/check-version.py
 ```
 
+### CI area routing
+
+`ci/ci_routing.py` selects validation using complete local Git history, without an API
+file-list limit. Pull requests compare their merge base to the event's head commit;
+main pushes compare event `before` to `after` (including all pushed commits). Moves
+are treated as a deletion plus addition so both owners are considered. Comparison
+history missing from a fork checkout, new/deleted refs, unrelated histories, or an
+unknown event select both areas. Malformed events and Git errors fail routing.
+
+| Changed paths | Validation |
+| --- | --- |
+| `website/**` | Linux website checks |
+| App sources/tests/project, `test-fixtures/**`, Swift lint/format config, non-CI `scripts/**` | macOS app checks |
+| `.github/**`, `scripts/ci/**`, unknown/shared paths (including root/maintainer docs) | Both |
+| Mixed changes | Union of the affected areas |
+| Empty comparison | Neither expensive validator |
+
+The workflow itself has no path filter. `website-validation` and `app-validation`
+run conditionally; the existing `website` and `build-and-test` check names are Linux
+result gates that require successful routing plus exactly selected/success or
+unselected/skipped. Missing outputs, failed/cancelled validators, and unexpectedly
+skipped selected validators cannot pass. An overall cancelled run may cancel the gate
+before it executes; it remains non-green. Release workflows, including main's direct
+distribution dry run, are separate and unchanged. No branch-protection settings are
+changed by routing.
+
+Run the real-Git routing matrix and result-gate truth table locally:
+
+```bash
+python3 -B -m unittest discover -s scripts/ci/tests -p test_ci_routing.py
+```
+
+These tests also run in the Linux routing job on every CI run, even website-only work.
+
 The Photos guard rejects exact PhotoKit change/creation request and `performChanges` identifiers in production Swift sources. It ignores nested comments and ordinary/raw/multiline string literals (including interpolation bodies), preserves source line numbers, and fails on missing/empty input. It has no inline bypass marker. This is a lexical tripwire: aliases, dynamic calls, and code inside string interpolation need review; it does not replace Swift compilation or behavioral tests. Python 3 is required; only its standard library is used. Self-tests invoke the real scanners against temporary fixtures and preserve the existing destination-keying self-test.
 
 The regression-symbol guard uses the same lexical masking and matches complete `struct` and ordinary `func name(...)` declarations, rather than substring mentions. `test-guards.sh` covers clean inputs, missing files/declarations, suffix renames, and comment/string-only symbols before CI runs the real scans. When changing a guard, add a clean fixture and a violation fixture that asserts the intended diagnostic, not just a nonzero exit. Keep gate names synchronized with `docs/reference/architecture-conventions.md`; runtime ordering and cancellation still require the behavioral tests.
