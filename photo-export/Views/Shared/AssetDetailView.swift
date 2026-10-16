@@ -107,7 +107,7 @@ struct AssetDetailView: View {
         Text("\(label): In progress")
       case .failed:
         if let friendly = ExportVariantRecovery.friendlyCopy(
-          for: variant.lastError, label: label)
+          for: variant.reason, label: label)
         {
           // Named recoverable case — render in secondary color with copy that doesn't
           // imply user action or guarantee recovery, just describes the retry behaviour.

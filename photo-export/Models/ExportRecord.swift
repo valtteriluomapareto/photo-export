@@ -27,10 +27,52 @@ struct ExportVariantRecord: Codable, Equatable {
   /// Path component inside the placement folder (e.g. `"videos"`). `nil`
   /// resolves to the bare placement path.
   var subfolder: String?
+  var reason: ExportVariantReason?
+
+  init(
+    filename: String?, status: ExportStatus, exportDate: Date?, lastError: String?,
+    subfolder: String? = nil, reason: ExportVariantReason? = nil
+  ) {
+    self.filename = filename
+    self.status = status
+    self.exportDate = exportDate
+    self.lastError = lastError
+    self.subfolder = subfolder
+    self.reason = reason
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case filename, status, exportDate, lastError, subfolder, reason
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    filename = try container.decodeIfPresent(String.self, forKey: .filename)
+    status = try container.decode(ExportStatus.self, forKey: .status)
+    exportDate = try container.decodeIfPresent(Date.self, forKey: .exportDate)
+    lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+    subfolder = try container.decodeIfPresent(String.self, forKey: .subfolder)
+    if container.contains(.reason) {
+      reason = try container.decodeIfPresent(ExportVariantReason.self, forKey: .reason)
+    } else {
+      reason = status == .failed ? ExportVariantReason.decodeLegacy(message: lastError) : nil
+    }
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encodeIfPresent(filename, forKey: .filename)
+    try container.encode(status, forKey: .status)
+    try container.encodeIfPresent(exportDate, forKey: .exportDate)
+    try container.encodeIfPresent(lastError, forKey: .lastError)
+    try container.encodeIfPresent(subfolder, forKey: .subfolder)
+    // Explicit null distinguishes new ordinary failures from legacy string sentinels.
+    try container.encode(reason, forKey: .reason)
+  }
 }
 
-/// Named, well-known recoverable failure cases. Persisted as the `lastError`
-/// string on a `.failed` variant, then matched in the UI to render with
+/// Display copy for typed recoverable failure reasons. The reason, rather than
+/// persisted human-readable text, selects the UI rendering with
 /// non-promising but softer copy and `.secondary` color rather than red.
 ///
 /// Add new cases here only when the failure has a clearly recoverable shape;
@@ -84,27 +126,23 @@ enum ExportVariantRecovery {
   static let pairedVideoUnavailableMessage =
     "Photos has no exportable paired video resource for this Live Photo"
 
-  /// Returns true when `lastError` matches a known recoverable case the UI
+  /// Returns true when the reason identifies a known recoverable case the UI
   /// can render with softer copy.
-  static func isRecoverable(_ message: String?) -> Bool {
-    guard let message else { return false }
-    return message == interruptedMessage
-      || message == editedResourceUnavailableMessage
-      || message == editedUnavailableOriginalBackedUpMessage
-      || message == pairedVideoUnavailableMessage
+  static func isRecoverable(_ reason: ExportVariantReason?) -> Bool {
+    friendlyCopy(for: reason, label: "") != nil
   }
 
   /// User-facing copy for a recoverable failure. Returns nil when the
-  /// message is not a known case — callers fall back to the raw error.
-  static func friendlyCopy(for message: String?, label: String) -> String? {
-    switch message {
-    case interruptedMessage:
+  /// reason is not a known case — callers fall back to the raw error.
+  static func friendlyCopy(for reason: ExportVariantReason?, label: String) -> String? {
+    switch reason {
+    case .interrupted:
       return "\(label): Will retry on next export"
-    case editedResourceUnavailableMessage:
+    case .editedResourceUnavailable:
       return "\(label) version could not be exported this time. Future exports will try again."
-    case editedUnavailableOriginalBackedUpMessage:
+    case .editedUnavailableOriginalBackedUp:
       return "\(label) version was unavailable. The original was saved as a `_orig` companion."
-    case pairedVideoUnavailableMessage:
+    case .pairedVideoUnavailable:
       return
         "\(label): Photos doesn't currently expose a paired video for this Live Photo. The still was exported."
     default:
@@ -193,7 +231,10 @@ struct ExportRecord: Codable, Equatable {
         filename: legacyFilename,
         status: migratedStatus,
         exportDate: legacyExportDate,
-        lastError: migratedError
+        lastError: migratedError,
+        reason: legacyStatus == .inProgress
+          ? .interrupted
+          : (legacyStatus == .failed ? ExportVariantReason.decodeLegacy(message: legacyError) : nil)
       )
     ]
   }

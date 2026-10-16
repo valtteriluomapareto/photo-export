@@ -25,7 +25,7 @@ enum ExportCompletionPolicy {
       if record?.status == .done { return false }
       return
         !(variant.isPairedVideo && record?.status == .failed
-        && record?.lastError == ExportVariantRecovery.pairedVideoUnavailableMessage)
+        && record?.reason == .pairedVideoUnavailable)
     }
   }
 
@@ -59,18 +59,18 @@ enum ExportCompletionPolicy {
 
   /// True when an adjusted asset asked to export `.edited` is covered by the `_orig`
   /// recovery slot: `.original` is `.done` AND `.edited` is `.failed` with the explicit
-  /// `editedUnavailableOriginalBackedUpMessage` sentinel (which `runEditedFallbackOriginal`
+  /// `editedUnavailableOriginalBackedUp` reason (which `runEditedFallbackOriginal`
   /// writes only after a successful `<stem>_orig` write).
   ///
   /// Distinct from `shouldRunEditedFallback`:
   /// - `satisfiesEditedFallback` is the *success* state — the `_orig` write already
   ///   happened, so the asset counts as exported.
   /// - `shouldRunEditedFallback` is the *trigger* state — the edited write just failed
-  ///   with the upstream `editedResourceUnavailableMessage`, so the recovery should run.
+  ///   with the upstream `editedResourceUnavailable` reason, so the recovery should run.
   ///
   /// We deliberately do not key on the `.original` filename's shape. The `_orig` ending is
   /// ambiguous — real user filenames like `vacation_orig.JPG` exist — so the explicit
-  /// sentinel is the only authoritative signal that the fallback ran. See
+  /// reason is the only authoritative signal that the fallback ran. See
   /// `ExportFilenamePolicy.isOrigCompanion`.
   static func satisfiesEditedFallback(
     variants: [ExportVariant: ExportVariantRecord],
@@ -82,15 +82,14 @@ enum ExportCompletionPolicy {
       variants[.original]?.status == .done,
       let editedRecord = variants[.edited],
       editedRecord.status == .failed,
-      editedRecord.lastError
-        == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
+      editedRecord.reason == .editedUnavailableOriginalBackedUp
     else { return false }
     return true
   }
 
   /// True when the pipeline should run the `_orig` recovery write for this asset: the
   /// user asked for `.edited` only, and a prior `.edited` write failed with the
-  /// `editedResourceUnavailableMessage` sentinel (which the variant write path emits when
+  /// `editedResourceUnavailable` reason sentinel (which the variant write path emits when
   /// Photos refuses the edited resource).
   ///
   /// Was `private func shouldRunEditedFallback(...)` on `ExportManager` before Phase 1.
@@ -104,7 +103,7 @@ enum ExportCompletionPolicy {
     guard required == [.edited] else { return false }
     guard let editedRecord = variants[.edited],
       editedRecord.status == .failed,
-      editedRecord.lastError == ExportVariantRecovery.editedResourceUnavailableMessage
+      editedRecord.reason == .editedResourceUnavailable
     else { return false }
     return true
   }

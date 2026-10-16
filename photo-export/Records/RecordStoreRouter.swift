@@ -116,16 +116,16 @@ final class RecordStoreRouter {
 
   func markVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    error: String, at date: Date
+    error: String, reason: ExportVariantReason? = nil, at date: Date
   ) {
     switch placement.kind {
     case .timeline:
       timelineStore.markVariantFailed(
-        assetId: assetId, variant: variant, error: error, at: date)
+        assetId: assetId, variant: variant, error: error, reason: reason, at: date)
     case .favorites, .album, .sharedAlbum:
       collectionStore.markVariantFailed(
         assetId: assetId, placement: placement, variant: variant,
-        error: error, at: date)
+        error: error, reason: reason, at: date)
     }
   }
 

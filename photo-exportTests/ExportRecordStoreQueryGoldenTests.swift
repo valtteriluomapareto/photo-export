@@ -635,8 +635,7 @@ struct ExportRecordStoreQueryGoldenTests {
             if originalDone,
               let editedRecord = record.variants[.edited],
               editedRecord.status == .failed,
-              editedRecord.lastError
-                == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
+              editedRecord.reason == .editedUnavailableOriginalBackedUp
             {
               editedFallback += 1
             }
@@ -729,7 +728,8 @@ struct ExportRecordStoreQueryGoldenTests {
       filename: "FB_orig.HEIC", exportedAt: now)
     store.markVariantFailed(
       assetId: "fb", variant: .edited,
-      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage, at: now)
+      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      reason: .editedUnavailableOriginalBackedUp, at: now)
     assertConsistentCountsForAllCells()
 
     // Step 9: transition `.edited` to `.done` (the edit becomes available on a
@@ -744,7 +744,8 @@ struct ExportRecordStoreQueryGoldenTests {
     // pass after the user deleted the file). Counter must drop to zero.
     store.markVariantFailed(
       assetId: "fb2", variant: .edited,
-      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage, at: now)
+      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      reason: .editedUnavailableOriginalBackedUp, at: now)
     store.markVariantExported(
       assetId: "fb2", variant: .original, year: 2026, month: 3, relPath: "2026/03/",
       filename: "FB2_orig.HEIC", exportedAt: now)
@@ -1081,7 +1082,8 @@ struct ExportRecordStoreQueryGoldenTests {
   ///   `recordsById`. The resulting counts must match a recompute exactly.
   @Test func configureReloadFromSnapshotPlusLogReproducesCounters() throws {
     let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportRecordStoreSnapshotReload-\(UUID().uuidString)",
+      .appendingPathComponent(
+        "ExportRecordStoreSnapshotReload-\(UUID().uuidString)",
         isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -1216,7 +1218,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// public count method returns 0 for the previously-populated cell.
   @Test func resetToEmptyClearsCounters() throws {
     let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportRecordStoreResetClears-\(UUID().uuidString)",
+      .appendingPathComponent(
+        "ExportRecordStoreResetClears-\(UUID().uuidString)",
         isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }

@@ -1743,7 +1743,7 @@ final class ExportManager: ObservableObject {
         try throwIfCancelledOrStale(gen)
         recordVariantFailed(
           assetId: job.assetLocalIdentifier, placement: job.placement, variant: .original,
-          sentinelMessage: "Asset not found", category: .assetMissing, at: Date())
+          sentinelMessage: "Asset not found", reason: nil, category: .assetMissing, at: Date())
         logger.error(
           "Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")
         return
@@ -2110,6 +2110,7 @@ final class ExportManager: ObservableObject {
       recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .edited,
         sentinelMessage: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+        reason: .editedUnavailableOriginalBackedUp,
         category: .resourceMissing, at: Date())
       logger.info(
         "Edited fallback wrote original for id: \(descriptor.id, privacy: .public) stem: \(stem, privacy: .public)"
@@ -2279,11 +2280,11 @@ final class ExportManager: ObservableObject {
 
   private func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    failure: ExportFailureSignal, at date: Date
+    failure: ExportFailureSignal, reason: ExportVariantReason? = nil, at date: Date
   ) {
     recordStoreRouter.markVariantFailed(
       assetId: assetId, placement: placement, variant: variant,
-      error: failure.localizedDescription, at: date)
+      error: failure.localizedDescription, reason: reason, at: date)
     activeRunBookkeeping?.failedCount += 1
     activeRunBookkeeping?.failures.append(
       ExportRunFailureDetail(
@@ -2306,27 +2307,30 @@ final class ExportManager: ObservableObject {
   ) {
     recordVariantFailed(
       assetId: assetId, placement: placement, variant: variant,
-      failure: AutoSyncFailureCategory.classify(error), at: date)
+      failure: AutoSyncFailureCategory.classify(error),
+      reason: error is EditedResourceUnavailableError ? .editedResourceUnavailable : nil, at: date)
   }
 
   /// Sentinel-message overload — call sites that synthesize a failure
   /// string with no underlying `Error` (e.g., "Asset not found"). The
   /// caller declares the intended `category` so retry routing is
-  /// deterministic; the message is used as both the `errorSignature` and
-  /// the user-visible description.
+  /// deterministic. Known reasons retain their frozen legacy retry signature;
+  /// ordinary failures use the message as their signature.
   ///
   /// Declared `internal` (not `private`) so `VariantExporter.Host` can witness this
   /// method. The other two `recordVariantFailed` overloads remain `private` because
   /// they are not part of the Host protocol surface.
   func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    sentinelMessage: String, category: AutoSyncFailureCategory, at date: Date
+    sentinelMessage: String, reason: ExportVariantReason?, category: AutoSyncFailureCategory,
+    at date: Date
   ) {
     recordVariantFailed(
       assetId: assetId, placement: placement, variant: variant,
       failure: AutoSyncFailureCategory.sentinel(
-        category: category, signature: sentinelMessage, message: sentinelMessage),
-      at: date)
+        category: category, signature: reason?.legacySignature ?? sentinelMessage,
+        message: sentinelMessage),
+      reason: reason, at: date)
   }
 
   // `recordVariantInProgress` and `recordVariantExported` previously lived here as pure

@@ -479,7 +479,7 @@ struct ExportRecordStoreTests {
             relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
         store.markVariantFailed(
             assetId: "live", variant: .originalPairedVideo,
-            error: ExportVariantRecovery.pairedVideoUnavailableMessage, at: Date())
+            error: ExportVariantRecovery.pairedVideoUnavailableMessage, reason: .pairedVideoUnavailable, at: Date())
         store.flushForTesting()
 
         let summary = store.sidebarSummary(

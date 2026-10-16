@@ -47,7 +47,8 @@ final class VariantExporter {
     // sentinel-message path — bookkeeping is load-bearing for `ExportRunSummary`.
     func recordVariantFailed(
       assetId: String, placement: ExportPlacement, variant: ExportVariant,
-      sentinelMessage: String, category: AutoSyncFailureCategory, at: Date)
+      sentinelMessage: String, reason: ExportVariantReason?, category: AutoSyncFailureCategory,
+      at: Date)
   }
 
   // MARK: - Dependencies
@@ -138,9 +139,11 @@ final class VariantExporter {
 
     guard let originalFilename = producer.originalFilename else {
       let errMsg: String
+      let reason: ExportVariantReason?
       switch variant {
       case .original:
         errMsg = "No exportable resource"
+        reason = nil
       case .originalPairedVideo, .editedPairedVideo:
         // Live Photo subtype said the asset has paired video, but PhotoKit's
         // resource enumeration didn't include one. A known iCloud data-
@@ -148,12 +151,14 @@ final class VariantExporter {
         // failure so the completion policy can treat the asset as covered
         // (still side is on disk; Photos has nothing more to give).
         errMsg = ExportVariantRecovery.pairedVideoUnavailableMessage
+        reason = .pairedVideoUnavailable
       case .edited:
         errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
+        reason = .editedResourceUnavailable
       }
       host?.recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: variant,
-        sentinelMessage: errMsg, category: .resourceMissing, at: Date())
+        sentinelMessage: errMsg, reason: reason, category: .resourceMissing, at: Date())
       logger.error(
         "No \(variant.rawValue, privacy: .public) byte source for id: \(descriptor.id, privacy: .public)"
       )
@@ -280,12 +285,7 @@ final class VariantExporter {
           logger.error(
             "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
           )
-          throw NSError(
-            domain: "Export", code: 9,
-            userInfo: [
-              NSLocalizedDescriptionKey:
-                ExportVariantRecovery.editedResourceUnavailableMessage
-            ])
+          throw EditedResourceUnavailableError()
         }
       case .convertHEIC(let request):
         // Two-step: materialise the source HEIC/HEIF bytes to a sibling temp
@@ -312,12 +312,7 @@ final class VariantExporter {
           logger.error(
             "HEIC→JPEG conversion failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
           )
-          throw NSError(
-            domain: "Export", code: 9,
-            userInfo: [
-              NSLocalizedDescriptionKey:
-                ExportVariantRecovery.editedResourceUnavailableMessage
-            ])
+          throw EditedResourceUnavailableError()
         }
       case .none:
         // Guarded above by `producer.originalFilename` check.

@@ -137,7 +137,8 @@ struct ExportManagerVideoRenderTests {
     #expect(
       record?.variants[.edited]?.lastError
         == ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage)
-    #expect(ExportVariantRecovery.isRecoverable(record?.variants[.edited]?.lastError))
+    #expect(record?.variants[.edited]?.reason == .editedUnavailableOriginalBackedUp)
+    #expect(ExportVariantRecovery.isRecoverable(record?.variants[.edited]?.reason))
     #expect(record?.variants[.original]?.status == .done)
     // Render activity must be cleared even on failure.
     #expect(h.manager.renderActivity == nil)
@@ -163,6 +164,7 @@ struct ExportManagerVideoRenderTests {
     #expect(
       record?.variants[.edited]?.lastError
         == ExportVariantRecovery.editedResourceUnavailableMessage)
+    #expect(record?.variants[.edited]?.reason == .editedResourceUnavailable)
     #expect(h.renderer.renderCalls.isEmpty)
   }
 
@@ -265,7 +267,8 @@ struct ExportManagerVideoRenderTests {
     // `tmpFiles.isEmpty` is vacuously true).
     #expect(
       h.renderer.renderCalls.count == 1,
-      "renderer must have been invoked before cancel landed; got \(h.renderer.renderCalls.count) render calls")
+      "renderer must have been invoked before cancel landed; got \(h.renderer.renderCalls.count) render calls"
+    )
 
     let monthDir = h.dest.rootURL.appendingPathComponent("2025/11")
     let contents = (try? FileManager.default.contentsOfDirectory(atPath: monthDir.path)) ?? []

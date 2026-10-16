@@ -28,7 +28,9 @@ struct VariantExporterTests {
   /// on its own. Post-issue-#67-item-2 the cancellation seam is no longer on the
   /// Host either — it routes through the injected `ExportQueueCoordinator`.
   private final class FakeHost: VariantExporter.Host, ExportQueueCoordinator.Host {
-    var failureCalls: [(assetId: String, variant: ExportVariant, message: String)] = []
+    var failureCalls:
+      [(assetId: String, variant: ExportVariant, message: String, reason: ExportVariantReason?)] =
+        []
     var convertHEICToJPEG: Bool = false
 
     func setCurrentAssetFilename(_ name: String?) {}
@@ -37,9 +39,11 @@ struct VariantExporterTests {
 
     func recordVariantFailed(
       assetId: String, placement: ExportPlacement, variant: ExportVariant,
-      sentinelMessage: String, category: AutoSyncFailureCategory, at: Date
+      sentinelMessage: String, reason: ExportVariantReason?, category: AutoSyncFailureCategory,
+      at: Date
     ) {
-      failureCalls.append((assetId: assetId, variant: variant, message: sentinelMessage))
+      failureCalls.append(
+        (assetId: assetId, variant: variant, message: sentinelMessage, reason: reason))
     }
 
     // ExportQueueCoordinator.Host — only required so the coordinator can be
@@ -126,9 +130,11 @@ struct VariantExporterTests {
       groupStem: nil, pairOriginalWithSuffix: false,
       generation: 0, inFlight: &inFlight)
 
-    #expect(h.renderer.renderCalls.isEmpty,
+    #expect(
+      h.renderer.renderCalls.isEmpty,
       "MediaRenderer must not be called for static-resource producers")
-    #expect(h.writer.writeCalls.contains { $0.assetId == "static" },
+    #expect(
+      h.writer.writeCalls.contains { $0.assetId == "static" },
       "AssetResourceWriter must be called for static-resource producers")
   }
 
@@ -156,8 +162,10 @@ struct VariantExporterTests {
       groupStem: nil, pairOriginalWithSuffix: false,
       generation: 0, inFlight: &inFlight)
 
-    #expect(h.renderer.renderCalls.count == 1,
-      "MediaRenderer.render must be invoked exactly once for rendered-media producers; got \(h.renderer.renderCalls.count)")
+    #expect(
+      h.renderer.renderCalls.count == 1,
+      "MediaRenderer.render must be invoked exactly once for rendered-media producers; got \(h.renderer.renderCalls.count)"
+    )
     #expect(h.renderer.renderCalls.first?.request.assetId == "rendered")
   }
 
@@ -193,14 +201,21 @@ struct VariantExporterTests {
         generation: 0, inFlight: &inFlight)
       Issue.record("Expected throw on render failure")
     } catch {
+      #expect(error is EditedResourceUnavailableError)
+      #expect(AutoSyncFailureCategory.classify(error).errorSignature == "Export:9")
+      #expect(AutoSyncFailureCategory.classify(error).category == .unknown)
       let nsError = error as NSError
-      #expect(nsError.domain == "Export",
+      #expect(
+        nsError.domain == "Export",
         "render-failure throw must be NSError domain \"Export\"; got \(nsError.domain)")
-      #expect(nsError.code == 9,
+      #expect(
+        nsError.code == 9,
         "render-failure throw must be NSError code 9; got \(nsError.code)")
-      #expect(nsError.localizedDescription
-        == ExportVariantRecovery.editedResourceUnavailableMessage,
-        "render-failure localizedDescription must be the canonical sentinel; got \(nsError.localizedDescription)")
+      #expect(
+        nsError.localizedDescription
+          == ExportVariantRecovery.editedResourceUnavailableMessage,
+        "render-failure localizedDescription must be the canonical sentinel; got \(nsError.localizedDescription)"
+      )
     }
   }
 
@@ -227,7 +242,8 @@ struct VariantExporterTests {
       generation: 0, inFlight: &inFlight)
 
     #expect(result == nil, "no-resource path must return nil (no chosenStem)")
-    #expect(h.host.failureCalls.count == 1,
+    #expect(
+      h.host.failureCalls.count == 1,
       "Host.recordVariantFailed must be called exactly once; got \(h.host.failureCalls.count)")
     #expect(h.host.failureCalls.first?.assetId == "no-res")
     #expect(h.host.failureCalls.first?.message == "No exportable resource")
@@ -265,12 +281,15 @@ struct VariantExporterTests {
       groupStem: nil, pairOriginalWithSuffix: false,
       generation: 0, inFlight: &inFlight)
 
-    #expect(h.converter.convertCalls.count == 1,
-      "ImageConverter.convertHEIC must be invoked once for unedited HEIC under toggle on; got \(h.converter.convertCalls.count)")
+    #expect(
+      h.converter.convertCalls.count == 1,
+      "ImageConverter.convertHEIC must be invoked once for unedited HEIC under toggle on; got \(h.converter.convertCalls.count)"
+    )
     // Convert destination is a `.tmp` file; the exporter strips `.tmp` and
     // moves to the final URL. Assert the move target ends in `.JPG`.
     let movedTo = h.fileSystem.moveCalls.last?.to.lastPathComponent ?? ""
-    #expect(movedTo.uppercased().hasSuffix(".JPG"),
+    #expect(
+      movedTo.uppercased().hasSuffix(".JPG"),
       "Final on-disk filename must end in .JPG; got \(movedTo)")
     // The writer IS called to materialize the source HEIC bytes for the
     // converter to read (to a `.heic-source` temp path). That's the
@@ -279,7 +298,8 @@ struct VariantExporterTests {
     // variant location.
     let writerTargetExt =
       h.writer.writeCalls.first { $0.assetId == "heic-unedited" }?.url.lastPathComponent ?? ""
-    #expect(writerTargetExt.hasSuffix(".heic-source"),
+    #expect(
+      writerTargetExt.hasSuffix(".heic-source"),
       "Writer must materialize the HEIC source to a `.heic-source` temp; got \(writerTargetExt)")
   }
 
@@ -313,10 +333,14 @@ struct VariantExporterTests {
       groupStem: nil, pairOriginalWithSuffix: false,
       generation: 0, inFlight: &inFlight)
 
-    #expect(h.converter.convertCalls.isEmpty,
-      "ImageConverter.convertHEIC must not be invoked when toggle is off; got \(h.converter.convertCalls.count) calls")
-    #expect(h.host.failureCalls.contains { $0.assetId == "heic-untouched" },
-      "Unedited HEIC under .edited selection with toggle off should record an editedResourceUnavailable failure")
+    #expect(
+      h.converter.convertCalls.isEmpty,
+      "ImageConverter.convertHEIC must not be invoked when toggle is off; got \(h.converter.convertCalls.count) calls"
+    )
+    #expect(
+      h.host.failureCalls.contains { $0.assetId == "heic-untouched" },
+      "Unedited HEIC under .edited selection with toggle off should record an editedResourceUnavailable failure"
+    )
   }
 
   // MARK: - Live Photo paired-video variants
@@ -346,7 +370,8 @@ struct VariantExporterTests {
       groupStem: "IMG_0001", pairOriginalWithSuffix: false,
       generation: 0, inFlight: &inFlight)
 
-    #expect(h.renderer.renderCalls.isEmpty,
+    #expect(
+      h.renderer.renderCalls.isEmpty,
       "MediaRenderer must not be called for Live Photo paired-video variants")
     #expect(h.writer.writeCalls.count == 1)
     #expect(h.writer.writeCalls.first?.resource.type == .pairedVideo)
@@ -396,7 +421,7 @@ struct VariantExporterTests {
 
     let asset = TestAssetFactory.makeAsset(id: "live", hasAdjustments: true, isLivePhoto: true)
     let resources = [
-      TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+      TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV")
     ]
     var inFlight: (assetId: String, variant: ExportVariant)?
 
@@ -410,7 +435,8 @@ struct VariantExporterTests {
       groupStem: "IMG_0001", pairOriginalWithSuffix: true,
       generation: 0, inFlight: &inFlight)
 
-    #expect(h.host.failureCalls.isEmpty,
+    #expect(
+      h.host.failureCalls.isEmpty,
       "Fallback must be silent — no failure recorded when `.pairedVideo` is used as a stand-in")
     #expect(h.writer.writeCalls.count == 1)
     #expect(h.writer.writeCalls.first?.resource.type == .pairedVideo)
@@ -429,7 +455,7 @@ struct VariantExporterTests {
 
     let asset = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
     let resources = [
-      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC")
     ]
     var inFlight: (assetId: String, variant: ExportVariant)?
 
@@ -446,7 +472,37 @@ struct VariantExporterTests {
     #expect(result == nil)
     #expect(h.host.failureCalls.count == 1)
     #expect(h.host.failureCalls.first?.variant == .originalPairedVideo)
+    #expect(h.host.failureCalls.first?.reason == .pairedVideoUnavailable)
     #expect(
       h.host.failureCalls.first?.message == ExportVariantRecovery.pairedVideoUnavailableMessage)
+  }
+}
+
+extension VariantExporterTests {
+  @Test func conversionFailureCarriesTypedReasonAndPreservesRetryIdentity() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.host.convertHEICToJPEG = true
+    h.converter.convertError = NSError(domain: "Test", code: 42)
+    let asset = TestAssetFactory.makeAsset(id: "convert-error")
+    let resource = TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG.HEIC")
+    var inFlight: (assetId: String, variant: ExportVariant)?
+    do {
+      _ = try await h.exporter.exportSingleVariant(
+        variant: .edited, descriptor: asset,
+        resources: [resource], destDir: h.destDir, relPath: "2025/07/",
+        job: ExportManager.ExportJob(
+          assetLocalIdentifier: asset.id,
+          placement: .timeline(year: 2025, month: 7), selection: .edited),
+        groupStem: nil, pairOriginalWithSuffix: false, generation: 0, inFlight: &inFlight)
+      Issue.record("Expected conversion failure")
+    } catch {
+      #expect(error is EditedResourceUnavailableError)
+      #expect((error as NSError).domain == "Export")
+      #expect((error as NSError).code == 9)
+      #expect(error.localizedDescription == "Edited resource unavailable")
+      #expect(AutoSyncFailureCategory.classify(error).category == .unknown)
+      #expect(AutoSyncFailureCategory.classify(error).errorSignature == "Export:9")
+    }
   }
 }
