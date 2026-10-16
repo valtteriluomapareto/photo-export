@@ -25,6 +25,10 @@ struct MonthContentView: View, Equatable {
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
   @StateObject private var viewModel: MonthViewModel
 
   let year: Int
@@ -42,6 +46,7 @@ struct MonthContentView: View, Equatable {
   /// Closure that triggers the "Export Month" action. Owned by the parent so we can
   /// avoid touching `ExportManager` here.
   let onExportMonth: () -> Void
+  private let selectedAssetId: String?
   @Binding var selectedAsset: AssetDescriptor?
 
   init(
@@ -58,12 +63,17 @@ struct MonthContentView: View, Equatable {
     self.versionSelection = versionSelection
     self.livePhotosPaired = livePhotosPaired
     self.onExportMonth = onExportMonth
+    self.selectedAssetId = selectedAsset.wrappedValue?.id
     self._selectedAsset = selectedAsset
     _viewModel = StateObject(
       wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("selected:\(selectedAsset?.id ?? "")")
+    #endif
     VStack(alignment: .leading, spacing: 12) {
       // Header with Month and Year
       Text("\(MonthFormatting.name(for: month)) \(String(year))")
@@ -117,9 +127,16 @@ struct MonthContentView: View, Equatable {
       await viewModel.loadAssets(forYear: year, month: month)
     }
     .onDisappear { viewModel.deactivate() }
-    .onChange(of: initialAssetSelection, initial: true) { _, asset in
-      if selectedAsset == nil, let asset {
-        selectedAsset = asset
+    .onReceive(viewModel.selectionUpdates) { _ in
+      // The model emits after an owned commit. Derive from the live binding
+      // and write synchronously, so no queued pane can undo newer navigation.
+      guard
+        let update = viewModel.selectionUpdate(
+          for: .timeline(year: year, month: month), preferredAssetId: selectedAsset?.id)
+      else { return }
+      if selectedAsset != update.asset { selectedAsset = update.asset }
+      if viewModel.selectedAssetId != update.asset?.id {
+        viewModel.select(assetId: update.asset?.id)
       }
     }
     // Photos library mutations (most commonly iCloud sync landing newly synced assets,
@@ -130,16 +147,14 @@ struct MonthContentView: View, Equatable {
     // path re-fetches and diff-updates `assets` so still-present items keep their
     // thumbnails.
     .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
-      Task { await viewModel.refresh(for: .timeline(year: year, month: month)) }
+      Task {
+        await viewModel.refresh(for: .timeline(year: year, month: month))
+        #if DEBUG
+          bodyCounter?.record("grid-refresh-finished")
+        #endif
+      }
     }
     .measureBodyInvalidations("MonthContentView")
-  }
-
-  // Observe the first batch rather than waiting for the entire progressive load.
-  // A scope check prevents an old pane's selection from reaching the detail binding.
-  private var initialAssetSelection: AssetDescriptor? {
-    guard selectedAsset == nil else { return nil }
-    return viewModel.selectedAsset(for: .timeline(year: year, month: month))
   }
 
   private var overlayViews: some View {
@@ -198,7 +213,7 @@ struct MonthContentView: View, Equatable {
   /// Compares only the value fields that affect rendering. Skips:
   /// - `onExportMonth` — a freshly-allocated closure per parent render that's
   ///   semantically identical (always `exportManager.startExportMonth(year:month:)`).
-  /// - `selectedAsset` wrapper itself — compare the bound asset id directly so a
+  /// - `selectedAsset` wrapper itself — compare the construction-time asset id so a
   ///   new `Binding<AssetDescriptor?>` instance per render doesn't defeat the diff.
   /// - `photoLibraryService` — injected once at init; identity is stable per
   ///   `LibraryRootView` lifetime.
@@ -207,6 +222,6 @@ struct MonthContentView: View, Equatable {
       && lhs.month == rhs.month
       && lhs.versionSelection == rhs.versionSelection
       && lhs.livePhotosPaired == rhs.livePhotosPaired
-      && lhs.selectedAsset?.id == rhs.selectedAsset?.id
+      && lhs.selectedAssetId == rhs.selectedAssetId
   }
 }

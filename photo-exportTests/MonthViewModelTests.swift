@@ -614,6 +614,64 @@ struct MonthViewModelTests {
     #expect(svc.stopCachingCalls.last?.map(\.id) == ["a", "b"])
   }
 
+  @Test(arguments: [false, true])
+  func refreshReconcilesRemovedSelection(empty: Bool) async {
+    let service = FakePhotoLibraryService()
+    let a = TestAssetFactory.makeAsset(id: "A")
+    let b = TestAssetFactory.makeAsset(id: "B")
+    let c = TestAssetFactory.makeAsset(id: "C")
+    service.favoritesAssets = [a, b, c]
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .favorites)
+    model.select(assetId: b.id)
+    service.favoritesAssets = empty ? [] : [c, a]
+    await model.refresh(for: .favorites)
+    #expect(model.assets == service.favoritesAssets)
+    #expect(model.selectedAssetId == (empty ? nil : c.id))
+    #expect(model.selectedAsset(for: .favorites) == (empty ? nil : c))
+  }
+
+  @Test func refreshPreservesSelectedMetadataAndFailedSnapshot() async {
+    let service = FakePhotoLibraryService()
+    let a = TestAssetFactory.makeAsset(id: "A")
+    let b = TestAssetFactory.makeAsset(id: "B")
+    let revised = TestAssetFactory.makeAsset(
+      id: "B", pixelWidth: 701, pixelHeight: 502, hasAdjustments: true)
+    service.favoritesAssets = [a, b]
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .favorites)
+    model.select(assetId: b.id)
+    service.favoritesAssets = [a, revised]
+    await model.refresh(for: .favorites)
+    #expect(model.selectedAsset(for: .favorites) == revised)
+    service.progressiveStreamOverride = { _ in
+      AsyncThrowingStream { $0.finish(throwing: CocoaError(.fileReadUnknown)) }
+    }
+    await model.refresh(for: .favorites)
+    #expect(model.assets == [a, revised])
+    #expect(model.selectedAssetId == b.id)
+    #expect(model.selectedAsset(for: .favorites) == revised)
+    #expect(model.errorMessage != nil)
+  }
+
+  @Test func completionSubscriberCanDeactivateWithoutLeavingLatePreheat() async {
+    let service = FakePhotoLibraryService()
+    let asset = TestAssetFactory.makeAsset(id: "A")
+    service.favoritesAssets = [asset]
+    let model = MonthViewModel(photoLibraryService: service)
+    var events = 0
+    let subscription = model.selectionUpdates.sink {
+      events += 1
+      if events == 2 { model.deactivate() }
+    }
+    defer { subscription.cancel() }
+    await model.loadAssets(for: .favorites)
+    #expect(events == 2)
+    #expect(model.selectedAsset(for: .favorites) == nil)
+    #expect(service.startCachingCalls == [[asset]])
+    #expect(service.stopCachingCalls == [[asset]])
+  }
+
   // MARK: - Progressive streaming
 
   /// Mid-stream scope switch: the user clicks album B while album A's

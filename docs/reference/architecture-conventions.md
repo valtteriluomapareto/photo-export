@@ -54,7 +54,12 @@ publishing success or error, in addition to UUID and Task cancellation guards. T
 superseded response even before SwiftUI starts the replacement task. Same-asset replacement
 retains the displayed image while loading; other selected IDs hide prior content immediately.
 A current failure clears retained bytes to expose the existing error message. Grid descriptor
-refresh remains owned by `MonthViewModel` and its parent selection binding.
+refresh remains owned by `MonthViewModel` and its parent selection binding. The model emits a
+payloadless selection update synchronously after each owned visible batch or successful complete
+snapshot. Grids derive the current descriptor from the live binding inside `onReceive`; they do
+not queue binding writes through `onChange`/task identities. A completed snapshot proves absence
+(first survivor or empty clears); unfinished enumeration preserves a choice still awaiting its
+batch. Failed or obsolete refreshes do not emit a selection update.
 
 ### Final file commit boundary
 

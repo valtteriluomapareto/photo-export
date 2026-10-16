@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import Photos
 import SwiftUI
@@ -43,6 +44,17 @@ final class MonthViewModel: ObservableObject {
   /// two overlapping requests for the same scope, including A → B → A navigation.
   private var currentScope: PhotoFetchScope?
   private var requestGeneration: UInt64 = 0
+  // isLoading ends at the first batch; only a complete snapshot proves absence.
+  private var hasCompleteSnapshot = false
+
+  struct SelectionUpdate {
+    let asset: AssetDescriptor?
+  }
+
+  // Emit after committing state, rather than using @Published's willSet values.
+  // The payloadless event is not another owner of selection or asset data.
+  private let selectionChanges = PassthroughSubject<Void, Never>()
+  var selectionUpdates: AnyPublisher<Void, Never> { selectionChanges.eraseToAnyPublisher() }
 
   private func ownsRequest(_ generation: UInt64, scope: PhotoFetchScope) -> Bool {
     !Task.isCancelled && requestGeneration == generation && currentScope == scope
@@ -57,6 +69,7 @@ final class MonthViewModel: ObservableObject {
   func deactivate() {
     requestGeneration &+= 1
     currentScope = nil
+    hasCompleteSnapshot = false
     stopPreheating()
     isLoading = false
   }
@@ -82,6 +95,7 @@ final class MonthViewModel: ObservableObject {
     requestGeneration &+= 1
     let generation = requestGeneration
     currentScope = scope
+    hasCompleteSnapshot = false
     isLoading = true
     errorMessage = nil
     stopPreheating()
@@ -104,6 +118,7 @@ final class MonthViewModel: ObservableObject {
           isLoading = false
           if selectedAssetId == nil, let first = batch.first { selectedAssetId = first.id }
         }
+        selectionChanges.send()
       }
     } catch {
       guard ownsRequest(generation, scope: scope) else { return }
@@ -112,6 +127,7 @@ final class MonthViewModel: ObservableObject {
       return
     }
     guard ownsRequest(generation, scope: scope) else { return }
+    hasCompleteSnapshot = true
     isLoading = false
 
     // Preheat the windowed prefix once the full asset list has settled.
@@ -120,6 +136,7 @@ final class MonthViewModel: ObservableObject {
       photoLibraryService.startCachingThumbnails(for: cachingWindow)
     }
     cachedAssets = cachingWindow
+    selectionChanges.send()
   }
 
   /// In-place refresh used when the underlying Photos library changes underneath us
@@ -174,10 +191,14 @@ final class MonthViewModel: ObservableObject {
       photoLibraryService.startCachingThumbnails(for: added)
     }
     cachedAssets = newCachingWindow
+    hasCompleteSnapshot = true
     assets = collected
     errorMessage = nil
     isLoading = false
-    if selectedAssetId == nil { selectedAssetId = collected.first?.id }
+    if !collected.contains(where: { $0.id == selectedAssetId }) {
+      selectedAssetId = collected.first?.id
+    }
+    selectionChanges.send()
   }
 
   /// Returns a selection only when the requested view scope still owns the
@@ -185,6 +206,25 @@ final class MonthViewModel: ObservableObject {
   func selectedAsset(for scope: PhotoFetchScope) -> AssetDescriptor? {
     guard currentScope == scope, let selectedAssetId else { return nil }
     return assets.first { $0.id == selectedAssetId }
+  }
+
+  /// Nil means this pane has no authoritative update. A snapshot containing a nil
+  /// asset means an owned, completed empty scope and deliberately clears details.
+  /// The binding may be ahead of the model (a click during a held refresh/load).
+  func selectionUpdate(
+    for scope: PhotoFetchScope, preferredAssetId: String?
+  ) -> SelectionUpdate? {
+    guard currentScope == scope else { return nil }
+    let selected: AssetDescriptor?
+    if let preferredAssetId, let preferred = assets.first(where: { $0.id == preferredAssetId }) {
+      selected = preferred
+    } else {
+      // A later progressive batch may still contain the bound selection.
+      guard hasCompleteSnapshot || (preferredAssetId == nil && !assets.isEmpty) else { return nil }
+      selected =
+        preferredAssetId == nil ? (selectedAsset(for: scope) ?? assets.first) : assets.first
+    }
+    return SelectionUpdate(asset: selected)
   }
 
   func select(assetId: String?) {
