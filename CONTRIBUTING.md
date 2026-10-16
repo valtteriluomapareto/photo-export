@@ -115,6 +115,12 @@ Include the following in your pull request description:
 
 For UI changes, include a screenshot or short recording when practical.
 
+## Automation Dependencies
+
+External GitHub Actions are pinned to upstream commit SHAs with version comments. Dependabot proposes weekly Action updates and website npm updates; routine minor/patch website updates are grouped, while major updates remain separate. Maintainers review these PRs and merge only after current-head CI passes. No automatic merging is enabled.
+
+When updating a pin manually, verify the commit and its `action.yml` in the upstream repository, retain the version comment, and preserve workflow permissions, triggers, environments, and release controls. For website dependency updates, commit both `website/package.json` and `website/package-lock.json` as applicable and run the website format, lint, and validation commands. App runtime dependencies remain unchanged.
+
 ## Release and Project Notes
 
 Longer-lived project notes live under [`docs/`](docs/README.md). Keep the repo root reserved for the files people expect in an open source project.
