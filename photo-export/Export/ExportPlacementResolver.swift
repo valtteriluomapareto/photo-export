@@ -25,7 +25,7 @@ import os
 ///   (`Collections/Albums/`) makes cross-kind collisions impossible.
 ///
 /// Sibling-collision disambiguation (per §"Path Policy → Disambiguation"):
-/// - Two distinct placements that, after sanitization, would have the same full path
+/// - Two distinct placements that, after sanitization and case folding, share a leaf
 ///   under the same parent folder under `Collections/Albums/` are *sibling collisions*.
 /// - First claimant keeps the bare path; new placements get `_2`, `_3`, … suffixes.
 /// - Stale placements from deleted albums count as live claimants so a reinstated album
@@ -243,12 +243,21 @@ struct ExportPlacementResolver {
         return trimmed.isEmpty ? nil : trimmed
       }
 
+    let leafKey = siblingLeafKey(sanitizedLeaf)
+    let existingLeafKeys = Set(existingLeaves.map(siblingLeafKey))
+    // Reserve natural names even before those siblings are persisted. Otherwise
+    // Trip/trip could consume the directory intended for a sibling named TRIP_2.
+    let reservedLeafKeys = Set(
+      collections.filter { $0.kind == .sharedAlbum }
+        .map { siblingLeafKey(ExportPathPolicy.sanitizeComponent($0.title)) })
+
     let siblingCandidates =
       collections
       .filter { $0.kind == .sharedAlbum }
       .filter { $0.localIdentifier != descriptor.localIdentifier }
       .filter { other in
-        ExportPathPolicy.sanitizeComponent(other.title) == sanitizedLeaf
+        siblingLeafKey(ExportPathPolicy.sanitizeComponent(other.title))
+          == leafKey
       }
       .filter { other in
         let otherHash = displayPathHash8(
@@ -264,7 +273,7 @@ struct ExportPlacementResolver {
       + siblingCandidates.compactMap { $0.localIdentifier })
       .filter { !$0.isEmpty }
 
-    let bareLeafTaken = existingLeaves.contains(sanitizedLeaf)
+    let bareLeafTaken = existingLeafKeys.contains(leafKey)
     let newSiblings = collidingNewIds.count > 1
     if !bareLeafTaken && !newSiblings {
       return sanitizedLeaf
@@ -283,12 +292,12 @@ struct ExportPlacementResolver {
     var n = 2
     while true {
       let candidate = "\(sanitizedLeaf)_\(n)"
-      if !existingLeaves.contains(candidate) {
+      let key = siblingLeafKey(candidate)
+      if !existingLeafKeys.contains(key) && !reservedLeafKeys.contains(key) {
         if slot == targetSlot { return candidate }
         slot += 1
       }
       n += 1
-      if n > 1000 { return "\(sanitizedLeaf)_\(n)" }
     }
   }
 
@@ -352,11 +361,20 @@ struct ExportPlacementResolver {
     // and the new path-hash hasn't been claimed yet. Without this distinction, two
     // distinct renamed albums could each end up at the bare path because the filter
     // would have dropped them as "covered above".
-    let siblingCandidates = albumsInTree(collections)
+    let siblings = albumsInTree(collections).filter {
+      sanitizedFolderPath($0.pathComponents) == parentPathString
+    }
+    let leafKey = siblingLeafKey(sanitizedLeaf)
+    let existingLeafKeys = Set(existingLeaves.map(siblingLeafKey))
+    let reservedLeafKeys = Set(
+      siblings.map { siblingLeafKey(ExportPathPolicy.sanitizeComponent($0.title)) })
+    let siblingCandidates =
+      siblings
       .filter { $0.localIdentifier != descriptor.localIdentifier }
       .filter { other in
         sanitizedFolderPath(other.pathComponents) == parentPathString
-          && ExportPathPolicy.sanitizeComponent(other.title) == sanitizedLeaf
+          && siblingLeafKey(ExportPathPolicy.sanitizeComponent(other.title))
+            == leafKey
       }
       .filter { other in
         // If an existing placement matches `other` at its *current* path-hash, it
@@ -376,7 +394,7 @@ struct ExportPlacementResolver {
       .filter { !$0.isEmpty }
 
     // If no collision (no other claimants share this leaf), keep the bare leaf.
-    let bareLeafTaken = existingLeaves.contains(sanitizedLeaf)
+    let bareLeafTaken = existingLeafKeys.contains(leafKey)
     let newSiblings = collidingNewIds.count > 1
     if !bareLeafTaken && !newSiblings {
       return sanitizedLeaf
@@ -403,16 +421,22 @@ struct ExportPlacementResolver {
     var n = 2
     while true {
       let candidate = "\(sanitizedLeaf)_\(n)"
-      // Skip suffixes already claimed by existing placements; new claimants only take
-      // unclaimed suffixes in order.
-      if !existingLeaves.contains(candidate) {
+      // Skip persisted names and natural sibling names; finite reservations always
+      // leave a free suffix, without an unchecked upper-bound fallback.
+      let key = siblingLeafKey(candidate)
+      if !existingLeafKeys.contains(key) && !reservedLeafKeys.contains(key) {
         if slot == targetSlot { return candidate }
         slot += 1
       }
       n += 1
-      // Defensive cap; should never hit at personal-library scale.
-      if n > 1000 { return "\(sanitizedLeaf)_\(n)" }
     }
+  }
+
+  /// Conservative comparison for new siblings on common case-insensitive volumes.
+  /// Emitted spelling and identity hashing deliberately keep the original case.
+  private func siblingLeafKey(_ sanitizedLeaf: String) -> String {
+    sanitizedLeaf.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+      .precomposedStringWithCanonicalMapping
   }
 
   // MARK: - Hash helpers

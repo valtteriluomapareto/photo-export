@@ -50,6 +50,19 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - Handles both images and videos, including edits made in Photos
 - Real-time progress tracking in the toolbar (count and current filename)
 
+### Album folder names
+
+New sibling albums whose names differ only by case get distinct folder names, for example
+`Trip/` and `trip_2/`. The same rule applies to Shared Albums. Existing folder names and
+tracking records stay unchanged; the app does not move or merge backup files. Collisions
+between different folder trees whose parent folder names differ only by case remain a
+separate limitation.
+
+If an older backup already mixed case-only sibling albums into one folder, choose a **new
+empty destination folder** and export the affected albums there. That destination starts
+with fresh tracking and separate album folders. Keep the old mixed backup until you have
+verified the new copies; importing the old backup does not separate those mixed folders.
+
 ### Format options (Settings → Advanced)
 
 Two settings under **Settings → Advanced** (Cmd+,) shape what lands on disk. A Settings

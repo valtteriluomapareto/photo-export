@@ -37,6 +37,11 @@ Browse your library two ways via the **Timeline / Collections** segmented contro
 - **Timeline** — your library by year and month. Click a month to preview its thumbnails and full-size photos.
 - **Collections** — your **Favorites**, every album and folder you've created in Photos, and any **iCloud shared albums** you participate in. Click an album to preview its contents. Shared albums sit in their own sidebar section because they export at reduced quality — see [Shared albums (reduced fidelity)](/photo-export/features/#shared-albums-reduced-fidelity). (Smart albums other than Favorites aren't included.)
 
+New sibling albums with case-only names, such as `Trip` and `trip`, receive separate export
+folders; Shared Albums follow the same rule. Previously tracked folders keep their paths.
+For an older mixed backup, export the affected albums to a **new empty destination folder**
+and retain the old backup until the new copies are verified. See [album folder names](/photo-export/features/#album-folder-names).
+
 Once you've picked a scope, decide what to write. Open **Settings → Advanced** (Cmd+, or the toolbar's Settings cog) for three toggles:
 
 - **Include originals for edited photos** — off (default) exports one file per photo, in the version Photos shows. Edited photos write the edit; unedited photos write the original. On adds a `_orig` companion (e.g. `IMG_0001_orig.HEIC`) for any photo with edits in Photos so you keep a copy of the original bytes.
