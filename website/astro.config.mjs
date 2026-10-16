@@ -1,24 +1,17 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { repositoryInfo } from './site-config.mjs';
 
 // Derived from the GitHub Actions context so that renaming the repository
 // automatically updates the Pages base path and GitHub links on next deploy.
 // Falls back to the current slug for local builds.
-const FALLBACK_REPOSITORY = 'valtteriluomapareto/photo-export';
-const repository = process.env.GITHUB_REPOSITORY || FALLBACK_REPOSITORY;
-const [repoOwner, repoName] = repository.split('/');
-if (!repoOwner || !repoName || repository.split('/').length !== 2) {
-	throw new Error(
-		`Invalid GITHUB_REPOSITORY value: "${repository}". Expected "owner/repo".`,
-	);
-}
-const repoUrl = `https://github.com/${repository}`;
+const { base, repoUrl } = repositoryInfo();
 
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://valtteriluomapareto.github.io',
-	base: `/${repoName}`,
+	base,
 	integrations: [
 		starlight({
 			title: 'Photo Export',
