@@ -19,7 +19,7 @@ def main():
         "project", nargs="?", type=pathlib.Path,
         default=pathlib.Path(__file__).resolve().parents[2] / "photo-export.xcodeproj/project.pbxproj",
     )
-    parser.add_argument("--expected", help="Expected full version, only supplied for actual tag events")
+    parser.add_argument("--expected", help="Expected full version for a version-tag ref")
     args = parser.parse_args()
     try:
         versions = []

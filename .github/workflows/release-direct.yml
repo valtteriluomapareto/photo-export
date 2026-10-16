@@ -41,31 +41,41 @@ jobs:
 
       - name: Determine build context
         id: ctx
+        env:
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           echo "::group::Build context"
           IS_TAG="false"
           VERSION="0.0.0-dev"
           IS_DRY_RUN="true"
+          SHOULD_CREATE_RELEASE="false"
 
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             IS_TAG="true"
             VERSION="${GITHUB_REF#refs/tags/v}"
+            echo "Version tag selected: v${VERSION}"
+          fi
+
+          # Ref identity never overrides a manual build-only request.
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$IS_TAG" == "true" ]]; then
             IS_DRY_RUN="false"
-            echo "Tag push detected: v${VERSION}"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            IS_DRY_RUN="${{ github.event.inputs.dry_run }}"
-            echo "workflow_dispatch detected (dry_run=${IS_DRY_RUN})"
-          else
-            echo "Branch push detected — dry run"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "${INPUT_DRY_RUN:-}" == "false" \
+            && ( "$IS_TAG" == "true" || "$GITHUB_REF" == refs/heads/* ) ]]; then
+            IS_DRY_RUN="false"
+          fi
+          if [[ "$IS_TAG" == "true" && "$IS_DRY_RUN" == "false" ]]; then
+            SHOULD_CREATE_RELEASE="true"
           fi
 
           echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "is_dry_run=${IS_DRY_RUN}" >> "$GITHUB_OUTPUT"
+          echo "should_create_release=${SHOULD_CREATE_RELEASE}" >> "$GITHUB_OUTPUT"
 
           echo "is_tag=${IS_TAG}"
           echo "version=${VERSION}"
           echo "is_dry_run=${IS_DRY_RUN}"
+          echo "should_create_release=${SHOULD_CREATE_RELEASE}"
           echo "::endgroup::"
 
       - name: Verify MARKETING_VERSION matches tag
@@ -75,7 +85,7 @@ jobs:
         run: python3 scripts/ci/check-version.py --expected "$EXPECTED_TAG_VERSION"
 
       - name: Check for existing GitHub Release
-        if: steps.ctx.outputs.is_tag == 'true'
+        if: steps.ctx.outputs.should_create_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -359,9 +369,9 @@ jobs:
           name: checksum
           path: ${{ env.CHECKSUM_FILE }}
 
-      # ── GitHub Release (tag pushes only) ──────────────────────────────
+      # ── GitHub Release (publication-enabled version tags) ─────────────
       - name: Create draft GitHub Release
-        if: steps.ctx.outputs.is_tag == 'true'
+        if: steps.ctx.outputs.should_create_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
