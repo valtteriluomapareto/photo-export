@@ -26,6 +26,8 @@ python3 scripts/ci/check-read-only-photos.py
 
 The Photos guard rejects exact PhotoKit change/creation request and `performChanges` identifiers in production Swift sources. It ignores nested comments and ordinary/raw/multiline string literals (including interpolation bodies), preserves source line numbers, and fails on missing/empty input. It has no inline bypass marker. This is a lexical tripwire: aliases, dynamic calls, and code inside string interpolation need review; it does not replace Swift compilation or behavioral tests. Python 3 is required; only its standard library is used. Self-tests invoke the real scanners against temporary fixtures and preserve the existing destination-keying self-test.
 
+The regression-symbol guard uses the same lexical masking and matches complete `struct` and ordinary `func name(...)` declarations, rather than substring mentions. `test-guards.sh` covers clean inputs, missing files/declarations, suffix renames, and comment/string-only symbols before CI runs the real scans. When changing a guard, add a clean fixture and a violation fixture that asserts the intended diagnostic, not just a nonzero exit. Keep gate names synchronized with `docs/reference/architecture-conventions.md`; runtime ordering and cancellation still require the behavioral tests.
+
 | Script | Used by workflow |
 | --- | --- |
 | `archive-appstore.sh` | `release-app-store.yml` |
