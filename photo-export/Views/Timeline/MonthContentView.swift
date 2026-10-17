@@ -70,6 +70,13 @@ struct MonthContentView: View, Equatable {
   }
 
   var body: some View {
+    let exportHelp =
+      exportDestinationManager.canExportNow
+      ? "Export unexported assets for this month" : exportDestinationManager.exportUnavailableHelp
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([exportHelp], for: "month-export-help")
+    #endif
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("selected:\(selectedAsset?.id ?? "")")
@@ -90,11 +97,7 @@ struct MonthContentView: View, Equatable {
         }
         .buttonStyle(.bordered)
         .disabled(!exportDestinationManager.canExportNow)
-        .help(
-          exportDestinationManager.canExportNow
-            ? "Export unexported assets for this month"
-            : "Select a writable export folder first"
-        )
+        .help(exportHelp)
       }
 
       // Grid of thumbnails

@@ -94,7 +94,10 @@ struct LibraryRootView: View {
         // grid its full real estate back.
         contentArea
           .safeAreaInset(edge: .top, spacing: 0) {
-            ExportProgressBar()
+            VStack(spacing: 0) {
+              DestinationStatusBanner()
+              ExportProgressBar()
+            }
           }
       },
       detail: {
