@@ -52,6 +52,11 @@ struct FolderContentView: View {
   @State private var selectionAnchorId: String?
 
   var body: some View {
+    let exportHelp = exportButtonHelp
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([exportHelp], for: "folder-export-help")
+    #endif
     VStack(alignment: .leading, spacing: 12) {
       Text(title)
         .font(.title2)
@@ -66,7 +71,7 @@ struct FolderContentView: View {
         }
         .buttonStyle(.bordered)
         .disabled(!canExport)
-        .help(exportButtonHelp)
+        .help(exportHelp)
       }
 
       contentBody
@@ -254,7 +259,7 @@ struct FolderContentView: View {
 
   private var exportButtonHelp: String {
     if !exportDestinationManager.canExportNow {
-      return "Select a writable export folder first"
+      return exportDestinationManager.exportUnavailableHelp
     }
     if !exportManager.canExportCollection {
       return "Collections store is not ready"

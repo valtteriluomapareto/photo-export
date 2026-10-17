@@ -50,6 +50,11 @@ struct CollectionContentView: View, Equatable {
   }
 
   var body: some View {
+    let exportHelp = exportButtonHelp
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([exportHelp], for: "collection-export-help")
+    #endif
     let placement = currentPlacement
     #if DEBUG
       // Required as a declaration inside the ViewBuilder.
@@ -76,7 +81,7 @@ struct CollectionContentView: View, Equatable {
         }
         .buttonStyle(.bordered)
         .disabled(!canExport)
-        .help(exportButtonHelp)
+        .help(exportHelp)
       }
 
       ScrollView {
@@ -330,7 +335,7 @@ struct CollectionContentView: View, Equatable {
 
   private var exportButtonHelp: String {
     if !exportDestinationManager.canExportNow {
-      return "Select a writable export folder first"
+      return exportDestinationManager.exportUnavailableHelp
     }
     if collectionExportRecordStore.state != .ready {
       return "Collections store is not ready"

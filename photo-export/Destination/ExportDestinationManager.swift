@@ -10,7 +10,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   @Published private(set) var selectedFolderURL: URL?
   @Published private(set) var isAvailable: Bool = false
   @Published private(set) var isWritable: Bool = false
-  @Published private(set) var statusMessage: String?
+  @Published private(set) var status: ExportDestinationStatus = .noSelection
+  var statusMessage: String? { status.statusMessage }
 
   /// The destination's identity — the **stable logical id** plus the volume/path
   /// `DestinationFingerprint` — published as one atomic value. This replaces the former
@@ -179,6 +180,16 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Import only reads the backup folder — it does not require write access.
   var canImportNow: Bool { selectedFolderURL != nil && isAvailable }
 
+  var exportUnavailableHelp: String { status.exportHelp }
+
+  var destinationWarning: String? { canExportNow ? nil : status.warningMessage }
+
+  var destinationHelp: String {
+    let path = selectedFolderURL.map { "Destination: \($0.path)" }
+    if status == .ready, let path { return path + " — click to change" }
+    return [status.exportHelp, path].compactMap { $0 }.joined(separator: "\n")
+  }
+
   // MARK: - Lifecycle
   init(
     skipRestore: Bool = false,
@@ -249,7 +260,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     selectedFolderURL = url
     isAvailable = true
     isWritable = true
-    statusMessage = nil
+    status = .ready
   }
 
   func selectFolder() {
@@ -309,7 +320,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     selectedFolderURL = nil
     isAvailable = false
     isWritable = false
-    statusMessage = "No export folder selected"
+    status = .noSelection
     publishUnavailableIdentity()
     stashedLegacyDestinationId = nil
     // Dropping the selection always drops the stable id — the next selection is a fresh
@@ -493,7 +504,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     selectedFolderURL = url
     isAvailable = true
     isWritable = true
-    statusMessage = nil
+    status = .ready
   }
 
   /// Exercises the production bookmark save path for unit tests as a fresh selection
@@ -533,7 +544,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // next validate/relaunch would reseed the old destination from a possibly-drifted
     // fingerprint and re-key its records.
     guard bookmarkSaver?(url) ?? saveBookmark(for: url) else {
-      statusMessage = "Failed to save access to selected folder"
+      status = .bookmarkSaveFailed
       return
     }
     switch decision {
@@ -720,7 +731,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private func restoreBookmarkIfAvailable() {
     guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else {
-      statusMessage = "No export folder selected"
+      status = .noSelection
       publishUnavailableIdentity()
       return
     }
@@ -752,7 +763,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     } catch {
       logger.error(
         "Failed to restore bookmark: \(String(describing: error), privacy: .public)")
-      statusMessage = "Export folder permission needs to be re-selected"
+      status = .permissionRequired
       selectedFolderURL = nil
       isAvailable = false
       isWritable = false
@@ -787,7 +798,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     guard didStart else {
       isAvailable = false
       isWritable = false
-      statusMessage = "Export folder permission needs to be re-selected"
+      status = .permissionRequired
       publishUnavailableIdentity()
       return
     }
@@ -810,14 +821,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     isAvailable = reachable && isDirectory
     isWritable = isAvailable && writable
 
-    if !isDirectory {
-      statusMessage = "Selected path is not a folder"
-    } else if !reachable {
-      statusMessage = "Export folder is not reachable (drive unplugged?)"
+    if !reachable {
+      status = .unreachable
+    } else if !isDirectory {
+      status = .notDirectory
     } else if !writable {
-      statusMessage = "Export folder is read-only"
+      status = .readOnly
     } else {
-      statusMessage = nil
+      status = .ready
     }
 
     // Publish identity once availability is known. When reachable, seed-or-reuse the stable id

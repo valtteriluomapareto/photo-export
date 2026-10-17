@@ -64,8 +64,9 @@ The full walkthrough — what triggers a run, how retry works, what the status i
 
 ### Troubleshooting
 
-- **"Export folder is not reachable"** — Check that the external drive is plugged in and mounted.
-- **"Export folder is read-only"** — Right-click the folder, choose Get Info, and make sure you have write permission.
+- **"Export folder is unavailable. Reconnect the drive or network share to export."** — Reconnect the selected backup drive or network share. This warning appears in the main window and Export help text, whether Auto Export is on or off; you do not need to choose a different destination.
+- **"Export folder access needs restoring. Reconnect the drive, then choose the same folder if needed."** — Reconnect first. If access still needs renewing, use **Choose Folder…** to reselect the same backup folder. The app also shows this recovery when a stored bookmark cannot be restored.
+- **"Export folder is read-only. Allow write access or choose a writable folder."** — Right-click the folder, choose Get Info, and make sure you have write permission. Import Existing Backup can still read a read-only folder.
 - **Photos permission denied** — Open **System Settings → Privacy & Security → Photos** and enable access for Photo Export.
 - **Export stuck near 100%** — Use **Help → Save Diagnostic Report…** to write a text file listing every photo whose export is in `failed` or `in-progress` state, including the underlying error message. If a previous Auto Export run was interrupted by the operating system (rare, but possible on very large libraries), the report also names which scope was in flight at the time. Attach the file to a [GitHub issue](https://github.com/valtteriluomapareto/photo-export/issues) so the cause is visible.
 - **Unexpected `_orig` files in my backup** — If Photos can't provide the edited version of an asset (`Edited resource unavailable` in the diagnostic report), the app writes the original file with an `_orig` suffix so you still have a backup of the asset. The diagnostic report flags these assets.

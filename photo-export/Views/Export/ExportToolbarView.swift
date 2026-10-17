@@ -4,6 +4,9 @@ struct ExportToolbarView: ToolbarContent {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
 
   /// Drives the primary action button's label and target. Timeline shows
   /// "Export All"; Collections shows "Export All Albums" by default and flips to
@@ -72,6 +75,11 @@ struct ExportToolbarView: ToolbarContent {
   /// path in the tooltip.
   @ViewBuilder
   private var destinationIndicator: some View {
+    let destinationHelp = exportDestinationManager.destinationHelp
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([destinationHelp], for: "destination-help")
+    #endif
     if let url = exportDestinationManager.selectedFolderURL {
       Button {
         exportDestinationManager.selectFolder()
@@ -86,12 +94,16 @@ struct ExportToolbarView: ToolbarContent {
         }
       }
       .buttonStyle(.bordered)
-      .help("Destination: \(url.path) — click to change")
+      .help(destinationHelp)
     } else {
-      Button("Select Export Folder\u{2026}") {
+      Button(
+        exportDestinationManager.status == .permissionRequired
+          ? "Choose Folder…" : "Select Export Folder…"
+      ) {
         exportDestinationManager.selectFolder()
       }
       .buttonStyle(.bordered)
+      .help(destinationHelp)
     }
   }
 
@@ -110,11 +122,15 @@ struct ExportToolbarView: ToolbarContent {
   @State private var isShowingSupersedeConfirm = false
 
   private var primaryActions: some View {
+    let exportHelp = primaryActionHelpText
+    #if DEBUG
+      bodyCounter?.recordText([exportHelp], for: "toolbar-export-help")
+    #endif
     // Internal spacing 12pt rather than 8pt — closer to macOS's default
     // between-button spacing in system toolbars (Mail/Finder/Notes). 8pt
     // packs the pause + cancel glyphs flush against the prominent Export
     // All button; 12pt gives them room to read as separate controls.
-    HStack(alignment: .center, spacing: 12) {
+    return HStack(alignment: .center, spacing: 12) {
       Button(primaryActionLabel) {
         handlePrimaryAction()
       }
@@ -123,7 +139,7 @@ struct ExportToolbarView: ToolbarContent {
       .tint(.accentColor)
       .keyboardShortcut("e", modifiers: .command)
       .disabled(!isPrimaryActionEnabled)
-      .help(primaryActionHelpText)
+      .help(exportHelp)
       .confirmationDialog(
         "Auto Export is running",
         isPresented: $isShowingSupersedeConfirm,
@@ -304,7 +320,7 @@ struct ExportToolbarView: ToolbarContent {
 
   private var primaryActionHelpText: String {
     guard exportDestinationManager.canExportNow else {
-      return "Select a writable export folder first"
+      return exportDestinationManager.exportUnavailableHelp
     }
     let multiCount: Int = {
       switch section {

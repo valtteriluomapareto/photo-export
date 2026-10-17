@@ -14,6 +14,10 @@ struct YearContentView: View {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
   let year: Int
   @Binding var selection: LibrarySelection?
   @Binding var selectedAsset: AssetDescriptor?
@@ -38,6 +42,13 @@ struct YearContentView: View {
   @State private var totalCount: Int?
 
   var body: some View {
+    let exportHelp =
+      exportDestinationManager.canExportNow
+      ? "Export every photo in this year" : exportDestinationManager.exportUnavailableHelp
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([exportHelp], for: "year-export-help")
+    #endif
     VStack(alignment: .leading, spacing: 12) {
       // `.title` (heavier than `MonthContentView`'s `.title2`) leans into Photos.app's
       // pattern of giving Years deck-level prominence: the year is a *container* of
@@ -55,11 +66,7 @@ struct YearContentView: View {
         }
         .buttonStyle(.bordered)
         .disabled(!exportDestinationManager.canExportNow)
-        .help(
-          exportDestinationManager.canExportNow
-            ? "Export every photo in this year"
-            : "Select a writable export folder first"
-        )
+        .help(exportHelp)
       }
 
       monthGrid
