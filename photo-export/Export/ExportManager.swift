@@ -298,6 +298,15 @@ final class ExportManager: ObservableObject {
   }
   private var activeRunBookkeeping: ActiveRunBookkeeping?
 
+  private struct ManualRunFeedback {
+    let generation: Int
+    var completedCount = 0
+    var failedCount = 0
+    var failureSignals = 0
+    var failureMessage: String?
+  }
+  private var manualRunFeedback: ManualRunFeedback?
+
   /// Whether the export queue is active (has pending/in-flight work).
   var hasActiveExportWork: Bool {
     isRunning || queueCount > 0 || isEnqueueingAll
@@ -399,7 +408,10 @@ final class ExportManager: ObservableObject {
   ) -> Task<Void, Never> {
     let id = UUID()
     let task = Task { [weak self] in
-      defer { self?.preparationTasks[id] = nil }
+      defer {
+        self?.preparationTasks[id] = nil
+        self?.finishManualFeedbackIfReady(generation: gen)
+      }
       await operation()
     }
     preparationTasks[id] = (gen, task)
@@ -667,6 +679,7 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
+        noteManualPreparationFailure("Could not scan this month. Try exporting again.")
         logger.error(
           "Failed to enqueue month export: \(String(describing: error), privacy: .public)"
         )
@@ -708,6 +721,7 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
+        noteManualPreparationFailure("Could not scan this year. Try exporting again.")
         logger.error(
           "Failed to enqueue year export: \(String(describing: error), privacy: .public)"
         )
@@ -874,6 +888,7 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
+        noteManualPreparationFailure("Could not scan Favorites. Try exporting again.")
         logger.error(
           "Failed to enqueue favorites export: \(String(describing: error), privacy: .public)"
         )
@@ -1091,6 +1106,8 @@ final class ExportManager: ObservableObject {
         self.logger.error(
           "\(logTag, privacy: .public) failed: \(String(describing: error), privacy: .public)"
         )
+        self.noteManualPreparationFailure(
+          "Some requested photos could not be scanned. Try exporting again.")
         // Partial-failure recovery: if any jobs already landed in the queue,
         // drain them and surface a warning + flag the run as `partialBulkScan`
         // so AutoSync's dirty-flag bookkeeping survives the partial scan.
@@ -1306,6 +1323,7 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
+        noteManualPreparationFailure("Could not scan this shared album. Try exporting again.")
         logger.error(
           "Failed to enqueue shared-album export: \(String(describing: error), privacy: .public)"
         )
@@ -1353,6 +1371,7 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
+        noteManualPreparationFailure("Could not scan this album. Try exporting again.")
         logger.error(
           "Failed to enqueue album export: \(String(describing: error), privacy: .public)"
         )
@@ -1375,7 +1394,10 @@ final class ExportManager: ObservableObject {
     generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else { return .unauthorized }
+    guard photoLibraryService.isAuthorized else {
+      noteManualPreparationFailure("Photos access is required to scan this selection.")
+      return .unauthorized
+    }
 
     // Resolve the placement. For `.album` and `.sharedAlbum`, the resolver needs the
     // collection tree to find the descriptor and any colliding siblings; for
@@ -1481,6 +1503,8 @@ final class ExportManager: ObservableObject {
     currentJobAssetId = nil
     currentJobVariant = nil
     currentJobPlacement = nil
+    manualRunFeedback = nil
+    progressState.manualSummary = nil
     queueCoordinator.bumpGeneration()
     preparationTasks.removeAll()
     queueCoordinator.teardownQueue()
@@ -1548,7 +1572,10 @@ final class ExportManager: ObservableObject {
   }
 
   func clearPending() {
-    _ = queueCoordinator.clearPending()
+    if queueCoordinator.clearPending() > 0 {
+      noteManualPreparationFailure("Pending exports were cleared before they finished.")
+      finishManualFeedbackIfReady(generation: generation)
+    }
   }
 
   // MARK: - Queue Handling
@@ -1564,7 +1591,10 @@ final class ExportManager: ObservableObject {
     livePhotosPaired: Bool, videoLayout: ExportVideoLayout, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else { return .unauthorized }
+    guard photoLibraryService.isAuthorized else {
+      noteManualPreparationFailure("Photos access is required to scan this selection.")
+      return .unauthorized
+    }
     let placement = ExportPlacement.timeline(year: year, month: month)
     var skippedCount = 0
     let newJobs = try await planAssetsProgressively(
@@ -1596,7 +1626,10 @@ final class ExportManager: ObservableObject {
     livePhotosPaired: Bool, videoLayout: ExportVideoLayout, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else { return .unauthorized }
+    guard photoLibraryService.isAuthorized else {
+      noteManualPreparationFailure("Photos access is required to scan this selection.")
+      return .unauthorized
+    }
     var skippedCount = 0
     let newJobs = try await planAssetsProgressively(
       in: .timeline(year: year, month: nil), generation: gen
@@ -1787,8 +1820,32 @@ final class ExportManager: ObservableObject {
   }
 
   private func resetProgressCounters() {
+    progressState.manualSummary = nil
+    if activeRunContext?.source == .autoSync {
+      manualRunFeedback = nil
+    } else if manualRunFeedback?.generation != generation || currentPreparationTasks.isEmpty {
+      // A temporarily empty queue can still have another accepted scan outstanding.
+      // Keep feedback totals across those scans without changing legacy counters.
+      manualRunFeedback = ManualRunFeedback(generation: generation)
+    }
     queueCoordinator.resetProgressCounters()
     progressState.currentAssetFilename = nil
+  }
+
+  private func noteManualPreparationFailure(_ message: String) {
+    guard manualRunFeedback?.generation == generation else { return }
+    if manualRunFeedback?.failureMessage == nil { manualRunFeedback?.failureMessage = message }
+  }
+
+  private func finishManualFeedbackIfReady(generation gen: Int) {
+    guard isCurrent(gen), !hasActiveExportWork, currentPreparationTasks.isEmpty,
+      let feedback = manualRunFeedback, feedback.generation == gen
+    else { return }
+    manualRunFeedback = nil
+    guard feedback.completedCount > 0 || feedback.failureMessage != nil else { return }
+    progressState.manualSummary = ManualExportSummary(
+      completedCount: feedback.completedCount, failedCount: feedback.failedCount,
+      failureMessage: feedback.failureMessage)
   }
 
   // MARK: - Export Logic
@@ -2280,6 +2337,7 @@ final class ExportManager: ObservableObject {
   /// existing `export(job:gen:)` body so the coordinator's drain loop doesn't need to
   /// know about it.
   func performExport(job: ExportJob, generation gen: Int) async {
+    let failureSignalsBefore = manualRunFeedback?.failureSignals ?? 0
     do {
       await variantExporter.waitForFinalCommit(onWait: finalCommitWaitObserver)
       try throwIfCancelledOrStale(gen)
@@ -2288,13 +2346,28 @@ final class ExportManager: ObservableObject {
       await export(job: job, generation: gen)
       guard isCurrent(gen) else { return }
       try await recordStoreRouter.flush(placement: job.placement)
+      guard isCurrent(gen), manualRunFeedback?.generation == gen else { return }
+      manualRunFeedback?.completedCount += 1
+      if (manualRunFeedback?.failureSignals ?? 0) > failureSignalsBefore {
+        manualRunFeedback?.failedCount += 1
+      }
     } catch {
       guard isCurrent(gen) else { return }
       logger.error(
         "Stopping export because progress could not be saved: \(error.localizedDescription, privacy: .public)"
       )
+      // Preserve feedback before teardown clears counters and ownership. This
+      // synchronous publication cannot be overtaken by a replacement generation.
+      let stopped = manualRunFeedback.map {
+        ManualExportSummary(
+          completedCount: $0.completedCount + 1, failedCount: $0.failedCount + 1,
+          failureMessage:
+            "Export stopped because progress could not be saved. Resolve the export history alert before retrying."
+        )
+      }
       // Preserve final-file records retained by the store for non-destructive Retry.
       teardownActiveWork()
+      progressState.manualSummary = stopped
       finalizeActiveRun(result: .failed, cancelReason: nil)
     }
   }
@@ -2304,6 +2377,7 @@ final class ExportManager: ObservableObject {
   func didDrainQueue() {
     logger.info("Export queue drained")
     finalizeActiveRun(result: .completed, cancelReason: nil)
+    finishManualFeedbackIfReady(generation: generation)
   }
 
   /// Set placement BEFORE assetId per the plan's ordering rule — any cancellation
@@ -2380,6 +2454,7 @@ final class ExportManager: ObservableObject {
     recordStoreRouter.markVariantFailed(
       assetId: assetId, placement: placement, variant: variant,
       error: failure.localizedDescription, reason: reason, at: date)
+    if manualRunFeedback?.generation == generation { manualRunFeedback?.failureSignals += 1 }
     activeRunBookkeeping?.failedCount += 1
     activeRunBookkeeping?.failures.append(
       ExportRunFailureDetail(

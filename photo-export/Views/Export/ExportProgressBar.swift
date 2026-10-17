@@ -23,9 +23,45 @@ struct ExportProgressBar: View {
   /// year/month grids, etc.). See `ExportProgressState` for the rationale.
   @EnvironmentObject private var progressState: ExportProgressState
 
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var counter
+  #endif
+  @Environment(\.openSettings) private var openSettings
+  @AppStorage(SettingsTab.storageKey) private var selectedSettingsTab: SettingsTab = .autoExport
+  private let successDelay: @Sendable () async throws -> Void
+  private let settingsOpener: (@MainActor () -> Void)?
+
+  init(
+    successDelay: @escaping @Sendable () async throws -> Void = {
+      try await Task.sleep(for: .seconds(5))
+    },
+    settingsOpener: (@MainActor () -> Void)? = nil
+  ) {
+    self.successDelay = successDelay
+    self.settingsOpener = settingsOpener
+  }
+
+  private func observed(_ message: String) -> String {
+    #if DEBUG
+      counter?.recordText([message], for: "progress-message")
+    #endif
+    return message
+  }
+
+  private var isVisible: Bool {
+    if let summary = progressState.manualSummary { return !summary.isDismissed }
+    return progressState.totalJobsEnqueued > 0 || progressState.emptyRunMessage != nil
+  }
+
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = recordVisibility()
+    #endif
     Group {
-      if progressState.totalJobsEnqueued > 0 {
+      if let summary = progressState.manualSummary {
+        if !summary.isDismissed { terminalSummary(summary) }
+      } else if progressState.totalJobsEnqueued > 0 {
         VStack(alignment: .leading, spacing: 0) {
           if let warning = progressState.queueWarningMessage {
             queueWarningBanner(message: warning)
@@ -39,6 +75,66 @@ struct ExportProgressBar: View {
     .animation(.default, value: progressState.totalJobsEnqueued > 0)
     .animation(.default, value: progressState.emptyRunMessage)
     .animation(.default, value: progressState.queueWarningMessage)
+    .task(id: progressState.manualSummary?.id) {
+      guard let summary = progressState.manualSummary,
+        !summary.isDismissed, summary.result == .completed
+      else { return }
+      do { try await successDelay() } catch { return }
+      #if DEBUG
+        counter?.record("progress-expiry-finished:\(summary.id)")
+      #endif
+      guard !Task.isCancelled, progressState.manualSummary?.id == summary.id else { return }
+      progressState.manualSummary?.isDismissed = true
+    }
+  }
+
+  #if DEBUG
+    private func recordVisibility() {
+      counter?.recordText([String(isVisible)], for: "progress-visible")
+      if !isVisible { counter?.recordText([], for: "progress-message") }
+    }
+  #endif
+
+  private func terminalSummary(_ summary: ManualExportSummary) -> some View {
+    let dismiss = {
+      guard progressState.manualSummary?.id == summary.id else { return }
+      progressState.manualSummary?.isDismissed = true
+    }
+    let showIssues = {
+      guard progressState.manualSummary?.id == summary.id,
+        progressState.manualSummary?.isDismissed == false
+      else { return }
+      selectedSettingsTab = .exportIssues
+      if let settingsOpener { settingsOpener() } else { openSettings() }
+    }
+    #if DEBUG
+      counter?.recordAction("progress-dismiss", action: dismiss)
+      counter?.recordAction("progress-view-issues", action: showIssues)
+    #endif
+    return VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 8) {
+        Image(
+          systemName: summary.result == .completed
+            ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+        )
+        .foregroundStyle(summary.result == .completed ? Color.green : .orange)
+        Text(observed(summary.message))
+        Spacer(minLength: 0)
+        if summary.result == .failed { Button("View Issues", action: showIssues) }
+        Button("Dismiss", systemImage: "xmark", action: dismiss)
+          .labelStyle(.iconOnly)
+          .help("Dismiss export summary")
+      }
+      if let message = summary.failureMessage {
+        Text(message).foregroundStyle(.secondary)
+      }
+    }
+    .font(.caption)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 6)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.bar)
+    .overlay(alignment: .bottom) { Divider() }
   }
 
   /// Persistent warning rendered above the progress strip when an enqueue partially
@@ -49,7 +145,7 @@ struct ExportProgressBar: View {
       Image(systemName: "exclamationmark.triangle.fill")
         .foregroundColor(.orange)
         .font(.caption)
-      Text(message)
+      Text(observed(message))
         .font(.caption)
         .foregroundColor(.secondary)
         .lineLimit(2)
@@ -79,7 +175,7 @@ struct ExportProgressBar: View {
         .frame(maxWidth: 240)
         .layoutPriority(2)
 
-      Text("\(done)/\(total) assets")
+      Text(observed("\(done)/\(total) assets"))
         .font(.caption)
         .monospacedDigit()
         .fixedSize()
@@ -167,7 +263,7 @@ struct ExportProgressBar: View {
       Image(systemName: "checkmark.circle.fill")
         .foregroundColor(.green)
         .font(.caption)
-      Text(message)
+      Text(observed(message))
         .font(.caption)
         .foregroundColor(.secondary)
         .lineLimit(1)
