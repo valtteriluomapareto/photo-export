@@ -90,6 +90,8 @@ If you reinstall the app, switch builds, or restore your data on a new Mac, **Fi
 
 Import preserves any completed history already tracked in another month, skipping conflicting matches. The matched count reports files matched to Photos, including those already tracked; it is not a count of newly adopted records. If reconciliation removes an old record whose file is missing, run import again to adopt a matching file in another month.
 
+If timeline history is corrupt, choose **Reset and Rebuild from Folder…** in its recovery alert to reset tracking and immediately run Import Existing Backup. **Reset Records** alone leaves tracking empty; exporting before rebuilding can create duplicate copies. Rebuilding requires Photos access, a connected readable destination, and no export or import already running. If both history stores need recovery, reset timeline history, resolve the collection alert, then choose **File → Import Existing Backup…**. Favorites and album history [cannot yet be rebuilt from disk](https://github.com/valtteriluomapareto/photo-export/issues/106); resetting it and re-exporting can create duplicate collection copies.
+
 If an import fails, the sheet stops showing progress and explains the error. **Close** lets you reconnect the drive or reselect the export folder; **Retry** becomes available when the folder and export history are ready. Read-only backup folders remain valid for importing. If either history store reports a storage or corruption problem, close the import sheet and resolve the export-history alert before retrying. Cancelling or invalidating an old import cannot replace a newer import’s result or error.
 
 ## If an export gets stuck
