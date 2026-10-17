@@ -23,6 +23,7 @@ import Foundation
 /// `ExportManager` keeps read-only computed forwarders.
 @MainActor
 final class ExportProgressState: ObservableObject {
+  @Published var manualSummary: ManualExportSummary?
   @Published var totalJobsEnqueued: Int = 0
   @Published var totalJobsCompleted: Int = 0
   @Published var currentAssetFilename: String?

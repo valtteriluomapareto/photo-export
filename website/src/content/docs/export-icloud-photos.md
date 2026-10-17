@@ -84,6 +84,8 @@ remain fast.
 
 If the export is interrupted — you unplug the drive, close the app, or your Mac goes to sleep — you can resume and the app will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again, but no data is lost.
 
+After a manual export finishes, the progress strip briefly shows **Export complete** on success. If any asset job fails, it instead shows **N exported · M failed** with **View Issues**, which opens **Settings → Export Issues**. A job that fails on several photo/video versions counts once; successfully exported versions remain tracked. Failed scans, cleared pending work and export-history save errors show an incomplete or stopped explanation. Failure feedback stays until you dismiss it or start another run. Dismissal and success expiry hide the finished strip without changing export history. Explicit cancellation clears the feedback; an unavailable destination remains explained above the strip.
+
 ## Rebuilding state from an existing backup
 
 If you reinstall the app, switch builds, or restore your data on a new Mac, **File → Import Existing Backup…** rebuilds local export state from disk. It scans the destination, matches files to your Photos library, and adopts what's already there as exported. As part of the same step, it **prunes records for files that are no longer on disk** — for example if you deleted a folder, recreated it empty under the same name, or removed individual exports. Matched files retain their actual year/month folder, even when a timezone change or a Photos date adjustment places the asset in an adjacent month. The next export skips the imported asset instead of creating another copy in its current Photos month.

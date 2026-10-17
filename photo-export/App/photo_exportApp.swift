@@ -336,24 +336,17 @@ struct PhotoExportApp: App {
     }
 
     Settings {
-      TabView {
-        AutoExportSettingsView()
-          .tabItem { Label("Auto Export", systemImage: "arrow.triangle.2.circlepath") }
-        ExportIssuesView()
-          .tabItem { Label("Export Issues", systemImage: "exclamationmark.triangle") }
-        AdvancedSettingsView()
-          .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
-      }
-      .environmentObject(autoSyncManager)
-      .environmentObject(autoSyncScopeStore)
-      .environmentObject(exportDestinationManager)
-      .environmentObject(exportManager)
-      .environmentObject(exportRecordStore)
-      .environmentObject(collectionExportRecordStore)
-      .environmentObject(lifecycleCoordinator)
-      .environmentObject(loginItemController)
-      .environmentObject(destinationSafetyMonitor)
-      .environmentObject(autoSyncPhotoChangeAdapter)
+      SettingsRootView()
+        .environmentObject(autoSyncManager)
+        .environmentObject(autoSyncScopeStore)
+        .environmentObject(exportDestinationManager)
+        .environmentObject(exportManager)
+        .environmentObject(exportRecordStore)
+        .environmentObject(collectionExportRecordStore)
+        .environmentObject(lifecycleCoordinator)
+        .environmentObject(loginItemController)
+        .environmentObject(destinationSafetyMonitor)
+        .environmentObject(autoSyncPhotoChangeAdapter)
     }
     .windowResizability(.contentMinSize)
   }

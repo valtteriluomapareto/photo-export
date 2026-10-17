@@ -357,6 +357,24 @@ func startExportX(...) {
 
 Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`, plus the shared `enqueueBulkAlbumExport` driver behind `startExportAllAlbums` / `startExportAllSharedAlbums` / `startExportFolder` / `startExportAlbums`) follow the same shape but loop over multiple `enqueueX(...)` calls and set `isEnqueueingAll = true` for the duration. The four outer-Task scaffoldings share a private helper, `runBulkExportTask(...)`, which owns the `Task { [weak self] in }` wrapping, the `isEnqueueingAll = false` teardown only for the owning generation, the success finalize, and the partial-failure recovery on throw. The inner per-item loop shares `runBulkEnqueueLoop(...)` so multi-bucket dispatchers (years + months for timeline; favorites + albums + shared for collections) can chain passes while accumulating into a single `BulkExportTotals`.
 
+## Manual export feedback
+
+Manual terminal feedback lives on `ExportProgressState.manualSummary`, not on the
+AutoSync run publications. Legacy actions keep their nil `activeRunContext` and do not
+emit new `completedRunsPublisher` values. Capture manual ownership before run-context
+finalization, and wait for all current-generation preparation handles as well as queue
+drain before publishing the outcome. A temporarily empty queue can still have a month
+or album scan outstanding. Private feedback totals survive that interval independently
+of the legacy queue counters.
+
+Manual failure counts are placement jobs: compare failure signals around each serialized,
+owned export and credit the job only after its post-export persistence flush. Multiple
+variant failures count once there; `ExportRunSummary.failedCount` retains its existing
+per-variant meaning. Latch scan/authorization/cleared-work reasons across appended actions.
+Persistence teardown snapshots a stopped outcome before clearing ownership. Cancellation,
+supersession and destination interruption clear feedback. Dismissal and success expiry
+retire the terminal row without resetting coordinator counters or revealing old N/N UI.
+
 ## Destination identity
 
 Every per-destination store — both record stores (`ExportRecords/<id>/`), the AutoSync state
