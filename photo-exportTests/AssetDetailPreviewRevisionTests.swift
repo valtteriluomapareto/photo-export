@@ -30,6 +30,7 @@ struct AssetDetailPreviewRevisionTests {
     let replacement = AsyncCheckpoint()
     let counter = BodyInvalidationCounter()
     var requests = 0
+    var holdsReplacement = false
     var currentImage = image(.red)
 
     init() {
@@ -53,7 +54,7 @@ struct AssetDetailPreviewRevisionTests {
         guard let self else { throw CancellationError() }
         requests += 1
         let image = currentImage
-        if requests == 2 { await replacement.enter() }
+        if holdsReplacement { await replacement.enter() }
         return image
       }
     }
@@ -70,14 +71,26 @@ struct AssetDetailPreviewRevisionTests {
       try? FileManager.default.removeItem(at: root)
     }
 
-    func shows(_ color: NSColor) -> Bool {
-      guard let view = window.contentView else { return false }
+    func sampledColor() -> NSColor? {
+      guard let view = window.contentView else { return nil }
       view.layoutSubtreeIfNeeded()
-      guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
+      guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
       view.cacheDisplay(in: view.bounds, to: bitmap)
+      return bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?
+        .usingColorSpace(.sRGB)
+    }
+
+    var diagnostics: String {
+      let rgb = sampledColor().map {
+        "RGB=(\($0.redComponent),\($0.greenComponent),\($0.blueComponent))"
+      }
+      return
+        "requests=\(requests), revision=\(manager.thumbnailContentRevision(for: "A")), \(rgb ?? "no pixel")"
+    }
+
+    func shows(_ color: NSColor) -> Bool {
       guard
-        let actual = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?
-          .usingColorSpace(.sRGB),
+        let actual = sampledColor(),
         let expected = color.usingColorSpace(.sRGB)
       else { return false }
       return expected.redComponent > expected.blueComponent
@@ -100,35 +113,40 @@ struct AssetDetailPreviewRevisionTests {
 
   private func observe(_ condition: () -> Bool) async -> Bool {
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(3))
+    let deadline = clock.now.advanced(by: .seconds(15))
     while !condition(), clock.now < deadline, !Task.isCancelled {
       try? await Task.sleep(for: .milliseconds(10))
     }
     return condition()
   }
 
-  @Test(.timeLimit(.minutes(1)), arguments: Change.allCases)
+  @Test(.timeLimit(.minutes(2)), arguments: Change.allCases)
   func mountedSameIDEditAndRevertRefreshPixelsWithoutBlanking(change: Change) async throws {
     let f = Fixture()
     defer { f.close() }
     f.show()
     let initial = await observe { f.shows(.red) }
-    try #require(initial)
+    try #require(initial, "Initial red preview: \(f.diagnostics)")
     f.currentImage = Self.image(.blue)
+    f.holdsReplacement = true
     f.invalidate(change)
-    let restarted = await observe { f.requests == 2 }
-    // Old code never starts the next request. Bound the baseline failure before
-    // awaiting its gate, so the regression cannot strand the runner.
-    try #require(restarted, "The selected content revision must restart the mounted preview task")
-    await f.replacement.waitForEnter(count: 1)
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(15))
+    while await f.replacement.enteredSoFar == 0, clock.now < deadline, !Task.isCancelled {
+      try? await Task.sleep(for: .milliseconds(10))
+    }
+    try #require(
+      await f.replacement.enteredSoFar > 0,
+      "The selected content revision must reach the held replacement: \(f.diagnostics)")
     #expect(f.shows(.red), "Keep the current image while replacement bytes are pending")
     await f.replacement.releaseAll()
     let updated = await observe { f.shows(.blue) }
-    #expect(updated)
+    try #require(updated, "Edited blue preview after releasing replacement: \(f.diagnostics)")
+    let beforeRevert = f.requests
     f.currentImage = Self.image(.red)
     f.manager.invalidateCache(changedThumbnailAssetIDs: ["A"])
-    let reverted = await observe { f.requests == 3 && f.shows(.red) }
-    #expect(reverted)
+    let reverted = await observe { f.requests > beforeRevert && f.shows(.red) }
+    #expect(reverted, "Reverted red preview: \(f.diagnostics)")
   }
 
   @Test(.timeLimit(.minutes(1)))

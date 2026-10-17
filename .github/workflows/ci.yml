@@ -145,20 +145,18 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tail -200
+            build 2>&1 | tee debug-build.log | tail -200
           echo "Debug build succeeded."
           echo "::endgroup::"
 
       - name: Run Unit Tests (Debug, with coverage)
         id: unit-tests
+        timeout-minutes: 15
         run: |
           echo "::group::Unit tests"
           echo "Running unit tests with code coverage enabled..."
           set -o pipefail
-          # Keep enough trailing output that any `#expect` failure messages
-          # survive in the log alongside the `Failing tests:` summary. The
-          # previous `tail -30` only kept the summary, forcing a download of
-          # the 89 MB xcresult bundle to find out *why* a test failed.
+          # Retain full output; the failure step prints reasons outside this tail.
           xcodebuild \
             -project photo-export.xcodeproj \
             -scheme "photo-export" \
@@ -166,7 +164,7 @@ jobs:
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            test 2>&1 | tail -300
+            test 2>&1 | tee test.log | tail -300
           echo "Unit tests passed."
           echo "Result bundle: $(du -sh TestResults.xcresult)"
           echo "::endgroup::"
@@ -182,13 +180,6 @@ jobs:
           --source-root "$GITHUB_WORKSPACE/photo-export"
           --test-outcome "$TEST_OUTCOME"
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: TestResults
-          path: TestResults.xcresult
-
       - name: Build Release
         run: |
           echo "::group::Release build"
@@ -200,9 +191,72 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tail -20
+            build 2>&1 | tee release-build.log | tail -20
           echo "Release build succeeded."
           echo "::endgroup::"
+
+      # Temporary #237 CI evidence. Removed before the merge candidate.
+      - name: Prove 30 consecutive preview iterations
+        if: always()
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          mkdir -p preview-stress
+          for iteration in {1..30}; do
+            echo "PREVIEW_STRESS_START=$iteration"
+            xcodebuild \
+              -project photo-export.xcodeproj \
+              -scheme "photo-export" \
+              -destination 'platform=macOS' \
+              '-only-testing:photo-exportTests/AssetDetailPreviewRevisionTests/mountedSameIDEditAndRevertRefreshPixelsWithoutBlanking(change:)' \
+              CODE_SIGNING_ALLOWED=NO \
+              -resultBundlePath "preview-stress/$iteration.xcresult" \
+              test-without-building 2>&1 | tee "preview-stress/$iteration.log" | tail -35
+            xcrun xcresulttool get test-results tests --path "preview-stress/$iteration.xcresult" > "preview-stress/$iteration.json"
+            python3 - "$iteration" <<'PYTHON'
+          import json, pathlib, sys
+          iteration = sys.argv[1]
+          data = json.loads(pathlib.Path(f"preview-stress/{iteration}.json").read_text())
+          def walk(node):
+              if isinstance(node, dict):
+                  yield node
+                  for value in node.values():
+                      yield from walk(value)
+              elif isinstance(node, list):
+                  for value in node:
+                      yield from walk(value)
+          selected = [n for n in walk(data) if n.get("nodeType") == "Test Case" and
+                      n.get("nodeIdentifier") == "AssetDetailPreviewRevisionTests/mountedSameIDEditAndRevertRefreshPixelsWithoutBlanking(change:)"]
+          assert len(selected) == 1 and selected[0].get("result") == "Passed", selected
+          arguments = [n for n in walk(selected[0]) if n.get("nodeType") == "Arguments"]
+          assert len(arguments) == 4 and {n["name"] for n in arguments} == {".known", ".unknown", ".overflow", ".coalesced"}, arguments
+          assert all(n.get("result") == "Passed" for n in arguments), arguments
+          PYTHON
+            echo "PREVIEW_STRESS_PASSED=$iteration CASES=4"
+          done
+
+      - name: Print build and test failure diagnostics
+        if: failure()
+        run: |
+          for log in debug-build.log test.log release-build.log; do
+            if [[ -f "$log" ]]; then
+              echo "::group::Failure diagnostics: $log"
+              grep -nE '✘|↳|recorded an issue|Expectation failed|error:' "$log" || true
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: TestResults
+          path: |
+            TestResults.xcresult
+            debug-build.log
+            test.log
+            release-build.log
+            preview-stress
 
   # Preserve the existing check name even when its expensive validator is skipped.
   website:
