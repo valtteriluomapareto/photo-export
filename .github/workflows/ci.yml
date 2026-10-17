@@ -152,6 +152,8 @@ jobs:
       - name: Run Unit Tests (Debug, with coverage)
         id: unit-tests
         timeout-minutes: 15
+        env:
+          TEST_RUNNER_REQUIRE_SCOPE_TESTS: "1"
         run: |
           echo "::group::Unit tests"
           echo "Running unit tests with code coverage enabled..."
