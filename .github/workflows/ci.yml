@@ -145,9 +145,16 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tail -200
+            build 2>&1 | tee debug-build.log | tail -200
           echo "Debug build succeeded."
           echo "::endgroup::"
+
+      - name: Diagnose Debug build failure
+        if: failure()
+        run: |
+          if [ -f debug-build.log ]; then
+            rg -n -C 3 "error:|BUILD FAILED" debug-build.log || true
+          fi
 
       - name: Run Unit Tests (Debug, with coverage)
         id: unit-tests
