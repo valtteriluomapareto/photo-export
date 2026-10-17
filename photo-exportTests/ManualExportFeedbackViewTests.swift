@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import Testing
 
@@ -8,6 +9,14 @@ import Testing
   @MainActor
   @Suite(.serialized)
   struct ManualExportFeedbackViewTests {
+    @MainActor
+    private final class LoginService: LoginItemService {
+      var status: LoginItemController.Status { .notRegistered }
+      func register() throws {}
+      func unregister() throws {}
+      func openSystemLoginItems() {}
+    }
+
     @MainActor
     private final class Fixture {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -19,6 +28,13 @@ import Testing
       let destination = FakeExportDestination()
       let destinationManager: ExportDestinationManager
       let autoSync = AutoSyncManager()
+      let lifecycle = AppLifecycleCoordinator(
+        cancelActiveWork: {}, interruptForDestinationUnavailable: {},
+        configureRecordStores: { _ in .success })
+      let scopeStore: UserDefaultsAutoExportScopeStore
+      let loginItem = LoginItemController(service: LoginService())
+      let safetyMonitor: DestinationSafetyMonitor
+      let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
       let counter = BodyInvalidationCounter()
       var window: NSWindow?
       var settingsWindow: NSWindow?
@@ -38,6 +54,15 @@ import Testing
           userDefaults: defaults)
         destinationManager = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
         destinationManager.configureForScreenshotMode()
+        scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: defaults)
+        safetyMonitor = DestinationSafetyMonitor(
+          identityPublisher: destinationManager.$identity.eraseToAnyPublisher(),
+          exportRecordStore: timeline, collectionExportRecordStore: collections,
+          confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { false })
+        photoChangeAdapter = PhotoLibraryPersistentChangeAdapter(
+          tokenStore: GlobalPhotoChangeTokenStore(
+            fileURL: root.appendingPathComponent("token.data")),
+          clock: TestClock())
         manager.progressState.totalJobsEnqueued = 3
         manager.progressState.totalJobsCompleted = 3
       }
@@ -69,7 +94,10 @@ import Testing
               destinationManager
             )
             .environmentObject(timeline).environmentObject(collections)
-            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
+            .environmentObject(lifecycle).environmentObject(scopeStore).environmentObject(loginItem)
+            .environmentObject(safetyMonitor).environmentObject(photoChangeAdapter)
+            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
+            .onAppear { [counter] in counter.record("settings-root-visible") })
         let owned = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 620),
           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -80,6 +108,7 @@ import Testing
       }
 
       func close() {
+        photoChangeAdapter.stop()
         window?.contentView = nil
         window?.close()
         settingsWindow?.contentView = nil
@@ -110,7 +139,10 @@ import Testing
       return await gate.enteredSoFar > 0
     }
 
-    @Test func failureShowsOutcomeAndSelectsIssuesBeforeOpeningSettings() async throws {
+    @Test(arguments: [false, true])
+    func failureShowsOutcomeAndSelectsIssuesBeforeOpeningSettings(settingsAlreadyOpen: Bool)
+      async throws
+    {
       let f = Fixture()
       defer { f.close() }
       f.manager.progressState.manualSummary = ManualExportSummary(
@@ -120,9 +152,15 @@ import Testing
       try #require(rendered)
       #expect(f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"])
       let issues = try #require(f.counter.renderedActions["progress-view-issues"])
+      if settingsAlreadyOpen {
+        f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
+        f.showSettings()
+        let mounted = await observe { f.counter.count(for: "settings-root-visible") > 0 }
+        try #require(mounted)
+      }
       issues()
       #expect(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
-      f.showSettings()
+      if !settingsAlreadyOpen { f.showSettings() }
       let issuesShown = await observe {
         f.counter.renderedText["settings-visible-tab"] == ["Export Issues"]
       }
