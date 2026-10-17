@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Presents one recovery alert at a time. IO failures offer non-destructive Retry;
 /// only a corrupt snapshot offers Reset Records. Timeline takes presentation priority.
+@MainActor
 struct RecordStoreAlertHost: ViewModifier {
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
@@ -119,6 +120,7 @@ struct RecordStoreAlertHost: ViewModifier {
 extension View {
   /// Attaches the record-store corruption-recovery alert host. See
   /// `RecordStoreAlertHost` for behavior.
+  @MainActor
   func recordStoreAlertHost() -> some View {
     modifier(RecordStoreAlertHost())
   }
