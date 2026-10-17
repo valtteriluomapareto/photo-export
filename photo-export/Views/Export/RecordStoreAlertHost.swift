@@ -13,6 +13,34 @@ struct RecordStoreAlertHost: ViewModifier {
   @State private var isShowingRecoveryImport = false
 
   func body(content: Content) -> some View {
+    timelineAlert(content: content)
+      .alert(
+        "Photo Export couldn't access collections progress",
+        isPresented: collectionAlertBinding,
+        actions: {
+          if collectionExportRecordStore.state == .persistenceFailed {
+            Button("Retry") { collectionExportRecordStore.retryPersistence() }
+          } else {
+            Button("Reset Records", role: .destructive) {
+              collectionExportRecordStore.resetToEmpty()
+            }
+          }
+          Button("Quit") { NSApplication.shared.terminate(nil) }
+        },
+        message: {
+          if collectionExportRecordStore.state == .persistenceFailed {
+            Text(storageFailureMessage(collectionExportRecordStore.persistenceError))
+          } else {
+            Text(collectionResetMessage)
+          }
+        }
+      )
+      .sheet(isPresented: $isShowingRecoveryImport) {
+        ImportView()
+      }
+  }
+
+  private func timelineAlert(content: Content) -> some View {
     content
       .alert(
         "Photo Export couldn't access timeline progress",
@@ -31,46 +59,32 @@ struct RecordStoreAlertHost: ViewModifier {
           if exportRecordStore.state == .persistenceFailed {
             Text(storageFailureMessage(exportRecordStore.persistenceError))
           } else {
-            Text(
-              "Your exported photos on disk are safe — only the in-app progress tracking "
-                + "for timeline (year/month) exports is affected. Reset Records moves the "
-                + "broken file aside and leaves tracking empty. Exporting before rebuilding "
-                + "can create duplicate copies. Reset and Rebuild from Folder uses Import "
-                + "Existing Backup to recognize files already in your export folder. "
-                + "If rebuilding is unavailable, restore folder and Photos access and resolve "
-                + "any collection history alert, then use File → Import Existing Backup….")
+            Text(timelineResetMessage)
           }
         }
       )
-      .alert(
-        "Photo Export couldn't access collections progress",
-        isPresented: collectionAlertBinding,
-        actions: {
-          if collectionExportRecordStore.state == .persistenceFailed {
-            Button("Retry") { collectionExportRecordStore.retryPersistence() }
-          } else {
-            Button("Reset Records", role: .destructive) {
-              collectionExportRecordStore.resetToEmpty()
-            }
-          }
-          Button("Quit") { NSApplication.shared.terminate(nil) }
-        },
-        message: {
-          if collectionExportRecordStore.state == .persistenceFailed {
-            Text(storageFailureMessage(collectionExportRecordStore.persistenceError))
-          } else {
-            Text(
-              "Your exported photos on disk are safe — only the in-app progress tracking "
-                + "for Favorites and album exports is affected. Reset Records moves the "
-                + "broken file aside and leaves tracking empty. Collection records cannot "
-                + "be rebuilt from disk yet; re-exporting can create duplicate copies. "
-                + "Import Existing Backup rebuilds timeline history only.")
-          }
-        }
-      )
-      .sheet(isPresented: $isShowingRecoveryImport) {
-        ImportView()
-      }
+  }
+
+  private var timelineResetMessage: String {
+    """
+    Your exported photos on disk are safe — only the in-app progress tracking \
+    for timeline (year/month) exports is affected. Reset Records moves the \
+    broken file aside and leaves tracking empty. Exporting before rebuilding \
+    can create duplicate copies. Reset and Rebuild from Folder uses Import \
+    Existing Backup to recognize files already in your export folder. \
+    If rebuilding is unavailable, restore folder and Photos access and resolve \
+    any collection history alert, then use File → Import Existing Backup….
+    """
+  }
+
+  private var collectionResetMessage: String {
+    """
+    Your exported photos on disk are safe — only the in-app progress tracking \
+    for Favorites and album exports is affected. Reset Records moves the \
+    broken file aside and leaves tracking empty. Collection records cannot \
+    be rebuilt from disk yet; re-exporting can create duplicate copies. \
+    Import Existing Backup rebuilds timeline history only.
+    """
   }
 
   private var canRebuild: Bool {
