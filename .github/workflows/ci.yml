@@ -145,20 +145,18 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tail -200
+            build 2>&1 | tee debug-build.log | tail -200
           echo "Debug build succeeded."
           echo "::endgroup::"
 
       - name: Run Unit Tests (Debug, with coverage)
         id: unit-tests
+        timeout-minutes: 15
         run: |
           echo "::group::Unit tests"
           echo "Running unit tests with code coverage enabled..."
           set -o pipefail
-          # Keep enough trailing output that any `#expect` failure messages
-          # survive in the log alongside the `Failing tests:` summary. The
-          # previous `tail -30` only kept the summary, forcing a download of
-          # the 89 MB xcresult bundle to find out *why* a test failed.
+          # Retain full output; the failure step prints reasons outside this tail.
           xcodebuild \
             -project photo-export.xcodeproj \
             -scheme "photo-export" \
@@ -166,7 +164,7 @@ jobs:
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            test 2>&1 | tail -300
+            test 2>&1 | tee test.log | tail -300
           echo "Unit tests passed."
           echo "Result bundle: $(du -sh TestResults.xcresult)"
           echo "::endgroup::"
@@ -182,13 +180,6 @@ jobs:
           --source-root "$GITHUB_WORKSPACE/photo-export"
           --test-outcome "$TEST_OUTCOME"
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: TestResults
-          path: TestResults.xcresult
-
       - name: Build Release
         run: |
           echo "::group::Release build"
@@ -200,9 +191,31 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tail -20
+            build 2>&1 | tee release-build.log | tail -20
           echo "Release build succeeded."
           echo "::endgroup::"
+
+      - name: Print build and test failure diagnostics
+        if: failure()
+        run: |
+          for log in debug-build.log test.log release-build.log; do
+            if [[ -f "$log" ]]; then
+              echo "::group::Failure diagnostics: $log"
+              grep -nE '✘|↳|recorded an issue|Expectation failed|error:' "$log" || true
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: TestResults
+          path: |
+            TestResults.xcresult
+            debug-build.log
+            test.log
+            release-build.log
 
   # Preserve the existing check name even when its expensive validator is skipped.
   website:

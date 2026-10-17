@@ -1349,7 +1349,7 @@ struct ExportManagerRunExportTests {
   /// materialises) AND the per-variant `subfolder` field on the persisted record
   /// (which reuse-source and reconcile consult). A regression that mis-routed
   /// either side would fail this test.
-  @Test func videoLayoutSubfolderRoutesStandaloneVideosOnlyLivePhotosStayPaired() async {
+  @Test(.timeLimit(.minutes(2))) func videoLayoutSubfolderRoutesStandaloneVideosOnlyLivePhotosStayPaired() async {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
 
@@ -1377,7 +1377,7 @@ struct ExportManagerRunExportTests {
     harness.manager.livePhotosPairedExport = true
 
     harness.manager.startExportMonth(year: 2026, month: 3)
-    await waitUntil(harness.manager.totalJobsCompleted >= 3)
+    await harness.manager.waitForQueueDrained()
 
     let root = harness.dest.rootURL
     let monthDir = root.appendingPathComponent("2026/03", isDirectory: true)
@@ -1536,7 +1536,7 @@ struct ExportManagerRunExportTests {
   /// Three assets in three different months of the same year so the planner exercises
   /// the per-asset month derivation and the queue fans them out to three distinct
   /// `2025/MM/` directories.
-  @Test func startExportYearWritesEachMonthInYYYYMMStructure() async {
+  @Test(.timeLimit(.minutes(2))) func startExportYearWritesEachMonthInYYYYMMStructure() async {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
 
@@ -1564,7 +1564,7 @@ struct ExportManagerRunExportTests {
     ]
 
     harness.manager.startExportYear(year: 2025)
-    await waitUntil(harness.manager.totalJobsCompleted >= 3)
+    await harness.manager.waitForQueueDrained()
 
     let root = harness.dest.rootURL
     let fm = FileManager.default
@@ -1580,7 +1580,7 @@ struct ExportManagerRunExportTests {
 
     // Per-record year/month must match the asset's creationDate, not the year arg —
     // a planner bug that planted every job under `2025/01/` would still satisfy the
-    // queue-count expectation above but would fail these.
+    // queue drain barrier above but would fail these.
     #expect(harness.store.exportInfo(assetId: "asset-march")?.month == 3)
     #expect(harness.store.exportInfo(assetId: "asset-june")?.month == 6)
     #expect(harness.store.exportInfo(assetId: "asset-sept")?.month == 9)
