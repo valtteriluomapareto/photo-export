@@ -21,6 +21,18 @@ final class FakeMediaRenderer: MediaRenderer, @unchecked Sendable {
   private var _renderDelay: Duration?
   private var _renderLatch: AsyncSemaphore?
   private var _enteredSignal: AsyncSemaphore?
+  private var _beforeRenderCheckpoint: AsyncCheckpoint?
+  private var _afterRenderCheckpoint: AsyncCheckpoint?
+
+  var beforeRenderCheckpoint: AsyncCheckpoint? {
+    get { lock.withLock { _beforeRenderCheckpoint } }
+    set { lock.withLock { _beforeRenderCheckpoint = newValue } }
+  }
+
+  var afterRenderCheckpoint: AsyncCheckpoint? {
+    get { lock.withLock { _afterRenderCheckpoint } }
+    set { lock.withLock { _afterRenderCheckpoint = newValue } }
+  }
 
   var renderCalls: [RenderCall] {
     lock.lock()
@@ -120,14 +132,14 @@ final class FakeMediaRenderer: MediaRenderer, @unchecked Sendable {
     _renderCalls.append(RenderCall(request: request, url: url))
     lock.unlock()
 
+    if let checkpoint = beforeRenderCheckpoint { await checkpoint.enter() }
     if let err = renderError { throw err }
     if let writer = fileWriter {
       writer(url)
-      return
-    }
-    if shouldCreateFile {
+    } else if shouldCreateFile {
       FileManager.default.createFile(atPath: url.path, contents: Data("fake-rendered".utf8))
     }
+    if let checkpoint = afterRenderCheckpoint { await checkpoint.enter() }
   }
 }
 

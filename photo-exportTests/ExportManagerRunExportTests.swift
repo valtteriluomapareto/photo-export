@@ -1098,7 +1098,7 @@ struct ExportManagerRunExportTests {
   }
 
   @Test(arguments: [false, true])
-  func mixedLivePhotoEligibilityPreservesPairingAndManualOverride(manual: Bool) async {
+  func mixedLivePhotoEligibilityPreservesPairingAndManualOverride(manual: Bool) async throws {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
     let asset = TestAssetFactory.makeAsset(id: "live-retry", isLivePhoto: true)
@@ -1116,11 +1116,23 @@ struct ExportManagerRunExportTests {
     #expect(result.result == .completed)
     #expect(harness.writer.writeCalls.count == (manual ? 2 : 1))
     #expect(harness.writer.writeCalls.first?.resource.type == .photo)
+    let variants = try #require(
+      harness.collectionStore.exportInfo(assetId: asset.id, placement: .favorites())?.variants)
+    #expect(variants[.original]?.status == .done)
+    #expect(variants[.original]?.filename == "LIVE.HEIC")
+    let directory = try harness.dest.urlForRelativeDirectory(
+      "Collections/Favorites/", createIfNeeded: false)
+    #expect(
+      (try? Data(contentsOf: directory.appendingPathComponent("LIVE.HEIC")))
+        == Data("fake-content".utf8))
     if manual {
-      let names = harness.writer.writeCalls.map {
-        $0.url.deletingPathExtension().deletingPathExtension().lastPathComponent
-      }
-      #expect(Set(names).count == 1)
+      #expect(variants[.originalPairedVideo]?.status == .done)
+      #expect(variants[.originalPairedVideo]?.filename == "LIVE.MOV")
+      #expect(
+        (try? Data(contentsOf: directory.appendingPathComponent("LIVE.MOV")))
+          == Data("fake-content".utf8))
+    } else {
+      #expect(variants[.originalPairedVideo] == nil)
     }
   }
 
