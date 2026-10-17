@@ -193,16 +193,10 @@ final class ImportCoordinator: ObservableObject {
         for matched in matchResult.matched {
           let descriptor = matched.asset
           let file = matched.file
-          let year: Int
-          let month: Int
-          if let creationDate = descriptor.creationDate {
-            let calendar = Calendar.current
-            year = calendar.component(.year, from: creationDate)
-            month = calendar.component(.month, from: creationDate)
-          } else {
-            year = file.year
-            month = file.month
-          }
+          // Matching includes adjacent months for timezone/date drift. The file's
+          // scanned folder remains the source of truth for its physical location.
+          let year = file.year
+          let month = file.month
           let relPath = "\(year)/" + String(format: "%02d", month) + "/"
 
           let record = ExportRecord(

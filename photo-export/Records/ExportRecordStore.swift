@@ -832,9 +832,20 @@ final class ExportRecordStore: ObservableObject {
         recordsById[incoming.id]
         ?? ExportRecord(
           id: incoming.id, year: incoming.year, month: incoming.month, relPath: incoming.relPath)
-      merged.year = incoming.year
-      merged.month = incoming.month
-      merged.relPath = incoming.relPath
+      let hasCompletedVariant = merged.variants.values.contains { $0.status == .done }
+      if hasCompletedVariant {
+        // Timeline paths are resolved from year/month plus each variant's subfolder.
+        // Raw relPath may include videos/ even for the same timeline placement.
+        guard merged.year == incoming.year, merged.month == incoming.month else {
+          skippedVariants += incoming.variants.count
+          logger.warning("Skipped import at a conflicting completed timeline placement")
+          continue
+        }
+      } else {
+        merged.year = incoming.year
+        merged.month = incoming.month
+        merged.relPath = incoming.relPath
+      }
       var changed = false
       for (variant, variantRecord) in incoming.variants {
         if let existing = merged.variants[variant], existing.status == .done {
@@ -850,7 +861,7 @@ final class ExportRecordStore: ObservableObject {
       }
     }
     logger.info(
-      "Bulk imported \(importedVariants) variants (skipped \(skippedVariants) already-done variants)"
+      "Bulk imported \(importedVariants) variants (skipped \(skippedVariants) completed or conflicting variants)"
     )
   }
 

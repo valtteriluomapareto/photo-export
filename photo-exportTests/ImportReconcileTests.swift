@@ -315,12 +315,148 @@ struct ImportReconcileTests {
     #expect(!h.manager.isImporting)
   }
 
+  @Test(arguments: [false, true], [false, true])
+  func adjacentMonthImportRetainsPhysicalPlacement(reverse: Bool, video: Bool) async throws {
+    let h = makeImportHarness()
+    defer { h.cleanup() }
+    let assetYear = reverse ? 2026 : 2025
+    let assetMonth = reverse ? 1 : 12
+    let fileYear = reverse ? 2025 : 2026
+    let fileMonth = reverse ? 12 : 1
+    let date = try #require(
+      Calendar.current.date(
+        from: DateComponents(
+          year: assetYear, month: assetMonth, day: reverse ? 1 : 31,
+          hour: reverse ? 0 : 23, minute: 30)))
+    let filename = video ? "BOUNDARY.MOV" : "BOUNDARY.JPG"
+    let relativePath = "\(fileYear)/" + String(format: "%02d", fileMonth) + "/"
+    let directory = try h.dest.urlForRelativeDirectory(
+      relativePath + (video ? "videos/" : ""), createIfNeeded: true)
+    let file = directory.appendingPathComponent(filename)
+    let bytes = Data("existing boundary backup".utf8)
+    try bytes.write(to: file)
+    try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+    let asset = TestAssetFactory.makeAsset(
+      id: "boundary", creationDate: date, mediaType: video ? .video : .image)
+    h.photoLib.assetsByYearMonth["\(assetYear)-\(assetMonth)"] = [asset]
+    h.photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(
+        type: video ? .video : .photo, originalFilename: filename)
+    ]
+
+    h.manager.startImport()
+    await h.waitForImport()
+
+    #expect(h.manager.importResult?.matchedCount == 1)
+    #expect(h.manager.importResult?.prunedVariants == 0)
+    let record = h.timeline.exportInfo(assetId: asset.id)
+    #expect(record?.year == fileYear)
+    #expect(record?.month == fileMonth)
+    #expect(record?.relPath == relativePath)
+    #expect(record?.variants[.original]?.status == .done)
+    #expect(record?.variants[.original]?.subfolder == (video ? "videos" : nil))
+    h.timeline.flushForTesting()
+    let reopened = ExportRecordStore(baseDirectoryURL: h.storeRoot)
+    reopened.configure(for: "test")
+    #expect(reopened.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
+    #expect(reopened.exportInfo(assetId: asset.id)?.relPath == relativePath)
+    let jobs = ExportJobPlanner.plan(
+      assets: [asset], placement: .timeline(year: assetYear, month: assetMonth),
+      selection: .edited,
+      isExported: { reopened.isExported(asset: $0, selection: .edited, livePhotosPaired: false) },
+      shouldSkipForRetry: { _, _, _ in false })
+    #expect(jobs.isEmpty)
+
+    h.manager.startExportMonth(year: assetYear, month: assetMonth)
+    await h.manager.waitForQueueDrained()
+    #expect(h.writer.writeCalls.isEmpty)
+    #expect(try Data(contentsOf: file) == bytes)
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: h.dest.rootURL
+          .appendingPathComponent("\(assetYear)/" + String(format: "%02d", assetMonth)).path))
+    reopened.flushForTesting()
+  }
+
+  @Test(arguments: ExportVariant.allCases, [false, true])
+  func importCannotRelocateAnyCompletedVariant(done: ExportVariant, changeYear: Bool) throws {
+    let h = makeImportHarness()
+    defer { h.cleanup() }
+    h.timeline.markVariantExported(
+      assetId: "existing", variant: done, year: 2025, month: 12,
+      relPath: "2025/12/", filename: "KEPT.JPG", exportedAt: Date(timeIntervalSince1970: 100),
+      subfolder: "videos")
+    let before = try #require(h.timeline.exportInfo(assetId: "existing"))
+    let countBefore = h.timeline.monthSummary(year: 2025, month: 12, totalAssets: 1)
+    let incomingVariant: ExportVariant = done == .edited ? .original : .edited
+    h.timeline.bulkImportRecords([
+      ExportRecord(
+        id: "existing", year: changeYear ? 2026 : 2025, month: changeYear ? 12 : 11,
+        relPath: changeYear ? "2026/12/" : "2025/11/",
+        variants: [
+          incomingVariant: ExportVariantRecord(
+            filename: "NEW.JPG", status: .done, exportDate: Date(), lastError: nil)
+        ])
+    ])
+    #expect(h.timeline.exportInfo(assetId: "existing") == before)
+    #expect(h.timeline.monthSummary(year: 2025, month: 12, totalAssets: 1) == countBefore)
+    #expect(
+      h.timeline.monthSummary(
+        year: changeYear ? 2026 : 2025, month: changeYear ? 12 : 11,
+        totalAssets: 1
+      ).exportedCount == 0)
+    h.timeline.flushForTesting()
+    let reopened = ExportRecordStore(baseDirectoryURL: h.storeRoot)
+    reopened.configure(for: "test")
+    #expect(reopened.exportInfo(assetId: "existing") == before)
+    reopened.flushForTesting()
+  }
+
+  @Test func sameMonthVideoImportMergesWithoutChangingCompletedPlacement() async throws {
+    let h = makeImportHarness()
+    defer { h.cleanup() }
+    let videos = try h.dest.urlForRelativeDirectory("2025/12/videos/", createIfNeeded: true)
+    let originalFile = videos.appendingPathComponent("ORIGINAL.MOV")
+    let editedFile = videos.deletingLastPathComponent().appendingPathComponent("EDITED.MOV")
+    try Data("original".utf8).write(to: originalFile)
+    try Data("edited".utf8).write(to: editedFile)
+    h.timeline.markVariantExported(
+      assetId: "video", variant: .original, year: 2025, month: 12,
+      relPath: "2025/12/videos/", filename: "ORIGINAL.MOV",
+      exportedAt: Date(timeIntervalSince1970: 100), subfolder: "videos")
+    let original = h.timeline.exportInfo(assetId: "video")?.variants[.original]
+    h.timeline.bulkImportRecords([
+      ExportRecord(
+        id: "video", year: 2025, month: 12, relPath: "2025/12/",
+        variants: [
+          .edited: ExportVariantRecord(
+            filename: "EDITED.MOV", status: .done,
+            exportDate: Date(timeIntervalSince1970: 200), lastError: nil)
+        ])
+    ])
+    let summary = await h.timeline.reconcileAgainstFilesystem(at: h.dest.rootURL)
+    #expect(summary == .zero)
+    let merged = try #require(h.timeline.exportInfo(assetId: "video"))
+    #expect(merged.relPath == "2025/12/videos/")
+    #expect(merged.variants[.original] == original)
+    #expect(merged.variants[.edited]?.status == .done)
+    #expect(merged.variants[.edited]?.subfolder == nil)
+    #expect(try Data(contentsOf: originalFile) == Data("original".utf8))
+    #expect(try Data(contentsOf: editedFile) == Data("edited".utf8))
+    h.timeline.flushForTesting()
+    let reopened = ExportRecordStore(baseDirectoryURL: h.storeRoot)
+    reopened.configure(for: "test")
+    #expect(reopened.exportInfo(assetId: "video") == merged)
+    reopened.flushForTesting()
+  }
+
   // MARK: - Integration harness
 
   @MainActor
   private struct ImportHarness {
     let manager: ExportManager
     let photoLib: FakePhotoLibraryService
+    let writer: FakeAssetResourceWriter
     let dest: FakeExportDestination
     let timeline: ExportRecordStore
     let collection: CollectionExportRecordStore
@@ -378,7 +514,7 @@ struct ImportReconcileTests {
       userDefaults: defaults
     )
     return ImportHarness(
-      manager: manager, photoLib: photoLib, dest: dest,
+      manager: manager, photoLib: photoLib, writer: writer, dest: dest,
       timeline: timeline, collection: collection,
       storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
