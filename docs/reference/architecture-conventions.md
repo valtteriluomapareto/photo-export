@@ -75,6 +75,15 @@ for recovery if either history store has failed. Scanner matching error propagat
 
 ### Final file commit boundary
 
+Every byte-producing attempt (PhotoKit resource, render, HEIC conversion or reuse)
+owns a short hidden UUID stage adjacent to its final destination. HEIC source bytes
+use a side-file derived from that attempt's stage. Physical producers may outlive
+Task cancellation: cleanup removes only their own stages, producer errors recheck
+generation before reaching outcome recording, and HEIC materialization rechecks before
+starting conversion. Callers also recheck after exporter awaits and before failure/fallback
+mutations. The legacy fixed `.tmp` sweep remains for older builds; unique crash leftovers
+are not automatically scavenged. Staging paths never determine final filenames.
+
 `VariantExporter` checks generation immediately before admitting the final atomic move.
 After admission, a short-lived task owns the physical move, timestamps, record acknowledgement,
 and staging cleanup. A successful move is acknowledged to its captured logical destination even

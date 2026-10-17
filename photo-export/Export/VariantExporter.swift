@@ -132,6 +132,7 @@ final class VariantExporter {
     subfolder: String? = nil,
     acceptsEditedFallback: Bool = false
   ) async throws -> String? {
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
     // Renderer activity must always be cleared on the way out of this function —
     // including on throw — so a render failure or cancel does not leave the toolbar
     // showing `(rendering…)` forever.
@@ -204,12 +205,9 @@ final class VariantExporter {
     if fileSystem.fileExists(atPath: legacyTempURL.path) {
       try? fileSystem.removeItem(at: legacyTempURL)
     }
-    // A cancelled copy can finish after a replacement starts. It owns a short,
-    // unique stage throughout copy/fallback/commit, never the replacement's tmp.
-    let tempURL =
-      reuseSource == nil
-      ? legacyTempURL
-      : destDir.appendingPathComponent(".photo-export-reuse-\(UUID().uuidString).tmp")
+    // Any producer can finish after cancellation. Its stage belongs to this attempt,
+    // including fallback and HEIC materialization, never a same-path replacement.
+    let tempURL = destDir.appendingPathComponent(".photo-export-\(UUID().uuidString).tmp")
     var ownsTempCleanup = true
     defer {
       if ownsTempCleanup, fileSystem.fileExists(atPath: tempURL.path) {
@@ -279,55 +277,63 @@ final class VariantExporter {
       }
     }
     if !didCopyFromReuseSource {
-      switch producer {
-      case .resource(let resource):
-        try await assetResourceWriter.writeResource(
-          resource, forAssetId: descriptor.id, to: tempURL)
-      case .render(let request):
-        // Translate any renderer error (other than cancellation) into the canonical
-        // recoverable failure so the persisted `lastError` is stable across both
-        // "no static resource" and "render attempted and failed" cases. The original
-        // error survives in the log for diagnostics.
-        do {
-          try await mediaRenderer.render(request: request, to: tempURL)
-        } catch is CancellationError {
-          throw CancellationError()
-        } catch {
-          logger.error(
-            "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
-          )
-          throw EditedResourceUnavailableError()
-        }
-      case .convertHEIC(let request):
-        // Two-step: materialise the source HEIC/HEIF bytes to a sibling temp
-        // file via the existing PhotoKit resource writer, then re-encode as
-        // JPEG into `tempURL` via the image converter. The intermediate temp
-        // is cleaned up via `defer` so a converter failure or cancel doesn't
-        // leak it. Any converter error translates to the same
-        // `editedResourceUnavailableMessage` sentinel the render path uses,
-        // so the existing "edited variant failed" recovery flow runs cleanly.
-        let heicTempURL = tempURL.appendingPathExtension("heic-source")
-        defer {
-          if fileSystem.fileExists(atPath: heicTempURL.path) {
-            try? fileSystem.removeItem(at: heicTempURL)
-          }
-        }
-        do {
+      do {
+        switch producer {
+        case .resource(let resource):
           try await assetResourceWriter.writeResource(
-            request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
-          try await imageConverter.convertHEIC(
-            at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
-        } catch is CancellationError {
-          throw CancellationError()
-        } catch {
-          logger.error(
-            "HEIC→JPEG conversion failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
-          )
-          throw EditedResourceUnavailableError()
+            resource, forAssetId: descriptor.id, to: tempURL)
+        case .render(let request):
+          // Translate any renderer error (other than cancellation) into the canonical
+          // recoverable failure so the persisted `lastError` is stable across both
+          // "no static resource" and "render attempted and failed" cases. The original
+          // error survives in the log for diagnostics.
+          do {
+            try await mediaRenderer.render(request: request, to: tempURL)
+          } catch is CancellationError {
+            throw CancellationError()
+          } catch {
+            logger.error(
+              "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
+            )
+            throw EditedResourceUnavailableError()
+          }
+        case .convertHEIC(let request):
+          // Two-step: materialise the source HEIC/HEIF bytes to a sibling temp
+          // file via the existing PhotoKit resource writer, then re-encode as
+          // JPEG into `tempURL` via the image converter. The intermediate temp
+          // is cleaned up via `defer` so a converter failure or cancel doesn't
+          // leak it. Any converter error translates to the same
+          // `editedResourceUnavailableMessage` sentinel the render path uses,
+          // so the existing "edited variant failed" recovery flow runs cleanly.
+          let heicTempURL = tempURL.appendingPathExtension("heic-source")
+          defer {
+            if fileSystem.fileExists(atPath: heicTempURL.path) {
+              try? fileSystem.removeItem(at: heicTempURL)
+            }
+          }
+          do {
+            try await assetResourceWriter.writeResource(
+              request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
+            try queueCoordinator?.throwIfCancelledOrStale(gen)
+            try await imageConverter.convertHEIC(
+              at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
+          } catch is CancellationError {
+            throw CancellationError()
+          } catch {
+            logger.error(
+              "HEIC→JPEG conversion failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
+            )
+            throw EditedResourceUnavailableError()
+          }
+        case .none:
+          // Guarded above by `producer.originalFilename` check.
+          preconditionFailure("EditedProducer.none reached the write step")
         }
-      case .none:
-        // Guarded above by `producer.originalFilename` check.
-        preconditionFailure("EditedProducer.none reached the write step")
+      } catch {
+        // A physical producer can fail after teardown, even after B committed.
+        // Convert that stale error to cancellation before any caller records it.
+        try queueCoordinator?.throwIfCancelledOrStale(gen)
+        throw error
       }
     }
     // Load-bearing: this checkpoint must run BEFORE the atomic move below so that a

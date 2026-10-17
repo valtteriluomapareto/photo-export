@@ -205,7 +205,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 ## Queue controls
 
 - Pause and resume the export queue at any time
-- Cancel and restart exports safely: a cancelled scan cannot change the new run’s progress or completion. A file already moved into place finishes its timestamps and history update for the original destination before a replacement export proceeds, avoiding a duplicate on retry. History storage failures retain the completed file for non-destructive Retry; process-crash recovery remains separate
+- Cancel and restart exports safely: a cancelled scan cannot change the new run’s progress or completion. A file already moved into place finishes its timestamps and history update for the original destination before a replacement export proceeds, avoiding a duplicate on retry. History storage failures retain the completed file for non-destructive Retry; process-crash recovery remains separate. An unfinished download, render or conversion cannot damage a restarted export or add failures to its result.
 - Cancel and clear the entire batch
 - Queue progress visible in the toolbar
 

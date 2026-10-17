@@ -189,7 +189,13 @@ struct ReuseCopyLifecycleTests {
         .original]?.status == .inProgress)
     await replacementWritten.releaseAll()
     await replacement.value
-    let final = output.deletingPathExtension()
+    let filename = try #require(
+      fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?
+        .variants[.original]?.filename)
+    #expect(filename == "IMG.JPG")
+    let final = try fixture.destination.urlForRelativeDirectory(
+      "Collections/Favorites/", createIfNeeded: false
+    ).appendingPathComponent(filename)
     #expect(try Data(contentsOf: final) == expectedBytes)
     #expect(
       fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?.variants[

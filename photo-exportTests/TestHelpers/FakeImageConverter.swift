@@ -21,7 +21,7 @@ final class FakeImageConverter: ImageConverter, @unchecked Sendable {
     return _convertCalls
   }
 
-  // Configuration is set on the main actor before the harness is constructed.
+  // Configure before a call or while all relevant calls are parked at checkpoints.
   // Not protected by `lock` — matches the discipline-via-doc-comment pattern
   // used by `FakeAssetResourceWriter` / `FakeMediaRenderer`.
 
@@ -38,6 +38,8 @@ final class FakeImageConverter: ImageConverter, @unchecked Sendable {
   /// output via ImageIO it will fail and the fake should be upgraded to emit
   /// a real 1×1 JPEG via `CGImageDestination`.
   var shouldCreateFile: Bool = true
+  var beforeConvertCheckpoint: AsyncCheckpoint?
+  var afterConvertCheckpoint: AsyncCheckpoint?
 
   func convertHEIC(at sourceURL: URL, to destURL: URL, quality: Double) async throws {
     lock.lock()
@@ -45,11 +47,13 @@ final class FakeImageConverter: ImageConverter, @unchecked Sendable {
       ConvertCall(sourceURL: sourceURL, destURL: destURL, quality: quality))
     lock.unlock()
 
+    if let checkpoint = beforeConvertCheckpoint { await checkpoint.enter() }
     if let error = convertError { throw error }
     if shouldCreateFile {
       let jpegSignature: [UInt8] = [0xFF, 0xD8, 0xFF, 0xE0]
       let payload = Data(jpegSignature) + Data("FAKE-JPEG-CONTENT".utf8)
       FileManager.default.createFile(atPath: destURL.path, contents: payload)
     }
+    if let checkpoint = afterConvertCheckpoint { await checkpoint.enter() }
   }
 }

@@ -285,8 +285,7 @@ struct VariantExporterTests {
       h.converter.convertCalls.count == 1,
       "ImageConverter.convertHEIC must be invoked once for unedited HEIC under toggle on; got \(h.converter.convertCalls.count)"
     )
-    // Convert destination is a `.tmp` file; the exporter strips `.tmp` and
-    // moves to the final URL. Assert the move target ends in `.JPG`.
+    // The unique stage is moved to the allocated final URL. Assert that target is JPEG.
     let movedTo = h.fileSystem.moveCalls.last?.to.lastPathComponent ?? ""
     #expect(
       movedTo.uppercased().hasSuffix(".JPG"),
@@ -375,10 +374,9 @@ struct VariantExporterTests {
       "MediaRenderer must not be called for Live Photo paired-video variants")
     #expect(h.writer.writeCalls.count == 1)
     #expect(h.writer.writeCalls.first?.resource.type == .pairedVideo)
-    // Writer receives the staging `.tmp` URL before the atomic move; the user-visible
-    // filename is the `.tmp`-stripped leaf.
-    #expect(
-      h.writer.writeCalls.first?.url.deletingPathExtension().lastPathComponent == "IMG_0001.MOV")
+    let final = try #require(h.fileSystem.moveCalls.last?.to)
+    #expect(final.lastPathComponent == "IMG_0001.MOV")
+    #expect((try? Data(contentsOf: final)) == Data("fake-content".utf8))
   }
 
   /// `.editedPairedVideo` prefers `.fullSizePairedVideo` when Photos has rendered an
@@ -407,8 +405,9 @@ struct VariantExporterTests {
 
     #expect(h.writer.writeCalls.count == 1)
     #expect(h.writer.writeCalls.first?.resource.type == .fullSizePairedVideo)
-    #expect(
-      h.writer.writeCalls.first?.url.deletingPathExtension().lastPathComponent == "IMG_0001.MOV")
+    let final = try #require(h.fileSystem.moveCalls.last?.to)
+    #expect(final.lastPathComponent == "IMG_0001.MOV")
+    #expect((try? Data(contentsOf: final)) == Data("fake-content".utf8))
   }
 
   /// `.editedPairedVideo` falls back to `.pairedVideo` when Photos elides the

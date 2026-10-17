@@ -2039,10 +2039,12 @@ final class ExportManager: ObservableObject {
             inFlight: &inFlight,
             subfolder: subfolder
           )
+          try throwIfCancelledOrStale(gen)
           if let nextGroupStem { groupStem = nextGroupStem }
         } catch is CancellationError {
           throw CancellationError()
         } catch {
+          try throwIfCancelledOrStale(gen)
           logger.error(
             "Variant \(variant.rawValue, privacy: .public) failed for id: \(descriptor.id, privacy: .public) error: \(String(describing: error), privacy: .public)"
           )
@@ -2189,6 +2191,7 @@ final class ExportManager: ObservableObject {
         subfolder: subfolder,
         acceptsEditedFallback: true
       )
+      try throwIfCancelledOrStale(gen)
       // Mark `.edited` with the explicit fallback sentinel so future runs
       // recognise the asset as covered without relying on the ambiguous
       // `_orig` filename shape. Overwrites the generic
@@ -2204,6 +2207,7 @@ final class ExportManager: ObservableObject {
     } catch is CancellationError {
       logger.info("Edited fallback cancelled for id: \(descriptor.id, privacy: .public)")
     } catch {
+      guard isCurrent(gen) else { return }
       logger.error(
         "Edited fallback failed for id: \(descriptor.id, privacy: .public) error: \(String(describing: error), privacy: .public)"
       )
