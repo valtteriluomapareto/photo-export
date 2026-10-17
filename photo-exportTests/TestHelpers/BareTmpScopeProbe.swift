@@ -22,5 +22,16 @@ import Foundation
 /// should be skipped. `false` (the common case) means the tests run
 /// normally.
 enum BareTmpScopeProbe {
-  static func bareTmpRejectsScopeStart() -> Bool { true }
+  static func bareTmpRejectsScopeStart() -> Bool {
+    let probe = FileManager.default.temporaryDirectory
+      .appendingPathComponent(
+        "BareTmpScopeProbe-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(
+      at: probe, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: probe) }
+
+    let started = probe.startAccessingSecurityScopedResource()
+    if started { probe.stopAccessingSecurityScopedResource() }
+    return !started
+  }
 }
