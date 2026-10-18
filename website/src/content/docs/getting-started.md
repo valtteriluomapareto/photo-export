@@ -27,9 +27,9 @@ Both versions are identical in functionality, signed and notarized by Apple.
 
 ### 1. Grant Photos access
 
-On first launch, macOS will prompt for **Photos library access**. Click **Grant Access** to allow the app to read your photo and video library.
+On first launch, macOS will prompt for **Photos library access**. Allow access to let the app read your photo and video library.
 
-If you choose **Select Photos**, the app will work with only the photos you pick. If you accidentally deny access, you can change permissions later in **System Settings → Privacy & Security → Photos**, or click the "Open System Preferences" button shown in the app.
+If you deny access, choose **Open System Settings** on the authorization screen, then enable access in **Privacy & Security → Photos**. Return to Photo Export: it checks access again and continues to onboarding or your library. Follow any relaunch instruction macOS itself presents.
 
 ### 2. Choose an export destination
 
@@ -67,7 +67,7 @@ The full walkthrough — what triggers a run, how retry works, what the status i
 - **"Export folder is unavailable. Reconnect the drive or network share to export."** — Reconnect the selected backup drive or network share. This warning appears in the main window and Export help text, whether Auto Export is on or off; you do not need to choose a different destination.
 - **"Export folder access needs restoring. Reconnect the drive, then choose the same folder if needed."** — Reconnect first. If access still needs renewing, use **Choose Folder…** to reselect the same backup folder. The app also shows this recovery when a stored bookmark cannot be restored.
 - **"Export folder is read-only. Allow write access or choose a writable folder."** — Right-click the folder, choose Get Info, and make sure you have write permission. Import Existing Backup can still read a read-only folder.
-- **Photos permission denied** — Open **System Settings → Privacy & Security → Photos** and enable access for Photo Export.
+- **Photos permission denied** — Choose **Open System Settings**, enable access for Photo Export under **Privacy & Security → Photos**, then return to the app. It checks access again when you return.
 - **Export stuck near 100%** — Use **Help → Save Diagnostic Report…** to write a text file listing every photo whose export is in `failed` or `in-progress` state, including the underlying error message. If a previous Auto Export run was interrupted by the operating system (rare, but possible on very large libraries), the report also names which scope was in flight at the time. Attach the file to a [GitHub issue](https://github.com/valtteriluomapareto/photo-export/issues) so the cause is visible.
 - **Unexpected `_orig` files in my backup** — If Photos can't provide the edited version of an asset (`Edited resource unavailable` in the diagnostic report), the app writes the original file with an `_orig` suffix so you still have a backup of the asset. The diagnostic report flags these assets.
 

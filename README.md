@@ -20,6 +20,8 @@ Both versions are signed and notarized by Apple. Project [website and docs](http
 
 Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to read the same library the built-in Photos app sees, **read-only** — it can't modify or delete anything in your Photos library. It does not upload your photos, use any third-party cloud service, require an account, or ask for your Apple Account password.
 
+If Photos access is denied, choose **Open System Settings**, enable access under **Privacy & Security → Photos**, then return to Photo Export. The app checks access again so you can continue setup or browsing.
+
 ## Features
 
 - Browse your library two ways via a Timeline / Collections segmented control

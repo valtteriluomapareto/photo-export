@@ -82,7 +82,11 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// Deferred requests let preview tests control completion order and cancellation.
   var fullImageRequestOverride: (@MainActor (String) async throws -> NSImage)?
 
-  func requestAuthorization() async -> Bool { isAuthorized }
+  private(set) var requestAuthorizationCalls = 0
+  func requestAuthorization() async -> Bool {
+    requestAuthorizationCalls += 1
+    return isAuthorized
+  }
 
   func fetchAssets(year: Int, month: Int?, mediaType: PHAssetMediaType?) async throws
     -> [AssetDescriptor]

@@ -144,9 +144,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     self.countInvalidationWaitObserver = countInvalidationWaitObserver
     super.init()
     // Sync the UI-facing auth state from the injected service so the onboarding
-    // gate (`ContentView`) sees the right gating value. Subsequent changes to the
-    // override service's auth state are not observed here — the curated mode does
-    // not change auth at runtime; if a future override needs that, add a publisher.
+    // gate (`ContentView`) sees the right gating value. Explicit authorization
+    // refreshes also read this service, without registering a real PhotoKit observer.
     authorizationStatus = overrideService.authorizationStatus
     isAuthorized = overrideService.isAuthorized
     setupDecodedThumbnailCache()
@@ -298,6 +297,18 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     } else {
       logger.debug("Found NSPhotoLibraryUsageDescription in Info.plist")
     }
+  }
+
+  /// Re-reads existing permission without prompting. Install fresh-cache barriers
+  /// before an authorization subscriber can start work against the newly visible library.
+  func refreshAuthorizationStatus() {
+    let status =
+      overrideService?.authorizationStatus
+      ?? PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    guard status != authorizationStatus else { return }
+    invalidateCache()
+    authorizationStatus = status
+    isAuthorized = Self.isAuthorizationSufficient(status)
   }
 
   /// Request authorization to access the Photos library

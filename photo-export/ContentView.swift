@@ -61,9 +61,19 @@ struct ContentView: View {
 }
 
 struct AuthorizationView: View {
+  @Environment(\.openURL) private var openURL
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+  var activationNotifications: NotificationCenter = .default
   @ObservedObject var photoLibraryManager: PhotoLibraryManager
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record(
+        "authorization-pane:\(photoLibraryManager.authorizationStatus.rawValue)")
+    #endif
     VStack(spacing: 20) {
       Image(systemName: "photo.on.rectangle.angled")
         .resizable()
@@ -84,18 +94,17 @@ struct AuthorizationView: View {
       if photoLibraryManager.authorizationStatus == .denied
         || photoLibraryManager.authorizationStatus == .restricted
       {
-        Text("Please enable Photos access in System Settings to use this app.")
-          .foregroundColor(.red)
+        Text("Enable Photos access in System Settings, then return to Photo Export to continue.")
+          .foregroundColor(.secondary)
           .padding()
 
-        Button("Open System Settings") {
-          NSWorkspace.shared.open(
-            URL(
-              string:
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos"
-            )!)
-        }
-        .padding()
+        #if DEBUG
+          // swiftlint:disable:next redundant_discardable_let
+          let _ = bodyCounter?.recordAction(
+            "authorization-open-settings", action: openSystemSettings)
+        #endif
+        Button("Open System Settings", action: openSystemSettings)
+          .padding()
       } else {
         ProgressView()
           .padding()
@@ -105,11 +114,23 @@ struct AuthorizationView: View {
     }
     .padding()
     .firstRunWindowMinSize()
+    .onReceive(activationNotifications.publisher(for: NSApplication.didBecomeActiveNotification)) {
+      _ in photoLibraryManager.refreshAuthorizationStatus()
+    }
     .task {
+      photoLibraryManager.refreshAuthorizationStatus()
       if photoLibraryManager.authorizationStatus == .notDetermined {
         _ = await photoLibraryManager.requestAuthorization()
       }
+      #if DEBUG
+        bodyCounter?.record("authorization-initial-check-complete")
+      #endif
     }
+  }
+
+  private func openSystemSettings() {
+    openURL(
+      URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos")!)
   }
 }
 
