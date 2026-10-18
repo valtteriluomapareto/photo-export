@@ -28,6 +28,7 @@ import Testing
       let destination = FakeExportDestination()
       let destinationManager: ExportDestinationManager
       let autoSync = AutoSyncManager()
+      let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
       let lifecycle = AppLifecycleCoordinator(
         cancelActiveWork: {}, interruptForDestinationUnavailable: {},
         configureRecordStores: { _ in .success })
@@ -90,6 +91,7 @@ import Testing
       func showSettings() {
         let hosted = NSHostingView(
           rootView: SettingsRootView()
+            .environmentObject(library)
             .environmentObject(manager).environmentObject(autoSync).environmentObject(
               destinationManager
             )

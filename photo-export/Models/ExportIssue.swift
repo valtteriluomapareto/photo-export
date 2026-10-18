@@ -18,9 +18,48 @@ struct ExportIssue: Identifiable, Equatable {
   let reason: ExportVariantReason?
   let failedAt: Date?
   let retry: RetryEntry?
+  var filename: String?
+  var creationDate: Date?
+
+  struct AssetMetadata: Equatable, Sendable {
+    let creationDate: Date?
+    let originalFilename: String?
+  }
 
   var assetId: String { id.assetId }
   var variant: ExportVariant? { ExportVariant(rawValue: id.variantRaw) }
+  var variantLabel: String {
+    switch variant {
+    case .original: return "Original"
+    case .edited: return "Edited"
+    case .originalPairedVideo: return "Live Photo video"
+    case .editedPairedVideo: return "Edited Live Photo video"
+    case nil: return "Unknown version"
+    }
+  }
+
+  static func nonemptyFilename(_ value: String?) -> String? {
+    guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return nil
+    }
+    return value
+  }
+
+  func enriched(with metadata: AssetMetadata?) -> Self {
+    var result = self
+    result.filename =
+      Self.nonemptyFilename(filename) ?? Self.nonemptyFilename(metadata?.originalFilename)
+    result.creationDate = metadata?.creationDate
+    return result
+  }
+
+  /// Presentation refreshes do not replace the authoritative failed attempt.
+  func matchesFailure(_ other: Self) -> Bool {
+    id == other.id && destinationId == other.destinationId && scopeLabel == other.scopeLabel
+      && scopeKey == other.scopeKey && message == other.message && reason == other.reason
+      && failedAt == other.failedAt && retry == other.retry
+  }
+
   var category: AutoSyncFailureCategory { retry?.category ?? .unknown }
   var isCovered: Bool {
     reason == .editedUnavailableOriginalBackedUp || reason == .pairedVideoUnavailable
@@ -33,12 +72,13 @@ enum ExportIssuesProjection {
     destinationId: String = "", timeline: [String: ExportRecord] = [:],
     collections: [String: [String: CollectionExportRecordStore.RecordBody]] = [:],
     placements: [String: ExportPlacement] = [:],
-    retryState: AutoSyncRetryState = .empty, retryDestinationId: String? = nil
+    retryState: AutoSyncRetryState = .empty, retryDestinationId: String? = nil,
+    assetMetadata: [String: ExportIssue.AssetMetadata] = [:]
   ) -> [ExportIssue] {
     var result: [ExportIssue] = []
     func append(
       source: ExportIssue.Source, assetId: String, rawVariant: String, record: ExportVariantRecord,
-      scope: AutoSyncRetryScopeKey?, label: String
+      scope: AutoSyncRetryScopeKey?, label: String, originalFilename: String?
     ) {
       guard record.status == .failed else { return }
       let metadata: RetryEntry?
@@ -57,14 +97,18 @@ enum ExportIssuesProjection {
           id: .init(source: source, assetId: assetId, variantRaw: rawVariant),
           destinationId: destinationId, scopeLabel: label, scopeKey: scope,
           message: record.lastError ?? "Failure details unavailable", reason: record.reason,
-          failedAt: record.failureDate, retry: metadata))
+          failedAt: record.failureDate, retry: metadata,
+          filename: ExportIssue.nonemptyFilename(record.filename)
+            ?? ExportIssue.nonemptyFilename(originalFilename)
+        ).enriched(with: assetMetadata[assetId]))
     }
     for record in timeline.values {
       for (variant, value) in record.variants where value.status == .failed {
         append(
           source: .timeline, assetId: record.id, rawVariant: variant.rawValue, record: value,
           scope: .timeline,
-          label: "Timeline \(String(format: "%04d-%02d", record.year, record.month))")
+          label: "Timeline \(String(format: "%04d-%02d", record.year, record.month))",
+          originalFilename: record.variants[.original]?.filename)
       }
     }
     for (placementId, assets) in collections {
@@ -74,7 +118,8 @@ enum ExportIssuesProjection {
         for (variant, value) in body.variants where value.status == .failed {
           append(
             source: .collection(placementId), assetId: assetId, rawVariant: variant, record: value,
-            scope: scope, label: placement?.displayName ?? "Unknown placement \(placementId)")
+            scope: scope, label: placement?.displayName ?? "Unknown placement \(placementId)",
+            originalFilename: body.variants[ExportVariant.original.rawValue]?.filename)
         }
       }
     }

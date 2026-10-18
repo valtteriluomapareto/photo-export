@@ -337,6 +337,7 @@ struct PhotoExportApp: App {
 
     Settings {
       SettingsRootView()
+        .environmentObject(photoLibraryManager)
         .environmentObject(autoSyncManager)
         .environmentObject(autoSyncScopeStore)
         .environmentObject(exportDestinationManager)

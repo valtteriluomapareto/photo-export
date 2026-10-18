@@ -119,7 +119,13 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     }
   }
 
+  var descriptorFetchCalls: [String] = []
+  var descriptorFetchObserver: ((String) -> Void)?
+  var detailsFetchCalls: [String] = []
+
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {
+    descriptorFetchCalls.append(assetId)
+    descriptorFetchObserver?(assetId)
     if missingAssetIds.contains(assetId) { return nil }
     for assets in assetsByYearMonth.values {
       if let found = assets.first(where: { $0.id == assetId }) { return found }
@@ -470,6 +476,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   func assetDetails(for assetId: String) -> AssetDetails? {
-    detailsByAssetId[assetId]
+    detailsFetchCalls.append(assetId)
+    return detailsByAssetId[assetId]
   }
 }

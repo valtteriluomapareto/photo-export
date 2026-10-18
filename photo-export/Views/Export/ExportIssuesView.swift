@@ -2,7 +2,13 @@ import SwiftUI
 
 /// Failed variants from current export records, with matching Auto Export retry history.
 struct ExportIssuesView: View {
+  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
+  @State private var loadedMetadata:
+    (request: ExportIssueMetadataRequest, values: [String: ExportIssue.AssetMetadata])?
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
@@ -15,8 +21,25 @@ struct ExportIssuesView: View {
       retryDestinationId: autoSyncManager.currentRetryDestinationId)
   }
 
+  private var metadataRequest: ExportIssueMetadataRequest {
+    ExportIssueMetadataRequest(
+      destinationId: exportDestinationManager.destinationId,
+      libraryRevision: photoLibraryManager.libraryRevision, rows: snapshot.rows)
+  }
+
   var body: some View {
-    let current = snapshot
+    let raw = snapshot
+    let request = ExportIssueMetadataRequest(
+      destinationId: exportDestinationManager.destinationId,
+      libraryRevision: photoLibraryManager.libraryRevision, rows: raw.rows)
+    let metadata = loadedMetadata?.request == request ? loadedMetadata?.values ?? [:] : [:]
+    let current = ExportIssuesProjection.Snapshot(
+      rows: raw.rows.map { $0.enriched(with: metadata[$0.assetId]) },
+      unavailableStores: raw.unavailableStores)
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText(current.rows.map(\.assetId), for: "issue-visible-ids")
+    #endif
     VStack(spacing: 0) {
       if !current.unavailableStores.isEmpty {
         Text(
@@ -44,6 +67,16 @@ struct ExportIssuesView: View {
       }
     }
     .frame(minWidth: 460, minHeight: 460)
+    .task(id: request) {
+      guard let values = await request.load(using: photoLibraryManager),
+        !Task.isCancelled, request == metadataRequest
+      else { return }
+      loadedMetadata = (request, values)
+      #if DEBUG
+        bodyCounter?.record(
+          "issue-metadata:\(request.destinationId ?? "none"):\(request.libraryRevision)")
+      #endif
+    }
   }
 
   private var emptyState: some View {
@@ -68,7 +101,8 @@ struct ExportIssuesView: View {
                 entry: entry, canRetry: canRetry, autoExportEnabled: autoSyncManager.isEnabled
               ) {
                 // A rendered closure can outlive a destination switch or a new failure.
-                guard snapshot.rows.contains(entry), let scope = entry.scopeKey,
+                guard snapshot.rows.contains(where: { $0.matchesFailure(entry) }),
+                  let scope = entry.scopeKey,
                   let variant = entry.variant, let retry = entry.retry
                 else { return }
                 autoSyncManager.retryFailedVariant(
@@ -136,26 +170,40 @@ struct ExportIssuesView: View {
 }
 
 private struct FailureRow: View {
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+  @Environment(\.locale) private var locale
   let entry: ExportIssue
   let canRetry: Bool
   let autoExportEnabled: Bool
   let onRetry: () -> Void
 
   var body: some View {
+    let primaryLine =
+      "\(entry.filename ?? "Filename unavailable") · \(creationDateLabel) · \(entry.variantLabel)"
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText(
+        [primaryLine, entry.assetId], for: "issue-row:\(entry.assetId)")
+    #endif
     VStack(alignment: .leading, spacing: 4) {
       HStack {
-        Text(entry.scopeLabel).font(.callout).foregroundStyle(.secondary)
-        Text("•").foregroundStyle(.tertiary)
-        Text(entry.id.variantRaw).font(.callout.monospaced()).foregroundStyle(.secondary)
+        Text(primaryLine).font(.callout).foregroundStyle(.secondary)
         Spacer()
         if let attempts = entry.retry?.attemptCount, attempts > 1 {
           Text("\(attempts) attempts").font(.caption).foregroundStyle(.secondary)
         }
       }
+      Text(entry.scopeLabel).font(.callout).foregroundStyle(.secondary)
       Text(entry.assetId).font(.caption.monospaced()).foregroundStyle(.tertiary)
-        .lineLimit(1).truncationMode(.middle)
+        .textSelection(.enabled)
+      if entry.variant == nil {
+        Text("Version key: \(entry.id.variantRaw)").font(.caption.monospaced())
+          .foregroundStyle(.secondary).textSelection(.enabled)
+      }
       Text(
-        ExportVariantRecovery.friendlyCopy(for: entry.reason, label: entry.id.variantRaw)
+        ExportVariantRecovery.friendlyCopy(for: entry.reason, label: entry.variantLabel)
           ?? entry.message
       )
       .font(.callout).fixedSize(horizontal: false, vertical: true)
@@ -163,6 +211,10 @@ private struct FailureRow: View {
         Text(timeFooter).font(.caption).foregroundStyle(.tertiary)
         Spacer()
         if entry.retry != nil, entry.scopeKey != nil, entry.variant != nil, !entry.isCovered {
+          #if DEBUG
+            // swiftlint:disable:next redundant_discardable_let
+            let _ = bodyCounter?.recordAction("issue-retry:\(entry.assetId)", action: onRetry)
+          #endif
           Button("Retry", action: onRetry).controlSize(.small).disabled(!canRetry)
             .help(
               "Retries using your configured Auto Export scopes. You can also export this item manually."
@@ -178,6 +230,11 @@ private struct FailureRow: View {
       }
     }
     .padding(.vertical, 2)
+  }
+
+  private var creationDateLabel: String {
+    guard let date = entry.creationDate else { return "Date unavailable" }
+    return date.formatted(.dateTime.day().month(.abbreviated).year().locale(locale))
   }
 
   private var timeFooter: String {
