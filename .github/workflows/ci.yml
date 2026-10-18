@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
@@ -88,13 +88,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Install SwiftLint and swift-format
-        run: |
-          echo "::group::Tool installation"
-          echo "Installing swiftlint and swift-format via Homebrew..."
-          brew install swiftlint swift-format
-          echo "SwiftLint version: $(swiftlint version)"
-          echo "swift-format version: $(swift-format --version)"
-          echo "::endgroup::"
+        run: bash scripts/ci/install-swift-tools.sh
 
       - name: SwiftLint
         run: |
