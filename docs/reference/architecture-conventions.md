@@ -335,35 +335,24 @@ Rules:
 
 ## Canonical `start*` entry-point shape
 
-Every fire-and-forget export entry point on `ExportManager` follows the same skeleton. Source of truth: `startExportMonth` in [`ExportManager.swift`](../../photo-export/Export/ExportManager.swift) — copy that method as a starting point rather than rewriting from this skeleton.
+Every fire-and-forget export entry point on `ExportManager` uses `canStartExport(in:logTag:)` for import/store admission and `prepareExport(selectionOverride:bulk:)` for shared synchronous preparation. Keep entry-specific exclusive-bulk and empty-input checks between them; rejected starts must preserve their existing message and counter behavior.
 
 ```text
 func startExportX(...) {
-  // 1. Block-on-conflict guards (synchronous, return early on each).
-  //    Typical conflicts: import in progress; store not in .ready;
-  //    bulk-enqueue already in flight (`isEnqueueingAll`).
-
-  // 2. Snapshot user-mutable state synchronously.
-  //    `let selection = versionSelection` — picker flips after this point
-  //    must not change the run.
-
-  // 3. Clear any prior UI messages (empty-run, queue-warning).
-
-  // 4. Reset progress counters ONLY when the queue is truly idle.
-  //    Idle = `!isRunning && !isProcessing && pendingJobs.isEmpty`.
-  //    "Paused with pending jobs" satisfies the first two but is NOT idle —
-  //    resetting there detaches done/total from pendingJobs.count.
-
-  // 5. Capture generation synchronously before the first await.
-  //    `let gen = generation`
-
-  // 6. Fire-and-forget Task with [weak self] re-checking isCurrent(gen)
-  //    after every await. Route the actual enqueueing through an existing
-  //    `enqueueX(... generation:)` helper (so record-store dispatch + dedup
-  //    are shared with the single-select paths). Call `processQueueIfNeeded()`
-  //    on success; log + bail on throw.
+  // 1. canStartExport: import conflict, then the correct timeline/collection store.
+  // 2. Entry-specific exclusive-bulk and empty-input checks, in their existing order.
+  // 3. prepareExport: capture settings, clear messages, publish the optional bulk flag,
+  //    reset counters only when truly idle, then capture generation synchronously.
+  let (settings, gen) = prepareExport(...)
+  // 4. Track the preparation task; pass settings intact to enqueueX(... generation:).
+  //    Re-check isCurrent(gen) after every await. Process the queue on success;
+  //    record preparation failure and log on throw.
 }
 ```
+
+`ExportSettingsSnapshot` owns the capture policy for selection, Live Photo paired-video export, and video layout. Add future click-time settings to that value and its capture initializer, then consume them where needed; start methods, enqueue helpers and planners transport the same value. `ExportJob` stores it once, with computed compatibility accessors. Only the manager-reading initializer is `@MainActor`; scalar construction and the value itself remain pure. A run-context selection override must never mutate the toolbar selection. HEIC-to-JPEG conversion deliberately remains live at planning/write time and is excluded from this snapshot.
+
+Preparation has no awaits. Capture settings before publishing messages or the bulk flag, and capture generation before dispatching any asynchronous work. The idle check is `!isRunning && !isProcessing && pendingJobs.isEmpty`: paused pending work accumulates counters. Never move preparation ahead of entry-specific rejection checks or combine timeline and collection readiness.
 
 Bulk dispatchers (`startExportAll`, `startExportTimelineSelection`, `startExportCollectionsSelection`, plus the shared `enqueueBulkAlbumExport` driver behind `startExportAllAlbums` / `startExportAllSharedAlbums` / `startExportFolder` / `startExportAlbums`) follow the same shape but loop over multiple `enqueueX(...)` calls and set `isEnqueueingAll = true` for the duration. The four outer-Task scaffoldings share a private helper, `runBulkExportTask(...)`, which owns the `Task { [weak self] in }` wrapping, the `isEnqueueingAll = false` teardown only for the owning generation, the success finalize, and the partial-failure recovery on throw. The inner per-item loop shares `runBulkEnqueueLoop(...)` so multi-bucket dispatchers (years + months for timeline; favorites + albums + shared for collections) can chain passes while accumulating into a single `BulkExportTotals`.
 
@@ -459,7 +448,7 @@ The behavioral gate names below match `AGENTS.md` and `CONTRIBUTING.md`. The gua
 
 1. Add the public method on `ExportManager` following the canonical shape above.
 2. If it routes through an existing `enqueueX(...)` helper, you are done — record-store dispatch, dedup, queue handoff are already correct.
-3. If it needs a new `enqueueX(...)` helper, write that private method too. It should be `async throws`, take `selection: ExportVersionSelection` and `generation: Int`, call `try throwIfCancelledOrStale(gen)` after the PhotoKit fetch, and end with `queueCoordinator.enqueue(jobs)` (NOT a direct `pendingJobs.append`).
+3. If it needs a new `enqueueX(...)` helper, write that private method too. It should be `async throws`, take `settings: ExportSettingsSnapshot` (passed intact) and `generation: Int`, call `try throwIfCancelledOrStale(gen)` after the PhotoKit fetch, and end with `queueCoordinator.enqueue(jobs)` (NOT a direct `pendingJobs.append`).
 4. Add a unit test that asserts the generation guard fires when the run is cancelled mid-await.
 
 ### Adding a new export placement kind

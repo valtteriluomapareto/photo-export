@@ -27,7 +27,7 @@ struct ExportJobPlannerTests {
 
   @Test func plan_emptyAssets_returnsEmpty() {
     let jobs = ExportJobPlanner.plan(
-      assets: [], placement: timelineJuly, selection: .edited,
+      assets: [], placement: timelineJuly, settings: .init(selection: .edited),
       isExported: { _ in false },
       shouldSkipForRetry: { _, _, _ in false })
     #expect(jobs.isEmpty)
@@ -36,7 +36,7 @@ struct ExportJobPlannerTests {
   @Test func plan_noSkips_returnsJobForEveryAsset() {
     let assets = [asset("a1"), asset("a2"), asset("a3")]
     let jobs = ExportJobPlanner.plan(
-      assets: assets, placement: timelineJuly, selection: .edited,
+      assets: assets, placement: timelineJuly, settings: .init(selection: .edited),
       isExported: { _ in false },
       shouldSkipForRetry: { _, _, _ in false })
     #expect(jobs.count == 3)
@@ -48,7 +48,7 @@ struct ExportJobPlannerTests {
     let assets = [asset("done"), asset("pending"), asset("also-done")]
     let exported: Set<String> = ["done", "also-done"]
     let jobs = ExportJobPlanner.plan(
-      assets: assets, placement: timelineJuly, selection: .edited,
+      assets: assets, placement: timelineJuly, settings: .init(selection: .edited),
       isExported: { exported.contains($0.id) },
       shouldSkipForRetry: { _, _, _ in false })
     #expect(jobs.map(\.assetLocalIdentifier) == ["pending"])
@@ -58,7 +58,7 @@ struct ExportJobPlannerTests {
     let assets = [asset("retry"), asset("eligible")]
     let blockedByRetry: Set<String> = ["retry"]
     let jobs = ExportJobPlanner.plan(
-      assets: assets, placement: timelineJuly, selection: .edited,
+      assets: assets, placement: timelineJuly, settings: .init(selection: .edited),
       isExported: { _ in false },
       shouldSkipForRetry: { a, _, _ in blockedByRetry.contains(a.id) })
     #expect(jobs.map(\.assetLocalIdentifier) == ["eligible"])
@@ -70,20 +70,21 @@ struct ExportJobPlannerTests {
     // must check `isExported` first.
     var retryCallsForExported: [String] = []
     _ = ExportJobPlanner.plan(
-      assets: [asset("already-done")], placement: timelineJuly, selection: .edited,
+      assets: [asset("already-done")], placement: timelineJuly, settings: .init(selection: .edited),
       isExported: { _ in true },
       shouldSkipForRetry: { a, _, _ in
         retryCallsForExported.append(a.id)
         return false
       })
-    #expect(retryCallsForExported.isEmpty,
+    #expect(
+      retryCallsForExported.isEmpty,
       "shouldSkipForRetry must NOT be called for assets that are already exported")
   }
 
   @Test func plan_placementAndSelectionThreadedThroughToShouldSkipForRetry() {
     var seenInRetryGate: [(placement: ExportPlacement, selection: ExportVersionSelection)] = []
     _ = ExportJobPlanner.plan(
-      assets: [asset("a1")], placement: favorites, selection: .editedWithOriginals,
+      assets: [asset("a1")], placement: favorites, settings: .init(selection: .editedWithOriginals),
       isExported: { _ in false },
       shouldSkipForRetry: { _, p, s in
         seenInRetryGate.append((placement: p, selection: s))
@@ -99,7 +100,7 @@ struct ExportJobPlannerTests {
     let dated = asset("dated", creationDate: makeDate(year: 2025, month: 3, day: 15))
     let undated = asset("undated", creationDate: nil)
     let jobs = ExportJobPlanner.planTimelineYear(
-      assets: [dated, undated], year: 2025, selection: .edited,
+      assets: [dated, undated], year: 2025, settings: .init(selection: .edited),
       isExported: { _ in false },
       shouldSkipForRetry: { _, _, _ in false })
     #expect(jobs.map(\.assetLocalIdentifier) == ["dated"])
@@ -109,7 +110,7 @@ struct ExportJobPlannerTests {
     let mar = asset("mar", creationDate: makeDate(year: 2025, month: 3, day: 15))
     let dec = asset("dec", creationDate: makeDate(year: 2025, month: 12, day: 1))
     let jobs = ExportJobPlanner.planTimelineYear(
-      assets: [mar, dec], year: 2025, selection: .edited,
+      assets: [mar, dec], year: 2025, settings: .init(selection: .edited),
       isExported: { _ in false },
       shouldSkipForRetry: { _, _, _ in false })
     #expect(jobs.count == 2)
@@ -122,7 +123,7 @@ struct ExportJobPlannerTests {
     let b = asset("b", creationDate: makeDate(year: 2025, month: 7, day: 1))
     let exported: Set<String> = ["a"]
     let jobs = ExportJobPlanner.planTimelineYear(
-      assets: [a, b], year: 2025, selection: .edited,
+      assets: [a, b], year: 2025, settings: .init(selection: .edited),
       isExported: { exported.contains($0.id) },
       shouldSkipForRetry: { _, _, _ in false })
     #expect(jobs.map(\.assetLocalIdentifier) == ["b"])
@@ -132,7 +133,7 @@ struct ExportJobPlannerTests {
     let a = asset("a", creationDate: makeDate(year: 2025, month: 6, day: 1))
     let b = asset("b", creationDate: makeDate(year: 2025, month: 7, day: 1))
     let jobs = ExportJobPlanner.planTimelineYear(
-      assets: [a, b], year: 2025, selection: .edited,
+      assets: [a, b], year: 2025, settings: .init(selection: .edited),
       isExported: { _ in false },
       shouldSkipForRetry: { x, _, _ in x.id == "a" })
     #expect(jobs.map(\.assetLocalIdentifier) == ["b"])
@@ -157,7 +158,7 @@ struct ExportJobPlannerTests {
 
     let dec31 = asset("dec31", creationDate: dateInGMT)
     let jobs = ExportJobPlanner.planTimelineYear(
-      assets: [dec31], year: 2025, selection: .edited,
+      assets: [dec31], year: 2025, settings: .init(selection: .edited),
       isExported: { _ in false },
       shouldSkipForRetry: { _, _, _ in false },
       calendar: gmt)
@@ -169,10 +170,14 @@ struct ExportJobPlannerTests {
     var retryCalls: [String] = []
     let dated = asset("a", creationDate: makeDate(year: 2025, month: 6, day: 1))
     _ = ExportJobPlanner.planTimelineYear(
-      assets: [dated], year: 2025, selection: .edited,
+      assets: [dated], year: 2025, settings: .init(selection: .edited),
       isExported: { _ in true },
-      shouldSkipForRetry: { a, _, _ in retryCalls.append(a.id); return false })
-    #expect(retryCalls.isEmpty,
+      shouldSkipForRetry: { a, _, _ in
+        retryCalls.append(a.id)
+        return false
+      })
+    #expect(
+      retryCalls.isEmpty,
       "shouldSkipForRetry must NOT be called for already-exported assets")
   }
 

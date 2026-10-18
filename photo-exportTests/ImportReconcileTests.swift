@@ -362,7 +362,7 @@ struct ImportReconcileTests {
     #expect(reopened.exportInfo(assetId: asset.id)?.relPath == relativePath)
     let jobs = ExportJobPlanner.plan(
       assets: [asset], placement: .timeline(year: assetYear, month: assetMonth),
-      selection: .edited,
+      settings: .init(selection: .edited),
       isExported: { reopened.isExported(asset: $0, selection: .edited, livePhotosPaired: false) },
       shouldSkipForRetry: { _, _, _ in false })
     #expect(jobs.isEmpty)
