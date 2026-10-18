@@ -1517,6 +1517,12 @@ final class ExportManager: ObservableObject {
     clearRenderActivity()
     clearEmptyRunMessage()
     clearQueueWarningMessage()
+    flushRecordNotifications()
+  }
+
+  private func flushRecordNotifications() {
+    exportRecordStore.flushPendingNotifications()
+    collectionExportRecordStore.flushPendingNotifications()
   }
 
   // MARK: - Empty-run message
@@ -1748,14 +1754,15 @@ final class ExportManager: ObservableObject {
 
   /// Resolves the awaitable run's continuation if one is active. Idempotent — second
   /// and later calls are no-ops, so existing run-terminal paths can call this without
-  /// worrying about whether they're the first to detect the end. No-op when the run
-  /// was started via the existing fire-and-forget `start*` methods (i.e.,
-  /// `activeRunContext` is nil).
+  /// worrying about whether they're the first to detect the end. Pending record UI
+  /// changes are also flushed for legacy fire-and-forget `start*` runs; their
+  /// `activeRunContext` is nil, so they do not produce an awaitable summary.
   private func finalizeActiveRun(
     result: ExportRunResult,
     cancelReason: ExportCancelReason?,
     jobTotals: (enqueued: Int, completed: Int)? = nil
   ) {
+    flushRecordNotifications()
     guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
       return
     }
@@ -1844,6 +1851,11 @@ final class ExportManager: ObservableObject {
   }
 
   private func finishManualFeedbackIfReady(generation gen: Int) {
+    guard isCurrent(gen), !hasActiveExportWork, currentPreparationTasks.isEmpty,
+      manualRunFeedback?.generation == gen
+    else { return }
+    flushRecordNotifications()
+    // Notification subscribers can synchronously start another preparation.
     guard isCurrent(gen), !hasActiveExportWork, currentPreparationTasks.isEmpty,
       let feedback = manualRunFeedback, feedback.generation == gen
     else { return }

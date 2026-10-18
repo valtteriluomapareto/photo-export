@@ -124,7 +124,11 @@ final class ExportRecordStore: ObservableObject {
   /// Change rate is zero outside user-toggle clicks, so no render-storm
   /// concern.
   @Published var convertHEICToJPEG: Bool = false
-  private var notifyWorkItem: DispatchWorkItem?
+  private let notificationClock: any AutoSyncClock
+  private lazy var changeNotifier = RecordStoreChangeNotifier(clock: notificationClock) {
+    [weak self] in
+    self?.mutationCounter &+= 1
+  }
 
   private let fileManager = FileManager.default
   private let recordLogIO: any JSONLRecordLogIO
@@ -140,6 +144,7 @@ final class ExportRecordStore: ObservableObject {
   private var jsonl: JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>?
 
   init() {
+    self.notificationClock = SystemAutoSyncClock()
     self.recordLogIO = ProductionJSONLRecordLogIO()
     self.reconciliationFileChecker = ReconciliationFileChecker()
     let appSupport = try! fileManager.url(
@@ -159,9 +164,11 @@ final class ExportRecordStore: ObservableObject {
   init(
     baseDirectoryURL: URL,
     reconciliationFileChecker: any ReconciliationFileChecking = ReconciliationFileChecker(),
-    recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
+    recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO(),
+    notificationClock: (any AutoSyncClock)? = nil
   ) {
     self.recordLogIO = recordLogIO
+    self.notificationClock = notificationClock ?? SystemAutoSyncClock()
     self.reconciliationFileChecker = reconciliationFileChecker
     self.storeRootURL = baseDirectoryURL
     createDirectoryIfNeeded(baseDirectoryURL)
@@ -202,7 +209,7 @@ final class ExportRecordStore: ObservableObject {
       currentStoreDirURL = nil
       jsonl = nil
       state = .unconfigured
-      mutationCounter &+= 1
+      changeNotifier.notifyNow()
       return
     }
 
@@ -234,14 +241,14 @@ final class ExportRecordStore: ObservableObject {
       hasUnsavedChanges = true
       persistenceError = "Progress from this destination still needs to be saved."
       state = .persistenceFailed
-      mutationCounter &+= 1
+      changeNotifier.notifyNow()
       return
     }
     let loaded = file.load()
     if let error = loaded.ioFailure {
       persistenceError = error.localizedDescription
       state = .persistenceFailed
-      mutationCounter &+= 1
+      changeNotifier.notifyNow()
       return
     }
     switch loaded.snapshotStatus {
@@ -274,7 +281,7 @@ final class ExportRecordStore: ObservableObject {
       finalCommitContext?.needsCorruptionRecovery = true
     }
     replayFinalCompletions()
-    mutationCounter &+= 1
+    changeNotifier.notifyNow()
   }
 
   /// Retry storage access without resetting export history. After an append failure,
@@ -292,7 +299,7 @@ final class ExportRecordStore: ObservableObject {
       persistenceError = nil
       state = .ready
       replayFinalCompletions()
-      mutationCounter &+= 1
+      changeNotifier.notifyNow()
     } catch {
       persistenceError = error.localizedDescription
     }
@@ -328,7 +335,7 @@ final class ExportRecordStore: ObservableObject {
       monthCounters = [:]
       state = .ready
       replayFinalCompletions()
-      mutationCounter &+= 1
+      changeNotifier.notifyNow()
     } catch {
       logger.error(
         "resetToEmpty failed: \(String(describing: error), privacy: .public). Store remains .failed."
@@ -957,7 +964,7 @@ final class ExportRecordStore: ObservableObject {
     hasUnsavedChanges = true
     persistenceError = error.localizedDescription
     state = .persistenceFailed
-    mutationCounter &+= 1
+    changeNotifier.notifyNow()
   }
 
   // MARK: - Internals
@@ -1084,13 +1091,12 @@ final class ExportRecordStore: ObservableObject {
   }
 
   private func scheduleCoalescedNotify() {
-    notifyWorkItem?.cancel()
-    let item = DispatchWorkItem { [weak self] in
-      guard let self else { return }
-      self.mutationCounter &+= 1
-    }
-    notifyWorkItem = item
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: item)
+    changeNotifier.schedule()
+  }
+
+  /// Delivers final logical changes at an owned terminal boundary, independently of IO.
+  func flushPendingNotifications() {
+    changeNotifier.flushPending()
   }
 
   // MARK: - Testing helpers

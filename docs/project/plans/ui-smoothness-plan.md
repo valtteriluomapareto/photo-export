@@ -59,6 +59,15 @@ favorites fetches, and lowers the timeline fetch batch size to 100. The follow-u
 left to this plan is the broader PhotoKit fetch smoothness work, not the issue
 #112 memory fix itself.
 
+Record-store badge notifications use a shared bounded coalescer (#244): the first
+pending mutation opens a 200 ms window that later mutations do not postpone.
+Owned export/import terminal transitions flush pending UI changes separately from
+per-job persistence barriers. Configure, reset, and recovery publish immediately
+and replace an older pending window. This bounds pending-change staleness in
+scheduler time; it does not promise a periodic cadence or real-time delivery while
+the main actor is occupied. Both stores use the injected clock for deterministic
+tests; their persistence lifecycle and schemas remain separate (#252).
+
 ## Phase 0 - Measurement and Fixtures — landed
 
 Land this before invasive refactors.

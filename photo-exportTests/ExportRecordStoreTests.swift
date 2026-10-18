@@ -167,23 +167,6 @@ struct ExportRecordStoreTests {
         #expect(store.monthSummary(year: 2025, month: 7, totalAssets: 1).exportedCount == 0)
     }
 
-    @Test func testMutationCounterCoalescedNotifications() async throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destC")
-        let baseline = store.mutationCounter
-        // Burst of mutations
-        for i in 0..<5 {
-            store.markInProgress(
-                assetId: "c\(i)", year: 2025, month: 8, relPath: "2025/08/", filename: nil)
-        }
-        // Wait for debounce (200ms) to fire once
-        try await Task.sleep(nanoseconds: 600_000_000)
-        let delta = store.mutationCounter - baseline
-        #expect(delta == 1)
-    }
-
     // MARK: - Strict, asset-aware isExported
 
     @Test func strictIsExportedDefaultModeUneditedAsset() throws {

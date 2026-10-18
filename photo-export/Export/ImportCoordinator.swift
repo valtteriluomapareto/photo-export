@@ -69,11 +69,18 @@ final class ImportCoordinator: ObservableObject {
     _ id: UUID, error: String? = nil, stage: BackupScanner.ImportStage? = nil
   ) {
     guard activeImportID == id else { return }
+    flushRecordNotifications()
+    guard activeImportID == id else { return }
     activeImportID = nil
     importError = error
     importStage = stage
     // Publish activity last; synchronous subscribers may start replacement work.
     isImporting = false
+  }
+
+  private func flushRecordNotifications() {
+    host?.exportRecordStore.flushPendingNotifications()
+    host?.collectionExportRecordStore.flushPendingNotifications()
   }
 
   // MARK: - Dependencies
@@ -287,6 +294,9 @@ final class ImportCoordinator: ObservableObject {
     host?.setImportResult(nil)
     importError = nil
     importStage = nil
+    flushRecordNotifications()
+    // A synchronous notification subscriber may cancel and start another import.
+    guard activeImportID == nil else { return }
     isImporting = false
     logger.info("Import cancelled")
   }
