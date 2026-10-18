@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -41,6 +41,12 @@ jobs:
 
       - name: Validate website
         run: npm run validate
+        working-directory: website
+
+      - name: Test and check built website links
+        run: |
+          npm run test:links
+          npm run check:links
         working-directory: website
 
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3

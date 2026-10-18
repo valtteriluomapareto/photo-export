@@ -44,10 +44,17 @@ xcodebuild \
   test
 ```
 
-Optional tools:
+CI pins **SwiftLint 0.65.1** and **swift-format 603.0.0** with SHA256-verified downloads. Use those versions for matching strict diagnostics. On macOS15+ arm64 with Command Line Tools installed, the same installer can prepare a local temporary session:
 
-- `brew install swiftlint`
-- `brew install swift-format`
+```bash
+SWIFT_TOOLS_DIR="$(mktemp -d)"
+RUNNER_TEMP="$SWIFT_TOOLS_DIR" GITHUB_PATH="$SWIFT_TOOLS_DIR/paths" bash scripts/ci/install-swift-tools.sh
+while IFS= read -r tool_bin; do export PATH="$tool_bin:$PATH"; done < "$SWIFT_TOOLS_DIR/paths"
+swiftlint version
+swift-format --version
+```
+
+The installer checks both hashes and exact versions before publishing paths; it has no Homebrew/latest fallback. Installed binaries remain in the temporary session directory. Other platforms can install the same tagged tools from their upstream sources; the CI installer targets its macOS arm64 image. Update pins/checksums and the installer fixtures deliberately when upgrading. Download provenance is recorded in [`install-swift-tools.sh`](scripts/ci/install-swift-tools.sh).
 
 Run the same enforcing style checks as CI from the repository root:
 
