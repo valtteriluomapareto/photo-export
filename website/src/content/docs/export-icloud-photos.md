@@ -102,7 +102,7 @@ If the progress fraction stops climbing or you suspect specific photos are faili
 
 When Photos can't provide the edited version of an asset (`Edited resource unavailable` in the report), the app **falls back to writing the original instead**, with a `_orig` suffix on the filename — for example `IMG_4019_orig.MOV`. Once the original has been written, the asset is considered exported and won't be retried on future runs — the original is your backup. The diagnostic report flags these assets so you can see which ones used the original instead of the edit.
 
-Export progress storage errors stop further exports using the affected records and show a Retry action. Restore storage access or free disk space, then retry while the app remains open to save retained progress without resetting history. Export runs acknowledge record writes before reporting completion.
+Export progress storage errors stop further exports using the affected records and show a Retry action. Restore storage access or free disk space, then retry while the app remains open to save retained progress without resetting history. Export runs acknowledge record writes before reporting completion. After an interrupted history write, valid recovered entries stay tracked when new exports add progress.
 
 ## Why use Photo Export instead of manually dragging photos?
 
