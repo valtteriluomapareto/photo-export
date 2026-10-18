@@ -64,11 +64,18 @@ Each missing version has its own retry time. For example, an original can finish
 
 Other failures need your attention — the destination drive is full, you've revoked write permission on the export folder, an asset has been deleted from Photos. Auto Export records these but won't retry on its own; fix the underlying condition (free up space, restore permissions, etc.), then use **Retry** or start a manual export. For a failure with current Auto Export retry history, use **Retry** while Auto Export is enabled; otherwise start a manual export. Fix the underlying problem first.
 
+A full destination or denied write access stops the current export run at its first
+such failure, including rendering or conversion. Remaining assets are not downloaded
+or marked failed by that run, and later scopes in the same Auto Export batch stop.
+Fix the destination, then use **Retry** or start a new manual export to queue unfinished
+work again. If saving export history also fails, resolve the history recovery alert first.
+
 You can see failed versions recorded by both manual and automatic exports in **Settings → Export Issues**, grouped by category:
 
 - _Destination Unavailable_ — drive went away mid-run
 - _Destination Permission_ — folder is read-only or write access has been revoked
 - _Destination Out of Space_ — disk is full
+- _Destination File Conflict_ — an occupied filename needs attention before retrying
 - _Asset Missing_ — photo no longer exists in your library
 - _Resource Unavailable_ — Photos couldn't provide the photo's data
 - _Photos Library Transient_ — Photos was momentarily unavailable

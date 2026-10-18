@@ -15,6 +15,11 @@ enum AutoSyncFailureCategory: String, Codable, Equatable, CaseIterable, Sendable
   case iCloudTransient
   case unknown
 
+  /// Further writes in this run would hit the same destination-wide failure.
+  var stopsCurrentExportRun: Bool {
+    self == .destinationNoSpace || self == .destinationPermission
+  }
+
   /// Whether the retry policy schedules an automatic retry for this category. Hard
   /// failures (`destinationPermission`, `destinationNoSpace`, `destinationCollision`, `assetMissing`, stable
   /// `resourceMissing`) require explicit user action. `destinationUnavailable` is

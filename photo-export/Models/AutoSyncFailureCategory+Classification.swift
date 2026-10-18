@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Photos
 
@@ -76,6 +77,8 @@ extension AutoSyncFailureCategory {
       }
     case "Export":
       return code == 2 || code == 5 ? .destinationCollision : .unknown
+    case AVFoundationErrorDomain:
+      return code == AVError.Code.diskFull.rawValue ? .destinationNoSpace : .unknown
     case NSURLErrorDomain:
       // PhotoKit's iCloud download path surfaces NSURLError* codes.
       switch code {

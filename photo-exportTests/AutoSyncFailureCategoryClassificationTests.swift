@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Photos
 import Testing
@@ -9,6 +10,18 @@ import Testing
 /// route to the right bucket. Unknown domains fall through to `.unknown`
 /// without misclassification.
 struct AutoSyncFailureCategoryClassificationTests {
+
+  @Test func nativeRendererDiskFullIsAStableHardDestinationFailure() {
+    let signal = AutoSyncFailureCategory.classify(
+      NSError(domain: AVFoundationErrorDomain, code: AVError.Code.diskFull.rawValue))
+    #expect(signal.category == .destinationNoSpace)
+    #expect(!signal.category.isAutomaticallyRetryable)
+    #expect(signal.errorSignature == "\(AVFoundationErrorDomain):-11807")
+    #expect(
+      AutoSyncFailureCategory.classify(
+        NSError(domain: AVFoundationErrorDomain, code: AVError.Code.unknown.rawValue)
+      ).category == .unknown)
+  }
 
   @Test func knownFileCollisionsRequireManualRetry() throws {
     for error in [
