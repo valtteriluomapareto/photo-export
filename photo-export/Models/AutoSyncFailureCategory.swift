@@ -8,6 +8,7 @@ enum AutoSyncFailureCategory: String, Codable, Equatable, CaseIterable, Sendable
   case destinationUnavailable
   case destinationPermission
   case destinationNoSpace
+  case destinationCollision
   case assetMissing
   case resourceMissing
   case photoKitTransient
@@ -15,7 +16,7 @@ enum AutoSyncFailureCategory: String, Codable, Equatable, CaseIterable, Sendable
   case unknown
 
   /// Whether the retry policy schedules an automatic retry for this category. Hard
-  /// failures (`destinationPermission`, `destinationNoSpace`, `assetMissing`, stable
+  /// failures (`destinationPermission`, `destinationNoSpace`, `destinationCollision`, `assetMissing`, stable
   /// `resourceMissing`) require explicit user action. `destinationUnavailable` is
   /// retry-on-state-change rather than retry-on-timer, so it returns `false` here even
   /// though it can resolve.
@@ -24,6 +25,7 @@ enum AutoSyncFailureCategory: String, Codable, Equatable, CaseIterable, Sendable
     case .photoKitTransient, .iCloudTransient, .unknown:
       return true
     case .destinationUnavailable, .destinationPermission, .destinationNoSpace,
+      .destinationCollision,
       .assetMissing, .resourceMissing:
       return false
     }
@@ -33,7 +35,7 @@ enum AutoSyncFailureCategory: String, Codable, Equatable, CaseIterable, Sendable
   /// wall-clock instant at which the retry policy considers a fresh
   /// attempt eligible, or `nil` for non-auto-retryable categories — those
   /// require user action (`destinationPermission`, `destinationNoSpace`,
-  /// `assetMissing`, `resourceMissing`) or a state change
+  /// `destinationCollision`, `assetMissing`, `resourceMissing`) or a state change
   /// (`destinationUnavailable` waits for the drive to come back).
   ///
   /// Per `(category, signature)` group, attempts back off:

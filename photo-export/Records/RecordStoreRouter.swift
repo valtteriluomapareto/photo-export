@@ -27,6 +27,34 @@ final class RecordStoreRouter {
 
   // MARK: - Reads
 
+  /// Proof retained by a previously interrupted original-side write, before a retry
+  /// overwrites its metadata. Compare persisted paths explicitly: placement equality is ID-only.
+  func interruptedFilename(
+    forAssetId assetId: String, placement: ExportPlacement, variant: ExportVariant,
+    relPath: String, subfolder: String?
+  ) -> String? {
+    let variants: [ExportVariant: ExportVariantRecord]
+    switch placement.kind {
+    case .timeline:
+      guard let record = timelineStore.exportInfo(assetId: assetId),
+        let month = placement.timelineYearMonth,
+        record.year == month.year, record.month == month.month, record.relPath == relPath
+      else { return nil }
+      variants = record.variants
+    case .favorites, .album, .sharedAlbum:
+      guard let stored = collectionStore.placement(id: placement.id),
+        stored.kind == placement.kind, stored.relativePath == placement.relativePath
+      else { return nil }
+      variants = collectionStore.exportInfo(assetId: assetId, placement: stored)?.variants ?? [:]
+    }
+    guard let record = variants[variant], record.status == .failed,
+      record.reason == .interrupted, record.subfolder == subfolder,
+      let filename = record.filename, !filename.isEmpty,
+      filename != ".", filename != "..", (filename as NSString).lastPathComponent == filename
+    else { return nil }
+    return filename
+  }
+
   /// Variants currently recorded for `assetId` at `placement`, regardless of status.
   /// Empty dictionary if no record exists in the relevant store.
   func variants(

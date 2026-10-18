@@ -14,6 +14,12 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   private var _afterMoveHook: (@Sendable (URL, URL) throws -> Void)?
   private var _afterTimestampsHook: (@Sendable (URL) -> Void)?
   private var _copyHook: (@Sendable (URL, URL) throws -> Void)?
+  private var _inspectionHook: (@Sendable (URL) throws -> Void)?
+
+  var inspectionHook: (@Sendable (URL) throws -> Void)? {
+    get { lock.withLock { _inspectionHook } }
+    set { lock.withLock { _inspectionHook = newValue } }
+  }
 
   /// Configured before an export. The callback runs without the tracking lock held.
   var copyHook: (@Sendable (URL, URL) throws -> Void)? {
@@ -90,6 +96,12 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
 
   func fileExists(atPath path: String) -> Bool {
     real.fileExists(atPath: path)
+  }
+
+  func regularFileSize(at url: URL) throws -> Int64? {
+    let size = try real.regularFileSize(at: url)
+    try inspectionHook?(url)
+    return size
   }
 
   func removeItem(at url: URL) throws {

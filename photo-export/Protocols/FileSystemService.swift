@@ -7,6 +7,8 @@ protocol FileSystemService: Sendable {
   func applyTimestamps(creationDate: Date, to url: URL)
   func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws
   func fileExists(atPath: String) -> Bool
+  /// Does not follow a symbolic link. Nil for non-regular files; throws on lookup errors.
+  func regularFileSize(at url: URL) throws -> Int64?
   func removeItem(at url: URL) throws
   /// Copies a file from `src` to `dst`. On APFS volumes (typical for the user's chosen
   /// destination), `FileManager.copyItem(at:to:)` performs copy-on-write at the
