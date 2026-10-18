@@ -297,8 +297,8 @@ final class VariantExporter {
           try await assetResourceWriter.writeResource(
             resource, forAssetId: descriptor.id, to: tempURL)
         case .render(let request):
-          // Translate any renderer error (other than cancellation) into the canonical
-          // recoverable failure so the persisted `lastError` is stable across both
+          // Preserve cancellation and hard destination failures; translate ordinary
+          // renderer errors into the canonical recoverable failure, stable across both
           // "no static resource" and "render attempted and failed" cases. The original
           // error survives in the log for diagnostics.
           do {
@@ -306,6 +306,10 @@ final class VariantExporter {
           } catch is CancellationError {
             throw CancellationError()
           } catch {
+            try queueCoordinator?.throwIfCancelledOrStale(gen)
+            if AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun {
+              throw error
+            }
             logger.error(
               "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
             )
@@ -316,8 +320,9 @@ final class VariantExporter {
           // file via the existing PhotoKit resource writer, then re-encode as
           // JPEG into `tempURL` via the image converter. The intermediate temp
           // is cleaned up via `defer` so a converter failure or cancel doesn't
-          // leak it. Any converter error translates to the same
-          // `editedResourceUnavailableMessage` sentinel the render path uses,
+          // leak it. Ordinary conversion errors translate to the same
+          // `editedResourceUnavailableMessage` sentinel; cancellation and hard
+          // destination failures retain their identity,
           // so the existing "edited variant failed" recovery flow runs cleanly.
           let heicTempURL = tempURL.appendingPathExtension("heic-source")
           defer {
@@ -334,6 +339,10 @@ final class VariantExporter {
           } catch is CancellationError {
             throw CancellationError()
           } catch {
+            try queueCoordinator?.throwIfCancelledOrStale(gen)
+            if AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun {
+              throw error
+            }
             logger.error(
               "HEIC→JPEG conversion failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
             )

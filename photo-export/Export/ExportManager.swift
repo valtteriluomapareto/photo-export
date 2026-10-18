@@ -1753,7 +1753,8 @@ final class ExportManager: ObservableObject {
   /// `activeRunContext` is nil).
   private func finalizeActiveRun(
     result: ExportRunResult,
-    cancelReason: ExportCancelReason?
+    cancelReason: ExportCancelReason?,
+    jobTotals: (enqueued: Int, completed: Int)? = nil
   ) {
     guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
       return
@@ -1780,8 +1781,10 @@ final class ExportManager: ObservableObject {
     let summary = ExportRunSummary(
       context: context,
       endedAt: Date(),
-      enqueuedCount: max(0, totalJobsEnqueued - bookkeeping.totalJobsEnqueuedAtStart),
-      completedCount: max(0, totalJobsCompleted - bookkeeping.totalJobsCompletedAtStart),
+      enqueuedCount: max(
+        0, (jobTotals?.enqueued ?? totalJobsEnqueued) - bookkeeping.totalJobsEnqueuedAtStart),
+      completedCount: max(
+        0, (jobTotals?.completed ?? totalJobsCompleted) - bookkeeping.totalJobsCompletedAtStart),
       failedCount: bookkeeping.failedCount,
       skippedCount: bookkeeping.skippedCount,
       cancelReason: cancelReason,
@@ -1876,8 +1879,9 @@ final class ExportManager: ObservableObject {
     try queueCoordinator.throwIfCancelledOrStale(gen)
   }
 
-  private func export(job: ExportJob, generation gen: Int) async {
+  private func export(job: ExportJob, generation gen: Int) async -> ExportFailureSignal? {
     var inFlight: (assetId: String, variant: ExportVariant)?
+    var intendedVariant: ExportVariant = .original
     do {
       try throwIfCancelledOrStale(gen)
 
@@ -1889,8 +1893,41 @@ final class ExportManager: ObservableObject {
           sentinelMessage: "Asset not found", reason: nil, category: .assetMissing, at: Date())
         logger.error(
           "Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")
-        return
+        return nil
       }
+      let required = requiredVariants(
+        for: descriptor, selection: job.selection,
+        policy: job.placement.kind.variantPolicy,
+        convertHEICToJPEG: convertHEICToJPEG,
+        livePhotosPaired: job.livePhotosPaired)
+      // Look up the existing record for the *current placement* (not cross-placement).
+      // Timeline jobs read from the timeline store; collection jobs read from the
+      // collection store; the router selects the right one. The reuse-source copy path
+      // (Phase 3.3) consults the *other* store separately to avoid re-fetching from
+      // PhotoKit when an asset is already exported elsewhere.
+      let existingVariants = recordStoreRouter.variants(
+        forAssetId: descriptor.id, placement: job.placement)
+      let missing = ExportCompletionPolicy.missingVariants(
+        required: required, variants: existingVariants)
+      if missing.isEmpty {
+        logger.debug(
+          "All required variants already .done for id: \(descriptor.id, privacy: .public)")
+        return nil
+      }
+
+      guard
+        let firstEligibleVariant =
+          [.original, .originalPairedVideo, .edited, .editedPairedVideo]
+          .first(where: {
+            missing.contains($0)
+              && isAutoSyncVariantEligible(
+                assetId: descriptor.id, placement: job.placement, variant: $0)
+          })
+      else {
+        activeRunBookkeeping?.skippedCount += 1
+        return nil
+      }
+      intendedVariant = firstEligibleVariant
       logger.debug(
         "Export begin id: \(descriptor.id, privacy: .public) type: \(descriptor.mediaType.rawValue) hasAdjustments: \(descriptor.hasAdjustments) dims: \(descriptor.pixelWidth)x\(descriptor.pixelHeight)"
       )
@@ -1932,13 +1969,6 @@ final class ExportManager: ObservableObject {
         separator: ", ")
       logger.debug("Asset resources: \(resourceSummary, privacy: .public)")
 
-      // Look up the existing record for the *current placement* (not cross-placement).
-      // Timeline jobs read from the timeline store; collection jobs read from the
-      // collection store; the router selects the right one. The reuse-source copy path
-      // (Phase 3.3) consults the *other* store separately to avoid re-fetching from
-      // PhotoKit when an asset is already exported elsewhere.
-      let existingVariants = recordStoreRouter.variants(
-        forAssetId: descriptor.id, placement: job.placement)
       // Synthesize an `ExportRecord` shape for the existing-stem inheritance logic below
       // (which today only accepts `ExportRecord?`). Collection placements don't have
       // year/month, so we use the placement's relPath directly.
@@ -1960,19 +1990,6 @@ final class ExportManager: ObservableObject {
       } else {
         existingRecord = nil
       }
-      let required = requiredVariants(
-        for: descriptor, selection: job.selection,
-        policy: job.placement.kind.variantPolicy,
-        convertHEICToJPEG: convertHEICToJPEG,
-        livePhotosPaired: job.livePhotosPaired)
-      let missing = ExportCompletionPolicy.missingVariants(
-        required: required, variants: existingVariants)
-      if missing.isEmpty {
-        logger.debug(
-          "All required variants already .done for id: \(descriptor.id, privacy: .public)")
-        return
-      }
-
       // Variant order: image side first within each pairing group so the motion file inherits
       // the anchored stem. For non-Live-Photo assets the paired-video filters fall away and
       // this collapses to the legacy `[.original, .edited]` order.
@@ -2108,16 +2125,17 @@ final class ExportManager: ObservableObject {
           logger.error(
             "Variant \(variant.rawValue, privacy: .public) failed for id: \(descriptor.id, privacy: .public) error: \(String(describing: error), privacy: .public)"
           )
-          recordVariantFailed(
+          let failure = recordVariantFailed(
             assetId: descriptor.id, placement: job.placement, variant: variant,
             error: error, at: Date())
           inFlight = nil
+          if failure.category.stopsCurrentExportRun { return failure }
         }
       }
 
       if !attemptedVariant {
         activeRunBookkeeping?.skippedCount += 1
-        return
+        return nil
       }
 
       // Issue #22 fallback: when the user asked for `.edited` only (no
@@ -2131,7 +2149,7 @@ final class ExportManager: ObservableObject {
       if ExportCompletionPolicy.shouldRunEditedFallback(
         variants: currentVariantsForFallback, required: required)
       {
-        await runEditedFallbackOriginal(
+        return await runEditedFallbackOriginal(
           descriptor: descriptor, resources: resources, destDir: destDir,
           relPath: relPath, job: job, generation: gen, inFlight: &inFlight,
           subfolder: subfolder)
@@ -2144,23 +2162,20 @@ final class ExportManager: ObservableObject {
           assetId: inFlight.assetId, placement: job.placement, variant: inFlight.variant)
       }
     } catch {
-      guard self.isCurrent(gen) else { return }
+      guard self.isCurrent(gen) else { return nil }
       logger.error(
         "Export failed for id: \(job.assetLocalIdentifier, privacy: .public) error: \(String(describing: error), privacy: .public)"
       )
-      // Record the failure against the variant that was actually in flight when the
-      // error landed. Falling back to `.original` here used to fabricate a phantom
-      // `.failed .original` entry on collection-only `.edited` jobs (collection-export
-      // descriptors that only need the edited variant); those jobs would surface a
-      // failure on a variant they never attempted to write. The in-flight tuple is
-      // populated as soon as `exportSingleVariant` issues the variant-in-progress
-      // record and is cleared on success/per-variant catch, so by the time we reach
-      // this outer catch it accurately names the variant whose write threw.
-      let failedVariant = inFlight?.variant ?? .original
-      recordVariantFailed(
+      // Prefer the actual in-flight variant. Directory/access failures can precede
+      // byte production; attribute those to the intended required variant rather
+      // than inventing original history for an edited-only job.
+      let failedVariant = inFlight?.variant ?? intendedVariant
+      let failure = recordVariantFailed(
         assetId: job.assetLocalIdentifier, placement: job.placement, variant: failedVariant,
         error: error, at: Date())
+      if failure.category.stopsCurrentExportRun { return failure }
     }
+    return nil
   }
 
   /// Forwarder onto `VariantExporter.exportSingleVariant`. The signature is preserved so
@@ -2217,11 +2232,11 @@ final class ExportManager: ObservableObject {
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
     subfolder: String? = nil
-  ) async {
+  ) async -> ExportFailureSignal? {
     guard
       isAutoSyncVariantEligible(
         assetId: descriptor.id, placement: job.placement, variant: .original)
-    else { return }
+    else { return nil }
     guard
       let originalRes = ResourceSelection.selectOriginalResource(
         from: resources, mediaType: descriptor.mediaType)
@@ -2229,7 +2244,7 @@ final class ExportManager: ObservableObject {
       logger.info(
         "Edited fallback skipped: no original-side resource for id: \(descriptor.id, privacy: .public)"
       )
-      return
+      return nil
     }
     let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
     let originalExt = (originalRes.originalFilename as NSString).pathExtension
@@ -2267,7 +2282,7 @@ final class ExportManager: ObservableObject {
     } catch is CancellationError {
       logger.info("Edited fallback cancelled for id: \(descriptor.id, privacy: .public)")
     } catch {
-      guard isCurrent(gen) else { return }
+      guard isCurrent(gen) else { return nil }
       logger.error(
         "Edited fallback failed for id: \(descriptor.id, privacy: .public) error: \(String(describing: error), privacy: .public)"
       )
@@ -2280,11 +2295,13 @@ final class ExportManager: ObservableObject {
       // finally rewrites it to `.failed`. Record the failure here so the
       // store reflects what actually happened. The asset is still re-queued
       // on the next run because `.original` is now `.failed` (not `.done`).
-      recordVariantFailed(
+      let failure = recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .original,
         error: error, at: Date())
       inFlight = nil
+      if failure.category.stopsCurrentExportRun { return failure }
     }
+    return nil
   }
 
   /// Variants currently recorded for the asset under `placement`. Pure forwarder to
@@ -2346,10 +2363,15 @@ final class ExportManager: ObservableObject {
       try throwIfCancelledOrStale(gen)
       try await recordStoreRouter.flush(placement: job.placement)
       guard isCurrent(gen) else { return }
-      await export(job: job, generation: gen)
+      let stop = await export(job: job, generation: gen)
       guard isCurrent(gen) else { return }
       try await recordStoreRouter.flush(placement: job.placement)
-      guard isCurrent(gen), manualRunFeedback?.generation == gen else { return }
+      guard isCurrent(gen) else { return }
+      if let stop {
+        stopForDestinationFailure(stop)
+        return
+      }
+      guard manualRunFeedback?.generation == gen else { return }
       manualRunFeedback?.completedCount += 1
       if (manualRunFeedback?.failureSignals ?? 0) > failureSignalsBefore {
         manualRunFeedback?.failedCount += 1
@@ -2369,10 +2391,28 @@ final class ExportManager: ObservableObject {
         )
       }
       // Preserve final-file records retained by the store for non-destructive Retry.
+      let totals = (enqueued: totalJobsEnqueued, completed: totalJobsCompleted + 1)
       teardownActiveWork()
       progressState.manualSummary = stopped
-      finalizeActiveRun(result: .failed, cancelReason: nil)
+      finalizeActiveRun(result: .failed, cancelReason: nil, jobTotals: totals)
     }
+  }
+
+  private func stopForDestinationFailure(_ failure: ExportFailureSignal) {
+    let message =
+      failure.category == .destinationNoSpace
+      ? "Export stopped: the destination is full. Free up space, then start a new export."
+      : "Export stopped: write access to the destination was denied. Restore access, then start a new export."
+    // This job will not receive the coordinator's normal completion increment.
+    let totals = (enqueued: totalJobsEnqueued, completed: totalJobsCompleted + 1)
+    let stopped = manualRunFeedback.map {
+      ManualExportSummary(
+        completedCount: $0.completedCount + 1, failedCount: $0.failedCount + 1,
+        failureMessage: message)
+    }
+    teardownActiveWork()
+    progressState.manualSummary = stopped
+    finalizeActiveRun(result: .failed, cancelReason: nil, jobTotals: totals)
   }
 
   /// Called by the coordinator's drain loop on the "queue empty after a job ran" edge.
@@ -2474,14 +2514,16 @@ final class ExportManager: ObservableObject {
   /// Backwards-compatible overload — call sites that already have an
   /// `Error` instance route through here. The classifier extracts the
   /// `(category, signature, message)` triple.
+  @discardableResult
   private func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     error: Error, at date: Date
-  ) {
+  ) -> ExportFailureSignal {
+    let failure = AutoSyncFailureCategory.classify(error)
     recordVariantFailed(
-      assetId: assetId, placement: placement, variant: variant,
-      failure: AutoSyncFailureCategory.classify(error),
+      assetId: assetId, placement: placement, variant: variant, failure: failure,
       reason: error is EditedResourceUnavailableError ? .editedResourceUnavailable : nil, at: date)
+    return failure
   }
 
   /// Sentinel-message overload — call sites that synthesize a failure

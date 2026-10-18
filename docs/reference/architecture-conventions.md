@@ -36,6 +36,7 @@ func bumpGeneration()
 - `interruptForDestinationUnavailable()` (same path)
 - `supersedeForManualRun()` (same path)
 - `cancelImport()` (on `ImportCoordinator`, via the injected `queueCoordinator` reference)
+- Destination or history-save failure teardown from `performExport` (through the same manager teardown helper)
 
 **Which method does NOT bump generation**:
 
@@ -383,6 +384,19 @@ per-variant meaning. Latch scan/authorization/cleared-work reasons across append
 Persistence teardown snapshots a stopped outcome before clearing ownership. Cancellation,
 supersession and destination interruption clear feedback. Dismissal and success expiry
 retire the terminal row without resetting coordinator counters or revealing old N/N UI.
+
+Destination no-space/permission failures return their original private job-stop signal
+after one failure record. The post-job history flush precedes teardown; a flush failure
+uses the existing persistence recovery message. Renderer/converter wrapping preserves
+these hard destination errors after checking generation; source-side reuse copy failures
+retain their PhotoKit fallback. Native AVFoundation disk-full uses the same category.
+Stop summaries snapshot totals before teardown and account for the current job once,
+since the coordinator's normal completion increment is suppressed by the generation
+change. Completion publication/awaiter resumption follows teardown. Manual feedback
+counts failed jobs; awaitable summaries retain per-variant failure details. The pending
+queue is cleared and preparations invalidated; unattempted history remains eligible for
+a fresh explicit run. Auto Export keeps its existing source visibility and scope fan-out
+stop on a failed result.
 
 ## Destination identity
 
