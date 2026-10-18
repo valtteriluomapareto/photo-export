@@ -75,7 +75,9 @@ struct ExportRecordStoreTests {
         store1.markExported(
             assetId: "x2", year: 2025, month: 3, relPath: "2025/03/", filename: "X2.jpg",
             exportedAt: Date())
-        store1.remove(assetId: "x1")
+        for variant in (store1.exportInfo(assetId: "x1").map { Array($0.variants.keys) } ?? []) {
+          store1.removeVariant(assetId: "x1", variant: variant)
+        }
         store1.flushForTesting()
 
         // New instance, same root and destination id

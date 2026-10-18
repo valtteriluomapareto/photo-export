@@ -2115,7 +2115,7 @@ final class ExportManager: ObservableObject {
         attemptedVariant = true
         do {
           try throwIfCancelledOrStale(gen)
-          let nextGroupStem = try await exportSingleVariant(
+          let nextGroupStem = try await variantExporter.exportSingleVariant(
             variant: variant,
             descriptor: descriptor,
             resources: resources,
@@ -2156,8 +2156,8 @@ final class ExportManager: ObservableObject {
       // future run can still write the edited file if Photos' state changes.
       // `isExported(asset:selection:)` recognises this pair and stops
       // re-queueing the asset every run.
-      let currentVariantsForFallback = currentVariants(
-        assetId: descriptor.id, placement: job.placement)
+      let currentVariantsForFallback = recordStoreRouter.variants(
+        forAssetId: descriptor.id, placement: job.placement)
       if ExportCompletionPolicy.shouldRunEditedFallback(
         variants: currentVariantsForFallback, required: required)
       {
@@ -2188,31 +2188,6 @@ final class ExportManager: ObservableObject {
       if failure.category.stopsCurrentExportRun { return failure }
     }
     return nil
-  }
-
-  /// Forwarder onto `VariantExporter.exportSingleVariant`. The signature is preserved so
-  /// existing call sites (the variant loop and the edited-fallback path) don't change
-  /// during Phase 3a.
-  private func exportSingleVariant(
-    variant: ExportVariant,
-    descriptor: AssetDescriptor,
-    resources: [ResourceDescriptor],
-    destDir: URL,
-    relPath: String,
-    job: ExportJob,
-    groupStem: String?,
-    pairOriginalWithSuffix: Bool,
-    generation gen: Int,
-    inFlight: inout (assetId: String, variant: ExportVariant)?,
-    subfolder: String? = nil,
-    acceptsEditedFallback: Bool = false
-  ) async throws -> String? {
-    try await variantExporter.exportSingleVariant(
-      variant: variant, descriptor: descriptor, resources: resources,
-      destDir: destDir, relPath: relPath, job: job,
-      groupStem: groupStem, pairOriginalWithSuffix: pairOriginalWithSuffix,
-      generation: gen, inFlight: &inFlight, subfolder: subfolder,
-      acceptsEditedFallback: acceptsEditedFallback)
   }
 
   // Destination resolution (URL + filename allocation, paired-stem allocation, collision
@@ -2264,7 +2239,7 @@ final class ExportManager: ObservableObject {
       baseStem: baseStem, originalExt: originalExt, destDir: destDir)
     do {
       try throwIfCancelledOrStale(gen)
-      _ = try await exportSingleVariant(
+      _ = try await variantExporter.exportSingleVariant(
         variant: .original,
         descriptor: descriptor,
         resources: resources,
@@ -2314,18 +2289,6 @@ final class ExportManager: ObservableObject {
       if failure.category.stopsCurrentExportRun { return failure }
     }
     return nil
-  }
-
-  /// Variants currently recorded for the asset under `placement`. Pure forwarder to
-  /// `RecordStoreRouter.variants(forAssetId:placement:)` — kept for call-site stability
-  /// across a refactor that has multiple readers (the variant loop, the cancellation
-  /// path, the fallback policy lookup). Inlining would touch all of them at once and
-  /// obscure the router seam in this PR; the wrapper is on the deletion list for a
-  /// later cleanup phase.
-  private func currentVariants(
-    assetId: String, placement: ExportPlacement
-  ) -> [ExportVariant: ExportVariantRecord] {
-    recordStoreRouter.variants(forAssetId: assetId, placement: placement)
   }
 
   // `allocateUnusedOrigStem` and `inheritedGroupStem` moved to ExportDestinationResolver.
@@ -2560,10 +2523,8 @@ final class ExportManager: ObservableObject {
       reason: reason, at: date)
   }
 
-  // `recordVariantInProgress` and `recordVariantExported` previously lived here as pure
-  // forwarders to the router. They became unused once Phase 3a moved the variant write
-  // path into `VariantExporter` (the only caller for both) — `VariantExporter` now
-  // calls `recordStoreRouter.markVariantInProgress` / `.markVariantExported` directly.
+  // VariantExporter records in-progress state through the router and acknowledges
+  // completed files through the destination owner retained by captureFinalCommit.
   // Removed in the post-refactor cleanup.
 
   // `splitFilename` and `uniqueFileURL` moved to ExportDestinationResolver

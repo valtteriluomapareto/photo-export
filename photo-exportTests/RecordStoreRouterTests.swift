@@ -107,18 +107,25 @@ struct RecordStoreRouterTests {
   // Timeline year/month plumb-through: a non-2025/7 placement must persist its year and
   // month onto the stored record, not the `(0,0)` fallback the router uses when
   // `timelineYearMonth` returns nil.
-  @Test func markVariantExported_timelinePreservesYearMonthFromPlacement() {
+  @Test func captureFinalCommit_timelinePreservesYearMonthFromPlacement() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
     let placement = timeline(year: 2019, month: 12)
-    h.router.markVariantExported(
+    let commit = try h.router.captureFinalCommit(
       assetId: "a", placement: placement, variant: .original,
-      relPath: "2019/12/", filename: "X.HEIC", exportedAt: Date())
+      relPath: "2019/12/", filename: "X.HEIC", subfolder: "videos", acceptsEditedFallback: false)
+    await commit(true)
 
-    let record = h.timeline.exportInfo(assetId: "a")
-    #expect(record?.year == 2019)
-    #expect(record?.month == 12)
-    #expect(record?.relPath == "2019/12/")
+    for reload in [false, true] {
+      if reload { h.timeline.configure(for: "test") }
+      let record = h.timeline.exportInfo(assetId: "a")
+      #expect(record?.year == 2019)
+      #expect(record?.month == 12)
+      #expect(record?.relPath == "2019/12/")
+      #expect(record?.variants[.original]?.status == .done)
+      #expect(record?.variants[.original]?.filename == "X.HEIC")
+      #expect(record?.variants[.original]?.subfolder == "videos")
+    }
   }
 
   @Test func retryCompletionIsSpecificToScopeAndVariant() async throws {
@@ -127,9 +134,10 @@ struct RecordStoreRouterTests {
     let placements = [timeline(), favorites(), album("one"), sharedAlbum("two")]
     for placement in placements {
       if placement.kind != .timeline { h.collection.upsertPlacement(placement) }
-      h.router.markVariantExported(
+      let commit = try h.router.captureFinalCommit(
         assetId: "asset", placement: placement, variant: .original,
-        relPath: "2025/07/", filename: "saved.jpg", exportedAt: Date())
+        relPath: "2025/07/", filename: "saved.jpg", subfolder: nil, acceptsEditedFallback: false)
+      await commit(true)
     }
     try await h.timeline.flush()
     try await h.collection.flush()
@@ -168,21 +176,29 @@ struct RecordStoreRouterTests {
     #expect(h.timeline.exportInfo(assetId: "fav") == nil)
   }
 
-  @Test func markVariantExported_dispatchesByPlacementKind() {
+  @Test func captureFinalCommit_dispatchesByPlacementKind() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
     let alb = album("vacation")
     h.collection.upsertPlacement(alb)
-    let now = Date()
-    h.router.markVariantExported(
+    let commit = try h.router.captureFinalCommit(
       assetId: "a1", placement: alb, variant: .edited,
-      relPath: alb.relativePath, filename: "v.HEIC", exportedAt: now)
+      relPath: alb.relativePath, filename: "v.HEIC", subfolder: "videos",
+      acceptsEditedFallback: false)
+    await commit(true)
 
-    let body = h.collection.exportInfo(assetId: "a1", placement: alb)
-    #expect(body?.variants[.edited]?.status == .done)
-    #expect(body?.variants[.edited]?.filename == "v.HEIC")
-    #expect(h.timeline.exportInfo(assetId: "a1") == nil)
+    for reload in [false, true] {
+      if reload { h.collection.configure(for: "test") }
+      let body = h.collection.exportInfo(assetId: "a1", placement: alb)
+      #expect(body?.variants[.edited]?.status == .done)
+      #expect(body?.variants[.edited]?.filename == "v.HEIC")
+      #expect(body?.variants[.edited]?.subfolder == "videos")
+      #expect(h.collection.placements[alb.id]?.relativePath == alb.relativePath)
+      #expect(h.collection.placements[alb.id]?.createdAt == alb.createdAt)
+      #expect(h.collection.placements[alb.id]?.displayName == alb.displayName)
+      #expect(h.timeline.exportInfo(assetId: "a1") == nil)
+    }
   }
 
   @Test func markVariantFailed_dispatchesByPlacementKind() {
@@ -203,7 +219,7 @@ struct RecordStoreRouterTests {
 
   // MARK: - Cancellation cleanup
 
-  @Test func removeInProgressVariant_removesOnlyInProgressVariants() {
+  @Test func removeInProgressVariant_removesOnlyInProgressVariants() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -216,15 +232,16 @@ struct RecordStoreRouterTests {
     #expect(h.timeline.exportInfo(assetId: "tl")?.variants[.original] == nil)
 
     // Timeline path: .done is NOT removed (only .inProgress is).
-    h.router.markVariantExported(
+    let commit = try h.router.captureFinalCommit(
       assetId: "done", placement: timeline(), variant: .original,
-      relPath: "2025/07/", filename: "D.HEIC", exportedAt: Date())
+      relPath: "2025/07/", filename: "D.HEIC", subfolder: nil, acceptsEditedFallback: false)
+    await commit(true)
     h.router.removeInProgressVariant(
       assetId: "done", placement: timeline(), variant: .original)
     #expect(h.timeline.exportInfo(assetId: "done")?.variants[.original]?.status == .done)
   }
 
-  @Test func removeInProgressVariant_collectionStore_sameContract() {
+  @Test func removeInProgressVariant_collectionStore_sameContract() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
     let alb = album("a")
@@ -237,9 +254,10 @@ struct RecordStoreRouterTests {
       assetId: "in", placement: alb, variant: .original)
     #expect(h.collection.exportInfo(assetId: "in", placement: alb) == nil)
 
-    h.router.markVariantExported(
+    let commit = try h.router.captureFinalCommit(
       assetId: "kept", placement: alb, variant: .original,
-      relPath: alb.relativePath, filename: "K.HEIC", exportedAt: Date())
+      relPath: alb.relativePath, filename: "K.HEIC", subfolder: nil, acceptsEditedFallback: false)
+    await commit(true)
     h.router.removeInProgressVariant(
       assetId: "kept", placement: alb, variant: .original)
     #expect(

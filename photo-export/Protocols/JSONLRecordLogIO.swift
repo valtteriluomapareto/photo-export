@@ -1,9 +1,9 @@
 import Darwin
 import Foundation
 
-/// The two disk operations whose failures must reach the composing record store. Keeping
-/// this seam at the log boundary lets tests force open, write, and sync failures without
-/// changing the snapshot replacement algorithm.
+/// Snapshot/log reads and log append operations whose failures reach the composing store.
+/// This seam injects read, open, write and sync failures without changing the snapshot
+/// replacement algorithm.
 protocol JSONLRecordLogIO: Sendable {
   func readIfPresent(at url: URL) throws -> Data?
   func openForAppending(at url: URL) throws -> FileHandle
@@ -48,7 +48,7 @@ struct ProductionJSONLRecordLogIO: JSONLRecordLogIO {
   }
 
   /// ENOENT also describes a dangling symlink or a missing parent directory. Neither
-  /// is a normal absent log inside a configured records directory.
+  /// is a normal absent snapshot or log inside a configured records directory.
   private static func isAbsentEntry(at url: URL) -> Bool {
     var metadata = stat()
     if lstat(url.path, &metadata) == 0 { return false }

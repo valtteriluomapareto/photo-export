@@ -710,7 +710,9 @@ struct ExportRecordStoreQueryGoldenTests {
     assertConsistentCountsForAllCells()
 
     // Step 6: full-record delete.
-    store.remove(assetId: "c")
+    for variant in (store.exportInfo(assetId: "c").map { Array($0.variants.keys) } ?? []) {
+      store.removeVariant(assetId: "c", variant: variant)
+    }
     assertConsistentCountsForAllCells()
 
     // Step 7: re-add with a different year/month (cross-cell move on re-insert).
@@ -750,7 +752,9 @@ struct ExportRecordStoreQueryGoldenTests {
       assetId: "fb2", variant: .original, year: 2026, month: 3, relPath: "2026/03/",
       filename: "FB2_orig.HEIC", exportedAt: now)
     assertConsistentCountsForAllCells()
-    store.remove(assetId: "fb2")
+    for variant in (store.exportInfo(assetId: "fb2").map { Array($0.variants.keys) } ?? []) {
+      store.removeVariant(assetId: "fb2", variant: variant)
+    }
     assertConsistentCountsForAllCells()
   }
 
@@ -789,7 +793,9 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(store.recordCountOriginalDoneAtNaturalStem(year: yr, month: mo) == 1)
 
     // Step 4: remove(assetId:) — record gone, all counts zero.
-    store.remove(assetId: "x")
+    for variant in (store.exportInfo(assetId: "x").map { Array($0.variants.keys) } ?? []) {
+      store.removeVariant(assetId: "x", variant: variant)
+    }
     #expect(store.recordCount(year: yr, month: mo, variant: .original, status: .done) == 0)
     #expect(store.recordCountOriginalDoneAtNaturalStem(year: yr, month: mo) == 0)
   }

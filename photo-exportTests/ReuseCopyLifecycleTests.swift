@@ -169,7 +169,9 @@ struct ReuseCopyLifecycleTests {
     await gate.started.waitForEnter(count: 1)
     let old = try #require(fixture.manager.currentTask)
     fixture.manager.cancelAndClear()
-    fixture.timeline.remove(assetId: fixture.asset.id)
+    for variant in (fixture.timeline.exportInfo(assetId: fixture.asset.id).map { Array($0.variants.keys) } ?? []) {
+      fixture.timeline.removeVariant(assetId: fixture.asset.id, variant: variant)
+    }
     fixture.writer.afterWriteCheckpoint = replacementWritten
     fixture.manager.startExportFavorites()
     await replacementWritten.waitForEnter(count: 1)
