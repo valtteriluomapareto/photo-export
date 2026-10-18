@@ -37,6 +37,9 @@ struct ExportDestinationResolver: Sendable {
   /// `.edited` variant (current run or prior record) and so must be written at
   /// `<stem>_orig.<ext>` instead of `<stem>.<ext>`.
   ///
+  /// `interruptedFilename` authorizes only the exact paired candidate already verified
+  /// by the exporter against interrupted history and regular-file metadata.
+  ///
   /// Throws on the paired-original collision case (target already occupied by a prior
   /// `.original.done` write) so the caller marks the variant `.failed` rather than
   /// silently splitting the pair across stems. The error domain/code/message string is
@@ -49,7 +52,8 @@ struct ExportDestinationResolver: Sendable {
     resources: [ResourceDescriptor],
     destDir: URL,
     groupStem: String?,
-    pairOriginalWithSuffix: Bool
+    pairOriginalWithSuffix: Bool,
+    interruptedFilename: String? = nil
   ) throws -> (URL, String) {
     switch variant {
     case .original, .originalPairedVideo:
@@ -63,7 +67,7 @@ struct ExportDestinationResolver: Sendable {
         let filename = ExportFilenamePolicy.originalFilename(
           stem: stem, ext: origExt, withSuffix: pairOriginalWithSuffix)
         let candidate = destDir.appendingPathComponent(filename)
-        if fileSystem.fileExists(atPath: candidate.path) {
+        if fileSystem.fileExists(atPath: candidate.path), filename != interruptedFilename {
           throw NSError(
             domain: "Export", code: 5,
             userInfo: [

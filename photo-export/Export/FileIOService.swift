@@ -64,6 +64,12 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     FileManager.default.fileExists(atPath: path)
   }
 
+  func regularFileSize(at url: URL) throws -> Int64? {
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    guard attributes[.type] as? FileAttributeType == .typeRegular else { return nil }
+    return (attributes[.size] as? NSNumber)?.int64Value
+  }
+
   func removeItem(at url: URL) throws {
     try FileManager.default.removeItem(at: url)
   }

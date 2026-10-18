@@ -95,7 +95,8 @@ struct ExportIssuesView: View {
 
   private static func icon(for category: AutoSyncFailureCategory) -> String {
     switch category {
-    case .destinationUnavailable, .destinationPermission, .destinationNoSpace:
+    case .destinationUnavailable, .destinationPermission, .destinationNoSpace,
+      .destinationCollision:
       return "externaldrive.badge.exclamationmark"
     case .assetMissing, .resourceMissing:
       return "photo.badge.exclamationmark"
@@ -111,7 +112,9 @@ struct ExportIssuesView: View {
   private static func tint(for category: AutoSyncFailureCategory) -> Color {
     switch category {
     case .destinationUnavailable, .iCloudTransient, .photoKitTransient: return .orange
-    case .destinationPermission, .destinationNoSpace, .assetMissing, .resourceMissing: return .red
+    case .destinationPermission, .destinationNoSpace, .destinationCollision, .assetMissing,
+      .resourceMissing:
+      return .red
     case .unknown: return .secondary
     }
   }
@@ -121,6 +124,7 @@ struct ExportIssuesView: View {
     case .destinationUnavailable: return "Destination Unavailable"
     case .destinationPermission: return "Destination Permission"
     case .destinationNoSpace: return "Destination Out of Space"
+    case .destinationCollision: return "Destination File Conflict"
     case .assetMissing: return "Asset Missing"
     case .resourceMissing: return "Resource Unavailable"
     case .photoKitTransient: return "Photos Library Transient"

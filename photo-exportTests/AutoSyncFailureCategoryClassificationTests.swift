@@ -10,9 +10,38 @@ import Testing
 /// without misclassification.
 struct AutoSyncFailureCategoryClassificationTests {
 
+  @Test func knownFileCollisionsRequireManualRetry() throws {
+    for error in [
+      NSError(domain: "Export", code: 5), NSError(domain: "Export", code: 2),
+      NSError(domain: NSCocoaErrorDomain, code: NSFileWriteFileExistsError),
+      NSError(domain: NSPOSIXErrorDomain, code: Int(EEXIST)),
+    ] {
+      let signal = AutoSyncFailureCategory.classify(error)
+      #expect(!signal.category.isAutomaticallyRetryable)
+      #expect(signal.category.nextEligibleAt(attemptCount: 1, from: Date()) == nil)
+      let data = try JSONEncoder().encode(signal.category)
+      #expect(try JSONDecoder().decode(AutoSyncFailureCategory.self, from: data) == signal.category)
+      var state = AutoSyncRetryState()
+      let now = Date(timeIntervalSince1970: 1_700_000_000)
+      state.recordFailure(
+        scope: .timeline, assetId: "collision", variant: .original,
+        category: signal.category, errorSignature: signal.errorSignature, at: now,
+        nextEligibleAt: signal.category.nextEligibleAt(attemptCount: 1, from: now))
+      let decoded = try JSONDecoder().decode(
+        AutoSyncRetryState.self, from: JSONEncoder().encode(state))
+      let entry = decoded.entry(scope: .timeline, assetId: "collision", variant: .original)
+      #expect(entry?.category == signal.category)
+      #expect(entry?.nextEligibleAt == nil)
+    }
+    #expect(
+      AutoSyncFailureCategory.classify(NSError(domain: "Other", code: 5)).category
+        .isAutomaticallyRetryable)
+  }
+
   @Test func observedPrivateCloudDownloadCodeOnly() {
     for code in [1004, 1005, 1006] {
-      let signal = AutoSyncFailureCategory.classify(NSError(domain: "CloudPhotoLibraryErrorDomain", code: code))
+      let signal = AutoSyncFailureCategory.classify(
+        NSError(domain: "CloudPhotoLibraryErrorDomain", code: code))
       #expect(signal.category == (code == 1005 ? .iCloudTransient : .unknown))
       #expect(signal.errorSignature == "CloudPhotoLibraryErrorDomain:\(code)")
     }

@@ -110,6 +110,7 @@ struct ExportDestinationResolverTests {
   @Test func uniqueFileURL_capRespected_returnsLastAttemptedURL() {
     final class AlwaysExists: FileSystemService, @unchecked Sendable {
       func fileExists(atPath path: String) -> Bool { true }
+      func regularFileSize(at url: URL) throws -> Int64? { nil }
       func moveItemAtomically(from src: URL, to dst: URL) throws {}
       func applyTimestamps(creationDate: Date, to url: URL) {}
       func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws {}

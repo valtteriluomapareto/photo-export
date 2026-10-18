@@ -76,6 +76,14 @@ disk when the toggle is on. Shared-album Live Photos stay still-only regardless 
 the setting because Apple doesn't expose the paired video for assets that live
 only in a shared album.
 
+If an original-side file reached its paired slot before the app stopped, a retry can
+recover it when history still identifies that exact interrupted filename and folder.
+The app verifies a non-empty regular file and checks the resource size when known;
+foreign or mismatched files remain conflicts. Conflicts require a manual retry rather
+than repeating on Auto Export's timer. This recovery does not cover edited renders,
+unrecorded first files, or history whose interruption marker was already replaced by
+an earlier collision failure.
+
 Edited videos render on your Mac during export, which is slower than copying — expect 4K
 iCloud videos to take noticeably longer per file than a plain copy would. Plain copies
 remain fast.

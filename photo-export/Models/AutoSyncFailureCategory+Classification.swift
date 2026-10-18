@@ -56,23 +56,26 @@ extension AutoSyncFailureCategory {
       case NSFileWriteNoPermissionError, NSFileReadNoPermissionError,
         NSFileWriteVolumeReadOnlyError:
         return .destinationPermission
-      case NSFileNoSuchFileError, NSFileReadNoSuchFileError,
-        NSFileWriteFileExistsError:
+      case NSFileWriteFileExistsError:
+        return .destinationCollision
+      case NSFileNoSuchFileError, NSFileReadNoSuchFileError:
         // Read-no-such-file at write time generally means the destination
         // directory vanished — treat as unavailable rather than missing-
-        // asset. Write-file-exists is a collision the exporter should never
-        // reach normally; surface as unknown so it doesn't get auto-retried.
-        return code == NSFileWriteFileExistsError ? .unknown : .destinationUnavailable
+        // asset.
+        return .destinationUnavailable
       default:
         return .unknown
       }
     case NSPOSIXErrorDomain:
       switch Int32(code) {
+      case EEXIST: return .destinationCollision
       case ENOSPC: return .destinationNoSpace
       case EACCES, EPERM, EROFS: return .destinationPermission
       case ENOENT, ENXIO: return .destinationUnavailable
       default: return .unknown
       }
+    case "Export":
+      return code == 2 || code == 5 ? .destinationCollision : .unknown
     case NSURLErrorDomain:
       // PhotoKit's iCloud download path surfaces NSURLError* codes.
       switch code {

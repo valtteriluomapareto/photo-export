@@ -194,6 +194,23 @@ render/conversion failures retain the `Export:9` retry identity.
 - After an append failure, the primitive stops subsequent queued appends and compactions. The store retains its in-memory history, including final filenames from an in-flight export. Retry saves this history with an atomic snapshot before returning to ready. Keep the app open until retry succeeds; unacknowledged progress can be lost on quit. Destination switches retain failed histories in memory until the user returns and retries.
 - After a read failure, Retry reloads the original files; it never replaces unreadable history with an empty snapshot. Callbacks belonging to a previous destination cannot change the current store's health.
 
+## Interrupted paired-slot recovery
+
+Original-side paired variants can reuse an existing slot only when their record still
+has typed `failed/interrupted` status and the persisted placement path, filename and
+subfolder match. A utility-worker probe rejects links, directories, empty files, metadata-inspection failures
+and positive known-resource-size mismatches. The regular resolver still computes
+the candidate. Recovery uses the same captured-destination final-commit barrier as a
+move, including timestamps and durable acknowledgement. It cannot reconstruct proof
+already erased by an older collision retry and makes no content-hash or crash-atomicity
+guarantee.
+
+Known file-exists errors now use the hard retry category `destinationCollision`.
+Existing category raw values and signatures are unchanged; saved `.unknown` entries
+are reclassified on their next attempt. This adds a persisted retry enum value:
+older builds cannot decode a retry file containing it and use their existing metadata
+recovery path on downgrade. Export-record schemas are unchanged.
+
 ## Auto Export metadata recovery
 
 The separate `dirtyState.json` and `retryState.json` files keep their existing JSON

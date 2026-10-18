@@ -176,6 +176,10 @@ final class VariantExporter {
       return nil
     }
 
+    let interruptedFilename = try await verifiedInterruptedFilename(
+      variant: variant, descriptor: descriptor, producer: producer, destDir: destDir,
+      relPath: relPath, job: job, groupStem: groupStem, subfolder: subfolder, generation: gen)
+
     let (finalURL, chosenStem) = try destinationResolver.resolveDestination(
       variant: variant,
       descriptor: descriptor,
@@ -183,8 +187,19 @@ final class VariantExporter {
       resources: resources,
       destDir: destDir,
       groupStem: groupStem,
-      pairOriginalWithSuffix: pairOriginalWithSuffix
+      pairOriginalWithSuffix: pairOriginalWithSuffix,
+      interruptedFilename: interruptedFilename
     )
+
+    if finalURL.lastPathComponent == interruptedFilename,
+      fileSystem.fileExists(atPath: finalURL.path)
+    {
+      try await commitFile(
+        stagedURL: nil, finalURL: finalURL, descriptor: descriptor, job: job,
+        variant: variant, relPath: relPath, subfolder: subfolder,
+        acceptsEditedFallback: acceptsEditedFallback, generation: gen)
+      return chosenStem
+    }
 
     let reuseSource: (url: URL, relativePath: String)?
     if let reuse = recordStoreRouter.findReuseSource(
@@ -208,9 +223,8 @@ final class VariantExporter {
     // Any producer can finish after cancellation. Its stage belongs to this attempt,
     // including fallback and HEIC materialization, never a same-path replacement.
     let tempURL = destDir.appendingPathComponent(".photo-export-\(UUID().uuidString).tmp")
-    var ownsTempCleanup = true
     defer {
-      if ownsTempCleanup, fileSystem.fileExists(atPath: tempURL.path) {
+      if fileSystem.fileExists(atPath: tempURL.path) {
         try? fileSystem.removeItem(at: tempURL)
       }
     }
@@ -342,22 +356,46 @@ final class VariantExporter {
     // by `defer`, but only if we throw before the move.
     try queueCoordinator?.throwIfCancelledOrStale(gen)
 
+    try await commitFile(
+      stagedURL: tempURL, finalURL: finalURL, descriptor: descriptor, job: job,
+      variant: variant, relPath: relPath, subfolder: subfolder,
+      acceptsEditedFallback: acceptsEditedFallback, generation: gen)
+    inFlight = nil
+    logger.info(
+      "Exported \(finalURL.lastPathComponent, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"
+    )
+    return chosenStem
+  }
+
+  // MARK: - Helpers
+
+  /// A nil stage acknowledges a verified interrupted paired slot through the same
+  /// bounded commit and captured-destination barrier as a newly moved file.
+  private func commitFile(
+    stagedURL: URL?, finalURL: URL, descriptor: AssetDescriptor, job: ExportManager.ExportJob,
+    variant: ExportVariant, relPath: String, subfolder: String?, acceptsEditedFallback: Bool,
+    generation gen: Int
+  ) async throws {
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
     let acknowledge = try recordStoreRouter.captureFinalCommit(
       assetId: descriptor.id, placement: job.placement, variant: variant,
       relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder,
       acceptsEditedFallback: acceptsEditedFallback)
-    ownsTempCleanup = false
     let commit = Task { [fileSystem] () -> Result<Void, Error> in
       defer {
-        if fileSystem.fileExists(atPath: tempURL.path) { try? fileSystem.removeItem(at: tempURL) }
+        if let tempURL = stagedURL, fileSystem.fileExists(atPath: tempURL.path) {
+          try? fileSystem.removeItem(at: tempURL)
+        }
         finalCommitTask = nil
       }
       do {
-        try await withCheckedThrowingContinuation {
-          (continuation: CheckedContinuation<Void, Error>) in
-          DispatchQueue.global(qos: .utility).async {
-            continuation.resume(
-              with: Result { try fileSystem.moveItemAtomically(from: tempURL, to: finalURL) })
+        if let tempURL = stagedURL {
+          try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .utility).async {
+              continuation.resume(
+                with: Result { try fileSystem.moveItemAtomically(from: tempURL, to: finalURL) })
+            }
           }
         }
       } catch {
@@ -382,14 +420,37 @@ final class VariantExporter {
     // Stale errors and successes cannot reach replacement bookkeeping or UI.
     try queueCoordinator?.throwIfCancelledOrStale(gen)
     try result.get()
-    inFlight = nil
-    logger.info(
-      "Exported \(finalURL.lastPathComponent, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"
-    )
-    return chosenStem
   }
 
-  // MARK: - Helpers
+  private func verifiedInterruptedFilename(
+    variant: ExportVariant, descriptor: AssetDescriptor, producer: EditedProducer,
+    destDir: URL, relPath: String, job: ExportManager.ExportJob, groupStem: String?,
+    subfolder: String?, generation gen: Int
+  ) async throws -> String? {
+    guard groupStem != nil, variant == .original || variant == .originalPairedVideo,
+      case .resource(let resource) = producer,
+      let filename = recordStoreRouter.interruptedFilename(
+        forAssetId: descriptor.id, placement: job.placement, variant: variant,
+        relPath: relPath, subfolder: subfolder)
+    else { return nil }
+    let destination = exportDestination.selectedFolderURL
+    let url = destDir.appendingPathComponent(filename)
+    // Await physical inspection even if the run becomes stale, retaining scoped access.
+    let size: Int64? = await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async { [fileSystem] in
+        continuation.resume(returning: try? fileSystem.regularFileSize(at: url))
+      }
+    }
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
+    guard exportDestination.selectedFolderURL == destination,
+      recordStoreRouter.interruptedFilename(
+        forAssetId: descriptor.id, placement: job.placement, variant: variant,
+        relPath: relPath, subfolder: subfolder) == filename
+    else { throw CancellationError() }
+    guard let size, size > 0 else { return nil }
+    if let expected = resource.fileSize, expected > 0, expected != size { return nil }
+    return filename
+  }
 
   /// Distinguishes source-side errors (file missing/unreadable — fall back to PhotoKit)
   /// from destination-side errors (out of space, target permission, target volume removed
