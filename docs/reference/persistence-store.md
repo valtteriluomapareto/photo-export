@@ -187,7 +187,7 @@ render/conversion failures retain the `Export:9` retry identity.
 ## Error Handling
 
 - A missing snapshot or log is normal. An unreadable file is an IO failure, never an empty history.
-- Invalid JSONL lines are skipped and logged, preserving truncated-final-line recovery.
+- Invalid JSONL lines are skipped and logged, preserving truncated-final-line recovery. A nonempty log without a final LF is remembered at load; the next operation prefixes a separating LF and writes its JSON plus final LF in one Data write. This prevents a recovered complete or partial tail from absorbing the next operation. Partial OS writes remain possible; the next load isolates them again. Successful snapshot/reset clears the pending separator; failed persistence still blocks later appends until snapshot recovery.
 - Snapshot decoding failure enters `.failed`. Reset Records explicitly moves the corrupt snapshot aside and starts empty; Quit preserves it.
 - Log read or append/open/write/synchronize failure enters `.persistenceFailed` and blocks new exports through the affected store. The other store remains independent. The recovery alert offers Retry rather than destructive reset.
 - In-memory mutations are provisional until `flush()` successfully acknowledges all preceding queued writes and synchronization. Export jobs await this boundary before work and before completion; import also flushes before reporting success. No extra fsync is performed per UI notification.

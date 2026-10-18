@@ -93,6 +93,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   private var mutationCountSinceCompact: Int = 0
   private var submittedRevision = 0
   private var flushedRevision = 0
+  /// A recovered complete or partial final line must not absorb the next operation.
+  private var needsLogSeparator = false
 
   /// A ready store may still contain pending writes. A flush acknowledges only
   /// mutations submitted before its await, never newer mutations queued during it.
@@ -181,6 +183,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     var malformedLineCount = 0
     do {
       if let fileData = try logIO.readIfPresent(at: logURL) {
+        needsLogSeparator = !fileData.isEmpty && fileData.last != 0x0A
         // Bulk-read the log instead of one FileHandle.read(upToCount: 1) per
         // byte. Cold-start measurement on a 184 KB log showed ~270 ms of
         // pure syscall overhead from the per-byte reader; one Data(contentsOf:)
@@ -202,6 +205,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
             )
           }
         }
+      } else {
+        needsLogSeparator = false
       }
     } catch {
       ioFailure = error
@@ -315,13 +320,18 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let fileReplacer = self.fileReplacer
     let logIO = self.logIO
     let ioFailureState = self.ioFailureState
+    var payload = Data()
+    if needsLogSeparator { payload.append(0x0A) }
+    payload.append(opData)
+    payload.append(0x0A)
+    let lineData = payload
 
     ioQueue.async { [weak self] in
       // The owner may already have applied a failed operation in memory. No later log
       // append or compaction may claim that state is durable before snapshot recovery.
       guard ioFailureState.currentFailure() == nil else { return }
       do {
-        try Self.appendLogLine(data: opData, to: logURL, logIO: logIO)
+        try Self.appendLogLine(data: lineData, to: logURL, logIO: logIO)
       } catch {
         logger.error(
           "Failed to append log line to \(logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
@@ -369,6 +379,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
         }
       }
     }
+    // IO failure keeps later queued appends blocked until full-snapshot recovery.
+    needsLogSeparator = false
   }
 
   // MARK: - Manual snapshot
@@ -392,6 +404,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     }
     mutationCountSinceCompact = 0
     flushedRevision = submittedRevision
+    needsLogSeparator = false
   }
 
   /// Acknowledges all appends queued before this call only after their file writes and
@@ -418,6 +431,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
       do {
         if fileManager.fileExists(atPath: url.path) {
           try fileManager.removeItem(at: url)
+          if url == logURL { needsLogSeparator = false }
         }
       } catch {
         logger.error(
@@ -500,7 +514,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let handle = try logIO.openForAppending(at: url)
     defer { try? handle.close() }
     try logIO.write(data, to: handle)
-    try logIO.write(Data([0x0A]), to: handle)
     try logIO.synchronize(handle)
   }
 
