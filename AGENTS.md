@@ -147,7 +147,7 @@ When changing user-visible behavior, update both the root `README.md` and the ma
 - Triage a red post-merge main run with an issue or revert before merging another PR.
 - Keep PRs focused. An existing unrelated PR still needs this workflow before merging; do not infer that an old passing check validates new changes.
 - If reviewer subagents are unavailable, explain the limitation instead of presenting a self-review as the requested three-agent review.
-- **Releasing:** always run `scripts/bump-version.sh <version>` and complete the [candidate Photos validation and evidence](docs/project/release-validation.md) before pushing a tag. Pushing a `v*` tag triggers both release pipelines (`release-direct.yml` and `release-app-store.yml`) and they validate that the tag matches `MARKETING_VERSION`. See [`docs/project/release-process.md`](docs/project/release-process.md).
+- **Releasing:** run `scripts/bump-version.sh <version> --no-tag` to prepare a reviewed version PR (the helper never commits or tags). After green CI and merge, complete the [candidate Photos validation and evidence](docs/project/release-validation.md) on the exact clean merged candidate, then explicitly create and push its tag. Pushing a `v*` tag triggers both release pipelines (`release-direct.yml` and `release-app-store.yml`) and they validate that the tag matches `MARKETING_VERSION`. See [`docs/project/release-process.md`](docs/project/release-process.md).
 
 ### Delegating to opencode / Kimi K2.6 (scout model)
 
