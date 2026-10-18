@@ -55,7 +55,7 @@ Once you've picked a scope, decide what to write. Open **Settings → Advanced**
 Then export:
 
 - **Timeline:** navigate to a month and click **Export Month**, or click **Export All** in the toolbar to queue the whole library.
-- **Collections:** select **Favorites** or any album and click **Export Favorites** / **Export Album**, or click **Export All Albums** in the toolbar to queue every user album in one go (Favorites is excluded — it has its own button).
+- **Collections:** select **Favorites** or any album and click **Export Favorites** / **Export Album**, or click **Export All Albums** in the toolbar to queue Favorites and every user album, including nested albums. This batch excludes Shared Albums. A single selected Shared Album gets **Export Shared Album** instead; multiple sidebar selections show **Export N Items** and export that selection. A folder's content-pane button (**Export 1 Album** / **Export N Albums**) exports its descendant albums, or narrows to selected child tiles when present.
 
 The app organizes the output on disk:
 
@@ -94,7 +94,7 @@ If the export is interrupted — you unplug the drive, close the app, or your Ma
 
 Export badges and counts refresh during continuous exports and show their final state when work finishes or is cancelled.
 
-After a manual export finishes, the progress strip briefly shows **Export complete** on success. If any asset job fails, it instead shows **N exported · M failed** with **View Issues**, which opens **Settings → Export Issues**. A job that fails on several photo/video versions counts once; successfully exported versions remain tracked. Failed scans, cleared pending work and export-history save errors show an incomplete or stopped explanation. Failure feedback stays until you dismiss it or start another run. A full destination or denied write access stops the current run immediately and shows the reason. Unattempted assets keep their history and do not gain failure rows. Fix the destination, then start a new export; the stopped queue is cleared, and the new run skips versions already exported. Dismissal and success expiry hide the finished strip without changing export history. Explicit cancellation clears the feedback; an unavailable destination remains explained above the strip.
+Export progress appears in the content-column strip below the toolbar. After a manual export finishes, the strip briefly shows **Export complete** on success. If any asset job fails, it instead shows **N exported · M failed** with **View Issues**, which opens **Settings → Export Issues**. A job that fails on several photo/video versions counts once; successfully exported versions remain tracked. Failed scans, cleared pending work and export-history save errors show an incomplete or stopped explanation. Failure feedback stays until you dismiss it or start another run. A full destination or denied write access stops the current run immediately and shows the reason. Unattempted assets keep their history and do not gain failure rows. Fix the destination, then start a new export; the stopped queue is cleared, and the new run skips versions already exported. Dismissal and success expiry hide the finished strip without changing export history. Explicit cancellation clears the feedback; an unavailable destination remains explained above the strip.
 
 ## Rebuilding state from an existing backup
 

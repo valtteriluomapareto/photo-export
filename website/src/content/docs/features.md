@@ -38,19 +38,19 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 
 - One-click export for a single month, a year, or the entire library
 - One-click export for Favorites or any album you've created in Photos, written to `Collections/Favorites/` or `Collections/Albums/<Album>/`
-- One-click batch export of every album (including albums nested in folders) via the **Export All Albums** toolbar button on the Collections tab
-- One-click batch export of every album in a single folder via **Export Folder** — select a folder in the Collections sidebar and the toolbar's primary action targets just that folder's subtree
+- One-click batch export of Favorites and every user album (including albums nested in folders) via the **Export All Albums** toolbar button on the Collections tab
+- Export a folder's descendant albums using **Export 1 Album** / **Export N Albums** in its content pane. Selecting child tiles narrows that pane action to their albums; selecting a single folder leaves the toolbar on **Export All Albums**
 - Multi-select album tiles inside a folder with Cmd-click / Shift-click to enqueue an arbitrary subset (selected subfolders expand to their descendant albums)
 - **Multi-select in the sidebar** with Cmd-click / Shift-click to enqueue an arbitrary mix in one run:
   - Timeline: any combination of years and months. A year covers all its months — selecting a year and a month inside it exports the year.
   - Collections: any combination of Favorites, albums, folders, and shared albums. Selected folders expand to their nested albums; duplicates dedupe.
   - **Edit → Select All Years** / **Select All Collections** (⌘A) picks every top-level row in the active sidebar. Right-clicking a folder that's part of a multi-selection acts on the whole selection, matching the toolbar's primary action.
-- **iCloud Shared Albums** appear in their own Collections sidebar section and export one at a time to `Collections/Shared Albums/<Album>/`. See the [reduced-fidelity note](#shared-albums-reduced-fidelity) below — Apple only serves shared photos as downscaled JPEGs
+- **iCloud Shared Albums** appear in their own Collections sidebar section and export when explicitly selected to `Collections/Shared Albums/<Album>/`. See the [reduced-fidelity note](#shared-albums-reduced-fidelity) below — Apple only serves shared photos as downscaled JPEGs
 - Only copies assets that haven't been exported yet
 - Automatic folder creation in `<year>/<month>/` for the timeline and `Collections/...` for albums and favorites
 - Albums under folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`)
 - Handles both images and videos, including edits made in Photos
-- Real-time progress tracking in the toolbar (count and current filename)
+- Export progress in the content-column strip below the toolbar (count, current filename, and download/render status)
 
 ### Album folder names
 
@@ -182,7 +182,7 @@ There's an important caveat that Photo Export can't work around: **iCloud only s
 - The exported files are the best version Apple makes available — typically a JPEG well under the original's resolution
 - The **Include originals** and **Convert HEIC to JPEG** toggles are no-ops for shared albums; no `_orig` companion is written and shared-album JPEGs are already JPEG
 - A photo that exists in both your library _and_ a shared album gets exported twice — once at full quality under its owned-library scope (`2025/...`, `Collections/Albums/...`), once downscaled under `Collections/Shared Albums/...`. Photo Export uses Photos' own per-asset identifiers, which differ between the two copies, so they're treated as distinct
-- Shared albums are also excluded from the **Export All Albums** batch action — you export them one at a time, which makes the trade-off explicit
+- Shared albums are excluded from **Export All Albums**. Selecting one gives the toolbar an **Export Shared Album** action; selecting several sidebar items switches to **Export N Items** and can explicitly include Shared Albums
 
 The shared-album pane shows an in-app banner with the same warning so the choice is visible at the moment of export.
 
@@ -207,7 +207,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 - Pause and resume the export queue at any time
 - Cancel and restart exports safely: a cancelled scan cannot change the new run’s progress or completion. A file already moved into place finishes its timestamps and history update for the original destination before a replacement export proceeds, avoiding a duplicate on retry. History storage failures retain the completed file for non-destructive Retry; process-crash recovery remains separate. An unfinished download, render or conversion cannot damage a restarted export or add failures to its result.
 - Cancel and clear the entire batch
-- Queue progress visible in the toolbar
+- Queue progress visible in the content-column strip below the toolbar; pause/resume/cancel controls remain in the toolbar
 
 ## Existing backup import
 
