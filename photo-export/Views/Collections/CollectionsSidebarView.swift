@@ -377,7 +377,6 @@ private struct CollectionRow: View {
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
 
   let descriptor: PhotoCollectionDescriptor
   let count: Int?
