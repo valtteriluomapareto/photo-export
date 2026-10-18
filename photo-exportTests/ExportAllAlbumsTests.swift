@@ -186,7 +186,7 @@ struct ExportAllAlbumsTests {
   /// Top-level albums and albums nested under folders both reach the queue.
   /// Favorites assets are present in the canned data but are NOT enqueued
   /// because the batch is albums-only.
-  @Test func enqueuesEveryAlbumIncludingNestedAndExcludesFavorites() async throws {
+  @Test(.timeLimit(.minutes(1))) func enqueuesEveryAlbumIncludingNestedAndExcludesFavorites() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -213,21 +213,25 @@ struct ExportAllAlbumsTests {
 
     h.photoLib.collectionTree = [favorites, topAlbum, folder]
 
+    h.manager.queueCoordinator.pause()
     h.manager.startExportAllAlbums()
-    await waitUntil(h.manager.totalJobsEnqueued == 3)
+    let preparations = h.manager.currentPreparationTasks
+    try #require(!preparations.isEmpty)
+    for task in preparations { await task.value }
 
     #expect(h.manager.totalJobsEnqueued == 3)
 
     // Every queued placement must be an album — never `.favorites` or `.timeline`.
-    let kinds = Set(h.manager.pendingJobs.map { $0.placement.kind })
-    #expect(kinds.isSubset(of: [.album]))
+    #expect(h.manager.pendingJobs.count == 3)
+    #expect(Set(h.manager.pendingJobs.map(\.assetLocalIdentifier)) == ["a1", "a2", "b1"])
+    #expect(Set(h.manager.pendingJobs.map { $0.placement.kind }) == [.album])
   }
 
   /// Bulk-album export must drop `phAssetCache` between iterations so peak
   /// memory is bounded by one album's working set, not the cumulative
   /// 282-album sweep (issue #112). Asserts via a `RecordingPHAssetCacheControl`
   /// spy because `PHAsset` can't be constructed in unit tests.
-  @Test func bulkAlbumExportCallsForgetPHAssetCachePerAlbum() async throws {
+  @Test(.timeLimit(.minutes(1))) func bulkAlbumExportCallsForgetPHAssetCachePerAlbum() async throws {
     let photoLib = FakePhotoLibraryService()
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
@@ -265,8 +269,11 @@ struct ExportAllAlbumsTests {
     let albumC = seedAlbum(photoLib, localId: "C", ids: ["c1"])
     photoLib.collectionTree = [albumA, albumB, albumC]
 
+    manager.queueCoordinator.pause()
     manager.startExportAllAlbums()
-    await waitUntil(manager.totalJobsEnqueued == 3)
+    let preparations = manager.currentPreparationTasks
+    try #require(!preparations.isEmpty)
+    for task in preparations { await task.value }
 
     // Three real album iterations → at least three drops. Favorites/shared
     // passes are empty in this fixture. `>=` rather than `==` lets the

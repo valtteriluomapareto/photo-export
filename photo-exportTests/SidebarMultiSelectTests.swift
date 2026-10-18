@@ -168,7 +168,7 @@ struct SidebarMultiSelectTests {
   /// placements. Verifies the bulk driver loops through both per-year and per-month
   /// enqueue helpers without losing the ordering or short-circuiting after the first
   /// iteration.
-  @Test func timelineSelectionEnqueuesYearsAndMonths() async throws {
+  @Test(.timeLimit(.minutes(1))) func timelineSelectionEnqueuesYearsAndMonths() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -179,16 +179,20 @@ struct SidebarMultiSelectTests {
     h.photoLib.assetsByYearMonth["2026-7"] = [makeAsset(id: "y26m7-a", year: 2026, month: 7)]
     h.photoLib.assetsByYearMonth["2024-5"] = [makeAsset(id: "y24m5-a", year: 2024, month: 5)]
 
+    h.manager.queueCoordinator.pause()
     h.manager.startExportTimelineSelection(
       years: [2026],
       months: [.init(year: 2024, month: 5)]
     )
 
-    await waitUntil(h.manager.totalJobsEnqueued == 3)
+    let preparations = h.manager.currentPreparationTasks
+    try #require(!preparations.isEmpty)
+    for task in preparations { await task.value }
     #expect(h.manager.totalJobsEnqueued == 3)
 
-    let kinds = Set(h.manager.pendingJobs.map { $0.placement.kind })
-    #expect(kinds.isSubset(of: [.timeline]))
+    #expect(h.manager.pendingJobs.count == 3)
+    #expect(Set(h.manager.pendingJobs.map(\.assetLocalIdentifier)) == ["y26m3-a", "y26m7-a", "y24m5-a"])
+    #expect(Set(h.manager.pendingJobs.map { $0.placement.kind }) == [.timeline])
   }
 
   /// Empty buckets must not enqueue any work, must surface the "no items" message,
@@ -365,7 +369,7 @@ struct SidebarMultiSelectTests {
 
   /// Folder + explicit album in the selection set deduplicate at dispatch time:
   /// the folder's descendant album appears exactly once on the queue.
-  @Test func collectionsSelectionExpandsFoldersAndDedupesAlbums() async throws {
+  @Test(.timeLimit(.minutes(1))) func collectionsSelectionExpandsFoldersAndDedupesAlbums() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -388,13 +392,17 @@ struct SidebarMultiSelectTests {
       default: return []
       }
     }
+    h.manager.queueCoordinator.pause()
     h.manager.startExportCollectionsSelection(buckets)
 
-    await waitUntil(h.manager.totalJobsEnqueued == 2)
+    let preparations = h.manager.currentPreparationTasks
+    try #require(!preparations.isEmpty)
+    for task in preparations { await task.value }
     #expect(h.manager.totalJobsEnqueued == 2)
 
-    let kinds = Set(h.manager.pendingJobs.map { $0.placement.kind })
-    #expect(kinds.isSubset(of: [.album]))
+    #expect(h.manager.pendingJobs.count == 2)
+    #expect(Set(h.manager.pendingJobs.map(\.assetLocalIdentifier)) == ["a1", "b1"])
+    #expect(Set(h.manager.pendingJobs.map { $0.placement.kind }) == [.album])
   }
 
   /// Empty buckets must not enqueue any work and must surface the empty-selection

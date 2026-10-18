@@ -10,9 +10,11 @@ import SwiftUI
 /// `selection: Binding<LibrarySelection?>` so the content view receives a unified
 /// selection regardless of which section is active.
 struct TimelineSidebarView: View {
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
 
   /// Multi-select state bound from `LibraryRootView`. The binding filter below
   /// strips non-timeline values defensively so the sidebar can never persist a
@@ -33,6 +35,13 @@ struct TimelineSidebarView: View {
   }
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("timeline-sidebar-body")
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText(
+        years.map { "\($0):\(assetCountsByYear[$0] ?? 0)" }, for: "timeline-sidebar-years")
+    #endif
     List(selection: timelineSelection) {
       Section("Photos by Year") {
         ForEach(years, id: \.self) { year in
