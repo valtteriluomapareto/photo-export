@@ -68,7 +68,7 @@ struct ImportReconcileTests {
       assetId: "asset-B", variant: .original, year: 2025, month: 3,
       relPath: "2025/03/", filename: "B.HEIC", exportedAt: Date())
 
-    let summary = await store.reconcileAgainstFilesystem(at: root)
+    let summary = try await store.reconcileAgainstFilesystem(at: root)
 
     #expect(summary == .zero)
     #expect(store.recordsById.count == 2)
@@ -88,7 +88,7 @@ struct ImportReconcileTests {
       assetId: "asset-gone", variant: .original, year: 2025, month: 3,
       relPath: "2025/03/", filename: "A.HEIC", exportedAt: Date())
 
-    let summary = await store.reconcileAgainstFilesystem(at: root)
+    let summary = try await store.reconcileAgainstFilesystem(at: root)
 
     #expect(summary.prunedVariants == 1)
     #expect(summary.prunedRecords == 1)
@@ -114,7 +114,7 @@ struct ImportReconcileTests {
       assetId: "asset-pair", variant: .edited, year: 2025, month: 3,
       relPath: "2025/03/", filename: "edit.JPG", exportedAt: Date())
 
-    let summary = await store.reconcileAgainstFilesystem(at: root)
+    let summary = try await store.reconcileAgainstFilesystem(at: root)
 
     #expect(summary.prunedVariants == 1)
     #expect(summary.prunedRecords == 0)
@@ -143,7 +143,7 @@ struct ImportReconcileTests {
       assetId: "asset-inflight", variant: .original, year: 2025, month: 3,
       relPath: "2025/03/", filename: "X.HEIC")
 
-    let summary = await store.reconcileAgainstFilesystem(at: root)
+    let summary = try await store.reconcileAgainstFilesystem(at: root)
 
     #expect(summary == .zero)
     #expect(store.recordsById["asset-failed"]?.variants[.original]?.status == .failed)
@@ -151,7 +151,7 @@ struct ImportReconcileTests {
       store.recordsById["asset-inflight"]?.variants[.original]?.status == .inProgress)
   }
 
-  @Test func timelineReconcilePrunesWhenPathIsDirectory() async throws {
+  @Test func timelineReconcileRejectsDirectoryWithoutPruning() async throws {
     let (root, cleanup) = makeRoot()
     defer { cleanup() }
     let storeRoot = FileManager.default.temporaryDirectory
@@ -166,10 +166,10 @@ struct ImportReconcileTests {
       assetId: "asset-dir", variant: .original, year: 2025, month: 3,
       relPath: "2025/03/", filename: "X.HEIC", exportedAt: Date())
 
-    let summary = await store.reconcileAgainstFilesystem(at: root)
-
-    #expect(summary.prunedVariants == 1)
-    #expect(store.recordsById["asset-dir"] == nil)
+    await #expect(throws: ReconciliationVerificationError.self) {
+      try await store.reconcileAgainstFilesystem(at: root)
+    }
+    #expect(store.recordsById["asset-dir"]?.variants[.original]?.status == .done)
   }
 
   @Test func timelineReconcileSkipsWhenStateNotReady() async throws {
@@ -181,7 +181,7 @@ struct ImportReconcileTests {
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     // Note: NOT configured. State is .unconfigured.
 
-    let summary = await store.reconcileAgainstFilesystem(at: root)
+    let summary = try await store.reconcileAgainstFilesystem(at: root)
     #expect(summary == .zero)
   }
 
@@ -205,7 +205,7 @@ struct ImportReconcileTests {
       assetId: "x1", placement: placement, variant: .original,
       filename: "X.HEIC", exportedAt: Date())
 
-    let summary = await store.reconcileAgainstFilesystem(at: root)
+    let summary = try await store.reconcileAgainstFilesystem(at: root)
     #expect(summary.prunedVariants == 1)
     #expect(summary.prunedRecords == 1)
     #expect(store.recordBodies[placement.id]?["x1"] == nil)
@@ -230,7 +230,7 @@ struct ImportReconcileTests {
       assetId: "x1", placement: placement, variant: .original,
       filename: "X.HEIC", exportedAt: Date())
 
-    let summary = await store.reconcileAgainstFilesystem(at: root)
+    let summary = try await store.reconcileAgainstFilesystem(at: root)
     #expect(summary == .zero)
     #expect(store.recordBodies[placement.id]?["x1"]?.variants["original"]?.status == .done)
   }
@@ -434,7 +434,7 @@ struct ImportReconcileTests {
             exportDate: Date(timeIntervalSince1970: 200), lastError: nil)
         ])
     ])
-    let summary = await h.timeline.reconcileAgainstFilesystem(at: h.dest.rootURL)
+    let summary = try await h.timeline.reconcileAgainstFilesystem(at: h.dest.rootURL)
     #expect(summary == .zero)
     let merged = try #require(h.timeline.exportInfo(assetId: "video"))
     #expect(merged.relPath == "2025/12/videos/")

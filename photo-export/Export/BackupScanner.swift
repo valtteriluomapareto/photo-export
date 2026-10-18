@@ -117,43 +117,36 @@ struct BackupScanner {
 
   /// Enumerates files in YYYY/MM/ directories under the backup root.
   /// Only considers directories where YYYY is a 4-digit year and MM is 01–12.
-  static func scanBackupFolder(at rootURL: URL) -> [ScannedFile] {
-    let fm = FileManager.default
+  static func scanBackupFolder(
+    at rootURL: URL, directoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader()
+  ) throws -> [ScannedFile] {
     var results: [ScannedFile] = []
 
-    // List year directories
-    guard
-      let yearEntries = try? fm.contentsOfDirectory(
-        at: rootURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
-    else {
-      logger.warning("Could not enumerate backup root: \(rootURL.path, privacy: .public)")
-      return []
-    }
+    let yearEntries = try readDirectory(rootURL, keys: [.isDirectoryKey], reader: directoryReader)
 
     for yearDir in yearEntries {
-      guard isDirectory(yearDir),
-        let year = parseYear(yearDir.lastPathComponent)
-      else { continue }
+      guard let year = parseYear(yearDir.lastPathComponent) else { continue }
+      guard try isDirectory(yearDir, reader: directoryReader) else { continue }
 
-      guard
-        let monthEntries = try? fm.contentsOfDirectory(
-          at: yearDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
-      else { continue }
+      let monthEntries = try readDirectory(
+        yearDir, keys: [.isDirectoryKey], reader: directoryReader)
 
       for monthDir in monthEntries {
-        guard isDirectory(monthDir),
-          let month = parseMonth(monthDir.lastPathComponent)
-        else { continue }
+        guard let month = parseMonth(monthDir.lastPathComponent) else { continue }
+        guard try isDirectory(monthDir, reader: directoryReader) else { continue }
 
         // Files directly under YYYY/MM/ (subfolder = nil).
-        appendFiles(in: monthDir, year: year, month: month, subfolder: nil, into: &results)
+        try appendFiles(
+          in: monthDir, year: year, month: month, subfolder: nil,
+          reader: directoryReader, into: &results)
 
         // Issue #38: also descend into YYYY/MM/videos/ (if present) so files written
         // under the subfolder layout are discovered by Import Existing Backup.
         let videosDir = monthDir.appendingPathComponent("videos", isDirectory: true)
-        if isDirectory(videosDir) {
-          appendFiles(
-            in: videosDir, year: year, month: month, subfolder: "videos", into: &results)
+        if try isDirectory(videosDir, reader: directoryReader, optional: true) {
+          try appendFiles(
+            in: videosDir, year: year, month: month, subfolder: "videos",
+            reader: directoryReader, into: &results)
         }
       }
     }
@@ -172,20 +165,19 @@ struct BackupScanner {
     year: Int,
     month: Int,
     subfolder: String?,
+    reader: any BackupDirectoryReading,
     into results: inout [ScannedFile]
-  ) {
-    let fm = FileManager.default
-    guard
-      let files = try? fm.contentsOfDirectory(
-        at: directory,
-        includingPropertiesForKeys: [
-          .isRegularFileKey, .contentModificationDateKey, .fileSizeKey,
-        ],
-        options: [.skipsHiddenFiles])
-    else { return }
+  ) throws {
+    let files = try readDirectory(
+      directory, keys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
+      reader: reader)
 
     for fileURL in files {
-      guard isRegularFile(fileURL) else { continue }
+      let type = try readValues(fileURL, keys: [.isRegularFileKey], reader: reader)
+      guard let regular = type.isRegularFile else {
+        throw BackupScanReadError(path: fileURL.path, detail: "File type is unavailable")
+      }
+      guard regular else { continue }
 
       let filename = fileURL.lastPathComponent
       let ext = fileURL.pathExtension
@@ -978,14 +970,39 @@ struct BackupScanner {
 
   // MARK: - Filesystem helpers
 
-  private static func isDirectory(_ url: URL) -> Bool {
-    let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
-    return values?.isDirectory == true
+  private static func readDirectory(
+    _ url: URL, keys: [URLResourceKey], reader: any BackupDirectoryReading
+  ) throws -> [URL] {
+    do { return try reader.contentsOfDirectory(at: url, keys: keys) } catch {
+      throw BackupScanReadError(path: url.path, detail: error.localizedDescription)
+    }
   }
 
-  private static func isRegularFile(_ url: URL) -> Bool {
-    let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
-    return values?.isRegularFile == true
+  private static func readValues(
+    _ url: URL, keys: Set<URLResourceKey>, reader: any BackupDirectoryReading
+  ) throws -> URLResourceValues {
+    do { return try reader.resourceValues(at: url, keys: keys) } catch {
+      throw BackupScanReadError(path: url.path, detail: error.localizedDescription)
+    }
+  }
+
+  private static func isDirectory(
+    _ url: URL, reader: any BackupDirectoryReading, optional: Bool = false
+  ) throws -> Bool {
+    let values: URLResourceValues
+    do { values = try reader.resourceValues(at: url, keys: [.isDirectoryKey]) } catch {
+      let error = error as NSError
+      let missing =
+        error.domain == NSCocoaErrorDomain
+        && (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError)
+      let missingPOSIX = error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT)
+      if optional && (missing || missingPOSIX) { return false }
+      throw BackupScanReadError(path: url.path, detail: error.localizedDescription)
+    }
+    guard let directory = values.isDirectory, !optional || directory else {
+      throw BackupScanReadError(path: url.path, detail: "Expected a directory")
+    }
+    return directory
   }
 
   private static func parseYear(_ component: String) -> Int? {

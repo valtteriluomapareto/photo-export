@@ -68,7 +68,7 @@ struct BackupScannerTests {
     let root = makeTempDir()
     defer { cleanup(root) }
 
-    let results = BackupScanner.scanBackupFolder(at: root)
+    let results = try BackupScanner.scanBackupFolder(at: root)
     #expect(results.isEmpty)
   }
 
@@ -85,7 +85,7 @@ struct BackupScannerTests {
     FileManager.default.createFile(
       atPath: monthDir.appendingPathComponent("IMG_0002 (1).heic").path, contents: Data([0xFF]))
 
-    let results = BackupScanner.scanBackupFolder(at: root)
+    let results = try BackupScanner.scanBackupFolder(at: root)
     #expect(results.count == 2)
 
     let file1 = results.first { $0.filename == "IMG_0001.jpg" }
@@ -124,7 +124,7 @@ struct BackupScannerTests {
     FileManager.default.createFile(
       atPath: zeroDir.appendingPathComponent("zero.jpg").path, contents: Data([0xFF]))
 
-    let results = BackupScanner.scanBackupFolder(at: root)
+    let results = try BackupScanner.scanBackupFolder(at: root)
     #expect(results.count == 1)
     #expect(results[0].filename == "valid.jpg")
   }
@@ -145,7 +145,7 @@ struct BackupScannerTests {
     FileManager.default.createFile(
       atPath: shortDir.appendingPathComponent("photo.jpg").path, contents: Data([0xFF]))
 
-    let results = BackupScanner.scanBackupFolder(at: root)
+    let results = try BackupScanner.scanBackupFolder(at: root)
     #expect(results.isEmpty)
   }
 
@@ -160,7 +160,7 @@ struct BackupScannerTests {
     FileManager.default.createFile(
       atPath: monthDir.appendingPathComponent("visible.jpg").path, contents: Data([0xFF]))
 
-    let results = BackupScanner.scanBackupFolder(at: root)
+    let results = try BackupScanner.scanBackupFolder(at: root)
     #expect(results.count == 1)
     #expect(results[0].filename == "visible.jpg")
   }
@@ -178,7 +178,7 @@ struct BackupScannerTests {
         atPath: dir.appendingPathComponent(file).path, contents: Data([0xFF]))
     }
 
-    let results = BackupScanner.scanBackupFolder(at: root)
+    let results = try BackupScanner.scanBackupFolder(at: root)
     #expect(results.count == 3)
   }
 

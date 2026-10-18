@@ -505,6 +505,7 @@ final class ExportManager: ObservableObject {
     imageConverter: any ImageConverter = ProductionImageConverter(),
     fileSystem: any FileSystemService = FileIOService(),
     phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
+    backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader(),
     userDefaults: UserDefaults = .standard
   ) {
     self.userDefaults = userDefaults
@@ -597,7 +598,9 @@ final class ExportManager: ObservableObject {
     self.queueCoordinator.$totalJobsCompleted
       .sink { [weak self] in self?.progressState.totalJobsCompleted = $0 }
       .store(in: &queueCancellables)
-    self.importCoordinator = ImportCoordinator(host: self, queueCoordinator: self.queueCoordinator)
+    self.importCoordinator = ImportCoordinator(
+      host: self, queueCoordinator: self.queueCoordinator,
+      backupDirectoryReader: backupDirectoryReader)
     self.importCoordinator.$isImporting
       .sink { [weak self] in self?.isImporting = $0 }
       .store(in: &importCancellables)
@@ -2541,8 +2544,7 @@ struct ImportReport: Equatable {
   let unmatchedCount: Int
   let totalScanned: Int
   /// Variants pruned from records because their backing file was missing on disk
-  /// (or replaced by a directory, or the variant was a corrupt `.done` with nil
-  /// filename). Counts the timeline and collection stores together.
+  /// (proven by a successful verification batch). Counts both stores together.
   let prunedVariants: Int
   /// Records removed entirely after their last variant was pruned. Counts the
   /// timeline and collection stores together.

@@ -5,15 +5,26 @@ import Testing
 
 actor GatedReconciliationFileChecker: ReconciliationFileChecking {
   private var gates: [AsyncCheckpoint] = []
+  private var nextFailure: Int?
 
   func suspendNextProbe(at gate: AsyncCheckpoint) { gates.append(gate) }
+  func failNextProbe(code: Int) { nextFailure = code }
 
-  func isFile(atPath path: String) async -> Bool {
+  func isFile(atPath path: String) async throws -> Bool {
     let gate = gates.isEmpty ? nil : gates.removeFirst()
-    // Capture disk truth before suspension: restoration must not repair an old probe.
-    let result = await ReconciliationFileChecker().isFile(atPath: path)
+    let failure = nextFailure
+    nextFailure = nil
+    let outcome: Result<Bool, Error>
+    do {
+      if let failure { throw NSError(domain: NSPOSIXErrorDomain, code: failure) }
+      outcome = .success(try await ReconciliationFileChecker().isFile(atPath: path))
+    } catch { outcome = .failure(error) }
     if let gate { await gate.enter() }
-    return result
+    return try outcome.get()
+  }
+
+  func validateRoot(atPath path: String) async throws {
+    try await ReconciliationFileChecker().validateRoot(atPath: path)
   }
 }
 
@@ -92,13 +103,14 @@ struct ReconciliationOwnershipTests {
       }
     }
 
-    func reconcile(at url: URL, isCurrent: @MainActor () -> Bool = { true }) async -> Summary {
+    func reconcile(at url: URL, isCurrent: @MainActor () -> Bool = { true }) async throws -> Summary
+    {
       switch kind {
       case .timeline:
-        let result = await timeline.reconcileAgainstFilesystem(at: url, isCurrent: isCurrent)
+        let result = try await timeline.reconcileAgainstFilesystem(at: url, isCurrent: isCurrent)
         return Summary(variants: result.prunedVariants, records: result.prunedRecords)
       case .collection:
-        let result = await collection.reconcileAgainstFilesystem(at: url, isCurrent: isCurrent)
+        let result = try await collection.reconcileAgainstFilesystem(at: url, isCurrent: isCurrent)
         return Summary(variants: result.prunedVariants, records: result.prunedRecords)
       }
     }
@@ -154,7 +166,7 @@ struct ReconciliationOwnershipTests {
     fixture.configure("A")
     let gate = AsyncCheckpoint()
     await fixture.checker.suspendNextProbe(at: gate)
-    let old = Task { await fixture.reconcile(at: fixture.mediaA) }
+    let old = Task { try await fixture.reconcile(at: fixture.mediaA) }
     await gate.waitForEnter(count: 1)
     switch change {
     case .other: fixture.configure("B")
@@ -165,7 +177,7 @@ struct ReconciliationOwnershipTests {
     }
     let beforeResume = fixture.info()
     await gate.releaseAll()
-    let summary = await old.value
+    let summary = try await old.value
     #expect(summary.variants == 0 && summary.records == 0)
     #expect(fixture.info() == beforeResume)
     #expect(fixture.reopenedInfo(change == .other ? "B" : "A") == beforeResume)
@@ -183,7 +195,7 @@ struct ReconciliationOwnershipTests {
     let before = fixture.info()
     let gate = AsyncCheckpoint()
     await fixture.checker.suspendNextProbe(at: gate)
-    let old = Task { await fixture.reconcile(at: fixture.mediaA) }
+    let old = Task { try await fixture.reconcile(at: fixture.mediaA) }
     await gate.waitForEnter(count: 1)
     let name = identical ? "same.jpg" : "new.jpg"
     let media = try fixture.plant(at: fixture.mediaA, filename: name)
@@ -191,7 +203,7 @@ struct ReconciliationOwnershipTests {
     if identical { #expect(fixture.info() == before) }
     let updated = fixture.info()
     await gate.releaseAll()
-    let summary = await old.value
+    let summary = try await old.value
     #expect(summary.variants == 0 && summary.records == 0)
     #expect(fixture.info() == updated)
     #expect(fixture.reopenedInfo("A") == updated)
@@ -209,11 +221,11 @@ struct ReconciliationOwnershipTests {
     var current = true
     let gate = AsyncCheckpoint()
     await fixture.checker.suspendNextProbe(at: gate)
-    let old = Task { await fixture.reconcile(at: fixture.mediaA, isCurrent: { current }) }
+    let old = Task { try await fixture.reconcile(at: fixture.mediaA, isCurrent: { current }) }
     await gate.waitForEnter(count: 1)
     if taskCancellation { old.cancel() } else { current = false }
     await gate.releaseAll()
-    let summary = await old.value
+    let summary = try await old.value
     #expect(summary.variants == 0 && summary.records == 0)
     #expect(fixture.reopenedInfo("A") == expected)
   }
@@ -226,13 +238,13 @@ struct ReconciliationOwnershipTests {
     let expected = fixture.info()
     let gate = AsyncCheckpoint()
     await fixture.checker.suspendNextProbe(at: gate)
-    let old = Task { await fixture.reconcile(at: fixture.mediaA) }
+    let old = Task { try await fixture.reconcile(at: fixture.mediaA) }
     await gate.waitForEnter(count: 1)
     try fixture.plant(at: fixture.mediaA)
-    let newer = await fixture.reconcile(at: fixture.mediaA)
+    let newer = try await fixture.reconcile(at: fixture.mediaA)
     #expect(newer.variants == 0 && newer.records == 0)
     await gate.releaseAll()
-    let stale = await old.value
+    let stale = try await old.value
     #expect(stale.variants == 0 && stale.records == 0)
     #expect(fixture.reopenedInfo("A") == expected)
   }
@@ -331,14 +343,55 @@ struct ReconciliationOwnershipTests {
   }
 
   @Test(arguments: StoreKind.allCases)
-  func healthyBatchPrunesEveryMissingAndCorruptRecord(kind: StoreKind) async throws {
+  func invalidMetadataRejectsWholeBatch(kind: StoreKind) async throws {
     let fixture = try Fixture(kind)
     defer { fixture.cleanup() }
     fixture.seed()
     fixture.seed(assetId: "also-missing")
     fixture.seed(filename: nil, assetId: "corrupt")
-    let result = await fixture.reconcile(at: fixture.mediaA)
-    #expect(result.variants == 3 && result.records == 3)
-    #expect(fixture.reopenedInfo("A") == nil)
+    await #expect(throws: ReconciliationVerificationError.self) {
+      try await fixture.reconcile(at: fixture.mediaA)
+    }
+    #expect(fixture.reopenedInfo("A")?.status == .done)
+  }
+
+  enum ErrorInvalidation: CaseIterable { case sameID, mutation, reconciliation, task, generation }
+
+  @Test(.timeLimit(.minutes(1)), arguments: StoreKind.allCases, ErrorInvalidation.allCases)
+  func obsoleteProbeErrorIsDiscarded(kind: StoreKind, invalidation: ErrorInvalidation) async throws
+  {
+    let fixture = try Fixture(kind)
+    fixture.seed()
+    fixture.flush()
+    let gate = AsyncCheckpoint()
+    await fixture.checker.suspendNextProbe(at: gate)
+    await fixture.checker.failNextProbe(code: Int(EIO))
+    var current = true
+    let old = Task { try await fixture.reconcile(at: fixture.mediaA, isCurrent: { current }) }
+    var failure: Error?
+    do {
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(10))
+      while await gate.enteredSoFar == 0, clock.now < deadline, !Task.isCancelled {
+        try? await Task.sleep(for: .milliseconds(10))
+      }
+      try #require(await gate.enteredSoFar == 1)
+      switch invalidation {
+      case .sameID: fixture.configure("A")
+      case .mutation: fixture.seed(assetId: "newer")
+      case .reconciliation: _ = try await fixture.reconcile(at: fixture.mediaA)
+      case .task: old.cancel()
+      case .generation: current = false
+      }
+      let before = fixture.info()
+      await gate.releaseAll()
+      let result = try await old.value
+      #expect(result.variants == 0 && result.records == 0)
+      #expect(fixture.info() == before)
+    } catch { failure = error }
+    await gate.releaseAll()
+    _ = try? await old.value
+    fixture.cleanup()
+    if let failure { throw failure }
   }
 }

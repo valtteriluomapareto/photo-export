@@ -722,10 +722,9 @@ final class ExportRecordStore: ObservableObject {
   /// Pruning rules:
   /// - `.failed`/`.inProgress` variants are left alone — they have signal value (Save
   ///   Diagnostic Report surfaces them) and the next export run retries them anyway.
-  /// - A `.done` variant with a `nil` filename is corrupt (the writer always sets a
-  ///   filename on success) and is pruned wholesale; there's no path to check.
-  /// - A `.done` variant whose path resolves to a directory (file replaced by a folder
-  ///   of the same name) is pruned — only regular files satisfy "exported."
+  /// - Invalid location metadata, nonregular targets and lookup errors reject the
+  ///   entire batch. Only child-path ENOENT/ENOTDIR proves absence.
+  /// - A readable destination root is revalidated before applying any prune.
   /// - When all variants are pruned, the record is removed entirely.
   ///
   /// Two-phase to respect the `@MainActor` isolation: snapshot on main, file checks
@@ -735,7 +734,7 @@ final class ExportRecordStore: ObservableObject {
   /// reconciliation, Task cancellation or loss of caller ownership discard the batch.
   func reconcileAgainstFilesystem(
     at root: URL, isCurrent: @MainActor () -> Bool = { true }
-  ) async -> ReconcileSummary {
+  ) async throws -> ReconcileSummary {
     guard isCurrent(), !Task.isCancelled, state == .ready else { return .zero }
     reconciliationRevision &+= 1
     let revision = reconciliationRevision
@@ -745,15 +744,10 @@ final class ExportRecordStore: ObservableObject {
       let assetId: String
       let variant: ExportVariant
       let path: String
-      let isCorrupt: Bool
     }
     var probes: [Probe] = []
     for (assetId, record) in recordsById {
       for (variant, vr) in record.variants where vr.status == .done {
-        guard let filename = vr.filename else {
-          probes.append(Probe(assetId: assetId, variant: variant, path: "", isCorrupt: true))
-          continue
-        }
         // Issue #38: probe each variant's *own* on-disk location, computed from the
         // placement-derived `record.relPath` (which the timeline store sets to the
         // current target layout's effective path on every write) plus the variant's
@@ -761,30 +755,24 @@ final class ExportRecordStore: ObservableObject {
         // can live in different subfolders — using a shared `record.relPath` here
         // would mis-probe whichever variant didn't match the last write.
         let placement = ExportPlacement.timeline(year: record.year, month: record.month)
-        let dirRelPath = ExportPlacementPathPolicy.relativePath(
-          placement: placement, subfolder: vr.subfolder)
-        let path = root.appendingPathComponent(dirRelPath)
-          .appendingPathComponent(filename).path
-        probes.append(Probe(assetId: assetId, variant: variant, path: path, isCorrupt: false))
+        let path = try ReconciliationFileChecker.filePath(
+          root: root, placement: placement, filename: vr.filename, subfolder: vr.subfolder)
+        probes.append(Probe(assetId: assetId, variant: variant, path: path))
       }
     }
 
-    // Phase 2 (off-main): file checks. `fileExists(atPath:isDirectory:)` rejects a
-    // directory standing in for the expected file.
+    // Phase 2 (off-main): preserve errors until ownership has been checked.
     let probesCopy = probes
     let fileChecker = reconciliationFileChecker
-    let toPrune: [(assetId: String, variant: ExportVariant)] = await Task.detached {
-      var keys: [(assetId: String, variant: ExportVariant)] = []
-      for probe in probesCopy {
-        if probe.isCorrupt {
-          keys.append((probe.assetId, probe.variant))
-          continue
-        }
-        if await !fileChecker.isFile(atPath: probe.path) {
+    let outcome: Result<[(assetId: String, variant: ExportVariant)], Error> = await Task.detached {
+      do {
+        var keys: [(assetId: String, variant: ExportVariant)] = []
+        for probe in probesCopy where try await !fileChecker.isFile(atPath: probe.path) {
           keys.append((probe.assetId, probe.variant))
         }
-      }
-      return keys
+        try await fileChecker.validateRoot(atPath: root.path)
+        return .success(keys)
+      } catch { return .failure(error) }
     }.value
 
     // Evaluate caller ownership first; then reject configuration/mutation changes
@@ -792,6 +780,8 @@ final class ExportRecordStore: ObservableObject {
     guard isCurrent(), !Task.isCancelled, state == .ready,
       reconciliationRevision == revision
     else { return .zero }
+
+    let toPrune = try outcome.get()
 
     // Phase 3 (main): apply mutations.
     var prunedVariants = 0
