@@ -15,7 +15,7 @@ on:
         type: boolean
 
 concurrency:
-  group: release-direct
+  group: release-direct-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -121,6 +121,7 @@ jobs:
 
           KEYCHAIN_PATH="${RUNNER_TEMP}/release.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "::add-mask::${KEYCHAIN_PASSWORD}"
 
           echo "Creating temporary keychain at ${KEYCHAIN_PATH}..."
           security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
