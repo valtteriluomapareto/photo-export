@@ -18,7 +18,7 @@ Keep a small fixture manifest with filenames, creation month, media kind, and id
 
 Use unique stems. Before **each matrix row**, reset Auto Export, Include originals, HEIC conversion, video subfolders, and Live Photo pairing to off; enable only the options that row specifies. Record setting changes. Use fresh scratch destinations for new-export option comparisons, then keep the same destination for each repeat/relaunch check. Do not publish private test media.
 
-Commit all intended candidate changes, including release notes, before the version bump. After the bump, require a clean `git status --short` before building; record the commit and confirm the intended tag targets it. Keep the candidate checkout unchanged during the smoke. If it changes, rebuild the new candidate and repeat relevant checks. Build without screenshot overrides:
+Include all intended candidate changes, release notes and the version bump in a reviewed PR. After green CI and merge, select that exact merged candidate and require a clean `git status --short` before building; record its SHA and create the tag at that SHA only after validation and the release decision. Keep the candidate checkout unchanged during the smoke. If it changes, rebuild the new candidate and repeat relevant checks. Build without screenshot overrides:
 
 ```bash
 xcodebuild \

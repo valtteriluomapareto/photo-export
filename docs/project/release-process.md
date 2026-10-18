@@ -20,43 +20,58 @@ Forgetting this step is non-fatal: the sheet falls back to a generic "Photo Expo
 
 Keep older entries in the catalog — users skipping multiple releases see the combined set for everything between their last-seen version and the current bundle version.
 
-Commit the catalog and all intended candidate changes before bumping the version; start step 2 with a clean checkout. The bump script commits only the project/version files and marketing layout, so uncommitted release notes would otherwise be absent from its tag.
+Prepare the catalog and all intended release changes on a release branch. Include the notes, project version and website version in the reviewed PR. The bump helper leaves the Git index alone and never commits or tags.
 
-### 2. Bump the version
-
-```bash
-scripts/bump-version.sh 1.2.0
-```
-
-This updates `MARKETING_VERSION` in `project.pbxproj` (all 6 build configs), mirrors the version into `website/src/layouts/MarketingLayout.astro` (the `softwareVersion` field on the homepage's SoftwareApplication JSON-LD, used by LLMs and search engines for version-aware results), commits, and creates a `v1.2.0` git tag.
-
-For pre-release bumps (`1.3.0-beta.1`), the website's `softwareVersion` is written as the base `1.3.0` rather than the suffixed form — Schema.org's `softwareVersion` is user-facing copy that surfaces in LLM and search-result snippets, where a hyphen suffix reads strangely. The bundle still carries the full pre-release string.
-
-To set the version without committing or tagging:
+### 2. Prepare the version and merge the release PR
 
 ```bash
+git switch -c release/1.2.0
 scripts/bump-version.sh 1.2.0 --no-tag
-```
-
-### 3. Validate the final candidate before tag push
-
-Complete the [pre-release Photos smoke matrix and evidence record](release-validation.md) against the final version-bumped commit. Record the app artifact and candidate commit in the release issue or PR. Failed cases block release; each unexercised case needs a reason, residual risk, and an explicit release-owner decision. CI does not substitute for real-library evidence.
-
-If the candidate changes, rebuild and repeat relevant checks before pushing its tag. This gate applies to betas, stable promotions, and code changes after App Review rejection. Keep the tag local until the release decision is recorded, and verify it points to the approved candidate.
-
-### 4. Push the tag
-
-Check that all project configurations agree with the version you are about to push:
-
-```bash
 python3 scripts/ci/check-version.py --expected 1.2.0
+git diff
+git add photo-export/Models/ReleaseNotesCatalog.swift photo-export.xcodeproj/project.pbxproj website/src/layouts/MarketingLayout.astro
+git commit -m "Prepare release 1.2.0"
+git push -u origin HEAD
+gh pr create --title "Prepare release 1.2.0" --body "Version and release notes for the candidate; Photos validation follows on the merged commit."
 ```
 
-Use the full suffixed version for a beta tag. Ordinary CI and both release workflows also run this read-only validator. Version-tag refs are compared with the project version, including manual build-only runs on a tag; branch runs have no tag comparison.
+Follow the normal [contributor review workflow](../../CONTRIBUTING.md), including the three reviewers and green checks before merge. Never push the bump directly to protected `main`.
+
+The helper updates every `MARKETING_VERSION` assignment and the homepage's structured-data `softwareVersion`. Preparation-only is the default; `--no-tag` remains an explicit compatible spelling. For `1.3.0-beta.1`, the bundle keeps the suffix while the website and release-note catalog use base `1.3.0`. Missing catalog entries require an explicit override. A same-version call still repairs website drift and never creates a tag.
+
+### 3. Validate the exact merged candidate
+
+After the release PR merges, select its merge commit while still on the release branch. Enter the merged PR number when prompted:
 
 ```bash
-git push && git push origin v1.2.0
+printf "Merged release PR number: "
+read -r RELEASE_PR &&
+CANDIDATE_SHA="$(gh pr view "$RELEASE_PR" --json mergeCommit --jq '.mergeCommit.oid')" &&
+git fetch origin main &&
+git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main &&
+git switch --detach "$CANDIDATE_SHA" &&
+test -z "$(git status --porcelain)"
 ```
+
+Stop if any command fails, the PR is unmerged, or the candidate is not clean. Verify the PR's current-head checks passed and its merge is the intended candidate. Keep `CANDIDATE_SHA` for the tag step; a later advance of `main` must not change the selected candidate.
+
+Complete the [Photos smoke matrix and evidence record](release-validation.md) against that exact clean, version-bumped merged commit. Record the artifact and candidate SHA in the release issue or PR. Failed cases block release; each unexercised case needs a reason, residual risk, and an explicit release-owner decision. CI does not substitute for real-library evidence.
+
+If the candidate changes, land the change through a PR, select its merged commit, rebuild and repeat relevant checks. This gate applies to betas, stable promotions and code changes after App Review rejection. Create the tag only after the release decision is recorded.
+
+### 4. Tag and push the approved candidate
+
+Using the same shell and the approved `CANDIDATE_SHA` from step3:
+
+```bash
+test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA" &&
+test -z "$(git status --porcelain)" &&
+python3 scripts/ci/check-version.py --expected 1.2.0 &&
+git tag v1.2.0 "$CANDIDATE_SHA" &&
+git push origin refs/tags/v1.2.0
+```
+
+Stop on any failure. Use the full suffixed version for a beta. Push only the tag after the PR has merged; no direct main push or protection bypass is part of this flow. Both release workflows validate that the tag version matches every project configuration, including manual build-only runs on a tag. The optional automated tag-ancestry/status gate is not implemented; selecting the approved merged candidate and recording its checks/evidence remain release-owner responsibilities.
 
 Pushing the `v*` tag triggers the **release-direct** workflow which:
 
@@ -94,7 +109,7 @@ xcodebuild archive \
   DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
 ```
 
-Upload via Xcode Organizer (Distribute App > App Store Connect) or Transporter.
+Upload via Xcode Organizer (Distribute App > App Store Connect) or Transporter. Choose a build number greater than the last accepted build for that marketing version. A high manual number can make subsequent CI `run_number.run_attempt` values too low; compare them before uploading and coordinate any override. Deleting a GitHub tag or draft does not delete App Store Connect builds.
 
 ### 7. Verify distribution artifacts
 
@@ -115,7 +130,7 @@ After App Review approval, release manually in App Store Connect. Verify via Tes
 Build numbers (`CURRENT_PROJECT_VERSION`) are independent per channel:
 
 - **GitHub Releases**: `github.run_number` (auto-incrementing)
-- **App Store**: Previous App Store Connect build number + 1
+- **App Store**: `${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}` (for example `42.2` on the second attempt of run42)
 
 The checked-in value in `project.pbxproj` stays at `1`. Both workflows override it at build time.
 
@@ -151,17 +166,7 @@ signing, uploads or tag creation, run `scripts/ci/test-guards.sh`.
 
 ## Beta / pre-release tags
 
-For seeding a build to a small group of testers from `main` without committing the version as the public stable, push a pre-release tag instead of a stable one.
-
-```bash
-scripts/bump-version.sh 1.3.0-beta.1
-```
-
-Complete step 3's pre-tag validation for this candidate, then push:
-
-```bash
-git push && git push origin v1.3.0-beta.1
-```
+Use the same PR → merged candidate → Photos validation → explicit tag flow for betas. In step2, prepare `scripts/bump-version.sh 1.3.0-beta.1 --no-tag` on its release branch. After merge and step3 validation, step4 uses `--expected 1.3.0-beta.1`, `git tag v1.3.0-beta.1 "$CANDIDATE_SHA"`, and `git push origin refs/tags/v1.3.0-beta.1`.
 
 The accepted version format is strict semver with an optional pre-release suffix: `X.Y.Z` or `X.Y.Z-<identifier>` (e.g. `1.3.0-beta.1`, `1.3.0-rc.2`). The suffix activates the pre-release path automatically:
 
@@ -171,17 +176,7 @@ The accepted version format is strict semver with an optional pre-release suffix
 
 Beta testers see the catalog's `1.3.0` entry in the What's New sheet (since `1.2.3 < 1.3.0 ≤ 1.3.0-beta.1`). When the stable `1.3.0` ships later, testers on `1.3.0-beta.1` will *not* re-fire the sheet (the comparison treats `1.3.0-beta.1` as newer-than `1.3.0` for the `shouldShow` gate). That's intentional — they've already seen the notes.
 
-To promote a beta to stable, bump again with the bare version and re-tag:
-
-```bash
-scripts/bump-version.sh 1.3.0
-```
-
-Apply step 3's candidate diff assessment and validation to the stable version before pushing:
-
-```bash
-git push && git push origin v1.3.0
-```
+To promote a beta, prepare the bare version with `scripts/bump-version.sh 1.3.0 --no-tag` in a new PR. Merge it when green, select that merged candidate, and repeat step3's diff assessment and Photos validation before explicitly tagging `v1.3.0` at its approved SHA. A beta tag is not moved to the stable candidate.
 
 The stable tag goes through both channels (GitHub Release + App Store) as usual.
 
@@ -196,15 +191,30 @@ The stable tag goes through both channels (GitHub Release + App Store) as usual.
 
 ### Rejection requires a code change
 
-1. Delete the draft GitHub Release and the tag (if the GitHub Release was already published, the semver is burned — use a new semver instead)
-2. Fix the issue on `main`
-3. Re-run `bump-version.sh` with the same semver (or a new one if the old version was published)
-4. Complete step 3's validation for the new candidate before pushing its tag
-5. A new draft GitHub Release is created; submit the new App Store build
+If the semver has been published in **either** distribution channel, use a new semver. An unpublished GitHub draft alone does not permit reusing an already published Store version. Existing Store builds also retain their build numbers.
+
+For an unpublished candidate only, delete the existing draft if present (`gh release delete v1.2.0 --yes`), then remove the old remote tag and its local copy if present:
+
+```bash
+git push origin :refs/tags/v1.2.0
+if git show-ref --verify --quiet refs/tags/v1.2.0; then git tag -d v1.2.0; fi
+```
+
+Prepare the correction on a branch and run `scripts/bump-version.sh 1.2.0 --no-tag` before committing, even if the project already has that version; it prepares files but **does not recreate the tag**. Include any resulting version/website changes in the reviewed correction PR. After green CI and merge, select that PR's exact clean merged commit and complete step3's validation/evidence. Then recreate and push explicitly, using that approved `CANDIDATE_SHA`:
+
+```bash
+test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA" &&
+test -z "$(git status --porcelain)" &&
+python3 scripts/ci/check-version.py --expected 1.2.0 &&
+git tag v1.2.0 "$CANDIDATE_SHA" &&
+git push origin refs/tags/v1.2.0
+```
+
+A new draft is created and the new Store build can be submitted with a higher accepted build number. Do not move published tags or bypass candidate validation to repair an upload.
 
 ## Rollback
 
-**Bad GitHub draft**: Delete the draft release and the tag, fix the issue, then re-tag and complete pre-tag validation before pushing.
+**Bad unpublished GitHub draft**: Use the unpublished-candidate recovery above, including a reviewed fix PR and validation of its exact merged candidate before recreating the tag. If either channel already published that semver, ship a new version.
 
 **Bad published GitHub release**: Ship a patch version (preferred) or delete the release.
 
