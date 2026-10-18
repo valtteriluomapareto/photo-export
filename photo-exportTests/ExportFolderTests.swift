@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Photos
 import Testing
@@ -516,7 +517,7 @@ struct ExportFolderTests {
 
   /// All albums under a folder already fully exported → the user-visible message
   /// distinguishes "this folder is done" from "this folder is empty".
-  @Test func allDescendantsAlreadyExportedSetsAlreadyDoneMessage() async throws {
+  @Test(.timeLimit(.minutes(1))) func allDescendantsAlreadyExportedSetsAlreadyDoneMessage() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -537,11 +538,18 @@ struct ExportFolderTests {
       assetId: "d1", placement: placement, variant: .original,
       filename: "d1.HEIC", exportedAt: Date())
 
+    var messages: [String] = []
+    let observation = h.manager.progressState.$emptyRunMessage.compactMap { $0 }.sink {
+      messages.append($0)
+    }
     h.manager.startExportFolder(folderId: "F")
-    await waitUntil(h.manager.emptyRunMessage != nil)
+    let preparations = h.manager.currentPreparationTasks
+    try #require(!preparations.isEmpty)
+    for task in preparations { await task.value }
 
-    #expect(
-      h.manager.emptyRunMessage == "All albums in this folder are already exported.")
+    withExtendedLifetime(observation) {
+      #expect(messages == ["All albums in this folder are already exported."])
+    }
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 
@@ -580,19 +588,28 @@ struct ExportFolderTests {
   /// (the multi-select grid) builds a union of selected album ids + descendant album
   /// ids of selected subfolders, which can produce duplicates if a subfolder and one
   /// of its child albums are both selected.
-  @Test func startExportAlbumsDeduplicatesInput() async throws {
+  @Test(.timeLimit(.minutes(1))) func startExportAlbumsDeduplicatesInput() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
     let album = seedAlbum(h.photoLib, localId: "dup", ids: ["x1", "x2"])
     h.photoLib.collectionTree = [album]
 
+    h.manager.queueCoordinator.pause()
     h.manager.startExportAlbums(collectionIds: ["dup", "dup", "dup"])
-    await waitUntil(h.manager.totalJobsEnqueued == 2)
+    let preparations = h.manager.currentPreparationTasks
+    try #require(!preparations.isEmpty)
+    for task in preparations { await task.value }
 
     #expect(h.manager.totalJobsEnqueued == 2)
     let queuedPlacements = Set(h.manager.pendingJobs.map(\.placement.id))
-    #expect(queuedPlacements.count == 1)
+    let expectedPlacement = try ExportPlacementResolver().placement(
+      for: .album(collectionId: "dup"), collections: h.photoLib.collectionTree,
+      existingPlacements: [])
+    #expect(queuedPlacements == [expectedPlacement.id])
+    #expect(h.manager.pendingJobs.count == 2)
+    #expect(Set(h.manager.pendingJobs.map(\.assetLocalIdentifier)) == ["x1", "x2"])
+    #expect(Set(h.manager.pendingJobs.map { $0.placement.kind }) == [.album])
   }
 
   @Test func startExportAlbumsWithEmptyListSetsEmptyMessage() async throws {
@@ -606,7 +623,7 @@ struct ExportFolderTests {
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 
-  @Test func startExportAlbumsWhenAllAlreadyDoneSetsAlreadyDoneMessage() async throws {
+  @Test(.timeLimit(.minutes(1))) func startExportAlbumsWhenAllAlreadyDoneSetsAlreadyDoneMessage() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -622,10 +639,18 @@ struct ExportFolderTests {
       assetId: "d1", placement: placement, variant: .original,
       filename: "d1.HEIC", exportedAt: Date())
 
+    var messages: [String] = []
+    let observation = h.manager.progressState.$emptyRunMessage.compactMap { $0 }.sink {
+      messages.append($0)
+    }
     h.manager.startExportAlbums(collectionIds: ["done"])
-    await waitUntil(h.manager.emptyRunMessage != nil)
+    let preparations = h.manager.currentPreparationTasks
+    try #require(!preparations.isEmpty)
+    for task in preparations { await task.value }
 
-    #expect(h.manager.emptyRunMessage == "All selected albums are already exported.")
+    withExtendedLifetime(observation) {
+      #expect(messages == ["All selected albums are already exported."])
+    }
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 }
