@@ -442,7 +442,7 @@ root-cause fix for #127 (a network-share remount re-exporting everything).
 
 These tests are wired so they fire when a load-bearing invariant breaks. Do not "fix" them by re-recording — audit first.
 
-The names below are also pinned by [`scripts/ci/check-regression-gates.sh`](../../scripts/ci/check-regression-gates.sh), which CI runs after SwiftLint. If you rename or move one of these tests, update both this table and the script in the same PR — otherwise CI will fail with a clear "MISSING SYMBOL" message.
+The behavioral gate names below match `AGENTS.md` and `CONTRIBUTING.md`. The guard also checks containing-suite declarations to support method-level gates; those symbol pins are not additional behavioral gates. The names are pinned by [`scripts/ci/check-regression-gates.sh`](../../scripts/ci/check-regression-gates.sh), which CI runs after SwiftLint. If you rename or move one of these tests, update this table, the gate lists in `AGENTS.md` and `CONTRIBUTING.md`, and the script in the same PR — otherwise CI will fail with a clear "MISSING SYMBOL" message.
 
 | Test | Fires when… | What to do |
 | --- | --- | --- |
@@ -467,7 +467,7 @@ The names below are also pinned by [`scripts/ci/check-regression-gates.sh`](../.
 `ExportPlacement.Kind` is a closed enum — the compiler will guide you to every switch that needs to handle the new case. Touch points:
 
 1. **`ExportPlacement.Kind`** ([Models](../../photo-export/Models/ExportPlacement.swift)) — add the case. The `variantPolicy` switch on `Kind` itself (same file) also needs to handle the new case — required-variants policy lives there.
-2. **`RecordStoreRouter`** ([Records](../../photo-export/Records/RecordStoreRouter.swift)) — every `switch placement.kind` in the router must handle the new case (today there are six: `variants`, `markVariantInProgress`, `markVariantExported`, `markVariantFailed`, `removeInProgressVariant`, plus the reuse-source probe). The closed enum will force you to update each one. If the new kind has its own retry scope, extend `AutoSyncRetryScopeKey`, its library-scope mapping, and the router’s `isRetryVariantDone` query too.
+2. **`RecordStoreRouter`** ([Records](../../photo-export/Records/RecordStoreRouter.swift)) — audit every placement-kind switch, including reads, flushes, writes, captured final commits and cleanup. Closed-enum switches are compiler-enforced, but comparisons are not: explicitly audit `findReuseSource`'s `currentPlacement.kind != .timeline` check. If the new kind has its own retry scope, extend `AutoSyncRetryScopeKey`, its library-scope mapping, and every affected router scope switch/query too. Preserve captured final-commit ownership rather than routing late acknowledgments through mutable current state.
 3. **`ExportCompletionPolicy`** ([Records](../../photo-export/Records/ExportCompletionPolicy.swift)) — handle the new kind in `requiredVariants`, edited-fallback, and asset-complete checks.
 4. **`ExportPlacementResolver`** and any **`startExport*` entry point** that constructs an `ExportPlacement` for this kind from a `LibrarySelection`. If the new kind also needs a UI route, add corresponding cases to `LibrarySelection` and `PhotoFetchScope`.
 
@@ -479,7 +479,7 @@ The `placement.kind` switch is *not* duplicated across `ExportManager` anymore �
 
 1. **`ExportVariant`** — add the case.
 2. **`VariantExporter`** ([Export](../../photo-export/Export/VariantExporter.swift)) — handle it in the per-variant write switch.
-3. **`ResourceSelection.selectEditedProducer`** ([Export](../../photo-export/Export/ResourceSelection.swift)) — decide how the new variant selects bytes. The function returns an `EditedProducer` enum (`.resource | .render | .none`); extend that enum if the new variant needs a third byte source. New media kinds change `ResourceSelection`, not the call sites.
+3. **`ResourceSelection.selectEditedProducer`** ([Export](../../photo-export/Export/ResourceSelection.swift)) — decide how the new variant selects bytes. The function returns an `EditedProducer` enum (`.resource | .render | .convertHEIC | .none`); extend that enum if the new variant needs an additional byte source. New media kinds change `ResourceSelection`, not the call sites.
 4. **`ExportFilenamePolicy`** — decide the suffix shape (`_orig`, plain, etc.).
 5. **`ExportCompletionPolicy`** — add the variant to `requiredVariants` where applicable.
 
@@ -505,7 +505,7 @@ The refactor shipped with three deliberate deferrals tracked in [issue #67](http
 
 1. ~~**PhotoLibrary composition refactor**~~ — landed (issue #67 item 1, May 2026): `PhotoLibraryManager` is `final`, holds an optional `overrideService`, and forwards every `PhotoLibraryService` method to it when set. `ScreenshotPhotoLibraryService` is a standalone conformance — no inheritance — so newly-added protocol methods are caught at compile time. The override-gate test stays as a behavioral pin against curated-content regressions.
 2. ~~**Generation-counter ownership transfer**~~ — landed: `var generation: Int` now lives on `ExportQueueCoordinator`; `VariantExporter` and `ImportCoordinator` hold a direct reference for the seam.
-3. ~~**Remaining Phase 7 folder moves**~~ — landed (issue #67 item 3, May 2026): `Destination/`, `Export/`, and `App/` exist; `Managers/` has been removed. The non-test source layout now matches the architecture-doc descriptions one-to-one.
+3. ~~**Remaining Phase 7 folder moves**~~ — landed (issue #67 item 3, May 2026): `Destination/`, `Export/`, and `App/` exist; `Managers/` has been removed. The folder descriptions are a role map with key examples, not an exhaustive file inventory. `photo-export/ContentView.swift` remains at the source root with `AuthorizationView`, `YearRow` and `MonthRow`; feature views are grouped under `Views/`.
 
 A second wave of follow-ups landed with item 4 (AutoSync seam test growth) and item 5 (`start*` bulk-loop helper consolidation). Item 6 (CI regression-gate symbol guard) is also done.
 
