@@ -20,7 +20,7 @@ enum ExportJobPlanner {
   ///
   /// - `isExported(asset)` returns `true` (the record store already has every required
   ///   variant `.done`, or the asset is covered by the issue #22 edited-fallback case).
-  /// - `shouldSkipForRetry(asset, placement, selection)` returns `true` (AutoSync retry
+  /// - `shouldSkipForRetry(asset, placement, settings.selection)` returns `true` (AutoSync retry
   ///   backoff for every required variant of this asset at this placement).
   ///
   /// Same predicate order as the pre-Phase-4a `enqueueMonth` / `enqueueCollection`
@@ -31,18 +31,15 @@ enum ExportJobPlanner {
   static func plan(
     assets: [AssetDescriptor],
     placement: ExportPlacement,
-    selection: ExportVersionSelection,
-    livePhotosPaired: Bool = false,
-    videoLayout: ExportVideoLayout = .flat,
+    settings: ExportSettingsSnapshot,
     isExported: (AssetDescriptor) -> Bool,
     shouldSkipForRetry: (AssetDescriptor, ExportPlacement, ExportVersionSelection) -> Bool
   ) -> [ExportManager.ExportJob] {
     assets.compactMap { asset in
       if isExported(asset) { return nil }
-      if shouldSkipForRetry(asset, placement, selection) { return nil }
+      if shouldSkipForRetry(asset, placement, settings.selection) { return nil }
       return ExportManager.ExportJob(
-        assetLocalIdentifier: asset.id, placement: placement, selection: selection,
-        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout)
+        assetLocalIdentifier: asset.id, placement: placement, settings: settings)
     }
   }
 
@@ -53,9 +50,7 @@ enum ExportJobPlanner {
   static func planTimelineYear(
     assets: [AssetDescriptor],
     year: Int,
-    selection: ExportVersionSelection,
-    livePhotosPaired: Bool = false,
-    videoLayout: ExportVideoLayout = .flat,
+    settings: ExportSettingsSnapshot,
     isExported: (AssetDescriptor) -> Bool,
     shouldSkipForRetry: (AssetDescriptor, ExportPlacement, ExportVersionSelection) -> Bool,
     calendar: Calendar = .current
@@ -68,10 +63,9 @@ enum ExportJobPlanner {
       // — it does NOT take a placement, because the timeline store keys records by asset
       // alone (the year/month are persisted on the record, not the lookup key).
       if isExported(asset) { return nil }
-      if shouldSkipForRetry(asset, placement, selection) { return nil }
+      if shouldSkipForRetry(asset, placement, settings.selection) { return nil }
       return ExportManager.ExportJob(
-        assetLocalIdentifier: asset.id, placement: placement, selection: selection,
-        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout)
+        assetLocalIdentifier: asset.id, placement: placement, settings: settings)
     }
   }
 }

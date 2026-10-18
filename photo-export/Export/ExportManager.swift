@@ -26,22 +26,17 @@ final class ExportManager: ObservableObject {
     ///   `.favorites`/`.album` → `collectionExportRecordStore`); see *Routing record
     ///   mutations to the right store* in the plan.
     let placement: ExportPlacement
-    /// Selection snapshot at enqueue time. Deterministic within a single job even if the user
-    /// toggles selection mid-run.
-    let selection: ExportVersionSelection
-    /// Live Photo paired-video toggle snapshot at enqueue time (issue #49). Same semantics
-    /// as `selection`: a mid-run flip of the Settings toggle does not change what an
-    /// already-queued job writes, so in-flight Live Photo work finishes against the
-    /// setting the user had when they clicked Export. Defaults to `false` so call sites
-    /// not yet aware of the toggle keep the pre-issue-#49 stills-only behaviour.
-    let livePhotosPaired: Bool
-    /// Videos-subfolder layout snapshot at enqueue time (issue #38). Same semantics as
-    /// `selection` and `livePhotosPaired`: a flip of the Settings toggle between two
-    /// `startExport*` clicks produces two differently-laid-out runs, but a flip *during*
-    /// one bulk dispatcher's enqueue loop does not (the snapshot reads once before
-    /// iterating). Defaults to `.flat` so call sites not yet aware of the setting keep
-    /// today's flat behaviour.
-    let videoLayout: ExportVideoLayout
+    let settings: ExportSettingsSnapshot
+    var selection: ExportVersionSelection { settings.selection }
+    var livePhotosPaired: Bool { settings.livePhotosPaired }
+    var videoLayout: ExportVideoLayout { settings.videoLayout }
+
+    init(assetLocalIdentifier: String, placement: ExportPlacement, settings: ExportSettingsSnapshot)
+    {
+      self.assetLocalIdentifier = assetLocalIdentifier
+      self.placement = placement
+      self.settings = settings
+    }
 
     init(
       assetLocalIdentifier: String,
@@ -50,11 +45,10 @@ final class ExportManager: ObservableObject {
       livePhotosPaired: Bool = false,
       videoLayout: ExportVideoLayout = .flat
     ) {
-      self.assetLocalIdentifier = assetLocalIdentifier
-      self.placement = placement
-      self.selection = selection
-      self.livePhotosPaired = livePhotosPaired
-      self.videoLayout = videoLayout
+      self.init(
+        assetLocalIdentifier: assetLocalIdentifier, placement: placement,
+        settings: .init(
+          selection: selection, livePhotosPaired: livePhotosPaired, videoLayout: videoLayout))
     }
 
     /// Year derived from the placement. Defined for timeline jobs; returns `0` for
@@ -637,41 +631,48 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  func startExportMonth(year: Int, month: Int) {
+  private enum ExportStoreScope { case timeline, collection }
+
+  private func canStartExport(in scope: ExportStoreScope, logTag: String) -> Bool {
     guard !isImporting else {
-      logger.warning("startExportMonth ignored: import in progress")
-      return
+      logger.warning("\(logTag, privacy: .public) ignored: import in progress")
+      return false
     }
-    guard canExportTimeline else {
+    let ready = scope == .timeline ? canExportTimeline : canExportCollection
+    guard ready else {
+      let state =
+        scope == .timeline
+        ? String(describing: exportRecordStore.state)
+        : String(describing: collectionExportRecordStore.state)
       logger.error(
-        "startExportMonth ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public) (need .ready)"
+        "\(logTag, privacy: .public) ignored: \(String(describing: scope), privacy: .public) store state=\(state, privacy: .public) (need .ready)"
       )
-      return
+      return false
     }
-    // Snapshot the active selection synchronously so a picker flip before the async enqueue
-    // lands (after `fetchAssets` returns) cannot change the mode that was visible at click
-    // time. The picker in the toolbar is also gated on `hasActiveExportWork` for clarity, but
-    // this snapshot is the correctness guarantee. `livePhotosPairedExport` (issue #49) gets
-    // the same click-time snapshot for the same reason.
-    let selection = versionSelection
-    let livePhotosPaired = livePhotosPairedExport
-    let videoLayout = videoLayout
+    return true
+  }
+
+  /// Call after entry-specific bulk/empty-input rejection, before the first await.
+  private func prepareExport(
+    selectionOverride: ExportVersionSelection? = nil, bulk: Bool = false
+  ) -> (settings: ExportSettingsSnapshot, generation: Int) {
+    let settings = ExportSettingsSnapshot(manager: self, selectionOverride: selectionOverride)
     clearEmptyRunMessage()
     clearQueueWarningMessage()
-    // Only reset progress counters when the queue is truly idle. "Paused
-    // with pending jobs" satisfies `!isRunning && !isProcessing` but is
-    // not idle — resetting the counter there detaches the visible
-    // `done/total` from `pendingJobs.count`, so the user sees a counter
-    // for the new work while the queue actually drains the leftover
-    // paused jobs first.
+    if bulk { isEnqueueingAll = true }
+    // A paused queue with pending jobs must accumulate progress instead of resetting.
     if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
+    return (settings, generation)
+  }
+
+  func startExportMonth(year: Int, month: Int) {
+    guard canStartExport(in: .timeline, logTag: "startExportMonth") else { return }
+    let (settings, gen) = prepareExport()
     trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueMonth(
-          year: year, month: month, selection: selection,
-          livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
+          year: year, month: month, settings: settings, generation: gen)
         guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
@@ -691,29 +692,13 @@ final class ExportManager: ObservableObject {
   }
 
   func startExportYear(year: Int) {
-    guard !isImporting else {
-      logger.warning("startExportYear ignored: import in progress")
-      return
-    }
-    guard canExportTimeline else {
-      logger.error(
-        "startExportYear ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public)"
-      )
-      return
-    }
-    let selection = versionSelection
-    let livePhotosPaired = livePhotosPairedExport
-    let videoLayout = videoLayout
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
+    guard canStartExport(in: .timeline, logTag: "startExportYear") else { return }
+    let (settings, gen) = prepareExport()
     trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueYear(
-          year: year, selection: selection,
-          livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
+          year: year, settings: settings, generation: gen)
         guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
@@ -736,31 +721,9 @@ final class ExportManager: ObservableObject {
   /// of the queue drain. Ignoring the handle preserves fire-and-forget dispatch.
   @discardableResult
   func startExportAll(selectionOverride: ExportVersionSelection? = nil) -> Task<Void, Never>? {
-    guard !isImporting else {
-      logger.warning("startExportAll ignored: import in progress")
-      return nil
-    }
-    guard canExportTimeline else {
-      logger.error(
-        "startExportAll ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public)"
-      )
-      return nil
-    }
+    guard canStartExport(in: .timeline, logTag: "startExportAll") else { return nil }
     guard !isEnqueueingAll else { return nil }
-    // selectionOverride lets `runExport(context:)` honor the run context's selection
-    // without mutating the user-visible toolbar `versionSelection`.
-    let selection = selectionOverride ?? versionSelection
-    let livePhotosPaired = livePhotosPairedExport
-    let videoLayout = videoLayout
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    isEnqueueingAll = true
-    // Same idle check as the other start functions: a paused queue with
-    // pending jobs must not reset the counter — Export All accumulates
-    // onto whatever is already queued. Users who want a clean slate
-    // should cancel first.
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
     return runBulkExportTask(
       generation: gen,
       logTag: "startExportAll",
@@ -773,8 +736,7 @@ final class ExportManager: ObservableObject {
         let allYears = try self.photoLibraryService.availableYears()
         let result = try await self.runBulkEnqueueLoop(items: allYears, generation: gen) { year in
           try await self.enqueueYear(
-            year: year, selection: selection,
-            livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
+            year: year, settings: settings, generation: gen)
         }
         return result.completed ? .completed(result.totals) : .stale
       }
@@ -801,29 +763,13 @@ final class ExportManager: ObservableObject {
     months: [TimelineSelectionBuckets.TimelineMonth],
     selectionOverride: ExportVersionSelection? = nil
   ) {
-    guard !isImporting else {
-      logger.warning("startExportTimelineSelection ignored: import in progress")
-      return
-    }
-    guard canExportTimeline else {
-      logger.error(
-        "startExportTimelineSelection ignored: timeline store state=\(String(describing: self.exportRecordStore.state), privacy: .public)"
-      )
-      return
-    }
+    guard canStartExport(in: .timeline, logTag: "startExportTimelineSelection") else { return }
     guard !isEnqueueingAll else { return }
     if years.isEmpty && months.isEmpty {
       setEmptyRunMessage("No timeline items selected.")
       return
     }
-    let selection = selectionOverride ?? versionSelection
-    let livePhotosPaired = livePhotosPairedExport
-    let videoLayout = videoLayout
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    isEnqueueingAll = true
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
     runBulkExportTask(
       generation: gen,
       logTag: "startExportTimelineSelection",
@@ -835,16 +781,14 @@ final class ExportManager: ObservableObject {
         guard let self else { return .stale }
         let yearsResult = try await self.runBulkEnqueueLoop(items: years, generation: gen) { year in
           try await self.enqueueYear(
-            year: year, selection: selection,
-            livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
+            year: year, settings: settings, generation: gen)
         }
         guard yearsResult.completed else { return .stale }
         let monthsResult = try await self.runBulkEnqueueLoop(
           items: months, generation: gen, startingFrom: yearsResult.totals
         ) { m in
           try await self.enqueueMonth(
-            year: m.year, month: m.month, selection: selection,
-            livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
+            year: m.year, month: m.month, settings: settings, generation: gen)
         }
         return monthsResult.completed ? .completed(monthsResult.totals) : .stale
       }
@@ -858,29 +802,13 @@ final class ExportManager: ObservableObject {
   /// `canExportCollection`; the timeline store's state is not consulted (collection and
   /// timeline exports are independent under the disjoint-key-spaces rationale).
   func startExportFavorites(selectionOverride: ExportVersionSelection? = nil) {
-    guard !isImporting else {
-      logger.warning("startExportFavorites ignored: import in progress")
-      return
-    }
-    guard canExportCollection else {
-      logger.error(
-        "startExportFavorites ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public) (need .ready)"
-      )
-      return
-    }
-    let selection = selectionOverride ?? versionSelection
-    let livePhotosPaired = livePhotosPairedExport
-    let videoLayout = videoLayout
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
+    guard canStartExport(in: .collection, logTag: "startExportFavorites") else { return }
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride)
     trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
-          selection: .favorites, scope: .favorites, selectionMode: selection,
-          livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
+          selection: .favorites, scope: .favorites, settings: settings, generation: gen)
         guard self.isCurrent(gen) else { return }
         switch outcome {
         case .enqueued, .unauthorized:
@@ -967,29 +895,13 @@ final class ExportManager: ObservableObject {
   /// racing on the message slot. Partial-failure recovery and generation
   /// tracking match `enqueueBulkAlbumExport`.
   func startExportCollectionsSelection(_ buckets: CollectionsSelectionBuckets) {
-    guard !isImporting else {
-      logger.warning("startExportCollectionsSelection ignored: import in progress")
-      return
-    }
-    guard canExportCollection else {
-      logger.error(
-        "startExportCollectionsSelection ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
-      )
-      return
-    }
+    guard canStartExport(in: .collection, logTag: "startExportCollectionsSelection") else { return }
     guard !isEnqueueingAll else { return }
     if buckets.isEmpty {
       setEmptyRunMessage("No collections selected.")
       return
     }
-    let selection = versionSelection
-    let livePhotosPaired = livePhotosPairedExport
-    let videoLayout = videoLayout
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    isEnqueueingAll = true
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
+    let (settings, gen) = prepareExport(bulk: true)
     runBulkExportTask(
       generation: gen,
       logTag: "startExportCollectionsSelection",
@@ -1007,8 +919,7 @@ final class ExportManager: ObservableObject {
         ) { _ in
           try await self.enqueueCollection(
             selection: .favorites, scope: .favorites,
-            selectionMode: selection,
-            livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
+            settings: settings, generation: gen)
         }
         guard favResult.completed else { return .stale }
         let albumsResult = try await self.runBulkEnqueueLoop(
@@ -1017,8 +928,7 @@ final class ExportManager: ObservableObject {
           try await self.enqueueCollection(
             selection: .album(collectionId: albumId),
             scope: .album(collectionId: albumId),
-            selectionMode: selection,
-            livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
+            settings: settings, generation: gen)
         }
         guard albumsResult.completed else { return .stale }
         let sharedResult = try await self.runBulkEnqueueLoop(
@@ -1027,8 +937,7 @@ final class ExportManager: ObservableObject {
           try await self.enqueueCollection(
             selection: .sharedAlbum(collectionId: sharedId),
             scope: .sharedAlbum(collectionId: sharedId),
-            selectionMode: selection,
-            livePhotosPaired: livePhotosPaired, videoLayout: videoLayout, generation: gen)
+            settings: settings, generation: gen)
         }
         return sharedResult.completed ? .completed(sharedResult.totals) : .stale
       }
@@ -1209,25 +1118,9 @@ final class ExportManager: ObservableObject {
     allDoneMessage: String,
     selectionOverride: ExportVersionSelection? = nil
   ) {
-    guard !isImporting else {
-      logger.warning("\(logTag, privacy: .public) ignored: import in progress")
-      return
-    }
-    guard canExportCollection else {
-      logger.error(
-        "\(logTag, privacy: .public) ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
-      )
-      return
-    }
+    guard canStartExport(in: .collection, logTag: logTag) else { return }
     guard !isEnqueueingAll else { return }
-    let selectionMode = selectionOverride ?? versionSelection
-    let livePhotosPaired = livePhotosPairedExport
-    let videoLayout = videoLayout
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    isEnqueueingAll = true
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
+    let (settings, gen) = prepareExport(selectionOverride: selectionOverride, bulk: true)
     runBulkExportTask(
       generation: gen,
       logTag: logTag,
@@ -1268,9 +1161,7 @@ final class ExportManager: ObservableObject {
           try await self.enqueueCollection(
             selection: source.selection(for: id),
             scope: source.scope(for: id),
-            selectionMode: selectionMode,
-            livePhotosPaired: livePhotosPaired,
-            videoLayout: videoLayout,
+            settings: settings,
             generation: gen
           )
         }
@@ -1288,32 +1179,15 @@ final class ExportManager: ObservableObject {
   /// `Collections/Shared Albums/`. Shared albums are excluded from "Export All Albums";
   /// users export them one at a time.
   func startExportSharedAlbum(collectionId: String) {
-    guard !isImporting else {
-      logger.warning("startExportSharedAlbum ignored: import in progress")
-      return
-    }
-    guard canExportCollection else {
-      logger.error(
-        "startExportSharedAlbum ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
-      )
-      return
-    }
-    let selection = versionSelection
-    let livePhotosPaired = livePhotosPairedExport
-    let videoLayout = videoLayout
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
+    guard canStartExport(in: .collection, logTag: "startExportSharedAlbum") else { return }
+    let (settings, gen) = prepareExport()
     trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
           selection: .sharedAlbum(collectionId: collectionId),
           scope: .sharedAlbum(collectionId: collectionId),
-          selectionMode: selection,
-          livePhotosPaired: livePhotosPaired,
-          videoLayout: videoLayout,
+          settings: settings,
           generation: gen
         )
         guard self.isCurrent(gen) else { return }
@@ -1336,32 +1210,15 @@ final class ExportManager: ObservableObject {
 
   /// Starts an export of a single user album by `collectionLocalIdentifier`.
   func startExportAlbum(collectionId: String) {
-    guard !isImporting else {
-      logger.warning("startExportAlbum ignored: import in progress")
-      return
-    }
-    guard canExportCollection else {
-      logger.error(
-        "startExportAlbum ignored: collection store state=\(String(describing: self.collectionExportRecordStore.state), privacy: .public)"
-      )
-      return
-    }
-    let selection = versionSelection
-    let livePhotosPaired = livePhotosPairedExport
-    let videoLayout = videoLayout
-    clearEmptyRunMessage()
-    clearQueueWarningMessage()
-    if !isRunning && !isProcessing && pendingJobs.isEmpty { resetProgressCounters() }
-    let gen = generation
+    guard canStartExport(in: .collection, logTag: "startExportAlbum") else { return }
+    let (settings, gen) = prepareExport()
     trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await enqueueCollection(
           selection: .album(collectionId: collectionId),
           scope: .album(collectionId: collectionId),
-          selectionMode: selection,
-          livePhotosPaired: livePhotosPaired,
-          videoLayout: videoLayout,
+          settings: settings,
           generation: gen
         )
         guard self.isCurrent(gen) else { return }
@@ -1391,9 +1248,7 @@ final class ExportManager: ObservableObject {
   private func enqueueCollection(
     selection: LibrarySelection,
     scope: PhotoFetchScope,
-    selectionMode: ExportVersionSelection,
-    livePhotosPaired: Bool,
-    videoLayout: ExportVideoLayout,
+    settings: ExportSettingsSnapshot,
     generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
@@ -1421,23 +1276,18 @@ final class ExportManager: ObservableObject {
       existingPlacements: Array(existingPlacements)
     )
 
-    // The Live Photo paired-video setting (issue #49) is snapshotted at click time by
-    // each `start*` caller and threaded in as `livePhotosPaired`. Doing the snapshot
-    // there rather than here keeps the click-time semantics in the doc comments above —
-    // a toggle flip during the `await fetchAssets` window cannot change what gets queued.
     var skippedCount = 0
     let newJobs = try await planAssetsProgressively(in: scope, generation: gen) { assets in
       ExportJobPlanner.plan(
-        assets: assets, placement: placement, selection: selectionMode,
-        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
+        assets: assets, placement: placement, settings: settings,
         isExported: {
           collectionExportRecordStore.isExported(
-            asset: $0, placement: placement, selection: selectionMode,
-            livePhotosPaired: livePhotosPaired)
+            asset: $0, placement: placement, selection: settings.selection,
+            livePhotosPaired: settings.livePhotosPaired)
         },
         shouldSkipForRetry: {
           skipForAutoSyncRetry(
-            asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired,
+            asset: $0, placement: $1, selection: $2, livePhotosPaired: settings.livePhotosPaired,
             skippedCount: &skippedCount)
         })
     }
@@ -1596,8 +1446,7 @@ final class ExportManager: ObservableObject {
   // `ExportQueueCoordinator.enqueue`. The three enqueue methods retain only the
   // PhotoKit fetch + `ExportJobPlanner.plan` call.
   private func enqueueMonth(
-    year: Int, month: Int, selection: ExportVersionSelection,
-    livePhotosPaired: Bool, videoLayout: ExportVideoLayout, generation gen: Int
+    year: Int, month: Int, settings: ExportSettingsSnapshot, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else {
@@ -1610,15 +1459,14 @@ final class ExportManager: ObservableObject {
       in: .timeline(year: year, month: month), generation: gen
     ) { assets in
       ExportJobPlanner.plan(
-        assets: assets, placement: placement, selection: selection,
-        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
+        assets: assets, placement: placement, settings: settings,
         isExported: {
           exportRecordStore.isExported(
-            asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
+            asset: $0, selection: settings.selection, livePhotosPaired: settings.livePhotosPaired)
         },
         shouldSkipForRetry: {
           skipForAutoSyncRetry(
-            asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired,
+            asset: $0, placement: $1, selection: $2, livePhotosPaired: settings.livePhotosPaired,
             skippedCount: &skippedCount)
         })
     }
@@ -1631,8 +1479,7 @@ final class ExportManager: ObservableObject {
 
   @discardableResult
   private func enqueueYear(
-    year: Int, selection: ExportVersionSelection,
-    livePhotosPaired: Bool, videoLayout: ExportVideoLayout, generation gen: Int
+    year: Int, settings: ExportSettingsSnapshot, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
     guard photoLibraryService.isAuthorized else {
@@ -1644,15 +1491,14 @@ final class ExportManager: ObservableObject {
       in: .timeline(year: year, month: nil), generation: gen
     ) { assets in
       ExportJobPlanner.planTimelineYear(
-        assets: assets, year: year, selection: selection,
-        livePhotosPaired: livePhotosPaired, videoLayout: videoLayout,
+        assets: assets, year: year, settings: settings,
         isExported: {
           exportRecordStore.isExported(
-            asset: $0, selection: selection, livePhotosPaired: livePhotosPaired)
+            asset: $0, selection: settings.selection, livePhotosPaired: settings.livePhotosPaired)
         },
         shouldSkipForRetry: {
           skipForAutoSyncRetry(
-            asset: $0, placement: $1, selection: $2, livePhotosPaired: livePhotosPaired,
+            asset: $0, placement: $1, selection: $2, livePhotosPaired: settings.livePhotosPaired,
             skippedCount: &skippedCount)
         })
     }
