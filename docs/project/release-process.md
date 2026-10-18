@@ -25,13 +25,13 @@ Prepare the catalog and all intended release changes on a release branch. Includ
 ### 2. Prepare the version and merge the release PR
 
 ```bash
-git switch -c release/1.2.0
-scripts/bump-version.sh 1.2.0 --no-tag
-python3 scripts/ci/check-version.py --expected 1.2.0
-git diff
-git add photo-export/Models/ReleaseNotesCatalog.swift photo-export.xcodeproj/project.pbxproj website/src/layouts/MarketingLayout.astro
-git commit -m "Prepare release 1.2.0"
-git push -u origin HEAD
+git switch -c release/1.2.0 &&
+scripts/bump-version.sh 1.2.0 --no-tag &&
+python3 scripts/ci/check-version.py --expected 1.2.0 &&
+git diff &&
+git add photo-export/Models/ReleaseNotesCatalog.swift photo-export.xcodeproj/project.pbxproj website/src/layouts/MarketingLayout.astro &&
+git commit -m "Prepare release 1.2.0" &&
+git push -u origin HEAD &&
 gh pr create --title "Prepare release 1.2.0" --body "Version and release notes for the candidate; Photos validation follows on the merged commit."
 ```
 

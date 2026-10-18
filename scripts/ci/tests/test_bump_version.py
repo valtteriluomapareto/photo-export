@@ -7,6 +7,7 @@ import re
 import shutil
 from unittest.mock import patch
 import tempfile
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -164,6 +165,43 @@ class BumpVersionTests(unittest.TestCase):
             self.assertEqual(fixture.git("rev-parse", "--show-toplevel"), str(fixture.root.resolve()))
         self.assertFalse(poisoned_index.exists())
         self.assertEqual((self.git("rev-parse", "HEAD"), self.git("status", "--porcelain")), before)
+
+
+    def test_failed_release_branch_creation_cannot_mutate_or_push_main(self):
+        text = (ROOT / "docs/project/release-process.md").read_text().split("### 2. Prepare", 1)[1]
+        body = re.search(r"```bash\n(.*?)```", text, re.S)[1]
+        for name in ("scripts/bump-version.sh", "scripts/ci/check-version.py"):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / name, target)
+        self.git("add", "scripts")
+        self.git("commit", "-qm", "Fixture release tools")
+        self.git("branch", "-M", "main")
+        self.git("branch", "release/1.2.0")
+        remote = Path(self.temporary.name) / "remote.git"
+        self.git("init", "--bare", "-q", str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "-u", "origin", "main")
+        binaries = Path(self.temporary.name) / "stub-bin"
+        binaries.mkdir()
+        audit = Path(self.temporary.name) / "pr-call"
+        gh = binaries / "gh"
+        gh.write_text(f"#!{sys.executable}\nimport pathlib\npathlib.Path({str(audit)!r}).write_text('called')\n")
+        gh.chmod(0o755)
+        head, index, worktree = self.git("rev-parse", "HEAD"), self.git("diff", "--cached"), self.git("status", "--porcelain")
+        before = self.project.read_bytes(), self.website.read_bytes()
+        remote_head = self.git("ls-remote", "origin", "refs/heads/main")
+        result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-c", body], cwd=self.root,
+                                env={**self.environment, "PATH": str(binaries) + os.pathsep + self.environment["PATH"]},
+                                text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git("branch", "--show-current"), "main")
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(self.git("diff", "--cached"), index)
+        self.assertEqual(self.git("status", "--porcelain"), worktree)
+        self.assertEqual((self.project.read_bytes(), self.website.read_bytes()), before)
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main"), remote_head)
+        self.assertFalse(audit.exists())
 
 
 if __name__ == "__main__":
