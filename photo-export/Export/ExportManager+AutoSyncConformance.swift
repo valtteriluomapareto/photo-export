@@ -10,18 +10,16 @@ import Foundation
 extension ExportManager: AutoSyncExportRunning {}
 extension ExportManager: AutoSyncImportProviding {}
 
-/// Phase 3a: ExportManager hosts `VariantExporter` so the exporter can call back for
-/// generation checks, UI-state mutations, bookkeeping-aware failure recording, and the
-/// rendered-media bridge. The required methods live on `ExportManager` itself; this is
-/// just the conformance wire-up.
+/// ExportManager hosts VariantExporter's UI-state and bookkeeping-aware failure callbacks.
+/// The exporter checks generation through ExportQueueCoordinator and holds its renderer
+/// directly. Host implementations live on ExportManager; only conformance is declared here.
 extension ExportManager: VariantExporter.Host {}
 
-/// Phase 4b: ExportManager hosts `ExportQueueCoordinator` so the coordinator can read
-/// generation, drive each job's export work, finalize an awaitable run on drain, and
-/// keep the manager's `currentJob*` UI identifiers in sync with the in-flight job.
+/// ExportManager hosts ExportQueueCoordinator's per-job work and run finalization.
+/// The coordinator owns cancellation generation and updates the manager's current-job
+/// UI identifiers through its Host callbacks.
 extension ExportManager: ExportQueueCoordinator.Host {}
 
-/// Phase 5: ExportManager hosts `ImportCoordinator` so the import flow can read the
-/// destination + photoLibraryService + record stores, check cancellation generation,
-/// and write `importResult` back to the manager's writable `@Published` mirror.
+/// ExportManager hosts ImportCoordinator's destination/library/store access and result
+/// updates. The coordinator checks generation directly through ExportQueueCoordinator.
 extension ExportManager: ImportCoordinator.Host {}

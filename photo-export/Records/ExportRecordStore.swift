@@ -256,7 +256,7 @@ final class ExportRecordStore: ObservableObject {
       // Deferred-rename rule: leave the corrupt snapshot at its original path on disk so
       // a Quit-and-relaunch reproduces this `.failed` state instead of silently
       // initializing empty. `resetToEmpty()` is the only path that renames the file out
-      // of the way; the alert UI that calls it lands in Phase 4.
+      // of the way after the user chooses recovery in RecordStoreAlertHost.
       logger.error(
         "Timeline records snapshot at \(dir.appendingPathComponent(Constants.snapshotFileName).path, privacy: .public) failed to decode; store transitioning to .failed."
       )
@@ -319,8 +319,7 @@ final class ExportRecordStore: ObservableObject {
   }
 
   /// Renames a corrupt snapshot to `<name>.broken-<ISO8601>` and reinitializes the store
-  /// with an empty snapshot + log. Called from the Phase 4 corruption alert UI's "Reset to
-  /// empty" action; in Phase 1 there is no UI for it and tests are the only caller.
+  /// with an empty snapshot + log after the user chooses recovery in RecordStoreAlertHost.
   ///
   /// Transitions `state` from `.failed` back to `.ready` on success. Only valid to call
   /// when `state == .failed` (otherwise it is a no-op so callers can wire it through a
@@ -462,44 +461,7 @@ final class ExportRecordStore: ObservableObject {
     }
   }
 
-  // MARK: - Public API (legacy wrappers, route to .original)
-
-  func markExported(
-    assetId: String,
-    year: Int,
-    month: Int,
-    relPath: String,
-    filename: String,
-    exportedAt: Date
-  ) {
-    markVariantExported(
-      assetId: assetId, variant: .original, year: year, month: month, relPath: relPath,
-      filename: filename, exportedAt: exportedAt)
-  }
-
-  func markFailed(assetId: String, error: String, at date: Date) {
-    markVariantFailed(assetId: assetId, variant: .original, error: error, at: date)
-  }
-
-  func markInProgress(
-    assetId: String, year: Int, month: Int, relPath: String, filename: String?
-  ) {
-    markVariantInProgress(
-      assetId: assetId, variant: .original, year: year, month: month, relPath: relPath,
-      filename: filename)
-  }
-
-  func remove(assetId: String) {
-    append(.delete(id: assetId))
-  }
-
   // MARK: - Public API (queries)
-
-  /// Whether the `.original` variant for this asset is `.done`. Kept as a cheap asset-ID shim for
-  /// legacy call sites and tests; new code should use `isExported(asset:selection:)`.
-  func isExported(assetId: String) -> Bool {
-    recordsById[assetId]?.variants[.original]?.status == .done
-  }
 
   /// Strict, asset-aware completion check for a single asset. Thin wrapper that hands the
   /// record's variant dict to `ExportCompletionPolicy.isComplete`. Timeline placements

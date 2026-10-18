@@ -124,24 +124,6 @@ final class RecordStoreRouter {
     }
   }
 
-  func markVariantExported(
-    assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    relPath: String, filename: String, exportedAt: Date, subfolder: String? = nil
-  ) {
-    switch placement.kind {
-    case .timeline:
-      let (year, month) = placement.timelineYearMonth ?? (0, 0)
-      timelineStore.markVariantExported(
-        assetId: assetId, variant: variant,
-        year: year, month: month, relPath: relPath,
-        filename: filename, exportedAt: exportedAt, subfolder: subfolder)
-    case .favorites, .album, .sharedAlbum:
-      collectionStore.markVariantExported(
-        assetId: assetId, placement: placement, variant: variant,
-        filename: filename, exportedAt: exportedAt, subfolder: subfolder)
-    }
-  }
-
   /// Retains the destination that owns an imminent final file commit.
   func captureFinalCommit(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,

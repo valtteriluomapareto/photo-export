@@ -101,7 +101,7 @@ extension ExportVariantReasonTests {
 
 @MainActor
 struct ExportVariantReasonStoreTests {
-  @Test func routerTransitionsAndReloadKeepReasonsExplicit() throws {
+  @Test func routerTransitionsAndReloadKeepReasonsExplicit() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
@@ -115,9 +115,10 @@ struct ExportVariantReasonStoreTests {
     let date = Date(timeIntervalSince1970: 1_700_000_000)
     let asset = TestAssetFactory.makeAsset(id: "fallback", hasAdjustments: true)
     for placement in [month, favorite] {
-      router.markVariantExported(
+      let commit = try router.captureFinalCommit(
         assetId: asset.id, placement: placement, variant: .original,
-        relPath: "2024/04/", filename: "F_orig.HEIC", exportedAt: date)
+        relPath: "2024/04/", filename: "F_orig.HEIC", subfolder: nil, acceptsEditedFallback: false)
+      await commit(true)
       router.markVariantFailed(
         assetId: asset.id, placement: placement, variant: .edited,
         error: "Changed copy", reason: .editedUnavailableOriginalBackedUp, at: date)
@@ -194,9 +195,10 @@ struct ExportVariantReasonStoreTests {
       router.markVariantFailed(
         assetId: asset.id, placement: placement, variant: .edited,
         error: "Unavailable", reason: .editedResourceUnavailable, at: date)
-      router.markVariantExported(
+      let commit = try router.captureFinalCommit(
         assetId: asset.id, placement: placement, variant: .edited,
-        relPath: "2024/04/", filename: "F.JPG", exportedAt: date)
+        relPath: "2024/04/", filename: "F.JPG", subfolder: nil, acceptsEditedFallback: false)
+      await commit(true)
     }
     #expect(timeline.exportInfo(assetId: asset.id)?.variants[.edited]?.reason == nil)
     #expect(
@@ -209,7 +211,7 @@ struct ExportVariantReasonStoreTests {
 
 extension ExportVariantReasonStoreTests {
   @Test(arguments: [false, true])
-  func countersAcceptOnlyKnownReasonsBeforeAndAfterReload(paired: Bool) {
+  func countersAcceptOnlyKnownReasonsBeforeAndAfterReload(paired: Bool) async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
@@ -229,9 +231,11 @@ extension ExportVariantReasonStoreTests {
     }
     for (index, asset) in assets.enumerated() {
       for placement in [month, favorite] {
-        router.markVariantExported(
+        let commit = try router.captureFinalCommit(
           assetId: asset.id, placement: placement, variant: .original,
-          relPath: "2024/04/", filename: paired ? "IMG.JPG" : "IMG_orig.HEIC", exportedAt: Date())
+          relPath: "2024/04/", filename: paired ? "IMG.JPG" : "IMG_orig.HEIC", subfolder: nil,
+          acceptsEditedFallback: false)
+        await commit(true)
         router.markVariantFailed(
           assetId: asset.id, placement: placement,
           variant: paired ? .originalPairedVideo : .edited,

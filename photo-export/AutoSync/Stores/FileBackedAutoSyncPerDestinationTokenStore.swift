@@ -5,8 +5,8 @@ import os
 /// `AutoSync/destinations/<destinationId>/lastDurablyRecordedToken.data`. The
 /// token is opaque to this store — it's the same NSKeyedArchiver-archived
 /// `PHPersistentChangeToken` blob the global token store writes, just keyed
-/// per destination so destinations resume from their own cursor after the
-/// global observer has moved on.
+/// per destination as an advisory durable acknowledgment. Production reads changes from
+/// the global observer cursor; loading this token does not resume per-destination fetching.
 @MainActor
 final class FileBackedAutoSyncPerDestinationTokenStore: AutoSyncPerDestinationTokenStore {
   private let baseDirectoryURL: URL

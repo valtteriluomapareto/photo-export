@@ -36,7 +36,7 @@ struct JSONLRecordFileIOFailureTests {
     private let production = ProductionJSONLRecordLogIO()
 
     func readIfPresent(at url: URL) throws -> Data? {
-      if failRead { throw InjectedError.read }
+      if failRead && url.pathExtension == "jsonl" { throw InjectedError.read }
       return try production.readIfPresent(at: url)
     }
 

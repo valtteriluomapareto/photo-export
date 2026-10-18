@@ -159,7 +159,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     var snapshotStatus: SnapshotStatus = .absent
     var ioFailure: (any Error)?
     do {
-      if let data = try ProductionJSONLRecordLogIO().readIfPresent(at: snapshotURL) {
+      if let data = try logIO.readIfPresent(at: snapshotURL) {
         do {
           let decoder = JSONDecoder()
           decoder.dateDecodingStrategy = dateDecodingStrategy
@@ -222,9 +222,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
 
   /// Renames the corrupt snapshot to `<name>.broken-<ISO8601>` and writes a fresh empty
   /// snapshot + log. Used by composing stores' `resetToEmpty()` paths after the user picks
-  /// the destructive Reset action in the corruption alert (the alert UI lives in Phase 4;
-  /// in Phase 1 there is no UI for this and the store remains `.failed` with the corrupt
-  /// file intact until `resetToEmpty()` is called from a test).
+  /// destructive Reset action in RecordStoreAlertHost. Until that explicit recovery,
+  /// the store remains failed and the corrupt file is preserved.
   func resetToEmpty(emptySnapshot: Snapshot) throws {
     // Filename-safe timestamp: ISO8601 basic-format date+time with no separators,
     // e.g. `20260430T123456Z`. The default ISO8601 (`.withInternetDateTime`) includes
