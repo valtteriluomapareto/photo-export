@@ -220,9 +220,11 @@ struct ExportIssuePresentationTests {
       f.library.invalidateCache()
     }
     f.window.orderFront(nil)
-    try #require(await observe { f.counter.count(for: "issue-metadata:\(f.destinationId):1") == 1 })
+    try #require(await observe {
+      f.counter.count(for: "issue-metadata:\(f.destinationId):1") == 1
+        && f.counter.renderedText["issue-row:asset"]?.first?.contains("2031") == true
+    })
     #expect(f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 0)
-    #expect(f.counter.renderedText["issue-row:asset"]?.first?.contains("2031") == true)
   }
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
