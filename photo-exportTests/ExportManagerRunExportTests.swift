@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Photos
 import Testing
@@ -859,7 +860,7 @@ struct ExportManagerRunExportTests {
   /// `.album` placement. Pin both: a placement of the right kind ends up in
   /// the collection store, and the on-disk relative path uses the Shared
   /// Albums root.
-  @Test func startExportSharedAlbumWritesUnderSharedAlbumsRoot() async {
+  @Test(.timeLimit(.minutes(2))) func startExportSharedAlbumWritesUnderSharedAlbumsRoot() async {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
 
@@ -876,7 +877,8 @@ struct ExportManagerRunExportTests {
     ]
 
     harness.manager.startExportSharedAlbum(collectionId: "shared-1")
-    await waitUntil(harness.manager.totalJobsCompleted >= 1)
+    await harness.manager.waitForQueueDrained()
+    #expect(harness.manager.totalJobsCompleted == 1)
 
     let placement = harness.collectionStore.placements(matching: .sharedAlbum)
       .first(where: { $0.collectionLocalIdentifier == "shared-1" })
@@ -1412,7 +1414,7 @@ struct ExportManagerRunExportTests {
   /// (the `videoLayout` toggle does not widen `requiredVariants`), so the second
   /// run skips it — no relocation, no second file in `videos/`, the record's
   /// `subfolder == nil` from the first write is left intact.
-  @Test func videoLayoutFlipAfterFlatExportDoesNotRelocateOrDoubleWrite() async {
+  @Test(.timeLimit(.minutes(2))) func videoLayoutFlipAfterFlatExportDoesNotRelocateOrDoubleWrite() async {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
 
@@ -1426,7 +1428,8 @@ struct ExportManagerRunExportTests {
     // First export under .flat — lands at bare month path.
     harness.manager.videoLayout = .flat
     harness.manager.startExportMonth(year: 2026, month: 3)
-    await waitUntil(harness.manager.totalJobsCompleted >= 1)
+    await harness.manager.waitForQueueDrained()
+    #expect(harness.manager.totalJobsCompleted == 1)
 
     let root = harness.dest.rootURL
     let flatPath = root.appendingPathComponent("2026/03/IMG_FLIP.MOV").path
@@ -1437,16 +1440,17 @@ struct ExportManagerRunExportTests {
 
     let firstWriteCount = harness.writer.writeCalls.count
 
-    // Flip the layout. The asset is still `.done` — `requiredVariants` doesn't widen.
-    // The `didSet` on `videoLayout` calls `clearEmptyRunMessage()`, so the message
-    // starts nil for the second run; waiting for the "already exported" message to
-    // appear is a deterministic signal that `startExportMonth` reached
-    // `enqueueMonth`, the planner returned `.alreadyComplete`, and the empty-run
-    // banner was set. Beats `Task.sleep`-based settle windows that race the
-    // fire-and-forget task's tail.
+    // Capture the real message publication so its normal expiry cannot race the assertion.
     harness.manager.videoLayout = .subfolder
+    var messages: [String] = []
+    let observation = harness.manager.progressState.$emptyRunMessage.compactMap { $0 }.sink {
+      messages.append($0)
+    }
     harness.manager.startExportMonth(year: 2026, month: 3)
-    await waitUntil(harness.manager.emptyRunMessage == "This month is already exported.")
+    await harness.manager.waitForQueueDrained()
+    withExtendedLifetime(observation) {
+      #expect(messages == ["This month is already exported."])
+    }
 
     // No second file, no second write call, no record mutation.
     #expect(fm.fileExists(atPath: flatPath))
@@ -1471,7 +1475,7 @@ struct ExportManagerRunExportTests {
   /// Without per-variant `subfolder`, the shared `ExportRecord.relPath` would
   /// be overwritten to `2026/03/videos/` on the `.edited` write, mis-locating
   /// the `.original` variant on the next reconcile and silently pruning it.
-  @Test func videoLayoutMidLifeSynthesizerWritesEditedToSubfolderKeepsOriginalAtBase() async {
+  @Test(.timeLimit(.minutes(2))) func videoLayoutMidLifeSynthesizerWritesEditedToSubfolderKeepsOriginalAtBase() async {
     let harness = makeHarness()
     defer { Task { await harness.cleanup() } }
 
@@ -1504,7 +1508,8 @@ struct ExportManagerRunExportTests {
     harness.manager.videoLayout = .subfolder
 
     harness.manager.startExportMonth(year: 2026, month: 3)
-    await waitUntil(harness.manager.totalJobsCompleted >= 1)
+    await harness.manager.waitForQueueDrained()
+    #expect(harness.manager.totalJobsCompleted == 1)
 
     let root = harness.dest.rootURL
     let videosDir = root.appendingPathComponent("2026/03/videos", isDirectory: true)
