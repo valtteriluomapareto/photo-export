@@ -28,6 +28,7 @@ done
 
 KEYCHAIN_PATH="${RUNNER_TEMP}/appstore-release.keychain-db"
 KEYCHAIN_PASSWORD="$(uuidgen)"
+echo "::add-mask::${KEYCHAIN_PASSWORD}"
 
 echo "Creating temporary keychain at ${KEYCHAIN_PATH}..."
 security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"

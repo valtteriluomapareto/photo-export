@@ -269,5 +269,90 @@ sys.exit(1 if name == "gh" and args[1] == "view" and os.environ["EXISTING"] == "
                 self.assertEqual(expression(predicate, values), expected)
 
 
+class ReleaseIsolationTests(unittest.TestCase):
+    def test_pending_tag_push_has_separate_group_from_main_dispatch_and_other_tags(self):
+        source = (ROOT / ".github/workflows/release-direct.yml").read_text()
+        block = re.search(r"^concurrency:\n(.*?)(?=^\S)", source, re.M | re.S)[1]
+        group = re.findall(r"^  group: (.+)$", block, re.M)
+        self.assertEqual(len(group), 1)
+        self.assertEqual(re.findall(r"^  cancel-in-progress: (.+)$", block, re.M), ["false"])
+        def key(event, ref):
+            return render(group[0], {"github.event_name": event, "github.ref": ref}).casefold()
+        push_tag = key("push", "refs/tags/v1.6.5")
+        for event, ref in [("push", "refs/heads/main"), ("push", "refs/tags/v1.6.6"),
+                           ("workflow_dispatch", "refs/tags/v1.6.5"),
+                           ("workflow_dispatch", "refs/heads/main")]:
+            with self.subTest(event=event, ref=ref):
+                self.assertNotEqual(push_tag, key(event, ref))
+        self.assertEqual(push_tag, key("push", "refs/tags/v1.6.5"))
+        self.assertEqual(push_tag, key("PUSH", "refs/tags/V1.6.5"))
+
+    def test_generated_password_is_masked_before_use_and_environment_export(self):
+        workflow = (ROOT / ".github/workflows/release-direct.yml").read_text()
+        direct = selected_steps(workflow, ["Create temporary keychain"])[0]
+        values = {binding: "b2ZmbGluZQ==" for binding in re.findall(r"\$\{\{ (secrets\.\w+) \}\}", workflow)}
+        bodies = {"direct": render(direct["run"], values),
+                  "app-store": (ROOT / "scripts/ci/setup-keychain-appstore.sh").read_text()}
+        password = "00000000-1111-2222-3333-444444444444"
+        for channel, body in bodies.items():
+            with self.subTest(channel=channel), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                binaries = root / "bin"
+                binaries.mkdir()
+                for name, target in {"base64": "/usr/bin/base64", "tr": "/usr/bin/tr",
+                                     "awk": "/usr/bin/awk", "rm": "/bin/rm"}.items():
+                    (binaries / name).symlink_to(target)
+                stub = f"#!{sys.executable}\n" + '''import os, pathlib, sys
+name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
+allowed = {"create-keychain", "set-keychain-settings", "unlock-keychain", "list-keychains",
+           "default-keychain", "import", "set-key-partition-list", "find-identity", "find-certificate"}
+valid = (name == "uuidgen" and not args or name == "security" and args and args[0] in allowed
+         or name == "xcrun" and args[:2] == ["notarytool", "store-credentials"])
+if not valid:
+    pathlib.Path(os.environ["UNEXPECTED"]).write_text(repr([name, *args]))
+    sys.exit(97)
+if name == "uuidgen":
+    print(os.environ["FAKE_PASSWORD"])
+elif os.environ["FAKE_PASSWORD"] in args:
+    print("PASSWORD_USE")
+    path = pathlib.Path(os.environ["GITHUB_ENV"])
+    if path.exists() and "KEYCHAIN_PASSWORD=" in path.read_text():
+        print("PASSWORD_EXPORTED_BEFORE_USE")
+elif name == "security" and args[0] == "find-identity":
+    print('  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Mac Installer Distribution: Offline"')
+'''
+                for name in ("uuidgen", "security", "xcrun"):
+                    path = binaries / name
+                    path.write_text(stub)
+                    path.chmod(0o755)
+                environment = {"PATH": str(binaries), "RUNNER_TEMP": str(root),
+                               "GITHUB_ENV": str(root / "environment"), "FAKE_PASSWORD": password,
+                               "UNEXPECTED": str(root / "unexpected")}
+                environment.update({name: "b2ZmbGluZQ==" for name in (
+                    "CERTIFICATE_P12_BASE64", "CERTIFICATE_PASSWORD", "APPLE_ID",
+                    "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID",
+                    "APPLE_DISTRIBUTION_CERTIFICATE_P12_BASE64", "APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD",
+                    "MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_P12_BASE64",
+                    "MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_PASSWORD")})
+                result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", body],
+                                        env=environment, cwd=root, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((root / "unexpected").exists(), "An unexpected command was invoked")
+                lines = result.stdout.splitlines()
+                mask = f"::add-mask::{password}"
+                self.assertIn(mask, lines)
+                self.assertLess(lines.index(mask), lines.index("PASSWORD_USE"))
+                self.assertNotIn("PASSWORD_EXPORTED_BEFORE_USE", lines)
+                self.assertEqual([line for line in lines if password in line], [mask])
+                self.assertNotIn(password, result.stderr)
+                exported = dict(line.split("=", 1) for line in (root / "environment").read_text().splitlines())
+                self.assertEqual(exported["KEYCHAIN_PASSWORD"], password)
+                # Pin immediate registration, before any command (including an early export).
+                after_uuid = body.split('KEYCHAIN_PASSWORD="$(uuidgen)"', 1)[1]
+                first_command = next(line.strip() for line in after_uuid.splitlines()
+                                     if line.strip() and not line.lstrip().startswith("#"))
+                self.assertEqual(first_command, 'echo "::add-mask::${KEYCHAIN_PASSWORD}"')
+
+
 if __name__ == "__main__":
     unittest.main()
