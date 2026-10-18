@@ -46,15 +46,15 @@ The folder needs to be writable. The app remembers your choice across launches u
 Once the destination is set, you'll see the main window with a **Timeline / Collections** segmented control above the sidebar and a **thumbnail grid** in the center.
 
 - **Timeline** — browse year by year, month by month. Click a month to see its photos. Click **Export Month** in the grid header to export that month, or **Export All** in the toolbar to queue the entire library.
-- **Collections** — see your **Favorites** at the top, then every album and folder from Photos beneath. Click an album to see its photos, then **Export Favorites** or **Export Album** in the grid header. To queue every user album in one go, use **Export All Albums** in the toolbar (Favorites is excluded — it has its own button). Albums under Photos folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`).
+- **Collections** — see your **Favorites** at the top, then every album and folder from Photos beneath. Click an album to see its photos, then **Export Favorites** or **Export Album** in the grid header. The toolbar's **Export All Albums** action queues Favorites and every user album, including nested albums; Shared Albums are excluded. A single selected Shared Album gets **Export Shared Album** instead, and multiple sidebar selections switch the toolbar to **Export N Items** for that selection. To export a folder subtree, use **Export 1 Album** / **Export N Albums** in the folder's content pane; selected child tiles narrow that action to their albums. Albums under Photos folders preserve their hierarchy on disk (e.g. `Collections/Albums/Trips/Iceland/`).
 
 A few extras that work in both views:
 
 - **Settings → Advanced** (Cmd+,) controls what lands on disk. **Include originals** adds a `_orig` companion for any photo or video edited in Photos so you keep a copy of the original bytes. **Convert HEIC to JPEG** re-encodes HEIC captures as JPEG on export, useful for destinations that don't understand HEIC. **Separate videos into a subfolder** routes standalone videos into a `videos/` subfolder so a backup doesn't mix photos and `.MOV` files. All three are off by default. The onboarding flow exposes the first two inline on first launch.
-- Edited videos render through Photos and may take longer than copying — especially for 4K or iCloud-only originals. The toolbar may briefly show `(downloading…)` while Photos prepares the source, then `(rendering…)` while the edit is applied.
+- Edited videos render through Photos and may take longer than copying — especially for 4K or iCloud-only originals. The export progress strip may briefly show `(downloading…)` while Photos prepares the source, then `(rendering…)` while the edit is applied.
 - **File → Import Existing Backup...** (Cmd+Shift+I) rebuilds local state to match the destination on disk. It adopts any files that are already there as exported, and prunes records for files that have since been deleted — useful both on a fresh install and when you've manually cleared part of a backup folder.
 
-Export progress is shown in the toolbar. You can pause, resume, or cancel at any time.
+Export progress appears in a strip at the top of the content column, below the toolbar. Use the toolbar controls to pause, resume, or cancel. Import progress appears in its own sheet.
 
 ### 4. (Optional) Turn on Auto Export
 
