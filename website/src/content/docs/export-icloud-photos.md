@@ -92,6 +92,8 @@ remain fast.
 
 If the export is interrupted — you unplug the drive, close the app, or your Mac goes to sleep — you can resume and the app will skip most already-exported files. In rare cases (e.g. a crash mid-write), a file may be copied again, but no data is lost.
 
+Export badges and counts refresh during continuous exports and show their final state when work finishes or is cancelled.
+
 After a manual export finishes, the progress strip briefly shows **Export complete** on success. If any asset job fails, it instead shows **N exported · M failed** with **View Issues**, which opens **Settings → Export Issues**. A job that fails on several photo/video versions counts once; successfully exported versions remain tracked. Failed scans, cleared pending work and export-history save errors show an incomplete or stopped explanation. Failure feedback stays until you dismiss it or start another run. A full destination or denied write access stops the current run immediately and shows the reason. Unattempted assets keep their history and do not gain failure rows. Fix the destination, then start a new export; the stopped queue is cleared, and the new run skips versions already exported. Dismissal and success expiry hide the finished strip without changing export history. Explicit cancellation clears the feedback; an unavailable destination remains explained above the strip.
 
 ## Rebuilding state from an existing backup
