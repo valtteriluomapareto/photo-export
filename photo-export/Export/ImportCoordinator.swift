@@ -87,8 +87,14 @@ final class ImportCoordinator: ObservableObject {
   /// `Host`.
   private weak var queueCoordinator: ExportQueueCoordinator?
 
-  init(host: Host, queueCoordinator: ExportQueueCoordinator) {
+  private let backupDirectoryReader: any BackupDirectoryReading
+
+  init(
+    host: Host, queueCoordinator: ExportQueueCoordinator,
+    backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader()
+  ) {
     self.host = host
+    self.backupDirectoryReader = backupDirectoryReader
     self.queueCoordinator = queueCoordinator
   }
 
@@ -143,26 +149,12 @@ final class ImportCoordinator: ObservableObject {
         }
         defer { host.exportDestination.endScopedAccess(for: scopedURL) }
 
-        // Probe the root before any destructive step. `BackupScanner.scanBackupFolder`
-        // swallows root-enumeration failure as `[]`, which would make a transiently
-        // unreadable drive look identical to "the user deleted everything." Reconcile
-        // would then prune every record. Catch that case here and bail without touching
-        // the stores.
-        do {
-          _ = try FileManager.default.contentsOfDirectory(
-            at: rootURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-        } catch {
-          self.logger.error(
-            "Import root unreachable: \(error.localizedDescription, privacy: .public)")
-          self.finishOwnedImport(
-            operationID, error: "Could not read the backup folder: \(error.localizedDescription)")
-          return
-        }
-
+        // The throwing scanner verifies recognized directories before any import or pruning.
         self.importStage = .scanningBackupFolder
         try Task.checkCancellation()
-        let scannedFiles = await Task.detached {
-          BackupScanner.scanBackupFolder(at: rootURL)
+        let reader = self.backupDirectoryReader
+        let scannedFiles = try await Task.detached {
+          try BackupScanner.scanBackupFolder(at: rootURL, directoryReader: reader)
         }.value
 
         try Task.checkCancellation()
@@ -231,13 +223,13 @@ final class ImportCoordinator: ObservableObject {
         // present at scan time gets deleted before bulkImport applies it.
         self.importStage = .reconcilingDiskState
         try Task.checkCancellation()
-        let timelineSummary = await host.exportRecordStore.reconcileAgainstFilesystem(
+        let timelineSummary = try await host.exportRecordStore.reconcileAgainstFilesystem(
           at: rootURL,
           isCurrent: { [weak self] in self?.queueCoordinator?.isCurrent(importGen) == true })
         try Task.checkCancellation()
         guard self.isCurrentImport(operationID, generation: importGen) else { return }
         let reconciledCollections = host.collectionExportRecordStore.state == .ready
-        let collectionSummary = await host.collectionExportRecordStore
+        let collectionSummary = try await host.collectionExportRecordStore
           .reconcileAgainstFilesystem(
             at: rootURL,
             isCurrent: { [weak self] in self?.queueCoordinator?.isCurrent(importGen) == true })

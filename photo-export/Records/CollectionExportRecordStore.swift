@@ -537,16 +537,15 @@ final class CollectionExportRecordStore: ObservableObject {
 
   /// Removes every `.done` variant whose backing file is missing from the destination.
   /// Mirrors the timeline-store reconcile but joins each record body to its
-  /// `ExportPlacement` by id to source the on-disk relative path. Record bodies whose
-  /// placement metadata is gone (orphans) are pruned wholesale — they're
-  /// unreconcilable garbage with no path to check.
+  /// `ExportPlacement` by id to source the on-disk relative path. Invalid metadata,
+  /// nonregular targets, lookup errors and an unreadable root reject the entire batch.
   ///
   /// Two-phase: snapshot on main, file checks off-main, mutations on main. Callers
   /// must run this only when no export is active. Obsolete configurations, mutations,
   /// replacement reconciliation or cancelled callers cannot apply the snapshot.
   func reconcileAgainstFilesystem(
     at root: URL, isCurrent: @MainActor () -> Bool = { true }
-  ) async -> ReconcileSummary {
+  ) async throws -> ReconcileSummary {
     guard isCurrent(), !Task.isCancelled, state == .ready else { return .zero }
     reconciliationRevision &+= 1
     let revision = reconciliationRevision
@@ -556,62 +555,43 @@ final class CollectionExportRecordStore: ObservableObject {
       let assetId: String
       let variantKey: String
       let path: String
-      let isCorrupt: Bool
     }
     var probes: [Probe] = []
-    var orphanDeletes: [(placementId: String, assetId: String)] = []
 
-    // Phase 1 (main): snapshot. Orphan-body keys (placementId not in `placements`)
-    // are queued for direct deletion; everything else is probed.
+    // Phase 1 (main): invalid placement metadata cannot prove a file missing.
     for (placementId, byAsset) in recordBodies {
       guard let placement = placements[placementId] else {
-        for assetId in byAsset.keys {
-          orphanDeletes.append((placementId, assetId))
-        }
-        continue
+        throw ReconciliationVerificationError(
+          path: root.path, detail: "History is missing a placement")
       }
       for (assetId, body) in byAsset {
         for (variantKey, vr) in body.variants where vr.status == .done {
-          guard let filename = vr.filename else {
-            probes.append(
-              Probe(
-                placementId: placementId, assetId: assetId, variantKey: variantKey,
-                path: "", isCorrupt: true))
-            continue
-          }
           // Issue #38: per-variant subfolder. A standalone-video asset's variants
           // may live in `<placement>/videos/`, while image-asset variants live at
           // the bare placement path. Probe each variant against its own stored
           // subfolder.
-          let dirRelPath = ExportPlacementPathPolicy.relativePath(
-            placement: placement, subfolder: vr.subfolder)
-          let path = root.appendingPathComponent(dirRelPath)
-            .appendingPathComponent(filename).path
+          let path = try ReconciliationFileChecker.filePath(
+            root: root, placement: placement, filename: vr.filename, subfolder: vr.subfolder)
           probes.append(
-            Probe(
-              placementId: placementId, assetId: assetId, variantKey: variantKey,
-              path: path, isCorrupt: false))
+            Probe(placementId: placementId, assetId: assetId, variantKey: variantKey, path: path))
         }
       }
     }
 
-    // Phase 2 (off-main): file checks.
+    // Phase 2 (off-main): preserve errors until ownership has been checked.
     let probesCopy = probes
     let fileChecker = reconciliationFileChecker
-    let toPrune: [(placementId: String, assetId: String, variantKey: String)] = await Task.detached
-    {
-      var keys: [(placementId: String, assetId: String, variantKey: String)] = []
-      for probe in probesCopy {
-        if probe.isCorrupt {
-          keys.append((probe.placementId, probe.assetId, probe.variantKey))
-          continue
-        }
-        if await !fileChecker.isFile(atPath: probe.path) {
-          keys.append((probe.placementId, probe.assetId, probe.variantKey))
-        }
-      }
-      return keys
-    }.value
+    let outcome: Result<[(placementId: String, assetId: String, variantKey: String)], Error> =
+      await Task.detached {
+        do {
+          var keys: [(placementId: String, assetId: String, variantKey: String)] = []
+          for probe in probesCopy where try await !fileChecker.isFile(atPath: probe.path) {
+            keys.append((probe.placementId, probe.assetId, probe.variantKey))
+          }
+          try await fileChecker.validateRoot(atPath: root.path)
+          return .success(keys)
+        } catch { return .failure(error) }
+      }.value
 
     // Evaluate caller ownership first; then reject configuration/mutation changes
     // before the whole synchronous commit (whose own appends advance the revision).
@@ -619,14 +599,11 @@ final class CollectionExportRecordStore: ObservableObject {
       reconciliationRevision == revision
     else { return .zero }
 
-    // Phase 3 (main): apply mutations. Orphan bodies first, then variant prunes.
+    let toPrune = try outcome.get()
+
+    // Phase 3 (main): apply the whole verified batch synchronously.
     var prunedVariants = 0
     var prunedRecords = 0
-    for (placementId, assetId) in orphanDeletes {
-      guard recordBodies[placementId]?[assetId] != nil else { continue }
-      append(.deleteRecord(placementId: placementId, assetId: assetId))
-      prunedRecords += 1
-    }
     for (placementId, assetId, variantKey) in toPrune {
       guard var body = recordBodies[placementId]?[assetId] else { continue }
       guard body.variants.removeValue(forKey: variantKey) != nil else { continue }
@@ -639,7 +616,7 @@ final class CollectionExportRecordStore: ObservableObject {
       }
     }
     logger.info(
-      "Reconciled collections: pruned \(prunedVariants) variants, \(prunedRecords) records (incl. orphan bodies)"
+      "Reconciled collections: pruned \(prunedVariants) variants, \(prunedRecords) records"
     )
     return ReconcileSummary(
       prunedVariants: prunedVariants, prunedRecords: prunedRecords)

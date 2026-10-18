@@ -556,7 +556,7 @@ struct BackupScannerVariantTests {
       atPath: videosDir.appendingPathComponent("IMG_VIDEO.MOV").path,
       contents: Data("video".utf8))
 
-    let files = BackupScanner.scanBackupFolder(at: rootDir)
+    let files = try BackupScanner.scanBackupFolder(at: rootDir)
 
     #expect(files.count == 2)
     let photo = files.first(where: { $0.filename == "IMG_PHOTO.JPG" })

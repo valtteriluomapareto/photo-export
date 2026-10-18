@@ -238,14 +238,19 @@ on existing run starts, reconnection, and retry mutation, without a new timer or
 
 Both record stores snapshot reconciliation candidates on MainActor, await file checks
 through `ReconciliationFileChecking` in a detached worker, then apply one synchronous
-prune batch. The production checker preserves `fileExists && !isDirectory`, including
-existing symbolic-link behavior.
+prune batch. The production checker follows valid file links, returns missing only for
+child-path ENOENT/ENOTDIR, and throws for other lookup/type errors. Invalid location
+metadata rejects the batch. Timeline paths still use year/month plus each variant's
+persisted subfolder, preserving mixed-layout history. A detached readable-root check
+runs after the file probes, immediately before returning the proposed batch.
 
 Each store owns a private immediate reconciliation revision, separate from its
 coalesced `mutationCounter`. Configuration (including nil and same-ID reloads), accepted
 record/placement mutations, reset and a new reconciliation invalidate older probes.
 After all physical probes finish, the store checks caller ownership, Task cancellation,
-readiness and the captured revision before **any** deletion. Reconciliation's own appends
+readiness and the captured revision before **any** deletion or error propagation.
+Workers return a Result so a stale thrown probe cannot surface an obsolete import error.
+A still-owned error rejects the entire affected store's prune batch. Reconciliation's own appends
 advance the revision but must not interrupt the rest of that synchronous batch.
 
 `ImportCoordinator` supplies its captured queue-generation predicate to both stores;
@@ -253,6 +258,10 @@ checking only after the awaited store call is too late to protect persisted hist
 An invalid snapshot returns zero without changes. The whole batch is discarded even
 when an unrelated record changed; a later import can reconcile again. No ownership
 metadata is persisted. Physical probes finish before the import releases scoped access.
+Scanner enumeration/type errors within recognized backup paths throw before bulk import
+or reconciliation; genuinely absent optional videos folders are accepted. A later failure
+can follow successful matched imports or reconciliation of the other store: there is no
+rollback across stores or import stages.
 
 ## Host protocol pattern
 

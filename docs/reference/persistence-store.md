@@ -194,6 +194,17 @@ render/conversion failures retain the `Export:9` retry identity.
 - After an append failure, the primitive stops subsequent queued appends and compactions. The store retains its in-memory history, including final filenames from an in-flight export. Retry saves this history with an atomic snapshot before returning to ready. Keep the app open until retry succeeds; unacknowledged progress can be lost on quit. Destination switches retain failed histories in memory until the user returns and retries.
 - After a read failure, Retry reloads the original files; it never replaces unreadable history with an empty snapshot. Callbacks belonging to a previous destination cannot change the current store's health.
 
+## Conservative import reconciliation
+
+Only child-path ENOENT/ENOTDIR proves a tracked file missing. Other lookup failures,
+nonregular targets and invalid stored locations reject the affected store's whole
+prune batch. A readable root is verified again off-main after the candidate probes.
+The ownership/revision guard runs before applying the worker's Result, suppressing
+obsolete errors as well as obsolete prunes. No schema or additional recovery state is
+persisted. Backup scanning propagates recognized-folder/type errors before importing;
+optional date/size values remain optional. A later failure does not roll back matched
+imports or already-verified changes in the other store.
+
 ## Interrupted paired-slot recovery
 
 Original-side paired variants can reuse an existing slot only when their record still

@@ -1,6 +1,6 @@
-/// Reconciliation's detached file probe. Kept async so tests can suspend a probe
-/// without blocking the cooperative executor. Implementations preserve the existing
-/// fileExists && !isDirectory semantics, including symbolic links.
+/// Missing child targets return false; verification failures throw. Valid file links
+/// are followed. Async seams let tests suspend probes without blocking an executor.
 protocol ReconciliationFileChecking: Sendable {
-  func isFile(atPath path: String) async -> Bool
+  func isFile(atPath path: String) async throws -> Bool
+  func validateRoot(atPath path: String) async throws
 }
