@@ -667,6 +667,17 @@ final class ExportManager: ObservableObject {
 
   func startExportMonth(year: Int, month: Int) {
     guard canStartExport(in: .timeline, logTag: "startExportMonth") else { return }
+    if isPaused, photoLibraryService.isAuthorized {
+      let placement = ExportPlacement.timeline(year: year, month: month)
+      let hasMatchingInFlightJob =
+        isProcessing && currentJobAssetId != nil && currentJobPlacement?.id == placement.id
+      if queuedCount(year: year, month: month) > 0 || hasMatchingInFlightJob {
+        // Continue the existing FIFO queue with its captured settings and counters.
+        // Rescanning here would append unfinished assets a second time.
+        resume()
+        return
+      }
+    }
     let (settings, gen) = prepareExport()
     trackPreparation(generation: gen) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
