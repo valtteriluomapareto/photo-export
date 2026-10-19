@@ -17,7 +17,9 @@ import Testing
 struct ExportPipelineTests {
   // MARK: - Test setup
 
-  private func makeTestHarness() -> (
+  private func makeTestHarness(
+    storeRootURL: URL? = nil, userDefaults: UserDefaults? = nil
+  ) -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore
   ) {
@@ -25,15 +27,18 @@ struct ExportPipelineTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let tempDir = FileManager.default.temporaryDirectory
+    let tempDir =
+      storeRootURL
+      ?? FileManager.default.temporaryDirectory
       .appendingPathComponent("ExportPipelineTest-\(UUID().uuidString)", isDirectory: true)
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "test")
 
     // Clear the persisted version selection so ExportManager starts at its default
     // regardless of what a sibling test suite may have written.
-    let defaults = UserDefaults(
-      suiteName: "test-ExportPipeline-\(UUID().uuidString)")!
+    let defaults =
+      userDefaults ?? UserDefaults(
+        suiteName: "test-ExportPipeline-\(UUID().uuidString)")!
 
     let manager = ExportManager(
       photoLibraryService: photoLib,
@@ -278,66 +283,146 @@ struct ExportPipelineTests {
 
   // MARK: - Cancel and clear
 
-  @Test func cancelAndClearResetsAllState() async throws {
-    let (manager, photoLib, dest, _, _, _) = makeTestHarness()
-    defer { dest.cleanup() }
-
-    var assets: [AssetDescriptor] = []
-    for i in 1...10 {
-      let asset = TestAssetFactory.makeAsset(id: "cancel-\(i)")
-      assets.append(asset)
-      photoLib.resourcesByAssetId["cancel-\(i)"] = [
-        TestAssetFactory.makeResource(originalFilename: "IMG_\(i).JPG")
-      ]
+  @Test(.timeLimit(.minutes(2))) func cancelAndClearResetsAllState() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let suite = "cancel-reset-\(UUID().uuidString)"
+    let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness(
+      storeRootURL: root, userDefaults: UserDefaults(suiteName: suite)!)
+    let gate = AsyncCheckpoint()
+    writer.checkpoint = gate
+    var tasks: [Task<Void, Never>] = []
+    func cleanup() async {
+      tasks += manager.currentPreparationTasks
+      if let task = manager.currentTask { tasks.append(task) }
+      manager.cancelAndClear()
+      await gate.releaseAll()
+      for task in tasks { await task.value }
+      store.flushForTesting()
+      try? FileManager.default.removeItem(at: root)
+      dest.cleanup()
+      UserDefaults().removePersistentDomain(forName: suite)
     }
-    photoLib.assetsByYearMonth["2025-9"] = assets
+    do {
+      photoLib.assetsByYearMonth["2025-9"] = (1...3).map { index in
+        let id = "cancel-\(index)"
+        photoLib.resourcesByAssetId[id] = [
+          TestAssetFactory.makeResource(originalFilename: "IMG_\(index).JPG")
+        ]
+        return TestAssetFactory.makeAsset(id: id)
+      }
+      manager.startExportMonth(year: 2025, month: 9)
+      try #require(await gate.waitForEnter(count: 1, timeout: .seconds(60)))
+      tasks.append(try #require(manager.currentTask))
+      await gate.release()
+      try #require(await gate.waitForEnter(count: 2, timeout: .seconds(60)))
+      let oldTask = try #require(manager.currentTask)
+      tasks.append(oldTask)
+      manager.pause()
+      try #require(manager.totalJobsEnqueued == 3)
+      try #require(manager.totalJobsCompleted == 1)
+      try #require(manager.pendingJobs.count == 1)
+      try #require(manager.queueCount == 2)
+      try #require(manager.isRunning && manager.isPaused)
+      try #require(manager.currentAssetFilename == "IMG_2.JPG")
+      let completed = try #require(store.exportInfo(assetId: "cancel-1"))
+      let completedFile = try dest.urlForMonth(year: 2025, month: 9, createIfNeeded: false)
+        .appendingPathComponent("IMG_1.JPG")
+      let completedBytes = try Data(contentsOf: completedFile)
 
-    manager.startExportMonth(year: 2025, month: 9)
-    try await Task.sleep(nanoseconds: 20_000_000)  // 20ms
+      manager.cancelAndClear()
 
-    manager.cancelAndClear()
-
-    #expect(manager.isRunning == false)
-    #expect(manager.isPaused == false)
-    #expect(manager.queueCount == 0)
-    #expect(manager.totalJobsEnqueued == 0)
-    #expect(manager.totalJobsCompleted == 0)
-    #expect(manager.currentAssetFilename == nil)
+      #expect(!manager.isRunning && !manager.isPaused)
+      #expect(manager.pendingJobs.isEmpty && manager.queueCount == 0)
+      #expect(manager.queuedCount(year: 2025, month: 9) == 0)
+      #expect(manager.totalJobsEnqueued == 0 && manager.totalJobsCompleted == 0)
+      #expect(manager.currentAssetFilename == nil && manager.currentJobAssetId == nil)
+      #expect(store.exportInfo(assetId: "cancel-2")?.variants[.original] == nil)
+      await gate.releaseAll()
+      await oldTask.value
+      #expect(manager.totalJobsCompleted == 0)
+      #expect(store.exportInfo(assetId: "cancel-1") == completed)
+      #expect(try Data(contentsOf: completedFile) == completedBytes)
+      #expect(fileSystem.moveCalls.count == 1)
+    } catch {
+      await cleanup()
+      throw error
+    }
+    await cleanup()
   }
 
   // MARK: - Generation counter
 
-  @Test func oldGenerationTasksExitCleanly() async throws {
-    let (manager, photoLib, dest, writer, _, _) = makeTestHarness()
-    defer { dest.cleanup() }
-
-    var assets: [AssetDescriptor] = []
-    for i in 1...20 {
-      let asset = TestAssetFactory.makeAsset(id: "gen-\(i)")
-      assets.append(asset)
-      photoLib.resourcesByAssetId["gen-\(i)"] = [
-        TestAssetFactory.makeResource(originalFilename: "IMG_\(i).JPG")
-      ]
+  @Test(.timeLimit(.minutes(2))) func oldGenerationTasksExitCleanly() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let suite = "cancel-generation-\(UUID().uuidString)"
+    let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness(
+      storeRootURL: root, userDefaults: UserDefaults(suiteName: suite)!)
+    let oldGate = AsyncCheckpoint()
+    let newGate = AsyncCheckpoint()
+    var tasks: [Task<Void, Never>] = []
+    func cleanup() async {
+      tasks += manager.currentPreparationTasks
+      if let task = manager.currentTask { tasks.append(task) }
+      manager.cancelAndClear()
+      await oldGate.releaseAll()
+      await newGate.releaseAll()
+      for task in tasks { await task.value }
+      store.flushForTesting()
+      try? FileManager.default.removeItem(at: root)
+      dest.cleanup()
+      UserDefaults().removePersistentDomain(forName: suite)
     }
-    photoLib.assetsByYearMonth["2025-10"] = assets
+    do {
+      photoLib.assetsByYearMonth["2025-10"] = (1...2).map { index in
+        let id = "gen-\(index)"
+        photoLib.resourcesByAssetId[id] = [
+          TestAssetFactory.makeResource(originalFilename: "OLD_\(index).JPG")
+        ]
+        return TestAssetFactory.makeAsset(id: id)
+      }
+      writer.checkpoint = oldGate
+      manager.startExportMonth(year: 2025, month: 10)
+      try #require(await oldGate.waitForEnter(count: 1, timeout: .seconds(60)))
+      let oldTask = try #require(manager.currentTask)
+      tasks.append(oldTask)
+      try #require(writer.writeCalls.count == 1)
+      try #require(store.exportInfo(assetId: "gen-1")?.variants[.original]?.status == .inProgress)
+      manager.cancelAndClear()
 
-    manager.startExportMonth(year: 2025, month: 10)
-    try await Task.sleep(nanoseconds: 30_000_000)  // 30ms
+      photoLib.assetsByYearMonth["2025-11"] = [TestAssetFactory.makeAsset(id: "new-gen-1")]
+      photoLib.resourcesByAssetId["new-gen-1"] = [
+        TestAssetFactory.makeResource(originalFilename: "NEW.JPG")
+      ]
+      writer.checkpoint = newGate
+      manager.startExportMonth(year: 2025, month: 11)
+      try #require(await newGate.waitForEnter(count: 1, timeout: .seconds(60)))
+      tasks.append(try #require(manager.currentTask))
+      let newRecord = try #require(store.exportInfo(assetId: "new-gen-1"))
 
-    // Cancel and start a new export — old generation tasks should exit
-    manager.cancelAndClear()
-    let newAsset = TestAssetFactory.makeAsset(id: "new-gen-1")
-    photoLib.assetsByYearMonth["2025-11"] = [newAsset]
-    photoLib.resourcesByAssetId["new-gen-1"] = [
-      TestAssetFactory.makeResource(originalFilename: "NEW.JPG")
-    ]
+      await oldGate.releaseAll()
+      await oldTask.value
 
-    manager.startExportMonth(year: 2025, month: 11)
-    await manager.waitForQueueDrained()
+      #expect(manager.isRunning)
+      #expect(manager.totalJobsEnqueued == 1 && manager.totalJobsCompleted == 0)
+      #expect(manager.queueCount == 1)
+      #expect(manager.currentJobAssetId == "new-gen-1" && manager.currentAssetFilename == "NEW.JPG")
+      #expect(store.exportInfo(assetId: "new-gen-1") == newRecord)
+      #expect(store.exportInfo(assetId: "gen-1")?.variants[.original] == nil)
+      #expect(store.exportInfo(assetId: "gen-2") == nil)
+      #expect(fileSystem.moveCalls.isEmpty)
+      #expect(writer.writeCalls.map(\.assetId) == ["gen-1", "new-gen-1"])
 
-    // The new asset should be the last one written
-    let lastWrite = writer.writeCalls.last
-    #expect(lastWrite?.assetId == "new-gen-1")
+      await newGate.releaseAll()
+      await manager.waitForQueueDrained()
+      #expect(manager.totalJobsCompleted == 1)
+      #expect(store.isExported(assetId: "new-gen-1"))
+      #expect(fileSystem.moveCalls.count == 1)
+      #expect(fileSystem.moveCalls.first?.to.lastPathComponent == "NEW.JPG")
+    } catch {
+      await cleanup()
+      throw error
+    }
+    await cleanup()
   }
 
   // MARK: - Scoped access pairing

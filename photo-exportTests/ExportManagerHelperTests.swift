@@ -33,18 +33,6 @@ struct ExportManagerHelperTests {
     #expect(mgr.totalJobsCompleted == 0)
   }
 
-  @Test func testCancelAndClearResetsAllCounters() {
-    let (mgr, _) = makeManager()
-    // Simulate some state by calling cancelAndClear on a fresh manager
-    mgr.cancelAndClear()
-    #expect(mgr.totalJobsEnqueued == 0)
-    #expect(mgr.totalJobsCompleted == 0)
-    #expect(mgr.currentAssetFilename == nil)
-    #expect(mgr.queueCount == 0)
-    #expect(mgr.isRunning == false)
-    #expect(mgr.isPaused == false)
-  }
-
   @Test func testPauseAndResumeToggle() {
     let (mgr, _) = makeManager()
     // Pause on non-running manager is a no-op

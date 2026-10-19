@@ -74,6 +74,17 @@ actor AsyncCheckpoint {
     }
   }
 
+  /// Bounded observation for tests that must still run awaited cleanup on failure.
+  /// Unlike the continuation-based overload, cancellation cannot strand this wait.
+  func waitForEnter(count: Int, timeout: Duration) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while enteredCount < count, !isShutdown, !Task.isCancelled, clock.now < deadline {
+      await Task.yield()
+    }
+    return enteredCount >= count
+  }
+
   /// Permanently opens the gate. Resumes every pending `enter()` and every
   /// `waitForEnter`; future `enter()` calls return immediately. Required in
   /// test harness teardown so a stranded write task can't outlive the test.
