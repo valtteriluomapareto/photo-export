@@ -6,11 +6,15 @@ import Testing
 actor GatedReconciliationFileChecker: ReconciliationFileChecking {
   private var gates: [AsyncCheckpoint] = []
   private var nextFailure: Int?
+  /// Probes and root checks started, counted on entry.
+  private(set) var isFileCalls = 0
+  private(set) var validateRootCalls = 0
 
   func suspendNextProbe(at gate: AsyncCheckpoint) { gates.append(gate) }
   func failNextProbe(code: Int) { nextFailure = code }
 
   func isFile(atPath path: String) async throws -> Bool {
+    isFileCalls += 1
     let gate = gates.isEmpty ? nil : gates.removeFirst()
     let failure = nextFailure
     nextFailure = nil
@@ -24,6 +28,7 @@ actor GatedReconciliationFileChecker: ReconciliationFileChecking {
   }
 
   func validateRoot(atPath path: String) async throws {
+    validateRootCalls += 1
     try await ReconciliationFileChecker().validateRoot(atPath: path)
   }
 }
@@ -96,6 +101,14 @@ struct ReconciliationOwnershipTests {
       }
     }
 
+    func status(assetId: String) -> ExportStatus? {
+      switch kind {
+      case .timeline: timeline.exportInfo(assetId: assetId)?.variants[.original]?.status
+      case .collection:
+        collection.exportInfo(assetId: assetId, placement: placement)?.variants[.original]?.status
+      }
+    }
+
     func info() -> ExportVariantRecord? {
       switch kind {
       case .timeline: timeline.exportInfo(assetId: "same")?.variants[.original]
@@ -149,6 +162,32 @@ struct ReconciliationOwnershipTests {
       flush()
       try? FileManager.default.removeItem(at: root)
     }
+  }
+
+  /// Cancelling a reconcile stops new probes: the probe in flight finishes, no further
+  /// probe or root check starts, and nothing is pruned. The uncancelled control proves the
+  /// same seed prunes every variant.
+  @Test(arguments: StoreKind.allCases, [false, true])
+  func cancellationStartsNoFurtherProbes(kind: StoreKind, cancel: Bool) async throws {
+    let fixture = try Fixture(kind)
+    defer { fixture.cleanup() }
+    for assetId in ["a", "b", "c"] { fixture.seed(assetId: assetId) }
+    let gate = AsyncCheckpoint()
+    defer { Task { await gate.releaseAll() } }
+    await fixture.checker.suspendNextProbe(at: gate)
+    let run = Task { try await fixture.reconcile(at: fixture.mediaA) }
+    let probing = await gate.waitForEnter(count: 1)
+    try #require(probing)
+    if cancel { run.cancel() }
+    await gate.releaseAll()
+    let summary = try await run.value
+    let probes = await fixture.checker.isFileCalls
+    let rootChecks = await fixture.checker.validateRootCalls
+    #expect(probes == (cancel ? 1 : 3))
+    #expect(rootChecks == (cancel ? 0 : 1))
+    #expect(summary.variants == (cancel ? 0 : 3))
+    let stillDone = ["a", "b", "c"].filter { fixture.status(assetId: $0) == .done }
+    #expect(stillDone.count == (cancel ? 3 : 0))
   }
 
   @Test(arguments: StoreKind.allCases, Reconfiguration.allCases)

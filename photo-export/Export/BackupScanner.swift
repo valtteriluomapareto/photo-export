@@ -125,6 +125,8 @@ struct BackupScanner {
     let yearEntries = try readDirectory(rootURL, keys: [.isDirectoryKey], reader: directoryReader)
 
     for yearDir in yearEntries {
+      // Each entry checks for cancellation first; a read already in progress completes.
+      try Task.checkCancellation()
       guard let year = parseYear(yearDir.lastPathComponent) else { continue }
       guard try isDirectory(yearDir, reader: directoryReader) else { continue }
 
@@ -132,6 +134,7 @@ struct BackupScanner {
         yearDir, keys: [.isDirectoryKey], reader: directoryReader)
 
       for monthDir in monthEntries {
+        try Task.checkCancellation()
         guard let month = parseMonth(monthDir.lastPathComponent) else { continue }
         guard try isDirectory(monthDir, reader: directoryReader) else { continue }
 
@@ -143,6 +146,7 @@ struct BackupScanner {
         // Issue #38: also descend into YYYY/MM/videos/ (if present) so files written
         // under the subfolder layout are discovered by Import Existing Backup.
         let videosDir = monthDir.appendingPathComponent("videos", isDirectory: true)
+        try Task.checkCancellation()
         if try isDirectory(videosDir, reader: directoryReader, optional: true) {
           try appendFiles(
             in: videosDir, year: year, month: month, subfolder: "videos",
@@ -173,6 +177,7 @@ struct BackupScanner {
       reader: reader)
 
     for fileURL in files {
+      try Task.checkCancellation()
       let type = try readValues(fileURL, keys: [.isRegularFileKey], reader: reader)
       guard let regular = type.isRegularFile else {
         throw BackupScanReadError(path: fileURL.path, detail: "File type is unavailable")
