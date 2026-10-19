@@ -158,4 +158,18 @@ extension PhotoCollectionDescriptor {
     let hi = max(anchorIdx, targetIdx)
     return (ids: current.union(order[lo...hi]), anchor: anchor)
   }
+
+  /// Narrows a tile selection to the folder's current children after a library change.
+  /// The anchor survives only while it is still selected. A `nil` folder (deleted, or the
+  /// tree fetch failed) clears both. Each album or folder has a single parent in PhotoKit,
+  /// so child ids are unique across folders and pruning against a different folder clears
+  /// the previous folder's selection.
+  ///
+  /// Pure helper extracted from `FolderContentView` so the pruning rules are unit-testable.
+  static func prunedSelection(
+    _ ids: Set<String>, anchor: String?, in folder: PhotoCollectionDescriptor?
+  ) -> (ids: Set<String>, anchor: String?) {
+    let kept = ids.intersection(folder?.children.map(\.id) ?? [])
+    return (ids: kept, anchor: anchor.flatMap { kept.contains($0) ? $0 : nil })
+  }
 }

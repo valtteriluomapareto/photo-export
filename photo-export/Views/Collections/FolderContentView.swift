@@ -56,6 +56,8 @@ struct FolderContentView: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([exportHelp], for: "folder-export-help")
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordAction("folder-select-all", action: selectAllChildren)
     #endif
     VStack(alignment: .leading, spacing: 12) {
       Text(title)
@@ -81,10 +83,13 @@ struct FolderContentView: View {
     .background(keyboardShortcutsHost)
     .task(id: folderId + "|\(photoLibraryManager.libraryRevision)") {
       folder = findFolder(folderId: folderId)
-      // Selection is per-folder; clear it whenever the visible folder changes so a
-      // stale anchor from a previous folder doesn't drive Shift-extend in the new one.
-      selectedChildIds.removeAll()
-      selectionAnchorId = nil
+      // A library change refreshes in place and keeps the selection, minus children that
+      // left the folder. Each album or folder has a single parent in PhotoKit, so child ids
+      // are unique across folders and a folder switch clears the selection.
+      let pruned = PhotoCollectionDescriptor.prunedSelection(
+        selectedChildIds, anchor: selectionAnchorId, in: folder)
+      selectedChildIds = pruned.ids
+      selectionAnchorId = pruned.anchor
       await loadCounts()
     }
   }
@@ -191,6 +196,7 @@ struct FolderContentView: View {
     let total = totalPhotoCount(albumIds: albumIds)
     #if DEBUG
       bodyCounter?.recordText(["\(exported)/\(total)"], for: "folder-summary")
+      bodyCounter?.recordText(selectedChildIds.sorted(), for: "folder-selection")
     #endif
 
     return HStack(spacing: 8) {
@@ -465,10 +471,23 @@ struct FolderContentView: View {
   /// identical fetches inside `CollectionCountCache`, so re-running this on revision
   /// bumps is cheap on the second pass.
   private func loadCounts() async {
-    guard let folder else { return }
+    guard let folder else {
+      isLoadingCounts = false
+      return
+    }
     isLoadingCounts = true
-    defer { isLoadingCounts = false }
-    countsByDescriptorId = await collectCounts(in: folder.children)
+    let counts = await collectCounts(in: folder.children)
+    // A newer library change or folder switch restarted the load. This load's results are
+    // stale (cancelled fetches read as zero), so leave the counts and `isLoadingCounts` to
+    // the newer load, which clears the flag when it finishes.
+    guard !Task.isCancelled else {
+      #if DEBUG
+        bodyCounter?.record("folder-counts-superseded")
+      #endif
+      return
+    }
+    countsByDescriptorId = counts
+    isLoadingCounts = false
   }
 
   /// Walks the subtree under each child, fetching album counts and rolling them up. The

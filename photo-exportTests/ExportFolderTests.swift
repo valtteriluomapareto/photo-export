@@ -245,6 +245,42 @@ struct ExportFolderTests {
     #expect(backward.ids == ["B", "C", "D"])
   }
 
+  // MARK: - Pruning after a library change (prunedSelection)
+
+  /// Children still in the folder stay selected, and so does the anchor.
+  @Test func prunedSelectionKeepsSurvivingChildrenAndAnchor() {
+    let folder = makeOrderedFolder(["A", "B", "C"])
+
+    let result = PhotoCollectionDescriptor.prunedSelection(["A", "C"], anchor: "C", in: folder)
+
+    #expect(result.ids == ["A", "C"])
+    #expect(result.anchor == "C")
+  }
+
+  /// A child that left the folder leaves the selection; an anchor on it is dropped.
+  @Test func prunedSelectionDropsRemovedChildAndItsAnchor() {
+    let folder = makeOrderedFolder(["B", "C"])
+
+    let result = PhotoCollectionDescriptor.prunedSelection(["A", "B"], anchor: "A", in: folder)
+
+    #expect(result.ids == ["B"])
+    #expect(result.anchor == nil)
+  }
+
+  /// Switching to another folder (disjoint child ids) or losing the folder clears both,
+  /// so no separate reset is needed when the visible folder changes.
+  @Test func prunedSelectionClearsForAnotherOrMissingFolder() {
+    let other = makeOrderedFolder(["X", "Y"])
+
+    let switched = PhotoCollectionDescriptor.prunedSelection(["A", "B"], anchor: "A", in: other)
+    let missing = PhotoCollectionDescriptor.prunedSelection(["A", "B"], anchor: "A", in: nil)
+
+    #expect(switched.ids.isEmpty)
+    #expect(switched.anchor == nil)
+    #expect(missing.ids.isEmpty)
+    #expect(missing.anchor == nil)
+  }
+
   /// Builds a flat parent folder with one child per id (all `.album`), in the
   /// supplied order. Used for `extendedSelection` tests where the children's
   /// `kind` is irrelevant — only the `id` ordering matters.
