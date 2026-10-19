@@ -115,11 +115,12 @@ Upload via Xcode Organizer (Distribute App > App Store Connect) or Transporter. 
 
 **GitHub Release:**
 
-Download the DMG on a separate machine (or fresh user account) and confirm:
+The published DMG is a separate build from the validated dry run. On a separate machine or fresh user account, confirm:
 
 - Gatekeeper accepts the app without warnings
 - The version in About matches the release
-- Over the validation account's state, the app relaunches, the destination resolves without a re-grant, and repeating an exported month writes no files
+
+In the [validation account](release-validation.md#validation-environment-one-time), install the published DMG over the validated state and confirm the app relaunches, the destination resolves without a re-grant, and repeating an exported month writes no files.
 
 **App Store:**
 

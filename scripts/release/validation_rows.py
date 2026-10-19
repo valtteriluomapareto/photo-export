@@ -13,6 +13,7 @@ Usage:
 
 `--base` is the default baseline for every row (normally the previous release tag);
 `--row-base` overrides it for a row whose last pass is older, so skipped rows stay owed.
+`--row-base ROW=never` marks a row that has no recorded pass.
 """
 
 import argparse
@@ -44,7 +45,7 @@ EVERY_ROW = tuple(ROWS)
 # one path component; `**` crosses components. Mixed-purpose folders list their files
 # explicitly, so a new file there fails the completeness test until someone maps it.
 RULES = [
-    # Hubs: shared by many rows (see HUBS).
+    # Hub files (listed in HUBS) and other widely shared files.
     ("photo-export/Export/ExportManager.swift", EVERY_ROW),
     ("photo-export/App/photo_exportApp.swift", ("authorization", "destination", "autoexport")),
     ("photo-export/PhotoLibrary/PhotoLibraryManager.swift",
@@ -139,16 +140,30 @@ RULES = [
 ]
 
 # Files so central that almost every release touches them. A row reached only through a
-# hub is reported separately: the release owner may exclude it with a recorded reason
-# (for example "ExportManager change only renames a log message"); rows reached through
-# a non-hub file are always required.
+# hub is reported separately, with the subjects of the commits that touched the hub; the
+# release owner may exclude it with a recorded reason. A hub commit whose subject names a
+# row's area (ROW_KEYWORDS) makes that row required. Rows reached through a non-hub file
+# are always required.
 HUBS = {
     "photo-export/Export/ExportManager.swift",
     "photo-export/App/photo_exportApp.swift",
     "photo-export/PhotoLibrary/PhotoLibraryManager.swift",
     "photo-export/ContentView.swift",
-    "photo-export/Export/VariantExporter.swift",
     "photo-export/Protocols/PhotoLibraryService.swift",
+}
+
+ROW_KEYWORDS = {
+    "local": r"original|heic|jpe?g|convert|filename",
+    "edited": r"edit|render|video|adjust",
+    "preview": r"preview|thumbnail|detail",
+    "icloud": r"icloud|download|network|resource",
+    "livephoto": r"live photo|paired",
+    "collections": r"album|favorite|collection|folder",
+    "authorization": r"authori[sz]|permission|onboarding|first.?run|welcome|access",
+    "cancel": r"cancel|pause|resume|interrupt|stop",
+    "destination": r"destination|volume|remount|bookmark|drive",
+    "autoexport": r"auto.?export|autosync|auto-sync|login",
+    "import": r"import|backup|recover",
 }
 
 # Covered by the core smoke alone: changes here need no extra row.
@@ -179,22 +194,35 @@ CORE_ONLY = [
     "photo-export/Views/Export/ExportToolbarView.swift",
 ]
 
-# Any change here requires the full matrix.
+# Any change here requires the full matrix: it shapes or signs the shipped binary.
 FULL_MATRIX_PATHS = [
     "photo-export/photo_export.entitlements",
     "photo-export/PrivacyInfo.xcprivacy",
     "photo-export/Project.xcconfig",
     "photo-export/**/Info.plist",
+    "photo-export.xcodeproj/xcshareddata/**",
+    "scripts/ci/archive-appstore.sh",
+    "scripts/ci/export-appstore.sh",
+    "scripts/ci/prepare-pkg.sh",
+    "scripts/ci/install-provisioning-profile.sh",
+    "scripts/ci/setup-keychain-appstore.sh",
     ".xcode-version",
 ]
 
 PROJECT = "photo-export.xcodeproj/project.pbxproj"
-VERSION_ONLY = re.compile(r"^\s*(MARKETING_VERSION|CURRENT_PROJECT_VERSION)\s*=")
+# Project settings that both release pipelines override on the xcodebuild command line
+# (release-direct.yml and scripts/ci/archive-appstore.sh), so the project's own values
+# never reach a shipped build. A test keeps this list in sync with the pipelines.
+PIPELINE_OVERRIDDEN_KEYS = (
+    "CODE_SIGN_IDENTITY", "CODE_SIGN_STYLE", "DEVELOPMENT_TEAM", "OTHER_CODE_SIGN_FLAGS",
+    "PROVISIONING_PROFILE_SPECIFIER", "CURRENT_PROJECT_VERSION",
+)
+IGNORED_PROJECT_LINE = re.compile(
+    r'^\s*"?(MARKETING_VERSION|' + "|".join(PIPELINE_OVERRIDDEN_KEYS) + r')(\[[^]]*\])?"?\s*=')
 RELEASE_WORKFLOWS = ".github/workflows/release-*.yml"
-TOOLCHAIN_OR_SIGNING = re.compile(
-    r"XCODE_PATH|Xcode_|xcode-select|DEVELOPER_DIR|CODE_SIGN|DEVELOPMENT_TEAM|"
-    r"ExportOptions|exportOptions|signingStyle|signingCertificate|teamID|notarytool",
-    re.IGNORECASE)
+# Release workflow lines that cannot change the built binary. Any other changed line
+# requires the full matrix.
+HARMLESS_WORKFLOW_LINE = re.compile(r"^\s*(#|echo\b|printf\b|schedule:|- cron:|$)")
 
 
 def _regex(pattern):
@@ -254,17 +282,22 @@ class Assessment:
     rows: dict
     full_matrix_reasons: list
     unmapped: list
+    named_rows: set = field(default_factory=set)
 
     def hub_only(self, row):
-        """True when every path triggering `row` is a hub."""
-        return bool(self.rows.get(row)) and all(path in HUBS for path in self.rows[row])
+        """True when only hubs trigger `row` and no hub commit names its area."""
+        paths = self.rows.get(row)
+        return bool(paths) and all(p in HUBS for p in paths) and row not in self.named_rows
 
 
-def assess(paths, project_diff, workflow_diffs=None, macos_major_changed=False):
+def assess(paths, project_diff, workflow_diffs=None, macos_major_changed=False,
+           hub_subjects=(), deleted=()):
     """Maps changed paths to rows and lists reasons the full matrix is required.
 
     `project_diff` holds the +/- lines of the project.pbxproj diff; `workflow_diffs` maps a
-    changed release workflow to its +/- lines.
+    changed release workflow to its +/- lines; `hub_subjects` are the subjects of commits
+    that touched a hub; `deleted` paths no longer exist at the candidate, so an unmapped
+    deleted path cannot ship unknown code and does not require the full matrix.
     """
     rows = {}
     reasons = []
@@ -273,52 +306,79 @@ def assess(paths, project_diff, workflow_diffs=None, macos_major_changed=False):
         if path == PROJECT:
             changed = [
                 line[1:] for line in project_diff
-                if line[:1] in "+-" and line[1:].strip() and not VERSION_ONLY.match(line[1:])
+                if line[:1] in "+-" and line[1:].strip()
+                and not IGNORED_PROJECT_LINE.match(line[1:])
             ]
             if changed:
                 reasons.append(f"{PROJECT} changes build settings: {changed[0].strip()}")
             continue
         if fnmatch.fnmatchcase(path, RELEASE_WORKFLOWS):
             lines = (workflow_diffs or {}).get(path, [])
-            hits = [line for line in lines if TOOLCHAIN_OR_SIGNING.search(line)]
+            hits = [line for line in lines if not HARMLESS_WORKFLOW_LINE.match(line[1:])]
             if hits:
-                reasons.append(f"{path} changes the toolchain or signing: {hits[0][1:].strip()}")
+                reasons.append(f"{path} changes the release build: {hits[0][1:].strip()}")
             continue
         found = classify(path)
         if found.full_matrix:
             reasons.append(f"{path} changed")
         elif found.unmapped:
             unmapped.append(path)
-            reasons.append(f"{path} is not mapped to any row")
+            if path not in deleted:
+                reasons.append(f"{path} is not mapped to any row")
         for row in found.rows:
             rows.setdefault(row, []).append(path)
     if macos_major_changed:
         reasons.append("the validation machine's macOS major version changed")
-    return Assessment(rows=rows, full_matrix_reasons=reasons, unmapped=unmapped)
+    named = {
+        row for row, pattern in ROW_KEYWORDS.items()
+        if any(re.search(pattern, subject, re.IGNORECASE) for subject in hub_subjects)
+    }
+    return Assessment(rows=rows, full_matrix_reasons=reasons, unmapped=unmapped, named_rows=named)
+
+
+class GitError(Exception):
+    pass
 
 
 def _git(*args):
-    return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
+    result = subprocess.run(["git", *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise GitError(f"git {' '.join(args)}: {result.stderr.strip()}")
+    return result.stdout
+
+
+def _diff_lines(spec, path):
+    lines = _git("diff", "-U0", "--no-renames", spec, "--", path).splitlines()
+    return [line for line in lines if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+
+
+def hub_commits(base, candidate):
+    """`<sha> <subject>` for commits in the range that touched a hub."""
+    return _git("log", "--format=%h %s", f"{base}..{candidate}", "--", *sorted(HUBS)).splitlines()
 
 
 def assess_git(base, candidate, macos_major_changed=False):
     spec = f"{base}..{candidate}"
-    paths = _git("diff", "--name-only", "-M", spec).split()
-    project = _git("diff", "-U0", spec, "--", PROJECT).splitlines()
-    project = [line for line in project if not line.startswith(("+++", "---"))]
-    workflows = {}
-    for path in paths:
-        if fnmatch.fnmatchcase(path, RELEASE_WORKFLOWS):
-            lines = _git("diff", "-U0", spec, "--", path).splitlines()
-            workflows[path] = [line for line in lines if not line.startswith(("+++", "---"))]
-    return assess(paths, project, workflows, macos_major_changed)
+    paths = [p for p in _git("diff", "--name-only", "--no-renames", "-z", spec).split("\0") if p]
+    workflows = {
+        path: _diff_lines(spec, path)
+        for path in paths if fnmatch.fnmatchcase(path, RELEASE_WORKFLOWS)
+    }
+    deleted = [
+        p for p in _git("diff", "--name-only", "--no-renames", "--diff-filter=D", "-z", spec)
+        .split("\0") if p
+    ]
+    subjects = [line.split(" ", 1)[-1] for line in hub_commits(base, candidate)]
+    return assess(paths, _diff_lines(spec, PROJECT), workflows, macos_major_changed, subjects,
+                  deleted)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--base", required=True, help="default baseline, e.g. the previous tag")
     parser.add_argument("--row-base", action="append", default=[], metavar="ROW=REF",
-                        help="older baseline for a row whose last pass predates --base")
+                        help="older baseline for a row whose last pass predates --base, "
+                        "or 'never' for a row with no recorded pass")
     parser.add_argument("--candidate", default="HEAD")
     parser.add_argument("--macos-major-changed", action="store_true")
     args = parser.parse_args(argv)
@@ -330,31 +390,44 @@ def main(argv=None):
             parser.error(f"unknown row in --row-base {item!r}; rows: {', '.join(ROWS)}")
         bases[row] = ref
 
-    results = {}
-    for base in sorted(set(bases.values())):
-        results[base] = assess_git(base, args.candidate, args.macos_major_changed)
+    try:
+        results = {
+            base: assess_git(base, args.candidate, args.macos_major_changed)
+            for base in sorted(set(bases.values()) - {"never"})
+        }
+        hubs = {base: hub_commits(base, args.candidate) for base in results}
+    except GitError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
 
     print("Core smoke: required")
-    reasons = sorted({reason for result in results.values() for reason in result.full_matrix_reasons})
     for row, title in ROWS.items():
-        result = results[bases[row]]
+        base = bases[row]
+        if base == "never":
+            print(f"{title} (never passed): TRIGGERED - no recorded pass")
+            continue
+        result = results[base]
         paths = result.rows.get(row)
         if result.full_matrix_reasons:
-            print(f"{title} (since {bases[row]}): TRIGGERED - full matrix")
+            print(f"{title} (since {base}): TRIGGERED - full matrix")
         elif paths and result.hub_only(row):
-            print(f"{title} (since {bases[row]}): TRIGGERED via hub only - "
+            print(f"{title} (since {base}): TRIGGERED via hub only - "
                   f"{', '.join(sorted(paths))} (may be excluded with a recorded reason)")
+            for commit in hubs[base]:
+                print(f"    {commit}")
         elif paths:
-            direct = sorted(path for path in paths if path not in HUBS)
-            print(f"{title} (since {bases[row]}): TRIGGERED - {', '.join(direct)}")
+            direct = sorted(path for path in paths if path not in HUBS) or sorted(paths)
+            print(f"{title} (since {base}): TRIGGERED - {', '.join(direct)}")
         else:
-            print(f"{title} (since {bases[row]}): not triggered")
-    if reasons:
-        print("Full matrix: REQUIRED")
+            print(f"{title} (since {base}): not triggered")
+    affected = {base: result.full_matrix_reasons for base, result in results.items()
+                if result.full_matrix_reasons}
+    if not affected:
+        print("Full matrix: not required")
+    for base, reasons in sorted(affected.items()):
+        print(f"Full matrix: REQUIRED for rows since {base}")
         for reason in reasons:
             print(f"  - {reason}")
-    else:
-        print("Full matrix: not required")
     return 0
 
 

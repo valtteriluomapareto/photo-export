@@ -1,5 +1,5 @@
 {
- "_comment": "Changed paths and project.pbxproj diff lines of shipped release ranges, captured with `git diff --name-only -M <range>` and `git diff -U0 <range> -- photo-export.xcodeproj/project.pbxproj`. Used to check the validation-row mapping against real history without needing tags in CI.",
+ "_comment": "Changed paths (both sides of renames), project.pbxproj diff lines and subjects of commits touching hub files for shipped release ranges, captured with `git diff --name-only --no-renames <range>` (deleted paths via `--diff-filter=D`), `git diff -U0 --no-renames <range> -- photo-export.xcodeproj/project.pbxproj` and `git log --format=%s <range> -- <hubs>`. Used to check the validation-row mapping against real history without needing tags in CI.",
  "v1.6.0..v1.6.1": {
   "paths": [
    ".github/workflows/ci.yml",
@@ -45,7 +45,14 @@
    "+\t\t\t\tMARKETING_VERSION = 1.6.1;",
    "-\t\t\t\tMARKETING_VERSION = 1.6.0;",
    "+\t\t\t\tMARKETING_VERSION = 1.6.1;"
-  ]
+  ],
+  "hub_subjects": [
+   "style(comments): trim diary content from #112 comments",
+   "fix(auto-export): move cache-drop intra-loop + autoreleasepool rewrite",
+   "fix(auto-export): bound memory across the AutoSync fan-out (issue #112)",
+   "feat(observability): AutoSync run journal + diagnostic report integration"
+  ],
+  "deleted": []
  },
  "v1.6.1..v1.6.2": {
   "paths": [
@@ -57,7 +64,13 @@
    "docs/project/archive/testing-improvement-plan.md",
    "docs/project/archive/videos-subfolder-plan.md",
    "docs/project/implementation-tasks.md",
+   "docs/project/import-existing-backup-plan.md",
+   "docs/project/plans/auto-export-memory-fix-plan.md",
+   "docs/project/plans/observability-improvement-plan.md",
+   "docs/project/plans/observable-migration-plan.md",
    "docs/project/plans/ui-smoothness-plan.md",
+   "docs/project/plans/videos-subfolder-plan.md",
+   "docs/project/testing-improvement-plan.md",
    "photo-export.xcodeproj/project.pbxproj",
    "photo-export/Models/ReleaseNotesCatalog.swift",
    "photo-export/ViewModels/MonthViewModel.swift",
@@ -78,6 +91,15 @@
    "+\t\t\t\tMARKETING_VERSION = 1.6.2;",
    "-\t\t\t\tMARKETING_VERSION = 1.6.1;",
    "+\t\t\t\tMARKETING_VERSION = 1.6.2;"
+  ],
+  "hub_subjects": [],
+  "deleted": [
+   "docs/project/import-existing-backup-plan.md",
+   "docs/project/plans/auto-export-memory-fix-plan.md",
+   "docs/project/plans/observability-improvement-plan.md",
+   "docs/project/plans/observable-migration-plan.md",
+   "docs/project/plans/videos-subfolder-plan.md",
+   "docs/project/testing-improvement-plan.md"
   ]
  },
  "v1.6.2..v1.6.3": {
@@ -132,7 +154,21 @@
    "+\t\t\t\tMARKETING_VERSION = 1.6.3;",
    "-\t\t\t\tMARKETING_VERSION = 1.6.2;",
    "+\t\t\t\tMARKETING_VERSION = 1.6.3;"
-  ]
+  ],
+  "hub_subjects": [
+   "feat(dev): --force-onboarding flag to preview first-run screen",
+   "Address PR review: explicit window resizability + shared min-size modifier",
+   "Fix collapsed, non-resizable welcome screen on first run",
+   "style(comments): trim narrative content from new comments",
+   "chore(progressive-fetch): apply reviewer feedback to streaming",
+   "feat(progressive-fetch): stream assets in 200-descriptor batches",
+   "chore(thumbnail): apply reviewer feedback to cell-scoped cancellation",
+   "feat(thumbnail): cell-scoped cancellation for grid loads",
+   "chore(thumbnail): apply reviewer feedback to decoded cache",
+   "feat(thumbnail): bounded CGImage cache shared across scopes",
+   "chore(measurement): Phase 0 scaffolding for UI smoothness plan"
+  ],
+  "deleted": []
  },
  "v1.6.3..v1.6.4": {
   "paths": [
@@ -141,6 +177,7 @@
    "photo-export/Models/ReleaseNotesCatalog.swift",
    "photo-export/Views/Settings/AutoExportSettingsView.swift",
    "photo-export/Views/Settings/DestinationRecordRecoveryView.swift",
+   "photo-export/Views/Settings/MigrationConflictRecoveryView.swift",
    "photo-exportTests/BackupScannerSizeDiscriminatorTests.swift",
    "photo-exportTests/BackupScannerVariantTests.swift",
    "photo-exportTests/DestinationSafetyMonitorTests.swift",
@@ -160,6 +197,10 @@
    "+\t\t\t\tMARKETING_VERSION = 1.6.4;",
    "-\t\t\t\tMARKETING_VERSION = 1.6.3;",
    "+\t\t\t\tMARKETING_VERSION = 1.6.4;"
+  ],
+  "hub_subjects": [],
+  "deleted": [
+   "photo-export/Views/Settings/MigrationConflictRecoveryView.swift"
   ]
  },
  "v1.6.4..v1.6.5": {
@@ -205,6 +246,23 @@
    "+\t\t\t\tMARKETING_VERSION = 1.6.5;",
    "-\t\t\t\tMARKETING_VERSION = 1.6.4;",
    "+\t\t\t\tMARKETING_VERSION = 1.6.5;"
-  ]
+  ],
+  "hub_subjects": [
+   "Stable logical destination id: stop network-share remounts from re-exporting (#133)"
+  ],
+  "deleted": []
+ },
+ "c352da8^..c352da8": {
+  "paths": [
+   "README.md",
+   "photo-export/Export/ExportManager.swift",
+   "photo-exportTests/ExportMonthResumeTests.swift",
+   "website/src/content/docs/getting-started.md"
+  ],
+  "pbxproj_diff": [],
+  "hub_subjects": [
+   "Resume existing paused work from Export Month (#298)"
+  ],
+  "deleted": []
  }
 }

@@ -18,7 +18,13 @@ RANGES = json.loads((pathlib.Path(__file__).with_name("fixtures") / "release_ran
 
 def assess_range(name):
     data = RANGES[name]
-    return vr.assess(data["paths"], data["pbxproj_diff"])
+    return vr.assess(data["paths"], data["pbxproj_diff"], hub_subjects=data["hub_subjects"],
+                     deleted=data["deleted"])
+
+
+def required(result, row):
+    """A row the release owner cannot exclude."""
+    return row in result.rows and not result.hub_only(row)
 
 
 class MappingCompletenessTests(unittest.TestCase):
@@ -43,21 +49,27 @@ class MappingCompletenessTests(unittest.TestCase):
 
 class ShippedHistoryTests(unittest.TestCase):
     def test_version_only_project_changes_never_require_the_full_matrix(self):
-        for name in [key for key in RANGES if not key.startswith("_")]:
+        for name in [key for key in RANGES if key.startswith("v")]:
             with self.subTest(range=name):
                 self.assertEqual(assess_range(name).full_matrix_reasons, [])
 
     def test_network_remount_fix_triggers_destination_reconnect(self):
-        self.assertIn("destination", assess_range("v1.6.4..v1.6.5").rows)
+        self.assertTrue(required(assess_range("v1.6.4..v1.6.5"), "destination"))
 
     def test_first_run_window_fix_triggers_authorization(self):
-        self.assertIn("authorization", assess_range("v1.6.2..v1.6.3").rows)
+        self.assertTrue(required(assess_range("v1.6.2..v1.6.3"), "authorization"))
 
     def test_auto_export_cache_rewrite_triggers_auto_export(self):
-        self.assertIn("autoexport", assess_range("v1.6.0..v1.6.1").rows)
+        self.assertTrue(required(assess_range("v1.6.0..v1.6.1"), "autoexport"))
 
     def test_backup_matcher_fix_triggers_import(self):
-        self.assertIn("import", assess_range("v1.6.3..v1.6.4").rows)
+        self.assertTrue(required(assess_range("v1.6.3..v1.6.4"), "import"))
+
+    def test_hub_only_fix_whose_commit_names_the_area_is_required(self):
+        # #298 touched only ExportManager.swift; its subject names pause and resume.
+        result = assess_range("c352da8^..c352da8")
+        self.assertTrue(required(result, "cancel"))
+        self.assertTrue(result.hub_only("collections"))
 
     def test_rows_reached_only_through_hubs_are_reported_as_excludable(self):
         result = vr.assess(["photo-export/Export/ExportManager.swift",
@@ -86,7 +98,7 @@ class FullMatrixTests(unittest.TestCase):
         diff = [
             "-\t\t\t\tMARKETING_VERSION = 1.6.5;",
             "+\t\t\t\tMARKETING_VERSION = 1.6.6;",
-            '+\t\t\t\t"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";',
+            "+\t\t\t\tENABLE_HARDENED_RUNTIME = NO;",
         ]
         result = vr.assess(["photo-export.xcodeproj/project.pbxproj"], diff)
         self.assertTrue(any("project.pbxproj" in reason for reason in result.full_matrix_reasons))
@@ -101,11 +113,8 @@ class FullMatrixTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(vr.assess([path], []).full_matrix_reasons)
 
-    def test_release_workflow_requires_the_full_matrix_only_for_toolchain_or_signing(self):
+    def test_release_workflow_toolchain_change_requires_the_full_matrix(self):
         workflow = ".github/workflows/release-direct.yml"
-        self.assertEqual(
-            vr.assess([workflow], [], {workflow: ["+    - cron: '0 6 * * 1'"]}).full_matrix_reasons,
-            [])
         self.assertTrue(
             vr.assess([workflow], [], {workflow: ["+  XCODE_PATH: /Applications/Xcode_16.4.app"]})
             .full_matrix_reasons)
@@ -113,10 +122,58 @@ class FullMatrixTests(unittest.TestCase):
     def test_macos_major_change_requires_the_full_matrix(self):
         self.assertTrue(vr.assess([], [], macos_major_changed=True).full_matrix_reasons)
 
+    def test_deleted_unmapped_path_is_listed_without_the_full_matrix(self):
+        result = vr.assess(["photo-export/Old/Gone.swift"], [], deleted=["photo-export/Old/Gone.swift"])
+        self.assertEqual(result.full_matrix_reasons, [])
+        self.assertEqual(result.unmapped, ["photo-export/Old/Gone.swift"])
+
     def test_tests_docs_and_website_alone_need_only_the_core_smoke(self):
         result = vr.assess(
             ["photo-exportTests/FooTests.swift", "docs/README.md", "website/src/x.md"], [])
         self.assertEqual((result.rows, result.full_matrix_reasons), ({}, []))
+
+
+class SigningOverrideTests(unittest.TestCase):
+    def test_release_pipelines_still_override_the_ignored_project_signing_keys(self):
+        direct = (REPO / ".github/workflows/release-direct.yml").read_text()
+        store = (REPO / "scripts/ci/archive-appstore.sh").read_text()
+        for key in vr.PIPELINE_OVERRIDDEN_KEYS:
+            if key == "PROVISIONING_PROFILE_SPECIFIER":
+                self.assertIn(f"{key}=", store)
+                continue
+            with self.subTest(key=key):
+                self.assertIn(f"{key}=", direct)
+                self.assertIn(f"{key}=", store)
+
+    def test_project_lines_for_pipeline_overridden_signing_keys_are_ignored(self):
+        diff = [
+            '+\t\t\t\t"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";',
+            "+\t\t\t\tDEVELOPMENT_TEAM = N4FKQHR5AC;",
+        ]
+        self.assertEqual(
+            vr.assess(["photo-export.xcodeproj/project.pbxproj"], diff).full_matrix_reasons, [])
+
+    def test_release_scripts_and_shared_scheme_require_the_full_matrix(self):
+        for path in [
+            "scripts/ci/archive-appstore.sh",
+            "scripts/ci/export-appstore.sh",
+            "photo-export.xcodeproj/xcshareddata/xcschemes/photo-export.xcscheme",
+        ]:
+            with self.subTest(path=path):
+                self.assertTrue(vr.assess([path], []).full_matrix_reasons)
+
+    def test_any_release_workflow_build_change_requires_the_full_matrix(self):
+        workflow = ".github/workflows/release-direct.yml"
+        for line in ["+            SWIFT_OPTIMIZATION_LEVEL=-Onone \\",
+                     "+          <string>developer-id</string>",
+                     "-            -configuration Release \\"]:
+            with self.subTest(line=line):
+                self.assertTrue(vr.assess([workflow], [], {workflow: [line]}).full_matrix_reasons)
+        for line in ["+  # weekly signed dry run", '+          echo "Archiving"',
+                     "+  schedule:", "+    - cron: '0 6 * * 1'"]:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    vr.assess([workflow], [], {workflow: [line]}).full_matrix_reasons, [])
 
 
 class CommandLineTests(unittest.TestCase):
@@ -157,6 +214,37 @@ class CommandLineTests(unittest.TestCase):
             lines)
         self.assertIn("Auto Export / relaunch (since middle): not triggered", lines)
         self.assertIn("Full matrix: not required", lines)
+
+    def test_renamed_file_triggers_the_rows_of_its_old_path(self):
+        self.git("mv", "photo-export/Destination/A.swift", "photo-export/AutoSync/A.swift")
+        self.git("commit", "-qm", "move")
+        lines = self.run_cli("--base", "HEAD~1").stdout.splitlines()
+        self.assertIn("Destination reconnect (since HEAD~1): TRIGGERED - "
+                      "photo-export/Destination/A.swift", lines)
+        self.assertIn("Auto Export / relaunch (since HEAD~1): TRIGGERED - "
+                      "photo-export/AutoSync/A.swift", lines)
+
+    def test_full_matrix_applies_only_to_rows_on_the_affected_baseline(self):
+        (self.repo / "photo-export/photo_export.entitlements").write_text("<plist/>\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "entitlements")
+        self.git("tag", "after-entitlements")
+        result = self.run_cli("--base", "after-entitlements", "--row-base", "autoexport=base")
+        lines = result.stdout.splitlines()
+        self.assertIn("Auto Export / relaunch (since base): TRIGGERED - full matrix", lines)
+        self.assertIn("Destination reconnect (since after-entitlements): not triggered", lines)
+        self.assertIn("Full matrix: REQUIRED for rows since base", lines)
+
+    def test_row_without_a_recorded_pass_is_owed(self):
+        result = self.run_cli("--base", "HEAD", "--row-base", "import=never")
+        self.assertIn("Import existing backup / record recovery (never passed): TRIGGERED - "
+                      "no recorded pass", result.stdout.splitlines())
+
+    def test_unknown_ref_fails_without_a_traceback(self):
+        result = self.run_cli("--base", "no-such-ref")
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("no-such-ref", result.stderr)
 
     def test_rejects_unknown_row(self):
         result = self.run_cli("--base", "base", "--row-base", "nope=middle")
