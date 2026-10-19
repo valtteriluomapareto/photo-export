@@ -132,7 +132,7 @@ struct YearContentView: View {
               MonthTileView(
                 year: year,
                 month: month,
-                photoCount: counts.assetCountsByYearMonth["\(year)-\(month)"],
+                photoCount: counts.countsByYearMonth["\(year)-\(month)"]?.total,
                 isFullyExported: isMonthFullyExported(month: month),
                 photoLibraryService: photoLibraryService
               )
@@ -153,9 +153,10 @@ struct YearContentView: View {
   /// the data lands.
   private func isMonthFullyExported(month: Int) -> Bool {
     let key = "\(year)-\(month)"
-    let total = counts.assetCountsByYearMonth[key] ?? 0
+    let pair = counts.countsByYearMonth[key]
+    let total = pair?.total ?? 0
     guard total > 0 else { return false }
-    let adjusted = counts.adjustedCountsByYearMonth[key]
+    let adjusted = pair?.adjusted
     guard
       let summary = exportRecordStore.sidebarSummary(
         year: year, month: month, totalCount: total, adjustedCount: adjusted,

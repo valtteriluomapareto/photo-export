@@ -17,7 +17,7 @@ import Foundation
 /// (`PhotoLibraryService.cachedCountAssets(in:)` and
 /// `cachedCountAdjustedAssets(in:)`). The `CollectionCountCache` actor
 /// dedups overlapping calls, so calling `loadCounts(forYears:)` multiple
-/// times is cheap. As each (year, month) pair lands, the `@Published` dicts
+/// times is cheap. As each (year, month) pair lands, the `@Published` snapshot
 /// update and dependent `YearRow` / `MonthRow` views re-render
 /// progressively.
 ///
@@ -29,8 +29,12 @@ import Foundation
 /// runloop while the detached fetch runs.
 @MainActor
 final class TimelineSidebarCounts: ObservableObject {
-  @Published private(set) var assetCountsByYearMonth: [String: Int] = [:]
-  @Published private(set) var adjustedCountsByYearMonth: [String: Int] = [:]
+  struct MonthCounts: Equatable {
+    let total: Int
+    let adjusted: Int?
+  }
+
+  @Published private(set) var countsByYearMonth: [String: MonthCounts] = [:]
   /// Last error encountered while fetching counts. Surfaces once so a future
   /// view-side banner can mention "couldn't load progress" without us having
   /// to thread Result types throughout the loader.
@@ -61,9 +65,8 @@ final class TimelineSidebarCounts: ObservableObject {
     guard !Task.isCancelled else { return }
     generation &+= 1
     let gen = generation
-    // Keep month rows stable, but do not pair old adjusted counts with new totals.
-    adjustedCountsByYearMonth = [:]
-    lastError = nil
+    // Keep each previous pair visible until its replacement is ready.
+    if lastError != nil { lastError = nil }
     let ordered = orderYears(years, preferredYear: preferredYear)
     for year in ordered {
       guard isCurrent(gen) else { return }
@@ -77,19 +80,26 @@ final class TimelineSidebarCounts: ObservableObject {
   /// repopulate from scratch.
   func reset() {
     generation &+= 1
-    assetCountsByYearMonth = [:]
-    adjustedCountsByYearMonth = [:]
-    lastError = nil
+    if !countsByYearMonth.isEmpty { countsByYearMonth = [:] }
+    if lastError != nil { lastError = nil }
   }
 
   // MARK: - Read helpers
+
+  var assetCountsByYearMonth: [String: Int] {
+    countsByYearMonth.mapValues(\.total)
+  }
+
+  var adjustedCountsByYearMonth: [String: Int] {
+    countsByYearMonth.compactMapValues(\.adjusted)
+  }
 
   /// Months 1...12 of `year` whose total count is non-zero. Replaces the old
   /// `computeMonthsWithAssets(for:)` view-method; the loader's dict is the
   /// new source of truth.
   func monthsWithAssets(for year: Int) -> [Int] {
     var months: [Int] = []
-    for month in 1...12 where (assetCountsByYearMonth["\(year)-\(month)"] ?? 0) > 0 {
+    for month in 1...12 where (countsByYearMonth["\(year)-\(month)"]?.total ?? 0) > 0 {
       months.append(month)
     }
     return months
@@ -113,10 +123,10 @@ final class TimelineSidebarCounts: ObservableObject {
     }
   }
 
-  /// Fetches one (year, month) pair's total + adjusted counts and writes
-  /// them to the published dicts. The two fetches are dispatched
-  /// concurrently via `async let`; if either throws, the failure is
-  /// recorded in `lastError` but the other still lands.
+  /// Refreshes a month's pair atomically. Initial totals can introduce a row
+  /// before coverage is known; loaded pairs remain visible during refresh.
+  /// A current failure clears only this month's coverage, never pairing a
+  /// retained total with a fresh adjusted count.
   private func loadMonth(year: Int, month: Int, generation: Int) async {
     guard isCurrent(generation) else { return }
     async let totalTask = service.cachedCountAssets(
@@ -125,12 +135,15 @@ final class TimelineSidebarCounts: ObservableObject {
       in: .timeline(year: year, month: month))
 
     let key = "\(year)-\(month)"
-    var hasFreshTotal = false
+    var freshTotal: Int?
+    var freshAdjusted: Int?
     do {
       let total = try await totalTask
       guard isCurrent(generation) else { return }
-      assetCountsByYearMonth[key] = total
-      hasFreshTotal = true
+      freshTotal = total
+      if countsByYearMonth[key] == nil {
+        update(MonthCounts(total: total, adjusted: nil), for: key)
+      }
     } catch {
       guard isCurrent(generation) else { return }
       lastError = error
@@ -138,11 +151,20 @@ final class TimelineSidebarCounts: ObservableObject {
     do {
       let adjusted = try await adjustedTask
       guard isCurrent(generation) else { return }
-      if hasFreshTotal { adjustedCountsByYearMonth[key] = adjusted }
+      freshAdjusted = adjusted
     } catch {
       guard isCurrent(generation) else { return }
       lastError = error
     }
+    guard isCurrent(generation), let total = freshTotal ?? countsByYearMonth[key]?.total else {
+      return
+    }
+    update(MonthCounts(total: total, adjusted: freshTotal == nil ? nil : freshAdjusted), for: key)
+  }
+
+  private func update(_ counts: MonthCounts, for key: String) {
+    guard countsByYearMonth[key] != counts else { return }
+    countsByYearMonth[key] = counts
   }
 
   private func isCurrent(_ gen: Int) -> Bool {
