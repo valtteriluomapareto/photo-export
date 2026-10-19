@@ -47,7 +47,7 @@ final class WhatsNewState: ObservableObject {
   static let lastSeenVersionKey = "WhatsNew.lastSeenVersion"
 
   convenience init(
-    userDefaults: UserDefaults = .standard,
+    userDefaults: UserDefaults,
     bundle: Bundle = .main,
     catalog: [ReleaseNote] = ReleaseNotesCatalog.all
   ) {

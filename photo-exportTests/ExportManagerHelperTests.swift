@@ -8,16 +8,20 @@ struct ExportManagerHelperTests {
   // Use a minimal ExportManager instance for testing pure helpers.
   // These tests exercise filename utilities and queue counter logic.
   private func makeManager() -> (ExportManager, ExportRecordStore) {
-    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
+    let tempDir = TestScratch.directory("ExportManagerHelper")
     let recordStore = ExportRecordStore(baseDirectoryURL: tempDir)
     recordStore.configure(for: "test")
+    // Left unconfigured: the timeline-only readiness test depends on it.
+    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
     let photoLib = PhotoLibraryManager()
-    let destMgr = ExportDestinationManager(skipRestore: true)
+    let destMgr = ExportDestinationManager(
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: destMgr,
-      exportRecordStore: recordStore)
+      exportRecordStore: recordStore,
+      collectionExportRecordStore: collections,
+      userDefaults: TestScratch.defaults("ExportManagerHelper"))
     return (manager, recordStore)
   }
 
@@ -82,15 +86,15 @@ struct ExportManagerHelperTests {
   /// "view-side stores see the right answer" contract that
   /// `MonthContentView` / `CollectionContentView` rely on.
   @Test func convertHEICToJPEGToggleDefaultsOffAndMirrorsToStores() {
-    let defaults = UserDefaults(suiteName: "test-heic47-\(UUID().uuidString)")!
-    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
+    let defaults = TestScratch.defaults("heic47")
+    let tempDir = TestScratch.directory("ExportManagerHelper")
     let timeline = ExportRecordStore(baseDirectoryURL: tempDir)
     timeline.configure(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: tempDir)
     collection.configure(for: "test")
     let photoLib = PhotoLibraryManager()
-    let destMgr = ExportDestinationManager(skipRestore: true)
+    let destMgr = ExportDestinationManager(
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: destMgr,
@@ -119,18 +123,18 @@ struct ExportManagerHelperTests {
   /// stores during init (didSet is suppressed during init, so the manual
   /// sync at the bottom of `ExportManager.init` is what guarantees this).
   @Test func convertHEICToJPEGTogglePersistsAcrossManagerInits() {
-    let suiteName = "test-heic47-persist-\(UUID().uuidString)"
+    let suiteName = TestScratch.suiteName("heic47-persist")
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.set(true, forKey: ExportManager.convertHEICToJPEGDefaultsKey)
 
-    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
+    let tempDir = TestScratch.directory("ExportManagerHelper")
     let timeline = ExportRecordStore(baseDirectoryURL: tempDir)
     timeline.configure(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: tempDir)
     collection.configure(for: "test")
     let photoLib = PhotoLibraryManager()
-    let destMgr = ExportDestinationManager(skipRestore: true)
+    let destMgr = ExportDestinationManager(
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: destMgr,
@@ -204,14 +208,14 @@ struct ExportManagerHelperTests {
   /// `ExportManager.init` doesn't fall back to the standard suite (which would leak
   /// state across tests).
   private func makeManagerForTogglePersistence(userDefaults: UserDefaults) -> ExportManager {
-    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
+    let tempDir = TestScratch.directory("ExportManagerHelper")
     let timeline = ExportRecordStore(baseDirectoryURL: tempDir)
     timeline.configure(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: tempDir)
     collection.configure(for: "test")
     let photoLib = PhotoLibraryManager()
-    let destMgr = ExportDestinationManager(skipRestore: true)
+    let destMgr = ExportDestinationManager(
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
     return ExportManager(
       photoLibraryService: photoLib,
       exportDestination: destMgr,
@@ -221,16 +225,20 @@ struct ExportManagerHelperTests {
   }
 
   @Test func startExportMonthShortCircuitsWhenTimelineNotReady() {
-    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
+    let tempDir = TestScratch.directory("ExportManagerHelper")
     let recordStore = ExportRecordStore(baseDirectoryURL: tempDir)
     // Intentionally skip configure(for:) — store stays `.unconfigured`.
+    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
+    collections.configure(for: "test")
     let photoLib = PhotoLibraryManager()
-    let destMgr = ExportDestinationManager(skipRestore: true)
+    let destMgr = ExportDestinationManager(
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: destMgr,
-      exportRecordStore: recordStore)
+      exportRecordStore: recordStore,
+      collectionExportRecordStore: collections,
+      userDefaults: TestScratch.defaults("ExportManagerHelper"))
 
     #expect(manager.canExportTimeline == false)
     manager.startExportMonth(year: 2025, month: 6)

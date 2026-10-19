@@ -18,7 +18,8 @@ struct ExportDestinationEscapeProtectionTests {
     let dir = FileManager.default.temporaryDirectory
       .appendingPathComponent("ExportDestEscape-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let mgr = ExportDestinationManager(skipRestore: true)
+    let mgr = ExportDestinationManager(
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
     mgr.setSelectedFolderForTesting(dir)
     return (mgr, dir)
   }
@@ -95,7 +96,8 @@ struct ExportDestinationEscapeProtectionTests {
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
 
-    let mgr = ExportDestinationManager(skipRestore: true)
+    let mgr = ExportDestinationManager(
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
     mgr.setSelectedFolderForTesting(root)
 
     // A symlink inside the root pointing at the sibling whose name happens to share a

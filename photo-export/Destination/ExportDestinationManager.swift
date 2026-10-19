@@ -193,7 +193,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   // MARK: - Lifecycle
   init(
     skipRestore: Bool = false,
-    userDefaults: UserDefaults = .standard,
+    userDefaults: UserDefaults,
     bookmarkDefaultsKey: String = "ExportDestinationBookmark",
     stableIdDefaultsKey: String = "ExportDestinationStableId",
     fingerprintProvider: @escaping (URL) -> DestinationFingerprint? = {

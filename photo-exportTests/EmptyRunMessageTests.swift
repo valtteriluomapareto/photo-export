@@ -18,18 +18,19 @@ struct EmptyRunMessageTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let tempDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("EmptyRunTest-\(UUID().uuidString)", isDirectory: true)
+    let tempDir = TestScratch.directory("EmptyRunTest")
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "test")
+    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
+    collections.configure(for: "test")
 
-    let defaults = UserDefaults(
-      suiteName: "test-EmptyRun-\(UUID().uuidString)")!
+    let defaults = TestScratch.defaults("EmptyRun")
 
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
+      collectionExportRecordStore: collections,
       assetResourceWriter: writer,
       fileSystem: fileSystem,
       userDefaults: defaults

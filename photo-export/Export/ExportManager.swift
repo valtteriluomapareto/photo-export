@@ -493,25 +493,23 @@ final class ExportManager: ObservableObject {
     photoLibraryService: any PhotoLibraryService,
     exportDestination: any ExportDestination,
     exportRecordStore: ExportRecordStore,
-    collectionExportRecordStore: CollectionExportRecordStore? = nil,
+    collectionExportRecordStore: CollectionExportRecordStore,
     assetResourceWriter: any AssetResourceWriter = ProductionAssetResourceWriter(),
     mediaRenderer: (any MediaRenderer)? = nil,
     imageConverter: any ImageConverter = ProductionImageConverter(),
     fileSystem: any FileSystemService = FileIOService(),
     phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
     backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader(),
-    userDefaults: UserDefaults = .standard
+    userDefaults: UserDefaults
   ) {
     self.userDefaults = userDefaults
     self.photoLibraryService = photoLibraryService
     self.exportDestination = exportDestination
     self.exportRecordStore = exportRecordStore
     self.phAssetCacheControl = phAssetCacheControl
-    // Default to a fresh collection store backed by the same on-disk root as the timeline
-    // store. Tests typically pass `nil` and get a default-rooted store; production wires
-    // an injected one from `photo_exportApp` so both stores share the destination's
-    // `<App Support>/<bundleId>/ExportRecords/<destinationId>/` directory.
-    self.collectionExportRecordStore = collectionExportRecordStore ?? CollectionExportRecordStore()
+    // Required, like `userDefaults`, so no caller falls back to the real
+    // `<App Support>/<bundleId>/ExportRecords/` store or `.standard` defaults by omission.
+    self.collectionExportRecordStore = collectionExportRecordStore
     self.recordStoreRouter = RecordStoreRouter(
       timelineStore: self.exportRecordStore,
       collectionStore: self.collectionExportRecordStore)

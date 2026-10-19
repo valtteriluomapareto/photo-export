@@ -8,7 +8,7 @@
 import Combine
 import SwiftUI
 
-@main
+/// Started by `AppEntry` for normal launches.
 struct PhotoExportApp: App {
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var photoLibraryManager: PhotoLibraryManager
@@ -36,7 +36,11 @@ struct PhotoExportApp: App {
   private let autoSyncClock: SystemAutoSyncClock
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
+  /// Set when the real app is composed; the test host never composes it.
+  @MainActor private(set) static var wasComposed = false
+
   init() {
+    Self.wasComposed = true
     AppDiagnostics.beginLaunch()
     // Screenshot mode (`--screenshot-mode` launch arg) swaps the real Photos
     // backing for a curated synthetic library so marketing screenshots don't
@@ -49,10 +53,10 @@ struct PhotoExportApp: App {
     // never leaks into a marketing capture.
     let edm: ExportDestinationManager
     if PhotoLibraryManager.isRunningInScreenshotMode {
-      edm = ExportDestinationManager(skipRestore: true)
+      edm = ExportDestinationManager(skipRestore: true, userDefaults: .standard)
       edm.configureForScreenshotMode()
     } else {
-      edm = ExportDestinationManager()
+      edm = ExportDestinationManager(userDefaults: .standard)
     }
     if PhotoLibraryManager.isRunningInScreenshotMode {
       // ContentView gates on `@AppStorage("hasCompletedOnboarding")`; without
@@ -90,7 +94,7 @@ struct PhotoExportApp: App {
     let em = ExportManager(
       photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers,
       collectionExportRecordStore: cers,
-      phAssetCacheControl: plm)
+      phAssetCacheControl: plm, userDefaults: .standard)
     // Issue #49: drive the PhotoLibraryManager `descriptor(from:)` resource fallback
     // from the same UserDefaults-backed toggle ExportManager owns. Synchronous sink so
     // the next fetch sees the current value; initial value flows immediately because
@@ -193,7 +197,7 @@ struct PhotoExportApp: App {
     _autoSyncManager = StateObject(wrappedValue: asm)
     _autoSyncScopeStore = StateObject(wrappedValue: scopeStore)
     _loginItemController = StateObject(wrappedValue: LoginItemController())
-    _whatsNewState = StateObject(wrappedValue: WhatsNewState())
+    _whatsNewState = StateObject(wrappedValue: WhatsNewState(userDefaults: .standard))
     _destinationSafetyMonitor = StateObject(wrappedValue: safetyMonitor)
     self.autoSyncDestinationAdapter = destinationAdapter
     _autoSyncPhotoChangeAdapter = StateObject(wrappedValue: photoAdapter)

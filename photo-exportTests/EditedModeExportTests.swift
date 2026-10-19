@@ -19,22 +19,23 @@ struct EditedModeExportTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let tempDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("EditedModeTest-\(UUID().uuidString)", isDirectory: true)
+    let tempDir = TestScratch.directory("EditedModeTest")
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "test")
+    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
+    collections.configure(for: "test")
 
     // Per-test UserDefaults suite isolates `versionSelection` from any other
     // suite running concurrently. Replacing the pre-existing `.standard
     // .removeObject(...)` pattern that raced across `@MainActor` test suites
     // (issue #28).
-    let defaults = UserDefaults(
-      suiteName: "test-EditedMode-\(UUID().uuidString)")!
+    let defaults = TestScratch.defaults("EditedMode")
 
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
+      collectionExportRecordStore: collections,
       assetResourceWriter: writer,
       fileSystem: fileSystem,
       userDefaults: defaults

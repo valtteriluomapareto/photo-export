@@ -44,16 +44,18 @@ struct ExportQueueStateSnapshotTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportQueueSnapshot-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ExportQueueSnapshot")
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
-    let suiteName = "test-ExportQueueSnapshot-\(UUID().uuidString)"
+    let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    collections.configure(for: "test")
+    let suiteName = TestScratch.suiteName("ExportQueueSnapshot")
     let defaults = UserDefaults(suiteName: suiteName)!
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
+      collectionExportRecordStore: collections,
       assetResourceWriter: writer,
       fileSystem: fileSystem,
       userDefaults: defaults
