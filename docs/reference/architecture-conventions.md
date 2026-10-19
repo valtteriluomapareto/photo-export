@@ -72,6 +72,8 @@ invalidate the generation without cancelling the task. Progress/results/errors r
 UUID and generation; deferred stale cleanup may settle only its own UUID. Cancel invalidates UUID
 before clearing state. Publish error/report/stage before setting activity false, and perform no
 old-operation state writes after that publication. Scope release still waits for physical work.
+Cancelling the import reaches the detached backup scan, which stops before its next directory
+entry, file entry or `videos/` check.
 Retry preserves timeline-only compatibility when the collection store is unconfigured, but waits
 for recovery if either history store has failed. Scanner matching error propagation is unchanged.
 
@@ -130,6 +132,7 @@ Rules:
 - Do **not** add `@MainActor` to pure helpers reflexively. If a type holds no state and crosses task boundaries, make it `Sendable` and leave the isolation off.
 - Do **not** promote a collaborator to `actor` to "fix" concurrency unless you have a measurement showing main-actor contention. `@MainActor` is the established pattern because `@Published` + SwiftUI binding works there without `await` ceremony.
 - Each `@MainActor final class` collaborator should carry a one-line comment at its top declaring its isolation. (Stops future contributors from silently making it `nonisolated`.)
+- Await detached work through `runDetached(priority:operation:)` (`Helpers/RunDetached.swift`), not `Task.detached { … }.value`. Awaiting `.value` never cancels the detached task, so its own cancellation checks never fire. The helper forwards the caller's cancellation and still waits for the operation to finish.
 
 ### 3. AutoSync seam preservation
 
@@ -249,6 +252,7 @@ runs after the file probes, immediately before returning the proposed batch.
 Each store owns a private immediate reconciliation revision, separate from its
 coalesced `mutationCounter`. Configuration (including nil and same-ID reloads), accepted
 record/placement mutations, reset and a new reconciliation invalidate older probes.
+Task cancellation stops new probes and the root check; a probe in flight finishes first.
 After all physical probes finish, the store checks caller ownership, Task cancellation,
 readiness and the captured revision before **any** deletion or error propagation.
 Workers return a Result so a stale thrown probe cannot surface an obsolete import error.

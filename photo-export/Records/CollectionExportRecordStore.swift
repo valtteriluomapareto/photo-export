@@ -588,17 +588,22 @@ final class CollectionExportRecordStore: ObservableObject {
     // Phase 2 (off-main): preserve errors until ownership has been checked.
     let probesCopy = probes
     let fileChecker = reconciliationFileChecker
+    // Cancellation stops new probes; a probe in flight finishes first.
     let outcome: Result<[(placementId: String, assetId: String, variantKey: String)], Error> =
-      await Task.detached {
+      await runDetached {
         do {
           var keys: [(placementId: String, assetId: String, variantKey: String)] = []
-          for probe in probesCopy where try await !fileChecker.isFile(atPath: probe.path) {
-            keys.append((probe.placementId, probe.assetId, probe.variantKey))
+          for probe in probesCopy {
+            try Task.checkCancellation()
+            if try await !fileChecker.isFile(atPath: probe.path) {
+              keys.append((probe.placementId, probe.assetId, probe.variantKey))
+            }
           }
+          try Task.checkCancellation()
           try await fileChecker.validateRoot(atPath: root.path)
           return .success(keys)
         } catch { return .failure(error) }
-      }.value
+      }
 
     // Evaluate caller ownership first; then reject configuration/mutation changes
     // before the whole synchronous commit (whose own appends advance the revision).

@@ -160,9 +160,9 @@ final class ImportCoordinator: ObservableObject {
         self.importStage = .scanningBackupFolder
         try Task.checkCancellation()
         let reader = self.backupDirectoryReader
-        let scannedFiles = try await Task.detached {
+        let scannedFiles = try await runDetached {
           try BackupScanner.scanBackupFolder(at: rootURL, directoryReader: reader)
-        }.value
+        }
 
         try Task.checkCancellation()
         guard self.isCurrentImport(operationID, generation: importGen) else { return }

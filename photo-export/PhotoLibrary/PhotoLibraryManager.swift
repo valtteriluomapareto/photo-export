@@ -524,7 +524,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// detached-task implementation here.
   nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
     if let s = overrideService { return try await s.countAssets(in: scope) }
-    return try await Task.detached(priority: .userInitiated) {
+    return try await runDetached(priority: .userInitiated) {
       try Task.checkCancellation()
       let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
       guard Self.isAuthorizationSufficient(status) else {
@@ -541,7 +541,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
         else { return 0 }
         return PHAsset.fetchAssets(in: collection, options: opts).count
       }
-    }.value
+    }
   }
 
   // MARK: - Cached counts (Phase 3)
@@ -598,7 +598,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// main actor.
   nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
     if let s = overrideService { return try await s.countAdjustedAssets(in: scope) }
-    return try await Task.detached(priority: .userInitiated) {
+    return try await runDetached(priority: .userInitiated) {
       try Task.checkCancellation()
       let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
       guard Self.isAuthorizationSufficient(status) else {
@@ -628,7 +628,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       }
       try Task.checkCancellation()
       return count
-    }.value
+    }
   }
 
   func fetchAssetDescriptor(for assetId: String) -> AssetDescriptor? {

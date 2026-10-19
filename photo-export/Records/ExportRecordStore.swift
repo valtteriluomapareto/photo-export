@@ -697,7 +697,7 @@ final class ExportRecordStore: ObservableObject {
   /// - When all variants are pruned, the record is removed entirely.
   ///
   /// Two-phase to respect the `@MainActor` isolation: snapshot on main, file checks
-  /// off-main via `Task.detached`, mutations applied on main. Callers must run this
+  /// off-main via `runDetached`, mutations applied on main. Callers must run this
   /// only when no export is active (the import flow already gates on
   /// `!hasActiveExportWork`). Reconfiguration, concurrent mutations, replacement
   /// reconciliation, Task cancellation or loss of caller ownership discard the batch.
@@ -733,16 +733,21 @@ final class ExportRecordStore: ObservableObject {
     // Phase 2 (off-main): preserve errors until ownership has been checked.
     let probesCopy = probes
     let fileChecker = reconciliationFileChecker
-    let outcome: Result<[(assetId: String, variant: ExportVariant)], Error> = await Task.detached {
+    // Cancellation stops new probes; a probe in flight finishes first.
+    let outcome: Result<[(assetId: String, variant: ExportVariant)], Error> = await runDetached {
       do {
         var keys: [(assetId: String, variant: ExportVariant)] = []
-        for probe in probesCopy where try await !fileChecker.isFile(atPath: probe.path) {
-          keys.append((probe.assetId, probe.variant))
+        for probe in probesCopy {
+          try Task.checkCancellation()
+          if try await !fileChecker.isFile(atPath: probe.path) {
+            keys.append((probe.assetId, probe.variant))
+          }
         }
+        try Task.checkCancellation()
         try await fileChecker.validateRoot(atPath: root.path)
         return .success(keys)
       } catch { return .failure(error) }
-    }.value
+    }
 
     // Evaluate caller ownership first; then reject configuration/mutation changes
     // before the whole synchronous commit (whose own appends advance the revision).
