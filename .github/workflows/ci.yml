@@ -122,6 +122,14 @@ jobs:
           python3 -B scripts/ci/check-test-scratch.py
           echo "::endgroup::"
 
+      - name: Check persistence doc value sets
+        run: |
+          echo "::group::Persistence-doc guard"
+          echo "Comparing the record-store value-set table in docs/reference/persistence-store.md"
+          echo "with the enum cases and static raw values declared in photo-export/."
+          python3 -B scripts/ci/check-persistence-doc.py
+          echo "::endgroup::"
+
       - name: Check project version consistency
         run: python3 scripts/ci/check-version.py
 
