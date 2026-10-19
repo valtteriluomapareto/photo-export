@@ -20,16 +20,15 @@ struct StableDestinationIdentityTests {
   }
 
   private func makeTempDir() throws -> URL {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("StableId-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("StableId")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
   }
 
   private func makeDefaults() -> (UserDefaults, suite: String, bookmarkKey: String, stableKey: String) {
-    let suite = "StableId-\(UUID().uuidString)"
+    let suite = TestScratch.suiteName("StableId")
     return (
-      UserDefaults(suiteName: suite)!, suite,
+      TestScratch.defaults(suiteName: suite), suite,
       "Bookmark-\(UUID().uuidString)", "StableId-\(UUID().uuidString)"
     )
   }
@@ -520,8 +519,7 @@ struct StableDestinationIdentityTests {
       "Local macOS scope quirk; runs on CI's macos-15 runner."))
   func failedRestoreKeepsLegacyHashSoSameFolderReselectMigrates() throws {
     let dir = try makeTempDir()
-    let recordsRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("StableId-Records-\(UUID().uuidString)", isDirectory: true)
+    let recordsRoot = TestScratch.directory("StableId-Records")
     defer {
       try? FileManager.default.removeItem(at: dir)
       try? FileManager.default.removeItem(at: recordsRoot)

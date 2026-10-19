@@ -9,8 +9,8 @@ import Testing
 struct ManualExportSummaryTests {
   @MainActor
   private final class Fixture {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let suite = "ManualSummary-\(UUID().uuidString)"
+    let root = TestScratch.directory("ManualExportSummary")
+    let suite = TestScratch.suiteName("ManualSummary")
     let defaults: UserDefaults
     let photos = FakePhotoLibraryService()
     let destination = FakeExportDestination()
@@ -22,7 +22,7 @@ struct ManualExportSummaryTests {
     private var closed = false
 
     init(logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()) {
-      defaults = UserDefaults(suiteName: suite)!
+      defaults = TestScratch.defaults(suiteName: suite)
       timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
       timeline.configure(for: "A")
@@ -252,95 +252,92 @@ struct ManualExportSummaryTests {
   func heldPreparationPreventsPrematureCompletionAndRetainsEarlierJobs(failing: Bool) async throws {
     let f = Fixture()
     let gate = AsyncCheckpoint()
-    defer {
-      Task {
-        await gate.releaseAll()
-        await f.manager.waitForQueueDrained()
-        f.close()
-      }
+    try await withCleanup {
+      f.seed(["first"])
+      f.seed(["later"], year: 2027, month: 1)
+      f.photos.fetchAssetsCheckpointByYear[2027] = gate
+      if failing { f.photos.fetchAssetsErrorByYear[2027] = CocoaError(.fileReadUnknown) }
+      f.manager.startExportMonth(year: 2027, month: 1)
+      try #require(await reached(gate))
+      f.manager.startExportMonth(year: 2026, month: 9)
+      let preparations = f.manager.currentPreparationTasks
+      // The 2026 preparation can settle while the 2027 one remains physically held.
+      let firstCompleted = await observe { f.manager.totalJobsCompleted == 1 }
+      try #require(firstCompleted)
+      #expect(f.timeline.exportInfo(assetId: "first")?.variants[.original]?.status == .done)
+      #expect(f.manager.progressState.manualSummary == nil)
+      await gate.releaseAll()
+      for task in preparations { await task.value }
+      await f.manager.waitForQueueDrained()
+      let summary = try #require(f.manager.progressState.manualSummary)
+      #expect(summary.completedCount == (failing ? 1 : 2))
+      #expect(summary.result == (failing ? .failed : .completed))
+      if failing { #expect(summary.failureMessage?.isEmpty == false) }
+      f.close()
+    } cleanup: {
+      await gate.releaseAll()
+      await f.manager.waitForQueueDrained()
+      f.close()
     }
-    f.seed(["first"])
-    f.seed(["later"], year: 2027, month: 1)
-    f.photos.fetchAssetsCheckpointByYear[2027] = gate
-    if failing { f.photos.fetchAssetsErrorByYear[2027] = CocoaError(.fileReadUnknown) }
-    f.manager.startExportMonth(year: 2027, month: 1)
-    try #require(await reached(gate))
-    f.manager.startExportMonth(year: 2026, month: 9)
-    let preparations = f.manager.currentPreparationTasks
-    // The 2026 preparation can settle while the 2027 one remains physically held.
-    let firstCompleted = await observe { f.manager.totalJobsCompleted == 1 }
-    try #require(firstCompleted)
-    #expect(f.timeline.exportInfo(assetId: "first")?.variants[.original]?.status == .done)
-    #expect(f.manager.progressState.manualSummary == nil)
-    await gate.releaseAll()
-    for task in preparations { await task.value }
-    await f.manager.waitForQueueDrained()
-    let summary = try #require(f.manager.progressState.manualSummary)
-    #expect(summary.completedCount == (failing ? 1 : 2))
-    #expect(summary.result == (failing ? .failed : .completed))
-    if failing { #expect(summary.failureMessage?.isEmpty == false) }
-    f.close()
   }
 
   @Test func clearPendingReportsIncompleteInsteadOfComplete() async throws {
     let f = Fixture()
     let gate = AsyncCheckpoint()
-    defer {
-      Task {
-        await gate.releaseAll()
-        await f.manager.waitForQueueDrained()
-        f.close()
-      }
+    try await withCleanup {
+      f.seed(["first", "second", "third"])
+      f.writer.checkpoint = gate
+      f.manager.startExportMonth(year: 2026, month: 9)
+      try #require(await reached(gate))
+      f.manager.clearPending()
+      await gate.releaseAll()
+      await f.manager.waitForQueueDrained()
+      let summary = try #require(f.manager.progressState.manualSummary)
+      #expect(summary.completedCount == 1 && summary.result == .failed)
+      #expect(summary.failureMessage?.isEmpty == false)
+      f.close()
+    } cleanup: {
+      await gate.releaseAll()
+      await f.manager.waitForQueueDrained()
+      f.close()
     }
-    f.seed(["first", "second", "third"])
-    f.writer.checkpoint = gate
-    f.manager.startExportMonth(year: 2026, month: 9)
-    try #require(await reached(gate))
-    f.manager.clearPending()
-    await gate.releaseAll()
-    await f.manager.waitForQueueDrained()
-    let summary = try #require(f.manager.progressState.manualSummary)
-    #expect(summary.completedCount == 1 && summary.result == .failed)
-    #expect(summary.failureMessage?.isEmpty == false)
-    f.close()
   }
   @Test func bulkScanFailureStaysIncompleteWhenManualWorkIsAppended() async throws {
     let f = Fixture()
     let scan = AsyncCheckpoint()
     let write = AsyncCheckpoint()
-    defer {
-      Task {
-        await scan.releaseAll()
-        await write.releaseAll()
-        await f.manager.waitForQueueDrained()
-        f.close()
-      }
+    try await withCleanup {
+      f.seed(["first"])
+      f.seed(["later"], year: 2027, month: 1)
+      f.seed(["appended"], year: 2028, month: 1)
+      f.photos.fetchAssetsCheckpointByYear[2027] = scan
+      f.photos.fetchAssetsErrorByYear[2027] = CocoaError(.fileReadUnknown)
+      f.writer.checkpoint = write
+      f.manager.startExportTimelineSelection(years: [2026, 2027], months: [])
+      try #require(await reached(scan))
+      // Resume can start already queued work while the next scope is still scanning.
+      f.manager.pause()
+      f.manager.resume()
+      try #require(await reached(write))
+      #expect(f.manager.progressState.manualSummary == nil)
+      await scan.releaseAll()
+      for task in f.manager.currentPreparationTasks { await task.value }
+      f.manager.startExportMonth(year: 2028, month: 1)
+      for task in f.manager.currentPreparationTasks { await task.value }
+      f.writer.checkpoint = nil
+      await write.releaseAll()
+      await f.manager.waitForQueueDrained()
+      let summary = try #require(f.manager.progressState.manualSummary)
+      #expect(summary.completedCount == 2 && summary.failedCount == 0)
+      #expect(summary.result == .failed && summary.failureMessage?.isEmpty == false)
+      #expect(f.timeline.exportInfo(assetId: "appended")?.variants[.original]?.status == .done)
+      f.close()
+    } cleanup: {
+      await scan.releaseAll()
+      await write.releaseAll()
+      await f.manager.waitForQueueDrained()
+      f.close()
     }
-    f.seed(["first"])
-    f.seed(["later"], year: 2027, month: 1)
-    f.seed(["appended"], year: 2028, month: 1)
-    f.photos.fetchAssetsCheckpointByYear[2027] = scan
-    f.photos.fetchAssetsErrorByYear[2027] = CocoaError(.fileReadUnknown)
-    f.writer.checkpoint = write
-    f.manager.startExportTimelineSelection(years: [2026, 2027], months: [])
-    try #require(await reached(scan))
-    // Resume can start already queued work while the next scope is still scanning.
-    f.manager.pause()
-    f.manager.resume()
-    try #require(await reached(write))
-    #expect(f.manager.progressState.manualSummary == nil)
-    await scan.releaseAll()
-    for task in f.manager.currentPreparationTasks { await task.value }
-    f.manager.startExportMonth(year: 2028, month: 1)
-    for task in f.manager.currentPreparationTasks { await task.value }
-    f.writer.checkpoint = nil
-    await write.releaseAll()
-    await f.manager.waitForQueueDrained()
-    let summary = try #require(f.manager.progressState.manualSummary)
-    #expect(summary.completedCount == 2 && summary.failedCount == 0)
-    #expect(summary.result == .failed && summary.failureMessage?.isEmpty == false)
-    #expect(f.timeline.exportInfo(assetId: "appended")?.variants[.original]?.status == .done)
-    f.close()
   }
 
   @Test(arguments: [1, 2])
@@ -391,38 +388,37 @@ struct ManualExportSummaryTests {
     let old = AsyncCheckpoint()
     let replacement = AsyncCheckpoint()
     var oldTask: Task<Void, Never>?
-    defer {
-      Task {
-        await old.releaseAll()
-        await replacement.releaseAll()
-        await oldTask?.value
-        await f.manager.waitForQueueDrained()
-        f.close()
-      }
+    try await withCleanup {
+      f.seed(["old"])
+      f.seed(["replacement"], year: 2027, month: 1)
+      f.writer.checkpoint = old
+      f.manager.startExportMonth(year: 2026, month: 9)
+      try #require(await reached(old))
+      oldTask = f.manager.currentTask
+      f.manager.cancelAndClear()
+      #expect(f.manager.progressState.manualSummary == nil)
+      f.writer.checkpoint = replacement
+      f.manager.startExportMonth(year: 2027, month: 1)
+      try #require(await reached(replacement))
+      f.writer.writeError = CocoaError(.fileReadUnknown)
+      await old.releaseAll()
+      await oldTask?.value
+      #expect(f.manager.progressState.manualSummary == nil)
+      #expect(f.manager.totalJobsCompleted == 0)
+      f.writer.writeError = nil
+      await replacement.releaseAll()
+      await f.manager.waitForQueueDrained()
+      let summary = try #require(f.manager.progressState.manualSummary)
+      #expect(summary.completedCount == 1 && summary.failedCount == 0)
+      #expect(summary.result == .completed)
+      f.close()
+    } cleanup: {
+      await old.releaseAll()
+      await replacement.releaseAll()
+      await oldTask?.value
+      await f.manager.waitForQueueDrained()
+      f.close()
     }
-    f.seed(["old"])
-    f.seed(["replacement"], year: 2027, month: 1)
-    f.writer.checkpoint = old
-    f.manager.startExportMonth(year: 2026, month: 9)
-    try #require(await reached(old))
-    oldTask = f.manager.currentTask
-    f.manager.cancelAndClear()
-    #expect(f.manager.progressState.manualSummary == nil)
-    f.writer.checkpoint = replacement
-    f.manager.startExportMonth(year: 2027, month: 1)
-    try #require(await reached(replacement))
-    f.writer.writeError = CocoaError(.fileReadUnknown)
-    await old.releaseAll()
-    await oldTask?.value
-    #expect(f.manager.progressState.manualSummary == nil)
-    #expect(f.manager.totalJobsCompleted == 0)
-    f.writer.writeError = nil
-    await replacement.releaseAll()
-    await f.manager.waitForQueueDrained()
-    let summary = try #require(f.manager.progressState.manualSummary)
-    #expect(summary.completedCount == 1 && summary.failedCount == 0)
-    #expect(summary.result == .completed)
-    f.close()
   }
 
 }

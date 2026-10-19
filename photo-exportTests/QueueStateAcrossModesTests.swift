@@ -45,7 +45,6 @@ struct QueueStateAcrossModesTests {
     let timelineStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
-    let userDefaultsSuite: String
 
     /// See note on `ExportAllAlbumsTests.Harness.cleanup` — same ordering: cancel,
     /// flush, remove dirs, drop UserDefaults suite. Tests using checkpoints must
@@ -56,7 +55,6 @@ struct QueueStateAcrossModesTests {
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
     }
   }
 
@@ -65,14 +63,12 @@ struct QueueStateAcrossModesTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("QueueAcrossModes-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("QueueAcrossModes")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let suiteName = "test-QueueAcrossModes-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let defaults = TestScratch.defaults("QueueAcrossModes")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -85,7 +81,7 @@ struct QueueStateAcrossModesTests {
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer,
       timelineStore: timelineStore, collectionStore: collectionStore,
-      storeRoot: storeRoot, userDefaultsSuite: suiteName)
+      storeRoot: storeRoot)
   }
 
   private func makeAsset(id: String, year: Int = 2025, month: Int = 4) -> AssetDescriptor {

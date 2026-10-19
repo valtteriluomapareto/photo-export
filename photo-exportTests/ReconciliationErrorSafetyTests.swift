@@ -8,7 +8,7 @@ import Testing
 struct ReconciliationErrorSafetyTests {
   @MainActor
   private final class Fixture {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ReconciliationErrorSafety")
     var media: URL { root.appendingPathComponent("Media") }
     var records: URL { root.appendingPathComponent("Records") }
     let collection: Bool
@@ -91,7 +91,7 @@ struct ReconciliationErrorSafetyTests {
 
   @Test(arguments: [false, true])
   func lookupErrorPreservesEntirePruneBatchAfterReload(collection: Bool) async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ReconciliationErrorSafety")
     defer { try? FileManager.default.removeItem(at: root) }
     let media = root.appendingPathComponent("Media")
     let records = root.appendingPathComponent("Records")
@@ -231,7 +231,7 @@ struct ReconciliationErrorSafetyTests {
   }
 
   @Test func checkerFollowsValidFileLinksAndRejectsOtherTypes() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ReconciliationErrorSafety")
     defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let file = root.appendingPathComponent("file")
@@ -292,13 +292,12 @@ struct ReconciliationErrorSafetyTests {
   func ownedVerificationFailureIsVisibleAndPreservesAffectedStore(collectionFailure: Bool)
     async throws
   {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ReconciliationErrorSafety")
     let destination = FakeExportDestination()
-    let suite = "VerificationFailure-\(UUID().uuidString)"
+    let suite = TestScratch.suiteName("VerificationFailure")
     defer {
       destination.cleanup()
       try? FileManager.default.removeItem(at: root)
-      UserDefaults.standard.removePersistentDomain(forName: suite)
     }
     let fault = FaultChecker(code: Int(EIO))
     let normal = ReconciliationFileChecker()
@@ -324,7 +323,7 @@ struct ReconciliationErrorSafetyTests {
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: timeline, collectionExportRecordStore: collections,
-      userDefaults: UserDefaults(suiteName: suite)!)
+      userDefaults: TestScratch.defaults(suiteName: suite))
     manager.startImport()
     await manager.waitForImportCompletion()
     #expect(manager.importError != nil)

@@ -33,8 +33,7 @@ struct DestinationSafetyMonitorTests {
   }
 
   private func makeHarness(scanResult: Bool = false) -> Harness {
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("SafetyMonitor-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("SafetyMonitor")
     let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     let confirmationStore = InMemoryDestinationSafetyConfirmationStore()
@@ -172,8 +171,7 @@ struct DestinationSafetyMonitorTests {
     // Simulate a slow scan whose result lands after the destination has
     // changed. The generation guard inside `evaluate` should discard the
     // stale result.
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("SafetyMonitor-stale-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("SafetyMonitor-stale")
     let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     let confirmationStore = InMemoryDestinationSafetyConfirmationStore()

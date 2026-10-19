@@ -7,7 +7,7 @@ import Testing
 struct RecordStorePersistenceHealthTests {
   @MainActor
   private struct Stores {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("RecordStorePersistenceHealth")
     let timeline: ExportRecordStore
     let collection: CollectionExportRecordStore
     let isCollection: Bool

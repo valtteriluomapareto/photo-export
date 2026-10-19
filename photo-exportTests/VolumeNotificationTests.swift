@@ -17,8 +17,8 @@ private final class TrackingNotificationCenter: NotificationCenter, @unchecked S
 struct VolumeNotificationTests {
   @Test func deinitRemovesBothTokensFromTheRegisteringCenter() {
     let center = TrackingNotificationCenter()
-    let suite = "VolumeCleanup-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
+    let suite = TestScratch.suiteName("VolumeCleanup")
+    let defaults = TestScratch.defaults(suiteName: suite)
     defer { defaults.removePersistentDomain(forName: suite) }
     var manager: ExportDestinationManager? = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, volumeNotificationCenter: center)
@@ -30,8 +30,8 @@ struct VolumeNotificationTests {
   }
 
   @Test func failedScopeAcquisitionDoesNotReleaseOrProbeTheDestination() {
-    let suite = "VolumeDenied-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
+    let suite = TestScratch.suiteName("VolumeDenied")
+    let defaults = TestScratch.defaults(suiteName: suite)
     defer { defaults.removePersistentDomain(forName: suite) }
     var releases = 0
     var fingerprints = 0
@@ -54,12 +54,12 @@ struct VolumeNotificationTests {
   @Test func realMountNotificationsReconfigureStoresWithoutLosingStableDestinationRecords()
     async throws
   {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("VolumeNotification")
     let folder = root.appendingPathComponent("Volume")
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let suite = "VolumeLifecycle-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
+    let suite = TestScratch.suiteName("VolumeLifecycle")
+    let defaults = TestScratch.defaults(suiteName: suite)
     defer { defaults.removePersistentDomain(forName: suite) }
     let center = NotificationCenter()
     let completed = AsyncStream<Void>.makeStream()

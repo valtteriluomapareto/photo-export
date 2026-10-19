@@ -52,8 +52,8 @@ import Testing
       let counter = BodyInvalidationCounter()
       let asset = TestAssetFactory.makeAsset(id: "changed-asset")
       let unchangedAsset = TestAssetFactory.makeAsset(id: "unchanged-asset")
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let defaultsName = "PlacementStatus-\(UUID().uuidString)"
+      let root = TestScratch.directory("CollectionPlacementStatus")
+      let defaultsName = TestScratch.suiteName("PlacementStatus")
       let defaults: UserDefaults
       let selection: LibrarySelection
       let old: ExportPlacement
@@ -68,7 +68,7 @@ import Testing
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         records = CollectionExportRecordStore(baseDirectoryURL: root)
-        defaults = UserDefaults(suiteName: defaultsName)!
+        defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline.configure(for: "A")
         records.configure(for: "A")
         manager = ExportManager(
@@ -494,56 +494,60 @@ import Testing
       defer { f.close() }
       let older = AsyncCheckpoint()
       let newer = AsyncCheckpoint()
-      defer { Task { await older.releaseAll(); await newer.releaseAll() } }
-      let (key, supersededKey, rendered): (String, String, (Int) -> [String]) =
-        switch surface {
-        case .folderPane: ("folder-summary", "folder-counts-superseded", { ["0/\($0)"] })
-        case .sidebarBadge:
-          (
-            "folder-sidebar:folder:folder", "sidebar-folder-count-superseded",
-            { ["notStarted(total: \($0))"] }
-          )
-        }
-      // Exactly one view loads the folder's counts, so 'stable' fetches map to its loads.
-      // The sidebar folder starts collapsed, so its album rows don't fetch 'stable' too.
-      f.useLiveCounts()
-      f.show(sidebar: surface == .sidebarBadge, folderPane: surface == .folderPane)
-      let loaded = await observe { f.counter.renderedText[key] == rendered(2) }
-      try #require(loaded)
-
-      let service = f.service
-      let stale = try await Fixture.liveCount(service, .album(collectionId: "stable"), adjusted: false)
-      service.assetsByAlbumLocalId["stable"]?.append(TestAssetFactory.makeAsset(id: "added"))
-      var stableFetches = 0
-      service.cachedCountOverride = { scope, adjusted in
-        if case .album("stable") = scope, !adjusted {
-          stableFetches += 1
-          if stableFetches == 1 {
-            await older.enter()
-            return stale
+      try await withCleanup {
+        let (key, supersededKey, rendered): (String, String, (Int) -> [String]) =
+          switch surface {
+          case .folderPane: ("folder-summary", "folder-counts-superseded", { ["0/\($0)"] })
+          case .sidebarBadge:
+            (
+              "folder-sidebar:folder:folder", "sidebar-folder-count-superseded",
+              { ["notStarted(total: \($0))"] }
+            )
           }
-          await newer.enter()
-        }
-        return try await Fixture.liveCount(service, scope, adjusted: adjusted)
-      }
-      f.library.invalidateCache()
-      let olderStarted = await older.waitForEnter(count: 1)
-      try #require(olderStarted)
-      f.library.invalidateCache()
-      let newerStarted = await newer.waitForEnter(count: 1)
-      try #require(newerStarted, "A newer library change must restart the folder count load")
-      await newer.release()
-      let refreshed = await observe { f.counter.renderedText[key] == rendered(3) }
-      try #require(refreshed)
+        // Exactly one view loads the folder's counts, so 'stable' fetches map to its loads.
+        // The sidebar folder starts collapsed, so its album rows don't fetch 'stable' too.
+        f.useLiveCounts()
+        f.show(sidebar: surface == .sidebarBadge, folderPane: surface == .folderPane)
+        let loaded = await observe { f.counter.renderedText[key] == rendered(2) }
+        try #require(loaded)
 
-      let supersededBefore = f.counter.count(for: supersededKey)
-      await older.release()
-      let settled = await observe {
-        f.counter.count(for: supersededKey) > supersededBefore
-          || f.counter.renderedText[key] != rendered(3)
+        let service = f.service
+        let stale = try await Fixture.liveCount(service, .album(collectionId: "stable"), adjusted: false)
+        service.assetsByAlbumLocalId["stable"]?.append(TestAssetFactory.makeAsset(id: "added"))
+        var stableFetches = 0
+        service.cachedCountOverride = { scope, adjusted in
+          if case .album("stable") = scope, !adjusted {
+            stableFetches += 1
+            if stableFetches == 1 {
+              await older.enter()
+              return stale
+            }
+            await newer.enter()
+          }
+          return try await Fixture.liveCount(service, scope, adjusted: adjusted)
+        }
+        f.library.invalidateCache()
+        let olderStarted = await older.waitForEnter(count: 1)
+        try #require(olderStarted)
+        f.library.invalidateCache()
+        let newerStarted = await newer.waitForEnter(count: 1)
+        try #require(newerStarted, "A newer library change must restart the folder count load")
+        await newer.release()
+        let refreshed = await observe { f.counter.renderedText[key] == rendered(3) }
+        try #require(refreshed)
+
+        let supersededBefore = f.counter.count(for: supersededKey)
+        await older.release()
+        let settled = await observe {
+          f.counter.count(for: supersededKey) > supersededBefore
+            || f.counter.renderedText[key] != rendered(3)
+        }
+        #expect(settled)
+        #expect(f.counter.renderedText[key] == rendered(3))
+      } cleanup: {
+        await older.releaseAll()
+        await newer.releaseAll()
       }
-      #expect(settled)
-      #expect(f.counter.renderedText[key] == rendered(3))
     }
   }
 #endif

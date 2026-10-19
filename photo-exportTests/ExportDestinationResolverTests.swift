@@ -15,8 +15,7 @@ struct ExportDestinationResolverTests {
 
   /// Creates a temp dir for the test and a resolver wired to the real filesystem service.
   private static func makeResolver(prefix: String = "DestResolver") throws -> (URL, ExportDestinationResolver) {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory(prefix)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let resolver = ExportDestinationResolver(fileSystem: FileIOService())
     return (dir, resolver)

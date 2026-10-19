@@ -10,8 +10,7 @@ struct CollectionExportRecordStoreTests {
   // MARK: - Fixtures
 
   private func makeStore() throws -> (URL, CollectionExportRecordStore) {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("CollectionStore-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("CollectionStore")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let store = CollectionExportRecordStore(baseDirectoryURL: dir)
     return (dir, store)

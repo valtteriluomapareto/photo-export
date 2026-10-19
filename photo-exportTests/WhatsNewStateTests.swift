@@ -6,8 +6,7 @@ import Testing
 @MainActor
 struct WhatsNewStateTests {
   private func makeDefaults() -> UserDefaults {
-    let suite = "test-WhatsNew-\(UUID().uuidString)"
-    return UserDefaults(suiteName: suite)!
+    TestScratch.defaults("WhatsNew")
   }
 
   private func makeBundle(version: String) -> Bundle {

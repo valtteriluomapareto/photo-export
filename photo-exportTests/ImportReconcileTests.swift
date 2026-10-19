@@ -24,8 +24,7 @@ struct ImportReconcileTests {
   /// closure. Tests that pass the URL to a reconcile method need the directory to
   /// actually exist (the reachability probe in `startImport` relies on it).
   private func makeRoot() -> (root: URL, cleanup: () -> Void) {
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ReconcileRoot-\(UUID().uuidString)", isDirectory: true)
+    let url = TestScratch.directory("ReconcileRoot")
     try? FileManager.default.createDirectory(
       at: url, withIntermediateDirectories: true)
     return (url, { try? FileManager.default.removeItem(at: url) })
@@ -53,8 +52,7 @@ struct ImportReconcileTests {
   @Test func timelineReconcileLeavesEverythingAloneWhenAllFilesExist() async throws {
     let (root, cleanup) = makeRoot()
     defer { cleanup() }
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Store-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
@@ -78,8 +76,7 @@ struct ImportReconcileTests {
   @Test func timelineReconcilePrunesDoneVariantWhenFileMissing() async throws {
     let (root, cleanup) = makeRoot()
     defer { cleanup() }
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Store-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
@@ -99,8 +96,7 @@ struct ImportReconcileTests {
   @Test func timelineReconcileKeepsRecordWhenSomeVariantsRemain() async throws {
     let (root, cleanup) = makeRoot()
     defer { cleanup() }
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Store-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
@@ -128,8 +124,7 @@ struct ImportReconcileTests {
   @Test func timelineReconcileSkipsFailedAndInProgressVariants() async throws {
     let (root, cleanup) = makeRoot()
     defer { cleanup() }
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Store-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
@@ -155,8 +150,7 @@ struct ImportReconcileTests {
   @Test func timelineReconcileRejectsDirectoryWithoutPruning() async throws {
     let (root, cleanup) = makeRoot()
     defer { cleanup() }
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Store-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
@@ -176,8 +170,7 @@ struct ImportReconcileTests {
   @Test func timelineReconcileSkipsWhenStateNotReady() async throws {
     let (root, cleanup) = makeRoot()
     defer { cleanup() }
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Store-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     // Note: NOT configured. State is .unconfigured.
@@ -191,8 +184,7 @@ struct ImportReconcileTests {
   @Test func collectionReconcilePrunesMissingDoneVariant() async throws {
     let (root, cleanup) = makeRoot()
     defer { cleanup() }
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("CStore-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("CStore")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
@@ -215,8 +207,7 @@ struct ImportReconcileTests {
   @Test func collectionReconcileLeavesPresentFilesAlone() async throws {
     let (root, cleanup) = makeRoot()
     defer { cleanup() }
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("CStore-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("CStore")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
@@ -462,7 +453,6 @@ struct ImportReconcileTests {
     let timeline: ExportRecordStore
     let collection: CollectionExportRecordStore
     let storeRoot: URL
-    let userDefaultsSuite: String
 
     func waitForImport() async {
       await manager.waitForImportCompletion()
@@ -488,7 +478,6 @@ struct ImportReconcileTests {
       collection.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
     }
   }
 
@@ -497,14 +486,12 @@ struct ImportReconcileTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ImportRec-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ImportRec")
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
     timeline.configure(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collection.configure(for: "test")
-    let suiteName = "test-ImportReconcile-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let defaults = TestScratch.defaults("ImportReconcile")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -517,6 +504,6 @@ struct ImportReconcileTests {
     return ImportHarness(
       manager: manager, photoLib: photoLib, writer: writer, dest: dest,
       timeline: timeline, collection: collection,
-      storeRoot: storeRoot, userDefaultsSuite: suiteName)
+      storeRoot: storeRoot)
   }
 }

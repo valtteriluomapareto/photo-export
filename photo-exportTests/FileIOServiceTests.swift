@@ -7,8 +7,7 @@ import Testing
 /// `Export`/2 before moving. The window between that check and the move is tracked in #326.
 @Suite struct FileIOServiceTests {
   private func makeRoot() throws -> URL {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "FileIOService-\(UUID().uuidString)", isDirectory: true)
+    let root = TestScratch.directory("FileIOService")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     return root
   }

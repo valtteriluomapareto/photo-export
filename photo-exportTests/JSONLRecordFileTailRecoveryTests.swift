@@ -45,7 +45,7 @@ struct JSONLRecordFileTailRecoveryTests {
   }
 
   private func directory() throws -> URL {
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent("JSONLTail-\(UUID())")
+    let url = TestScratch.directory("JSONLTail")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }

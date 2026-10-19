@@ -15,8 +15,7 @@ struct ExportDestinationEscapeProtectionTests {
   // MARK: - Helpers
 
   private func makeManagerAndRoot() throws -> (ExportDestinationManager, URL) {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportDestEscape-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("ExportDestEscape")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let mgr = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
@@ -86,8 +85,7 @@ struct ExportDestinationEscapeProtectionTests {
   /// uses `root + "/"` (or equality with root) so the prefix only matches at a path
   /// component boundary.
   @Test func siblingDirectoryWithSimilarPrefixIsRejected() throws {
-    let parent = FileManager.default.temporaryDirectory
-      .appendingPathComponent("EscapePrefix-\(UUID().uuidString)", isDirectory: true)
+    let parent = TestScratch.directory("EscapePrefix")
     try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: parent) }
 
@@ -118,8 +116,7 @@ struct ExportDestinationEscapeProtectionTests {
     let (mgr, root) = try makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     // Create an external folder and a symlink inside the root pointing to it.
-    let outside = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Outside-\(UUID().uuidString)", isDirectory: true)
+    let outside = TestScratch.directory("Outside")
     try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: outside) }
     let escapeLink = root.appendingPathComponent("escape", isDirectory: true)

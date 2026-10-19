@@ -8,8 +8,7 @@ import Testing
 struct ExportRecordStoreRecoveryTests {
 
   private func makeTempDir() -> URL {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("RecordRecovery-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("RecordRecovery")
     try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
   }

@@ -14,7 +14,7 @@ struct TimelineCountRefreshTests {
     }
     let loader = TimelineSidebarCounts(service: service)
     await loader.loadCounts(forYears: [2025])
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("TimelineCountRefresh")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
     defer { store.flushForTesting() }

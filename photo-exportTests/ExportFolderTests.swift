@@ -306,7 +306,6 @@ struct ExportFolderTests {
     let timelineStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
-    let userDefaultsSuite: String
 
     func cleanup() {
       manager.cancelAndClear()
@@ -314,7 +313,6 @@ struct ExportFolderTests {
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
     }
   }
 
@@ -323,14 +321,12 @@ struct ExportFolderTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportFolder-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ExportFolder")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let suiteName = "test-ExportFolder-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let defaults = TestScratch.defaults("ExportFolder")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -343,7 +339,7 @@ struct ExportFolderTests {
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer,
       timelineStore: timelineStore, collectionStore: collectionStore,
-      storeRoot: storeRoot, userDefaultsSuite: suiteName)
+      storeRoot: storeRoot)
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {

@@ -37,8 +37,8 @@ import Testing
 
     @MainActor
     private final class Fixture {
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let suite = "SidebarObservation-\(UUID().uuidString)"
+      let root = TestScratch.directory("SidebarObservation")
+      let suite = TestScratch.suiteName("SidebarObservation")
       let defaults: UserDefaults
       let service = FakePhotoLibraryService()
       let library: PhotoLibraryManager
@@ -50,7 +50,7 @@ import Testing
       let window: NSWindow
 
       init() {
-        defaults = UserDefaults(suiteName: suite)!
+        defaults = TestScratch.defaults(suiteName: suite)
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         let assets = ["first", "second"].map {
           TestAssetFactory.makeAsset(id: $0, creationDate: date)

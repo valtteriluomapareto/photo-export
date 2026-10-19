@@ -28,14 +28,12 @@ struct ExportQueueStateSnapshotTests {
     let writer: FakeAssetResourceWriter
     let store: ExportRecordStore
     let storeRoot: URL
-    let userDefaultsSuite: String
 
     func cleanup() {
       manager.cancelAndClear()
       store.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
     }
   }
 
@@ -49,8 +47,7 @@ struct ExportQueueStateSnapshotTests {
     store.configure(for: "test")
     let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collections.configure(for: "test")
-    let suiteName = TestScratch.suiteName("ExportQueueSnapshot")
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let defaults = TestScratch.defaults("ExportQueueSnapshot")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -62,7 +59,7 @@ struct ExportQueueStateSnapshotTests {
     )
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      store: store, storeRoot: storeRoot, userDefaultsSuite: suiteName)
+      store: store, storeRoot: storeRoot)
   }
 
   /// Canonical queue-state at a single instant. The Phase 4b extraction must preserve

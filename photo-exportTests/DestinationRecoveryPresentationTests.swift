@@ -19,8 +19,8 @@ import Testing
 
     @MainActor
     private final class Fixture {
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let suite = "DestinationRecovery-\(UUID().uuidString)"
+      let root = TestScratch.directory("DestinationRecoveryPresentation")
+      let suite = TestScratch.suiteName("DestinationRecovery")
       let defaults: UserDefaults
       let scope: Scope
       let destination: ExportDestinationManager
@@ -37,7 +37,7 @@ import Testing
       var folder: URL { root.appendingPathComponent("Backup") }
 
       init(restoreFailure: Bool = false) throws {
-        defaults = UserDefaults(suiteName: suite)!
+        defaults = TestScratch.defaults(suiteName: suite)
         if restoreFailure {
           defaults.set(Data("bad bookmark".utf8), forKey: "ExportDestinationBookmark")
         }

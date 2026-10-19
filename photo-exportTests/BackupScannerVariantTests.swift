@@ -18,8 +18,7 @@ struct BackupScannerVariantTests {
     _ filename: String, year: Int = 2025, month: Int = 6, modDate: Date? = nil,
     subdir: String? = nil
   ) throws -> (BackupScanner.ScannedFile, URL) {
-    let rootDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("BSV-\(UUID().uuidString)", isDirectory: true)
+    let rootDir = TestScratch.directory("BSV")
     try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
     let monthStr = String(format: "%02d", month)
     var dir = rootDir.appendingPathComponent("\(year)", isDirectory: true)
@@ -341,8 +340,7 @@ struct BackupScannerVariantTests {
   // MARK: - Import merges original and edited into separate variants
 
   @Test func importMergesOriginalAndEditedForSameAsset() async throws {
-    let tempDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("BSV-merge-\(UUID().uuidString)", isDirectory: true)
+    let tempDir = TestScratch.directory("BSV-merge")
     defer { try? FileManager.default.removeItem(at: tempDir) }
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "merge-test")
@@ -543,8 +541,7 @@ struct BackupScannerVariantTests {
   /// Import Existing Backup — videos in the subfolder would not match and would
   /// be re-exported as duplicates on the next run.
   @Test func scanBackupFolderDescendsIntoVideosSubfolder() throws {
-    let rootDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("BSV-scan-\(UUID().uuidString)", isDirectory: true)
+    let rootDir = TestScratch.directory("BSV-scan")
     defer { try? FileManager.default.removeItem(at: rootDir) }
     let monthDir = rootDir.appendingPathComponent("2026/03", isDirectory: true)
     let videosDir = monthDir.appendingPathComponent("videos", isDirectory: true)

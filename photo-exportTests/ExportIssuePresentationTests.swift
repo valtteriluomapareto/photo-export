@@ -252,8 +252,8 @@ struct ExportIssuePresentationTests {
 
   @MainActor
   private final class Fixture {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let defaultsName = "IssuePresentation-\(UUID().uuidString)"
+    let root = TestScratch.directory("ExportIssuePresentation")
+    let defaultsName = TestScratch.suiteName("IssuePresentation")
     let defaults: UserDefaults
     let destination: ExportDestinationManager
     let timeline: ExportRecordStore
@@ -267,7 +267,7 @@ struct ExportIssuePresentationTests {
     let destinationId: String
 
     init(created: Date, failedAt: Date) throws {
-      defaults = UserDefaults(suiteName: defaultsName)!
+      defaults = TestScratch.defaults(suiteName: defaultsName)
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
       destination = ExportDestinationManager(
         skipRestore: true, userDefaults: defaults,

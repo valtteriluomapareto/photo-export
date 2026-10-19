@@ -275,8 +275,7 @@ struct BackupScannerTests {
   // MARK: - Helpers
 
   private func makeTempDir() -> URL {
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
+    let url = TestScratch.directory("BackupScanner")
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }

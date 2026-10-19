@@ -29,6 +29,7 @@ scripts/ci/test-guards.sh
 python3 scripts/ci/check-read-only-photos.py
 python3 scripts/ci/check-version.py
 python3 scripts/ci/check-test-waits.py
+python3 scripts/ci/check-test-scratch.py
 ```
 
 `check-test-waits.py` rejects wall-clock `< deadline` waits in `photo-exportTests/`
@@ -37,6 +38,62 @@ test file that calls `eventually(` to declare a `.timeLimit(`. Waits re-check pr
 and rely on the test's time limit, because CI's congested main actor makes fixed
 deadlines measure scheduler load rather than progress (#277). It is lexical, like the
 other structural guards.
+
+`check-test-scratch.py` keeps test state inside `TestScratch`
+(`photo-exportTests/TestHelpers/TestScratch.swift`), whose per-run root under
+`$TMPDIR/photo-export-tests/` is removed when the test process exits. The hosted test
+process shares the app's identity, so outside that file the guard rejects, across line
+breaks: `UserDefaults(suiteName:` (also via `.init`), `UserDefaults.standard`,
+`UserDefaults()`, `.temporaryDirectory`, `NSTemporaryDirectory(`,
+`.itemReplacementDirectory`, `.applicationSupportDirectory`, `.cachesDirectory` and the
+no-argument `ExportRecordStore()` / `CollectionExportRecordStore()`. Use
+`TestScratch.defaults(_:)` for a fresh suite, `TestScratch.suiteName(_:)` with
+`TestScratch.defaults(suiteName:)` when two objects share or reopen one suite, and
+`TestScratch.directory(_:)` for folders. A test that must exercise the real path keeps the
+construct and marks it with a `// test-scratch: allow <reason>` comment on the line where
+the use starts or the line above. It is lexical, like the other guards.
+
+### Removing leaked test files
+
+Test runs before `TestScratch` left tens of thousands of preference plists and temporary
+folders behind: in `~/Library/Preferences` and the shell `$TMPDIR` for unsigned
+command-line runs, and in the app's container for signed Xcode runs. To clear them once by
+hand, quit Photo Export and make sure no test run is active. The shared folders are matched
+only by the name prefixes those tests used; the container, which only the app and its tests
+write to, by any UUID-suffixed name. Temporary entries younger than an hour are kept, and
+`photo-export-tests` is left to `TestScratch`'s own sweep.
+
+```bash
+CONTAINER=~/Library/Containers/com.valtteriluoma.photo-export/Data
+UUID='[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}'
+SUFFIX="-([A-Za-z0-9_-]*-)?$UUID"
+PREFS='(test|ExportSettingsCapture|ProducerOwnership|StableId|DestinationRecovery|ExportDestinationTests|IssuePresentation|DestId|ManualFeedbackView|FinalCommit|DestinationStop|RemountIntegration|CollectionObservation|VolumeLifecycle|ImportFailure|ManualSummary|AlertRecovery|ExportMonthResume)'
+TEMPS='(FakeExportDest|EditedModeTest|VideoRenderTest|ExportPipelineTest|EmptyRunTest|BSV|BSMatchTest|BSSizeTest|ExportManagerRunExport|ExportManagerImport|ExportManagerPause|JSONL|JSONLRollback|CollectionStore|ExportRecordStoreQuery|SidebarMultiSelect|SafetyMonitor|QueueAcrossModes|ExportFolder|VariantExporter|ExportAllAlbums|CrossStoreInd|AdapterStore|EditedFallback|ReuseSource|ReuseSourceAlbum|ImportRec|ImportIdempotency|ExportQueueSnapshot|AutoSyncSeam|AutoSyncMidRun|RemountRecords|RemountIntegration|GridSelection|AssetDetailLifecycle|RecordStoreRouter|DiagnosticReporter)'
+```
+
+Count first; drop `| wc -l` to review the names:
+
+```bash
+find -E ~/Library/Preferences -maxdepth 1 -type f -regex ".*/$PREFS$SUFFIX\.plist" | wc -l
+find -E "$CONTAINER/Library/Preferences" -maxdepth 1 -type f -regex ".*-$UUID\.plist" | wc -l
+find -E "$TMPDIR" -mindepth 1 -maxdepth 1 -mmin +60 -regex ".*/$TEMPS$SUFFIX(\.[a-z]+)?" | wc -l
+find -E "$CONTAINER/tmp" -mindepth 1 -maxdepth 1 -mmin +60 -regex ".*/([^/]*-)?$UUID(\.[a-z]+)?" | wc -l
+```
+
+Then stop `cfprefsd`, so it cannot write cached suites back, and delete with the same
+matches. The folders go through `-exec rm -rf {} +`, because `find -delete` cannot remove a
+non-empty folder; like `-delete`, it avoids the "argument list too long" failure a shell
+glob hits at this many files.
+
+```bash
+killall -u "$USER" cfprefsd
+find -E ~/Library/Preferences -maxdepth 1 -type f -regex ".*/$PREFS$SUFFIX\.plist" -delete
+find -E "$CONTAINER/Library/Preferences" -maxdepth 1 -type f -regex ".*-$UUID\.plist" -delete
+find -E "$TMPDIR" -mindepth 1 -maxdepth 1 -mmin +60 -regex ".*/$TEMPS$SUFFIX(\.[a-z]+)?" \
+  -exec rm -rf {} +
+find -E "$CONTAINER/tmp" -mindepth 1 -maxdepth 1 -mmin +60 -regex ".*/([^/]*-)?$UUID(\.[a-z]+)?" \
+  -exec rm -rf {} +
+```
 
 ### CI area routing
 

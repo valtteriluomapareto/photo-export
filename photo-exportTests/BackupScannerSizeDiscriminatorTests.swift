@@ -36,8 +36,7 @@ struct BackupScannerSizeDiscriminatorTests {
   private func makeScannedFiles(
     _ files: [(year: Int, month: Int, filename: String, modDate: Date?, fileSize: UInt64?)]
   ) throws -> ([BackupScanner.ScannedFile], URL) {
-    let rootDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("BSSizeTest-\(UUID().uuidString)", isDirectory: true)
+    let rootDir = TestScratch.directory("BSSizeTest")
     try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
     var scannedFiles: [BackupScanner.ScannedFile] = []
     for file in files {

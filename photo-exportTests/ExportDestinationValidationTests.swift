@@ -22,8 +22,7 @@ struct ExportDestinationValidationTests {
   /// noSelection / notAvailable / notWritable guards pass and we actually hit
   /// the year/month validation.
   private func managerWithFolder() throws -> (ExportDestinationManager, URL) {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportDestValidation-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("ExportDestValidation")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let mgr = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
@@ -96,12 +95,11 @@ struct ExportDestinationValidationTests {
   /// the destination as unavailable, and the stored bookmark bytes are not
   /// rewritten (proving the synchronous refresh was deferred).
   @Test func restoringBookmarkForMissingFolderDoesNotRewriteBookmark() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportDest-Issue92-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("ExportDest-Issue92")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-    let suiteName = "ExportDestinationTests-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let suiteName = TestScratch.suiteName("ExportDestinationTests")
+    let defaults = TestScratch.defaults(suiteName: suiteName)
     let bookmarkKey = "ExportDestinationBookmark-\(UUID().uuidString)"
     defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -133,13 +131,12 @@ struct ExportDestinationValidationTests {
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). CI's macos-15 runner returns true (per Apple's docs) so this runs there."))
   func persistedBookmarkRestoresFolderAcrossManagerInstances() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportDestBookmark-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("ExportDestBookmark")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let suiteName = "ExportDestinationTests-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let suiteName = TestScratch.suiteName("ExportDestinationTests")
+    let defaults = TestScratch.defaults(suiteName: suiteName)
     let bookmarkKey = "ExportDestinationBookmark-\(UUID().uuidString)"
     defer { defaults.removePersistentDomain(forName: suiteName) }
 

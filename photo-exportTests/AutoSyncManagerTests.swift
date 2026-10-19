@@ -911,24 +911,31 @@ struct AutoSyncManagerTests {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     let gate = AsyncCheckpoint()
-    defer { Task { await gate.releaseAll() } }
-    builder.exportRunner.gateForInvocation = { $0 == 1 ? gate : nil }
-    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
-    builder.destination.subject.send(safeDestination())
-    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true, favorites: true))
-    manager.attach(to: builder.environment)
-    builder.clock.advance(by: 10)
-    let parked = await gate.waitForEnter(count: 1)
-    try #require(parked)
-    let fanOut = try #require(manager.activeRunFanOutTask)
+    var fanOuts: [Task<Void, Never>] = []
+    try await withCleanup {
+      builder.exportRunner.gateForInvocation = { $0 == 1 ? gate : nil }
+      builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+      builder.destination.subject.send(safeDestination())
+      builder.scopes.subject.send(AutoExportScopeSelection(timeline: true, favorites: true))
+      manager.attach(to: builder.environment)
+      builder.clock.advance(by: 10)
+      let parked = await gate.waitForEnter(count: 1)
+      try #require(parked)
+      let fanOut = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(fanOut)
 
-    manager.setEnabled(false)
-    #expect(builder.exportRunner.cancelAutoSyncRunCalls == 1)
+      manager.setEnabled(false)
+      #expect(builder.exportRunner.cancelAutoSyncRunCalls == 1)
 
-    await gate.release()
-    let ended = await finished(fanOut)
-    try #require(ended)
-    #expect(builder.exportRunner.receivedContexts.count == 1)
+      await gate.release()
+      let ended = await finished(fanOut)
+      try #require(ended)
+      #expect(builder.exportRunner.receivedContexts.count == 1)
+    } cleanup: {
+      await gate.releaseAll()
+      if let current = manager.activeRunFanOutTask { fanOuts.append(current) }
+      for task in fanOuts { _ = await finished(task) }
+    }
   }
 
   // MARK: - Idempotent attach

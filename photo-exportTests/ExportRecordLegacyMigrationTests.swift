@@ -8,8 +8,7 @@ import Testing
 @MainActor
 struct ExportRecordLegacyMigrationTests {
   private func makeTempDir() -> URL {
-    FileManager.default.temporaryDirectory
-      .appendingPathComponent("LegacyMig-\(UUID().uuidString)", isDirectory: true)
+    TestScratch.directory("LegacyMig")
   }
 
   private func writeLegacySnapshot(_ json: String, at dir: URL, dest: String) throws {

@@ -10,8 +10,8 @@ import Testing
   struct RecordStoreAlertRecoveryTests {
     @MainActor
     private final class Fixture {
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let defaultsName = "AlertRecovery-\(UUID().uuidString)"
+      let root = TestScratch.directory("RecordStoreAlertRecovery")
+      let defaultsName = TestScratch.suiteName("AlertRecovery")
       let defaults: UserDefaults
       let timeline: ExportRecordStore
       let collections: CollectionExportRecordStore
@@ -25,7 +25,7 @@ import Testing
       var window: NSWindow?
 
       init(collection: Bool = false, storageFailure: Bool = false) throws {
-        defaults = UserDefaults(suiteName: defaultsName)!
+        defaults = TestScratch.defaults(suiteName: defaultsName)
         let directory = root.appendingPathComponent("A")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let name =

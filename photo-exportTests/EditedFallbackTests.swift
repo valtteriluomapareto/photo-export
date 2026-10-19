@@ -25,7 +25,6 @@ struct EditedFallbackTests {
     let store: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
-    let userDefaultsSuite: String
 
     func cleanup() {
       manager.cancelAndClear()
@@ -33,7 +32,6 @@ struct EditedFallbackTests {
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
     }
   }
 
@@ -43,14 +41,12 @@ struct EditedFallbackTests {
     let writer = FakeAssetResourceWriter()
     let renderer = FakeMediaRenderer()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("EditedFallback-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("EditedFallback")
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let suiteName = "test-EditedFallback-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let defaults = TestScratch.defaults("EditedFallback")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -64,7 +60,7 @@ struct EditedFallbackTests {
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer,
       renderer: renderer, store: store, collectionStore: collectionStore,
-      storeRoot: storeRoot, userDefaultsSuite: suiteName)
+      storeRoot: storeRoot)
   }
 
   // MARK: - Pipeline behaviour

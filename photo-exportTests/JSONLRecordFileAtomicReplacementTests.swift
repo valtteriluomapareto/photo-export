@@ -54,8 +54,7 @@ struct JSONLRecordFileAtomicReplacementTests {
   }
 
   private func makeDirectory() throws -> URL {
-    let directory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("JSONL-atomic-\(UUID().uuidString)", isDirectory: true)
+    let directory = TestScratch.directory("JSONL-atomic")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
   }

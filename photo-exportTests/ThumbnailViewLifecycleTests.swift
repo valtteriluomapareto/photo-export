@@ -127,40 +127,39 @@ struct ThumbnailViewLifecycleTests {
       }
       return edited ? blue : red
     }
-    defer {
-      fixture.close()
-      Task {
-        await oldDecode.releaseAll()
-        await observerStarted.releaseAll()
+    try await withCleanup {
+      fixture.show()
+      await oldDecode.waitForEnter(count: 1)
+      // Join the cell's already-blocked decode so the test can await its actual
+      // completion after the edit, rather than checking before the old response.
+      let oldObserver = Task { @MainActor in
+        Task { await observerStarted.enter() }
+        return await fixture.manager.decodedThumbnail(
+          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: oldDelivery)
       }
-    }
-    fixture.show()
-    await oldDecode.waitForEnter(count: 1)
-    // Join the cell's already-blocked decode so the test can await its actual
-    // completion after the edit, rather than checking before the old response.
-    let oldObserver = Task { @MainActor in
-      Task { await observerStarted.enter() }
-      return await fixture.manager.decodedThumbnail(
-        for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: oldDelivery)
-    }
-    await observerStarted.waitForEnter(count: 1)
+      await observerStarted.waitForEnter(count: 1)
 
-    edited = true
-    fixture.manager.invalidateCache(changedThumbnailAssetIDs: ["asset-A"])
-    let refreshed = await observe {
-      fixture.shows(.blue)
-        && fixture.manager.cachedDecodedThumbnail(
-          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: .highQuality) === blue
+      edited = true
+      fixture.manager.invalidateCache(changedThumbnailAssetIDs: ["asset-A"])
+      let refreshed = await observe {
+        fixture.shows(.blue)
+          && fixture.manager.cachedDecodedThumbnail(
+            for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: .highQuality) === blue
+      }
+      try #require(refreshed, "\(fixture.lastColorDescription)")
+      await oldDecode.releaseAll()
+      #expect(
+        await oldObserver.value == nil,
+        "An obsolete decode must not return image bytes to its waiters")
+      #expect(fixture.shows(.blue))
+      #expect(
+        fixture.manager.cachedDecodedThumbnail(
+          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: oldDelivery) === blue)
+    } cleanup: {
+      fixture.close()
+      await oldDecode.releaseAll()
+      await observerStarted.releaseAll()
     }
-    try #require(refreshed, "\(fixture.lastColorDescription)")
-    await oldDecode.releaseAll()
-    #expect(
-      await oldObserver.value == nil,
-      "An obsolete decode must not return image bytes to its waiters")
-    #expect(fixture.shows(.blue))
-    #expect(
-      fixture.manager.cachedDecodedThumbnail(
-        for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: oldDelivery) === blue)
   }
 
   @Test(.timeLimit(.minutes(1)))
@@ -177,25 +176,26 @@ struct ThumbnailViewLifecycleTests {
       }
       return red
     }
-    defer {
-      fixture.close()
-      Task { await replacement.releaseAll() }
-    }
-    fixture.show()
-    let initialLoaded = await observe {
-      fixture.shows(.red)
-        && fixture.manager.cachedDecodedThumbnail(
-          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: .highQuality) === red
-    }
-    try #require(initialLoaded)
+    try await withCleanup {
+      fixture.show()
+      let initialLoaded = await observe {
+        fixture.shows(.red)
+          && fixture.manager.cachedDecodedThumbnail(
+            for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: .highQuality) === red
+      }
+      try #require(initialLoaded)
 
-    edited = true
-    fixture.manager.invalidateCache(changedThumbnailAssetIDs: ["asset-A"])
-    await replacement.waitForEnter(count: 1)
-    #expect(fixture.shows(.red), "Content invalidation must not blank the mounted cell")
-    await replacement.releaseAll()
-    let refreshed = await observe { fixture.shows(.blue) }
-    #expect(refreshed)
+      edited = true
+      fixture.manager.invalidateCache(changedThumbnailAssetIDs: ["asset-A"])
+      await replacement.waitForEnter(count: 1)
+      #expect(fixture.shows(.red), "Content invalidation must not blank the mounted cell")
+      await replacement.releaseAll()
+      let refreshed = await observe { fixture.shows(.blue) }
+      #expect(refreshed)
+    } cleanup: {
+      fixture.close()
+      await replacement.releaseAll()
+    }
   }
 
   @Test(.timeLimit(.minutes(1)))

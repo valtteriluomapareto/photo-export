@@ -589,7 +589,6 @@ struct SidebarMultiSelectTests {
     let timelineStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
-    let userDefaultsSuite: String
 
     func cleanup() {
       manager.cancelAndClear()
@@ -597,7 +596,6 @@ struct SidebarMultiSelectTests {
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
     }
   }
 
@@ -606,14 +604,12 @@ struct SidebarMultiSelectTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("SidebarMultiSelect-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("SidebarMultiSelect")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let suiteName = "test-SidebarMultiSelect-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let defaults = TestScratch.defaults("SidebarMultiSelect")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -626,7 +622,7 @@ struct SidebarMultiSelectTests {
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer,
       timelineStore: timelineStore, collectionStore: collectionStore,
-      storeRoot: storeRoot, userDefaultsSuite: suiteName)
+      storeRoot: storeRoot)
   }
 
   private func makeAsset(id: String, year: Int = 2024, month: Int = 1) -> AssetDescriptor {

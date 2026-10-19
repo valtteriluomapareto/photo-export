@@ -73,8 +73,8 @@ struct ExportSettingsCaptureTests {
     let destination = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let converter = FakeImageConverter()
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let suite = "ExportSettingsCapture-\(UUID().uuidString)"
+    let root = TestScratch.directory("ExportSettingsCapture")
+    let suite = TestScratch.suiteName("ExportSettingsCapture")
     let timeline: ExportRecordStore
     let collections: CollectionExportRecordStore
     let manager: ExportManager
@@ -88,7 +88,7 @@ struct ExportSettingsCaptureTests {
         photoLibraryService: library, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, imageConverter: converter, fileSystem: FakeFileSystem(),
-        userDefaults: UserDefaults(suiteName: suite)!)
+        userDefaults: TestScratch.defaults(suiteName: suite))
       manager.queueCoordinator.pause()
       library.yearCounts = [(2025, 1), (2026, 1)]
       library.assetsByYearMonth["2025-1"] = [asset("t1")]
@@ -150,7 +150,6 @@ struct ExportSettingsCaptureTests {
       collections.flushForTesting()
       try? FileManager.default.removeItem(at: root)
       destination.cleanup()
-      UserDefaults().removePersistentDomain(forName: suite)
     }
   }
 

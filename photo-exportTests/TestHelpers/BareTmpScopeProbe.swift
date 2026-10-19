@@ -1,8 +1,8 @@
 import Foundation
 
 /// Runtime probe used by destination-manager tests that materialise a real
-/// folder under `FileManager.default.temporaryDirectory` (inside the app's
-/// sandbox container) and then exercise `ExportDestinationManager`'s
+/// folder under `TestScratch` (in the temporary directory, inside the app's
+/// sandbox container when signed) and then exercise `ExportDestinationManager`'s
 /// security-scope path.
 ///
 /// `URL.startAccessingSecurityScopedResource()` is documented to return
@@ -23,9 +23,7 @@ import Foundation
 /// normally.
 enum BareTmpScopeProbe {
   static func bareTmpRejectsScopeStart() -> Bool {
-    let probe = FileManager.default.temporaryDirectory
-      .appendingPathComponent(
-        "BareTmpScopeProbe-\(UUID().uuidString)", isDirectory: true)
+    let probe = TestScratch.directory("BareTmpScopeProbe")
     try? FileManager.default.createDirectory(
       at: probe, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: probe) }

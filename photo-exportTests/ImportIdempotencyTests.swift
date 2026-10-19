@@ -29,14 +29,12 @@ struct ImportIdempotencyTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ImportIdempotency-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ImportIdempotency")
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
     let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collections.configure(for: "test")
-    let defaults = UserDefaults(
-      suiteName: "test-ImportIdempotency-\(UUID().uuidString)")!
+    let defaults = TestScratch.defaults("ImportIdempotency")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,

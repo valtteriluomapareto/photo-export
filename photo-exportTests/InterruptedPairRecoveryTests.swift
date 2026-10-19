@@ -32,7 +32,7 @@ struct InterruptedPairRecoveryTests {
 
   @MainActor
   private final class Destination: ExportDestination {
-    let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let base = TestScratch.directory("InterruptedPairRecovery")
     var rootURL: URL { base.appendingPathComponent("A") }
     var selectedFolderURL: URL?
     var canExportNow: Bool { true }
@@ -90,12 +90,12 @@ struct InterruptedPairRecoveryTests {
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
       timeline.configure(for: "A")
       collections.configure(for: "A")
-      defaultsName = "InterruptedPair-\(UUID().uuidString)"
+      defaultsName = TestScratch.suiteName("InterruptedPair")
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, fileSystem: files,
-        userDefaults: UserDefaults(suiteName: defaultsName)!)
+        userDefaults: TestScratch.defaults(suiteName: defaultsName))
       let asset = TestAssetFactory.makeAsset(
         id: "asset", hasAdjustments: companion, isLivePhoto: !companion)
       photos.assetsByYearMonth["2025-1"] = [asset]
@@ -155,14 +155,13 @@ struct InterruptedPairRecoveryTests {
       try? await collections.flush()
       destination.cleanup()
       try? FileManager.default.removeItem(at: root)
-      UserDefaults.standard.removePersistentDomain(forName: defaultsName)
     }
   }
 
   private func makeFixture(
     collection: Bool, companion: Bool = false, mismatch: Mismatch? = nil
   ) async throws -> Fixture {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("InterruptedPairRecovery")
     let destination = Destination()
     let placement: ExportPlacement = collection ? .favorites() : .timeline(year: 2025, month: 1)
     let variant: ExportVariant = companion ? .original : .originalPairedVideo

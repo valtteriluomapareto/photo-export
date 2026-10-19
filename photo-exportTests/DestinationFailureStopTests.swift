@@ -31,8 +31,8 @@ struct DestinationFailureStopTests {
   }
   @MainActor
   private final class Fixture {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let suite = "DestinationStop-\(UUID().uuidString)"
+    let root = TestScratch.directory("DestinationFailureStop")
+    let suite = TestScratch.suiteName("DestinationStop")
     let photos = FakePhotoLibraryService()
     let destination = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
@@ -56,7 +56,7 @@ struct DestinationFailureStopTests {
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, mediaRenderer: renderer, imageConverter: converter,
-        fileSystem: files, userDefaults: UserDefaults(suiteName: suite)!)
+        fileSystem: files, userDefaults: TestScratch.defaults(suiteName: suite))
       let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
       let assets = ids.map { TestAssetFactory.makeAsset(id: $0, creationDate: date) }
       photos.assetsByYearMonth["2026-9"] = assets
@@ -102,7 +102,6 @@ struct DestinationFailureStopTests {
       try? await timeline.flush()
       try? await collections.flush()
       destination.cleanup()
-      UserDefaults.standard.removePersistentDomain(forName: suite)
       try? FileManager.default.removeItem(at: root)
     }
   }

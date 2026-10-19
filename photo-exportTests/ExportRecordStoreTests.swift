@@ -6,16 +6,14 @@ import Testing
 @MainActor
 struct ExportRecordStoreTests {
     @Test func testLoadEmptyStore() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destA")
         #expect(store.recordsById.isEmpty)
     }
 
     @Test func testUpsertAndQuery() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destA")
         let id = "asset-1"
@@ -31,8 +29,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testMonthSummary() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destA")
         store.markExported(
@@ -53,8 +50,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testFailureUpsert() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destA")
         let id = "asset-fail"
@@ -66,8 +62,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testPersistenceAcrossLaunchesAndDeletion() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store1 = ExportRecordStore(baseDirectoryURL: tempDir)
         store1.configure(for: "destA")
         store1.markInProgress(
@@ -88,8 +83,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testInProgressToDoneTransition() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destA")
         store.markInProgress(
@@ -106,8 +100,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testCorruptedLogLineIsSkipped() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         let destId = "destA"
         store.configure(for: destId)
@@ -128,8 +121,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testPerDestinationIsolation() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let root = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: root)
 
         store.configure(for: "destA")
@@ -153,8 +145,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testNilDestinationShowsEmpty() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let root = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: root)
 
         store.configure(for: "destA")
@@ -172,8 +163,7 @@ struct ExportRecordStoreTests {
     // MARK: - Strict, asset-aware isExported
 
     @Test func strictIsExportedDefaultModeUneditedAsset() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destStrict")
         let asset = TestAssetFactory.makeAsset(id: "u", hasAdjustments: false)
@@ -187,8 +177,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func strictIsExportedDefaultModeAdjustedAsset() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destStrict2")
         let asset = TestAssetFactory.makeAsset(id: "a", hasAdjustments: true)
@@ -207,8 +196,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func strictIsExportedIncludeOriginalsAdjustedAssetRequiresBoth() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destStrict3")
         let asset = TestAssetFactory.makeAsset(id: "a", hasAdjustments: true)
@@ -231,8 +219,7 @@ struct ExportRecordStoreTests {
     /// shows a green check while the header still reads partial. Pins the call-site contract that
     /// MonthContentView's thumbnail grid forwards `livePhotosPaired`.
     @Test func strictIsExportedLivePhotoPairedPendingNotComplete() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destLivePair")
         let live = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
@@ -260,8 +247,7 @@ struct ExportRecordStoreTests {
     // MARK: - Sidebar approximation: cap behaviour
 
     @Test func sidebarSummaryCapsOriginalOnlyContributionAtUneditedCount() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destCap")
         let now = Date()
@@ -283,8 +269,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func sidebarSummaryReturnsNilWhileAdjustedCountLoading() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destLoading")
         let summary = store.sidebarSummary(
@@ -300,8 +285,7 @@ struct ExportRecordStoreTests {
     /// over-count protects the invariant: future "fix" attempts that drop the cap or
     /// reach for asset descriptors must update this test deliberately.
     @Test func sidebarSummaryDocumentedMixedPartialOvercount() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destMixed")
         let now = Date()
@@ -328,8 +312,7 @@ struct ExportRecordStoreTests {
     /// under-count rather than the asset-aware truth — the asset-aware path remains
     /// correct via `MonthContentView.exportSummaryView`.
     @Test func sidebarSummaryUnderCountsForUserOrigFilename() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destUserOrig")
         store.markVariantExported(
@@ -350,8 +333,7 @@ struct ExportRecordStoreTests {
     /// skips months with zero assets, propagates nil from any month whose
     /// adjustedCount hasn't loaded.
     @Test func sidebarYearExportedCountAggregatesAcrossMonths() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destYear")
         let now = Date()
@@ -394,8 +376,7 @@ struct ExportRecordStoreTests {
     /// `.originalPairedVideo.pending` reads as 1 of 1 exported under `.edited`. Pins
     /// the no-regression guarantee for libraries that haven't opted in.
     @Test func sidebarSummaryLivePhotosPairedOff_unchangedByPendingPairedVideo() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destPairOff")
         store.markVariantExported(
@@ -417,8 +398,7 @@ struct ExportRecordStoreTests {
     /// `.originalPairedVideo` is still pending must NOT count as exported. The sidebar
     /// must agree with the asset-aware `isExported(asset:selection:livePhotosPaired:)`.
     @Test func sidebarSummaryLivePhotosPairedOn_subtractsPendingPairedVideo() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destPairOn")
         store.markVariantExported(
@@ -455,8 +435,7 @@ struct ExportRecordStoreTests {
     /// Photos pegged the sidebar below 100% permanently — see the deferred plan in
     /// `Section A` of the project notes.
     @Test func sidebarSummaryLivePhotosPairedOn_pairedVideoUnavailableSentinel_isCovered() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destPairUnavail")
         store.markVariantExported(
@@ -480,8 +459,7 @@ struct ExportRecordStoreTests {
     /// incomplete. Mirrors the `ExportCompletionPolicyTests` regression guard for
     /// the same case at the policy level.
     @Test func sidebarSummaryLivePhotosPairedOn_genericPairedVideoFailure_isNotCovered() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destPairGenericFail")
         store.markVariantExported(
@@ -503,8 +481,7 @@ struct ExportRecordStoreTests {
     /// Photo with `.original.done` + `.edited.done` + `.editedPairedVideo.pending` reads
     /// as not yet exported under the toggle.
     @Test func sidebarSummaryIncludeOriginalsLivePhotosPairedOn_subtractsPendingPairedVideo() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destPairOnIncl")
         let now = Date()
@@ -527,8 +504,7 @@ struct ExportRecordStoreTests {
 
     /// Issue #49: year-scope roll-up forwards the flag.
     @Test func sidebarYearExportedCountLivePhotosPairedOn_subtractsPerMonth() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destPairYear")
         let now = Date()
@@ -565,8 +541,7 @@ struct ExportRecordStoreTests {
     /// `editedWithOriginals`. The asset has only `.original.done`; that's all that's
     /// required for an unedited asset under either selection.
     @Test func strictIsExportedIncludeOriginalsUneditedAssetSatisfiedByOriginalDone() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destUnedited")
         let asset = TestAssetFactory.makeAsset(id: "u", hasAdjustments: false)
@@ -578,8 +553,7 @@ struct ExportRecordStoreTests {
     }
 
     @Test func testDoneCountTracksTransitionsAndMoves() throws {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-            UUID().uuidString, isDirectory: true)
+        let tempDir = TestScratch.directory("ExportRecordStore")
         let store = ExportRecordStore(baseDirectoryURL: tempDir)
         store.configure(for: "destD")
         // Export to month 9

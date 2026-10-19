@@ -14,23 +14,26 @@ struct RunDetachedTests {
 
   @Test func cancellingTheCallerReachesTheOperationAfterItsCurrentStep() async throws {
     let gate = AsyncCheckpoint()
-    defer { Task { await gate.releaseAll() } }
-    let log = Log()
-    let caller = Task {
-      await runDetached {
-        await gate.enter()
-        await log.append(Task.isCancelled ? "operation saw cancel" : "operation not cancelled")
+    try await withCleanup {
+      let log = Log()
+      let caller = Task {
+        await runDetached {
+          await gate.enter()
+          await log.append(Task.isCancelled ? "operation saw cancel" : "operation not cancelled")
+        }
+        await log.append("caller returned")
       }
-      await log.append("caller returned")
+      let started = await gate.waitForEnter(count: 1)
+      try #require(started)
+
+      caller.cancel()
+      await gate.releaseAll()
+      await caller.value
+
+      #expect(await log.events == ["operation saw cancel", "caller returned"])
+    } cleanup: {
+      await gate.releaseAll()
     }
-    let started = await gate.waitForEnter(count: 1)
-    try #require(started)
-
-    caller.cancel()
-    await gate.releaseAll()
-    await caller.value
-
-    #expect(await log.events == ["operation saw cancel", "caller returned"])
   }
 
   @Test func aCallerCancelledBeforehandCancelsTheOperation() async {
@@ -49,19 +52,22 @@ struct RunDetachedTests {
 
   @Test func theThrowingVariantReportsCancellation() async throws {
     let gate = AsyncCheckpoint()
-    defer { Task { await gate.releaseAll() } }
-    let caller = Task {
-      try await runDetached {
-        await gate.enter()
-        try Task.checkCancellation()
-        return 1
+    try await withCleanup {
+      let caller = Task {
+        try await runDetached {
+          await gate.enter()
+          try Task.checkCancellation()
+          return 1
+        }
       }
+      let started = await gate.waitForEnter(count: 1)
+      try #require(started)
+      caller.cancel()
+      await gate.releaseAll()
+      let result = await caller.result
+      #expect(throws: CancellationError.self) { try result.get() }
+    } cleanup: {
+      await gate.releaseAll()
     }
-    let started = await gate.waitForEnter(count: 1)
-    try #require(started)
-    caller.cancel()
-    await gate.releaseAll()
-    let result = await caller.result
-    #expect(throws: CancellationError.self) { try result.get() }
   }
 }

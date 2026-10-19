@@ -18,8 +18,8 @@ import Testing
 
     @MainActor
     private final class Fixture {
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let suite = "TimelineBadgeRefresh-\(UUID().uuidString)"
+      let root = TestScratch.directory("TimelineSidebarBadgeRefresh")
+      let suite = TestScratch.suiteName("TimelineBadgeRefresh")
       let defaults: UserDefaults
       let service = FakePhotoLibraryService()
       let library: PhotoLibraryManager
@@ -30,7 +30,7 @@ import Testing
       let window: NSWindow
 
       init() {
-        defaults = UserDefaults(suiteName: suite)!
+        defaults = TestScratch.defaults(suiteName: suite)
         service.yearCounts = [(2026, 2), (2025, 2)]
         service.cachedCountOverride = { scope, adjusted in
           switch scope {

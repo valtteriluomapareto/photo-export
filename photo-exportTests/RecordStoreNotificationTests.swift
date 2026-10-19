@@ -9,7 +9,7 @@ import Testing
 struct RecordStoreNotificationTests {
   @MainActor
   private final class Fixture {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("RecordStoreNotification")
     let clock = TestClock()
     let timeline: ExportRecordStore
     let collections: CollectionExportRecordStore
@@ -217,7 +217,7 @@ struct RecordStoreNotificationTests {
   func exportTerminalTransitionsPublishPendingChanges(collection: Bool, cancel: Bool) async {
     let f = Fixture(collection: collection)
     let destination = FakeExportDestination()
-    let suite = "NotificationExport-\(UUID().uuidString)"
+    let suite = TestScratch.suiteName("NotificationExport")
     let photos = FakePhotoLibraryService()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     photos.assetsByYearMonth["2026-9"] = [TestAssetFactory.makeAsset(id: "asset", creationDate: date)]
@@ -227,7 +227,7 @@ struct RecordStoreNotificationTests {
       photoLibraryService: photos, exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
       assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
-      userDefaults: UserDefaults(suiteName: suite)!)
+      userDefaults: TestScratch.defaults(suiteName: suite))
     let baseline = f.counter
     if cancel {
       f.write("pending")
@@ -245,7 +245,6 @@ struct RecordStoreNotificationTests {
     manager.cancelAndClear()
     await physical?.value
     destination.cleanup()
-    UserDefaults.standard.removePersistentDomain(forName: suite)
     await f.close()
   }
 
@@ -257,7 +256,7 @@ struct RecordStoreNotificationTests {
   func cancellingHeldExportPublishesAfterRemovingOwnedInProgressRecord(collection: Bool) async throws {
     let f = Fixture(collection: collection)
     let destination = FakeExportDestination()
-    let suite = "NotificationHeldExport-\(UUID().uuidString)"
+    let suite = TestScratch.suiteName("NotificationHeldExport")
     let photos = FakePhotoLibraryService()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     photos.assetsByYearMonth["2026-9"] = [TestAssetFactory.makeAsset(id: "held", creationDate: date)]
@@ -270,7 +269,7 @@ struct RecordStoreNotificationTests {
       photoLibraryService: photos, exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
       assetResourceWriter: writer, fileSystem: FakeFileSystem(),
-      userDefaults: UserDefaults(suiteName: suite)!)
+      userDefaults: TestScratch.defaults(suiteName: suite))
     var physical: Task<Void, Never>?
     var failure: Error?
     var notifications = 0
@@ -299,7 +298,6 @@ struct RecordStoreNotificationTests {
     await current?.value
     withExtendedLifetime(observation) {}
     destination.cleanup()
-    UserDefaults.standard.removePersistentDomain(forName: suite)
     await f.close()
     if let failure { throw failure }
   }
@@ -307,7 +305,7 @@ struct RecordStoreNotificationTests {
   @Test func terminalBadgeSubscriberCannotEraseReplacementManualFeedback() async {
     let f = Fixture(collection: false)
     let destination = FakeExportDestination()
-    let suite = "NotificationManualReentry-\(UUID().uuidString)"
+    let suite = TestScratch.suiteName("NotificationManualReentry")
     let photos = FakePhotoLibraryService()
     photos.fetchAssetsErrorByYear[2025] = CocoaError(.fileReadUnknown)
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
@@ -317,7 +315,7 @@ struct RecordStoreNotificationTests {
       photoLibraryService: photos, exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
       assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
-      userDefaults: UserDefaults(suiteName: suite)!)
+      userDefaults: TestScratch.defaults(suiteName: suite))
     var replaced = false
     let observation = f.publisher.dropFirst().sink { _ in
       guard !replaced else { return }
@@ -339,7 +337,6 @@ struct RecordStoreNotificationTests {
     await physical?.value
     withExtendedLifetime(observation) {}
     destination.cleanup()
-    UserDefaults.standard.removePersistentDomain(forName: suite)
     await f.close()
   }
 
@@ -347,7 +344,7 @@ struct RecordStoreNotificationTests {
   func terminalBadgeSubscriberCannotEraseReplacementImportOwnership(cancel: Bool) async throws {
     let f = Fixture(collection: false)
     let destination = FakeExportDestination()
-    let suite = "NotificationImportReentry-\(UUID().uuidString)"
+    let suite = TestScratch.suiteName("NotificationImportReentry")
     let photos = FakePhotoLibraryService()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     photos.assetsByYearMonth["2026-9"] = [TestAssetFactory.makeAsset(id: "asset", creationDate: date)]
@@ -360,7 +357,7 @@ struct RecordStoreNotificationTests {
       photoLibraryService: photos, exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
       assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
-      userDefaults: UserDefaults(suiteName: suite)!)
+      userDefaults: TestScratch.defaults(suiteName: suite))
     let gate = AsyncCheckpoint()
     var replacement: Task<Void, Never>?
     var replaced = false
@@ -395,7 +392,6 @@ struct RecordStoreNotificationTests {
     await current?.value
     withExtendedLifetime(observation) {}
     destination.cleanup()
-    UserDefaults.standard.removePersistentDomain(forName: suite)
     await f.close()
     if let failure { throw failure }
   }
@@ -404,12 +400,12 @@ struct RecordStoreNotificationTests {
   func importTerminalPublishesBothStoresAndStaleTaskCannotFlushNewWindow(cancel: Bool) async {
     let f = Fixture(collection: false)
     let destination = FakeExportDestination()
-    let suite = "NotificationImport-\(UUID().uuidString)"
+    let suite = TestScratch.suiteName("NotificationImport")
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
       assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
-      userDefaults: UserDefaults(suiteName: suite)!)
+      userDefaults: TestScratch.defaults(suiteName: suite))
     let beforeTimeline = f.timeline.mutationCounter
     let beforeCollections = f.collections.mutationCounter
     f.write("pending")
@@ -441,7 +437,6 @@ struct RecordStoreNotificationTests {
     #expect(f.collections.mutationCounter == beforeCollections + (cancel ? 2 : 1))
     withExtendedLifetime(observation) {}
     destination.cleanup()
-    UserDefaults.standard.removePersistentDomain(forName: suite)
     await f.close()
   }
 }

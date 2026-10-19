@@ -88,33 +88,41 @@ struct AutoSyncRetryLifecycleTests {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     let gate = AsyncCheckpoint()
-    defer { Task { await gate.releaseAll() } }
-    builder.exportRunner.gateForInvocation = { index in index == 2 ? gate : nil }
-    let failureAt = builder.clock.now().addingTimeInterval(-18)
-    try builder.retryStore.save(retryState(at: failureAt), destinationId: "retry-A")
-    attach(manager, builder, scopes: AutoExportScopeSelection(timeline: true, favorites: true))
+    var fanOuts: [Task<Void, Never>] = []
+    try await withCleanup {
+      builder.exportRunner.gateForInvocation = { index in index == 2 ? gate : nil }
+      let failureAt = builder.clock.now().addingTimeInterval(-18)
+      try builder.retryStore.save(retryState(at: failureAt), destinationId: "retry-A")
+      attach(manager, builder, scopes: AutoExportScopeSelection(timeline: true, favorites: true))
 
-    builder.clock.advance(by: 10)
-    await gate.waitForEnter(count: 1)
-    let firstTask = try #require(manager.activeRunFanOutTask)
-    #expect(
-      builder.exportRunner.receivedContexts.map(\.scope) == [
-        .timelineFullLibrary, .favoritesFull,
-      ])
-    // Simulate the idle publication between per-scope exports. Manager ownership,
-    // not the runner's current-state mirror, must prevent an overlapping retry.
-    builder.exportRunner.subject.send(.idle)
-    builder.clock.advance(by: 2)  // Eligibility at t=12 while scope 2 is parked.
-    #expect(builder.exportRunner.receivedContexts.count == 2)
-    await gate.release()
-    await firstTask.value
-    builder.clock.advance(by: 0)
-    let secondTask = try #require(manager.activeRunFanOutTask)
-    await secondTask.value
-    #expect(builder.exportRunner.receivedContexts.count == 4)
-    #expect(builder.exportRunner.receivedContexts[2].reason == .retryBackoff)
-    builder.clock.advance(by: 0)
-    #expect(builder.exportRunner.receivedContexts.count == 4)
+      builder.clock.advance(by: 10)
+      await gate.waitForEnter(count: 1)
+      let firstTask = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(firstTask)
+      #expect(
+        builder.exportRunner.receivedContexts.map(\.scope) == [
+          .timelineFullLibrary, .favoritesFull,
+        ])
+      // Simulate the idle publication between per-scope exports. Manager ownership,
+      // not the runner's current-state mirror, must prevent an overlapping retry.
+      builder.exportRunner.subject.send(.idle)
+      builder.clock.advance(by: 2)  // Eligibility at t=12 while scope 2 is parked.
+      #expect(builder.exportRunner.receivedContexts.count == 2)
+      await gate.release()
+      await firstTask.value
+      builder.clock.advance(by: 0)
+      let secondTask = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(secondTask)
+      await secondTask.value
+      #expect(builder.exportRunner.receivedContexts.count == 4)
+      #expect(builder.exportRunner.receivedContexts[2].reason == .retryBackoff)
+      builder.clock.advance(by: 0)
+      #expect(builder.exportRunner.receivedContexts.count == 4)
+    } cleanup: {
+      await gate.releaseAll()
+      if let current = manager.activeRunFanOutTask { fanOuts.append(current) }
+      for task in fanOuts { _ = await finished(task) }
+    }
   }
 
   @Test(.timeLimit(.minutes(1)))
@@ -122,26 +130,33 @@ struct AutoSyncRetryLifecycleTests {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     let firstGate = AsyncCheckpoint()
-    defer { Task { await firstGate.releaseAll() } }
-    builder.exportRunner.gateForInvocation = { index in index == 1 ? firstGate : nil }
-    let failedAt = builder.clock.now()
-    var retry = retryState(at: failedAt)
-    retry.recordFailure(
-      scope: .timeline, assetId: "asset", variant: .edited,
-      category: .iCloudTransient, errorSignature: "network", at: failedAt,
-      nextEligibleAt: failedAt.addingTimeInterval(30))
-    try builder.retryStore.save(retry, destinationId: "retry-A")
-    attach(manager, builder)
-    builder.clock.advance(by: 10)
-    await firstGate.waitForEnter(count: 1)
-    let task = try #require(manager.activeRunFanOutTask)
-    builder.exportRunner.retryVariantDone = { _, _, variant in variant == .original }
-    await firstGate.release()
-    await task.value
+    var fanOuts: [Task<Void, Never>] = []
+    try await withCleanup {
+      builder.exportRunner.gateForInvocation = { index in index == 1 ? firstGate : nil }
+      let failedAt = builder.clock.now()
+      var retry = retryState(at: failedAt)
+      retry.recordFailure(
+        scope: .timeline, assetId: "asset", variant: .edited,
+        category: .iCloudTransient, errorSignature: "network", at: failedAt,
+        nextEligibleAt: failedAt.addingTimeInterval(30))
+      try builder.retryStore.save(retry, destinationId: "retry-A")
+      attach(manager, builder)
+      builder.clock.advance(by: 10)
+      await firstGate.waitForEnter(count: 1)
+      let task = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(task)
+      builder.exportRunner.retryVariantDone = { _, _, variant in variant == .original }
+      await firstGate.release()
+      await task.value
 
-    let remaining = builder.retryStore.load(destinationId: "retry-A")
-    #expect(remaining.entry(scope: .timeline, assetId: "asset", variant: .original) == nil)
-    #expect(remaining.entry(scope: .timeline, assetId: "asset", variant: .edited) != nil)
+      let remaining = builder.retryStore.load(destinationId: "retry-A")
+      #expect(remaining.entry(scope: .timeline, assetId: "asset", variant: .original) == nil)
+      #expect(remaining.entry(scope: .timeline, assetId: "asset", variant: .edited) != nil)
+    } cleanup: {
+      await firstGate.releaseAll()
+      if let current = manager.activeRunFanOutTask { fanOuts.append(current) }
+      for task in fanOuts { _ = await finished(task) }
+    }
   }
 
   @Test(.timeLimit(.minutes(1)))
@@ -369,26 +384,33 @@ struct AutoSyncRetryLifecycleTests {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     let oldGate = AsyncCheckpoint()
-    defer { Task { await oldGate.releaseAll() } }
-    builder.exportRunner.gateForInvocation = { index in index == 1 ? oldGate : nil }
-    let bRetry = retryState(at: builder.clock.now())
-    try builder.retryStore.save(bRetry, destinationId: "retry-B")
-    var queryCount = 0
-    builder.exportRunner.retryVariantDone = { _, _, _ in
-      queryCount += 1
-      return true
-    }
-    attach(manager, builder)
-    builder.clock.advance(by: 10)
-    await oldGate.waitForEnter(count: 1)
-    let oldTask = try #require(manager.activeRunFanOutTask)
+    var fanOuts: [Task<Void, Never>] = []
+    try await withCleanup {
+      builder.exportRunner.gateForInvocation = { index in index == 1 ? oldGate : nil }
+      let bRetry = retryState(at: builder.clock.now())
+      try builder.retryStore.save(bRetry, destinationId: "retry-B")
+      var queryCount = 0
+      builder.exportRunner.retryVariantDone = { _, _, _ in
+        queryCount += 1
+        return true
+      }
+      attach(manager, builder)
+      builder.clock.advance(by: 10)
+      await oldGate.waitForEnter(count: 1)
+      let oldTask = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(oldTask)
 
-    builder.destination.subject.send(destination("retry-B"))
-    await oldGate.release()
-    await oldTask.value
-    #expect(queryCount == 0)
-    #expect(builder.retryStore.load(destinationId: "retry-B") == bRetry)
-    #expect(manager.currentRetryState == bRetry)
+      builder.destination.subject.send(destination("retry-B"))
+      await oldGate.release()
+      await oldTask.value
+      #expect(queryCount == 0)
+      #expect(builder.retryStore.load(destinationId: "retry-B") == bRetry)
+      #expect(manager.currentRetryState == bRetry)
+    } cleanup: {
+      await oldGate.releaseAll()
+      if let current = manager.activeRunFanOutTask { fanOuts.append(current) }
+      for task in fanOuts { _ = await finished(task) }
+    }
   }
 
   /// The real runner ends an automatic run when Auto Export is turned off; this fake keeps
@@ -398,31 +420,39 @@ struct AutoSyncRetryLifecycleTests {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     let gate = AsyncCheckpoint()
-    defer { Task { await gate.releaseAll() } }
-    builder.exportRunner.gateForInvocation = { index in index == 1 ? gate : nil }
-    try builder.retryStore.save(retryState(at: builder.clock.now()), destinationId: "retry-A")
-    attach(manager, builder)
-    builder.clock.advance(by: 10)
-    await gate.waitForEnter(count: 1)
-    let oldTask = try #require(manager.activeRunFanOutTask)
-    let context = try #require(builder.exportRunner.receivedContexts.first)
-    builder.exportRunner.subject.send(
-      ExportRunState(
-        activeContext: context, isManualActive: false, isAutoSyncActive: true))
-    manager.setEnabled(false)
-    manager.setEnabled(true)
-    builder.clock.advance(by: 20)
-    builder.clock.advance(by: 0)
-    #expect(manager.activeRunFanOutTask == nil)
-    #expect(builder.exportRunner.receivedContexts.count == 1)
-    await gate.releaseAll()
-    await oldTask.value
-    builder.exportRunner.subject.send(.idle)
-    builder.clock.advance(by: 0)
-    let retryTask = try #require(manager.activeRunFanOutTask)
-    await retryTask.value
-    #expect(builder.exportRunner.receivedContexts.count == 2)
-    #expect(builder.exportRunner.receivedContexts.last?.reason == .retryBackoff)
+    var fanOuts: [Task<Void, Never>] = []
+    try await withCleanup {
+      builder.exportRunner.gateForInvocation = { index in index == 1 ? gate : nil }
+      try builder.retryStore.save(retryState(at: builder.clock.now()), destinationId: "retry-A")
+      attach(manager, builder)
+      builder.clock.advance(by: 10)
+      await gate.waitForEnter(count: 1)
+      let oldTask = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(oldTask)
+      let context = try #require(builder.exportRunner.receivedContexts.first)
+      builder.exportRunner.subject.send(
+        ExportRunState(
+          activeContext: context, isManualActive: false, isAutoSyncActive: true))
+      manager.setEnabled(false)
+      manager.setEnabled(true)
+      builder.clock.advance(by: 20)
+      builder.clock.advance(by: 0)
+      #expect(manager.activeRunFanOutTask == nil)
+      #expect(builder.exportRunner.receivedContexts.count == 1)
+      await gate.releaseAll()
+      await oldTask.value
+      builder.exportRunner.subject.send(.idle)
+      builder.clock.advance(by: 0)
+      let retryTask = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(retryTask)
+      await retryTask.value
+      #expect(builder.exportRunner.receivedContexts.count == 2)
+      #expect(builder.exportRunner.receivedContexts.last?.reason == .retryBackoff)
+    } cleanup: {
+      await gate.releaseAll()
+      if let current = manager.activeRunFanOutTask { fanOuts.append(current) }
+      for task in fanOuts { _ = await finished(task) }
+    }
   }
 
 }

@@ -57,8 +57,7 @@ struct HistoricalPersistenceFixtureTests {
         bytes[url] = data
       }
       originals = bytes
-      root = FileManager.default.temporaryDirectory.appendingPathComponent(
-        "Historical-\(UUID().uuidString)")
+      root = TestScratch.directory("Historical")
       try FileManager.default.copyItem(at: source, to: root)
     }
 

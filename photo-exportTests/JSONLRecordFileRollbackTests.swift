@@ -95,8 +95,7 @@ struct JSONLRecordFileRollbackTests {
   /// We assert the post-rollback retry compacts successfully — that's the
   /// observable proof the rollback fired.
   @Test func snapshotEncodeFailureRollbackAllowsNextAppendToRetryCompaction() async throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("JSONLRollback-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("JSONLRollback")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -172,9 +171,8 @@ struct JSONLRecordFileRollbackTests {
   @Test func logWriteFailureRequiresSnapshotRecoveryBeforeLaterAppend() async throws {
     // A directory that does not exist on disk. `appendLogLine` will fail to
     // open a FileHandle to a path inside it.
-    let nonexistentDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent(
-        "JSONLRollback-Missing-\(UUID().uuidString)/subdir", isDirectory: true)
+    let nonexistentDir = TestScratch.directory("JSONLRollback-Missing")
+      .appendingPathComponent("subdir", isDirectory: true)
     // (Intentionally do NOT create this directory.)
 
     let queue = DispatchQueue(

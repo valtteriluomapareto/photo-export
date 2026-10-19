@@ -69,7 +69,7 @@ struct BackupScanReadFailureTests {
 
   @Test(arguments: Failure.allCases)
   func recognizedBackupLookupFailuresAreExplicit(failure: Failure) throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("BackupScanReadFailure")
     defer { try? FileManager.default.removeItem(at: root) }
     try plantBackup(at: root)
     let reader = Reader(root: root, failure: failure)
@@ -86,12 +86,11 @@ struct BackupScanReadFailureTests {
   @MainActor
   @Test func unreadableMonthFailsImportBeforeHistoryChanges() async throws {
     let destination = FakeExportDestination()
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let defaultsName = "BackupScanFailure-\(UUID().uuidString)"
+    let root = TestScratch.directory("BackupScanReadFailure")
+    let defaultsName = TestScratch.suiteName("BackupScanFailure")
     defer {
       destination.cleanup()
       try? FileManager.default.removeItem(at: root)
-      UserDefaults.standard.removePersistentDomain(forName: defaultsName)
     }
     try plantBackup(at: destination.rootURL)
     let reader = Reader(root: destination.rootURL, failure: .monthEnumeration)
@@ -113,7 +112,7 @@ struct BackupScanReadFailureTests {
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: timeline, collectionExportRecordStore: collections,
-      backupDirectoryReader: reader, userDefaults: UserDefaults(suiteName: defaultsName)!)
+      backupDirectoryReader: reader, userDefaults: TestScratch.defaults(suiteName: defaultsName))
     manager.startImport()
     await manager.waitForImportCompletion()
     #expect(manager.importError?.contains(reader.failurePath) == true)

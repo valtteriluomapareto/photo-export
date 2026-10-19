@@ -12,8 +12,7 @@ struct DestinationFingerprintTests {
   /// `ExportDestinationManager.computeDestinationId(for:)` is a thin wrapper over the
   /// fingerprint factory; the id field is the same hex string.
   @Test func managerIdMatchesFingerprintId() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Fingerprint-Match-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("Fingerprint-Match")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -28,8 +27,7 @@ struct DestinationFingerprintTests {
   /// The fingerprint is deterministic — two calls against the same folder produce the same
   /// structured output (no per-call randomness).
   @Test func fingerprintIsDeterministic() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Fingerprint-Stable-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("Fingerprint-Stable")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -43,8 +41,7 @@ struct DestinationFingerprintTests {
   /// A folder on the boot/internal volume has a volume UUID, so identity confidence is `.high`.
   /// Temp dirs live under `/var/folders/...` which is on the boot volume in test environments.
   @Test func tempDirectoryReportsHighConfidenceIdentity() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Fingerprint-Confidence-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("Fingerprint-Confidence")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -60,8 +57,7 @@ struct DestinationFingerprintTests {
   /// `LiveDestinationIdentityHints` are populated from same-session resource keys when
   /// available. They are diagnostic only — never persisted, never the primary identity.
   @Test func liveHintsIncludeFileResourceIdentifier() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Fingerprint-Hints-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("Fingerprint-Hints")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -77,8 +73,7 @@ struct DestinationFingerprintTests {
   /// The structured fields populate the volume root and the relative path within that volume,
   /// matching the pre-Phase-0 hash input layout (`volumeUUID || \0 || /relativePath`).
   @Test func structuredFieldsCarryRelativePathFromVolumeRoot() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Fingerprint-Path-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("Fingerprint-Path")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -93,8 +88,7 @@ struct DestinationFingerprintTests {
   /// in later commits). `id` is intentionally excluded from the persisted form and re-derived
   /// after decode, so the decoded fingerprint's id must equal the original's.
   @Test func fingerprintRoundTripsThroughCodableAndIdIsRederived() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("Fingerprint-Codable-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("Fingerprint-Codable")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 

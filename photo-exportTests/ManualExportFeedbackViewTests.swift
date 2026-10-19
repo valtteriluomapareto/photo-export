@@ -19,8 +19,8 @@ import Testing
 
     @MainActor
     private final class Fixture {
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let suite = "ManualFeedbackView-\(UUID().uuidString)"
+      let root = TestScratch.directory("ManualExportFeedbackView")
+      let suite = TestScratch.suiteName("ManualFeedbackView")
       let defaults: UserDefaults
       let timeline: ExportRecordStore
       let collections: CollectionExportRecordStore
@@ -42,7 +42,7 @@ import Testing
       var selectedAtOpen: String?
 
       init() {
-        defaults = UserDefaults(suiteName: suite)!
+        defaults = TestScratch.defaults(suiteName: suite)
         defaults.set(SettingsTab.advanced.rawValue, forKey: SettingsTab.storageKey)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)
@@ -196,53 +196,51 @@ import Testing
     @Test func successExpiryRetiresCounters() async throws {
       let f = Fixture()
       let expiry = AsyncCheckpoint()
-      defer {
-        Task {
-          await expiry.releaseAll()
-          f.close()
+      try await withCleanup {
+        f.manager.progressState.manualSummary = ManualExportSummary(
+          completedCount: 3, failedCount: 0, failureMessage: nil)
+        f.show(successDelay: { await expiry.enter() })
+        let shown = await observe {
+          f.counter.renderedText["progress-message"] == ["Export complete"]
         }
+        try #require(shown)
+        try #require(await reached(expiry))
+        await expiry.releaseAll()
+        let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
+        #expect(hidden)
+        #expect(f.counter.renderedText["progress-message"] == [])
+        #expect(f.manager.progressState.totalJobsCompleted == 3)
+      } cleanup: {
+        await expiry.releaseAll()
+        f.close()
       }
-      f.manager.progressState.manualSummary = ManualExportSummary(
-        completedCount: 3, failedCount: 0, failureMessage: nil)
-      f.show(successDelay: { await expiry.enter() })
-      let shown = await observe {
-        f.counter.renderedText["progress-message"] == ["Export complete"]
-      }
-      try #require(shown)
-      try #require(await reached(expiry))
-      await expiry.releaseAll()
-      let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
-      #expect(hidden)
-      #expect(f.counter.renderedText["progress-message"] == [])
-      #expect(f.manager.progressState.totalJobsCompleted == 3)
     }
 
     @Test func oldSuccessExpiryCannotDismissNewFailure() async throws {
       let f = Fixture()
       let expiry = AsyncCheckpoint()
-      defer {
-        Task {
-          await expiry.releaseAll()
-          f.close()
+      try await withCleanup {
+        let success = ManualExportSummary(completedCount: 3, failedCount: 0, failureMessage: nil)
+        f.manager.progressState.manualSummary = success
+        f.show(successDelay: { await expiry.enter() })
+        try #require(await reached(expiry))
+        let failure = ManualExportSummary(completedCount: 3, failedCount: 1, failureMessage: nil)
+        f.manager.progressState.manualSummary = failure
+        await expiry.releaseAll()
+        let oldFinished = await observe {
+          f.counter.count(for: "progress-expiry-finished:\(success.id)") == 1
         }
+        try #require(oldFinished)
+        #expect(f.manager.progressState.manualSummary?.id == failure.id)
+        #expect(f.manager.progressState.manualSummary?.isDismissed == false)
+        let shown = await observe {
+          f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"]
+        }
+        #expect(shown)
+      } cleanup: {
+        await expiry.releaseAll()
+        f.close()
       }
-      let success = ManualExportSummary(completedCount: 3, failedCount: 0, failureMessage: nil)
-      f.manager.progressState.manualSummary = success
-      f.show(successDelay: { await expiry.enter() })
-      try #require(await reached(expiry))
-      let failure = ManualExportSummary(completedCount: 3, failedCount: 1, failureMessage: nil)
-      f.manager.progressState.manualSummary = failure
-      await expiry.releaseAll()
-      let oldFinished = await observe {
-        f.counter.count(for: "progress-expiry-finished:\(success.id)") == 1
-      }
-      try #require(oldFinished)
-      #expect(f.manager.progressState.manualSummary?.id == failure.id)
-      #expect(f.manager.progressState.manualSummary?.isDismissed == false)
-      let shown = await observe {
-        f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"]
-      }
-      #expect(shown)
     }
 
   }

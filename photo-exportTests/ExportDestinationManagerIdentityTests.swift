@@ -22,7 +22,7 @@ struct ExportDestinationManagerIdentityTests {
   @Test func configureForScreenshotModeSetsAvailableWritableState() {
     let manager = ExportDestinationManager(
       skipRestore: true,
-      userDefaults: UserDefaults(suiteName: "test-screenshot-\(UUID().uuidString)")!
+      userDefaults: TestScratch.defaults("screenshot")
     )
 
     manager.configureForScreenshotMode()
@@ -38,7 +38,7 @@ struct ExportDestinationManagerIdentityTests {
   @Test func configureForScreenshotModeRespectsCustomDisplayName() {
     let manager = ExportDestinationManager(
       skipRestore: true,
-      userDefaults: UserDefaults(suiteName: "test-screenshot-\(UUID().uuidString)")!
+      userDefaults: TestScratch.defaults("screenshot")
     )
 
     manager.configureForScreenshotMode(displayName: "External Photos")
@@ -50,8 +50,7 @@ struct ExportDestinationManagerIdentityTests {
 
   /// Re-deriving against the same folder yields the same id (no per-call randomness).
   @Test func computeDestinationIdIsDeterministic() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("DestId-Stable-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("DestId-Stable")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -64,8 +63,7 @@ struct ExportDestinationManagerIdentityTests {
   /// Two distinct folders on the same volume produce different ids (path is part of the
   /// digest input).
   @Test func twoFoldersSameVolumeProduceDifferentIds() throws {
-    let parent = FileManager.default.temporaryDirectory
-      .appendingPathComponent("DestId-DifferentFolders-\(UUID().uuidString)", isDirectory: true)
+    let parent = TestScratch.directory("DestId-DifferentFolders")
     try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: parent) }
 
@@ -84,13 +82,11 @@ struct ExportDestinationManagerIdentityTests {
   /// Reaching the same folder via a symlink resolves to the same id (symlinks are
   /// resolved before hashing).
   @Test func symlinkPathResolvesToSameId() throws {
-    let target = FileManager.default.temporaryDirectory
-      .appendingPathComponent("DestId-Target-\(UUID().uuidString)", isDirectory: true)
+    let target = TestScratch.directory("DestId-Target")
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: target) }
 
-    let symlinkParent = FileManager.default.temporaryDirectory
-      .appendingPathComponent("DestId-Symlink-\(UUID().uuidString)", isDirectory: true)
+    let symlinkParent = TestScratch.directory("DestId-Symlink")
     try FileManager.default.createDirectory(at: symlinkParent, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: symlinkParent) }
     let symlink = symlinkParent.appendingPathComponent("link")
@@ -113,13 +109,12 @@ struct ExportDestinationManagerIdentityTests {
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). CI's macos-15 runner returns true (per Apple's docs) so this runs there."))
   func destinationIdSurvivesBookmarkRefresh() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("DestId-BookmarkRefresh-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("DestId-BookmarkRefresh")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let suiteName = "DestId-Refresh-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let suiteName = TestScratch.suiteName("DestId-Refresh")
+    let defaults = TestScratch.defaults(suiteName: suiteName)
     let bookmarkKey = "DestId-Refresh-Bookmark-\(UUID().uuidString)"
     defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -160,13 +155,12 @@ struct ExportDestinationManagerIdentityTests {
   /// `currentLegacyDestinationId()` returns nil when no bookmark is stored, and the legacy
   /// hash of the bookmark bytes when one is.
   @Test func currentLegacyDestinationIdReadsStoredBookmark() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("DestId-Legacy-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("DestId-Legacy")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let suiteName = "DestId-Legacy-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let suiteName = TestScratch.suiteName("DestId-Legacy")
+    let defaults = TestScratch.defaults(suiteName: suiteName)
     let bookmarkKey = "DestId-Legacy-Bookmark-\(UUID().uuidString)"
     defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -200,13 +194,12 @@ struct ExportDestinationManagerIdentityTests {
   /// coordinator would call `currentLegacyDestinationId()` and get `hash(B)` — but the
   /// existing on-disk directory is named `hash(A)`.
   @Test func legacyIdSnapshotSurvivesBookmarkRefresh() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("DestId-LegacyRefresh-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("DestId-LegacyRefresh")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let suiteName = "DestId-LegacyRefresh-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let suiteName = TestScratch.suiteName("DestId-LegacyRefresh")
+    let defaults = TestScratch.defaults(suiteName: suiteName)
     let bookmarkKey = "DestId-LegacyRefresh-Bookmark-\(UUID().uuidString)"
     defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -243,8 +236,7 @@ struct ExportDestinationManagerIdentityTests {
   /// produce different ids, but the function does not throw on / blow up on the relative-
   /// path stripping.
   @Test func destinationIdIsStableForBootVolumeRelativePaths() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("DestId-Relative-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("DestId-Relative")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
