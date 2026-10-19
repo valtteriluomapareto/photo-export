@@ -216,6 +216,19 @@ sys.exit(1 if name == "gh" and args[1] == "view" and os.environ["EXISTING"] == "
                         self.assertEqual(outputs["version"], version)
                         self.assertEqual(outputs["build_number"], "42.2")
 
+    def test_scheduled_run_stays_build_only_without_touching_releases(self):
+        # Schedules carry no inputs; a stray "false" must not opt in to publication either.
+        for channel in ("direct", "app-store"):
+            for flag in ("", "false"):
+                with self.subTest(channel=channel, flag=flag):
+                    outputs, calls, _, failed = self.run_release(channel, "schedule", "refs/heads/main", flag)
+                    self.assertIsNone(failed)
+                    self.assertEqual(calls, [])
+                    if channel == "direct":
+                        self.assertEqual(
+                            (outputs["is_dry_run"], outputs["should_create_release"], outputs["version"]),
+                            ("true", "false", "0.0.0-dev"))
+
     def test_existing_release_blocks_creation_but_not_build_only(self):
         for flag in ("true", "false"):
             with self.subTest(flag=flag):
@@ -281,11 +294,55 @@ class ReleaseIsolationTests(unittest.TestCase):
         push_tag = key("push", "refs/tags/v1.6.5")
         for event, ref in [("push", "refs/heads/main"), ("push", "refs/tags/v1.6.6"),
                            ("workflow_dispatch", "refs/tags/v1.6.5"),
-                           ("workflow_dispatch", "refs/heads/main")]:
+                           ("workflow_dispatch", "refs/heads/main"),
+                           ("schedule", "refs/heads/main")]:
             with self.subTest(event=event, ref=ref):
                 self.assertNotEqual(push_tag, key(event, ref))
         self.assertEqual(push_tag, key("push", "refs/tags/v1.6.5"))
         self.assertEqual(push_tag, key("PUSH", "refs/tags/V1.6.5"))
+
+    @staticmethod
+    def triggers(name, source=None):
+        source = source if source is not None else (ROOT / f".github/workflows/{name}").read_text()
+        # One block-style top-level `on:`; flow or quoted forms are unexpected structure.
+        if re.findall(r"^(?:on|'on'|\"on\"|true):.*$", source, re.M) != ["on:"]:
+            raise ValueError(f"Unexpected trigger structure in {name}")
+        block = re.search(r"^on:\n(.*?)(?=^[^\s#])", source, re.M | re.S)[1]
+        events = re.findall(r"^  (\S+):", block, re.M)
+        def section(event):
+            found = re.search(rf"^  {event}:\n(.*?)(?=^  [^\s#]|\Z)", block, re.M | re.S)
+            return [line.strip() for line in found[1].splitlines()
+                    if line.strip() and not line.strip().startswith("#")] if found else []
+        return events, section
+
+    def test_release_workflows_never_start_from_branch_pushes_or_untrusted_events(self):
+        for name, expected in [("release-direct.yml", {"push", "schedule", "workflow_dispatch"}),
+                               ("release-app-store.yml", {"push", "workflow_dispatch"})]:
+            with self.subTest(workflow=name):
+                events, section = self.triggers(name)
+                self.assertEqual(section("push"), ["tags:", "- 'v*'"],
+                                 "Pushes to branches must not start signing or notarization")
+                self.assertEqual(set(events), expected)
+                self.assertEqual(len(events), len(expected))
+
+    def test_comment_cannot_hide_a_branch_trigger(self):
+        source = (ROOT / ".github/workflows/release-direct.yml").read_text()
+        hidden = source.replace("      - 'v*'\n", "      - 'v*'\n  # note\n    branches:\n      - main\n", 1)
+        _, section = self.triggers("release-direct.yml", hidden)
+        self.assertIn("branches:", section("push"))
+        # A column-0 comment must not end the `on:` block early either.
+        reordered = "on:\n  workflow_dispatch:\n  push:\n    tags:\n      - 'v*'\n# note\n    branches:\n      - main\njobs:\n"
+        _, section = self.triggers("release-direct.yml", reordered)
+        self.assertIn("branches:", section("push"))
+
+    def test_direct_dry_run_is_scheduled_and_dispatch_defaults_to_build_only(self):
+        _, section = self.triggers("release-direct.yml")
+        crons = [line for line in section("schedule") if line.startswith("- cron:")]
+        self.assertEqual(len(crons), 1)
+        self.assertRegex(crons[0], r"^- cron: '(\S+ ){4}\S+'$")
+        dispatch = section("workflow_dispatch")
+        self.assertIn("dry_run:", dispatch)
+        self.assertEqual(dispatch[dispatch.index("dry_run:"):].count("default: true"), 1)
 
     def test_generated_password_is_masked_before_use_and_environment_export(self):
         workflow = (ROOT / ".github/workflows/release-direct.yml").read_text()
