@@ -108,18 +108,19 @@ const faqData = {
 				Why Use Photo Export for Your iCloud Backup?
 			</h2>
 			<p class="section-lead">
-				Photo Export uses Apple's <strong>PhotoKit framework</strong> — the same system
-				API that powers the built-in Photos app. It sees exactly what your Photos
-				app sees: every photo, video, and album synced through iCloud Photos. No reverse
-				engineering, no private APIs, no workarounds.
+				Photo Export uses Apple's <strong>PhotoKit framework</strong> — the same
+				system API that powers the built-in Photos app. It sees exactly what
+				your Photos app sees: every photo, video, and album synced through
+				iCloud Photos. No reverse engineering, no private APIs, no workarounds.
 			</p>
 			<p class="section-lead">
-				This matters because PhotoKit is <strong>the only supported way</strong> to
-				read the Photos library on macOS. It means the app works reliably across macOS
-				updates, respects your privacy settings, and can request iCloud originals
-				on demand through Apple's own infrastructure. The app never asks for your
-				Apple Account password, and reads your library <strong>read-only</strong
-				> — it can't modify or delete anything in Photos.
+				This matters because PhotoKit is <strong>the only supported way</strong>
+				to read the Photos library on macOS. It means the app works reliably
+				across macOS updates, respects your privacy settings, and can request
+				iCloud originals on demand through Apple's own infrastructure. The app
+				never asks for your Apple Account password, and reads your library
+				<strong>read-only</strong> — it can't modify or delete anything in
+				Photos.
 			</p>
 			<div class="value-props">
 				<div class="value-prop">
@@ -132,8 +133,8 @@ const faqData = {
 					<strong>Two ways to navigate</strong>
 					<span
 						>Browse year by year and month by month, or by your
-						<strong>Favorites</strong> and the <strong>albums</strong> you've created
-						in Photos. Pick the view that fits your library.</span
+						<strong>Favorites</strong> and the <strong>albums</strong> you've
+						created in Photos. Pick the view that fits your library.</span
 					>
 				</div>
 				<div class="value-prop">
@@ -165,9 +166,8 @@ const faqData = {
 				</FeatureCard>
 				<FeatureCard title="Export by Album" icon="❤️">
 					Back up just your Favorites, or one specific album, in one step.
-					Albums under Photos folders preserve their hierarchy on disk, e.g. <code
-						>Collections/Albums/Trips/Iceland/</code
-					>.
+					Albums under Photos folders preserve their hierarchy on disk, e.g.
+					<code>Collections/Albums/Trips/Iceland/</code>.
 				</FeatureCard>
 				<FeatureCard title="Thumbnail Previews" icon="🖼">
 					Fast thumbnail grid with in-memory caching. Click any photo for a
@@ -175,29 +175,28 @@ const faqData = {
 				</FeatureCard>
 				<FeatureCard title="Edits Included" icon="✨">
 					Exports the version Photos shows you — edits and all — at the original
-					filename. Open <strong>Settings → Advanced</strong> to also keep <code
-						>_orig</code
-					> companions with the original bytes.
+					filename. Open <strong>Settings → Advanced</strong> to also keep
+					<code>_orig</code> companions with the original bytes.
 				</FeatureCard>
 				<FeatureCard title="Convert HEIC to JPEG" icon="↔️">
-					Optional toggle in <strong>Settings → Advanced</strong> re-encodes HEIC
-					and HEIF captures as high-quality JPEG on export. Useful for destinations
-					that don't understand HEIC — a NAS, a Windows PC, an older photo viewer.
-					Non-HEIC photos are unaffected.
+					Optional toggle in <strong>Settings → Advanced</strong> re-encodes
+					HEIC and HEIF captures as high-quality JPEG on export. Useful for
+					destinations that don't understand HEIC — a NAS, a Windows PC, an
+					older photo viewer. Non-HEIC photos are unaffected.
 				</FeatureCard>
 				<FeatureCard title="Live Photos" icon="🎞">
-					Optional toggle in <strong>Settings → Advanced</strong> writes the paired
-					<code>.MOV</code> next to each Live Photo's still (e.g.
+					Optional toggle in <strong>Settings → Advanced</strong> writes the
+					paired <code>.MOV</code> next to each Live Photo's still (e.g.
 					<code>IMG_0001.HEIC</code> + <code>IMG_0001.MOV</code>). Off by
 					default — Live Photo paired videos roughly double disk usage on
 					Live-Photo-heavy libraries.
 				</FeatureCard>
 				<FeatureCard title="Videos in a Subfolder" icon="🎥">
-					Optional toggle in <strong>Settings → Advanced</strong> routes standalone
-					videos into a <code>videos/</code> subfolder (e.g.
+					Optional toggle in <strong>Settings → Advanced</strong> routes
+					standalone videos into a <code>videos/</code> subfolder (e.g.
 					<code>2026/03/videos/IMG_0002.MOV</code>) so a backup doesn't mix
-					<code>.JPG</code> and <code>.MOV</code> files in the same folder. Live Photo
-					pairs stay together.
+					<code>.JPG</code> and <code>.MOV</code> files in the same folder. Live
+					Photo pairs stay together.
 				</FeatureCard>
 				<FeatureCard title="Smart Export Tracking" icon="✅">
 					Remembers every exported photo. Resume-safe — never re-exports what's
@@ -229,10 +228,11 @@ const faqData = {
 		<div class="container">
 			<h2 id="how-it-works">How to Export Your iCloud Photos in 3 Steps</h2>
 			<p class="section-note">
-				<strong>Prerequisite:</strong> Make sure iCloud Photos is enabled on your
-				Mac (<strong>System Settings → Apple Account → iCloud → Photos</strong
-				>). Photo Export reads your local Photos library, so your iCloud photos
-				need to be syncing to this Mac.
+				<strong>Prerequisite:</strong> Make sure iCloud Photos is enabled on
+				your Mac
+				(<strong>System Settings → Apple Account → iCloud → Photos</strong>).
+				Photo Export reads your local Photos library, so your iCloud photos need
+				to be syncing to this Mac.
 			</p>
 			<div class="steps">
 				<div class="step">
@@ -247,11 +247,10 @@ const faqData = {
 					<div class="step-number">2</div>
 					<h3>Browse your library</h3>
 					<p>
-						Switch the sidebar between two views: a <strong
-							>year-and-month</strong
-						>
-						timeline, or your <strong>Favorites and albums</strong> straight from
-						Photos. Preview thumbnails and inspect individual photos before exporting.
+						Switch the sidebar between two views: a
+						<strong>year-and-month</strong> timeline, or your
+						<strong>Favorites and albums</strong> straight from Photos. Preview
+						thumbnails and inspect individual photos before exporting.
 					</p>
 				</div>
 				<div class="step">
@@ -260,9 +259,9 @@ const faqData = {
 					<p>
 						Hit export and the app copies original files into an organized
 						folder tree — <code>Year/Month/</code> for the timeline,
-						<code>Collections/Favorites/</code> or <code
-							>Collections/Albums/&lt;Album&gt;/</code
-						> for collections. Track progress in real time.
+						<code>Collections/Favorites/</code> or
+						<code>Collections/Albums/&lt;Album&gt;/</code> for collections.
+						Track progress in real time.
 					</p>
 				</div>
 			</div>
@@ -283,9 +282,9 @@ const faqData = {
 						sizes="(max-width: 768px) 100vw, 900px"
 					/>
 					<figcaption class="screenshot-caption">
-						<strong>Albums.</strong> The <strong>Collections</strong> tab lists your
-						Favorites and every album you've created in Photos. Pick one, preview
-						the contents, and click <strong>Export Album</strong>.
+						<strong>Albums.</strong> The <strong>Collections</strong> tab lists
+						your Favorites and every album you've created in Photos. Pick one,
+						preview the contents, and click <strong>Export Album</strong>.
 					</figcaption>
 				</figure>
 
@@ -298,10 +297,10 @@ const faqData = {
 						sizes="(max-width: 768px) 100vw, 900px"
 					/>
 					<figcaption class="screenshot-caption">
-						<strong>Timeline.</strong> Browse by year and month exactly like Apple
-						Photos. Export a single month, an entire year, or your whole library —
-						the destination folder gets a clean
-						<code>YYYY/MM/</code> structure.
+						<strong>Timeline.</strong> Browse by year and month exactly like
+						Apple Photos. Export a single month, an entire year, or your whole
+						library — the destination folder gets a clean <code>YYYY/MM/</code>
+						structure.
 					</figcaption>
 				</figure>
 
@@ -314,9 +313,9 @@ const faqData = {
 						sizes="(max-width: 768px) 100vw, 900px"
 					/>
 					<figcaption class="screenshot-caption">
-						<strong>Folders.</strong> Select a folder of albums in the sidebar and
-						export every album inside with one click — or Cmd-click tiles to pick
-						an explicit subset.
+						<strong>Folders.</strong> Select a folder of albums in the sidebar
+						and export every album inside with one click — or Cmd-click tiles to
+						pick an explicit subset.
 					</figcaption>
 				</figure>
 			</div>
@@ -329,21 +328,23 @@ const faqData = {
 			<h2 id="community-feedback">Shipped from real-world feedback</h2>
 			<p class="section-lead">
 				Photo Export improves on what users actually report. Recent releases
-				added <strong>album and Favorites export</strong>, <strong
-					>backup-folder import</strong
-				> to rebuild export state from an existing folder, the
-				<strong>Include originals</strong> toggle for keeping unedited copies of edited
-				photos, and <strong>Convert HEIC to JPEG</strong> for destinations that don't
-				understand HEIC. See the <a
-					href="https://github.com/valtteriluomapareto/photo-export/releases"
+				added <strong>album and Favorites export</strong>,
+				<strong>backup-folder import</strong> to rebuild export state from an
+				existing folder, the <strong>Include originals</strong> toggle for
+				keeping unedited copies of edited photos, and
+				<strong>Convert HEIC to JPEG</strong> for destinations that don't
+				understand HEIC. See the
+				<a href="https://github.com/valtteriluomapareto/photo-export/releases"
 					>release notes</a
-				> for the full history.
+				>
+				for the full history.
 			</p>
 			<p class="section-lead">
-				If something doesn't work the way you expect, <a
-					href="https://github.com/valtteriluomapareto/photo-export/issues"
+				If something doesn't work the way you expect,
+				<a href="https://github.com/valtteriluomapareto/photo-export/issues"
 					>open an issue</a
-				> — bug reports and feature suggestions are read and acted on.
+				>
+				— bug reports and feature suggestions are read and acted on.
 			</p>
 		</div>
 	</section>
@@ -361,27 +362,29 @@ const faqData = {
 					<strong>Requires macOS 15.0 or later.</strong>
 				</li>
 				<li>
-					<strong>Smart albums other than Favorites aren't surfaced.</strong> Albums,
-					Favorites, and iCloud Shared Albums are.
+					<strong>Smart albums other than Favorites aren't surfaced.</strong>
+					Albums, Favorites, and iCloud Shared Albums are.
 				</li>
 				<li>
-					<strong>iCloud Shared Albums export at reduced quality.</strong> Apple only
-					serves shared photos as downscaled JPEGs — there's no API to fetch the full-resolution
-					originals. The <strong>Include originals</strong> and
-					<strong>Convert HEIC to JPEG</strong> toggles are no-ops for shared albums,
-					and shared-album Live Photos can't be exported with their paired video.
+					<strong>iCloud Shared Albums export at reduced quality.</strong> Apple
+					only serves shared photos as downscaled JPEGs — there's no API to
+					fetch the full-resolution originals. The
+					<strong>Include originals</strong> and
+					<strong>Convert HEIC to JPEG</strong> toggles are no-ops for shared
+					albums, and shared-album Live Photos can't be exported with their
+					paired video.
 				</li>
 				<li>
-					<strong>Exports run sequentially.</strong> Edited videos additionally render
-					through the Photos framework, which can take noticeably longer than copying
-					— especially for 4K or iCloud-only originals.
+					<strong>Exports run sequentially.</strong> Edited videos additionally
+					render through the Photos framework, which can take noticeably longer
+					than copying — especially for 4K or iCloud-only originals.
 				</li>
 				<li>
 					<strong>Toggle changes apply to new exports only.</strong> Turning on
 					<strong>Convert HEIC to JPEG</strong> or
-					<strong>Separate videos into a subfolder</strong> later doesn't relocate
-					or re-encode files already on disk; re-run an Export action (or wait for
-					Auto Export) to bring them in line.
+					<strong>Separate videos into a subfolder</strong> later doesn't
+					relocate or re-encode files already on disk; re-run an Export action
+					(or wait for Auto Export) to bring them in line.
 				</li>
 			</ul>
 		</div>
@@ -394,15 +397,16 @@ const faqData = {
 			<p class="section-lead">
 				<strong>Free from GitHub.</strong>
 				<strong>Paid on the Mac App Store</strong>
-				if you want automatic updates and to support development. Same app, same features
-				— both signed and notarized by Apple.
+				if you want automatic updates and to support development. Same app, same
+				features — both signed and notarized by Apple.
 			</p>
 			<div class="install-channels">
 				<div class="install-channel">
 					<h3>GitHub Releases (free)</h3>
 					<ol>
 						<li>
-							Download the latest <code>.dmg</code> from <a
+							Download the latest <code>.dmg</code> from
+							<a
 								href="https://github.com/valtteriluomapareto/photo-export/releases"
 								>GitHub Releases</a
 							>
@@ -418,17 +422,19 @@ const faqData = {
 				<div class="install-channel">
 					<h3>Mac App Store (paid)</h3>
 					<p>
-						Install directly from the <a
+						Install directly from the
+						<a
 							href="https://apps.apple.com/app/photo-export-local-backup/id6761410742"
 							>Mac App Store</a
-						> for automatic updates and trusted distribution. Your purchase supports
-						continued development of an open-source project.
+						>
+						for automatic updates and trusted distribution. Your purchase
+						supports continued development of an open-source project.
 					</p>
 				</div>
 			</div>
 			<div class="requirements">
-				<strong>Requirements:</strong> macOS 15.0+. Both versions are signed and notarized
-				by Apple and identical in functionality.
+				<strong>Requirements:</strong> macOS 15.0+. Both versions are signed and
+				notarized by Apple and identical in functionality.
 			</div>
 		</div>
 	</section>
@@ -446,10 +452,11 @@ const faqData = {
 			</ul>
 			<p><a href={`${base}/roadmap`}>See all ideas &rarr;</a></p>
 			<p class="feedback-cta">
-				Missing a feature? <a
-					href="https://github.com/valtteriluomapareto/photo-export/issues"
+				Missing a feature?
+				<a href="https://github.com/valtteriluomapareto/photo-export/issues"
 					>Open an issue on GitHub</a
-				> and let us know what you need.
+				>
+				and let us know what you need.
 			</p>
 		</div>
 	</section>
@@ -485,7 +492,8 @@ const faqData = {
 				<div class="faq-item">
 					<dt>Is it free?</dt>
 					<dd>
-						Photo Export is free and open source on <a
+						Photo Export is free and open source on
+						<a
 							href="https://github.com/valtteriluomapareto/photo-export/releases"
 							>GitHub Releases</a
 						>. It's also available as a paid app on the Mac App Store — the
@@ -499,7 +507,8 @@ const faqData = {
 						Yes. The app exports photos and videos. Live Photos export as
 						still-only by default; turn on
 						<em
-							>Settings → Advanced → Export Live Photos as paired image + video</em
+							>Settings → Advanced → Export Live Photos as paired image +
+							video</em
 						>
 						to also write the paired video next to the still (e.g.
 						<code>IMG_0001.HEIC</code> + <code>IMG_0001.MOV</code>) using
@@ -508,49 +517,50 @@ const faqData = {
 						expose their paired video. Standalone videos can optionally land in
 						a <code>videos/</code> subfolder via
 						<em>Settings → Advanced → Separate videos into a subfolder</em>, so
-						a backup doesn't mix <code>.JPG</code> and <code>.MOV</code> files in
-						the same folder.
+						a backup doesn't mix <code>.JPG</code> and <code>.MOV</code> files
+						in the same folder.
 					</dd>
 				</div>
 				<div class="faq-item">
 					<dt>How do I export a single album from Apple Photos?</dt>
 					<dd>
-						Yes — you can export your <strong>Favorites</strong> or any individual
-						album to its own folder on your drive. Photo Export lists everything you've
-						created in Photos under a <strong>Collections</strong>
-						tab in the sidebar; pick one and click <strong>Export</strong>.
-						Albums land at <code>Collections/Albums/&lt;Album&gt;/</code> (folder
-						hierarchy preserved); Favorites land at <code
-							>Collections/Favorites/</code
-						>. Smart albums other than Favorites aren't included.
-						<strong>iCloud Shared Albums</strong> are surfaced in their own sidebar
-						section and export to <code>Collections/Shared Albums/</code>, but
-						at reduced quality — Apple only serves shared photos as downscaled
-						JPEGs. Timeline (year/month) export still works exactly as before.
+						Yes — you can export your <strong>Favorites</strong> or any
+						individual album to its own folder on your drive. Photo Export lists
+						everything you've created in Photos under a
+						<strong>Collections</strong> tab in the sidebar; pick one and click
+						<strong>Export</strong>. Albums land at
+						<code>Collections/Albums/&lt;Album&gt;/</code> (folder hierarchy
+						preserved); Favorites land at <code>Collections/Favorites/</code>.
+						Smart albums other than Favorites aren't included.
+						<strong>iCloud Shared Albums</strong> are surfaced in their own
+						sidebar section and export to <code>Collections/Shared Albums/</code
+						>, but at reduced quality — Apple only serves shared photos as
+						downscaled JPEGs. Timeline (year/month) export still works exactly
+						as before.
 					</dd>
 				</div>
 				<div class="faq-item">
 					<dt>What about photos I have edited in Photos?</dt>
 					<dd>
 						By default, Photo Export saves the version Photos shows you — edits
-						and all — at the original filename. Open <strong
-							>Settings → Advanced</strong
-						> (Cmd+,) and turn on <strong>Include originals</strong> to also keep
-						an original-bytes copy as a <code>_orig</code> companion (e.g. <code
-							>IMG_0001_orig.HEIC</code
-						> alongside <code>IMG_0001.JPG</code>).
+						and all — at the original filename. Open
+						<strong>Settings → Advanced</strong> (Cmd+,) and turn on
+						<strong>Include originals</strong> to also keep an original-bytes
+						copy as a <code>_orig</code> companion (e.g.
+						<code>IMG_0001_orig.HEIC</code> alongside <code>IMG_0001.JPG</code
+						>).
 					</dd>
 				</div>
 				<div class="faq-item">
 					<dt>Can I export HEIC photos as JPEG?</dt>
 					<dd>
-						Yes. Open <strong>Settings → Advanced</strong> (Cmd+,) and turn on <strong
-							>Convert HEIC to JPEG</strong
-						>. Photo Export then re-encodes HEIC and HEIF captures as
-						high-quality JPEG on export — useful if your destination (a NAS, a
-						Windows PC, an older photo viewer) doesn't understand HEIC. Non-HEIC
-						photos are unaffected. The toggle applies to new exports only;
-						re-run an Export action to convert HEICs already on disk.
+						Yes. Open <strong>Settings → Advanced</strong> (Cmd+,) and turn on
+						<strong>Convert HEIC to JPEG</strong>. Photo Export then re-encodes
+						HEIC and HEIF captures as high-quality JPEG on export — useful if
+						your destination (a NAS, a Windows PC, an older photo viewer)
+						doesn't understand HEIC. Non-HEIC photos are unaffected. The toggle
+						applies to new exports only; re-run an Export action to convert
+						HEICs already on disk.
 					</dd>
 				</div>
 				<div class="faq-item">
@@ -577,19 +587,21 @@ const faqData = {
 			<div class="cta-actions">
 				<a
 					href="https://apps.apple.com/app/photo-export-local-backup/id6761410742"
-					class="btn btn-primary">Download on the Mac App Store</a
+					class="btn btn-primary"
+					>Download on the Mac App Store</a
 				>
 				<a
 					href="https://github.com/valtteriluomapareto/photo-export/releases"
-					class="btn btn-secondary">Download from GitHub (free)</a
+					class="btn btn-secondary"
+					>Download from GitHub (free)</a
 				>
 				<a href={`${base}/getting-started`} class="btn btn-secondary"
 					>Read the docs</a
 				>
 			</div>
 			<p class="feedback-note">
-				Found a bug or have feedback? <a
-					href="https://github.com/valtteriluomapareto/photo-export/issues"
+				Found a bug or have feedback?
+				<a href="https://github.com/valtteriluomapareto/photo-export/issues"
 					>We'd love to hear from you.</a
 				>
 			</p>

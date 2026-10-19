@@ -20,16 +20,16 @@
 		"astro": "astro"
 	},
 	"dependencies": {
-		"@astrojs/starlight": "^0.38.2",
-		"astro": "^6.1.1",
-		"sharp": "^0.34.5"
+		"@astrojs/starlight": "^0.42.6",
+		"astro": "~7.3.8",
+		"sharp": "^0.35.5"
 	},
 	"devDependencies": {
-		"@astrojs/check": "^0.9.8",
+		"@astrojs/check": "^0.9.10",
 		"linkinator": "7.6.1",
-		"oxlint": "^1.57.0",
-		"prettier": "^3.8.1",
-		"prettier-plugin-astro": "^0.14.1",
+		"oxlint": "^1.88.0",
+		"prettier": "^3.9.10",
+		"prettier-plugin-astro": "^1.1.1",
 		"typescript": "^5.9.3"
 	},
 	"overrides": {
