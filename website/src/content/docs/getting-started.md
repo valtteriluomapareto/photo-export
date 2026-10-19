@@ -56,6 +56,8 @@ A few extras that work in both views:
 
 Export progress appears in a strip at the top of the content column, below the toolbar. Use the toolbar controls to pause, resume, or cancel. Import progress appears in its own sheet.
 
+If the selected month already has paused work, clicking **Export Month** also resumes the existing queue with its original settings. This continues all work already queued, including other months, without adding the same unfinished photos again. New photos added since that queue was prepared can be included in a later export.
+
 ### 4. (Optional) Turn on Auto Export
 
 If you want Photo Export to keep your backup folder in sync automatically — adding new photos as they appear in Apple Photos without you clicking Export — open **Photo Export → Settings…** (Cmd+,) and head to the **Auto Export** tab. Enable the toggle and pick at least one category to back up (Timeline, Favorites, or Albums). For a hands-off setup, also turn on **Open Photo Export at login**.
