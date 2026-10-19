@@ -16,7 +16,7 @@ struct CrossStoreIndependenceTests {
 
   // MARK: - Fixtures
 
-  private func makeManager() throws -> (
+  private func makeManager(suiteName: String? = nil) throws -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
@@ -31,7 +31,7 @@ struct CrossStoreIndependenceTests {
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
     let defaults = UserDefaults(
-      suiteName: "test-CrossStore-\(UUID().uuidString)")!
+      suiteName: suiteName ?? "test-CrossStore-\(UUID().uuidString)")!
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -128,65 +128,142 @@ struct CrossStoreIndependenceTests {
   // MARK: - cancelAndClear routes per-placement
 
   /// `cancelAndClear` mid-flight on a timeline job removes the in-progress variant from
-  /// the timeline store only; the collection store stays empty (no spurious record from
-  /// the cancellation cleanup landing in the wrong store).
-  @Test func cancelAndClearOnTimelineDoesNotTouchCollectionStore() async throws {
+  /// the timeline store only; the same asset’s collection record stays unchanged.
+  @Test(.timeLimit(.minutes(2))) func cancelAndClearOnTimelineDoesNotTouchCollectionStore()
+    async throws
+  {
+    let suite = "cancel-timeline-\(UUID().uuidString)"
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    ) = try makeManager(suiteName: suite)
+    let gate = AsyncCheckpoint()
+    writer.checkpoint = gate
+    var tasks: [Task<Void, Never>] = []
+    func cleanup() async {
+      tasks += manager.currentPreparationTasks
+      if let task = manager.currentTask { tasks.append(task) }
+      manager.cancelAndClear()
+      await gate.releaseAll()
+      for task in tasks { await task.value }
+      timelineStore.flushForTesting()
+      collectionStore.flushForTesting()
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+      UserDefaults().removePersistentDomain(forName: suite)
+    }
+    do {
+      let asset = makeAsset(id: "cancel-asset", year: 2025, month: 8)
+      photoLib.assetsByYearMonth["2025-8"] = [asset]
+      photoLib.resourcesByAssetId[asset.id] = [
+        ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")
+      ]
+      let favorites = ExportPlacement.favorites()
+      collectionStore.upsertPlacement(favorites)
+      collectionStore.markVariantInProgress(
+        assetId: asset.id, placement: favorites, variant: .original,
+        filename: "CONTROL.HEIC", subfolder: "preserved")
+      let control = try #require(
+        collectionStore.exportInfo(assetId: asset.id, placement: favorites))
+      let controlPlacement = try #require(collectionStore.placements[favorites.id])
 
-    let asset = makeAsset(id: "cancel-asset", year: 2025, month: 8)
-    photoLib.assetsByYearMonth["2025-8"] = [asset]
-    photoLib.resourcesByAssetId[asset.id] = [
-      ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")
-    ]
-    // Make the writer hang so we can cancel mid-flight.
-    writer.writeDelaySeconds = 1.0
+      manager.startExportMonth(year: 2025, month: 8)
+      try #require(await gate.waitForEnter(count: 1, timeout: .seconds(60)))
+      let oldTask = try #require(manager.currentTask)
+      tasks.append(oldTask)
+      try #require(writer.writeCalls.count == 1)
+      try #require(
+        timelineStore.exportInfo(assetId: asset.id)?.variants[.original]?.status == .inProgress)
+      try #require(collectionStore.exportInfo(assetId: asset.id, placement: favorites) == control)
+      let placementsBeforeCancel = collectionStore.placements
 
-    manager.startExportMonth(year: 2025, month: 8)
-    // Yield so the run-loop advances into the writer call.
-    try? await Task.sleep(nanoseconds: 100_000_000)
-    manager.cancelAndClear()
-    await manager.waitForQueueDrained()
-
-    // Timeline store: in-progress variant removed by cancel routing.
-    let info = timelineStore.exportInfo(assetId: asset.id)
-    #expect(info?.variants[.original]?.status != .inProgress)
-
-    // Collection store: zero entries — cancel routing did not touch it.
-    #expect(collectionStore.recordBodies.isEmpty)
-    #expect(collectionStore.placements.isEmpty)
+      manager.cancelAndClear()
+      #expect(timelineStore.exportInfo(assetId: asset.id)?.variants[.original] == nil)
+      #expect(collectionStore.exportInfo(assetId: asset.id, placement: favorites) == control)
+      let placementsAfterCancel = collectionStore.placements
+      await gate.releaseAll()
+      await oldTask.value
+      #expect(timelineStore.exportInfo(assetId: asset.id)?.variants[.original] == nil)
+      #expect(collectionStore.exportInfo(assetId: asset.id, placement: favorites) == control)
+      // Placement equality is ID-only; inspect the actual stored metadata at each boundary.
+      for placements in [placementsBeforeCancel, placementsAfterCancel, collectionStore.placements] {
+        #expect(Set(placements.keys) == [favorites.id])
+        let stored = try #require(placements[favorites.id])
+        #expect(stored.id == controlPlacement.id)
+        #expect(stored.kind == controlPlacement.kind)
+        #expect(stored.displayName == controlPlacement.displayName)
+        #expect(stored.collectionLocalIdentifier == controlPlacement.collectionLocalIdentifier)
+        #expect(stored.relativePath == controlPlacement.relativePath)
+        #expect(stored.createdAt == controlPlacement.createdAt)
+      }
+    } catch {
+      await cleanup()
+      throw error
+    }
+    await cleanup()
   }
 
   /// Symmetric: cancel mid-flight on a favorites job leaves the timeline store
   /// untouched.
-  @Test func cancelAndClearOnFavoritesDoesNotTouchTimelineStore() async throws {
+  @Test(.timeLimit(.minutes(2))) func cancelAndClearOnFavoritesDoesNotTouchTimelineStore()
+    async throws
+  {
+    let suite = "cancel-favorites-\(UUID().uuidString)"
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    ) = try makeManager(suiteName: suite)
+    let gate = AsyncCheckpoint()
+    writer.checkpoint = gate
+    var tasks: [Task<Void, Never>] = []
+    func cleanup() async {
+      tasks += manager.currentPreparationTasks
+      if let task = manager.currentTask { tasks.append(task) }
+      manager.cancelAndClear()
+      await gate.releaseAll()
+      for task in tasks { await task.value }
+      timelineStore.flushForTesting()
+      collectionStore.flushForTesting()
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+      UserDefaults().removePersistentDomain(forName: suite)
+    }
+    do {
+      let asset = makeAsset(id: "fav-cancel-asset")
+      photoLib.favoritesAssets = [asset]
+      photoLib.resourcesByAssetId[asset.id] = [
+        ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")
+      ]
+      timelineStore.markVariantInProgress(
+        assetId: asset.id, variant: .original, year: 2020, month: 2,
+        relPath: "2020/02/", filename: "CONTROL.HEIC", subfolder: "preserved")
+      let control = try #require(timelineStore.exportInfo(assetId: asset.id))
+      let favorites = ExportPlacement.favorites()
 
-    let asset = makeAsset(id: "fav-cancel-asset")
-    photoLib.favoritesAssets = [asset]
-    photoLib.resourcesByAssetId[asset.id] = [
-      ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")
-    ]
-    writer.writeDelaySeconds = 1.0
+      manager.startExportFavorites()
+      try #require(await gate.waitForEnter(count: 1, timeout: .seconds(60)))
+      let oldTask = try #require(manager.currentTask)
+      tasks.append(oldTask)
+      try #require(writer.writeCalls.count == 1)
+      try #require(
+        collectionStore.exportInfo(assetId: asset.id, placement: favorites)?.variants[.original]?
+          .status == .inProgress)
+      try #require(timelineStore.exportInfo(assetId: asset.id) == control)
 
-    manager.startExportFavorites()
-    try? await Task.sleep(nanoseconds: 100_000_000)
-    manager.cancelAndClear()
-    await manager.waitForQueueDrained()
-
-    // Collection store: in-progress variant removed.
-    let favorites = ExportPlacement.favorites()
-    let collectionInfo = collectionStore.exportInfo(
-      assetId: asset.id, placement: favorites)
-    #expect(collectionInfo?.variants[.original]?.status != .inProgress)
-
-    // Timeline store: zero entries — cancel routing did not touch it.
-    #expect(timelineStore.recordsById.isEmpty)
+      manager.cancelAndClear()
+      #expect(
+        collectionStore.exportInfo(assetId: asset.id, placement: favorites)?.variants[.original]
+          == nil)
+      #expect(timelineStore.exportInfo(assetId: asset.id) == control)
+      await gate.releaseAll()
+      await oldTask.value
+      #expect(
+        collectionStore.exportInfo(assetId: asset.id, placement: favorites)?.variants[.original]
+          == nil)
+      #expect(timelineStore.exportInfo(assetId: asset.id) == control)
+    } catch {
+      await cleanup()
+      throw error
+    }
+    await cleanup()
   }
 
   // MARK: - .failed-state independence
