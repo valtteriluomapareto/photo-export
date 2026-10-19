@@ -16,13 +16,9 @@ const socialImageUrl = new URL(
 	Astro.site ?? Astro.url,
 ).toString();
 
-// `softwareVersion` lags MARKETING_VERSION (in `project.pbxproj`) intentionally
-// while a release is in flight: bump this to the new semver when you tag
-// `vX.Y.Z` so that crawlers and LLMs see the same number the App About box shows.
-// The website docs typically lead the bump by a day or two — that's fine; users
-// of search/AI care about the latest documented capabilities, not the in-app
-// MARKETING_VERSION constant.
-const softwareVersion = '1.6.5';
+// scripts/bump-version.sh prepares this and the project's MARKETING_VERSION
+// together in a reviewed release PR, before merged-candidate validation and tagging.
+const softwareVersion = '1.6.6';
 // Rebuilt on every deploy, so AI crawlers see a freshness signal that tracks the
 // actual publication time of the static site rather than a stale checked-in date.
 const dateModified = new Date().toISOString().split('T')[0];
