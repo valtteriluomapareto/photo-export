@@ -7,10 +7,12 @@ import UniformTypeIdentifiers
 /// `TimelineSidebarView` and `CollectionsSidebarView` based on the active section; the
 /// content + detail panes render the selected scope.
 struct LibraryRootView: View {
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var whatsNewState: WhatsNewState
 
@@ -81,6 +83,10 @@ struct LibraryRootView: View {
   }
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("library-root")
+    #endif
     NavigationSplitView(
       sidebar: {
         sidebar
@@ -274,7 +280,7 @@ struct LibraryRootView: View {
         TimelineSidebarView(
           selectionSet: $selectionSet, photoLibraryService: photoLibraryManager)
       case .collections:
-        CollectionsSidebarView(selectionSet: $selectionSet)
+        CollectionsSidebarView(selectionSet: $selectionSet, exportManager: exportManager)
       }
     }
     // Sidebar shows "Photos by Year" + album titles without truncation at

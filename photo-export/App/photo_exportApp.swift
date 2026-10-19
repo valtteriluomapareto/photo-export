@@ -217,7 +217,8 @@ struct PhotoExportApp: App {
     // so the app is still identified as "Photo Export" everywhere it
     // matters outside the chrome.
     WindowGroup("") {
-      ContentView()
+      ContentView(destinationManager: exportDestinationManager, recordStore: exportRecordStore)
+        .equatable()
         .recordStoreAlertHost()
         .environmentObject(exportDestinationManager)
         .environmentObject(photoLibraryManager)

@@ -50,32 +50,13 @@ enum SharedAlbumsSectionMode: Equatable {
   }
 }
 
-/// Sidebar for the Collections section: a synthetic Favorites entry followed by the
-/// user's albums and folders. Selection is bridged out as a `LibrarySelection` so the
-/// content area can observe it.
+/// The "Shared Albums" section shown when the shared-album fetch returned nothing: the
+/// discovery hint, or nothing once the user dismissed it.
 ///
-/// The tree is fetched lazily through `PhotoLibraryService.fetchCollectionTree()` and
-/// re-fetched whenever `PhotoLibraryManager.libraryRevision` bumps. Per-collection
-/// counts come from `cachedCountAssets(in:)` so concurrent sidebar reads share one
-/// fetch and the cache is cleared on the same change observer.
-struct CollectionsSidebarView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
-
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-  #endif
-
-  /// Multi-select state bound from `LibraryRootView`. Writes are filtered to
-  /// collection-shaped values so the sidebar can never persist a stray timeline
-  /// tag into the collection state.
-  @Binding var selectionSet: Set<LibrarySelection>
-
-  @State private var tree: [PhotoCollectionDescriptor] = []
-  @State private var expandedFolders: Set<String> = []
-  @State private var countsById: [String: Int] = [:]
-
+/// It owns the `@AppStorage` flag so `CollectionsSidebarView` holds none. SwiftUI re-runs
+/// the body of a view with an `@AppStorage` property whenever its parent rebuilds it, and
+/// `LibraryRootView` rebuilds the sidebar on every export-queue publication.
+private struct SharedAlbumsHintSection: View {
   /// Persisted dismissal of the "Where are my shared albums?" hint. We can't read
   /// the Photos.app "Shared Albums" iCloud-sync toggle from a sandboxed app, so
   /// the hint is shown whenever the targeted shared-album fetch returns zero —
@@ -86,57 +67,13 @@ struct CollectionsSidebarView: View {
   private var sharedAlbumsHintDismissed: Bool = false
 
   var body: some View {
-    List(selection: collectionSelection) {
-      Section("Favorites") {
-        CollectionRow(
-          descriptor: favoritesDescriptor,
-          count: countsById[favoritesDescriptor.id]
-        )
-        .tag(LibrarySelection.favorites)
-        .task(id: photoLibraryManager.libraryRevision) {
-          await loadCount(for: .favorites, descriptorId: favoritesDescriptor.id)
-        }
-      }
-
-      if !userCollections.isEmpty {
-        Section("Albums") {
-          ForEach(userCollections, id: \.id) { node in
-            descriptorRows(node, depth: 0)
-          }
-        }
-      }
-
-      // Always render the "Shared Albums" section header when there's anything
-      // to show in it — either the actual shared albums, or the discovery hint
-      // for users who don't have them surfaced yet. The header is what teaches
-      // new users the feature exists; a hint floating without a header reads
-      // as an orphan card. The section is hidden entirely only when both
-      // branches go empty (no albums AND the hint has been dismissed). The
-      // four-cell truth table is encoded in `SharedAlbumsSectionMode.resolve`
-      // so it's unit-testable in isolation from SwiftUI.
-      switch SharedAlbumsSectionMode.resolve(
-        hasSharedAlbums: !sharedAlbums.isEmpty,
-        hintDismissed: sharedAlbumsHintDismissed)
-      {
-      case .albums:
-        Section("Shared Albums") {
-          ForEach(sharedAlbums, id: \.id) { node in
-            descriptorRows(node, depth: 0)
-          }
-        }
-      case .hint:
-        Section("Shared Albums") {
-          sharedAlbumsHintRow
-        }
-      case .hidden:
-        EmptyView()
+    if SharedAlbumsSectionMode.resolve(
+      hasSharedAlbums: false, hintDismissed: sharedAlbumsHintDismissed) == .hint
+    {
+      Section("Shared Albums") {
+        sharedAlbumsHintRow
       }
     }
-    .navigationTitle("Photo Export")
-    .task(id: photoLibraryManager.libraryRevision) {
-      reloadTree()
-    }
-    .measureBodyInvalidations("CollectionsSidebarView")
   }
 
   /// Soft hint shown when zero shared albums were returned. We can't tell the user
@@ -176,6 +113,86 @@ struct CollectionsSidebarView: View {
       }
     }
     .padding(.vertical, 4)
+  }
+}
+
+/// Sidebar for the Collections section: a synthetic Favorites entry followed by the
+/// user's albums and folders. Selection is bridged out as a `LibrarySelection` so the
+/// content area can observe it.
+///
+/// The tree is fetched lazily through `PhotoLibraryService.fetchCollectionTree()` and
+/// re-fetched whenever `PhotoLibraryManager.libraryRevision` bumps. Per-collection
+/// counts come from `cachedCountAssets(in:)` so concurrent sidebar reads share one
+/// fetch and the cache is cleared on the same change observer.
+struct CollectionsSidebarView: View {
+  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
+  /// Multi-select state bound from `LibraryRootView`. Writes are filtered to
+  /// collection-shaped values so the sidebar can never persist a stray timeline
+  /// tag into the collection state.
+  @Binding var selectionSet: Set<LibrarySelection>
+
+  /// Used only by the multi-select export action. A plain reference rather than an
+  /// environment object, so queue and progress publications don't re-run this body.
+  let exportManager: ExportManager
+
+  @State private var tree: [PhotoCollectionDescriptor] = []
+  @State private var expandedFolders: Set<String> = []
+  @State private var countsById: [String: Int] = [:]
+
+  var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("collections-sidebar")
+    #endif
+    List(selection: collectionSelection) {
+      Section("Favorites") {
+        CollectionRow(
+          descriptor: favoritesDescriptor,
+          count: countsById[favoritesDescriptor.id]
+        )
+        .tag(LibrarySelection.favorites)
+        .task(id: photoLibraryManager.libraryRevision) {
+          await loadCount(for: .favorites, descriptorId: favoritesDescriptor.id)
+        }
+      }
+
+      if !userCollections.isEmpty {
+        Section("Albums") {
+          ForEach(userCollections, id: \.id) { node in
+            descriptorRows(node, depth: 0)
+          }
+        }
+      }
+
+      // Always render the "Shared Albums" section header when there's anything
+      // to show in it — either the actual shared albums, or the discovery hint
+      // for users who don't have them surfaced yet. The header is what teaches
+      // new users the feature exists; a hint floating without a header reads
+      // as an orphan card. The section is hidden entirely only when both
+      // branches go empty (no albums AND the hint has been dismissed). Albums
+      // present always show the list; with none, `SharedAlbumsHintSection`
+      // resolves the hint half of `SharedAlbumsSectionMode.resolve` and owns the
+      // persisted dismissal, so its `@AppStorage` doesn't re-run this body.
+      if !sharedAlbums.isEmpty {
+        Section("Shared Albums") {
+          ForEach(sharedAlbums, id: \.id) { node in
+            descriptorRows(node, depth: 0)
+          }
+        }
+      } else {
+        SharedAlbumsHintSection()
+      }
+    }
+    .navigationTitle("Photo Export")
+    .task(id: photoLibraryManager.libraryRevision) {
+      reloadTree()
+    }
+    .measureBodyInvalidations("CollectionsSidebarView")
   }
 
   // MARK: - Tree rendering

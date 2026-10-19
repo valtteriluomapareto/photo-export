@@ -13,6 +13,7 @@ import Testing
     @MainActor
     private struct Host: View {
       let service: FakePhotoLibraryService
+      let manager: ExportManager
       let selection: LibrarySelection
       let folderId: String?
       var showsSidebar = true
@@ -24,7 +25,8 @@ import Testing
       var body: some View {
         HStack(alignment: .top) {
           if showsSidebar {
-            CollectionsSidebarView(selectionSet: $sidebarSelection).frame(width: 260)
+            CollectionsSidebarView(selectionSet: $sidebarSelection, exportManager: manager)
+              .frame(width: 260)
           }
           CollectionContentView(
             selection: selection, title: "Current album", versionSelection: .edited,
@@ -153,8 +155,8 @@ import Testing
         let hosted = NSHostingView(
           rootView:
             Host(
-              service: service, selection: selectionOverride ?? selection, folderId: folderId,
-              showsSidebar: sidebar, showsFolderPane: folderPane)
+              service: service, manager: manager, selection: selectionOverride ?? selection,
+              folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane)
             .environmentObject(library).environmentObject(timeline).environmentObject(records)
             .environmentObject(manager)
             .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))

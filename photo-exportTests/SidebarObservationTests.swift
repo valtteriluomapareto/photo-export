@@ -18,9 +18,25 @@ import Testing
       }
     }
 
+    /// Rebuilds the collections sidebar on every manager or collection-store publication, as
+    /// `LibraryRootView` does in production. Its own key shows a publication has rendered.
+    @MainActor
+    private struct CollectionsHost: View {
+      @ObservedObject var manager: ExportManager
+      @ObservedObject var collections: CollectionExportRecordStore
+      @Binding var selectionSet: Set<LibrarySelection>
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        let _ = counter.record(
+          "collections-host:\(manager.queueCount):\(collections.mutationCounter)")
+        CollectionsSidebarView(selectionSet: $selectionSet, exportManager: manager)
+      }
+    }
+
     @MainActor
     private struct Host: View {
       let manager: ExportManager
+      let collections: CollectionExportRecordStore
       let service: FakePhotoLibraryService
       let counter: BodyInvalidationCounter
       @State private var timelineSelection: Set<LibrarySelection> = []
@@ -29,7 +45,10 @@ import Testing
         HStack {
           TimelineSidebarView(
             selectionSet: $timelineSelection, photoLibraryService: service).frame(width: 260)
-          CollectionsSidebarView(selectionSet: $collectionSelection).frame(width: 260)
+          CollectionsHost(
+            manager: manager, collections: collections, selectionSet: $collectionSelection,
+            counter: counter
+          ).frame(width: 260)
           QueueProbe(manager: manager, counter: counter)
         }
       }
@@ -70,7 +89,8 @@ import Testing
           exportRecordStore: timeline, collectionExportRecordStore: collections,
           assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
           userDefaults: defaults)
-        let content = Host(manager: manager, service: service, counter: counter)
+        let content = Host(
+          manager: manager, collections: collections, service: service, counter: counter)
           .environmentObject(library).environmentObject(timeline)
           .environmentObject(collections).environmentObject(manager)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
@@ -164,6 +184,54 @@ import Testing
       } catch { failure = error }
       await f.close()
       if let failure { throw failure }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func queueAndRecordPublicationsSkipTheCollectionsSidebarBody() async throws {
+      let f = Fixture()
+      try await withCleanup {
+        try #require(await observe {
+          f.counter.renderedText["collection-sidebar:favorites"]
+            == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+        })
+        let album = ExportPlacement(
+          kind: .album, id: "unrelated-album", displayName: "Unrelated",
+          collectionLocalIdentifier: "unrelated-album", relativePath: "Collections/Unrelated/",
+          createdAt: Date(timeIntervalSince1970: 0))
+        f.collections.upsertPlacement(album)
+        f.collections.flushPendingNotifications()
+        let placed = "collections-host:0:\(f.collections.mutationCounter)"
+        try #require(await observe { f.counter.count(for: placed) > 0 })
+        await f.quiesce()
+        let sidebarBodies = f.counter.count(for: "collections-sidebar")
+        let baseline = f.counter.snapshot()
+        try #require(sidebarBodies > 0)
+        f.manager.queueCoordinator.enqueue([
+          .init(assetLocalIdentifier: "unrelated", placement: .favorites(), selection: .edited)
+        ])
+        let queued = "collections-host:1:\(f.collections.mutationCounter)"
+        try #require(await observe { f.counter.count(for: queued) > 0 })
+        await f.quiesce()
+        #expect(
+          f.counter.count(for: "collections-sidebar") == sidebarBodies,
+          "Changes since baseline: \(f.changes(since: baseline))")
+        let revision = f.collections.mutationCounter
+        f.collections.markVariantExported(
+          assetId: "unrelated", placement: album, variant: .original, filename: "UNRELATED.JPG",
+          exportedAt: Date())
+        f.collections.flushPendingNotifications()
+        try #require(f.collections.mutationCounter > revision)
+        let recorded = "collections-host:1:\(f.collections.mutationCounter)"
+        try #require(await observe { f.counter.count(for: recorded) > 0 })
+        await f.quiesce()
+        #expect(
+          f.counter.count(for: "collections-sidebar") == sidebarBodies,
+          "Changes since baseline: \(f.changes(since: baseline))")
+        f.library.invalidateCache()
+        #expect(await observe { f.counter.count(for: "collections-sidebar") > sidebarBodies })
+      } cleanup: {
+        await f.close()
+      }
     }
   }
 #endif

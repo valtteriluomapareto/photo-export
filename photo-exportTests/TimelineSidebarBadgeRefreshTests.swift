@@ -26,6 +26,7 @@ import Testing
       let store: ExportRecordStore
       let manager: ExportManager
       let destination = FakeExportDestination()
+      let writer = FakeAssetResourceWriter()
       let counter = BodyInvalidationCounter()
       let window: NSWindow
 
@@ -52,7 +53,7 @@ import Testing
         manager = ExportManager(
           photoLibraryService: service, exportDestination: destination, exportRecordStore: store,
           collectionExportRecordStore: collections,
-          assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+          assetResourceWriter: writer, fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         let content = Host(service: service)
           .environmentObject(library).environmentObject(store).environmentObject(manager)
@@ -170,6 +171,49 @@ import Testing
       for task in f.counter.tasks { _ = await finished(task) }
       await f.close()
       if let failure { throw failure }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func monthQueueBadgeFollowsEnqueueAndFirstDequeue() async throws {
+      let f = Fixture()
+      let gate = AsyncCheckpoint()
+      try await withCleanup {
+        try #require(await observe(in: f.window) {
+          f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
+        })
+        let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
+        let ids = ["queued-a", "queued-b"]
+        f.service.assetsByYearMonth["2026-9"] = ids.map {
+          TestAssetFactory.makeAsset(id: $0, creationDate: date)
+        }
+        for id in ids {
+          f.service.resourcesByAssetId[id] = [
+            ResourceDescriptor(type: .photo, originalFilename: "\(id).JPG")
+          ]
+        }
+        f.writer.checkpoint = gate
+        f.manager.queueCoordinator.enqueue(
+          ids.map {
+            .init(
+              assetLocalIdentifier: $0, placement: .timeline(year: 2026, month: 9),
+              selection: .edited)
+          })
+        #expect(await observe(in: f.window) {
+          f.counter.renderedText["timeline-month:2026-9"] == ["2 left"]
+        })
+        f.manager.queueCoordinator.processQueueIfNeeded()
+        try #require(await gate.waitForEnter(count: 1))
+        #expect(await observe(in: f.window) {
+          f.counter.renderedText["timeline-month:2026-9"] == ["1 left"]
+        })
+      } cleanup: {
+        let held = f.manager.currentTask
+        f.manager.cancelAndClear()
+        await gate.releaseAll()
+        if let held { _ = await finished(held) }
+        for task in f.counter.tasks { _ = await finished(task) }
+        await f.close()
+      }
     }
   }
 #endif
