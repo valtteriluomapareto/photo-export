@@ -101,6 +101,7 @@ The pipeline is split across several collaborators. The list below pairs each ro
 .task(id: (year, month)) { await viewModel.loadAssets(forYear: year, month: month) }
 ```
 - Extract complex UI sections into small views with clear inputs. Avoid heavy logic in `body`.
+- Pass dependencies a view uses only in actions or `onAppear` as plain `let` references or closures from an observing parent; avoid subscribing (`@EnvironmentObject`, `@ObservedObject`) to an observable that `body` doesn't read. Keep `@AppStorage` out of such a view (or give it `Equatable` and `.equatable()`): the hosted observation tests here show a view with `@AppStorage` re-running its body whenever its parent rebuilds it (not documented by Apple, observed in this app). `AutoSyncAwareExportButton` is the deliberate exception until the Observation migration.
 - Avoid creating expensive objects in `body` or tight loops. For `DateFormatter`, provide static caches:
 ```swift
 enum Formatters {

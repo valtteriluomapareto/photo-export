@@ -14,9 +14,14 @@ import SwiftUI
 /// authorized library view. The Phase 4 refactor moved the bulk of the authorized
 /// layout into `LibraryRootView`; this file is now responsible for routing only.
 struct ContentView: View {
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  /// Read only by the onboarding auto-skip in `onAppear`. Plain references rather than
+  /// environment objects, so destination and record publications don't re-run the root body.
+  let destinationManager: ExportDestinationManager
+  let recordStore: ExportRecordStore
 
   // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -35,6 +40,10 @@ struct ContentView: View {
   }()
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("content-root")
+    #endif
     Group {
       if Self.forceOnboarding || (photoLibraryManager.isAuthorized && !hasCompletedOnboarding) {
         OnboardingView {
@@ -50,13 +59,26 @@ struct ContentView: View {
       // Auto-skip onboarding for existing users who already have an export destination
       // or records.
       if !hasCompletedOnboarding {
-        let hasDestination = exportDestinationManager.selectedFolderURL != nil
-        let hasRecords = !exportRecordStore.recordsById.isEmpty
+        let hasDestination = destinationManager.selectedFolderURL != nil
+        let hasRecords = !recordStore.recordsById.isEmpty
         if hasDestination || hasRecords {
           hasCompletedOnboarding = true
         }
       }
+      #if DEBUG
+        bodyCounter?.record("onboarding-auto-skip-checked")
+      #endif
     }
+  }
+}
+
+extension ContentView: Equatable {
+  /// Compares the injected references by identity, for `.equatable()` at the call site.
+  /// The `@AppStorage` property otherwise makes SwiftUI re-run this body every time
+  /// `App.body` rebuilds the view. The view's own `@AppStorage` and `@EnvironmentObject`
+  /// changes still re-run it.
+  static func == (lhs: ContentView, rhs: ContentView) -> Bool {
+    lhs.destinationManager === rhs.destinationManager && lhs.recordStore === rhs.recordStore
   }
 }
 
@@ -220,7 +242,7 @@ struct MonthRow: View {
   /// Reads `currentJobPlacement` from the live-progress observable rather than the
   /// manager, so the per-job placement mutations don't ripple through every view
   /// holding `ExportManager` as `@EnvironmentObject`. `MonthRow` still observes
-  /// `ExportManager` for `versionSelection` / `queuedCount(…)`.
+  /// `ExportManager` for `versionSelection`, `livePhotosPairedExport` and the queue badge.
   @EnvironmentObject private var progressState: ExportProgressState
 
   let year: Int
@@ -234,6 +256,9 @@ struct MonthRow: View {
       year: year, month: month, totalCount: total, adjustedCount: adjusted,
       selection: selection,
       livePhotosPaired: exportManager.livePhotosPairedExport)
+    // `queuedCount(year:month:)` reads the queue coordinator's unpublished per-month counts.
+    // The "N left" badge relies on the manager publishing `queueCount` (and, for a job
+    // starting, `progressState` publishing `currentJobPlacement`) in the same turn.
     let queued = exportManager.queuedCount(year: year, month: month)
     // Only the row owning the currently-in-flight job spins. Other rows with queued work
     // show just the "N left" text — a spinner on every queued row of a Year export reads
@@ -324,8 +349,4 @@ struct MonthRow: View {
         + "photos fully exported (including original copies for edited photos)."
     }
   }
-}
-
-#Preview {
-  ContentView()
 }

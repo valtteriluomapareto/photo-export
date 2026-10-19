@@ -14,7 +14,6 @@ struct TimelineSidebarView: View {
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
   /// Multi-select state bound from `LibraryRootView`. The binding filter below
   /// strips non-timeline values defensively so the sidebar can never persist a
