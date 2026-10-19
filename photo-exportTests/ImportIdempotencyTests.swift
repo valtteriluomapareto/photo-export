@@ -185,8 +185,7 @@ struct ImportIdempotencyTests {
   /// collection store was reconciled. The second import must leave both stores' records
   /// (including `exportDate`) and their on-disk files unchanged, and report the same
   /// counts.
-  @Test(.disabled("Temporary: proves CI catches a skipped gate"))
-  func bulkImportIsIdempotent() async throws {
+  @Test func bulkImportIsIdempotent() async throws {
     let (manager, photoLib, dest, store, storeRoot, collections) = makeTestHarness()
     defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
 
