@@ -19,6 +19,54 @@ enum ReleaseNotesCatalog {
   /// must match a real `CFBundleShortVersionString` shipped to users.
   static let all: [ReleaseNote] = [
     ReleaseNote(
+      version: "1.6.6",
+      summary:
+        "More reliable export history, clearer recovery from interrupted backups, "
+        + "and previews and progress that stay in step with your Photos library.",
+      bullets: [
+        ReleaseNote.Bullet(
+          title: "Preserve backup progress through interruptions",
+          body:
+            "Export history is safer when a record write is interrupted or an export "
+            + "is cancelled while a file is being committed. Import Existing Backup "
+            + "preserves existing progress when verification fails and offers clearer "
+            + "recovery when history cannot be read."
+        ),
+        ReleaseNote.Bullet(
+          title: "See accurate results and actionable export issues",
+          body:
+            "Progress and detail history follow the current destination and album. "
+            + "Manual exports report their outcome, and export issues include filenames "
+            + "and creation dates when available to help identify affected photos. Storage failures "
+            + "that prevent further writes stop the run and show recovery guidance."
+        ),
+        ReleaseNote.Bullet(
+          title: "Keep previews and selections current",
+          body:
+            "Thumbnails and the selected full-size preview refresh after Photos edits, "
+            + "while obsolete image requests cannot replace newer content. Grid "
+            + "selections stay consistent as library contents refresh."
+        ),
+        ReleaseNote.Bullet(
+          title: "Keep Auto Export work safe for retry",
+          body:
+            "Photos changes arriving during an export remain pending for a later run. "
+            + "Retry scheduling and saved change state are more resilient to "
+            + "interruptions and persistence failures, with recovery for uncertain "
+            + "Auto Export metadata."
+        ),
+        ReleaseNote.Bullet(
+          title: "Recover more clearly when a destination is unavailable",
+          body:
+            "Missing, read-only and inaccessible backup folders have clearer "
+            + "explanations and recovery actions. Photo Export also checks that "
+            + "delayed work still belongs to the current destination before "
+            + "changing its saved progress."
+        ),
+      ],
+      learnMore: nil
+    ),
+    ReleaseNote(
       version: "1.6.5",
       summary:
         "Fixes duplicate re-exports when your backup folder lives on a network "
