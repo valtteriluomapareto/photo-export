@@ -183,16 +183,24 @@ struct ExportQueueStateSnapshotTests {
     // Force the coordinator into a running state cheaply by enqueueing one job and
     // gating its writer so the run loop is parked.
     let asset = TestAssetFactory.makeAsset(id: "sink-sync")
-    h.photoLib.assetsByYearMonth["2025-7"] = [asset]
+    let queued = TestAssetFactory.makeAsset(id: "sink-sync-queued")
+    h.photoLib.assetsByYearMonth["2025-7"] = [asset, queued]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(originalFilename: "X.JPG")
+    ]
+    h.photoLib.resourcesByAssetId[queued.id] = [
+      TestAssetFactory.makeResource(originalFilename: "Y.JPG")
     ]
     let gate = AsyncCheckpoint()
     h.writer.checkpoint = gate
 
     h.manager.startExportMonth(year: 2025, month: 7)
     await gate.waitForEnter(count: 1)
-    #expect(h.manager.isRunning, "precondition: coordinator should have flipped isRunning")
+    // Pause too, so clearing every mirror is observable, not just already-false values.
+    h.manager.pause()
+    try #require(h.manager.isRunning, "precondition: coordinator should have flipped isRunning")
+    try #require(h.manager.isPaused, "precondition: the queue should be paused")
+    try #require(h.manager.queueCount > 0, "precondition: a second job should be queued")
 
     // The contract: teardownQueue() mutates the coordinator's @Published synchronously,
     // sinks fire synchronously, manager mirrors are updated before this call returns.

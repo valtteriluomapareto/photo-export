@@ -4,12 +4,10 @@ import Testing
 
 @testable import Photo_Export
 
-/// Phase 5 prep regression-gate test. Imports a backup fixture twice and asserts the
-/// timeline + collection record-store state is identical after the second import. The
-/// Phase 5 extraction moves the import flow into `ImportCoordinator` and transfers
-/// generation ownership to `ExportQueueCoordinator`; both store-state and the
-/// per-asset reconciliation order must remain deterministic across the extraction so a
-/// user re-running an import doesn't see records drift, duplicate, or get reordered.
+/// Regression gate for import idempotency. Imports a backup fixture twice and asserts that
+/// the timeline and collection record stores, in memory and on disk, are unchanged by the
+/// second import, so a user re-running an import doesn't see records drift, get rewritten,
+/// duplicate, or reorder.
 ///
 /// Existing `ExportManagerImportTests` covers the *first* import. This test covers the
 /// idempotency property — load-bearing because:
@@ -24,7 +22,8 @@ struct ImportIdempotencyTests {
   // MARK: - Fixtures (mirrored from ExportManagerImportTests)
 
   private func makeTestHarness() -> (
-    ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore, URL
+    ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore, URL,
+    CollectionExportRecordStore
   ) {
     let photoLib = FakePhotoLibraryService()
     let dest = FakeExportDestination()
@@ -34,17 +33,34 @@ struct ImportIdempotencyTests {
       .appendingPathComponent("ImportIdempotency-\(UUID().uuidString)", isDirectory: true)
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
+    let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    collections.configure(for: "test")
     let defaults = UserDefaults(
       suiteName: "test-ImportIdempotency-\(UUID().uuidString)")!
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
+      collectionExportRecordStore: collections,
       assetResourceWriter: writer,
       fileSystem: fileSystem,
       userDefaults: defaults
     )
-    return (manager, photoLib, dest, store, storeRoot)
+    return (manager, photoLib, dest, store, storeRoot, collections)
+  }
+
+  /// The on-disk record files for one store: the append log (which a rewrite would grow)
+  /// and the compacted snapshot (absent until compaction).
+  private func persistedBytes(storeRoot: URL, log: String, snapshot: String) throws
+    -> (log: Data, snapshot: Data?)
+  {
+    let dir = storeRoot.appendingPathComponent("test", isDirectory: true)
+    let logData = try Data(contentsOf: dir.appendingPathComponent(log))
+    let snapshotURL = dir.appendingPathComponent(snapshot)
+    let snapshotData =
+      FileManager.default.fileExists(atPath: snapshotURL.path)
+      ? try Data(contentsOf: snapshotURL) : nil
+    return (logData, snapshotData)
   }
 
   private func plantBackupFile(
@@ -120,7 +136,7 @@ struct ImportIdempotencyTests {
   /// catch reorderings incidentally (e.g. via a different `prunedRecords` count on a
   /// ghost file); this test pins the contract directly.
   @Test func importStageSequenceMatchesContract() async throws {
-    let (manager, photoLib, dest, _, storeRoot) = makeTestHarness()
+    let (manager, photoLib, dest, _, storeRoot, _) = makeTestHarness()
     defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
 
     let stageDate = date(year: 2025, month: 6, day: 15)
@@ -163,12 +179,14 @@ struct ImportIdempotencyTests {
       """)
   }
 
-  /// Plants three backup files (two that match library assets, one unmatched), imports
-  /// once to land the records, snapshots the timeline store, imports again, and asserts
-  /// the snapshot is identical and the import report agrees that everything was
-  /// already-done on the second pass.
+  /// Plants three backup files (two that match library assets, one unmatched) plus a
+  /// Favorites export with one file present and one missing. The first import lands the
+  /// timeline records and prunes the missing Favorites record, which proves the
+  /// collection store was reconciled. The second import must leave both stores' records
+  /// (including `exportDate`) and their on-disk files unchanged, and report the same
+  /// counts.
   @Test func bulkImportIsIdempotent() async throws {
-    let (manager, photoLib, dest, store, storeRoot) = makeTestHarness()
+    let (manager, photoLib, dest, store, storeRoot, collections) = makeTestHarness()
     defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
 
     // Plant three files, two of which have library asset counterparts.
@@ -192,9 +210,28 @@ struct ImportIdempotencyTests {
       TestAssetFactory.makeResource(originalFilename: "IMG_0002.JPG")
     ]
 
+    let favorites = ExportPlacement.favorites()
+    collections.upsertPlacement(favorites)
+    for assetId in ["fav-kept", "fav-missing"] {
+      collections.markVariantExported(
+        assetId: assetId, placement: favorites, variant: .original,
+        filename: "\(assetId).JPG", exportedAt: dateA)
+    }
+    let favoritesDir = try dest.urlForRelativeDirectory(
+      favorites.relativePath, createIfNeeded: true)
+    try Data("kept".utf8).write(to: favoritesDir.appendingPathComponent("fav-kept.JPG"))
+    try #require(collections.exportInfo(assetId: "fav-missing", placement: favorites) != nil)
+
     // First import.
     manager.startImport()
     await manager.waitForImportCompletion()
+    try #require(
+      collections.exportInfo(assetId: "fav-kept", placement: favorites)?
+        .variants[.original]?.status == .done,
+      "the Favorites record whose file exists must survive reconcile")
+    try #require(
+      collections.exportInfo(assetId: "fav-missing", placement: favorites) == nil,
+      "the first import must prune the Favorites record whose file is missing")
     let firstReport = manager.importResult
     #expect(firstReport?.matchedCount == 2)
     #expect(firstReport?.unmatchedCount == 1)
@@ -203,6 +240,15 @@ struct ImportIdempotencyTests {
     let firstSnapshot = snapshot(store)
     #expect(firstSnapshot.count == 2,
       "first import must land exactly 2 records (one per matched file)")
+    store.flushForTesting()
+    collections.flushForTesting()
+    let firstRecords = store.recordsById
+    let firstCollectionRecords = collections.recordBodies
+    let firstTimelineFiles = try persistedBytes(
+      storeRoot: storeRoot, log: "export-records.jsonl", snapshot: "export-records.json")
+    let firstCollectionFiles = try persistedBytes(
+      storeRoot: storeRoot, log: "collection-records.jsonl", snapshot: "collection-records.json")
+    try #require(!firstTimelineFiles.log.isEmpty && !firstCollectionFiles.log.isEmpty)
 
     // Second import against the same fixture. Reset importResult to confirm the second
     // pass writes a fresh report.
@@ -225,5 +271,19 @@ struct ImportIdempotencyTests {
       First:  \(firstSnapshot)
       Second: \(secondSnapshot)
       """)
+    // Nothing may be rewritten either: same full records (including `exportDate`) and the
+    // same bytes on disk, so the second import appended nothing.
+    store.flushForTesting()
+    collections.flushForTesting()
+    #expect(store.recordsById == firstRecords)
+    #expect(collections.recordBodies == firstCollectionRecords)
+    let secondTimelineFiles = try persistedBytes(
+      storeRoot: storeRoot, log: "export-records.jsonl", snapshot: "export-records.json")
+    let secondCollectionFiles = try persistedBytes(
+      storeRoot: storeRoot, log: "collection-records.jsonl", snapshot: "collection-records.json")
+    #expect(secondTimelineFiles.log == firstTimelineFiles.log)
+    #expect(secondTimelineFiles.snapshot == firstTimelineFiles.snapshot)
+    #expect(secondCollectionFiles.log == firstCollectionFiles.log)
+    #expect(secondCollectionFiles.snapshot == firstCollectionFiles.snapshot)
   }
 }

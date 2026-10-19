@@ -11,13 +11,15 @@ import Testing
 /// this is the regression gate that pins the AutoSync-observable emission sequence.
 /// The contract: across a manual export and an import, AutoSync subscribers see the
 /// canonical state-transition sequence `idle → manual-active → idle → importing →
-/// idle`, plus exactly one completion summary for the export.
+/// idle`, plus exactly one completion summary for the export. An AutoSync run reads as
+/// `autoSyncActive`, and a manual export superseding it as `autoSyncActive → idle →
+/// manual-active → idle`.
 ///
-/// The test asserts on the canonical sequence (after de-duplicating adjacent
+/// The tests assert on the canonical sequence (after de-duplicating adjacent
 /// identical states) rather than raw frame count, because
-/// `exportRunStatePublisher` is a `CombineLatest3` over three `@Published`
-/// mirrors and intermediate triples land in unobservable order across `await`
-/// hops. Asserting raw counts or exact emission timing would flake under future
+/// `exportRunStatePublisher` is a `CombineLatest4` over `activeRunContext`,
+/// `isRunning`, `queueCount` and `isEnqueueingAll`, and intermediate tuples land in
+/// unobservable order across `await` hops. Asserting raw counts or exact emission timing would flake under future
 /// refactors that reorder property mutation; asserting canonical transitions
 /// captures the invariant AutoSync actually depends on.
 @MainActor
@@ -66,6 +68,7 @@ struct AutoSyncSeamCharacterizationTests {
       }
       manager.cancelAndClear()
       store.flushForTesting()
+      collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
       UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
@@ -100,6 +103,25 @@ struct AutoSyncSeamCharacterizationTests {
       storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
 
+  /// Runs `body` with a fresh harness and always awaits its cleanup, including when the
+  /// body throws.
+  private func withHarness(_ body: (Harness) async throws -> Void) async throws {
+    let harness = makeHarness()
+    do {
+      try await body(harness)
+    } catch {
+      await harness.cleanup()
+      throw error
+    }
+    await harness.cleanup()
+  }
+
+  /// A state that is both manual- and AutoSync-active would let the canonical mapping
+  /// hide a source mix-up.
+  private static func noMixedSources(_ states: [ExportRunState]) -> Bool {
+    states.allSatisfy { !($0.isManualActive && $0.isAutoSyncActive) }
+  }
+
   /// Drops adjacent duplicates while preserving order.
   private static func canonicalize<T: Equatable>(_ values: [T]) -> [T] {
     var result: [T] = []
@@ -122,76 +144,177 @@ struct AutoSyncSeamCharacterizationTests {
   /// Re-run after every phase. A failure means an extraction reordered the publisher
   /// sources AutoSync observes — fix the extraction, not the test.
   @Test func manualExportThenImportYieldsCanonicalSequence() async throws {
-    let harness = makeHarness()
-    defer { Task { await harness.cleanup() } }
+    try await withHarness { harness in
+      // Seed one favorite asset so `.favoritesFull` actually enqueues a job.
+      let asset = TestAssetFactory.makeAsset(id: "a1")
+      harness.photoLib.favoritesAssets = [asset]
+      harness.photoLib.resourcesByAssetId["a1"] = [
+        TestAssetFactory.makeResource(originalFilename: "a1.HEIC")
+      ]
+      // Gate the writer so we pass through the manual-active state long enough for
+      // the subscribed sinks to observe it.
+      let writeGate = AsyncCheckpoint()
+      harness.writer.checkpoint = writeGate
 
-    // Seed one favorite asset so `.favoritesFull` actually enqueues a job.
-    let asset = TestAssetFactory.makeAsset(id: "a1")
-    harness.photoLib.favoritesAssets = [asset]
-    harness.photoLib.resourcesByAssetId["a1"] = [
-      TestAssetFactory.makeResource(originalFilename: "a1.HEIC")
-    ]
-    // Gate the writer so we pass through the manual-active state long enough for
-    // the subscribed sinks to observe it.
-    let writeGate = AsyncCheckpoint()
-    harness.writer.checkpoint = writeGate
+      // Subscribe BEFORE any work starts. `@Published`-backed publishers replay their
+      // current value on subscription, so this captures the initial `idle`/`false`
+      // baseline plus every subsequent emission.
+      var runStateEmissions: [ExportRunState] = []
+      var isImportingEmissions: [Bool] = []
+      var completedSummaries: [ExportRunSummary] = []
 
-    // Subscribe BEFORE any work starts. `@Published`-backed publishers replay their
-    // current value on subscription, so this captures the initial `idle`/`false`
-    // baseline plus every subsequent emission.
-    var runStateEmissions: [ExportRunState] = []
-    var isImportingEmissions: [Bool] = []
-    var completedSummaries: [ExportRunSummary] = []
+      let cancellables: [AnyCancellable] = [
+        harness.manager.exportRunStatePublisher.sink { runStateEmissions.append($0) },
+        harness.manager.isImportingPublisher.sink { isImportingEmissions.append($0) },
+        harness.manager.completedRunsPublisher.sink { completedSummaries.append($0) },
+      ]
+      defer { cancellables.forEach { $0.cancel() } }
 
-    let cancellables: [AnyCancellable] = [
-      harness.manager.exportRunStatePublisher.sink { runStateEmissions.append($0) },
-      harness.manager.isImportingPublisher.sink { isImportingEmissions.append($0) },
-      harness.manager.completedRunsPublisher.sink { completedSummaries.append($0) },
-    ]
-    defer { cancellables.forEach { $0.cancel() } }
+      // Phase A: manual export via the awaitable run API.
+      let context = ExportRunContext(
+        source: .manual, visibility: .userVisible,
+        scope: .favoritesFull, selection: .edited)
 
-    // Phase A: manual export via the awaitable run API.
-    let context = ExportRunContext(
-      source: .manual, visibility: .userVisible,
-      scope: .favoritesFull, selection: .edited)
+      let run = Task { await harness.manager.runExport(context: context) }
+      let writing = await writeGate.waitForEnter(count: 1)
+      try #require(writing)
+      await writeGate.release(1)
+      let ran = await finished(run)
+      try #require(ran)
+      let summary = await run.value
+      #expect(summary.result == .completed)
 
-    async let summaryTask = harness.manager.runExport(context: context)
-    await writeGate.waitForEnter(count: 1)
-    await writeGate.release(1)
-    let summary = await summaryTask
-    #expect(summary.result == .completed)
+      // Phase B: import an empty backup folder. `startImport()` flips `isImporting`
+      // synchronously; the body resolves quickly because the scan finds nothing.
+      harness.manager.startImport()
+      await harness.manager.waitForImportCompletion()
 
-    // Phase B: import an empty backup folder. `startImport()` flips `isImporting`
-    // synchronously; the body resolves quickly because the scan finds nothing.
-    harness.manager.startImport()
-    await harness.manager.waitForImportCompletion()
+      // Phase C: canonical-sequence assertions.
+      let canonicalRunStates = Self.canonicalize(
+        runStateEmissions.map(CanonicalRunState.init))
+      let canonicalImporting = Self.canonicalize(isImportingEmissions)
 
-    // Phase C: canonical-sequence assertions.
-    let canonicalRunStates = Self.canonicalize(
-      runStateEmissions.map(CanonicalRunState.init))
-    let canonicalImporting = Self.canonicalize(isImportingEmissions)
+      #expect(
+        canonicalRunStates == [.idle, .manualActive, .idle],
+        """
+        AutoSync seam contract violation: exportRunStatePublisher canonical sequence \
+        must be [idle, manualActive, idle] for a manual export. Got: \(canonicalRunStates)
+        """)
+      #expect(
+        canonicalImporting == [false, true, false],
+        """
+        AutoSync seam contract violation: isImportingPublisher canonical sequence \
+        must be [false, true, false] for one import. Got: \(canonicalImporting)
+        """)
+      #expect(
+        completedSummaries.count == 1,
+        """
+        completedRunsPublisher must emit exactly one summary per runExport completion; \
+        got \(completedSummaries.count)
+        """)
+      #expect(
+        completedSummaries.first?.context == context,
+        "completion summary must carry the original run context")
+      #expect(Self.noMixedSources(runStateEmissions))
+    }
+  }
 
-    #expect(
-      canonicalRunStates == [.idle, .manualActive, .idle],
-      """
-      AutoSync seam contract violation: exportRunStatePublisher canonical sequence \
-      must be [idle, manualActive, idle] for a manual export. Got: \(canonicalRunStates)
-      """)
-    #expect(
-      canonicalImporting == [false, true, false],
-      """
-      AutoSync seam contract violation: isImportingPublisher canonical sequence \
-      must be [false, true, false] for one import. Got: \(canonicalImporting)
-      """)
-    #expect(
-      completedSummaries.count == 1,
-      """
-      completedRunsPublisher must emit exactly one summary per runExport completion; \
-      got \(completedSummaries.count)
-      """)
-    #expect(
-      completedSummaries.first?.context == context,
-      "completion summary must carry the original run context")
+  /// An AutoSync-sourced run must read as `autoSyncActive`, never `manualActive`: AutoSync
+  /// treats its own run differently from a manual one when deciding whether to start.
+  @Test func autoSyncRunYieldsCanonicalSequence() async throws {
+    try await withHarness { harness in
+      harness.photoLib.favoritesAssets = [TestAssetFactory.makeAsset(id: "a1")]
+      harness.photoLib.resourcesByAssetId["a1"] = [
+        TestAssetFactory.makeResource(originalFilename: "a1.HEIC")
+      ]
+      let writeGate = AsyncCheckpoint()
+      harness.writer.checkpoint = writeGate
+      var runStateEmissions: [ExportRunState] = []
+      var completedSummaries: [ExportRunSummary] = []
+      let cancellables: [AnyCancellable] = [
+        harness.manager.exportRunStatePublisher.sink { runStateEmissions.append($0) },
+        harness.manager.completedRunsPublisher.sink { completedSummaries.append($0) },
+      ]
+      defer { cancellables.forEach { $0.cancel() } }
+
+      let context = ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .favoritesFull, selection: .edited)
+      let run = Task { await harness.manager.runExport(context: context) }
+      let writing = await writeGate.waitForEnter(count: 1)
+      try #require(writing)
+      await writeGate.release(1)
+      let ran = await finished(run)
+      try #require(ran)
+      #expect(await run.value.result == .completed)
+
+      let canonical = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
+      #expect(
+        canonical == [.idle, .autoSyncActive, .idle],
+        "AutoSync seam contract violation for an AutoSync run. Got: \(canonical)")
+      #expect(completedSummaries.map(\.context) == [context])
+      #expect(Self.noMixedSources(runStateEmissions))
+    }
+  }
+
+  /// A manual export that supersedes an AutoSync run: the AutoSync run resolves as
+  /// superseded, the state passes through `idle` while the manual scan runs (AutoSync's
+  /// debounce covers that window), and the manual export reads as `manualActive`.
+  @Test func manualExportSupersedingAutoSyncYieldsCanonicalSequence() async throws {
+    try await withHarness { harness in
+      harness.photoLib.favoritesAssets = [TestAssetFactory.makeAsset(id: "auto")]
+      harness.photoLib.resourcesByAssetId["auto"] = [
+        TestAssetFactory.makeResource(originalFilename: "AUTO.HEIC")
+      ]
+      let monthAsset = TestAssetFactory.makeAsset(
+        id: "manual", creationDate: Calendar.current.date(
+          from: DateComponents(year: 2025, month: 7, day: 15))!)
+      harness.photoLib.assetsByYearMonth["2025-7"] = [monthAsset]
+      harness.photoLib.resourcesByAssetId["manual"] = [
+        TestAssetFactory.makeResource(originalFilename: "MANUAL.JPG")
+      ]
+      let writeGate = AsyncCheckpoint()
+      harness.writer.checkpoint = writeGate
+      var runStateEmissions: [ExportRunState] = []
+      var completedSummaries: [ExportRunSummary] = []
+      let cancellables: [AnyCancellable] = [
+        harness.manager.exportRunStatePublisher.sink { runStateEmissions.append($0) },
+        harness.manager.completedRunsPublisher.sink { completedSummaries.append($0) },
+      ]
+      defer { cancellables.forEach { $0.cancel() } }
+
+      let autoContext = ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .favoritesFull, selection: .edited)
+      let auto = Task { await harness.manager.runExport(context: autoContext) }
+      let writing = await writeGate.waitForEnter(count: 1)
+      try #require(writing)
+      let staleJob = try #require(harness.manager.currentTask)
+
+      harness.manager.supersedeForManualRun()
+      // Let the superseded write settle before the manual export starts.
+      await writeGate.releaseAll()
+      let staleSettled = await finished(staleJob)
+      try #require(staleSettled)
+      let autoResolved = await finished(auto)
+      try #require(autoResolved)
+      let autoSummary = await auto.value
+      #expect(autoSummary.result == .superseded)
+      #expect(autoSummary.cancelReason == .supersededByManualRun)
+
+      harness.manager.startExportMonth(year: 2025, month: 7)
+      for task in harness.manager.currentPreparationTasks {
+        let prepared = await finished(task)
+        try #require(prepared)
+      }
+      await harness.manager.waitForQueueDrained()
+      #expect(harness.writer.writeCalls.map(\.assetId).contains("manual"))
+
+      let canonical = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
+      #expect(
+        canonical == [.idle, .autoSyncActive, .idle, .manualActive, .idle],
+        "AutoSync seam contract violation for a superseding manual export. Got: \(canonical)")
+      #expect(completedSummaries.map(\.context) == [autoContext])
+      #expect(Self.noMixedSources(runStateEmissions))
+    }
   }
 
   /// Issue #67 item 4a: `isEnqueueingAll` participates in the AutoSync
@@ -210,65 +333,65 @@ struct AutoSyncSeamCharacterizationTests {
   /// instead would not catch the regression (the coordinator's `isRunning`
   /// would carry the `manualActive` emission on its own).
   @Test func autoSyncSeam_multiSelectTimelineDispatcherIsManualActive() async throws {
-    let harness = makeHarness()
-    defer { Task { await harness.cleanup() } }
+    try await withHarness { harness in
 
-    // One asset in 2026-03; the dispatcher iterates [2026] and calls
-    // enqueueYear → photoLibraryService.fetchAssets(year: 2026, month: nil),
-    // which the fake routes through `fetchAssetsCheckpointByYear[2026]`.
-    let asset = TestAssetFactory.makeAsset(id: "a1")
-    harness.photoLib.assetsByYearMonth["2026-3"] = [asset]
-    harness.photoLib.resourcesByAssetId["a1"] = [
-      TestAssetFactory.makeResource(originalFilename: "a1.HEIC")
-    ]
-    let fetchGate = AsyncCheckpoint()
-    harness.photoLib.fetchAssetsCheckpointByYear[2026] = fetchGate
+      // One asset in 2026-03; the dispatcher iterates [2026] and calls
+      // enqueueYear → photoLibraryService.fetchAssets(year: 2026, month: nil),
+      // which the fake routes through `fetchAssetsCheckpointByYear[2026]`.
+      let asset = TestAssetFactory.makeAsset(id: "a1")
+      harness.photoLib.assetsByYearMonth["2026-3"] = [asset]
+      harness.photoLib.resourcesByAssetId["a1"] = [
+        TestAssetFactory.makeResource(originalFilename: "a1.HEIC")
+      ]
+      let fetchGate = AsyncCheckpoint()
+      harness.photoLib.fetchAssetsCheckpointByYear[2026] = fetchGate
 
-    var runStateEmissions: [ExportRunState] = []
-    let cancellable = harness.manager.exportRunStatePublisher.sink {
-      runStateEmissions.append($0)
+      var runStateEmissions: [ExportRunState] = []
+      let cancellable = harness.manager.exportRunStatePublisher.sink {
+        runStateEmissions.append($0)
+      }
+      defer { cancellable.cancel() }
+
+      harness.manager.startExportTimelineSelection(years: [2026], months: [])
+      await fetchGate.waitForEnter(count: 1)
+
+      // Mid-enqueue: pending=0, isRunning=false, queueCount=0, isEnqueueingAll=true.
+      // The publisher must already have emitted `.manualActive` from
+      // `isEnqueueingAll` alone — no other input has flipped.
+      #expect(
+        harness.manager.pendingJobs.isEmpty,
+        "test sanity: dispatcher must be suspended before any job lands")
+      #expect(
+        !harness.manager.isRunning,
+        "test sanity: queue must not yet be running")
+      #expect(
+        harness.manager.isEnqueueingAll,
+        "test sanity: the dispatcher's mid-enqueue flag must be set")
+      let midGate = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
+      #expect(
+        midGate == [.idle, .manualActive],
+        """
+        AutoSync seam contract violation: while the multi-select timeline \
+        dispatcher is suspended inside the enqueue fetch (pending=0, \
+        isRunning=false, queueCount=0), the publisher must already be in \
+        `manualActive` because `isEnqueueingAll` participates in \
+        CombineLatest4. Got: \(midGate). If `isEnqueueingAll` is no longer in \
+        `exportRunStatePublisher`'s tuple, restore it (issue #67 item 4a).
+        """
+      )
+
+      // Drain. Final canonical sequence is the full export lifecycle.
+      await fetchGate.releaseAll()
+      // Not a `#require`: a stalled drain must still reach the canonical-sequence diff below.
+      _ = await eventually("queue drained") {
+        !(harness.manager.isRunning || harness.manager.isEnqueueingAll
+          || harness.manager.queueCount > 0)
+      }
+
+      let canonical = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
+      #expect(
+        canonical == [.idle, .manualActive, .idle],
+        "Full canonical sequence after drain: \(canonical)")
     }
-    defer { cancellable.cancel() }
-
-    harness.manager.startExportTimelineSelection(years: [2026], months: [])
-    await fetchGate.waitForEnter(count: 1)
-
-    // Mid-enqueue: pending=0, isRunning=false, queueCount=0, isEnqueueingAll=true.
-    // The publisher must already have emitted `.manualActive` from
-    // `isEnqueueingAll` alone — no other input has flipped.
-    #expect(
-      harness.manager.pendingJobs.isEmpty,
-      "test sanity: dispatcher must be suspended before any job lands")
-    #expect(
-      !harness.manager.isRunning,
-      "test sanity: queue must not yet be running")
-    #expect(
-      harness.manager.isEnqueueingAll,
-      "test sanity: the dispatcher's mid-enqueue flag must be set")
-    let midGate = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
-    #expect(
-      midGate == [.idle, .manualActive],
-      """
-      AutoSync seam contract violation: while the multi-select timeline \
-      dispatcher is suspended inside the enqueue fetch (pending=0, \
-      isRunning=false, queueCount=0), the publisher must already be in \
-      `manualActive` because `isEnqueueingAll` participates in \
-      CombineLatest4. Got: \(midGate). If `isEnqueueingAll` is no longer in \
-      `exportRunStatePublisher`'s tuple, restore it (issue #67 item 4a).
-      """
-    )
-
-    // Drain. Final canonical sequence is the full export lifecycle.
-    await fetchGate.releaseAll()
-    // Not a `#require`: a stalled drain must still reach the canonical-sequence diff below.
-    _ = await eventually("queue drained") {
-      !(harness.manager.isRunning || harness.manager.isEnqueueingAll
-        || harness.manager.queueCount > 0)
-    }
-
-    let canonical = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))
-    #expect(
-      canonical == [.idle, .manualActive, .idle],
-      "Full canonical sequence after drain: \(canonical)")
   }
 }
