@@ -30,7 +30,7 @@ Current process and open work:
 
 - [`project/implementation-tasks.md`](project/implementation-tasks.md) — open work items (including the deferred architecture follow-ups, [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67), and loose future improvements folded back from archived plans)
 - [`project/release-process.md`](project/release-process.md) — how to cut a release (version bump, tag, publish)
-- [`project/release-validation.md`](project/release-validation.md) — real-Photos smoke matrix and candidate evidence required before release tag push
+- [`project/release-validation.md`](project/release-validation.md) — real-Photos validation before release tag push: core smoke for every release plus the rows `scripts/release/validation_rows.py` reports
 - [`project/historical-persistence-fixtures.md`](project/historical-persistence-fixtures.md) — immutable released-writer fixtures, provenance, and upgrade compatibility tests
 - [`project/plans/ui-smoothness-plan.md`](project/plans/ui-smoothness-plan.md) — active UI smoothness and SwiftUI Observation modernization roadmap
 - [`project/plans/launch-agent-background-sync-plan.md`](project/plans/launch-agent-background-sync-plan.md) — proposed LaunchAgent for closed-app Auto Export (follow-up to the shipped MVP)

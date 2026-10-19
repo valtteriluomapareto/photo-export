@@ -55,7 +55,7 @@ test -z "$(git status --porcelain)"
 
 Stop if any command fails, the PR is unmerged, or the candidate is not clean. Verify the PR's current-head checks passed and its merge is the intended candidate. Keep `CANDIDATE_SHA` for the tag step; a later advance of `main` must not change the selected candidate.
 
-Complete the [Photos smoke matrix and evidence record](release-validation.md) against that exact clean, version-bumped merged commit. Record the artifact and candidate SHA in the release issue or PR. Failed cases block release; each unexercised case needs a reason, residual risk, and an explicit release-owner decision. CI does not substitute for real-library evidence.
+Complete the [pre-release Photos validation](release-validation.md) against that exact clean, version-bumped merged commit: the core smoke plus the rows `scripts/release/validation_rows.py` reports, on the signed dry-run DMG built from that commit. It defines the tiers, the evidence record and when a row may be skipped or deferred.
 
 If the candidate changes, land the change through a PR, select its merged commit, rebuild and repeat relevant checks. This gate applies to betas, stable promotions and code changes after App Review rejection. Create the tag only after the release decision is recorded.
 
@@ -118,8 +118,8 @@ Upload via Xcode Organizer (Distribute App > App Store Connect) or Transporter. 
 Download the DMG on a separate machine (or fresh user account) and confirm:
 
 - Gatekeeper accepts the app without warnings
-- The app launches and core flows work
 - The version in About matches the release
+- Over the validation account's state, the app relaunches, the destination resolves without a re-grant, and repeating an exported month writes no files
 
 **App Store:**
 
@@ -166,7 +166,7 @@ signing, uploads or tag creation, run `scripts/ci/test-guards.sh`.
 
 ## Beta / pre-release tags
 
-Use the same PR → merged candidate → Photos validation → explicit tag flow for betas. In step2, prepare `scripts/bump-version.sh 1.3.0-beta.1 --no-tag` on its release branch. After merge and step3 validation, step4 uses `--expected 1.3.0-beta.1`, `git tag v1.3.0-beta.1 "$CANDIDATE_SHA"`, and `git push origin refs/tags/v1.3.0-beta.1`.
+Use the same PR → merged candidate → Photos validation → explicit tag flow for betas. A beta may defer triggered validation rows; they stay owed for the stable release (see [release validation](release-validation.md#what-to-run)). In step2, prepare `scripts/bump-version.sh 1.3.0-beta.1 --no-tag` on its release branch. After merge and step3 validation, step4 uses `--expected 1.3.0-beta.1`, `git tag v1.3.0-beta.1 "$CANDIDATE_SHA"`, and `git push origin refs/tags/v1.3.0-beta.1`.
 
 The accepted version format is strict semver with an optional pre-release suffix: `X.Y.Z` or `X.Y.Z-<identifier>` (e.g. `1.3.0-beta.1`, `1.3.0-rc.2`). The suffix activates the pre-release path automatically:
 
