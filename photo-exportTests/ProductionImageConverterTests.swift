@@ -16,8 +16,7 @@ struct ProductionImageConverterTests {
   /// Build a tiny HEIC file in a temp dir and round-trip it through the
   /// converter, asserting the output is a valid JPEG.
   @Test func convertsHEICToJPEGAndProducesValidJPEG() async throws {
-    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "ProductionImageConverterTests-\(UUID().uuidString)", isDirectory: true)
+    let tempDir = TestScratch.directory("ProductionImageConverterTests")
     try FileManager.default.createDirectory(
       at: tempDir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -42,8 +41,7 @@ struct ProductionImageConverterTests {
   /// Pins the protocol contract — values outside the range are documented as
   /// clamped, not errored.
   @Test func clampsQualityOutOfRange() async throws {
-    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "ProductionImageConverterTests-\(UUID().uuidString)", isDirectory: true)
+    let tempDir = TestScratch.directory("ProductionImageConverterTests")
     try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: tempDir) }
 
@@ -60,8 +58,7 @@ struct ProductionImageConverterTests {
 
   /// Source file that doesn't exist (or isn't a valid image) throws.
   @Test func throwsWhenSourceMissing() async throws {
-    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "ProductionImageConverterTests-\(UUID().uuidString)", isDirectory: true)
+    let tempDir = TestScratch.directory("ProductionImageConverterTests")
     try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: tempDir) }
 

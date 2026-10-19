@@ -48,9 +48,10 @@ struct VideoExportExecutorTests {
     let executor = FakeVideoExportExecutor()
     let recorder = ActivityRecorder()
     let renderer = ProductionMediaRenderer(executor: executor) { recorder.record($0) }
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("happy-\(UUID().uuidString).mov")
-    defer { try? FileManager.default.removeItem(at: url) }
+    let directory = TestScratch.directory("VideoExportExecutor")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("happy.mov")
 
     try await renderer.render(request: makeRequest(), to: url)
 
@@ -70,7 +71,7 @@ struct VideoExportExecutorTests {
     await #expect(throws: (any Error).self) {
       try await renderer.render(
         request: makeRequest(),
-        to: FileManager.default.temporaryDirectory.appendingPathComponent("x.mov"))
+        to: TestScratch.directory("VideoExportExecutor").appendingPathComponent("x.mov"))
     }
 
     #expect(executor.requestCalls.count == 1)
@@ -88,7 +89,7 @@ struct VideoExportExecutorTests {
     await #expect(throws: (any Error).self) {
       try await renderer.render(
         request: makeRequest(),
-        to: FileManager.default.temporaryDirectory.appendingPathComponent("y.mov"))
+        to: TestScratch.directory("VideoExportExecutor").appendingPathComponent("y.mov"))
     }
 
     #expect(executor.runCalls.count == 1)
@@ -100,9 +101,10 @@ struct VideoExportExecutorTests {
     executor.runExportLatch = latch
     let renderer = ProductionMediaRenderer(executor: executor) { _ in }
 
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("cancel-\(UUID().uuidString).mov")
-    defer { try? FileManager.default.removeItem(at: url) }
+    let directory = TestScratch.directory("VideoExportExecutor")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("cancel.mov")
 
     let task = Task {
       try await renderer.render(request: makeRequest(), to: url)

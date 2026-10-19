@@ -325,10 +325,10 @@ struct ExportPipelineTests {
   // MARK: - Cancel and clear
 
   @Test(.timeLimit(.minutes(2))) func cancelAndClearResetsAllState() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let suite = "cancel-reset-\(UUID().uuidString)"
+    let root = TestScratch.directory("ExportPipeline")
+    let suite = TestScratch.suiteName("cancel-reset")
     let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness(
-      storeRootURL: root, userDefaults: UserDefaults(suiteName: suite)!)
+      storeRootURL: root, userDefaults: TestScratch.defaults(suiteName: suite))
     let gate = AsyncCheckpoint()
     writer.checkpoint = gate
     var tasks: [Task<Void, Never>] = []
@@ -341,7 +341,6 @@ struct ExportPipelineTests {
       store.flushForTesting()
       try? FileManager.default.removeItem(at: root)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: suite)
     }
     do {
       photoLib.assetsByYearMonth["2025-9"] = (1...3).map { index in
@@ -394,10 +393,10 @@ struct ExportPipelineTests {
   // MARK: - Generation counter
 
   @Test(.timeLimit(.minutes(2))) func oldGenerationTasksExitCleanly() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let suite = "cancel-generation-\(UUID().uuidString)"
+    let root = TestScratch.directory("ExportPipeline")
+    let suite = TestScratch.suiteName("cancel-generation")
     let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness(
-      storeRootURL: root, userDefaults: UserDefaults(suiteName: suite)!)
+      storeRootURL: root, userDefaults: TestScratch.defaults(suiteName: suite))
     let oldGate = AsyncCheckpoint()
     let newGate = AsyncCheckpoint()
     var tasks: [Task<Void, Never>] = []
@@ -411,7 +410,6 @@ struct ExportPipelineTests {
       store.flushForTesting()
       try? FileManager.default.removeItem(at: root)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: suite)
     }
     do {
       photoLib.assetsByYearMonth["2025-10"] = (1...2).map { index in

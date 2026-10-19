@@ -44,8 +44,7 @@ struct AutoSyncStorePersistenceTests {
   /// on scope exit (including throws). Replaces 10 copies of the same
   /// allocate/defer pattern that the prior iteration of this file carried.
   private func withTempDirectory(_ body: (URL) throws -> Void) throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AutoSyncStorePersistenceTests-\(UUID().uuidString)")
+    let dir = TestScratch.directory("AutoSyncStorePersistenceTests")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     try body(dir)

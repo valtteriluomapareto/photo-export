@@ -49,7 +49,7 @@ struct FinalCommitCancellationTests {
   }
 
   private final class Destination: ExportDestination {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("FinalCommitCancellation")
     var selectedFolderURL: URL?
     var canExportNow: Bool { true }
     var canImportNow: Bool { true }
@@ -80,18 +80,18 @@ struct FinalCommitCancellationTests {
     let timeline: ExportRecordStore
     let collections: CollectionExportRecordStore
     let manager: ExportManager
-    let defaultsName = "FinalCommit-\(UUID().uuidString)"
+    let defaultsName = TestScratch.suiteName("FinalCommit")
     let defaults: UserDefaults
     let placement: ExportPlacement
     let asset: AssetDescriptor
     let gate = Gate()
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("FinalCommitCancellation")
 
     init(
       collection: Bool, phase: Phase, fallback: Bool = false,
       logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
     ) throws {
-      defaults = UserDefaults(suiteName: defaultsName)!
+      defaults = TestScratch.defaults(suiteName: defaultsName)
       placement = collection ? .favorites() : .timeline(year: 2025, month: 1)
       asset = TestAssetFactory.makeAsset(id: "asset", hasAdjustments: fallback)
       timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)

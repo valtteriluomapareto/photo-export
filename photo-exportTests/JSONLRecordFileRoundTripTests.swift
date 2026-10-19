@@ -53,8 +53,7 @@ struct JSONLRecordFileRoundTripTests {
   private func makeStore() throws -> (
     URL, JSONLRecordFile<Snapshot, Op>, DispatchQueue
   ) {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("JSONLRecordFileRoundTrip-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("JSONLRecordFileRoundTrip")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let queue = DispatchQueue(
       label: "JSONLRecordFile-rt-\(UUID().uuidString)", qos: .utility)

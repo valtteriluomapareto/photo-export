@@ -29,17 +29,15 @@ struct DestinationIdentityIntegrationTests {
       "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). CI's macos-15 runner runs this."
     ))
   func remountDriftKeepsEveryKeyOnStableId() async throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("RemountIntegration-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("RemountIntegration")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let recordsRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("RemountRecords-\(UUID().uuidString)", isDirectory: true)
+    let recordsRoot = TestScratch.directory("RemountRecords")
     defer { try? FileManager.default.removeItem(at: recordsRoot) }
 
-    let suite = "RemountIntegration-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
+    let suite = TestScratch.suiteName("RemountIntegration")
+    let defaults = TestScratch.defaults(suiteName: suite)
     defer { defaults.removePersistentDomain(forName: suite) }
 
     var currentFP: DestinationFingerprint? = lowConfidence("/Volumes/mount-A/backup")

@@ -11,7 +11,7 @@ struct ProducerAttemptOwnershipTests {
 
   @MainActor
   private final class Destination: ExportDestination {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ProducerAttemptOwnership")
     var selectedFolderURL: URL?
     var canExportNow: Bool { true }
     var canImportNow: Bool { true }
@@ -47,11 +47,11 @@ struct ProducerAttemptOwnershipTests {
     let renderer = FakeMediaRenderer()
     let converter = FakeImageConverter()
     let files = FakeFileSystem()
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ProducerAttemptOwnership")
     let timeline: ExportRecordStore
     let collections: CollectionExportRecordStore
     let manager: ExportManager
-    let defaultsName = "ProducerOwnership-\(UUID().uuidString)"
+    let defaultsName = TestScratch.suiteName("ProducerOwnership")
     let defaults: UserDefaults
     let oldGate = AsyncCheckpoint()
     let targetGate = AsyncCheckpoint()
@@ -68,7 +68,7 @@ struct ProducerAttemptOwnershipTests {
     init(_ producer: Producer, collection: Bool = false) {
       self.producer = producer
       self.collection = collection
-      defaults = UserDefaults(suiteName: defaultsName)!
+      defaults = TestScratch.defaults(suiteName: defaultsName)
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
       timeline.configure(for: "A")

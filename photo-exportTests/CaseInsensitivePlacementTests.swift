@@ -132,7 +132,7 @@ struct CaseInsensitivePlacementTests {
   func persistedPathsAndCaseOnlyRenameIdentityStayCompatible(kind: PhotoCollectionDescriptor.Kind)
     async throws
   {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("CaseInsensitivePlacement")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = CollectionExportRecordStore(baseDirectoryURL: root)
     store.configure(for: "test")
@@ -195,7 +195,7 @@ struct CaseInsensitivePlacementTests {
   func resolvedDirectoriesKeepSeparateFilesOnScratchVolume(kind: PhotoCollectionDescriptor.Kind)
     throws
   {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("CaseInsensitivePlacement")
     defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let probe = root.appendingPathComponent("CaseProbe")

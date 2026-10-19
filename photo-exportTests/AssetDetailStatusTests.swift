@@ -44,7 +44,7 @@ import Testing
       let counter = BodyInvalidationCounter()
       let gate = AsyncCheckpoint()
       let requests = RequestLog()
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      let root = TestScratch.directory("AssetDetailStatus")
       let window: NSWindow
       let timelinePlacement = ExportPlacement.timeline(year: 2025, month: 1)
 

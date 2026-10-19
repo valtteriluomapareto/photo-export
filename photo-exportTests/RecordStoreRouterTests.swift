@@ -32,8 +32,7 @@ struct RecordStoreRouterTests {
   }
 
   private func makeHarness() -> Harness {
-    let root = FileManager.default.temporaryDirectory
-      .appendingPathComponent("RecordStoreRouter-\(UUID().uuidString)", isDirectory: true)
+    let root = TestScratch.directory("RecordStoreRouter")
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     timeline.configure(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: root)

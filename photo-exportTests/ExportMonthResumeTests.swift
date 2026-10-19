@@ -7,8 +7,8 @@ import Testing
 struct ExportMonthResumeTests {
   @MainActor
   private final class Fixture {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let suite = "ExportMonthResume-\(UUID().uuidString)"
+    let root = TestScratch.directory("ExportMonthResume")
+    let suite = TestScratch.suiteName("ExportMonthResume")
     let library = FakePhotoLibraryService()
     let destination = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
@@ -29,7 +29,7 @@ struct ExportMonthResumeTests {
         photoLibraryService: library, exportDestination: destination,
         exportRecordStore: store, collectionExportRecordStore: collections,
         assetResourceWriter: writer, fileSystem: fileSystem,
-        userDefaults: UserDefaults(suiteName: suite)!)
+        userDefaults: TestScratch.defaults(suiteName: suite))
     }
 
     func add(_ id: String, month: Int = 1, edited: Bool = false) {
@@ -66,7 +66,6 @@ struct ExportMonthResumeTests {
       try? await store.flush()
       try? await collections.flush()
       destination.cleanup()
-      UserDefaults().removePersistentDomain(forName: suite)
       try? FileManager.default.removeItem(at: root)
     }
   }

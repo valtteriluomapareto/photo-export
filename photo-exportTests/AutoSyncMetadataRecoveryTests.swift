@@ -6,8 +6,7 @@ import Testing
 @MainActor
 struct AutoSyncMetadataRecoveryTests {
   private func root() throws -> URL {
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "MetadataRecovery-\(UUID())")
+    let url = TestScratch.directory("MetadataRecovery")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }

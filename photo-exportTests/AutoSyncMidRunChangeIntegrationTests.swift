@@ -61,8 +61,7 @@ struct AutoSyncMidRunChangeIntegrationTests {
     let writer = FakeAssetResourceWriter()
     let writeGate = AsyncCheckpoint()
     writer.checkpoint = writeGate
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AutoSyncMidRun-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("AutoSyncMidRun")
     let destinationSnapshot = DestinationSnapshot(
       fingerprint: .makeHigh(
         volumeUUIDString: "mid-run-test-volume",

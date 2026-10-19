@@ -31,8 +31,7 @@ struct BackupScannerMatchingTests {
   ) throws -> (
     [BackupScanner.ScannedFile], URL
   ) {
-    let rootDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("BSMatchTest-\(UUID().uuidString)", isDirectory: true)
+    let rootDir = TestScratch.directory("BSMatchTest")
     try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
 
     var scannedFiles: [BackupScanner.ScannedFile] = []

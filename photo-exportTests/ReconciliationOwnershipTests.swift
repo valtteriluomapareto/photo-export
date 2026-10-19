@@ -48,7 +48,7 @@ struct ReconciliationOwnershipTests {
   @MainActor
   private final class Fixture {
     let kind: StoreKind
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ReconciliationOwnership")
     let checker = GatedReconciliationFileChecker()
     let timeline: ExportRecordStore
     let collection: CollectionExportRecordStore
@@ -289,16 +289,14 @@ struct ReconciliationOwnershipTests {
     #expect(fixture.reopenedInfo("A") == expected)
   }
 
-  private func makeImportManager(_ fixture: Fixture, destination: FakeExportDestination) -> (
-    ExportManager, String
-  ) {
-    let suite = "ReconciliationOwnership-\(UUID().uuidString)"
-    let manager = ExportManager(
+  private func makeImportManager(_ fixture: Fixture, destination: FakeExportDestination)
+    -> ExportManager
+  {
+    ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: fixture.timeline, collectionExportRecordStore: fixture.collection,
       assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
-      userDefaults: UserDefaults(suiteName: suite)!)
-    return (manager, suite)
+      userDefaults: TestScratch.defaults("ReconciliationOwnership"))
   }
 
   @Test(arguments: StoreKind.allCases, Interruption.allCases)
@@ -308,11 +306,10 @@ struct ReconciliationOwnershipTests {
     let fixture = try Fixture(kind)
     let destination = FakeExportDestination()
     destination.selectedFolderURL = fixture.mediaA
-    let (manager, suite) = makeImportManager(fixture, destination: destination)
+    let manager = makeImportManager(fixture, destination: destination)
     defer {
       fixture.cleanup()
       destination.cleanup()
-      UserDefaults().removePersistentDomain(forName: suite)
     }
     fixture.seed()
     let expected = fixture.info()
@@ -347,11 +344,10 @@ struct ReconciliationOwnershipTests {
     let fixture = try Fixture(kind)
     let destination = FakeExportDestination()
     destination.selectedFolderURL = fixture.mediaA
-    let (manager, suite) = makeImportManager(fixture, destination: destination)
+    let manager = makeImportManager(fixture, destination: destination)
     defer {
       fixture.cleanup()
       destination.cleanup()
-      UserDefaults().removePersistentDomain(forName: suite)
     }
     fixture.seed()
     let expected = fixture.info()

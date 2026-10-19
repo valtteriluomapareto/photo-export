@@ -8,8 +8,7 @@ struct ExportRecordsDirectoryCoordinatorTests {
   // MARK: - Helpers
 
   private func makeStoreRoot() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportRecordsDirCoord-\(UUID().uuidString)", isDirectory: true)
+    let url = TestScratch.directory("ExportRecordsDirCoord")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }

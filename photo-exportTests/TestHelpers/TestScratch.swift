@@ -40,7 +40,16 @@ enum TestScratch {
 
   /// A fresh preferences suite inside the run root.
   static func defaults(_ label: String) -> UserDefaults {
-    UserDefaults(suiteName: suiteName(label))!
+    defaults(suiteName: suiteName(label))
+  }
+
+  /// Opens the suite a `suiteName(_:)` call returned, so two objects can share it or a
+  /// test can reopen it. Names from anywhere else are rejected, because they would be
+  /// stored in the user's preferences folder.
+  static func defaults(suiteName name: String) -> UserDefaults {
+    precondition(
+      name.hasPrefix(root.path + "/"), "Not a TestScratch suite name: \(name)")
+    return UserDefaults(suiteName: name)!
   }
 
   /// Removes sibling run roots whose process no longer exists. `EPERM` means the pid

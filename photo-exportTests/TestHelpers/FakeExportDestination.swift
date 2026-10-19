@@ -23,8 +23,7 @@ final class FakeExportDestination: ExportDestination {
   var urlForRelativeDirectoryError: Error?
 
   init() {
-    rootURL = FileManager.default.temporaryDirectory
-      .appendingPathComponent("FakeExportDest-\(UUID().uuidString)", isDirectory: true)
+    rootURL = TestScratch.directory("FakeExportDest")
     try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
     selectedFolderURL = rootURL
   }

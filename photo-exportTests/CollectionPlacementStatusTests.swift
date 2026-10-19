@@ -52,8 +52,8 @@ import Testing
       let counter = BodyInvalidationCounter()
       let asset = TestAssetFactory.makeAsset(id: "changed-asset")
       let unchangedAsset = TestAssetFactory.makeAsset(id: "unchanged-asset")
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let defaultsName = "PlacementStatus-\(UUID().uuidString)"
+      let root = TestScratch.directory("CollectionPlacementStatus")
+      let defaultsName = TestScratch.suiteName("PlacementStatus")
       let defaults: UserDefaults
       let selection: LibrarySelection
       let old: ExportPlacement
@@ -68,7 +68,7 @@ import Testing
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         records = CollectionExportRecordStore(baseDirectoryURL: root)
-        defaults = UserDefaults(suiteName: defaultsName)!
+        defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline.configure(for: "A")
         records.configure(for: "A")
         manager = ExportManager(

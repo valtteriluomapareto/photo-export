@@ -178,12 +178,7 @@ struct FakeAutoSyncEnvironmentBuilder {
   let perDestinationTokenStore = InMemoryAutoSyncPerDestinationTokenStore()
   let currentRunStore = InMemoryAutoSyncCurrentRunStore()
   let clock = TestClock()
-  let userDefaults: UserDefaults
-
-  init() {
-    let suiteName = "test-AutoSyncManager-\(UUID().uuidString)"
-    self.userDefaults = UserDefaults(suiteName: suiteName)!
-  }
+  let userDefaults = TestScratch.defaults("AutoSyncManager")
 
   var environment: AutoSyncEnvironment {
     AutoSyncEnvironment(
@@ -200,10 +195,5 @@ struct FakeAutoSyncEnvironmentBuilder {
       clock: clock,
       userDefaults: userDefaults
     )
-  }
-
-  func cleanup() {
-    UserDefaults().removePersistentDomain(
-      forName: userDefaults.dictionaryRepresentation().keys.first ?? "")
   }
 }

@@ -18,8 +18,7 @@ struct DiagnosticReporterTests {
   }
 
   private func makeHarness() -> Harness {
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("DiagnosticReporter-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("DiagnosticReporter")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)

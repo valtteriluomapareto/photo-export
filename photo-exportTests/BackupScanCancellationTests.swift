@@ -77,7 +77,7 @@ struct BackupScanCancellationTests {
 
   @Test(arguments: HoldPoint.allCases)
   func cancelledScanReadsNothingAfterTheCurrentEntry(hold: HoldPoint) async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("BackupScanCancellation")
       .resolvingSymlinksInPath()
     defer { try? FileManager.default.removeItem(at: root) }
     try Self.plantBackup(at: root)
@@ -113,13 +113,11 @@ struct BackupScanCancellationTests {
     cancelAtMonthListing cancel: Bool
   ) async throws -> (reads: [Read], monthListing: Read) {
     let destination = FakeExportDestination()
-    let storeRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString)
-    let defaultsName = "BackupScanCancel-\(UUID().uuidString)"
+    let storeRoot = TestScratch.directory("BackupScanCancellation")
+    let defaultsName = TestScratch.suiteName("BackupScanCancel")
     defer {
       destination.cleanup()
       try? FileManager.default.removeItem(at: storeRoot)
-      UserDefaults.standard.removePersistentDomain(forName: defaultsName)
     }
     let root = destination.rootURL.resolvingSymlinksInPath()
     try Self.plantBackup(at: root)
@@ -139,7 +137,7 @@ struct BackupScanCancellationTests {
     let created = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: timeline, collectionExportRecordStore: collections,
-      backupDirectoryReader: reader, userDefaults: UserDefaults(suiteName: defaultsName)!)
+      backupDirectoryReader: reader, userDefaults: TestScratch.defaults(suiteName: defaultsName))
     manager = created
     defer { manager = nil }  // The reader's closure would otherwise keep the manager alive.
     created.startImport()

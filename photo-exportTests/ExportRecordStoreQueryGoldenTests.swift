@@ -21,8 +21,7 @@ struct ExportRecordStoreQueryGoldenTests {
   // MARK: - Fixtures
 
   private func makeStore() throws -> (URL, ExportRecordStore) {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportRecordStoreQuery-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("ExportRecordStoreQuery")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let store = ExportRecordStore(baseDirectoryURL: dir)
     store.configure(for: "test")
@@ -1087,10 +1086,7 @@ struct ExportRecordStoreQueryGoldenTests {
   /// - `rebuildCountersFromRecords()` populates `monthCounters` from the final
   ///   `recordsById`. The resulting counts must match a recompute exactly.
   @Test func configureReloadFromSnapshotPlusLogReproducesCounters() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent(
-        "ExportRecordStoreSnapshotReload-\(UUID().uuidString)",
-        isDirectory: true)
+    let dir = TestScratch.directory("ExportRecordStoreSnapshotReload")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -1223,10 +1219,7 @@ struct ExportRecordStoreQueryGoldenTests {
   /// snapshot file, reloads → `.failed`, calls `resetToEmpty`, then asserts every
   /// public count method returns 0 for the previously-populated cell.
   @Test func resetToEmptyClearsCounters() throws {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent(
-        "ExportRecordStoreResetClears-\(UUID().uuidString)",
-        isDirectory: true)
+    let dir = TestScratch.directory("ExportRecordStoreResetClears")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 

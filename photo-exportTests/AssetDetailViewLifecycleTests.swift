@@ -78,8 +78,7 @@ struct AssetDetailViewLifecycleTests {
     }
 
     let photoLibraryManager = PhotoLibraryManager(overrideService: service)
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AssetDetailLifecycle-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("AssetDetailLifecycle")
     let exportRecordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     exportRecordStore.configure(for: "detail-test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)

@@ -102,7 +102,7 @@ extension ExportVariantReasonTests {
 @MainActor
 struct ExportVariantReasonStoreTests {
   @Test func routerTransitionsAndReloadKeepReasonsExplicit() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ExportVariantReason")
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
@@ -212,7 +212,7 @@ struct ExportVariantReasonStoreTests {
 extension ExportVariantReasonStoreTests {
   @Test(arguments: [false, true])
   func countersAcceptOnlyKnownReasonsBeforeAndAfterReload(paired: Bool) async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ExportVariantReason")
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)

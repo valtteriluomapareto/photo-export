@@ -32,8 +32,8 @@ struct DestinationSnapshotAdapterTests {
     configureResult: ConfigureRecordStoresResult = .success,
     scanResult: Bool = false
   ) -> Harness {
-    let suite = "AdapterTest-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
+    let suite = TestScratch.suiteName("AdapterTest")
+    let defaults = TestScratch.defaults(suiteName: suite)
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults,
       bookmarkDefaultsKey: "bm-\(UUID().uuidString)",
@@ -41,8 +41,7 @@ struct DestinationSnapshotAdapterTests {
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: {}, interruptForDestinationUnavailable: {},
       configureRecordStores: { _ in configureResult })
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AdapterStore-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("AdapterStore")
     let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     let monitorIdentity = CurrentValueSubject<DestinationIdentity, Never>(.unavailable)

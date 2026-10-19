@@ -87,10 +87,9 @@ struct LibraryGridSelectionLifecycleTests {
     let hostingView: NSView
 
     init(grid: Grid) {
-      root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("GridSelection-\(UUID().uuidString)", isDirectory: true)
-      defaultsName = "GridSelection-\(UUID().uuidString)"
-      defaults = UserDefaults(suiteName: defaultsName)!
+      root = TestScratch.directory("GridSelection")
+      defaultsName = TestScratch.suiteName("GridSelection")
+      defaults = TestScratch.defaults(suiteName: defaultsName)
       timelineStore = ExportRecordStore(baseDirectoryURL: root)
       collectionStore = CollectionExportRecordStore(baseDirectoryURL: root)
       timelineStore.configure(for: "grid-test")

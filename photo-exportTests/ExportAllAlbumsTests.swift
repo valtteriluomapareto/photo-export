@@ -104,7 +104,6 @@ struct ExportAllAlbumsTests {
     let timelineStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
-    let userDefaultsSuite: String
 
     /// Tear down in the right order: cancel anything in flight, flush both stores'
     /// IO queues so no async append is still racing toward the temp dirs, remove
@@ -118,7 +117,6 @@ struct ExportAllAlbumsTests {
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
     }
   }
 
@@ -127,14 +125,13 @@ struct ExportAllAlbumsTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportAllAlbums-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ExportAllAlbums")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let suiteName = "test-ExportAllAlbums-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let suiteName = TestScratch.suiteName("ExportAllAlbums")
+    let defaults = TestScratch.defaults(suiteName: suiteName)
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -147,7 +144,7 @@ struct ExportAllAlbumsTests {
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer, fileSystem: fileSystem,
       timelineStore: timelineStore, collectionStore: collectionStore,
-      storeRoot: storeRoot, userDefaultsSuite: suiteName)
+      storeRoot: storeRoot)
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {
@@ -236,14 +233,13 @@ struct ExportAllAlbumsTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportAllAlbums-cache-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ExportAllAlbums-cache")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let suiteName = "test-ExportAllAlbums-cache-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let suiteName = TestScratch.suiteName("ExportAllAlbums-cache")
+    let defaults = TestScratch.defaults(suiteName: suiteName)
     let cacheControl = RecordingPHAssetCacheControl()
     let manager = ExportManager(
       photoLibraryService: photoLib,
@@ -261,7 +257,6 @@ struct ExportAllAlbumsTests {
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: suiteName)
     }
 
     let albumA = seedAlbum(photoLib, localId: "A", ids: ["a1"])

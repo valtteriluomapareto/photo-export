@@ -19,8 +19,8 @@ import Testing
 
     @MainActor
     private final class Fixture {
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let suite = "ManualFeedbackView-\(UUID().uuidString)"
+      let root = TestScratch.directory("ManualExportFeedbackView")
+      let suite = TestScratch.suiteName("ManualFeedbackView")
       let defaults: UserDefaults
       let timeline: ExportRecordStore
       let collections: CollectionExportRecordStore
@@ -42,7 +42,7 @@ import Testing
       var selectedAtOpen: String?
 
       init() {
-        defaults = UserDefaults(suiteName: suite)!
+        defaults = TestScratch.defaults(suiteName: suite)
         defaults.set(SettingsTab.advanced.rawValue, forKey: SettingsTab.storageKey)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)

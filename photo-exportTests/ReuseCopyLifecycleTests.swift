@@ -34,16 +34,16 @@ struct ReuseCopyLifecycleTests {
     let destination = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let files = FakeFileSystem()
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ReuseCopyLifecycle")
     let timeline: ExportRecordStore
     let collections: CollectionExportRecordStore
     let manager: ExportManager
-    let defaultsName = "ReuseCopyLifecycle-\(UUID().uuidString)"
+    let defaultsName = TestScratch.suiteName("ReuseCopyLifecycle")
     let defaults: UserDefaults
     let asset = TestAssetFactory.makeAsset(id: "shared", hasAdjustments: false)
 
     init() throws {
-      defaults = UserDefaults(suiteName: defaultsName)!
+      defaults = TestScratch.defaults(suiteName: defaultsName)
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
       timeline.configure(for: "A")

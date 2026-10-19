@@ -54,8 +54,8 @@ import Testing
       let records: CollectionExportRecordStore
       let destination: ExportDestinationManager
       let fakeDestination = FakeExportDestination()
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let defaultsName = "CollectionObservation-\(UUID().uuidString)"
+      let root = TestScratch.directory("CollectionContentObservation")
+      let defaultsName = TestScratch.suiteName("CollectionObservation")
       let defaults: UserDefaults
       let window: NSWindow
       let favorite = ExportPlacement.favorites()
@@ -66,7 +66,7 @@ import Testing
           albumFolders: 1, albumsPerFolder: 1, assetsPerAlbum: 10_000)
         service.favoritesAssets = service.assetsByAlbumLocalId["bulk-album-0-0"]!
         library = PhotoLibraryManager(overrideService: service)
-        defaults = UserDefaults(suiteName: defaultsName)!
+        defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         records = CollectionExportRecordStore(baseDirectoryURL: root)
         timeline.configure(for: "test")

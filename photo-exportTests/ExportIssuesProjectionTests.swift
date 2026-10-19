@@ -67,7 +67,7 @@ struct ExportIssuesProjectionTests {
   }
 
   @Test func retryMetadataSurvivesRealFractionalTimePersistence() throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ExportIssuesProjection")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
     defer { store.flushForTesting() }
@@ -93,7 +93,7 @@ struct ExportIssuesProjectionTests {
   }
 
   @Test func recoveredInterruptionDoesNotBorrowEarlierSuccessfulTime() throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ExportIssuesProjection")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
     defer { store.flushForTesting() }
@@ -125,7 +125,7 @@ struct ExportIssuesIntegrationTests {
   private let date = Date(timeIntervalSince1970: 1_800_000_000)
 
   @Test func partialStoresKeepKnownFailuresAndDestinationSwitchesDoNotMix() throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("ExportIssuesProjection")
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     defer { timeline.flushForTesting() }

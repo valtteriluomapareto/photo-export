@@ -16,8 +16,7 @@ import Testing
 @MainActor
 struct FileBackedAutoSyncRunSummaryStoreTests {
   private func makeRoot() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("RunSummary-\(UUID().uuidString)", isDirectory: true)
+    let url = TestScratch.directory("RunSummary")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }
@@ -102,8 +101,7 @@ struct FileBackedAutoSyncRunSummaryStoreTests {
 @MainActor
 struct FileBackedAutoSyncPerDestinationTokenStoreTests {
   private func makeRoot() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("PerDestToken-\(UUID().uuidString)", isDirectory: true)
+    let url = TestScratch.directory("PerDestToken")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }
@@ -164,8 +162,7 @@ struct FileBackedAutoSyncPerDestinationTokenStoreTests {
 @MainActor
 struct FileBackedDestinationSafetyConfirmationStoreTests {
   private func makeRoot() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("SafetyConfirm-\(UUID().uuidString)", isDirectory: true)
+    let url = TestScratch.directory("SafetyConfirm")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }
@@ -235,8 +232,7 @@ struct FileBackedDestinationSafetyConfirmationStoreTests {
 @MainActor
 struct GlobalPhotoChangeTokenStoreTests {
   private func makeFile() throws -> URL {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("GlobalToken-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("GlobalToken")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir.appendingPathComponent("photo-library-change-token.data")
   }
@@ -263,8 +259,7 @@ struct GlobalPhotoChangeTokenStoreTests {
     // doesn't exist — normal first-launch state. The bug-magnet cleanup
     // walks below have been removed: rooting everything under a single
     // UUID-prefixed temp dir keeps cleanup honest.
-    let topLevelDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("GlobalToken-nested-\(UUID().uuidString)", isDirectory: true)
+    let topLevelDir = TestScratch.directory("GlobalToken-nested")
     defer { try? FileManager.default.removeItem(at: topLevelDir) }
     let store = GlobalPhotoChangeTokenStore(
       fileURL:

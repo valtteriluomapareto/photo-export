@@ -6,8 +6,7 @@ import Testing
 @MainActor
 struct FileBackedAutoSyncDirtyStateStoreTests {
   private func makeRoot() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AutoSyncDirty-\(UUID().uuidString)", isDirectory: true)
+    let url = TestScratch.directory("AutoSyncDirty")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }
@@ -112,8 +111,7 @@ struct FileBackedAutoSyncDirtyStateStoreTests {
 @MainActor
 struct FileBackedAutoSyncRetryStateStoreTests {
   private func makeRoot() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AutoSyncRetry-\(UUID().uuidString)", isDirectory: true)
+    let url = TestScratch.directory("AutoSyncRetry")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }

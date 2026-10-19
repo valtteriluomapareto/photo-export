@@ -9,8 +9,8 @@ import Testing
 struct ManualExportSummaryTests {
   @MainActor
   private final class Fixture {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let suite = "ManualSummary-\(UUID().uuidString)"
+    let root = TestScratch.directory("ManualExportSummary")
+    let suite = TestScratch.suiteName("ManualSummary")
     let defaults: UserDefaults
     let photos = FakePhotoLibraryService()
     let destination = FakeExportDestination()
@@ -22,7 +22,7 @@ struct ManualExportSummaryTests {
     private var closed = false
 
     init(logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()) {
-      defaults = UserDefaults(suiteName: suite)!
+      defaults = TestScratch.defaults(suiteName: suite)
       timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
       timeline.configure(for: "A")

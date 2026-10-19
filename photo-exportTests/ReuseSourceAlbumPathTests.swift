@@ -36,14 +36,12 @@ struct ReuseSourceAlbumPathTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ReuseSourceAlbum-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ReuseSourceAlbum")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let defaults = UserDefaults(
-      suiteName: "test-ReuseAlbum-\(UUID().uuidString)")!
+    let defaults = TestScratch.defaults("ReuseAlbum")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,

@@ -38,14 +38,14 @@ import Testing
       let manager: ExportManager
       let destinationManager: ExportDestinationManager
       let counter = BodyInvalidationCounter()
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let defaultsName = "ImportFailure-\(UUID().uuidString)"
+      let root = TestScratch.directory("ImportFailurePresentation")
+      let defaultsName = TestScratch.suiteName("ImportFailure")
       let defaults: UserDefaults
       let favorites = ExportPlacement.favorites()
       var window: NSWindow?
 
       init(fault: History? = nil) {
-        defaults = UserDefaults(suiteName: defaultsName)!
+        defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline = ExportRecordStore(
           baseDirectoryURL: root, reconciliationFileChecker: checker,
           recordLogIO: fault == .timeline ? io : ProductionJSONLRecordLogIO())

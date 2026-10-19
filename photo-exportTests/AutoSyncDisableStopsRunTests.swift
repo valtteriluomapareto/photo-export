@@ -18,8 +18,7 @@ struct AutoSyncDisableStopsRunTests {
     let destination = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let writeGate = AsyncCheckpoint()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("AutoSyncDisable-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("AutoSyncDisable")
     let destinationSnapshot: DestinationSnapshot
     let timelineStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore

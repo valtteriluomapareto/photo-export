@@ -66,7 +66,7 @@ struct SnapshotReadInjectionTests {
   }
 
   @Test func snapshotReadFailureUsesTheInjectedBoundaryAndKeepsTheReadableLog() throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("SnapshotReadInjection")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let snapshotURL = root.appendingPathComponent("snapshot.json")
@@ -102,7 +102,7 @@ struct SnapshotReadInjectionTests {
 
   @Test(arguments: [false, true])
   func bothStoresPreserveSnapshotAndLogUntilReadRetry(collection: Bool) throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("SnapshotReadInjection")
     let directory = root.appendingPathComponent("A")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let placement = ExportPlacement.favorites(createdAt: date)

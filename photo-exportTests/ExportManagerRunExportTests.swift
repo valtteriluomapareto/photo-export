@@ -38,7 +38,6 @@ struct ExportManagerRunExportTests {
     let store: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
-    let userDefaultsSuite: String
 
     func cleanup() async {
       // Release any suspended writers before cancelling so the writer Task can complete.
@@ -50,7 +49,6 @@ struct ExportManagerRunExportTests {
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: userDefaultsSuite)
     }
   }
 
@@ -59,14 +57,12 @@ struct ExportManagerRunExportTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportManagerRunExport-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ExportManagerRunExport")
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let suiteName = "test-ExportManagerRunExport-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let defaults = TestScratch.defaults("ExportManagerRunExport")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -79,7 +75,7 @@ struct ExportManagerRunExportTests {
     return Harness(
       manager: manager, photoLib: photoLib, dest: dest, writer: writer,
       store: store, collectionStore: collectionStore,
-      storeRoot: storeRoot, userDefaultsSuite: suiteName)
+      storeRoot: storeRoot)
   }
 
   private func makeContext(scope: ExportRunScope) -> ExportRunContext {

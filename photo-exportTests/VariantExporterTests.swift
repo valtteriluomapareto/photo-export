@@ -80,8 +80,7 @@ struct VariantExporterTests {
     let converter = FakeImageConverter()
     let fileSystem = FakeFileSystem()
     let dest = FakeExportDestination()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("VariantExporter-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("VariantExporter")
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
     timeline.configure(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)

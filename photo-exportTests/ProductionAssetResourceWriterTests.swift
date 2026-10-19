@@ -6,9 +6,7 @@ import Testing
 
 struct ProductionAssetResourceWriterTests {
   private func makeTempURL(filename: String = UUID().uuidString) -> URL {
-    FileManager.default.temporaryDirectory
-      .appendingPathComponent("ProductionWriterTests", isDirectory: true)
-      .appendingPathComponent(filename)
+    TestScratch.directory("ProductionWriter").appendingPathComponent(filename)
   }
 
   @Test func writeResourceUsesResolvedWriteCallback() async throws {

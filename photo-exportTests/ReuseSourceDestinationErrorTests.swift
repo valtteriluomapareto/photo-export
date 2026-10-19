@@ -34,14 +34,12 @@ struct ReuseSourceDestinationErrorTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ReuseSourceDestErr-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ReuseSourceDestErr")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let defaults = UserDefaults(
-      suiteName: "test-ReuseDestErr-\(UUID().uuidString)")!
+    let defaults = TestScratch.defaults("ReuseDestErr")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,

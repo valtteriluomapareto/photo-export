@@ -23,7 +23,7 @@ struct AssetDetailPreviewRevisionTests {
   private final class Fixture {
     let service = FakePhotoLibraryService()
     let manager: PhotoLibraryManager
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let root = TestScratch.directory("AssetDetailPreviewRevision")
     let timeline: ExportRecordStore
     let collections: CollectionExportRecordStore
     let window: NSWindow

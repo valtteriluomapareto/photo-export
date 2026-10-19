@@ -27,14 +27,12 @@ struct ReuseSourceCopyPathTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ReuseSource-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ReuseSource")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let defaults = UserDefaults(
-      suiteName: "test-ReuseCopy-\(UUID().uuidString)")!
+    let defaults = TestScratch.defaults("ReuseCopy")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,

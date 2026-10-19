@@ -124,7 +124,7 @@ struct ExportManagerHelperTests {
   /// sync at the bottom of `ExportManager.init` is what guarantees this).
   @Test func convertHEICToJPEGTogglePersistsAcrossManagerInits() {
     let suiteName = TestScratch.suiteName("heic47-persist")
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let defaults = TestScratch.defaults(suiteName: suiteName)
     defaults.set(true, forKey: ExportManager.convertHEICToJPEGDefaultsKey)
 
     let tempDir = TestScratch.directory("ExportManagerHelper")
@@ -158,8 +158,8 @@ struct ExportManagerHelperTests {
   /// `isExported`), so the test only pins the UserDefaults read/write contract — but
   /// that contract is the entire reason the Settings toggle survives a relaunch.
   @Test func livePhotosPairedExportTogglePersistsAcrossManagerInits() {
-    let suiteName = "test-livePhotos49-persist-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let suiteName = TestScratch.suiteName("livePhotos49-persist")
+    let defaults = TestScratch.defaults(suiteName: suiteName)
 
     // Fresh suite: toggle defaults off, didSet persists to defaults.
     let initial = makeManagerForTogglePersistence(userDefaults: defaults)
@@ -186,8 +186,8 @@ struct ExportManagerHelperTests {
   /// docstring: reconcile correctness rides on the per-variant `subfolder` field,
   /// not on the live store mirror), so this test only pins the UserDefaults contract.
   @Test func videoLayoutTogglePersistsAcrossManagerInits() {
-    let suiteName = "test-videoLayout38-persist-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
+    let suiteName = TestScratch.suiteName("videoLayout38-persist")
+    let defaults = TestScratch.defaults(suiteName: suiteName)
 
     let initial = makeManagerForTogglePersistence(userDefaults: defaults)
     #expect(initial.videoLayout == .flat,

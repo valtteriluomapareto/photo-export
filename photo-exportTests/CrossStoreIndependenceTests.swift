@@ -25,14 +25,13 @@ struct CrossStoreIndependenceTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("CrossStoreInd-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("CrossStoreInd")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
     timelineStore.configure(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
-    let defaults = UserDefaults(
-      suiteName: suiteName ?? "test-CrossStore-\(UUID().uuidString)")!
+    let defaults = TestScratch.defaults(
+      suiteName: suiteName ?? TestScratch.suiteName("CrossStore"))
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
@@ -133,7 +132,7 @@ struct CrossStoreIndependenceTests {
   @Test(.timeLimit(.minutes(2))) func cancelAndClearOnTimelineDoesNotTouchCollectionStore()
     async throws
   {
-    let suite = "cancel-timeline-\(UUID().uuidString)"
+    let suite = TestScratch.suiteName("cancel-timeline")
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
     ) = try makeManager(suiteName: suite)
@@ -150,7 +149,6 @@ struct CrossStoreIndependenceTests {
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: suite)
     }
     do {
       let asset = makeAsset(id: "cancel-asset", year: 2025, month: 8)
@@ -208,7 +206,7 @@ struct CrossStoreIndependenceTests {
   @Test(.timeLimit(.minutes(2))) func cancelAndClearOnFavoritesDoesNotTouchTimelineStore()
     async throws
   {
-    let suite = "cancel-favorites-\(UUID().uuidString)"
+    let suite = TestScratch.suiteName("cancel-favorites")
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
     ) = try makeManager(suiteName: suite)
@@ -225,7 +223,6 @@ struct CrossStoreIndependenceTests {
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
-      UserDefaults().removePersistentDomain(forName: suite)
     }
     do {
       let asset = makeAsset(id: "fav-cancel-asset")

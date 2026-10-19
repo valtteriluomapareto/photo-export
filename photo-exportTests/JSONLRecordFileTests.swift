@@ -26,8 +26,7 @@ struct JSONLRecordFileTests {
   private func makeStore() throws -> (
     URL, JSONLRecordFile<Snapshot, Op>, DispatchQueue
   ) {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("JSONLRecordFile-\(UUID().uuidString)", isDirectory: true)
+    let dir = TestScratch.directory("JSONLRecordFile")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let queue = DispatchQueue(label: "JSONLRecordFile-test-\(UUID().uuidString)", qos: .utility)
     let file = JSONLRecordFile<Snapshot, Op>(

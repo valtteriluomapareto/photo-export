@@ -119,8 +119,8 @@ import Testing
     /// Mirrors the shape of the hosted fixtures that tests capture as `f` or `fixture`.
     @MainActor
     private final class HostedFixture {
-      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      let suite = "ExpectationReflectionSafety-\(UUID().uuidString)"
+      let root = TestScratch.directory("ExpectationReflectionSafety")
+      let suite = TestScratch.suiteName("ExpectationReflectionSafety")
       let defaults: UserDefaults
       let service = FakePhotoLibraryService()
       let destination = FakeExportDestination()
@@ -136,7 +136,7 @@ import Testing
       var isLoaded = false
 
       init() {
-        defaults = UserDefaults(suiteName: suite)!
+        defaults = TestScratch.defaults(suiteName: suite)
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)
