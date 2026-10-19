@@ -14,6 +14,7 @@ import Testing
 /// validated by manual testing and the app's own usage; these tests cover the orchestration
 /// layer that was previously untestable.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ExportPipelineTests {
   // MARK: - Test setup
 

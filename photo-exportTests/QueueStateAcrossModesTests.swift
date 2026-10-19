@@ -31,6 +31,7 @@ import Testing
 /// below catch that regression directly.
 ///
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct QueueStateAcrossModesTests {
 
   // MARK: - Fixtures
@@ -129,16 +130,13 @@ struct QueueStateAcrossModesTests {
     }
   }
 
-  /// Yields until the given condition holds or the deadline elapses. Used
-  /// instead of fixed sleeps so the tests stay deterministic under varying
-  /// machine load.
+  /// Re-checks until the given condition holds; the suite's time limit is the
+  /// backstop. Used instead of fixed sleeps so the tests stay deterministic
+  /// under varying machine load.
   private func waitUntil(
-    timeout: TimeInterval = 10, _ condition: @autoclosure () -> Bool
+    _ condition: @autoclosure () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
   ) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    while !condition() && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 5_000_000)
-    }
+    _ = await eventually("waitUntil condition", sourceLocation: sourceLocation) { condition() }
   }
 
   // MARK: - 1. Counter monotonicity across mode switch (the reported bug)

@@ -9,6 +9,7 @@ import Testing
 /// `PhotoCollectionDescriptor.albumLocalIds(in:)` tree-walk helper.
 ///
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ExportAllAlbumsTests {
 
   // MARK: - Tree walk
@@ -175,12 +176,9 @@ struct ExportAllAlbumsTests {
   }
 
   private func waitUntil(
-    timeout: TimeInterval = 10, _ condition: @autoclosure () -> Bool
+    _ condition: @autoclosure () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
   ) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    while !condition() && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 5_000_000)
-    }
+    _ = await eventually("waitUntil condition", sourceLocation: sourceLocation) { condition() }
   }
 
   // MARK: - Enqueue behaviour

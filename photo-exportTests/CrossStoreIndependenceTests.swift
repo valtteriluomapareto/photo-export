@@ -12,6 +12,7 @@ import Testing
 /// per-store rejection guards in `CollectionExportRecordStoreTests` cover the unit-level
 /// API; this suite covers the integration paths that touch both stores in one run.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct CrossStoreIndependenceTests {
 
   // MARK: - Fixtures

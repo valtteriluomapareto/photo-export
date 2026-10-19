@@ -4,6 +4,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ExportRecordStoreRecoveryTests {
 
   private func makeTempDir() -> URL {
@@ -241,12 +242,11 @@ struct ExportRecordStoreRecoveryTests {
     }
 
     // Compaction is: ioQueue → Task @MainActor → ioQueue
-    // Poll for the snapshot file to appear (up to 3 seconds)
+    // Poll for the snapshot file to appear.
     let snapFile = snapshotURL(base: base, dest: dest)
-    let deadline = Date().addingTimeInterval(3)
-    while !FileManager.default.fileExists(atPath: snapFile.path) && Date() < deadline {
+    _ = await eventually("compaction snapshot written") {
       store.flushForTesting()
-      try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+      return FileManager.default.fileExists(atPath: snapFile.path)
     }
 
     #expect(FileManager.default.fileExists(atPath: snapFile.path))
@@ -275,10 +275,9 @@ struct ExportRecordStoreRecoveryTests {
     }
 
     let snapFile = snapshotURL(base: base, dest: dest)
-    let deadline = Date().addingTimeInterval(3)
-    while !FileManager.default.fileExists(atPath: snapFile.path) && Date() < deadline {
+    _ = await eventually("compaction snapshot written") {
       store.flushForTesting()
-      try await Task.sleep(nanoseconds: 100_000_000)
+      return FileManager.default.fileExists(atPath: snapFile.path)
     }
 
     let store2 = ExportRecordStore(baseDirectoryURL: base)

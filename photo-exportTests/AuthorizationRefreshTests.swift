@@ -8,7 +8,7 @@ import Testing
 
 #if DEBUG
   @MainActor
-  @Suite(.serialized)
+  @Suite(.timeLimit(.minutes(2)), .serialized)
   struct AuthorizationRefreshTests {
     @MainActor
     private struct Host: View {
@@ -73,13 +73,10 @@ import Testing
       }
     }
 
-    private func observe(_ condition: () -> Bool) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(10))
-      while !condition(), clock.now < deadline, !Task.isCancelled {
-        try? await Task.sleep(for: .milliseconds(10))
-      }
-      return condition()
+    private func observe(
+      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
     }
 
     @Test(.timeLimit(.minutes(1)), arguments: [PHAuthorizationStatus.authorized, .limited])

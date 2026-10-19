@@ -4,6 +4,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ExportSettingsCaptureTests {
   enum Mode: CaseIterable, Sendable {
     case month, year, all, timelineSelection, favorites, collectionsSelection

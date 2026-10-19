@@ -10,6 +10,7 @@ import Testing
 /// contract guarantees, and how the render path interacts with paired
 /// `_orig` companions and collision suffixing.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ExportManagerVideoRenderTests {
   // MARK: - Test harness
 

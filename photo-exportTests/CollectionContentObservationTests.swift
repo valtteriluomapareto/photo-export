@@ -122,15 +122,14 @@ import Testing
       }
     }
 
-    private func observe(in window: NSWindow, _ condition: () -> Bool) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(15))
-      while !Task.isCancelled, clock.now < deadline {
+    private func observe(
+      in window: NSWindow, _ condition: () -> Bool,
+      sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+      await eventually("observed hosted condition", sourceLocation: sourceLocation) {
         window.contentView?.layoutSubtreeIfNeeded()
-        if condition() { return true }
-        try? await Task.sleep(for: .milliseconds(10))
+        return condition()
       }
-      return condition()
     }
 
     @Test(.timeLimit(.minutes(2)))

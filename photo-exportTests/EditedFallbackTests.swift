@@ -10,6 +10,7 @@ import Testing
 /// asset. The asset's `isExported` check recognises the resulting record
 /// shape so the queue stops re-trying every export run.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct EditedFallbackTests {
 
   // MARK: - Harness

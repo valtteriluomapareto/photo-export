@@ -18,6 +18,7 @@ import Testing
 ///   2. `BackupScanner` + `bulkImportRecords` together can produce different records
 ///      for the same input if any step is non-deterministic (ordering, timing, retry).
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ImportIdempotencyTests {
 
   // MARK: - Fixtures (mirrored from ExportManagerImportTests)

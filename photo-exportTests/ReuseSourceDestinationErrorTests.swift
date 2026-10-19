@@ -21,6 +21,7 @@ import Testing
 /// switch in `isSourceSideCopyError`) would silently retry destination problems
 /// via PhotoKit — doubling work and never surfacing the real error to the user.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ReuseSourceDestinationErrorTests {
 
   // MARK: - Fixtures

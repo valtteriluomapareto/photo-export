@@ -4,6 +4,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct AutoSyncRetryLifecycleTests {
   private func destination(_ id: String = "retry-A") -> DestinationSnapshot {
     DestinationSnapshot(stableId: id, fingerprint: nil, isAvailable: true, safety: .safe)

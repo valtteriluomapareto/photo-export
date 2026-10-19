@@ -15,6 +15,7 @@ import Testing
 /// 3. Integration tests that drive the full `startImport` flow.
 ///
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ImportReconcileTests {
 
   // MARK: - Filesystem helpers

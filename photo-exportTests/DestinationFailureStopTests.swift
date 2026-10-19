@@ -5,6 +5,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct DestinationFailureStopTests {
   enum Route: CaseIterable { case render, conversion, copy, move, fallback, directory }
 
@@ -26,12 +27,7 @@ struct DestinationFailureStopTests {
   }
 
   private func reached(_ gate: AsyncCheckpoint) async -> Bool {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(10))
-    while await gate.enteredSoFar == 0, clock.now < deadline, !Task.isCancelled {
-      try? await Task.sleep(for: .milliseconds(10))
-    }
-    return await gate.enteredSoFar > 0
+    await gate.waitForEnter(count: 1)
   }
   @MainActor
   private final class Fixture {
@@ -399,10 +395,8 @@ struct DestinationFailureStopTests {
       preparations = f.manager.currentPreparationTasks
       let generation = f.manager.generation
       f.start()
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(10))
-      while f.manager.generation == generation, clock.now < deadline, !Task.isCancelled {
-        try? await Task.sleep(for: .milliseconds(10))
+      _ = await eventually("destination stop advances the generation") {
+        f.manager.generation != generation
       }
       try #require(f.manager.generation != generation)
       #expect(f.manager.currentPreparationTasks.isEmpty)

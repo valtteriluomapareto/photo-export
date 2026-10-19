@@ -4,6 +4,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ReuseCopyLifecycleTests {
   private final class Observation: @unchecked Sendable {
     private let lock = NSLock()
@@ -18,7 +19,8 @@ struct ReuseCopyLifecycleTests {
 
     func hold() throws {
       Task { await started.enter() }
-      guard releaseSignal.wait(timeout: .now() + 15) == .success else {
+      // Teardown always signals; the bound only keeps a broken test from stranding the worker.
+      guard releaseSignal.wait(timeout: .now() + 120) == .success else {
         throw NSError(domain: "CopyGateTimeout", code: 1)
       }
     }
@@ -76,16 +78,19 @@ struct ReuseCopyLifecycleTests {
     let fixture = try Fixture()
     defer { fixture.cleanup() }
     let observation = Observation()
+    let offMain = Observation()
     fixture.files.copyHook = { _, _ in
+      offMain.record(!Thread.isMainThread)
       let heartbeat = DispatchSemaphore(value: 0)
       Task { @MainActor in heartbeat.signal() }
-      // Independent bounded release: old code blocks MainActor, then fails this
-      // observation instead of deadlocking the test runner indefinitely.
-      observation.record(heartbeat.wait(timeout: .now() + 2) == .success)
+      // The bound only keeps old main-thread copies from deadlocking the runner; how
+      // quickly a congested MainActor answers is not the oracle.
+      observation.record(heartbeat.wait(timeout: .now() + 30) == .success)
     }
     fixture.manager.startExportFavorites()
     await fixture.manager.waitForQueueDrained()
     #expect(fixture.files.copyCalls.count == 1)
+    #expect(offMain.observed, "The physical copy must not run on the main thread")
     #expect(observation.observed, "MainActor must respond while the physical copy is held")
     #expect(fixture.writer.writeCalls.isEmpty)
     #expect(

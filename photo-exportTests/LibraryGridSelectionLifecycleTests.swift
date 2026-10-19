@@ -132,15 +132,12 @@ struct LibraryGridSelectionLifecycleTests {
   }
 
   /// SwiftUI schedules render passes independently of the stream producer. The
-  /// deadline bounds a failed observation; stream continuations control all races.
-  /// Allow CI's parallel MainActor tests to finish before the first render pass.
-  private func observe(seconds: Int = 15, _ condition: () -> Bool) async -> Bool {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(seconds))
-    while !condition(), !Task.isCancelled, clock.now < deadline {
-      try? await Task.sleep(for: .milliseconds(10))
-    }
-    return condition()
+  /// test's time limit bounds a failed observation; stream continuations control
+  /// all races.
+  private func observe(
+    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+  ) async -> Bool {
+    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
   }
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)

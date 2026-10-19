@@ -11,6 +11,7 @@ import Testing
 /// preheat lifecycle, and the scope-race guard — thumbnail loading lives in
 /// `ThumbnailView.task(id:)` against `PhotoLibraryManager.decodedThumbnail`.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct MonthViewModelTests {
 
   @MainActor

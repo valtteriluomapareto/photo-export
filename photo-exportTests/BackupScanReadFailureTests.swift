@@ -3,6 +3,7 @@ import Testing
 
 @testable import Photo_Export
 
+@Suite(.timeLimit(.minutes(2)))
 struct BackupScanReadFailureTests {
   enum Failure: CaseIterable {
     case rootEnumeration, yearEnumeration, monthEnumeration, videosEnumeration

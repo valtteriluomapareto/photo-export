@@ -111,13 +111,10 @@ struct AssetDetailPreviewRevisionTests {
     }
   }
 
-  private func observe(_ condition: () -> Bool) async -> Bool {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(15))
-    while !condition(), clock.now < deadline, !Task.isCancelled {
-      try? await Task.sleep(for: .milliseconds(10))
-    }
-    return condition()
+  private func observe(
+    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+  ) async -> Bool {
+    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
   }
 
   @Test(.timeLimit(.minutes(2)), arguments: Change.allCases)
@@ -130,11 +127,7 @@ struct AssetDetailPreviewRevisionTests {
     f.currentImage = Self.image(.blue)
     f.holdsReplacement = true
     f.invalidate(change)
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(15))
-    while await f.replacement.enteredSoFar == 0, clock.now < deadline, !Task.isCancelled {
-      try? await Task.sleep(for: .milliseconds(10))
-    }
+    await f.replacement.waitForEnter(count: 1)
     try #require(
       await f.replacement.enteredSoFar > 0,
       "The selected content revision must reach the held replacement: \(f.diagnostics)")

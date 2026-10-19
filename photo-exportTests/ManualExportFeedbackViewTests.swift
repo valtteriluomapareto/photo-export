@@ -7,7 +7,7 @@ import Testing
 
 #if DEBUG
   @MainActor
-  @Suite(.serialized)
+  @Suite(.timeLimit(.minutes(2)), .serialized)
   struct ManualExportFeedbackViewTests {
     @MainActor
     private final class LoginService: LoginItemService {
@@ -125,20 +125,14 @@ import Testing
       }
     }
 
-    private func observe(_ condition: () -> Bool) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(15))
-      while !condition(), clock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
-      return condition()
+    private func observe(
+      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
     }
 
     private func reached(_ gate: AsyncCheckpoint) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(15))
-      while await gate.enteredSoFar == 0, clock.now < deadline {
-        try? await Task.sleep(for: .milliseconds(10))
-      }
-      return await gate.enteredSoFar > 0
+      await gate.waitForEnter(count: 1)
     }
 
     @Test(arguments: [false, true])

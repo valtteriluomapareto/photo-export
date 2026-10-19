@@ -6,7 +6,7 @@ import Testing
 
 #if DEBUG
   @MainActor
-  @Suite(.serialized)
+  @Suite(.timeLimit(.minutes(2)), .serialized)
   struct RecordStoreAlertRecoveryTests {
     @MainActor
     private final class Fixture {
@@ -86,11 +86,10 @@ import Testing
       }
     }
 
-    private func observe(_ condition: () -> Bool) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(15))
-      while !condition(), clock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
-      return condition()
+    private func observe(
+      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
     }
 
     private func descendants(_ view: NSView) -> [NSView] {

@@ -4,6 +4,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct AutoSyncDestinationCompletionTests {
   private func destination(_ id: String) -> DestinationSnapshot {
     DestinationSnapshot(

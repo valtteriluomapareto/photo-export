@@ -7,7 +7,7 @@ import Testing
 /// Tests actual rendered pixels while the same cell remains mounted. Clearing
 /// the manager cache alone cannot prove that SwiftUI restarts a cell's task.
 @MainActor
-@Suite(.serialized)
+@Suite(.timeLimit(.minutes(2)), .serialized)
 struct ThumbnailViewLifecycleTests {
   private static let targetSize = CGSize(width: 256, height: 256)
 
@@ -75,13 +75,10 @@ struct ThumbnailViewLifecycleTests {
 
   /// This is only a bound on SwiftUI render scheduling, not a delay used to
   /// arrange a race. Provider checkpoints control in-flight completion order.
-  private func observe(_ condition: () -> Bool) async -> Bool {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(15))
-    while !condition(), !Task.isCancelled, clock.now < deadline {
-      try? await Task.sleep(for: .milliseconds(10))
-    }
-    return condition()
+  private func observe(
+    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+  ) async -> Bool {
+    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
   }
 
   @Test(.timeLimit(.minutes(2)), arguments: [false, true])

@@ -29,6 +29,7 @@ actor GatedReconciliationFileChecker: ReconciliationFileChecking {
 }
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ReconciliationOwnershipTests {
   enum StoreKind: CaseIterable, Sendable { case timeline, collection }
   enum Reconfiguration: CaseIterable, Sendable { case other, roundTrip, sameID }
@@ -370,11 +371,7 @@ struct ReconciliationOwnershipTests {
     let old = Task { try await fixture.reconcile(at: fixture.mediaA, isCurrent: { current }) }
     var failure: Error?
     do {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(10))
-      while await gate.enteredSoFar == 0, clock.now < deadline, !Task.isCancelled {
-        try? await Task.sleep(for: .milliseconds(10))
-      }
+      await gate.waitForEnter(count: 1)
       try #require(await gate.enteredSoFar == 1)
       switch invalidation {
       case .sameID: fixture.configure("A")

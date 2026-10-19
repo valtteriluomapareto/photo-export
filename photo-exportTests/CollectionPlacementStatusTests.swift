@@ -174,13 +174,10 @@ import Testing
       }
     }
 
-    private func observe(_ condition: () -> Bool) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(15))
-      while !condition(), clock.now < deadline {
-        try? await Task.sleep(for: .milliseconds(10))
-      }
-      return condition()
+    private func observe(
+      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
     }
     private func loaded(_ f: Fixture) async throws {
       let ready = await observe {
@@ -202,13 +199,9 @@ import Testing
       sourceLocation: SourceLocation = #_sourceLocation
     ) async {
       let expected = [exported ? "1/1" : "0/1"]
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(15))
-      while f.counter.renderedText["collection-summary"] != expected
-        || f.counter.renderedText["thumbnail-exported:changed-asset"] != [String(exported)],
-        clock.now < deadline
-      {
-        try? await Task.sleep(for: .milliseconds(10))
+      _ = await eventually("collection summary \(expected)", sourceLocation: sourceLocation) {
+        f.counter.renderedText["collection-summary"] == expected
+          && f.counter.renderedText["thumbnail-exported:changed-asset"] == [String(exported)]
       }
       #expect(
         f.counter.renderedText["collection-summary"] == expected, sourceLocation: sourceLocation)

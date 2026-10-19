@@ -7,6 +7,7 @@ import Testing
 /// Coverage for the toolbar's "already exported" feedback. Verifies the scope-tagged
 /// message, the explicit clearing rules, and the auto-clear timer.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct EmptyRunMessageTests {
   // MARK: - Test harness
 
