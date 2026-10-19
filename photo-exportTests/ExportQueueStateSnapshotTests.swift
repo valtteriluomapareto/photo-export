@@ -15,6 +15,7 @@ import Testing
 /// This one asserts on the state-machine *transitions* — the shape AutoSync's
 /// `exportRunStatePublisher` indirectly observes via `$isRunning` + `$queueCount`.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ExportQueueStateSnapshotTests {
 
   // MARK: - Harness (mirrors ExportManagerPauseResumeTests)
@@ -90,13 +91,12 @@ struct ExportQueueStateSnapshotTests {
     return result
   }
 
+  /// Re-checks until `condition` holds; the suite's time limit is the backstop. Deliberately
+  /// not a `#require`, so a stalled park still reaches the canonical-sequence diff below.
   private func waitUntil(
-    timeout: TimeInterval = 3, _ condition: () -> Bool
+    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
   ) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    while !condition() && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 10_000_000)
-    }
+    _ = await eventually("waitUntil condition", sourceLocation: sourceLocation) { condition() }
   }
 
   // MARK: - Test
