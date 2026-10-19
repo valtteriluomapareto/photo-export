@@ -173,21 +173,24 @@ struct ReconciliationOwnershipTests {
     defer { fixture.cleanup() }
     for assetId in ["a", "b", "c"] { fixture.seed(assetId: assetId) }
     let gate = AsyncCheckpoint()
-    defer { Task { await gate.releaseAll() } }
-    await fixture.checker.suspendNextProbe(at: gate)
-    let run = Task { try await fixture.reconcile(at: fixture.mediaA) }
-    let probing = await gate.waitForEnter(count: 1)
-    try #require(probing)
-    if cancel { run.cancel() }
-    await gate.releaseAll()
-    let summary = try await run.value
-    let probes = await fixture.checker.isFileCalls
-    let rootChecks = await fixture.checker.validateRootCalls
-    #expect(probes == (cancel ? 1 : 3))
-    #expect(rootChecks == (cancel ? 0 : 1))
-    #expect(summary.variants == (cancel ? 0 : 3))
-    let stillDone = ["a", "b", "c"].filter { fixture.status(assetId: $0) == .done }
-    #expect(stillDone.count == (cancel ? 3 : 0))
+    try await withCleanup {
+      await fixture.checker.suspendNextProbe(at: gate)
+      let run = Task { try await fixture.reconcile(at: fixture.mediaA) }
+      let probing = await gate.waitForEnter(count: 1)
+      try #require(probing)
+      if cancel { run.cancel() }
+      await gate.releaseAll()
+      let summary = try await run.value
+      let probes = await fixture.checker.isFileCalls
+      let rootChecks = await fixture.checker.validateRootCalls
+      #expect(probes == (cancel ? 1 : 3))
+      #expect(rootChecks == (cancel ? 0 : 1))
+      #expect(summary.variants == (cancel ? 0 : 3))
+      let stillDone = ["a", "b", "c"].filter { fixture.status(assetId: $0) == .done }
+      #expect(stillDone.count == (cancel ? 3 : 0))
+    } cleanup: {
+      await gate.releaseAll()
+    }
   }
 
   @Test(arguments: StoreKind.allCases, Reconfiguration.allCases)

@@ -103,57 +103,60 @@ struct ReuseCopyLifecycleTests {
   {
     let fixture = try Fixture()
     let gate = CopyGate()
-    defer {
-      gate.release()
-      Task { await gate.started.releaseAll() }
-      fixture.cleanup()
-    }
-    fixture.files.copyHook = { _, output in
-      try gate.hold()
-      if sourceError {
-        try Data("partial".utf8).write(to: output)
-        throw CocoaError(.fileReadNoSuchFile)
+    try await withCleanup {
+      fixture.files.copyHook = { _, output in
+        try gate.hold()
+        if sourceError {
+          try Data("partial".utf8).write(to: output)
+          throw CocoaError(.fileReadNoSuchFile)
+        }
       }
-    }
-    fixture.manager.startExportFavorites()
-    await gate.started.waitForEnter(count: 1)
-    let old = try #require(fixture.manager.currentTask)
-    #expect(fixture.destination.closedScopeURLs.isEmpty)
-    fixture.manager.progressState.renderActivity = .rendering
-    if switchDestination {
-      fixture.manager.interruptForDestinationUnavailable()
-      fixture.destination.selectedFolderURL = fixture.destination.rootURL.appendingPathComponent(
-        "B")
-      fixture.timeline.configure(for: "B")
-      fixture.collections.configure(for: "B")
-      fixture.collections.upsertPlacement(.favorites())
-      fixture.collections.markVariantExported(
-        assetId: "B-only", placement: .favorites(), variant: .original,
-        filename: "B.JPG", exportedAt: Date())
-      _ = fixture.destination.beginScopedAccess()
-    } else {
-      fixture.manager.cancelAndClear()
-    }
-    #expect(fixture.manager.renderActivity == nil, "Owning teardown clears activity synchronously")
-    #expect(fixture.destination.closedScopeURLs.isEmpty, "Physical IO still owns A's scope")
-    gate.release()
-    await old.value
-    #expect(fixture.manager.renderActivity == nil)
-    #expect(fixture.files.moveCalls.isEmpty)
-    #expect(fixture.writer.writeCalls.isEmpty, "A stale source error must not fall back to Photos")
-    #expect(fixture.destination.closedScopeURLs == [fixture.destination.rootURL])
-    #expect(
-      fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites()) == nil)
-    if switchDestination {
+      fixture.manager.startExportFavorites()
+      await gate.started.waitForEnter(count: 1)
+      let old = try #require(fixture.manager.currentTask)
+      #expect(fixture.destination.closedScopeURLs.isEmpty)
+      fixture.manager.progressState.renderActivity = .rendering
+      if switchDestination {
+        fixture.manager.interruptForDestinationUnavailable()
+        fixture.destination.selectedFolderURL = fixture.destination.rootURL.appendingPathComponent(
+          "B")
+        fixture.timeline.configure(for: "B")
+        fixture.collections.configure(for: "B")
+        fixture.collections.upsertPlacement(.favorites())
+        fixture.collections.markVariantExported(
+          assetId: "B-only", placement: .favorites(), variant: .original,
+          filename: "B.JPG", exportedAt: Date())
+        _ = fixture.destination.beginScopedAccess()
+      } else {
+        fixture.manager.cancelAndClear()
+      }
       #expect(
-        fixture.collections.exportInfo(assetId: "B-only", placement: .favorites())?.variants[
-          .original]?.status == .done)
-      let newScope = try #require(fixture.destination.selectedFolderURL)
-      fixture.destination.endScopedAccess(for: newScope)
+        fixture.manager.renderActivity == nil, "Owning teardown clears activity synchronously")
+      #expect(fixture.destination.closedScopeURLs.isEmpty, "Physical IO still owns A's scope")
+      gate.release()
+      await old.value
+      #expect(fixture.manager.renderActivity == nil)
+      #expect(fixture.files.moveCalls.isEmpty)
+      #expect(
+        fixture.writer.writeCalls.isEmpty, "A stale source error must not fall back to Photos")
+      #expect(fixture.destination.closedScopeURLs == [fixture.destination.rootURL])
+      #expect(
+        fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites()) == nil)
+      if switchDestination {
+        #expect(
+          fixture.collections.exportInfo(assetId: "B-only", placement: .favorites())?.variants[
+            .original]?.status == .done)
+        let newScope = try #require(fixture.destination.selectedFolderURL)
+        fixture.destination.endScopedAccess(for: newScope)
+      }
+      let directory = try fixture.destination.urlForRelativeDirectory(
+        "Collections/Favorites/", createIfNeeded: false)
+      #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    } cleanup: {
+      gate.release()
+      fixture.cleanup()
+      await gate.started.releaseAll()
     }
-    let directory = try fixture.destination.urlForRelativeDirectory(
-      "Collections/Favorites/", createIfNeeded: false)
-    #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
   }
 
   @Test(.timeLimit(.minutes(1)))
@@ -161,52 +164,53 @@ struct ReuseCopyLifecycleTests {
     let fixture = try Fixture()
     let gate = CopyGate()
     let replacementWritten = AsyncCheckpoint()
-    defer {
-      gate.release()
-      Task {
-        await gate.started.releaseAll()
-        await replacementWritten.releaseAll()
+    try await withCleanup {
+      fixture.files.copyHook = { _, _ in try gate.hold() }
+      fixture.manager.startExportFavorites()
+      await gate.started.waitForEnter(count: 1)
+      let old = try #require(fixture.manager.currentTask)
+      fixture.manager.cancelAndClear()
+      let variants =
+        fixture.timeline.exportInfo(assetId: fixture.asset.id).map { Array($0.variants.keys) } ?? []
+      for variant in variants {
+        fixture.timeline.removeVariant(assetId: fixture.asset.id, variant: variant)
       }
+      fixture.writer.afterWriteCheckpoint = replacementWritten
+      fixture.manager.startExportFavorites()
+      await replacementWritten.waitForEnter(count: 1)
+      let replacement = try #require(fixture.manager.currentTask)
+      let output = try #require(fixture.writer.writeCalls.last?.url)
+      let expectedBytes = try Data(contentsOf: output)
+      fixture.manager.progressState.renderActivity = .rendering
+      gate.release()
+      await old.value
+      #expect(try Data(contentsOf: output) == expectedBytes)
+      #expect(fixture.manager.currentJobAssetId == fixture.asset.id)
+      #expect(fixture.manager.currentJobVariant == .original)
+      #expect(fixture.manager.currentAssetFilename == "IMG.JPG")
+      #expect(fixture.manager.renderActivity == .rendering)
+      #expect(
+        fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?
+          .variants[.original]?.status == .inProgress)
+      await replacementWritten.releaseAll()
+      await replacement.value
+      let filename = try #require(
+        fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?
+          .variants[.original]?.filename)
+      #expect(filename == "IMG.JPG")
+      let final = try fixture.destination.urlForRelativeDirectory(
+        "Collections/Favorites/", createIfNeeded: false
+      ).appendingPathComponent(filename)
+      #expect(try Data(contentsOf: final) == expectedBytes)
+      #expect(
+        fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?
+          .variants[.original]?.status == .done)
+    } cleanup: {
+      gate.release()
       fixture.cleanup()
+      await gate.started.releaseAll()
+      await replacementWritten.releaseAll()
     }
-    fixture.files.copyHook = { _, _ in try gate.hold() }
-    fixture.manager.startExportFavorites()
-    await gate.started.waitForEnter(count: 1)
-    let old = try #require(fixture.manager.currentTask)
-    fixture.manager.cancelAndClear()
-    for variant in (fixture.timeline.exportInfo(assetId: fixture.asset.id).map { Array($0.variants.keys) } ?? []) {
-      fixture.timeline.removeVariant(assetId: fixture.asset.id, variant: variant)
-    }
-    fixture.writer.afterWriteCheckpoint = replacementWritten
-    fixture.manager.startExportFavorites()
-    await replacementWritten.waitForEnter(count: 1)
-    let replacement = try #require(fixture.manager.currentTask)
-    let output = try #require(fixture.writer.writeCalls.last?.url)
-    let expectedBytes = try Data(contentsOf: output)
-    fixture.manager.progressState.renderActivity = .rendering
-    gate.release()
-    await old.value
-    #expect(try Data(contentsOf: output) == expectedBytes)
-    #expect(fixture.manager.currentJobAssetId == fixture.asset.id)
-    #expect(fixture.manager.currentJobVariant == .original)
-    #expect(fixture.manager.currentAssetFilename == "IMG.JPG")
-    #expect(fixture.manager.renderActivity == .rendering)
-    #expect(
-      fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?.variants[
-        .original]?.status == .inProgress)
-    await replacementWritten.releaseAll()
-    await replacement.value
-    let filename = try #require(
-      fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?
-        .variants[.original]?.filename)
-    #expect(filename == "IMG.JPG")
-    let final = try fixture.destination.urlForRelativeDirectory(
-      "Collections/Favorites/", createIfNeeded: false
-    ).appendingPathComponent(filename)
-    #expect(try Data(contentsOf: final) == expectedBytes)
-    #expect(
-      fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?.variants[
-        .original]?.status == .done)
   }
 
   @Test func partialSourceCopyIsRemovedBeforePhotoKitFallback() async throws {

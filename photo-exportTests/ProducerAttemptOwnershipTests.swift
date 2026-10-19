@@ -200,53 +200,56 @@ struct ProducerAttemptOwnershipTests {
     [false, true])
   func oldCleanupCannotDeleteReplacementStage(producer: Producer, supersede: Bool) async throws {
     let f = Fixture(producer)
-    defer { Task { await f.cleanup() } }
-    f.armAfter(f.oldGate)
-    f.start()
-    let oldArrived = await reached(f.oldGate)
-    try #require(oldArrived)
-    let old = try f.captureTask()
-    let oldStage = try f.stage()
-    try Data("old-attempt".utf8).write(to: oldStage)
-    if supersede { f.manager.supersedeForManualRun() } else { f.manager.cancelAndClear() }
-    f.armAfter(f.targetGate)
-    f.start()
-    let replacementArrived = await reached(f.targetGate)
-    try #require(replacementArrived)
-    let replacement = try f.captureTask()
-    let stage = try f.stage()
-    let expected = try Data(contentsOf: stage)
-    #expect(expected != Data("old-attempt".utf8))
-    await f.oldGate.releaseAll()
-    await old.value
-    #expect(
-      (try? Data(contentsOf: stage)) == expected, "A's cleanup must preserve B's staged bytes")
-    #expect(f.variants()[f.variant]?.status == .inProgress)
-    #expect(f.manager.currentJobAssetId == "target")
-    #expect(f.manager.currentJobVariant == f.variant)
-    if producer == .heicSource {
+    try await withCleanup {
+      f.armAfter(f.oldGate)
+      f.start()
+      let oldArrived = await reached(f.oldGate)
+      try #require(oldArrived)
+      let old = try f.captureTask()
+      let oldStage = try f.stage()
+      try Data("old-attempt".utf8).write(to: oldStage)
+      if supersede { f.manager.supersedeForManualRun() } else { f.manager.cancelAndClear() }
+      f.armAfter(f.targetGate)
+      f.start()
+      let replacementArrived = await reached(f.targetGate)
+      try #require(replacementArrived)
+      let replacement = try f.captureTask()
+      let stage = try f.stage()
+      let expected = try Data(contentsOf: stage)
+      #expect(expected != Data("old-attempt".utf8))
+      await f.oldGate.releaseAll()
+      await old.value
       #expect(
-        f.converter.convertCalls.isEmpty,
-        "A must not start conversion after its source await became stale")
+        (try? Data(contentsOf: stage)) == expected, "A's cleanup must preserve B's staged bytes")
+      #expect(f.variants()[f.variant]?.status == .inProgress)
+      #expect(f.manager.currentJobAssetId == "target")
+      #expect(f.manager.currentJobVariant == f.variant)
+      if producer == .heicSource {
+        #expect(
+          f.converter.convertCalls.isEmpty,
+          "A must not start conversion after its source await became stale")
+      }
+      await f.targetGate.releaseAll()
+      await replacement.value
+      let info = try #require(f.variants()[f.variant])
+      #expect(info.status == .done)
+      let directory = try f.destination.urlForRelativeDirectory(
+        f.placement.relativePath, createIfNeeded: false)
+      let filename = try #require(info.filename)
+      #expect(filename == (producer == .render ? "target.MOV" : "target.JPG"))
+      let final = directory.appendingPathComponent(filename)
+      let bytes = try? Data(contentsOf: final)
+      if producer == .heicSource {
+        #expect(bytes == Data([0xFF, 0xD8, 0xFF, 0xE0]) + Data("FAKE-JPEG-CONTENT".utf8))
+      } else {
+        #expect(bytes == expected)
+      }
+      #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [filename])
+      f.assertBalancedScopes()
+      await f.cleanup()
+    } cleanup: {
+      await f.cleanup()
     }
-    await f.targetGate.releaseAll()
-    await replacement.value
-    let info = try #require(f.variants()[f.variant])
-    #expect(info.status == .done)
-    let directory = try f.destination.urlForRelativeDirectory(
-      f.placement.relativePath, createIfNeeded: false)
-    let filename = try #require(info.filename)
-    #expect(filename == (producer == .render ? "target.MOV" : "target.JPG"))
-    let final = directory.appendingPathComponent(filename)
-    let bytes = try? Data(contentsOf: final)
-    if producer == .heicSource {
-      #expect(bytes == Data([0xFF, 0xD8, 0xFF, 0xE0]) + Data("FAKE-JPEG-CONTENT".utf8))
-    } else {
-      #expect(bytes == expected)
-    }
-    #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [filename])
-    f.assertBalancedScopes()
-    await f.cleanup()
   }
 
   @Test(.timeLimit(.minutes(1)), arguments: Producer.allCases, [false, true])
@@ -254,86 +257,92 @@ struct ProducerAttemptOwnershipTests {
     async throws
   {
     let f = Fixture(producer, collection: collection)
-    defer { Task { await f.cleanup() } }
-    f.armBefore(f.oldGate)
-    f.start()
-    let oldArrived = await reached(f.oldGate)
-    try #require(oldArrived)
-    let old = try f.captureTask()
-    f.manager.supersedeForManualRun()
-    f.selectB()
-    f.armBefore(nil)
-    f.armAfter(f.targetGate)
-    f.seed(ids: ["target", "blocker"], includeEdits: producer != .fallback)
-    let run = f.startRun()
-    let targetArrived = await reached(f.targetGate)
-    try #require(targetArrived)
-    f.armAfter(f.blockerGate)
-    await f.targetGate.releaseAll()
-    let blockerArrived = await reached(f.blockerGate)
-    try #require(blockerArrived)
-    let replacement = try f.captureTask()
-    let before = f.variants()
-    #expect(before[f.variant]?.status == .done)
-    #expect(f.variants("blocker")[f.variant]?.status == .inProgress)
-    #expect(f.manager.activeRunContext != nil)
-    f.injectError()
-    await f.oldGate.releaseAll()
-    await old.value
-    #expect(f.variants() == before, "A's late error cannot downgrade B's committed variant")
-    #expect(f.variants("blocker")[f.variant]?.status == .inProgress)
-    await f.blockerGate.releaseAll()
-    await replacement.value
-    let summary = await run.value
-    #expect(summary.result == .completed)
-    #expect(summary.enqueuedCount == 2 && summary.completedCount == 2)
-    #expect(summary.failedCount == 0 && summary.failures.isEmpty)
-    f.assertBalancedScopes()
-    try await f.timeline.flush()
-    try await f.collections.flush()
-    let reopenedTimeline = ExportRecordStore(baseDirectoryURL: f.root)
-    let reopenedCollections = CollectionExportRecordStore(baseDirectoryURL: f.root)
-    reopenedTimeline.configure(for: "B")
-    reopenedCollections.configure(for: "B")
-    let reopened =
-      collection
-      ? reopenedCollections.exportInfo(assetId: "target", placement: f.placement)?.variants
-      : reopenedTimeline.exportInfo(assetId: "target")?.variants
-    let persisted = try #require(reopened)
-    #expect(Set(persisted.keys) == Set(before.keys))
-    for (variant, expected) in before {
-      var actual = try #require(persisted[variant])
-      // JSONL's ISO8601 dates preserve seconds, not subsecond clock precision.
-      if let loadedDate = actual.exportDate, let expectedDate = expected.exportDate {
-        #expect(abs(loadedDate.timeIntervalSince(expectedDate)) < 1)
-      } else {
-        #expect(actual.exportDate == expected.exportDate)
+    try await withCleanup {
+      f.armBefore(f.oldGate)
+      f.start()
+      let oldArrived = await reached(f.oldGate)
+      try #require(oldArrived)
+      let old = try f.captureTask()
+      f.manager.supersedeForManualRun()
+      f.selectB()
+      f.armBefore(nil)
+      f.armAfter(f.targetGate)
+      f.seed(ids: ["target", "blocker"], includeEdits: producer != .fallback)
+      let run = f.startRun()
+      let targetArrived = await reached(f.targetGate)
+      try #require(targetArrived)
+      f.armAfter(f.blockerGate)
+      await f.targetGate.releaseAll()
+      let blockerArrived = await reached(f.blockerGate)
+      try #require(blockerArrived)
+      let replacement = try f.captureTask()
+      let before = f.variants()
+      #expect(before[f.variant]?.status == .done)
+      #expect(f.variants("blocker")[f.variant]?.status == .inProgress)
+      #expect(f.manager.activeRunContext != nil)
+      f.injectError()
+      await f.oldGate.releaseAll()
+      await old.value
+      #expect(f.variants() == before, "A's late error cannot downgrade B's committed variant")
+      #expect(f.variants("blocker")[f.variant]?.status == .inProgress)
+      await f.blockerGate.releaseAll()
+      await replacement.value
+      let summary = await run.value
+      #expect(summary.result == .completed)
+      #expect(summary.enqueuedCount == 2 && summary.completedCount == 2)
+      #expect(summary.failedCount == 0 && summary.failures.isEmpty)
+      f.assertBalancedScopes()
+      try await f.timeline.flush()
+      try await f.collections.flush()
+      let reopenedTimeline = ExportRecordStore(baseDirectoryURL: f.root)
+      let reopenedCollections = CollectionExportRecordStore(baseDirectoryURL: f.root)
+      reopenedTimeline.configure(for: "B")
+      reopenedCollections.configure(for: "B")
+      let reopened =
+        collection
+        ? reopenedCollections.exportInfo(assetId: "target", placement: f.placement)?.variants
+        : reopenedTimeline.exportInfo(assetId: "target")?.variants
+      let persisted = try #require(reopened)
+      #expect(Set(persisted.keys) == Set(before.keys))
+      for (variant, expected) in before {
+        var actual = try #require(persisted[variant])
+        // JSONL's ISO8601 dates preserve seconds, not subsecond clock precision.
+        if let loadedDate = actual.exportDate, let expectedDate = expected.exportDate {
+          #expect(abs(loadedDate.timeIntervalSince(expectedDate)) < 1)
+        } else {
+          #expect(actual.exportDate == expected.exportDate)
+        }
+        actual.exportDate = expected.exportDate
+        #expect(actual == expected)
       }
-      actual.exportDate = expected.exportDate
-      #expect(actual == expected)
+      reopenedTimeline.flushForTesting()
+      reopenedCollections.flushForTesting()
+      await f.cleanup()
+    } cleanup: {
+      await f.cleanup()
     }
-    reopenedTimeline.flushForTesting()
-    reopenedCollections.flushForTesting()
-    await f.cleanup()
   }
 
   @Test(
     .timeLimit(.minutes(1)), arguments: [Producer.resource, .render, .heicSource, .heicConversion])
   func cancelledProducerErrorDoesNotCreateFailure(producer: Producer) async throws {
     let f = Fixture(producer)
-    defer { Task { await f.cleanup() } }
-    f.armBefore(f.oldGate)
-    f.start()
-    let arrived = await reached(f.oldGate)
-    try #require(arrived)
-    let old = try f.captureTask()
-    f.manager.cancelAndClear()
-    f.injectError()
-    await f.oldGate.releaseAll()
-    await old.value
-    #expect(f.variants().isEmpty)
-    #expect(f.manager.totalJobsCompleted == 0)
-    f.assertBalancedScopes()
-    await f.cleanup()
+    try await withCleanup {
+      f.armBefore(f.oldGate)
+      f.start()
+      let arrived = await reached(f.oldGate)
+      try #require(arrived)
+      let old = try f.captureTask()
+      f.manager.cancelAndClear()
+      f.injectError()
+      await f.oldGate.releaseAll()
+      await old.value
+      #expect(f.variants().isEmpty)
+      #expect(f.manager.totalJobsCompleted == 0)
+      f.assertBalancedScopes()
+      await f.cleanup()
+    } cleanup: {
+      await f.cleanup()
+    }
   }
 }

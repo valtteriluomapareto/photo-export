@@ -171,27 +171,31 @@ struct AutoSyncDisableStopsRunTests {
     let h = Harness()
     defer { h.close() }
     let scanGate = AsyncCheckpoint()
-    defer { Task { await scanGate.releaseAll() } }
-    h.photoLibrary.fetchAssetsCheckpointByYear[h.year] = scanGate
-    h.attach()
-    h.builder.clock.advance(by: 10)
-    let scanning = await scanGate.waitForEnter(count: 1)
-    try #require(scanning)
-    let preparation = h.exportManager.currentPreparationTasks
-    try #require(!preparation.isEmpty)
+    try await withCleanup {
+      h.photoLibrary.fetchAssetsCheckpointByYear[h.year] = scanGate
+      h.attach()
+      h.builder.clock.advance(by: 10)
+      let scanning = await scanGate.waitForEnter(count: 1)
+      try #require(scanning)
+      let preparation = h.exportManager.currentPreparationTasks
+      try #require(!preparation.isEmpty)
 
-    h.autoSync.setEnabled(false)
+      h.autoSync.setEnabled(false)
 
-    #expect(h.exportManager.activeRunContext == nil)
-    #expect(h.runSummaries.map(\.result) == [.cancelled])
-    await scanGate.releaseAll()
-    for task in preparation {
-      let done = await finished(task)
-      try #require(done)
+      #expect(h.exportManager.activeRunContext == nil)
+      #expect(h.runSummaries.map(\.result) == [.cancelled])
+      await scanGate.releaseAll()
+      for task in preparation {
+        let done = await finished(task)
+        try #require(done)
+      }
+      #expect(h.exportManager.pendingJobs.isEmpty)
+      #expect(h.writtenIds.isEmpty)
+      #expect(!h.exportManager.hasActiveExportWork)
+    } cleanup: {
+      await scanGate.releaseAll()
+      for task in h.exportManager.currentPreparationTasks { _ = await finished(task) }
     }
-    #expect(h.exportManager.pendingJobs.isEmpty)
-    #expect(h.writtenIds.isEmpty)
-    #expect(!h.exportManager.hasActiveExportWork)
   }
 
   /// Guard: only automatic runs stop. A manual export (the toolbar's legacy `start*` path,

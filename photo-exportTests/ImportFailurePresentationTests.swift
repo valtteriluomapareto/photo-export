@@ -289,33 +289,39 @@ import Testing
     func oldMatchingTaskCannotReplaceNewFailure() async throws {
       let f = Fixture()
       let gate = AsyncCheckpoint()
-      defer {
-        Task { await gate.releaseAll() }
+      var imports: [Task<Void, Never>] = []
+      try await withCleanup {
+        try f.plantMatch()
+        f.photos.fetchAssetsCheckpointByYear[2026] = gate
+        f.manager.startImport()
+        let old = try #require(f.manager.importTask)
+        imports.append(old)
+        let matching = await reached(gate)
+        try #require(matching)
+        f.manager.cancelImport()
+        f.photos.fetchAssetsCheckpointByYear[2026] = nil
+        f.destination.selectedFolderURL = f.destination.rootURL.appendingPathComponent("missing")
+        f.manager.startImport()
+        let current = try #require(f.manager.importTask)
+        imports.append(current)
+        await current.value
+        #expect(f.manager.importError?.isEmpty == false)
+        let failure = f.manager.importError
+        await gate.releaseAll()
+        await old.value
+        #expect(old.isCancelled)
+        #expect(f.manager.importError == failure)
+        #expect(
+          !f.manager.isImporting && f.manager.importStage == nil && f.manager.importResult == nil)
+        #expect(
+          f.destination.openedScopeURLs.map(\.path).sorted()
+            == f.destination.closedScopeURLs.map(\.path).sorted())
+      } cleanup: {
+        await gate.releaseAll()
+        if let current = f.manager.importTask { imports.append(current) }
+        for task in imports { _ = await finished(task) }
         f.close()
       }
-      try f.plantMatch()
-      f.photos.fetchAssetsCheckpointByYear[2026] = gate
-      f.manager.startImport()
-      let old = try #require(f.manager.importTask)
-      let matching = await reached(gate)
-      try #require(matching)
-      f.manager.cancelImport()
-      f.photos.fetchAssetsCheckpointByYear[2026] = nil
-      f.destination.selectedFolderURL = f.destination.rootURL.appendingPathComponent("missing")
-      f.manager.startImport()
-      let current = try #require(f.manager.importTask)
-      await current.value
-      #expect(f.manager.importError?.isEmpty == false)
-      let failure = f.manager.importError
-      await gate.releaseAll()
-      await old.value
-      #expect(old.isCancelled)
-      #expect(f.manager.importError == failure)
-      #expect(
-        !f.manager.isImporting && f.manager.importStage == nil && f.manager.importResult == nil)
-      #expect(
-        f.destination.openedScopeURLs.map(\.path).sorted()
-          == f.destination.closedScopeURLs.map(\.path).sorted())
     }
 
     @Test(.timeLimit(.minutes(2)), arguments: [false, true])
@@ -324,71 +330,81 @@ import Testing
     {
       let f = Fixture()
       let gate = AsyncCheckpoint()
-      defer {
-        Task { await gate.releaseAll() }
+      var imports: [Task<Void, Never>] = []
+      try await withCleanup {
+        try f.plantMatch()
+        f.photos.fetchAssetsCheckpointByYear[2026] = gate
+        f.show()
+        f.manager.startImport()
+        let old = try #require(f.manager.importTask)
+        imports.append(old)
+        let matching = await reached(gate)
+        try #require(matching)
+        if unavailable {
+          f.manager.interruptForDestinationUnavailable()
+        } else {
+          f.manager.cancelAndClear()
+        }
+        #expect(!old.isCancelled)
+        var lateStages: [BackupScanner.ImportStage?] = []
+        let subscription = f.manager.$importStage.dropFirst().sink { lateStages.append($0) }
+        defer { subscription.cancel() }
+        await gate.releaseAll()
+        await old.value
+        #expect(
+          lateStages.allSatisfy { $0 == nil },
+          "Invalidated matching must publish no transient stale progress")
+        #expect(!f.manager.isImporting && f.manager.importStage == nil)
+        #expect(f.manager.importError == nil && f.manager.importResult == nil)
+        _ = await shows("Import Stopped", in: f)
+        #expect(
+          f.destination.openedScopeURLs.map(\.path).sorted()
+            == f.destination.closedScopeURLs.map(\.path).sorted())
+      } cleanup: {
+        await gate.releaseAll()
+        if let current = f.manager.importTask { imports.append(current) }
+        for task in imports { _ = await finished(task) }
         f.close()
       }
-      try f.plantMatch()
-      f.photos.fetchAssetsCheckpointByYear[2026] = gate
-      f.show()
-      f.manager.startImport()
-      let old = try #require(f.manager.importTask)
-      let matching = await reached(gate)
-      try #require(matching)
-      if unavailable {
-        f.manager.interruptForDestinationUnavailable()
-      } else {
-        f.manager.cancelAndClear()
-      }
-      #expect(!old.isCancelled)
-      var lateStages: [BackupScanner.ImportStage?] = []
-      let subscription = f.manager.$importStage.dropFirst().sink { lateStages.append($0) }
-      defer { subscription.cancel() }
-      await gate.releaseAll()
-      await old.value
-      #expect(
-        lateStages.allSatisfy { $0 == nil },
-        "Invalidated matching must publish no transient stale progress")
-      #expect(!f.manager.isImporting && f.manager.importStage == nil)
-      #expect(f.manager.importError == nil && f.manager.importResult == nil)
-      _ = await shows("Import Stopped", in: f)
-      #expect(
-        f.destination.openedScopeURLs.map(\.path).sorted()
-          == f.destination.closedScopeURLs.map(\.path).sorted())
     }
 
     @Test(.timeLimit(.minutes(2)))
     func idleRejectedStartAndCancelStayCloseableWithoutFailure() async throws {
       let f = Fixture()
       let gate = AsyncCheckpoint()
-      defer {
-        Task { await gate.releaseAll() }
+      var imports: [Task<Void, Never>] = []
+      try await withCleanup {
+        f.timeline.configure(for: nil)
+        f.show()
+        f.manager.startImport()
+        #expect(!f.manager.isImporting && f.manager.importError == nil)
+        guard await shows("Import Stopped", in: f) else { return }
+        #expect(f.counter.renderedText["import-progress"] == ["false"])
+        #expect(f.counter.renderedActions["import-close"] != nil)
+        f.timeline.configure(for: "A")
+        try f.plantMatch()
+        f.photos.fetchAssetsCheckpointByYear[2026] = gate
+        f.manager.startImport()
+        let old = try #require(f.manager.importTask)
+        imports.append(old)
+        let matching = await reached(gate)
+        try #require(matching)
+        let shown = await shows("Importing Existing Backup", in: f)
+        try #require(shown)
+        let cancel = try #require(f.counter.renderedActions["import-cancel"])
+        cancel()
+        #expect(
+          !f.manager.isImporting && f.manager.importError == nil && f.manager.importResult == nil)
+        await gate.releaseAll()
+        await old.value
+        #expect(old.isCancelled)
+        _ = await shows("Import Stopped", in: f)
+      } cleanup: {
+        await gate.releaseAll()
+        if let current = f.manager.importTask { imports.append(current) }
+        for task in imports { _ = await finished(task) }
         f.close()
       }
-      f.timeline.configure(for: nil)
-      f.show()
-      f.manager.startImport()
-      #expect(!f.manager.isImporting && f.manager.importError == nil)
-      guard await shows("Import Stopped", in: f) else { return }
-      #expect(f.counter.renderedText["import-progress"] == ["false"])
-      #expect(f.counter.renderedActions["import-close"] != nil)
-      f.timeline.configure(for: "A")
-      try f.plantMatch()
-      f.photos.fetchAssetsCheckpointByYear[2026] = gate
-      f.manager.startImport()
-      let old = try #require(f.manager.importTask)
-      let matching = await reached(gate)
-      try #require(matching)
-      let shown = await shows("Importing Existing Backup", in: f)
-      try #require(shown)
-      let cancel = try #require(f.counter.renderedActions["import-cancel"])
-      cancel()
-      #expect(
-        !f.manager.isImporting && f.manager.importError == nil && f.manager.importResult == nil)
-      await gate.releaseAll()
-      await old.value
-      #expect(old.isCancelled)
-      _ = await shows("Import Stopped", in: f)
     }
 
   }

@@ -40,31 +40,38 @@ struct AutoSyncDestinationCompletionTests {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     let oldGate = AsyncCheckpoint()
-    defer { Task { await oldGate.releaseAll() } }
-    builder.exportRunner.gateForInvocation = { index in index == 1 ? oldGate : nil }
-    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
-    builder.destination.subject.send(destination("A"))
-    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true, favorites: true))
-    manager.attach(to: builder.environment)
+    var fanOuts: [Task<Void, Never>] = []
+    try await withCleanup {
+      builder.exportRunner.gateForInvocation = { index in index == 1 ? oldGate : nil }
+      builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+      builder.destination.subject.send(destination("A"))
+      builder.scopes.subject.send(AutoExportScopeSelection(timeline: true, favorites: true))
+      manager.attach(to: builder.environment)
 
-    builder.clock.advance(by: 10)
-    await oldGate.waitForEnter(count: 1)
-    let oldTask = try #require(manager.activeRunFanOutTask)
-    #expect(builder.currentRunStore.load(destinationId: "A") != nil)
+      builder.clock.advance(by: 10)
+      await oldGate.waitForEnter(count: 1)
+      let oldTask = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(oldTask)
+      #expect(builder.currentRunStore.load(destinationId: "A") != nil)
 
-    builder.destination.subject.send(destination("B"))
-    #expect(builder.currentRunStore.load(destinationId: "A") == nil)
-    builder.exportRunner.nextRunSummary = failedSummary(at: builder.clock.now())
-    await oldGate.release()
-    await oldTask.value
+      builder.destination.subject.send(destination("B"))
+      #expect(builder.currentRunStore.load(destinationId: "A") == nil)
+      builder.exportRunner.nextRunSummary = failedSummary(at: builder.clock.now())
+      await oldGate.release()
+      await oldTask.value
 
-    #expect(builder.exportRunner.receivedContexts.count == 1)
-    #expect(builder.runSummaryStore.load(destinationId: "A") == nil)
-    #expect(builder.runSummaryStore.load(destinationId: "B") == nil)
-    #expect(builder.retryStore.load(destinationId: "B").isEmpty)
-    #expect(builder.dirtyStore.load(destinationId: "B").isEmpty)
-    #expect(manager.lastRunSummary == nil)
-    #expect(manager.currentRetryState.isEmpty)
+      #expect(builder.exportRunner.receivedContexts.count == 1)
+      #expect(builder.runSummaryStore.load(destinationId: "A") == nil)
+      #expect(builder.runSummaryStore.load(destinationId: "B") == nil)
+      #expect(builder.retryStore.load(destinationId: "B").isEmpty)
+      #expect(builder.dirtyStore.load(destinationId: "B").isEmpty)
+      #expect(manager.lastRunSummary == nil)
+      #expect(manager.currentRetryState.isEmpty)
+    } cleanup: {
+      await oldGate.releaseAll()
+      if let current = manager.activeRunFanOutTask { fanOuts.append(current) }
+      for task in fanOuts { _ = await finished(task) }
+    }
   }
 
   @Test(.timeLimit(.minutes(1)))
@@ -72,26 +79,33 @@ struct AutoSyncDestinationCompletionTests {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     let oldGate = AsyncCheckpoint()
-    defer { Task { await oldGate.releaseAll() } }
-    builder.exportRunner.gateForInvocation = { _ in oldGate }
-    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
-    builder.destination.subject.send(destination("A"))
-    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true, favorites: true))
-    manager.attach(to: builder.environment)
+    var fanOuts: [Task<Void, Never>] = []
+    try await withCleanup {
+      builder.exportRunner.gateForInvocation = { _ in oldGate }
+      builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+      builder.destination.subject.send(destination("A"))
+      builder.scopes.subject.send(AutoExportScopeSelection(timeline: true, favorites: true))
+      manager.attach(to: builder.environment)
 
-    builder.clock.advance(by: 10)
-    await oldGate.waitForEnter(count: 1)
-    let oldTask = try #require(manager.activeRunFanOutTask)
-    builder.destination.subject.send(.none)
-    builder.exportRunner.nextRunSummary = failedSummary(at: builder.clock.now())
-    await oldGate.release()
-    await oldTask.value
+      builder.clock.advance(by: 10)
+      await oldGate.waitForEnter(count: 1)
+      let oldTask = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(oldTask)
+      builder.destination.subject.send(.none)
+      builder.exportRunner.nextRunSummary = failedSummary(at: builder.clock.now())
+      await oldGate.release()
+      await oldTask.value
 
-    #expect(builder.currentRunStore.load(destinationId: "A") == nil)
-    #expect(builder.runSummaryStore.load(destinationId: "A") == nil)
-    #expect(builder.exportRunner.receivedContexts.count == 1)
-    #expect(manager.lastRunSummary == nil)
-    #expect(manager.currentRetryState.isEmpty)
+      #expect(builder.currentRunStore.load(destinationId: "A") == nil)
+      #expect(builder.runSummaryStore.load(destinationId: "A") == nil)
+      #expect(builder.exportRunner.receivedContexts.count == 1)
+      #expect(manager.lastRunSummary == nil)
+      #expect(manager.currentRetryState.isEmpty)
+    } cleanup: {
+      await oldGate.releaseAll()
+      if let current = manager.activeRunFanOutTask { fanOuts.append(current) }
+      for task in fanOuts { _ = await finished(task) }
+    }
   }
 
   @Test(.timeLimit(.minutes(1)))
@@ -100,41 +114,45 @@ struct AutoSyncDestinationCompletionTests {
     let builder = FakeAutoSyncEnvironmentBuilder()
     let oldGate = AsyncCheckpoint()
     let newGate = AsyncCheckpoint()
-    defer {
-      Task {
-        await oldGate.releaseAll()
-        await newGate.releaseAll()
+    var fanOuts: [Task<Void, Never>] = []
+    try await withCleanup {
+      builder.exportRunner.gateForInvocation = { index in
+        index == 1 ? oldGate : newGate
       }
+      builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+      builder.destination.subject.send(destination("A"))
+      builder.scopes.subject.send(AutoExportScopeSelection(timeline: true))
+      manager.attach(to: builder.environment)
+
+      builder.clock.advance(by: 10)
+      await oldGate.waitForEnter(count: 1)
+      let oldTask = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(oldTask)
+      builder.destination.subject.send(destination("B"))
+      builder.destination.subject.send(destination("A"))
+      builder.clock.advance(by: 3)
+      await newGate.waitForEnter(count: 1)
+      let newTask = try #require(manager.activeRunFanOutTask)
+      fanOuts.append(newTask)
+      let newJournal = try #require(builder.currentRunStore.load(destinationId: "A"))
+
+      // The cancelled A runner ignores cancellation and returns after the newer A
+      // fan-out has started. Its defer must not erase the new journal or task slot.
+      await oldGate.release()
+      await oldTask.value
+      #expect(builder.currentRunStore.load(destinationId: "A") == newJournal)
+      #expect(manager.activeRunFanOutTask != nil)
+
+      await newGate.release()
+      await newTask.value
+      #expect(builder.currentRunStore.load(destinationId: "A") == nil)
+      #expect(manager.activeRunFanOutTask == nil)
+    } cleanup: {
+      await oldGate.releaseAll()
+      await newGate.releaseAll()
+      if let current = manager.activeRunFanOutTask { fanOuts.append(current) }
+      for task in fanOuts { _ = await finished(task) }
     }
-    builder.exportRunner.gateForInvocation = { index in
-      index == 1 ? oldGate : newGate
-    }
-    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
-    builder.destination.subject.send(destination("A"))
-    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true))
-    manager.attach(to: builder.environment)
-
-    builder.clock.advance(by: 10)
-    await oldGate.waitForEnter(count: 1)
-    let oldTask = try #require(manager.activeRunFanOutTask)
-    builder.destination.subject.send(destination("B"))
-    builder.destination.subject.send(destination("A"))
-    builder.clock.advance(by: 3)
-    await newGate.waitForEnter(count: 1)
-    let newTask = try #require(manager.activeRunFanOutTask)
-    let newJournal = try #require(builder.currentRunStore.load(destinationId: "A"))
-
-    // The cancelled A runner ignores cancellation and returns after the newer A
-    // fan-out has started. Its defer must not erase the new journal or task slot.
-    await oldGate.release()
-    await oldTask.value
-    #expect(builder.currentRunStore.load(destinationId: "A") == newJournal)
-    #expect(manager.activeRunFanOutTask != nil)
-
-    await newGate.release()
-    await newTask.value
-    #expect(builder.currentRunStore.load(destinationId: "A") == nil)
-    #expect(manager.activeRunFanOutTask == nil)
   }
 
   @Test func reducerRejectsOldCompletionAndPublisherAfterAtoBtoA() {

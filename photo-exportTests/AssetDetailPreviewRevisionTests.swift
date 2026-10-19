@@ -61,11 +61,11 @@ struct AssetDetailPreviewRevisionTests {
 
     func show() { window.orderFront(nil) }
 
-    func close() {
+    func close() async {
       window.orderOut(nil)
       window.contentView = nil
       window.close()
-      Task { await replacement.releaseAll() }
+      await replacement.releaseAll()
       timeline.flushForTesting()
       collections.flushForTesting()
       try? FileManager.default.removeItem(at: root)
@@ -120,43 +120,49 @@ struct AssetDetailPreviewRevisionTests {
   @Test(.timeLimit(.minutes(2)), arguments: Change.allCases)
   func mountedSameIDEditAndRevertRefreshPixelsWithoutBlanking(change: Change) async throws {
     let f = Fixture()
-    defer { f.close() }
-    f.show()
-    let initial = await observe { f.shows(.red) }
-    try #require(initial, "Initial red preview: \(f.diagnostics)")
-    f.currentImage = Self.image(.blue)
-    f.holdsReplacement = true
-    f.invalidate(change)
-    await f.replacement.waitForEnter(count: 1)
-    try #require(
-      await f.replacement.enteredSoFar > 0,
-      "The selected content revision must reach the held replacement: \(f.diagnostics)")
-    #expect(f.shows(.red), "Keep the current image while replacement bytes are pending")
-    await f.replacement.releaseAll()
-    let updated = await observe { f.shows(.blue) }
-    try #require(updated, "Edited blue preview after releasing replacement: \(f.diagnostics)")
-    let beforeRevert = f.requests
-    f.currentImage = Self.image(.red)
-    f.manager.invalidateCache(changedThumbnailAssetIDs: ["A"])
-    let reverted = await observe { f.requests > beforeRevert && f.shows(.red) }
-    #expect(reverted, "Reverted red preview: \(f.diagnostics)")
+    try await withCleanup {
+      f.show()
+      let initial = await observe { f.shows(.red) }
+      try #require(initial, "Initial red preview: \(f.diagnostics)")
+      f.currentImage = Self.image(.blue)
+      f.holdsReplacement = true
+      f.invalidate(change)
+      await f.replacement.waitForEnter(count: 1)
+      try #require(
+        await f.replacement.enteredSoFar > 0,
+        "The selected content revision must reach the held replacement: \(f.diagnostics)")
+      #expect(f.shows(.red), "Keep the current image while replacement bytes are pending")
+      await f.replacement.releaseAll()
+      let updated = await observe { f.shows(.blue) }
+      try #require(updated, "Edited blue preview after releasing replacement: \(f.diagnostics)")
+      let beforeRevert = f.requests
+      f.currentImage = Self.image(.red)
+      f.manager.invalidateCache(changedThumbnailAssetIDs: ["A"])
+      let reverted = await observe { f.requests > beforeRevert && f.shows(.red) }
+      #expect(reverted, "Reverted red preview: \(f.diagnostics)")
+    } cleanup: {
+      await f.close()
+    }
   }
 
   @Test(.timeLimit(.minutes(1)))
   func unrelatedKnownEditRendersWithoutReloadingSelectedImage() async throws {
     let f = Fixture()
-    defer { f.close() }
-    f.show()
-    let initial = await observe { f.shows(.red) }
-    try #require(initial)
-    let before = f.counter.count(for: "asset-detail-body")
-    f.manager.invalidateCache(changedThumbnailAssetIDs: ["B"])
-    let rendered = await observe { f.counter.count(for: "asset-detail-body") > before }
-    try #require(rendered)
-    // Acknowledged render settling is a negative-control barrier, not the race gate.
-    try await Task.sleep(for: .milliseconds(30))
-    #expect(f.requests == 1)
-    #expect(f.shows(.red))
+    try await withCleanup {
+      f.show()
+      let initial = await observe { f.shows(.red) }
+      try #require(initial)
+      let before = f.counter.count(for: "asset-detail-body")
+      f.manager.invalidateCache(changedThumbnailAssetIDs: ["B"])
+      let rendered = await observe { f.counter.count(for: "asset-detail-body") > before }
+      try #require(rendered)
+      // Acknowledged render settling is a negative-control barrier, not the race gate.
+      try await Task.sleep(for: .milliseconds(30))
+      #expect(f.requests == 1)
+      #expect(f.shows(.red))
+    } cleanup: {
+      await f.close()
+    }
   }
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])

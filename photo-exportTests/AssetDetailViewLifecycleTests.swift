@@ -93,28 +93,27 @@ struct AssetDetailViewLifecycleTests {
       styleMask: [.borderless], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
     window.contentView = hostingView
-    defer {
+    await withCleanup {
+      window.orderFront(nil)
+
+      await firstGate.waitForEnter(count: 1)
+      selection.asset = second
+      await cancellations.wait(for: first.id)
+      await secondGate.waitForEnter(count: 1)
+
+      selection.showsDetail = false
+      await cancellations.wait(for: second.id)
+      await firstGate.releaseAll()
+      await secondGate.releaseAll()
+    } cleanup: {
       window.orderOut(nil)
       window.contentView = nil
       window.close()
-      Task {
-        await firstGate.releaseAll()
-        await secondGate.releaseAll()
-      }
       exportRecordStore.flushForTesting()
       collectionStore.flushForTesting()
       try? FileManager.default.removeItem(at: storeRoot)
+      await firstGate.releaseAll()
+      await secondGate.releaseAll()
     }
-    window.orderFront(nil)
-
-    await firstGate.waitForEnter(count: 1)
-    selection.asset = second
-    await cancellations.wait(for: first.id)
-    await secondGate.waitForEnter(count: 1)
-
-    selection.showsDetail = false
-    await cancellations.wait(for: second.id)
-    await firstGate.releaseAll()
-    await secondGate.releaseAll()
   }
 }

@@ -185,23 +185,24 @@ struct LibraryGridSelectionLifecycleTests {
         continuation.finish()
       }
     }
-    defer {
+    try await withCleanup {
+      fixture.show()
+      let began = await observe { requests == 1 }
+      try #require(began)
+      old.continuation.yield([TestAssetFactory.makeAsset(id: "obsolete")])
+      fixture.selection.isVisible = false
+      await terminated.waitForEnter(count: 1)
+      await terminated.releaseAll()
       old.continuation.finish()
-      Task { await terminated.releaseAll() }
+      fixture.selection.isVisible = true
+      let loaded = await observe { fixture.service.startCachingCalls.count == 1 }
+      try #require(loaded)
+      #expect(fixture.service.startCachingCalls[0].map(\.id) == ["current"])
+    } cleanup: {
+      old.continuation.finish()
       fixture.close()
+      await terminated.releaseAll()
     }
-    fixture.show()
-    let began = await observe { requests == 1 }
-    try #require(began)
-    old.continuation.yield([TestAssetFactory.makeAsset(id: "obsolete")])
-    fixture.selection.isVisible = false
-    await terminated.waitForEnter(count: 1)
-    await terminated.releaseAll()
-    old.continuation.finish()
-    fixture.selection.isVisible = true
-    let loaded = await observe { fixture.service.startCachingCalls.count == 1 }
-    try #require(loaded)
-    #expect(fixture.service.startCachingCalls[0].map(\.id) == ["current"])
   }
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
