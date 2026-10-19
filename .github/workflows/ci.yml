@@ -108,6 +108,13 @@ jobs:
           ./scripts/ci/test-guards.sh
           python3 scripts/ci/check-read-only-photos.py
 
+      - name: Check test waits
+        run: |
+          echo "::group::Test-wait guard"
+          echo "Rejecting wall-clock deadline waits and unbacked eventually( calls in photo-exportTests/ (#277)."
+          python3 -B scripts/ci/check-test-waits.py
+          echo "::endgroup::"
+
       - name: Check project version consistency
         run: python3 scripts/ci/check-version.py
 
