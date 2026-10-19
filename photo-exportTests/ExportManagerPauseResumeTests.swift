@@ -16,9 +16,9 @@ import Testing
 /// dropping `processQueueIfNeeded()` from `resume`) would either deadlock the
 /// queue or run jobs through pause; no current test would notice.
 ///
-/// Approach: enqueue 3 assets, slow the writer via `writeDelaySeconds`, call
-/// `pause()` after the first asset's write starts, wait for the in-flight job
-/// to finish, then assert the queue parked correctly. Resume and verify the
+/// Approach: enqueue 3 assets, hold the first write at the writer's checkpoint, call
+/// `pause()` while it is in flight, release it and wait for the job to finish, then
+/// assert the queue parked correctly. Resume and verify the
 /// remaining work drains.
 @MainActor
 @Suite(.timeLimit(.minutes(2)))

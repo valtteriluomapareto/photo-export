@@ -200,6 +200,47 @@ struct ExportPipelineTests {
     #expect(leftoverTmp?.isEmpty != false)
   }
 
+  /// A file that appears at the final name after staging is never overwritten. The explicit
+  /// check refuses the move with `Export`/2, the third-party bytes stay, and neither staging
+  /// nor a suffixed copy is left. The window between that check and the move itself is not
+  /// covered here (#326).
+  @Test func lateCollisionAtTheFinalNameKeepsTheExistingFile() async throws {
+    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
+    defer { dest.cleanup() }
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "late-collision",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!)
+    photoLib.yearCounts = [(2025, 1)]
+    photoLib.assetsByYearMonth["2025-6"] = [asset]
+    photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+    ]
+    fileSystem.beforeMoveHook = { [fileSystem] _, destination in
+      fileSystem.beforeMoveHook = nil
+      try Data("third-party".utf8).write(to: destination)
+    }
+
+    // An Auto Export run, so the failure detail carries the signature retry state uses.
+    let summary = await manager.runExport(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+        selection: .edited))
+
+    #expect(summary.failures.map(\.errorSignature) == ["Export:2"])
+    #expect(summary.failures.map(\.category) == [.destinationCollision])
+    #expect(fileSystem.moveCalls.count == 1)
+    let variant = store.exportInfo(assetId: asset.id)?.variants[.original]
+    #expect(variant?.status == .failed)
+    #expect(variant?.lastError == "Destination already exists")
+    let monthDir = try dest.urlForMonth(year: 2025, month: 6, createIfNeeded: false)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: monthDir.path) == ["IMG_0001.JPG"])
+    #expect(
+      try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001.JPG"))
+        == Data("third-party".utf8))
+    #expect(fileSystem.timestampCalls.isEmpty)
+  }
+
   // MARK: - Pause/resume cycle
 
   @Test func pauseAndResumeBehavior() async throws {

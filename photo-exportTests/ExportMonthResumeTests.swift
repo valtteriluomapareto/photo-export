@@ -25,7 +25,6 @@ struct ExportMonthResumeTests {
       store.configure(for: "test")
       collections.configure(for: "test")
       writer.checkpoint = gate
-      writer.requiresUnusedDestination = true
       manager = ExportManager(
         photoLibraryService: library, exportDestination: destination,
         exportRecordStore: store, collectionExportRecordStore: collections,

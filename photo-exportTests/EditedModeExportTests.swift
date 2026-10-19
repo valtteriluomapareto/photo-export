@@ -258,7 +258,10 @@ struct EditedModeExportTests {
 
     let bRecord = store.exportInfo(assetId: "b")
     #expect(bRecord?.variants[.original]?.status == .failed)
-    #expect(bRecord?.variants[.original]?.lastError?.contains("already exists") == true)
+    // Exact: the final-move guard's "Destination already exists" would also refuse it.
+    #expect(
+      bRecord?.variants[.original]?.lastError
+        == "Paired original filename already exists on disk: IMG_0001_orig.JPG")
     let cData = try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001_orig.JPG"))
     #expect(String(data: cData, encoding: .utf8) == "other-asset")
   }
