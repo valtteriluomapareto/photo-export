@@ -127,7 +127,7 @@ Agent-authored PRs follow the repository's three-reviewer workflow:
 5. Reuse the same three agents to review the implementation, resolve actionable findings, and record the review outcomes.
 6. Push and open the PR. Merge after CI passes for its current head commit and actionable findings are resolved, unless the user requests a different flow.
 
-Triage a red post-merge main run with an issue or revert before merging another PR.
+Triage a red post-merge main run with an issue or revert before merging another PR. A red scheduled release dry run gets an issue but does not block merges (see [the release process](docs/project/release-process.md#dry-run)).
 
 Include the following in your pull request description:
 

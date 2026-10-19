@@ -137,6 +137,10 @@ The checked-in value in `project.pbxproj` stays at `1`. Both workflows override 
 
 ## Dry run
 
+`release-direct` runs a signed, notarized dry run of `main` every Monday (06:23 UTC) to catch certificate, credential and Apple-side drift early; merges to `main` no longer start it. A red scheduled run is an early warning, not a merge blocker: open an issue, or note a known stapler network flake on #284 if a re-run passes. Tagging is gated by the candidate's own dry run in [release validation](release-validation.md#candidate-build). GitHub runs schedules from the default branch only, may delay them, emails failures to whoever last edited the cron line, and disables them after 60 days without repository activity (re-enable from the Actions tab).
+
+A PR that changes `release-*.yml` or the release signing scripts gets no post-merge signal, so before merging it run `gh workflow run release-direct.yml --ref <branch> -f dry_run=true` and link the green run.
+
 To test the GitHub workflow without creating a release:
 
 1. Go to **Actions > release-direct** on GitHub

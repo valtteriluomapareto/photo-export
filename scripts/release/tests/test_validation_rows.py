@@ -180,6 +180,9 @@ class SigningOverrideTests(unittest.TestCase):
                      "+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
                      "+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2",
                      "-      uses: actions/checkout@v4",
+                     # Trigger-only lines decide when the workflow runs, not what it builds.
+                     "+on:", "-  push:", "-    branches:", "-      - main", "+    tags:",
+                     "+      - 'v*'",
                      "+concurrency:", "+  group: release-direct"]:
             with self.subTest(line=line):
                 self.assertEqual(

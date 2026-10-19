@@ -4,8 +4,10 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
+  # Weekly signed, notarized dry run of main to catch certificate, credential and
+  # Apple-side drift early; release candidates get their own dispatched dry run.
+  schedule:
+    - cron: '23 6 * * 1'
   workflow_dispatch:
     inputs:
       dry_run:

@@ -60,8 +60,8 @@ run conditionally; the existing `website` and `build-and-test` check names are L
 result gates that require successful routing plus exactly selected/success or
 unselected/skipped. Missing outputs, failed/cancelled validators, and unexpectedly
 skipped selected validators cannot pass. An overall cancelled run may cancel the gate
-before it executes; it remains non-green. Release workflows, including main's direct
-distribution dry run, are separate and unchanged. No branch-protection settings are
+before it executes; it remains non-green. Release workflows, including the weekly scheduled
+direct-distribution dry run, are separate and unchanged. No branch-protection settings are
 changed by routing.
 
 Run the real-Git routing matrix and result-gate truth table locally:
