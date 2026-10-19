@@ -93,11 +93,15 @@ The app's export pipeline went through a multi-phase architecture refactor in Ma
 1. Read [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) — the canonical home for the contracts, the canonical `start*` entry-point shape, and the "to add a new X, touch these files" recipes.
 2. If your change touches the queue, AutoSync surface, record stores, or the screenshot photo library service, the following **regression-gate tests** must pass *without re-recording* unless you have explicitly audited the new behavior:
    - `AutoSyncSeamCharacterizationTests` — pins the AutoSync emission sequence.
+   - `AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence` — pins the AutoSync run's state sequence.
+   - `AutoSyncSeamCharacterizationTests.manualExportSupersedingAutoSyncYieldsCanonicalSequence` — pins a manual export superseding an AutoSync run.
    - `ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors` — pins synchronous coordinator→manager mirrors.
    - `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions` — pins toolbar state transitions.
    - `ScreenshotPhotoLibraryServiceOverridesTests` — pins screenshot-mode override coverage.
    - `ImportIdempotencyTests` — pins import idempotency.
    - `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` — pins the already-exported check before retry eligibility.
+
+   The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list misses a gate from it or if a gate is skipped.
 3. New collaborator extracted from `ExportManager`? Use the Host-protocol pattern documented in the conventions file (narrow protocol, IUO init, weak host, synchronous mirror sinks). Do not duplicate `@Published` state on the manager.
 
 The deeper architecture map (what each type does) lives at [`website/src/content/docs/architecture.md`](website/src/content/docs/architecture.md). For agent-specific quick reference (build commands, design decisions, conventions), [`AGENTS.md`](AGENTS.md) is the richest single source — humans are welcome to read it too.

@@ -117,13 +117,15 @@ Three contracts bind every collaborator (cancellation seam, actor isolation poli
 The behavioral regression gates are the same in this guide, `CONTRIBUTING.md`, and the canonical reference:
 
 - `AutoSyncSeamCharacterizationTests`
+- `AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence`
+- `AutoSyncSeamCharacterizationTests.manualExportSupersedingAutoSyncYieldsCanonicalSequence`
 - `ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`
 - `ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions`
 - `ScreenshotPhotoLibraryServiceOverridesTests`
 - `ImportIdempotencyTests`
 - `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck`
 
-Run these without re-recording unless the new behavior has been explicitly audited. `scripts/ci/check-regression-gates.sh` also pins containing-suite declarations to support method-level gates; those pins are not additional behavioral gates.
+Run these without re-recording unless the new behavior has been explicitly audited. They are listed once in `scripts/ci/regression-gates.txt`, which also pins containing-suite declarations to support method-level gates; those pins are not additional behavioral gates. CI checks that this list names every gate in the file and that every gate ran and passed.
 
 ## Documentation Layout
 

@@ -34,7 +34,7 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     let years = try svc.availableYears()
     #expect(!years.isEmpty,
       "screenshot mode must surface curated years; an empty list means the override didn't take")
-    guard let firstYear = years.first else { return }
+    let firstYear = try #require(years.first)
     let yearAssets = try await svc.fetchAssets(year: firstYear, month: nil, mediaType: nil)
     #expect(!yearAssets.isEmpty,
       "fetchAssets(year:month:) must return curated synthetic assets, not an empty production result")
@@ -51,7 +51,7 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
   @Test func countAssetsForYearMonthReturnsCuratedData() throws {
     let svc = ScreenshotPhotoLibraryService()
     let years = try svc.availableYears()
-    guard let firstYear = years.first else { return }
+    let firstYear = try #require(years.first)
     let total = try svc.countAssets(year: firstYear)
     #expect(total > 0)
   }
@@ -59,9 +59,12 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
   @Test func countAdjustedAssetsForYearMonthReturnsCuratedData() async throws {
     let svc = ScreenshotPhotoLibraryService()
     let years = try svc.availableYears()
-    guard let firstYear = years.first else { return }
+    let firstYear = try #require(years.first)
+    let total = try svc.countAssets(year: firstYear)
     let adjusted = try await svc.countAdjustedAssets(year: firstYear)
-    #expect(adjusted >= 0)
+    // Curated shape, as for scopes below; per-asset flags vary between processes.
+    try #require(adjusted > 0)
+    #expect(adjusted == total / 4)
   }
 
   // MARK: - Collections
@@ -90,10 +93,8 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     let svc = ScreenshotPhotoLibraryService()
     let tree = try svc.fetchCollectionTree()
     let firstAlbum = tree.first { $0.kind == .album }
-    guard let albumId = firstAlbum?.localIdentifier else {
-      Issue.record("Curated tree must contain at least one album")
-      return
-    }
+    let albumId = try #require(
+      firstAlbum?.localIdentifier, "Curated tree must contain at least one album")
     let assets = try await svc.fetchAssets(in: .album(collectionId: albumId), mediaType: nil)
     #expect(!assets.isEmpty)
   }

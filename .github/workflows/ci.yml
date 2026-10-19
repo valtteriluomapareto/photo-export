@@ -121,9 +121,9 @@ jobs:
       - name: Check regression-gate symbols
         run: |
           echo "::group::Regression-gate symbol check"
-          echo "Verifying that the six tests documented in"
-          echo "docs/reference/architecture-conventions.md §Regression gates"
-          echo "still exist under their documented names."
+          echo "Verifying that the gates listed in scripts/ci/regression-gates.txt"
+          echo "still exist under their listed names, and that the gate lists in"
+          echo "docs/reference/architecture-conventions.md, AGENTS.md and CONTRIBUTING.md match it."
           ./scripts/ci/check-regression-gates.sh
           echo "::endgroup::"
 
@@ -175,6 +175,16 @@ jobs:
             test 2>&1 | tee test.log | tail -300
           echo "Unit tests passed."
           echo "Result bundle: $(du -sh TestResults.xcresult)"
+          echo "::endgroup::"
+
+      - name: Check regression gates ran
+        if: success()
+        run: |
+          echo "::group::Regression-gate result check"
+          echo "Verifying that every gate in scripts/ci/regression-gates.txt ran in"
+          echo "TestResults.xcresult and was not skipped, failed or an expected failure."
+          xcrun xcresulttool version
+          python3 -B scripts/ci/check-regression-gates-ran.py --result-bundle TestResults.xcresult
           echo "::endgroup::"
 
       - name: Publish advisory app coverage
