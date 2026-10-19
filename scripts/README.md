@@ -30,6 +30,7 @@ python3 scripts/ci/check-read-only-photos.py
 python3 scripts/ci/check-version.py
 python3 scripts/ci/check-test-waits.py
 python3 scripts/ci/check-test-scratch.py
+python3 scripts/ci/check-persistence-doc.py
 ```
 
 `check-test-waits.py` rejects wall-clock `< deadline` waits in `photo-exportTests/`
@@ -52,6 +53,12 @@ no-argument `ExportRecordStore()` / `CollectionExportRecordStore()`. Use
 `TestScratch.directory(_:)` for folders. A test that must exercise the real path keeps the
 construct and marks it with a `// test-scratch: allow <reason>` comment on the line where
 the use starts or the line above. It is lexical, like the other guards.
+
+`check-persistence-doc.py` compares the "Record-store value sets" table in
+[`docs/reference/persistence-store.md`](../docs/reference/persistence-store.md) with the
+Swift types its rows name; add a new persisted value to the table in the same change.
+Static members on `ExportVariantReason` other than `static let x = Self(rawValue: "...")`
+constants fail until the guard is taught about them.
 
 ### Removing leaked test files
 

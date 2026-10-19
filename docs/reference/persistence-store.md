@@ -9,8 +9,9 @@ The app keeps **two parallel record stores**, one per "shape" of export:
 - `ExportRecordStore` (timeline) — keyed by `PHAsset.localIdentifier`. Backs the
   year/month exports under `<root>/YYYY/MM/`.
 - `CollectionExportRecordStore` (collections) — keyed by
-  `(placementId, assetId)`. Backs Favorites and user-album exports under
-  `<root>/Collections/Favorites/` and `<root>/Collections/Albums/...`.
+  `(placementId, assetId)`. Backs Favorites, user-album and shared-album exports under
+  `<root>/Collections/Favorites/`, `<root>/Collections/Albums/...` and
+  `<root>/Collections/Shared Albums/<album>/`.
 
 The two stores share **no key space**: the collection store rejects `.timeline`
 placements at every API entry point. As a result a corrupt collection store cannot
@@ -44,29 +45,101 @@ compacted snapshot — implemented by the shared `JSONLRecordFile` component.
   - `collection-records.jsonl` — append-only log of placement and record mutations
   - `collection-records.json` — compacted snapshot containing `placements` (placement metadata keyed by placement id) and `records` (record bodies nested by `[placementId][assetId]`)
 
+## Record-store value sets
+
+This table is the one list of the enum-like strings the two record stores write. The
+data-model sections below refer to it rather than repeating the values.
+[`scripts/ci/check-persistence-doc.py`](../../scripts/ci/check-persistence-doc.py) reads
+each named Swift type and fails CI when a row and the source disagree, so keep the header
+and the backticked, comma-separated value lists in this shape.
+
+| Value set | Persisted as | Values |
+| --- | --- | --- |
+| `ExportPlacement.Kind` | placement `kind`; the collection store never persists `timeline` | `timeline`, `favorites`, `album`, `sharedAlbum` |
+| `ExportVariant` | keys of `variants`, in both stores | `original`, `edited`, `originalPairedVideo`, `editedPairedVideo` |
+| `ExportStatus` | variant `status` | `pending`, `inProgress`, `done`, `failed` |
+| `ExportVariantReason` | variant `reason`; an open set, unknown codes round-trip | `interrupted`, `editedResourceUnavailable`, `editedUnavailableOriginalBackedUp`, `pairedVideoUnavailable` |
+| `ExportRecordMutation.Operation` | timeline log `op` | `upsert`, `delete` |
+| `CollectionExportRecordStore.LogOp.OpDiscriminator` | collection log `op` | `upsertPlacement`, `deletePlacement`, `upsertRecord`, `deleteRecord` |
+
+The AutoSync metadata files have their own persisted enums, such as
+[`AutoSyncFailureCategory`](../../photo-export/Models/AutoSyncFailureCategory.swift); see
+[Auto Export metadata recovery](#auto-export-metadata-recovery). They are not record-store
+values and are not listed here.
+
 ## Data Model — timeline store
 
 - `ExportRecord` (JSON):
   - `id` (String) — `PHAsset.localIdentifier`
   - `year` (Int), `month` (Int)
-  - `relPath` (String) — relative export folder, e.g. `2025/02/`
-  - `variants` (Object) — keyed by variant name (`original`, `edited`), each value an
-    `ExportVariantRecord`
-- `ExportVariantRecord` (JSON):
-  - `filename` (String?) — final exported filename for that variant. The `.original`
-    variant's filename may be the bare stem (e.g. `IMG_0001.JPG`) or the `_orig` companion
-    form (e.g. `IMG_0001_orig.HEIC`) depending on whether it was paired with an `.edited`
-    write.
-  - `status` (String) — `pending` | `inProgress` | `done` | `failed`
-  - `exportDate` (ISO8601 date)
+  - `relPath` (String) — the export folder of the latest in-progress or done write, e.g. `2025/02/`, or
+    `2025/02/videos/` for a standalone video written into the `videos` subfolder. Readers
+    locate each file from `year`/`month` plus the variant's `subfolder`, not from `relPath`.
+    A failure recorded for an asset that has no record yet creates one with `year` and
+    `month` `0` and an empty `relPath`; a later in-progress or done write fills them in.
+  - `variants` (Object) — keyed by an `ExportVariant` value
+    ([value sets](#record-store-value-sets)), each value an `ExportVariantRecord`
+- `ExportVariantRecord` (JSON), the same shape in both stores:
+  - `filename` (String?) — final exported filename for that variant; see
+    [Variants and file names](#variants-and-file-names).
+  - `status` (String) — an `ExportStatus` value
+  - `exportDate` (ISO8601 date, optional)
   - `lastError` (String?)
-  - `reason` (String or explicit null) — stable domain reason, separate from error copy.
-    Known codes are `interrupted`, `editedResourceUnavailable`,
-    `editedUnavailableOriginalBackedUp`, and `pairedVideoUnavailable`.
+  - `subfolder` (String?) — the path component inside the placement folder where the file
+    landed. Today's writer sets `"videos"` for every variant of a standalone video asset
+    (`PHAssetMediaType.video`) under `videoLayout = .subfolder`, and omits the key
+    otherwise; a Live Photo's paired video stays beside its still. A missing key means
+    the bare placement folder, which is what records written before the field existed
+    decode to.
+  - `reason` (String or explicit null) — stable domain reason, separate from error copy:
+    an `ExportVariantReason` code. The set is open; see
+    [Stable variant reasons](#stable-variant-reasons).
 - `ExportRecordMutation` (JSON Lines):
-  - `op` — `upsert` | `delete`
+  - `op` — an `ExportRecordMutation.Operation` value
   - `id` — asset id
   - `record` — present on `upsert`, omitted on `delete`
+
+A timeline log line for a Live Photo whose paired video Photos did not provide, from
+[`test-fixtures/persistence/v1.6.5/A/export-records.jsonl`](../../test-fixtures/persistence/v1.6.5/A/export-records.jsonl)
+(line 11). It shows the failed case, so the paired video has no `filename`; a done one
+records the Photos resource's extension, typically `.MOV`, at the still's stem
+(`LIVE.MOV` here). The line is wrapped for reading; keys, values and escapes are as
+written. That release predates `reason`, so the field is absent:
+
+```json
+{"id":"live","record":{"id":"live","year":2024,"month":4,"relPath":"2024\/04\/",
+ "variants":{"original":{"filename":"LIVE.HEIC","status":"done","exportDate":"2023-11-14T22:13:20Z"},
+ "originalPairedVideo":{"lastError":"Photos has no exportable paired video resource for this Live Photo","status":"failed","exportDate":"2023-11-14T22:13:20Z"}}},
+ "op":"upsert"}
+```
+
+### Variants and file names
+
+Both stores use the same variant keys and file-naming rules:
+
+- `original` — the original resource at its natural name, e.g. `IMG_0001.HEIC`, or at the
+  `_orig` companion name, e.g. `IMG_0001_orig.HEIC`, when it is paired with an `edited`
+  write (including the fallback that backs up the original when the edit is unavailable).
+- `edited` — the rendered edit at the natural stem, e.g. `IMG_0001.JPG`. With HEIC-to-JPEG
+  conversion on, it is also the JPEG made from an unedited HEIC original, which then
+  counts as adjusted for variant selection.
+- `originalPairedVideo` and `editedPairedVideo` — the Live Photo motion file paired with
+  `original` or `edited`. They appear only when "Export Live Photos as paired image +
+  video" is on. The extension comes from Photos' paired-video resource, typically `.MOV`.
+  The file lands at its still's stem (`IMG_0001.MOV`), or at the `_orig` stem
+  (`IMG_0001_orig.MOV`) for `originalPairedVideo` when the asset also has an `edited`
+  write.
+
+A name that is taken gets a ` (1)`, ` (2)`, … collision suffix. When several files of one
+asset are written together (an edit with its `_orig` companion, or a still with its paired
+video), the exporter picks one stem at which every file's name is free, so the group
+shares one stem and its collision suffix rather than being split across stems.
+
+Shared albums record only `original`. Their placement kind maps to the `singleResource`
+variant policy (`ExportPlacement.Kind.variantPolicy`, not persisted): Photos exposes one
+downscaled resource per shared-album asset, so there is no `edited` variant, no `_orig`
+companion and no paired video, whatever the version selection, HEIC-to-JPEG and Live Photo
+settings. The other kinds use the `standard` policy, which honors those settings.
 
 ## Data Model — collection store
 
@@ -76,21 +149,42 @@ compacted snapshot — implemented by the shared `JSONLRecordFile` component.
     `ExportPlacement` (see below)
   - `records` (Object) — `{ placementId: { assetId: { variants: { variantName: ExportVariantRecord } } } }`
 - `ExportPlacement`:
-  - `kind` (String) — `timeline` | `favorites` | `album`. The collection store rejects
-    `timeline` at every API entry point; persisted snapshots only ever contain
-    `favorites` and `album`.
+  - `kind` (String) — an `ExportPlacement.Kind` value
+    ([value sets](#record-store-value-sets)). The collection store rejects `timeline` at
+    every API entry point; persisted snapshots only ever contain `favorites`, `album` and
+    `sharedAlbum`.
   - `id` (String) — placement id. Format: `collections:favorites` for the canonical
     Favorites placement; `collections:album:<collectionIdHash16>:<displayPathHash8>` for
-    albums (the path-hash component changes when the album is renamed or moved between
-    folders, so the next export resolves to a fresh placement).
-  - `displayName` (String) — human-readable label (e.g. `Trips/Iceland`).
+    albums; `collections:shared-album:<collectionIdHash16>:<displayPathHash8>` for shared
+    albums. The path-hash component changes when an album is renamed or moved between
+    folders, and when a shared album is renamed (shared albums never nest, so they never
+    move); the next export then resolves to a fresh placement.
+  - `displayName` (String) — human-readable label (e.g. `Trips/Iceland`); a shared
+    album's title.
   - `collectionLocalIdentifier` (String?) — `PHAssetCollection.localIdentifier` for
-    `.album`. `nil` for `.favorites`.
-  - `relativePath` (String) — path under the export root, e.g. `Collections/Albums/Iceland/`.
+    `album` and `sharedAlbum`. Absent for `favorites`.
+  - `relativePath` (String) — path under the export root, frozen when the placement is
+    created, e.g. `Collections/Albums/Trips/Iceland/` or `Collections/Shared Albums/Family/`.
+    Shared albums never nest. When sanitized sibling names collide, later placements get
+    `_2`, `_3`, … suffixes; a shared album collides only with other shared albums.
   - `createdAt` (ISO8601 date) — diagnostic only, not part of identity.
-- `LogOp` (JSON Lines): four operations, distinguished by an `op` discriminator —
-  `upsertPlacement`, `deletePlacement`, `upsertRecord`, `deleteRecord`. Record-level
-  bodies are the same `{ variants: { ... } }` shape as the snapshot.
+- `LogOp` (JSON Lines): four operations, distinguished by an `op` discriminator (a
+  `CollectionExportRecordStore.LogOp.OpDiscriminator` value). Record-level bodies are the
+  same `{ variants: { ... } }` shape as the snapshot, under the key `record`.
+
+A collection snapshot trimmed to its shared-album placement and that placement's records,
+from [`test-fixtures/persistence/v1.6.5/A/collection-records.json`](../../test-fixtures/persistence/v1.6.5/A/collection-records.json).
+The other placements and records are omitted and the JSON is indented; keys, values and
+escapes are as written. The fixture's placement id is synthetic: a real one has the
+`collections:shared-album:…` form above.
+
+```json
+{"placements":{
+  "fixture-shared":{"id":"fixture-shared","createdAt":"2023-11-14T22:13:20Z","kind":"sharedAlbum","displayName":"Shared","collectionLocalIdentifier":"fixture-shared-collection","relativePath":"Collections\/Shared Albums\/Shared\/"}},
+ "version":1,
+ "records":{
+  "fixture-shared":{"shared":{"variants":{"original":{"status":"done","filename":"SHARED.JPG","exportDate":"2023-11-14T22:13:20Z"}}}}}}
+```
 
 The collection store also enforces a referential constraint when replaying the log: an
 `upsertRecord` with no matching placement metadata is skipped (with a log line) so a
@@ -137,15 +231,19 @@ render/conversion failures retain the `Export:9` retry identity.
 
 ## Lifecycle
 
+Both stores follow the same lifecycle on their own files: `export-records.json` and
+`export-records.jsonl` for the timeline store, `collection-records.json` and
+`collection-records.jsonl` for the collection store.
+
 1. On first run, the store creates its directory.
-2. On launch, the store loads the snapshot (if present), then applies each log line in order to reconstruct the latest state.
+2. On launch, the store loads its snapshot (if present), then applies each log line in order to reconstruct the latest state.
 3. On updates, the store:
    - Applies the mutation to in-memory state immediately
-   - Appends a JSON line to `export-records.jsonl`
-   - Periodically compacts:
+   - Appends a JSON line to its log (`export-records.jsonl` or `collection-records.jsonl`)
+   - Compacts every 1,000 mutations:
      - Writes a full snapshot to a temp file
-     - Atomically replaces `export-records.json`
-     - Truncates `export-records.jsonl`
+     - Atomically replaces the snapshot (`export-records.json` or `collection-records.json`)
+     - Truncates the log
 4. On quit, any pending compaction can run; otherwise the log is replayed at next launch.
 
 ## Crash Safety
@@ -164,25 +262,39 @@ render/conversion failures retain the `Export:9` retry identity.
 
 ## Querying Status
 
-- `isExported(assetId:)` returns whether the `.original` variant is `done` — a convenience shim
-  for legacy call sites.
-- `isExported(asset:selection:)` evaluates completion strictly against
-  `requiredVariants(for:selection:)` — i.e. the asset's current `hasAdjustments`. No
-  filename inspection: a `.original.done` row at any filename satisfies an unedited
-  asset's requirement, and an adjusted asset is only satisfied when `.edited.done` (and
-  `.original.done` under `editedWithOriginals`).
-- `exportInfo(assetId:)` returns the full record; callers inspect
-  `record.variants[.original]` and `record.variants[.edited]` directly.
-- `monthSummary(assets:selection:)` computes an asset-based summary for a selected month
-  by calling the strict, asset-aware `isExported` on each descriptor.
-- `sidebarSummary(year:month:totalCount:adjustedCount:selection:)` computes an approximate
-  summary for sidebar rows that do not have loaded `AssetDescriptor`s. The formula is
-  `editedDone + min(origOnlyAtStem, uneditedCount)` for the default mode and
-  `bothDone + min(origOnlyAtStem, uneditedCount)` for include-originals, where
-  `origOnlyAtStem` filters records by `!isOrigCompanion(filename:)`. The
-  `adjustedCount`-derived cap prevents natural-stem `.original.done` records belonging to
-  currently-adjusted assets from over-contributing past the number of assets that could
-  legitimately be original-only.
+Completion is decided by `ExportCompletionPolicy.isComplete` against the variants that
+`requiredVariants(for:selection:policy:convertHEICToJPEG:livePhotosPaired:)` returns:
+
+- the placement's variant policy (`standard`, or `singleResource` for shared albums, which
+  requires only `original`);
+- the version selection and the asset's current `hasAdjustments`, where an unedited HEIC
+  counts as adjusted while HEIC-to-JPEG conversion is on;
+- with Live Photo pairing on, the paired-video variant of each required still.
+
+Every required variant must be `done`, with two exceptions. A paired video that failed with
+reason `pairedVideoUnavailable` counts as covered. Under the `edited` selection, an
+adjusted asset whose `original` is `done` and whose `edited` failed with reason
+`editedUnavailableOriginalBackedUp` counts as exported. Filenames are not inspected.
+
+- `isExported(asset:selection:livePhotosPaired:)` on the timeline store, and
+  `isExported(asset:placement:selection:livePhotosPaired:)` on the collection store,
+  apply that rule to the asset's record. The pairing flag has no default, so every caller
+  states it.
+- `exportInfo(assetId:)` (timeline) and `exportInfo(assetId:placement:)` (collections)
+  return the record; callers read `variants` directly, including the paired-video keys.
+- `monthSummary(assets:selection:livePhotosPaired:)` counts the loaded assets for which
+  `isExported` holds. The older `monthSummary(year:month:totalAssets:)` and
+  `yearExportedCount(year:)` count `original` `done` records only.
+- `sidebarSummary(year:month:totalCount:adjustedCount:selection:livePhotosPaired:)`
+  approximates the count for sidebar rows without loaded `AssetDescriptor`s, from
+  per-month record counters. It returns nil until `adjustedCount` is known. The exported
+  count is `editedDone + min(origOnlyAtStem, uneditedCount) + fallbackCovered` for the
+  `edited` selection and `bothDone + min(origOnlyAtStem, uneditedCount)` for
+  `editedWithOriginals`. With pairing on, records with an incomplete paired video (not
+  `done` and not `pairedVideoUnavailable`) are then subtracted. `origOnlyAtStem` counts
+  records whose `original` is `done` at a non-`_orig` filename and whose `edited` is not
+  `done`. The `uneditedCount` cap keeps natural-stem `original` records of now-adjusted
+  assets from counting past the number of assets that could be original-only.
 
 ## Error Handling
 
