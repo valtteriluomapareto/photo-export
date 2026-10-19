@@ -12,6 +12,8 @@ const { base, repoUrl } = repositoryInfo();
 export default defineConfig({
 	site: 'https://valtteriluomapareto.github.io',
 	base,
+	// Keep the HTML whitespace semantics used before Astro 7.
+	compressHTML: true,
 	integrations: [
 		starlight({
 			title: 'Photo Export',
