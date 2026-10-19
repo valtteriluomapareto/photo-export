@@ -666,6 +666,41 @@ struct ExportManagerRunExportTests {
     #expect(harness.writer.writeCalls.count == 1)
   }
 
+  /// A favorites run whose scan fails resolves `.failed` exactly once. The `.manual` case
+  /// exercises the run-context branch (no UI path uses it) and keeps the scan message in its
+  /// feedback; an AutoSync run has none. Awaits the preparation rather than the run, so a
+  /// regression fails here instead of hanging.
+  @Test(.timeLimit(.minutes(1)), arguments: [ExportRunSource.manual, .autoSync])
+  func favoritesScanFailureResolvesTheRunAsFailed(source: ExportRunSource) async throws {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+    harness.photoLib.fetchAssetsError = CocoaError(.fileReadUnknown)
+    var completions: [ExportRunSummary] = []
+    let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
+    let context = ExportRunContext(
+      source: source, visibility: source == .manual ? .userVisible : .background,
+      scope: .favoritesFull, selection: .edited)
+
+    _ = Task { await harness.manager.runExport(context: context) }
+    // `runExport` sets the context and registers the preparation in one MainActor turn.
+    let preparing = await eventually("favorites run started") {
+      harness.manager.activeRunContext != nil || !completions.isEmpty
+    }
+    try #require(preparing)
+    for task in harness.manager.currentPreparationTasks {
+      let done = await finished(task)
+      try #require(done)
+    }
+
+    #expect(completions.map(\.context) == [context])
+    #expect(completions.map(\.result) == [.failed])
+    #expect(harness.manager.activeRunContext == nil)
+    #expect(
+      harness.manager.progressState.manualSummary?.failureMessage
+        == (source == .manual ? "Could not scan Favorites. Try exporting again." : nil))
+  }
+
   // MARK: - Full-scope run characterization (issue #153)
 
   /// Every supported full scope must resolve an empty scan once. This also pins

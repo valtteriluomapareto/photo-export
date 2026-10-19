@@ -346,10 +346,13 @@ func startExportX(...) {
   //    reset counters only when truly idle, then capture generation synchronously.
   let (settings, gen) = prepareExport(...)
   // 4. Track the preparation task; pass settings intact to enqueueX(... generation:).
-  //    Re-check isCurrent(gen) after every await. Process the queue on success;
-  //    record preparation failure and log on throw.
+  //    Re-check isCurrent(gen) after every await. Process the queue on success.
+  //    On throw, single-scope starts call handleScanFailure: record the preparation
+  //    failure, log, and resolve an active run as .failed when nothing is queued.
 }
 ```
+
+Favorites is the only single-scope start AutoSync runs through `runExport`; the shared failure rule keeps the others safe if one is ever routed there.
 
 `ExportSettingsSnapshot` owns the capture policy for selection, Live Photo paired-video export, and video layout. Add future click-time settings to that value and its capture initializer, then consume them where needed; start methods, enqueue helpers and planners transport the same value. `ExportJob` stores it once, with computed compatibility accessors. Only the manager-reading initializer is `@MainActor`; scalar construction and the value itself remain pure. A run-context selection override must never mutate the toolbar selection. HEIC-to-JPEG conversion deliberately remains live at planning/write time and is excluded from this snapshot.
 
