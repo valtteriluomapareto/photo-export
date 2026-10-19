@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Photos
 import Testing
@@ -98,6 +99,7 @@ struct ExportAllAlbumsTests {
     let photoLib: FakePhotoLibraryService
     let dest: FakeExportDestination
     let writer: FakeAssetResourceWriter
+    let fileSystem: FakeFileSystem
     let timelineStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let storeRoot: URL
@@ -142,7 +144,7 @@ struct ExportAllAlbumsTests {
       userDefaults: defaults
     )
     return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
+      manager: manager, photoLib: photoLib, dest: dest, writer: writer, fileSystem: fileSystem,
       timelineStore: timelineStore, collectionStore: collectionStore,
       storeRoot: storeRoot, userDefaultsSuite: suiteName)
   }
@@ -388,7 +390,7 @@ struct ExportAllAlbumsTests {
     #expect(h.manager.emptyRunMessage == nil)
   }
 
-  @Test func allAlbumsAlreadyExportedSetsAlreadyDoneMessage() async throws {
+  @Test(.timeLimit(.minutes(2))) func allAlbumsAlreadyExportedSetsAlreadyDoneMessage() async throws {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -409,12 +411,21 @@ struct ExportAllAlbumsTests {
       assetId: "d1", placement: placement, variant: .original,
       filename: "d1.HEIC", exportedAt: Date())
 
+    var messages: [String] = []
+    let subscription = h.manager.progressState.$emptyRunMessage
+      .compactMap { $0 }
+      .sink { messages.append($0) }
+    defer { subscription.cancel() }
     h.manager.startExportAllAlbums()
-    await waitUntil(h.manager.emptyRunMessage != nil)
+    await h.manager.waitForQueueDrained()
 
     #expect(
-      h.manager.emptyRunMessage == "All albums in this destination are already exported.")
+      messages == ["All albums in this destination are already exported."])
     #expect(h.manager.totalJobsEnqueued == 0)
+    #expect(h.manager.totalJobsCompleted == 0)
+    #expect(h.writer.writeCalls.isEmpty)
+    #expect(h.fileSystem.moveCalls.isEmpty)
+    #expect(!h.manager.isRunning && !h.manager.isEnqueueingAll && h.manager.queueCount == 0)
   }
 
   /// AutoSync passes `selectionOverride` so a scheduled run honours the AutoSync
