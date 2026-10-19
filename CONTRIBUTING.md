@@ -101,7 +101,7 @@ The app's export pipeline went through a multi-phase architecture refactor in Ma
    - `ImportIdempotencyTests` — pins import idempotency.
    - `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` — pins the already-exported check before retry eligibility.
 
-   The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list drifts from it or if a gate is skipped.
+   The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list misses a gate from it or if a gate is skipped.
 3. New collaborator extracted from `ExportManager`? Use the Host-protocol pattern documented in the conventions file (narrow protocol, IUO init, weak host, synchronous mirror sinks). Do not duplicate `@Published` state on the manager.
 
 The deeper architecture map (what each type does) lives at [`website/src/content/docs/architecture.md`](website/src/content/docs/architecture.md). For agent-specific quick reference (build commands, design decisions, conventions), [`AGENTS.md`](AGENTS.md) is the richest single source — humans are welcome to read it too.

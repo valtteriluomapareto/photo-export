@@ -443,8 +443,8 @@ The gates are listed once, in [`scripts/ci/regression-gates.txt`](../../scripts/
 
 CI checks the list twice:
 
-- **Before the build,** [`scripts/ci/check-regression-gates.sh`](../../scripts/ci/check-regression-gates.sh) checks that every listed suite and method is still declared, and that this table and the gate lists in `AGENTS.md` and `CONTRIBUTING.md` name exactly the listed gates. A rename fails with a clear "MISSING SYMBOL" message, and a stale doc with "DOC DRIFT".
-- **After the unit tests pass,** [`scripts/ci/check-regression-gates-ran.py`](../../scripts/ci/check-regression-gates-ran.py) reads the result bundle and checks that every gate ran and none of its cases, arguments or repetitions was skipped, failed or an expected failure. A suite gate also needs at least one test case.
+- **Before the build,** [`scripts/ci/check-regression-gates.sh`](../../scripts/ci/check-regression-gates.sh) checks that every listed suite and method is still declared, and that this table and the gate lists in `AGENTS.md` and `CONTRIBUTING.md` name every listed gate. A rename fails with a clear "MISSING SYMBOL" message, and a doc missing a gate with "DOC DRIFT".
+- **After the unit tests pass,** [`scripts/ci/check-regression-gates-ran.py`](../../scripts/ci/check-regression-gates-ran.py) reads the result bundle and checks that every gate ran and that each of its test cases and argument cases reports Passed. Skipped, failed, expected-failure, unknown or missing results fail the gate, and a suite gate also needs at least one test case.
 
 If you rename, move, add or remove one of these tests, update the list file, this table, and the gate lists in `AGENTS.md` and `CONTRIBUTING.md` in the same PR. A gate that returns early without recording an issue still reports Passed; no result-bundle check can catch that, so write gate preconditions with `#require` rather than `guard … return`.
 

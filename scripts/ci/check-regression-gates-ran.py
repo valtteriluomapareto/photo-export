@@ -4,14 +4,18 @@
 Reads `xcrun xcresulttool get test-results tests` for a result bundle (or a
 pre-dumped copy of that JSON) and checks each listed row:
 
-  gate struct Suite         the suite ran at least one test case, and no node at
-                            or under it is Skipped, Failed or Expected Failure
+  gate struct Suite         the suite ran at least one test case, and every
+                            "Test Case" and "Arguments" node under it Passed
   gate func Suite.method    at least one test case whose identifier starts with
-                            "Suite/method(" ran, and no node at or under any of
-                            them (argument cases, repetitions) has those results
+                            "Suite/method(" ran, and every "Test Case" and
+                            "Arguments" node at or under the matches Passed
   pin struct Suite          the suite is present in the results
 
+A missing result or any value other than "Passed" on those nodes fails the gate.
 Missing results, a failing xcresulttool or unreadable JSON fail the check.
+
+This file also holds the only parser for the gate list; check-regression-gates.sh
+reads the rows through --print-rows.
 """
 
 import argparse
@@ -20,10 +24,11 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from urllib.parse import unquote
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 DEFAULT_GATE_LIST = REPOSITORY / "scripts/ci/regression-gates.txt"
-BAD_RESULTS = ("Skipped", "Failed", "Expected Failure")
+RESULT_NODE_TYPES = ("Test Case", "Arguments")
 STRUCT_DECLARATION = re.compile(r"struct [A-Za-z_][A-Za-z0-9_]*")
 FUNC_DECLARATION = re.compile(r"func [A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*")
 XCRESULTTOOL_TIMEOUT_SECONDS = 300
@@ -38,10 +43,11 @@ class ResultsError(ValueError):
 
 
 def parse_gate_list(text, source="gate list"):
-    """Parse gate rows with the same rules as check-regression-gates.sh.
+    """Parse gate rows into (file, kind, declaration) tuples.
 
-    Returns (file, kind, declaration) tuples. Text from "#" to the end of a line
-    is a comment, blank lines are ignored and fields are trimmed.
+    Text from "#" to the end of a line is a comment, blank lines are ignored and
+    fields are trimmed. A malformed row or an empty list raises GateListError
+    with one message per line.
     """
     rows, errors = [], []
     for number, line in enumerate(text.split("\n"), start=1):
@@ -108,39 +114,65 @@ def walk(nodes):
         stack.extend(reversed(children(node)))
 
 
-def is_suite(node, suite):
-    if node.get("nodeType") != "Test Suite":
-        return False
+def url_path(node):
+    """The node's test path from nodeIdentifierURL, without the bundle prefix or query.
+
+    "test://com.apple.xcode/photo-export/photo-exportTests/Suite/method(x:)?args=…"
+    becomes "Suite/method(x:)".
+    """
     url = node.get("nodeIdentifierURL")
-    return suite in (node.get("name"), node.get("nodeIdentifier"),
-                     url.rsplit("/", 1)[-1] if isinstance(url, str) else None)
+    if not isinstance(url, str) or not url.startswith("test://"):
+        return None
+    parts = url[len("test://"):].split("?", 1)[0].split("/")
+    return unquote("/".join(parts[3:])) if len(parts) > 3 else None
+
+
+def suite_identity(node):
+    """The last segment of nodeIdentifier, else of nodeIdentifierURL, else the display name.
+
+    `@Suite("…")` display names can replace `name`, so it is only a last resort.
+    """
+    if isinstance(node.get("nodeIdentifier"), str):
+        return node["nodeIdentifier"].rsplit("/", 1)[-1]
+    path = url_path(node)
+    if path:
+        return path.rsplit("/", 1)[-1]
+    return node.get("name")
+
+
+def case_identifier(node):
+    if isinstance(node.get("nodeIdentifier"), str):
+        return node["nodeIdentifier"]
+    return url_path(node)
+
+
+def is_suite(node, suite):
+    return node.get("nodeType") == "Test Suite" and suite_identity(node) == suite
 
 
 def is_case(node, prefix=None):
     if node.get("nodeType") != "Test Case":
         return False
-    identifier = node.get("nodeIdentifier")
+    identifier = case_identifier(node)
     return prefix is None or (isinstance(identifier, str) and identifier.startswith(prefix))
 
 
 def label(node, case):
-    if isinstance(node.get("nodeIdentifier"), str):
-        return node["nodeIdentifier"]
-    name = node.get("name", node.get("nodeType", "node"))
-    if case is None or case is node:
-        return str(name)
-    return f"{case.get('nodeIdentifier', case.get('name'))} [{node.get('nodeType', 'node')}: {name}]"
+    if node.get("nodeType") == "Test Case":
+        return str(case_identifier(node) or node.get("name", "Test Case"))
+    return f"{label(case, case) if case else 'test'} [{node.get('nodeType')}: {node.get('name', '?')}]"
 
 
-def bad_results(nodes):
-    """List the nodes at or under `nodes` whose result is not a clean pass."""
+def unpassed(nodes):
+    """List the Test Case and Arguments nodes at or under `nodes` that did not pass."""
     problems = []
 
     def visit(node, case):
         if node.get("nodeType") == "Test Case":
             case = node
-        if node.get("result") in BAD_RESULTS:
-            problems.append(f"{node['result']}: {label(node, case)}")
+        if node.get("nodeType") in RESULT_NODE_TYPES and node.get("result") != "Passed":
+            result = node.get("result")
+            problems.append(f"{result if isinstance(result, str) else 'no result'}: {label(node, case)}")
         for child in children(node):
             visit(child, case)
 
@@ -166,7 +198,7 @@ def check_row(test_nodes, kind, declaration):
         cases = [node for node in walk(matches) if is_case(node)]
         if not cases:
             return False, "suite has no test cases in the test results"
-        problems = bad_results(matches)
+        problems = unpassed(matches)
         if problems:
             return False, summarize(problems)
         return True, f"{len(cases)} test case(s) passed"
@@ -175,7 +207,7 @@ def check_row(test_nodes, kind, declaration):
     matches = [node for node in walk(test_nodes) if is_case(node, prefix)]
     if not matches:
         return False, f"no test case with identifier {prefix}…) in the test results"
-    problems = bad_results(matches)
+    problems = unpassed(matches)
     if problems:
         return False, summarize(problems)
     return True, f"{len(matches)} test case(s) passed"
@@ -190,13 +222,29 @@ def check(test_nodes, rows):
     return not failed
 
 
+def print_rows(gate_list):
+    try:
+        rows = parse_gate_list(gate_list.read_text(), str(gate_list))
+    except (GateListError, OSError) as error:
+        for line in str(error).splitlines():
+            print(f"  INVALID GATE LIST: {line}", file=sys.stderr)
+        return 1
+    for row in rows:
+        print("|".join(row))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--result-bundle", type=Path, help="xcresult bundle to read with xcresulttool")
     inputs.add_argument("--json-file", type=Path, help="pre-dumped `get test-results tests` JSON")
+    inputs.add_argument("--print-rows", action="store_true",
+                        help="print the gate list as <file>|<kind>|<declaration> lines and exit")
     parser.add_argument("--gate-list", type=Path, default=DEFAULT_GATE_LIST)
     args = parser.parse_args(argv)
+    if args.print_rows:
+        return print_rows(args.gate_list)
     source = args.json_file or args.result_bundle
     print(f"Checking that the regression gates in {args.gate_list} ran in {source}...")
     try:

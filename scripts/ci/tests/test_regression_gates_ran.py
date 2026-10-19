@@ -3,9 +3,7 @@
 fixtures/xcresult-test-results.json is cut down from real
 `xcrun xcresulttool get test-results tests` output, recorded on 2026-10-19 with
 Xcode 27.0 (27A266a) on macOS 26.6.2 from a passing full-suite run. Only the
-device identifier was replaced. CI pins Xcode 16.2, whose xcresulttool may emit a
-different shape, so the checker walks the tree tolerantly and these fixtures
-cover the shapes seen locally:
+device identifier was replaced. The shapes seen locally:
 
 - Test Plan > Unit test bundle > Test Suite > Test Case. Suites carry `name` and
   `nodeIdentifierURL` but no `nodeIdentifier`; cases carry `nodeIdentifier`
@@ -15,8 +13,15 @@ cover the shapes seen locally:
 - A known issue makes the case's result "Expected Failure" and adds
   "Expected Failure" children that have no result.
 
-The recorded run has no skipped cases, repetitions or device nodes; those are
-built in-test from the node and result types in xcresulttool's own schema.
+The parser was also confirmed on CI with Xcode 16.2 (xcresulttool 23500):
+a `.disabled` case was reported as "Skipped" with a "Failure Message" child, the
+suite gate failed on it, and every other row, including the method rows matched
+by `nodeIdentifier`, was OK
+(https://github.com/valtteriluomapareto/photo-export/actions/runs/39301325072).
+
+Skipped cases, missing or "unknown" results, cases without `nodeIdentifier`,
+repetitions and device nodes are built in-test from the node and result types
+in xcresulttool's own schema.
 """
 
 import copy
@@ -32,7 +37,6 @@ import unittest
 
 CI_DIRECTORY = pathlib.Path(__file__).resolve().parents[1]
 CHECK = CI_DIRECTORY / "check-regression-gates-ran.py"
-SYMBOL_GUARD = CI_DIRECTORY / "check-regression-gates.sh"
 GATE_LIST = CI_DIRECTORY / "regression-gates.txt"
 FIXTURE = json.loads((pathlib.Path(__file__).resolve().parent / "fixtures/xcresult-test-results.json").read_text())
 
@@ -50,7 +54,7 @@ photo-exportTests/FileBackedAutoSyncDirtyStateStoreTests.swift|gate|func FileBac
 """
 
 # Comments, blank and indented lines, tabs, an inline comment, a CRLF ending and
-# no trailing newline: both readers must produce the same rows.
+# no trailing newline.
 TRICKY_LIST = (
     "# leading comment\n"
     "\n"
@@ -138,7 +142,10 @@ class GateResultCheckTests(unittest.TestCase):
     def test_skipped_case_under_suite_gate_fails(self):
         skipped = case(self.results, "ImportIdempotencyTests/bulkImportIsIdempotent()")
         skipped["result"] = "Skipped"
-        skipped["children"] = [{"name": "Test skipped: disabled", "nodeType": "Skip Message"}]
+        # Xcode 16.2 reports a disabled case with a "Failure Message" child; its
+        # result field, if any, is not what decides the gate.
+        skipped["children"] = [{"name": "Test skipped: disabled", "nodeType": "Failure Message",
+                                "result": "Passed"}]
         self.assert_fails(self.run_check(),
                           "FAIL: gate struct ImportIdempotencyTests: Skipped: ImportIdempotencyTests/bulkImportIsIdempotent()")
 
@@ -147,9 +154,46 @@ class GateResultCheckTests(unittest.TestCase):
         self.assert_fails(self.run_check(), "FAIL: gate struct AutoSyncSeamCharacterizationTests: Failed: "
                           "AutoSyncSeamCharacterizationTests/manualExportThenImportYieldsCanonicalSequence()")
 
-    def test_skipped_suite_node_fails(self):
+    def test_case_without_a_result_fails(self):
+        del case(self.results, "ImportIdempotencyTests/bulkImportIsIdempotent()")["result"]
+        self.assert_fails(self.run_check(), "FAIL: gate struct ImportIdempotencyTests: no result: "
+                          "ImportIdempotencyTests/bulkImportIsIdempotent()")
+
+    def test_unknown_result_fails(self):
+        case(self.results, "ExportQueueStateSnapshotTests/teardownQueue_synchronouslyClearsManagerMirrors()")[
+            "result"] = "unknown"
+        self.assert_fails(self.run_check(), "FAIL: gate func ExportQueueStateSnapshotTests."
+                          "teardownQueue_synchronouslyClearsManagerMirrors: unknown: "
+                          "ExportQueueStateSnapshotTests/teardownQueue_synchronouslyClearsManagerMirrors()")
+
+    def test_argument_without_a_result_fails(self):
+        parameterized = case(self.results, "AutoSyncRunDirtyBoundaryTests/unsuccessfulRunNeverAcknowledgesDirtyWork(result:)")
+        del parameterized["children"][2]["result"]
+        self.assert_fails(self.run_check(), "no result: AutoSyncRunDirtyBoundaryTests/"
+                          "unsuccessfulRunNeverAcknowledgesDirtyWork(result:) [Arguments: .interrupted]")
+
+    def test_results_on_other_node_types_are_ignored(self):
         suite(self.results, "ImportIdempotencyTests")["result"] = "Skipped"
-        self.assert_fails(self.run_check(), "FAIL: gate struct ImportIdempotencyTests: Skipped: ImportIdempotencyTests")
+        case(self.results, "ImportIdempotencyTests/bulkImportIsIdempotent()")["children"] = [
+            {"name": "note", "nodeType": "Failure Message", "result": "Failed"}]
+        self.assert_passes(self.run_check())
+
+    def test_case_without_identifier_matches_through_its_url(self):
+        for identifier in ("ExportQueueStateSnapshotTests/teardownQueue_synchronouslyClearsManagerMirrors()",
+                           "AutoSyncRunDirtyBoundaryTests/unsuccessfulRunNeverAcknowledgesDirtyWork(result:)"):
+            del case(self.results, identifier)["nodeIdentifier"]
+        tree = nodes(self.results)
+        self.assertFalse(any(node.get("nodeIdentifier", "").startswith("ExportQueueStateSnapshotTests/teardown")
+                             for node in tree))
+        result = self.run_check()
+        self.assert_passes(result)
+        self.assertIn("OK: gate func ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors: "
+                      "1 test case(s) passed", result.stdout)
+        teardown = next(node for node in nodes(self.results)
+                        if node.get("name") == "teardownQueue_synchronouslyClearsManagerMirrors()")
+        teardown["result"] = "Skipped"
+        self.assert_fails(self.run_check(), "Skipped: ExportQueueStateSnapshotTests/"
+                          "teardownQueue_synchronouslyClearsManagerMirrors()")
 
     def test_missing_suite_fails(self):
         bundle = self.results["testNodes"][0]["children"][0]
@@ -178,6 +222,28 @@ class GateResultCheckTests(unittest.TestCase):
 
     def test_suite_matches_its_identifier_url_when_the_name_differs(self):
         suite(self.results, "ImportIdempotencyTests")["name"] = "Import idempotency"
+        self.assert_passes(self.run_check())
+
+    def test_suite_identifier_takes_precedence_over_the_name(self):
+        target = suite(self.results, "ImportIdempotencyTests")
+        target["nodeIdentifier"] = "photo-exportTests/ImportIdempotencyTests"
+        del target["nodeIdentifierURL"]
+        target["name"] = "Import idempotency"
+        self.assert_passes(self.run_check())
+        target["nodeIdentifier"] = "OtherTests"
+        target["name"] = "ImportIdempotencyTests"
+        self.assert_fails(self.run_check(), "FAIL: gate struct ImportIdempotencyTests: suite not found")
+
+    def test_display_name_cannot_stand_in_for_a_different_suite(self):
+        other = suite(self.results, "FileBackedAutoSyncRunSummaryStoreTests")
+        other["name"] = "ImportIdempotencyTests"
+        bundle = self.results["testNodes"][0]["children"][0]
+        bundle["children"] = [node for node in bundle["children"]
+                              if node.get("nodeIdentifierURL", "").rsplit("/", 1)[-1] != "ImportIdempotencyTests"]
+        self.assert_fails(self.run_check(), "FAIL: gate struct ImportIdempotencyTests: suite not found")
+
+    def test_suite_name_is_used_when_no_identifier_exists(self):
+        del suite(self.results, "ImportIdempotencyTests")["nodeIdentifierURL"]
         self.assert_passes(self.run_check())
 
     def test_parameterized_method_with_one_skipped_argument_fails(self):
@@ -232,10 +298,11 @@ class GateResultCheckTests(unittest.TestCase):
                     {"name": "attachment.txt", "nodeType": "Attachment"}]}]}
             for index in (1, 2)]
         self.assert_passes(self.run_check())
-        teardown["children"][1]["children"][0]["result"] = "Skipped"
+        teardown["children"][1]["children"][0]["children"].append(
+            {"name": "x: 2", "nodeType": "Arguments", "result": "Skipped"})
         self.assert_fails(self.run_check(),
                           "Skipped: ExportQueueStateSnapshotTests/teardownQueue_synchronouslyClearsManagerMirrors() "
-                          "[Test Case Run: Run 1]")
+                          "[Arguments: x: 2]")
 
     def test_tolerates_malformed_children(self):
         suite(self.results, "AutoSyncSeamCharacterizationTests")["children"].extend(["text", 3, None])
@@ -286,14 +353,14 @@ class GateResultCheckTests(unittest.TestCase):
 
 
 class GateListReaderTests(unittest.TestCase):
-    def bash_rows(self, text):
+    def print_rows(self, text):
         with tempfile.TemporaryDirectory() as directory:
             gate_list = pathlib.Path(directory) / "gates.txt"
             gate_list.write_bytes(text.encode())
-            return subprocess.run(["bash", str(SYMBOL_GUARD), "--print-gates", str(gate_list)],
+            return subprocess.run([sys.executable, "-B", str(CHECK), "--print-rows", "--gate-list", str(gate_list)],
                                   capture_output=True, text=True, timeout=30)
 
-    def test_bash_and_python_read_the_same_rows(self):
+    def test_print_rows_skips_comments_and_blank_lines(self):
         expected = [
             ("photo-exportTests/A.swift", "gate", "struct ASuite"),
             ("photo-exportTests/B.swift", "pin", "struct BSuite"),
@@ -303,17 +370,17 @@ class GateListReaderTests(unittest.TestCase):
         ]
         self.assertFalse(TRICKY_LIST.endswith("\n"))
         self.assertEqual(gates_ran.parse_gate_list(TRICKY_LIST), expected)
-        result = self.bash_rows(TRICKY_LIST)
+        result = self.print_rows(TRICKY_LIST)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([tuple(line.split("|")) for line in result.stdout.splitlines()], expected)
 
-    def test_bash_and_python_read_the_real_list_identically(self):
-        rows = gates_ran.parse_gate_list(GATE_LIST.read_text())
-        result = self.bash_rows(GATE_LIST.read_text())
+    def test_print_rows_reads_the_real_list(self):
+        result = self.print_rows(GATE_LIST.read_text())
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([tuple(line.split("|")) for line in result.stdout.splitlines()], rows)
+        self.assertEqual([tuple(line.split("|")) for line in result.stdout.splitlines()],
+                         gates_ran.parse_gate_list(GATE_LIST.read_text()))
 
-    def test_bash_and_python_reject_the_same_rows(self):
+    def test_malformed_rows_are_rejected(self):
         for row in ("photo-exportTests/A.swift|struct A",
                     "photo-exportTests/A.swift|gate|struct A|",
                     "photo-exportTests/A.swift|skip|struct A",
@@ -326,17 +393,18 @@ class GateListReaderTests(unittest.TestCase):
                 text = "photo-exportTests/B.swift|gate|struct B\n" + row + "\n"
                 with self.assertRaisesRegex(gates_ran.GateListError, ":2: "):
                     gates_ran.parse_gate_list(text)
-                result = self.bash_rows(text)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("INVALID ROW:", result.stderr)
+                result = self.print_rows(text)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("INVALID GATE LIST: ", result.stderr)
                 self.assertIn(":2: ", result.stderr)
 
-    def test_bash_and_python_reject_an_empty_list(self):
+    def test_empty_list_is_rejected(self):
         with self.assertRaises(gates_ran.GateListError):
             gates_ran.parse_gate_list("# only comments\n\n")
-        result = self.bash_rows("# only comments\n\n")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("EMPTY GATE LIST", result.stderr)
+        result = self.print_rows("# only comments\n\n")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("has no rows", result.stderr)
 
 
 if __name__ == "__main__":

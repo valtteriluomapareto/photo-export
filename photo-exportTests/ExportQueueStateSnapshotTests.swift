@@ -200,7 +200,7 @@ struct ExportQueueStateSnapshotTests {
     h.manager.pause()
     try #require(h.manager.isRunning, "precondition: coordinator should have flipped isRunning")
     try #require(h.manager.isPaused, "precondition: the queue should be paused")
-    try #require(h.manager.queueCount > 0, "precondition: a second job should be queued")
+    try #require(h.manager.pendingJobs.count == 1, "precondition: a second job should be queued")
 
     // The contract: teardownQueue() mutates the coordinator's @Published synchronously,
     // sinks fire synchronously, manager mirrors are updated before this call returns.

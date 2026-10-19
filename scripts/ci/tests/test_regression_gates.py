@@ -11,6 +11,7 @@ CI_DIRECTORY = pathlib.Path(__file__).resolve().parents[1]
 REPOSITORY = CI_DIRECTORY.parents[1]
 GUARD = CI_DIRECTORY / "check-regression-gates.sh"
 GATE_LIST = CI_DIRECTORY / "regression-gates.txt"
+GATE_PARSER = CI_DIRECTORY / "check-regression-gates-ran.py"
 DOCS = ("docs/reference/architecture-conventions.md", "AGENTS.md", "CONTRIBUTING.md")
 
 
@@ -51,6 +52,7 @@ class RegressionGuardTests(unittest.TestCase):
         ci.mkdir(parents=True)
         shutil.copy(GUARD, ci / GUARD.name)
         shutil.copy(GATE_LIST, ci / GATE_LIST.name)
+        shutil.copy(GATE_PARSER, ci / GATE_PARSER.name)
         shutil.copy(CI_DIRECTORY / "swift_source.py", ci / "swift_source.py")
         for doc in DOCS:
             (self.root / doc).parent.mkdir(parents=True, exist_ok=True)
@@ -86,7 +88,7 @@ class RegressionGuardTests(unittest.TestCase):
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("All regression-gate symbols present", result.stdout)
-        self.assertIn("All documented regression-gate lists match", result.stdout)
+        self.assertIn("All documented regression-gate lists name every gate", result.stdout)
         for file, declaration in gate_rows():
             self.assertIn(f"{declaration} in {file}", result.stdout)
 
@@ -142,25 +144,27 @@ class RegressionGuardTests(unittest.TestCase):
                     "|gate|struct A"):
             with self.subTest(row=row):
                 self.gate_list.write_text(GATE_LIST.read_text() + row + "\n")
-                self.assert_violation("INVALID ROW: scripts/ci/regression-gates.txt:")
+                self.assert_violation("INVALID GATE LIST: scripts/ci/regression-gates.txt:")
 
     def test_empty_gate_list_fails(self):
         self.gate_list.write_text("# nothing listed\n\n")
-        self.assert_violation("EMPTY GATE LIST")
+        self.assert_violation("INVALID GATE LIST: scripts/ci/regression-gates.txt has no rows")
 
     def test_doc_missing_a_gate_fails(self):
         self.edit("AGENTS.md", "- `ImportIdempotencyTests`\n", "")
         self.assert_violation("DOC DRIFT: AGENTS.md does not list gate 'ImportIdempotencyTests'")
 
-    def test_doc_listing_a_non_gate_fails(self):
-        self.edit("CONTRIBUTING.md", "   - `ImportIdempotencyTests`",
-                  "   - `RetiredGateTests` — retired.\n   - `ImportIdempotencyTests`")
-        self.assert_violation("DOC DRIFT: CONTRIBUTING.md lists 'RetiredGateTests'")
-
-    def test_doc_listing_a_pin_as_a_gate_fails(self):
+    def test_other_names_in_a_gate_section_do_not_fail(self):
         self.edit("AGENTS.md", "- `ImportIdempotencyTests`\n",
-                  "- `ImportIdempotencyTests`\n- `ExportManagerRunExportTests`\n")
-        self.assert_violation("DOC DRIFT: AGENTS.md lists 'ExportManagerRunExportTests'")
+                  "- `ImportIdempotencyTests`\n- `RetiredGateTests`\n- `scripts/ci/test-guards.sh` runs the guards.\n")
+        self.edit("CONTRIBUTING.md", "   - `ImportIdempotencyTests`",
+                  "   - `ExportManagerRunExportTests` — a pin.\n   - `ImportIdempotencyTests`")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_gate_name_must_be_complete_in_the_doc(self):
+        self.edit("AGENTS.md", "- `ImportIdempotencyTests`\n", "- `ImportIdempotencyTestsExtra`\n")
+        self.assert_violation("DOC DRIFT: AGENTS.md does not list gate 'ImportIdempotencyTests'")
 
     def test_doc_table_missing_a_method_gate_and_its_pin_fails(self):
         doc = "docs/reference/architecture-conventions.md"

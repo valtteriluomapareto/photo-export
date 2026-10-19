@@ -187,7 +187,12 @@ struct ImportIdempotencyTests {
   /// counts.
   @Test func bulkImportIsIdempotent() async throws {
     let (manager, photoLib, dest, store, storeRoot, collections) = makeTestHarness()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      store.flushForTesting()
+      collections.flushForTesting()
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     // Plant three files, two of which have library asset counterparts.
     let dateA = date(year: 2025, month: 6, day: 15)
