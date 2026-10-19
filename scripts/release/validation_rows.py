@@ -220,15 +220,17 @@ PIPELINE_OVERRIDDEN_KEYS = (
 IGNORED_PROJECT_LINE = re.compile(
     r'^\s*"?(MARKETING_VERSION|' + "|".join(PIPELINE_OVERRIDDEN_KEYS) + r')(\[[^]]*\])?"?\s*=')
 RELEASE_WORKFLOWS = ".github/workflows/release-*.yml"
-# Release workflow lines that cannot change the built binary: comments, trigger lines
+# Whole release-workflow lines that cannot change the built binary: comments, trigger lines
 # (which decide when a workflow runs, not what it builds), the concurrency group, pin bumps
 # of the checkout/artifact actions, and echo/printf that only print (no redirection into
-# $GITHUB_ENV, $GITHUB_OUTPUT or a file later steps read). Any other changed line requires
-# the full matrix.
+# $GITHUB_ENV, $GITHUB_OUTPUT or a file later steps read). Patterns match the whole line so
+# a trigger-like prefix cannot hide a real change. Any other changed line requires the full
+# matrix.
 HARMLESS_WORKFLOW_LINE = re.compile(
-    r"^\s*(#|(echo|printf)\b[^>]*$|on:|push:|tags:|branches:|- main|- 'v\*'|"
-    r"schedule:|- cron:|concurrency:|group:|"
-    r"(- )?uses: actions/(checkout|upload-artifact|download-artifact)@([0-9a-f]{40}|v[0-9.]+)( #.*)?$|$)")
+    r"^\s*(#.*|(echo|printf)\b[^>]*|(on|push|tags|branches|schedule|concurrency):|"
+    r"- (main|'v\*')|- cron: '[^']*'|group: [\w${}. -]*|"
+    r"(- )?uses: actions/(checkout|upload-artifact|download-artifact)@([0-9a-f]{40}|v[0-9.]+)"
+    r"( #.*)?|)\s*$")
 
 
 def _regex(pattern):

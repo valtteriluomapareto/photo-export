@@ -302,15 +302,15 @@ class ReleaseIsolationTests(unittest.TestCase):
         self.assertEqual(push_tag, key("PUSH", "refs/tags/V1.6.5"))
 
     @staticmethod
-    def triggers(name):
-        source = (ROOT / f".github/workflows/{name}").read_text()
+    def triggers(name, source=None):
+        source = source if source is not None else (ROOT / f".github/workflows/{name}").read_text()
         # One block-style top-level `on:`; flow or quoted forms are unexpected structure.
         if re.findall(r"^(?:on|'on'|\"on\"|true):.*$", source, re.M) != ["on:"]:
             raise ValueError(f"Unexpected trigger structure in {name}")
         block = re.search(r"^on:\n(.*?)(?=^\S)", source, re.M | re.S)[1]
         events = re.findall(r"^  (\S+):", block, re.M)
         def section(event):
-            found = re.search(rf"^  {event}:\n(.*?)(?=^  \S|\Z)", block, re.M | re.S)
+            found = re.search(rf"^  {event}:\n(.*?)(?=^  [^\s#]|\Z)", block, re.M | re.S)
             return [line.strip() for line in found[1].splitlines()
                     if line.strip() and not line.strip().startswith("#")] if found else []
         return events, section
@@ -325,10 +325,17 @@ class ReleaseIsolationTests(unittest.TestCase):
                 self.assertEqual(set(events), expected)
                 self.assertEqual(len(events), len(expected))
 
+    def test_comment_cannot_hide_a_branch_trigger(self):
+        source = (ROOT / ".github/workflows/release-direct.yml").read_text()
+        hidden = source.replace("      - 'v*'\n", "      - 'v*'\n  # note\n    branches:\n      - main\n", 1)
+        _, section = self.triggers("release-direct.yml", hidden)
+        self.assertIn("branches:", section("push"))
+
     def test_direct_dry_run_is_scheduled_and_dispatch_defaults_to_build_only(self):
         _, section = self.triggers("release-direct.yml")
         crons = [line for line in section("schedule") if line.startswith("- cron:")]
-        self.assertGreaterEqual(len(crons), 1)
+        self.assertEqual(len(crons), 1)
+        self.assertRegex(crons[0], r"^- cron: '(\S+ ){4}\S+'$")
         dispatch = section("workflow_dispatch")
         self.assertIn("dry_run:", dispatch)
         self.assertEqual(dispatch[dispatch.index("dry_run:"):].count("default: true"), 1)

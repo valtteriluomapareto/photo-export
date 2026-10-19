@@ -169,6 +169,10 @@ class SigningOverrideTests(unittest.TestCase):
         for line in ["+            SWIFT_OPTIMIZATION_LEVEL=-Onone \\",
                      '+          echo "APP_PATH=${ARCHIVE_PATH}/Products" >> "$GITHUB_ENV"',
                      '+          printf "is_dry_run=%s\\n" "$X" >> "$GITHUB_OUTPUT"',
+                     # Trigger-like prefixes must not hide a real change.
+                     '+      - main" >> "$GITHUB_ENV"', "+          tags: foo", "+on: [push]",
+                     "+  push: x", "+      - mainline-script.sh",
+                     "+  group: release-${{ secrets.X }} && ./build.sh",
                      "+          <string>developer-id</string>",
                      "-            -configuration Release \\"]:
             with self.subTest(line=line):
