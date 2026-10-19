@@ -4,7 +4,7 @@ Run this on the **final version-bumped candidate before pushing its release tag*
 
 ## What to run
 
-- **Core smoke** — every release. Pass or fail only; it cannot be skipped or deferred.
+- **Core smoke** — every release. Pass or fail only; it cannot be skipped or deferred, except core steps 1 and 5 for a beta built without signing (see [Candidate build](#candidate-build)).
 - **Triggered rows** — rows whose files changed since the candidate where that row last passed:
 
   ```bash
@@ -19,7 +19,7 @@ Tiering makes small releases cheap; a long batch still triggers most rows, so re
 
 ## Validation environment (one-time)
 
-Use a dedicated macOS account with its own System Photo Library. A candidate must never read or edit the maintainer's primary library, Photos access permission and the launch-at-login registration are shared per bundle id, and the signed candidate shares the installed app's sandbox container.
+Use a dedicated macOS account with its own System Photo Library. A candidate must never read or edit the maintainer's primary library. Photos access and the launch-at-login registration are shared per bundle id, and the signed candidate shares the installed app's sandbox container.
 
 Keep, outside the repository, a fixture manifest and unmodified reference copies with a `shasum -c` checksum file. Use unique stems, none ending in ` (N)`:
 
@@ -48,7 +48,8 @@ Validate a signed, notarized build of the candidate SHA made with the release to
 BRANCH="validation/<version>"
 git push origin "$CANDIDATE_SHA:refs/heads/$BRANCH"
 gh workflow run release-direct.yml --ref "$BRANCH" -f dry_run=true
-RUN_ID="$(gh run list --workflow release-direct.yml --branch "$BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId')"
+until RUN_ID="$(gh run list --workflow release-direct.yml --branch "$BRANCH" --json databaseId,headSha \
+  --jq "map(select(.headSha == \"$CANDIDATE_SHA\"))[0].databaseId // empty")" && [ -n "$RUN_ID" ]; do sleep 5; done
 gh run watch "$RUN_ID" --exit-status
 test "$(gh run view "$RUN_ID" --json headSha --jq .headSha)" = "$CANDIDATE_SHA" && echo candidate-ok
 gh run download "$RUN_ID" -n dmg -n checksum -D "$EVIDENCE"
@@ -65,7 +66,7 @@ codesign -dv "$APP" 2>&1 | grep -E '^(Authority=Developer ID|TeamIdentifier)'
 sw_vers -productVersion
 ```
 
-A local unsigned build runs unsandboxed and cannot exercise the upgrade, bookmark or container behavior. It is acceptable only for a beta, with core steps 1 and 6 recorded as owed until a signed build passes them.
+A local unsigned build runs unsandboxed and cannot exercise the upgrade, bookmark or container behavior. It is acceptable only for a beta, with core steps 1 and 5 recorded as owed until a signed build passes them.
 
 ## Core smoke
 

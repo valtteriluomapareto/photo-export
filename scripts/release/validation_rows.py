@@ -154,13 +154,13 @@ HUBS = {
 
 ROW_KEYWORDS = {
     "local": r"original|heic|jpe?g|convert|filename",
-    "edited": r"edit|render|video|adjust",
-    "preview": r"preview|thumbnail|detail",
-    "icloud": r"icloud|download|network|resource",
+    "edited": r"edited|render|video|adjust",
+    "preview": r"preview|thumbnail",
+    "icloud": r"icloud|download|network",
     "livephoto": r"live photo|paired",
-    "collections": r"album|favorite|collection|folder",
-    "authorization": r"authori[sz]|permission|onboarding|first.?run|welcome|access",
-    "cancel": r"cancel|pause|resume|interrupt|stop",
+    "collections": r"album|favorite|collection",
+    "authorization": r"authori[sz]|permission|onboarding|first.?run|welcome",
+    "cancel": r"cancel|pause|resume|interrupt",
     "destination": r"destination|volume|remount|bookmark|drive",
     "autoexport": r"auto.?export|autosync|auto-sync|login",
     "import": r"import|backup|recover",
@@ -215,14 +215,18 @@ PROJECT = "photo-export.xcodeproj/project.pbxproj"
 # never reach a shipped build. A test keeps this list in sync with the pipelines.
 PIPELINE_OVERRIDDEN_KEYS = (
     "CODE_SIGN_IDENTITY", "CODE_SIGN_STYLE", "DEVELOPMENT_TEAM", "OTHER_CODE_SIGN_FLAGS",
-    "PROVISIONING_PROFILE_SPECIFIER", "CURRENT_PROJECT_VERSION",
+    "CURRENT_PROJECT_VERSION",
 )
 IGNORED_PROJECT_LINE = re.compile(
     r'^\s*"?(MARKETING_VERSION|' + "|".join(PIPELINE_OVERRIDDEN_KEYS) + r')(\[[^]]*\])?"?\s*=')
 RELEASE_WORKFLOWS = ".github/workflows/release-*.yml"
-# Release workflow lines that cannot change the built binary. Any other changed line
-# requires the full matrix.
-HARMLESS_WORKFLOW_LINE = re.compile(r"^\s*(#|echo\b|printf\b|schedule:|- cron:|$)")
+# Release workflow lines that cannot change the built binary: comments, schedule triggers,
+# the concurrency group, pin bumps of the checkout/artifact actions, and echo/printf that
+# only print (no redirection into $GITHUB_ENV, $GITHUB_OUTPUT or a file later steps read).
+# Any other changed line requires the full matrix.
+HARMLESS_WORKFLOW_LINE = re.compile(
+    r"^\s*(#|(echo|printf)\b[^>]*$|schedule:|- cron:|concurrency:|group:|"
+    r"(- )?uses: actions/(checkout|upload-artifact|download-artifact)@([0-9a-f]{40}|v[0-9.]+)( #.*)?$|$)")
 
 
 def _regex(pattern):

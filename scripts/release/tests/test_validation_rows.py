@@ -138,12 +138,14 @@ class SigningOverrideTests(unittest.TestCase):
         direct = (REPO / ".github/workflows/release-direct.yml").read_text()
         store = (REPO / "scripts/ci/archive-appstore.sh").read_text()
         for key in vr.PIPELINE_OVERRIDDEN_KEYS:
-            if key == "PROVISIONING_PROFILE_SPECIFIER":
-                self.assertIn(f"{key}=", store)
-                continue
             with self.subTest(key=key):
                 self.assertIn(f"{key}=", direct)
                 self.assertIn(f"{key}=", store)
+
+    def test_provisioning_profile_change_requires_the_full_matrix(self):
+        diff = ['+\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "Photo Export";']
+        self.assertTrue(
+            vr.assess(["photo-export.xcodeproj/project.pbxproj"], diff).full_matrix_reasons)
 
     def test_project_lines_for_pipeline_overridden_signing_keys_are_ignored(self):
         diff = [
@@ -165,12 +167,20 @@ class SigningOverrideTests(unittest.TestCase):
     def test_any_release_workflow_build_change_requires_the_full_matrix(self):
         workflow = ".github/workflows/release-direct.yml"
         for line in ["+            SWIFT_OPTIMIZATION_LEVEL=-Onone \\",
+                     '+          echo "APP_PATH=${ARCHIVE_PATH}/Products" >> "$GITHUB_ENV"',
+                     '+          printf "is_dry_run=%s\\n" "$X" >> "$GITHUB_OUTPUT"',
                      "+          <string>developer-id</string>",
                      "-            -configuration Release \\"]:
             with self.subTest(line=line):
                 self.assertTrue(vr.assess([workflow], [], {workflow: [line]}).full_matrix_reasons)
         for line in ["+  # weekly signed dry run", '+          echo "Archiving"',
-                     "+  schedule:", "+    - cron: '0 6 * * 1'"]:
+                     "+  schedule:", "+    - cron: '0 6 * * 1'",
+                     # Dependabot pin bumps from #287 and the concurrency group from #283.
+                     "-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4",
+                     "+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+                     "+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2",
+                     "-      uses: actions/checkout@v4",
+                     "+concurrency:", "+  group: release-direct"]:
             with self.subTest(line=line):
                 self.assertEqual(
                     vr.assess([workflow], [], {workflow: [line]}).full_matrix_reasons, [])
