@@ -139,6 +139,92 @@ struct ManualExportSummaryTests {
     #expect(summary.message == "Export incomplete")
   }
 
+  enum SingleScope: CaseIterable, Sendable {
+    case favorites, album, albumTree, sharedAlbum, month, year
+
+    var failureMessage: String {
+      switch self {
+      case .favorites: "Could not scan Favorites. Try exporting again."
+      case .album, .albumTree: "Could not scan this album. Try exporting again."
+      case .sharedAlbum: "Could not scan this shared album. Try exporting again."
+      case .month: "Could not scan this month. Try exporting again."
+      case .year: "Could not scan this year. Try exporting again."
+      }
+    }
+  }
+
+  /// A single-scope export whose scan fails reports that scope's message, writes nothing,
+  /// and leaves no work or run behind. Without the injected failure (the control), the
+  /// same setup exports its one asset, so only the scan failure stops it.
+  @Test(arguments: SingleScope.allCases, [true, false])
+  func singleScopeScanFailureReportsItsMessageAndSettles(
+    scope: SingleScope, injectFailure: Bool
+  ) async throws {
+    let f = Fixture()
+    defer { f.close() }
+    let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
+    let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: date)
+    f.photos.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "ASSET.JPG")
+    ]
+    let error: Error? = injectFailure ? CocoaError(.fileReadUnknown) : nil
+    switch scope {
+    case .favorites:
+      f.photos.favoritesAssets = [asset]
+      f.photos.fetchAssetsError = error
+    case .album, .albumTree:
+      f.photos.collectionTree = [
+        PhotoCollectionDescriptor(
+          id: "album:album", localIdentifier: "album", title: "Album", kind: .album,
+          pathComponents: [], children: [])
+      ]
+      f.photos.assetsByAlbumLocalId["album"] = [asset]
+      if scope == .album {
+        f.photos.fetchAssetsErrorByAlbumId["album"] = error
+      } else {
+        f.photos.collectionTreeError = error
+      }
+    case .sharedAlbum:
+      f.photos.collectionTree = [
+        PhotoCollectionDescriptor(
+          id: "shared:shared", localIdentifier: "shared", title: "Shared", kind: .sharedAlbum,
+          pathComponents: [], children: [])
+      ]
+      f.photos.assetsBySharedAlbumLocalId["shared"] = [asset]
+      f.photos.fetchAssetsErrorByAlbumId["shared"] = error
+    case .month, .year:
+      f.photos.assetsByYearMonth["2026-9"] = [asset]
+      f.photos.fetchAssetsErrorByYear[2026] = error
+    }
+
+    switch scope {
+    case .favorites: f.manager.startExportFavorites()
+    case .album, .albumTree: f.manager.startExportAlbum(collectionId: "album")
+    case .sharedAlbum: f.manager.startExportSharedAlbum(collectionId: "shared")
+    case .month: f.manager.startExportMonth(year: 2026, month: 9)
+    case .year: f.manager.startExportYear(year: 2026)
+    }
+    let preparation = f.manager.currentPreparationTasks
+    try #require(!preparation.isEmpty)
+    for task in preparation {
+      let done = await finished(task)
+      try #require(done)
+    }
+    guard injectFailure else {
+      await f.manager.waitForQueueDrained()
+      #expect(f.writer.writeCalls.map(\.assetId) == [asset.id])
+      return
+    }
+
+    let summary = try #require(f.manager.progressState.manualSummary)
+    #expect(summary.result == .failed)
+    #expect(summary.failureMessage == scope.failureMessage)
+    #expect(f.manager.emptyRunMessage == nil)
+    #expect(f.writer.writeCalls.isEmpty)
+    #expect(!f.manager.hasActiveExportWork)
+    #expect(f.manager.activeRunContext == nil)
+  }
+
   @Test func multipleVariantFailuresCountAsOneFailedJob() async throws {
     let f = Fixture()
     defer { f.close() }

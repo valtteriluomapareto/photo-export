@@ -694,10 +694,8 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
-        noteManualPreparationFailure("Could not scan this month. Try exporting again.")
-        logger.error(
-          "Failed to enqueue month export: \(String(describing: error), privacy: .public)"
-        )
+        handleScanFailure(
+          "Could not scan this month. Try exporting again.", scope: "month", error: error)
       }
     }
   }
@@ -720,10 +718,8 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
-        noteManualPreparationFailure("Could not scan this year. Try exporting again.")
-        logger.error(
-          "Failed to enqueue year export: \(String(describing: error), privacy: .public)"
-        )
+        handleScanFailure(
+          "Could not scan this year. Try exporting again.", scope: "year", error: error)
       }
     }
   }
@@ -830,13 +826,8 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
-        noteManualPreparationFailure("Could not scan Favorites. Try exporting again.")
-        logger.error(
-          "Failed to enqueue favorites export: \(String(describing: error), privacy: .public)"
-        )
-        if pendingJobs.isEmpty {
-          finalizeActiveRun(result: .failed, cancelReason: nil)
-        }
+        handleScanFailure(
+          "Could not scan Favorites. Try exporting again.", scope: "favorites", error: error)
       }
     }
   }
@@ -1211,10 +1202,9 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
-        noteManualPreparationFailure("Could not scan this shared album. Try exporting again.")
-        logger.error(
-          "Failed to enqueue shared-album export: \(String(describing: error), privacy: .public)"
-        )
+        handleScanFailure(
+          "Could not scan this shared album. Try exporting again.", scope: "shared-album",
+          error: error)
       }
     }
   }
@@ -1242,10 +1232,8 @@ final class ExportManager: ObservableObject {
         processQueueIfNeeded()
       } catch {
         guard self.isCurrent(gen) else { return }
-        noteManualPreparationFailure("Could not scan this album. Try exporting again.")
-        logger.error(
-          "Failed to enqueue album export: \(String(describing: error), privacy: .public)"
-        )
+        handleScanFailure(
+          "Could not scan this album. Try exporting again.", scope: "album", error: error)
       }
     }
   }
@@ -1720,6 +1708,22 @@ final class ExportManager: ObservableObject {
     }
     queueCoordinator.resetProgressCounters()
     progressState.currentAssetFilename = nil
+  }
+
+  /// Scan failure in a single-scope `start*` (month, year, Favorites, album, shared album).
+  /// Notes the failure for manual feedback and, when the start runs under `runExport` with
+  /// nothing queued, resolves that run as `.failed` so its awaiter never hangs. Only
+  /// Favorites runs under a run context today; the rule keeps every path safe if more do.
+  /// Legacy `start*` calls from the UI have no run context, so they neither flush nor
+  /// finalize here; their feedback flushes when the preparation ends.
+  private func handleScanFailure(_ message: String, scope: String, error: Error) {
+    noteManualPreparationFailure(message)
+    logger.error(
+      "Failed to enqueue \(scope, privacy: .public) export: \(String(describing: error), privacy: .public)"
+    )
+    if activeRunContext != nil, pendingJobs.isEmpty {
+      finalizeActiveRun(result: .failed, cancelReason: nil)
+    }
   }
 
   private func noteManualPreparationFailure(_ message: String) {
