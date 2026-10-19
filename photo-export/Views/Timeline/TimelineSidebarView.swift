@@ -61,8 +61,8 @@ struct TimelineSidebarView: View {
               MonthRow(
                 year: year,
                 month: month,
-                total: counts.assetCountsByYearMonth["\(year)-\(month)"] ?? 0,
-                adjusted: counts.adjustedCountsByYearMonth["\(year)-\(month)"]
+                total: counts.countsByYearMonth["\(year)-\(month)"]?.total ?? 0,
+                adjusted: counts.countsByYearMonth["\(year)-\(month)"]?.adjusted
               )
               .tag(LibrarySelection.timelineMonth(year: year, month: month))
             }
@@ -145,9 +145,15 @@ struct TimelineSidebarView: View {
     // badges populate as their data arrives. The current year (if selected)
     // goes first so its data is ready by the time the user might expand it.
     let yearsCopy = years
-    Task { [counts] in
+    let task = Task { [counts] in
       await counts.loadCounts(forYears: yearsCopy, preferredYear: preferredYear)
+      #if DEBUG
+        bodyCounter?.record("timeline-counts-loaded")
+      #endif
     }
+    #if DEBUG
+      bodyCounter?.recordTask(task)
+    #endif
   }
 
   private func loadYears() {
@@ -161,7 +167,7 @@ struct TimelineSidebarView: View {
   private func monthTotals(for year: Int) -> [Int: Int] {
     var map: [Int: Int] = [:]
     for month in 1...12 {
-      map[month] = counts.assetCountsByYearMonth["\(year)-\(month)"] ?? 0
+      map[month] = counts.countsByYearMonth["\(year)-\(month)"]?.total ?? 0
     }
     return map
   }
@@ -169,7 +175,7 @@ struct TimelineSidebarView: View {
   private func adjustedMonths(for year: Int) -> [Int: Int?] {
     var map: [Int: Int?] = [:]
     for month in 1...12 {
-      map[month] = counts.adjustedCountsByYearMonth["\(year)-\(month)"]
+      map[month] = counts.countsByYearMonth["\(year)-\(month)"]?.adjusted
     }
     return map
   }

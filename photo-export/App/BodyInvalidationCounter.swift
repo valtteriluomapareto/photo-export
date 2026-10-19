@@ -6,6 +6,7 @@ import SwiftUI
     static let shared = BodyInvalidationCounter()
 
     private(set) var renderedText: [String: [String]] = [:]
+    private(set) var tasks: [Task<Void, Never>] = []
     private var countsByKey: [String: Int] = [:]
     private(set) var renderedActions: [String: () -> Void] = [:]
     init() {}
@@ -15,6 +16,7 @@ import SwiftUI
     }
 
     func recordText(_ text: [String], for key: String) { renderedText[key] = text }
+    func recordTask(_ task: Task<Void, Never>) { tasks.append(task) }
 
     func count(for key: String) -> Int { countsByKey[key] ?? 0 }
     func recordAction(_ key: String, action: @escaping () -> Void) {
@@ -23,6 +25,7 @@ import SwiftUI
     func snapshot() -> [String: Int] { countsByKey }
     func reset() {
       renderedText.removeAll()
+      tasks.removeAll()
       countsByKey.removeAll()
       renderedActions.removeAll()
     }
