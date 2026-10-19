@@ -110,7 +110,7 @@ import Testing
         let initialDiagnostics = f.readinessDescription
         try #require(initiallyReady, "Initial sidebar: \(initialDiagnostics)")
         // Complete every initial appearance load before changing fake responses.
-        for task in f.counter.tasks { await task.value }
+        for task in f.counter.tasks { _ = await finished(task) }
         f.service.cachedCountOverride = { scope, adjusted in
           if scope == .timeline(year: 2026, month: 9) { await gate.enter() }
           switch scope {
@@ -139,8 +139,8 @@ import Testing
         let heldDiagnostics = f.readinessDescription
         #expect(badgesStayVisible, "Held refresh: \(heldDiagnostics)")
         await gate.releaseAll()
-        for task in refreshTasks { await task.value }
-        for task in f.counter.tasks { await task.value }
+        for task in refreshTasks { _ = await finished(task) }
+        for task in f.counter.tasks { _ = await finished(task) }
         let refreshed = f.counter.count(for: "timeline-counts-loaded") > completionsBeforeRefresh
         try #require(refreshed)
         f.service.cachedCountOverride = { scope, adjusted in
@@ -164,7 +164,7 @@ import Testing
         #expect(failedCoverageClears, "Failed coverage: \(failedDiagnostics)")
       } catch { failure = error }
       await gate.releaseAll()
-      for task in f.counter.tasks { await task.value }
+      for task in f.counter.tasks { _ = await finished(task) }
       await f.close()
       if let failure { throw failure }
     }

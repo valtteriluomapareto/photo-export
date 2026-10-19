@@ -53,6 +53,16 @@ class TestWaitGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("DeadlineTests.swift:4: wall-clock deadline wait", result.stdout)
 
+    def test_renamed_deadline_comparison_fails(self):
+        self.write(
+            "RenamedTests.swift",
+            "struct RenamedTests {\n"
+            "  func t() async {\n"
+            "    while !done, clock.now < limit { }\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("RenamedTests.swift:3: wall-clock deadline wait", result.stdout)
+
     def test_eventually_without_time_limit_fails(self):
         self.write(
             "UnboundedTests.swift",

@@ -20,7 +20,7 @@ struct TestWaitTests {
   @Test func checkpointWaitReturnsFalseWhenCancelledWhileWaiting() async {
     let gate = AsyncCheckpoint()
     let waiter = Task { await gate.waitForEnter(count: 1) }
-    while await gate.observerCountForTesting == 0 { await Task.yield() }
+    while await gate.observerCountForTesting == 0, !Task.isCancelled { await Task.yield() }
     waiter.cancel()
     #expect(await waiter.value == false)
     #expect(await gate.observerCountForTesting == 0)
@@ -39,7 +39,7 @@ struct TestWaitTests {
   @Test func checkpointWaitReturnsWhenReleasedAll() async {
     let gate = AsyncCheckpoint()
     let waiter = Task { await gate.waitForEnter(count: 1) }
-    while await gate.observerCountForTesting == 0 { await Task.yield() }
+    while await gate.observerCountForTesting == 0, !Task.isCancelled { await Task.yield() }
     await gate.releaseAll()
     #expect(await waiter.value == false)
   }

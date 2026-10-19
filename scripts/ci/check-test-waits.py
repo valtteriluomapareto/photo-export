@@ -7,7 +7,8 @@ than progress. Tests wait with `eventually` (or `AsyncCheckpoint.waitForEnter`)
 and rely on their `.timeLimit` as the hang backstop instead.
 
 This is a lexical guard over comment- and string-masked source:
-- no `< deadline` comparisons outside the allow-listed anti-hang backstops;
+- no `< deadline`, `clock.now <` or `Date() <` comparisons outside the allow-listed
+  anti-hang backstops;
 - every test file that calls `eventually(` declares a `.timeLimit(`.
 """
 
@@ -24,7 +25,7 @@ DEADLINE_ALLOWED = {
     TESTS / "TestHelpers" / "TestWait.swift",
     TESTS / "TestHelpers" / "ExportManager+TestWait.swift",
 }
-DEADLINE = re.compile(r"<\s*deadline\b")
+DEADLINE = re.compile(r"<\s*deadline\b|\b(?:clock|ContinuousClock)\.now\s*<|\bDate\(\)\s*<")
 EVENTUALLY = re.compile(r"(?<![\w.])eventually\s*\(")
 TIME_LIMIT = re.compile(r"\.timeLimit\s*\(")
 

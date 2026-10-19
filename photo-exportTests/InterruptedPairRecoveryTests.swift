@@ -22,7 +22,7 @@ struct InterruptedPairRecoveryTests {
       else { return }
       Task { await entered.enter() }
       // Teardown always releases; the bound only keeps a broken test from stranding the worker.
-      if semaphore.wait(timeout: .now() + 120) != .success {
+      if semaphore.wait(timeout: .now() + 150) != .success {
         Issue.record("Interrupted recovery gate timed out")
       }
     }

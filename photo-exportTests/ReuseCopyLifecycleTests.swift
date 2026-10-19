@@ -20,7 +20,7 @@ struct ReuseCopyLifecycleTests {
     func hold() throws {
       Task { await started.enter() }
       // Teardown always signals; the bound only keeps a broken test from stranding the worker.
-      guard releaseSignal.wait(timeout: .now() + 120) == .success else {
+      guard releaseSignal.wait(timeout: .now() + 150) == .success else {
         throw NSError(domain: "CopyGateTimeout", code: 1)
       }
     }

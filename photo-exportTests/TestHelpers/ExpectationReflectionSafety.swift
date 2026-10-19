@@ -18,7 +18,7 @@ import SwiftUI
 // description instead of crashing the run. The protection is enumerative: a new cyclic type that
 // is not reachable only through these leaves is caught by `ExpectationReflectionSafetyTests`
 // when it is one of that suite's roots, not automatically. Remove this file once every pipeline
-// builds tests with swift-testing 6.1 or later (Xcode 16.3+).
+// builds tests with swift-testing 6.1 or later (Xcode 16.3+), tracked by issue #302.
 
 extension Published: @retroactive CustomReflectable {
   public var customMirror: Mirror { Mirror(self, children: [:]) }
@@ -41,7 +41,7 @@ extension AnyCancellable: @retroactive CustomReflectable {
 }
 
 extension NSHostingView: @retroactive CustomReflectable {
-  public var customMirror: Mirror { Mirror(self, children: [:]) }
+  public nonisolated var customMirror: Mirror { Mirror(self, children: [:]) }
 }
 
 extension ExportManager: @retroactive CustomReflectable {

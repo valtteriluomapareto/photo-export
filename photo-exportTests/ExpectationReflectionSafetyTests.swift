@@ -184,11 +184,15 @@ import Testing
       let autoSync = AutoSyncManager()
       let builder = FakeAutoSyncEnvironmentBuilder()
       autoSync.attach(to: builder.environment)
+      let lifecycle = AppLifecycleCoordinator(
+        cancelActiveWork: {}, interruptForDestinationUnavailable: {},
+        configureRecordStores: { _ in .success })
 
       expectFinite("hosted fixture", f)
       expectFinite("NSHostingView", f.hostingView)
       expectFinite("ExportManager", f.manager)
-      expectFinite("ExportQueueCoordinator", f.manager.queueCoordinator)
+      expectFinite(
+        "ExportQueueCoordinator", f.manager.queueCoordinator as ExportQueueCoordinator)
       expectFinite("ExportProgressState", f.manager.progressState)
       expectFinite("ExportRecordStore", f.timeline)
       expectFinite("CollectionExportRecordStore", f.collections)
@@ -198,6 +202,7 @@ import Testing
       expectFinite("ExportDestinationManager", destinationManager)
       expectFinite("AutoSyncManager", autoSync)
       expectFinite("FakeAutoSyncEnvironmentBuilder", builder)
+      expectFinite("AppLifecycleCoordinator", lifecycle)
 
       await f.close()
     }

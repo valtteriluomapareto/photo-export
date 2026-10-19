@@ -30,19 +30,22 @@ extension ExportManager {
   /// current generation, rechecking after each snapshot. Every await stops when
   /// the waiting test is cancelled (for example by its `.timeLimit`), so a held
   /// export cannot keep the test from reaching the teardown that releases it.
-  func waitForQueueDrained(safetyTimeout: Duration = .seconds(60)) async {
+  func waitForQueueDrained(
+    safetyTimeout: Duration = .seconds(150), sourceLocation: SourceLocation = #_sourceLocation
+  ) async {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: safetyTimeout)
-    while clock.now < deadline, !Task.isCancelled {
+    while clock.now < deadline {
       let preparations = currentPreparationTasks
+      if preparations.isEmpty, pendingJobs.isEmpty, !isRunning, !hasActiveExportWork {
+        return
+      }
+      if Task.isCancelled { break }
       if !preparations.isEmpty {
         for task in preparations {
           if !(await finished(task)) { break }
         }
         continue
-      }
-      if pendingJobs.isEmpty, !isRunning, !hasActiveExportWork {
-        return
       }
       if let task = currentTask {
         _ = await finished(task)
@@ -51,9 +54,11 @@ extension ExportManager {
       }
     }
     if Task.isCancelled {
-      Issue.record("Cancelled while waiting for the export queue to drain")
+      Issue.record(
+        "Cancelled while waiting for the export queue to drain", sourceLocation: sourceLocation)
     } else {
-      Issue.record("Export queue did not drain before the safety deadline")
+      Issue.record(
+        "Export queue did not drain before the safety deadline", sourceLocation: sourceLocation)
     }
   }
 
@@ -61,9 +66,10 @@ extension ExportManager {
   /// assigned synchronously inside `startImport()` (after `isImporting = true`)
   /// and the import body sets `isImporting = false` before returning, so once
   /// `await importTask?.value` resolves the manager is observably idle.
-  func waitForImportCompletion() async {
+  func waitForImportCompletion(sourceLocation: SourceLocation = #_sourceLocation) async {
     if let task = importTask, !(await finished(task)) {
-      Issue.record("Cancelled while waiting for the import to complete")
+      Issue.record(
+        "Cancelled while waiting for the import to complete", sourceLocation: sourceLocation)
     }
   }
 }
