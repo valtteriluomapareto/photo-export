@@ -390,6 +390,9 @@ struct AutoSyncRetryLifecycleTests {
     #expect(builder.retryStore.load(destinationId: "retry-B") == bRetry)
     #expect(manager.currentRetryState == bRetry)
   }
+
+  /// The real runner ends an automatic run when Auto Export is turned off; this fake keeps
+  /// it running to cover the defensive guard against a late runner after re-enabling.
   @Test(.timeLimit(.minutes(1)))
   func rapidReenableWaitsForOldRunnerThenStartsDueRetry() async throws {
     let manager = AutoSyncManager()

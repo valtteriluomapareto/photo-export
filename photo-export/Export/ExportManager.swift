@@ -1332,6 +1332,18 @@ final class ExportManager: ObservableObject {
     finalizeActiveRun(result: .superseded, cancelReason: .supersededByManualRun)
   }
 
+  /// The user turned Auto Export off: stop the AutoSync run in progress through the same
+  /// teardown as Cancel. Synchronous and idempotent. Manual exports and legacy `start*`
+  /// work are left alone, so the guard is on the run's source, not on AutoSync's fan-out:
+  /// after `supersedeForManualRun()` a manual export can already be active while the old
+  /// fan-out task still exists, and `cancelAndClear()` would stop that manual export.
+  func cancelAutoSyncRun() {
+    guard activeRunContext?.source == .autoSync else { return }
+    logger.info("Auto Export turned off; cancelling the automatic run")
+    teardownActiveWork()
+    finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
+  }
+
   /// Drive-unmount equivalent of `cancelAndClear()`. Stops starting new jobs and clears
   /// in-memory pending work, but resolves the active run as transient
   /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. The AutoSync
@@ -1547,8 +1559,8 @@ final class ExportManager: ObservableObject {
 
   /// Runs an export and returns its terminal summary. Wraps the existing fire-and-forget
   /// `start*` methods with single-active-run ownership: at most one `runExport` is in
-  /// flight per `ExportManager`, and the await resolves when the run reaches a terminal
-  /// state — completed, cancelled, or failed.
+  /// flight per `ExportManager` (a second call is rejected with `.failed`), and the await
+  /// resolves when the run reaches a terminal state — completed, cancelled, or failed.
   ///
   /// Full timeline, Favorites, albums, and shared-album scopes map to the existing
   /// manual-export entry points. Targeted asset-id scopes and the umbrella
@@ -1557,13 +1569,21 @@ final class ExportManager: ObservableObject {
   ///
   /// **Awaiter behavior under pause**: `pause()` while a `runExport` is active leaves
   /// the queue parked and the awaitable suspended until either `resume()` drains the
-  /// queue or `cancelAndClear()` / `interruptForDestinationUnavailable()` resolves the
-  /// run. Callers that pause mid-run are responsible for unblocking the awaiter.
+  /// queue or `cancelAndClear()` / `interruptForDestinationUnavailable()` /
+  /// `cancelAutoSyncRun()` resolves the run. Callers that pause mid-run are responsible
+  /// for unblocking the awaiter.
   func runExport(context: ExportRunContext) async -> ExportRunSummary {
-    precondition(
-      activeRunContext == nil,
-      "runExport called while another run is active; ExportManager has at most one active run"
-    )
+    if let active = activeRunContext {
+      // The AutoSync reducer never starts a run while one is active. If that breaks, leave
+      // the active run alone; AutoSync records this as a failed run but keeps pending work.
+      logger.fault(
+        "runExport \(context.runId, privacy: .public) rejected: run \(active.runId, privacy: .public) is active; AutoSync may report a failed run but keeps pending work"
+      )
+      return ExportRunSummary(
+        context: context, endedAt: Date(),
+        enqueuedCount: 0, completedCount: 0, failedCount: 0, skippedCount: 0,
+        cancelReason: nil, result: .failed)
+    }
     return await withCheckedContinuation {
       (continuation: CheckedContinuation<ExportRunSummary, Never>) in
       activeRunContext = context

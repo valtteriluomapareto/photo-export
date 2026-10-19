@@ -27,6 +27,11 @@ protocol AutoSyncExportRunning: AnyObject {
   /// `ExportRunContext` (incl. UUID + startedAt) and awaits the terminal summary.
   func runExport(context: ExportRunContext) async -> ExportRunSummary
 
+  /// Stops the AutoSync-sourced run in progress, if any, as `.cancelled` /
+  /// `.userCancelled`. Called when the user turns Auto Export off. Synchronous and
+  /// idempotent; a no-op for manual and legacy fire-and-forget runs.
+  func cancelAutoSyncRun()
+
   /// Whether this exact recorded variant is complete for its placement. Used to
   /// prune retry entries after a matched run; a successful run summary alone cannot
   /// prove that every previously failed variant was selected and written.
