@@ -63,6 +63,10 @@ struct CollectionsSidebarView: View {
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
 
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
   /// Multi-select state bound from `LibraryRootView`. Writes are filtered to
   /// collection-shaped values so the sidebar can never persist a stray timeline
   /// tag into the collection state.
@@ -360,6 +364,14 @@ struct CollectionsSidebarView: View {
       } catch {
         // Skip unreachable albums; the badge will render the partial sum we have.
       }
+    }
+    // A newer library change restarted the load, and cancelled fetches were skipped above;
+    // leave the badge to the newer load rather than publish a stale or partial sum.
+    guard !Task.isCancelled else {
+      #if DEBUG
+        bodyCounter?.record("sidebar-folder-count-superseded")
+      #endif
+      return
     }
     await MainActor.run { countsById[descriptor.id] = total }
   }

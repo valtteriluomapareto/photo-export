@@ -15,19 +15,23 @@ import Testing
       let service: FakePhotoLibraryService
       let selection: LibrarySelection
       let folderId: String?
+      var showsSidebar = true
+      var showsFolderPane = true
       @State private var selectedAsset: AssetDescriptor?
       @State private var sidebarSelection: Set<LibrarySelection> = []
       @State private var folderSelection: LibrarySelection?
 
       var body: some View {
         HStack(alignment: .top) {
-          CollectionsSidebarView(selectionSet: $sidebarSelection).frame(width: 260)
+          if showsSidebar {
+            CollectionsSidebarView(selectionSet: $sidebarSelection).frame(width: 260)
+          }
           CollectionContentView(
             selection: selection, title: "Current album", versionSelection: .edited,
             livePhotosPaired: false, onExportCollection: {}, selectedAsset: $selectedAsset,
             photoLibraryService: service
           ).equatable().frame(width: 350)
-          if let folderId {
+          if let folderId, showsFolderPane {
             FolderContentView(
               folderId: folderId, title: "Current folder", selection: $folderSelection,
               selectedAsset: $selectedAsset, photoLibraryService: service
@@ -143,10 +147,14 @@ import Testing
             ]))
       }
 
-      func show(selectionOverride: LibrarySelection? = nil) {
+      func show(
+        selectionOverride: LibrarySelection? = nil, sidebar: Bool = true, folderPane: Bool = true
+      ) {
         let hosted = NSHostingView(
           rootView:
-            Host(service: service, selection: selectionOverride ?? selection, folderId: folderId)
+            Host(
+              service: service, selection: selectionOverride ?? selection, folderId: folderId,
+              showsSidebar: sidebar, showsFolderPane: folderPane)
             .environmentObject(library).environmentObject(timeline).environmentObject(records)
             .environmentObject(manager)
             .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
@@ -158,6 +166,21 @@ import Testing
         hostWindow.contentView = hosted
         window = hostWindow
         hostWindow.orderFront(nil)
+      }
+
+      /// Reads live fake counts; the fake's own count cache survives `invalidateCache`.
+      static func liveCount(
+        _ service: FakePhotoLibraryService, _ scope: PhotoFetchScope, adjusted: Bool
+      ) async throws -> Int {
+        adjusted
+          ? try await service.countAdjustedAssets(in: scope)
+          : try await service.countAssets(in: scope)
+      }
+
+      func useLiveCounts() {
+        service.cachedCountOverride = { [service] scope, adjusted in
+          try await Self.liveCount(service, scope, adjusted: adjusted)
+        }
       }
 
       func close() {
@@ -419,5 +442,108 @@ import Testing
       #expect(favorites.relativePath == "Collections/Favorites/")
     }
 
+  }
+#endif
+
+#if DEBUG
+  extension CollectionPlacementStatusTests {
+    /// A Photos library change refreshes the folder in place: the multi-selection survives,
+    /// and only a child that left the folder drops out of it.
+    @Test(.timeLimit(.minutes(2)))
+    func libraryChangeKeepsFolderSelectionAndPrunesRemovedChildren() async throws {
+      let f = try Fixture(change: .ancestorRename)
+      defer { f.close() }
+      f.useLiveCounts()
+      f.show(sidebar: false)
+      let loaded = await observe { f.counter.renderedText["folder-summary"] == ["0/2"] }
+      try #require(loaded)
+      let selectAll = try #require(f.counter.renderedActions["folder-select-all"])
+      selectAll()
+      let both = ["album:stable", "album:target"]
+      let selected = await observe { f.counter.renderedText["folder-selection"] == both }
+      try #require(selected)
+
+      f.service.assetsByAlbumLocalId["stable"]?.append(TestAssetFactory.makeAsset(id: "added"))
+      f.library.invalidateCache()
+      let refreshed = await observe { f.counter.renderedText["folder-summary"] == ["0/3"] }
+      try #require(refreshed)
+      #expect(f.counter.renderedText["folder-selection"] == both)
+
+      let folder = try #require(f.service.collectionTree.first)
+      f.service.collectionTree = [
+        PhotoCollectionDescriptor(
+          id: folder.id, localIdentifier: folder.localIdentifier, title: folder.title,
+          kind: folder.kind, pathComponents: folder.pathComponents,
+          children: folder.children.filter { $0.id != "album:target" })
+      ]
+      f.library.invalidateCache()
+      let pruned = await observe { f.counter.renderedText["folder-summary"] == ["0/2"] }
+      try #require(pruned)
+      #expect(f.counter.renderedText["folder-selection"] == ["album:stable"])
+    }
+
+    enum FolderCountSurface: CaseIterable { case folderPane, sidebarBadge }
+
+    /// A folder count load superseded by a newer library change must not publish, or a
+    /// stale (or, in the manager, cancelled-as-zero) result overwrites the newer counts.
+    @Test(.timeLimit(.minutes(2)), arguments: FolderCountSurface.allCases)
+    func supersededFolderCountLoadDoesNotOverwriteNewerCounts(
+      surface: FolderCountSurface
+    ) async throws {
+      let f = try Fixture(change: .ancestorRename)
+      defer { f.close() }
+      let older = AsyncCheckpoint()
+      let newer = AsyncCheckpoint()
+      defer { Task { await older.releaseAll(); await newer.releaseAll() } }
+      let (key, supersededKey, rendered): (String, String, (Int) -> [String]) =
+        switch surface {
+        case .folderPane: ("folder-summary", "folder-counts-superseded", { ["0/\($0)"] })
+        case .sidebarBadge:
+          (
+            "folder-sidebar:folder:folder", "sidebar-folder-count-superseded",
+            { ["notStarted(total: \($0))"] }
+          )
+        }
+      // Exactly one view loads the folder's counts, so 'stable' fetches map to its loads.
+      // The sidebar folder starts collapsed, so its album rows don't fetch 'stable' too.
+      f.useLiveCounts()
+      f.show(sidebar: surface == .sidebarBadge, folderPane: surface == .folderPane)
+      let loaded = await observe { f.counter.renderedText[key] == rendered(2) }
+      try #require(loaded)
+
+      let service = f.service
+      let stale = try await Fixture.liveCount(service, .album(collectionId: "stable"), adjusted: false)
+      service.assetsByAlbumLocalId["stable"]?.append(TestAssetFactory.makeAsset(id: "added"))
+      var stableFetches = 0
+      service.cachedCountOverride = { scope, adjusted in
+        if case .album("stable") = scope, !adjusted {
+          stableFetches += 1
+          if stableFetches == 1 {
+            await older.enter()
+            return stale
+          }
+          await newer.enter()
+        }
+        return try await Fixture.liveCount(service, scope, adjusted: adjusted)
+      }
+      f.library.invalidateCache()
+      let olderStarted = await older.waitForEnter(count: 1)
+      try #require(olderStarted)
+      f.library.invalidateCache()
+      let newerStarted = await newer.waitForEnter(count: 1)
+      try #require(newerStarted, "A newer library change must restart the folder count load")
+      await newer.release()
+      let refreshed = await observe { f.counter.renderedText[key] == rendered(3) }
+      try #require(refreshed)
+
+      let supersededBefore = f.counter.count(for: supersededKey)
+      await older.release()
+      let settled = await observe {
+        f.counter.count(for: supersededKey) > supersededBefore
+          || f.counter.renderedText[key] != rendered(3)
+      }
+      #expect(settled)
+      #expect(f.counter.renderedText[key] == rendered(3))
+    }
   }
 #endif
