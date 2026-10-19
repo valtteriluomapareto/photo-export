@@ -307,7 +307,7 @@ class ReleaseIsolationTests(unittest.TestCase):
         # One block-style top-level `on:`; flow or quoted forms are unexpected structure.
         if re.findall(r"^(?:on|'on'|\"on\"|true):.*$", source, re.M) != ["on:"]:
             raise ValueError(f"Unexpected trigger structure in {name}")
-        block = re.search(r"^on:\n(.*?)(?=^\S)", source, re.M | re.S)[1]
+        block = re.search(r"^on:\n(.*?)(?=^[^\s#])", source, re.M | re.S)[1]
         events = re.findall(r"^  (\S+):", block, re.M)
         def section(event):
             found = re.search(rf"^  {event}:\n(.*?)(?=^  [^\s#]|\Z)", block, re.M | re.S)
@@ -329,6 +329,10 @@ class ReleaseIsolationTests(unittest.TestCase):
         source = (ROOT / ".github/workflows/release-direct.yml").read_text()
         hidden = source.replace("      - 'v*'\n", "      - 'v*'\n  # note\n    branches:\n      - main\n", 1)
         _, section = self.triggers("release-direct.yml", hidden)
+        self.assertIn("branches:", section("push"))
+        # A column-0 comment must not end the `on:` block early either.
+        reordered = "on:\n  workflow_dispatch:\n  push:\n    tags:\n      - 'v*'\n# note\n    branches:\n      - main\njobs:\n"
+        _, section = self.triggers("release-direct.yml", reordered)
         self.assertIn("branches:", section("push"))
 
     def test_direct_dry_run_is_scheduled_and_dispatch_defaults_to_build_only(self):
