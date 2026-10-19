@@ -311,10 +311,10 @@ struct ExportPipelineTests {
         return TestAssetFactory.makeAsset(id: id)
       }
       manager.startExportMonth(year: 2025, month: 9)
-      try #require(await gate.waitForEnter(count: 1, timeout: .seconds(60)))
+      try #require(await gate.waitForEnter(count: 1))
       tasks.append(try #require(manager.currentTask))
       await gate.release()
-      try #require(await gate.waitForEnter(count: 2, timeout: .seconds(60)))
+      try #require(await gate.waitForEnter(count: 2))
       let oldTask = try #require(manager.currentTask)
       tasks.append(oldTask)
       manager.pause()
@@ -382,7 +382,7 @@ struct ExportPipelineTests {
       }
       writer.checkpoint = oldGate
       manager.startExportMonth(year: 2025, month: 10)
-      try #require(await oldGate.waitForEnter(count: 1, timeout: .seconds(60)))
+      try #require(await oldGate.waitForEnter(count: 1))
       let oldTask = try #require(manager.currentTask)
       tasks.append(oldTask)
       try #require(writer.writeCalls.count == 1)
@@ -395,7 +395,7 @@ struct ExportPipelineTests {
       ]
       writer.checkpoint = newGate
       manager.startExportMonth(year: 2025, month: 11)
-      try #require(await newGate.waitForEnter(count: 1, timeout: .seconds(60)))
+      try #require(await newGate.waitForEnter(count: 1))
       tasks.append(try #require(manager.currentTask))
       let newRecord = try #require(store.exportInfo(assetId: "new-gen-1"))
 

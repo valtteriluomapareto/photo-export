@@ -122,7 +122,7 @@ import Testing
         let tasksBeforeRefresh = f.counter.tasks.count
         let completionsBeforeRefresh = f.counter.count(for: "timeline-counts-loaded")
         f.library.invalidateCache()
-        let refreshStarted = await gate.waitForEnter(count: 2, timeout: .seconds(10))
+        let refreshStarted = await gate.waitForEnter(count: 2)
         try #require(refreshStarted)
         let refreshTasks = Array(f.counter.tasks.dropFirst(tasksBeforeRefresh))
         let capturedRefresh = !refreshTasks.isEmpty

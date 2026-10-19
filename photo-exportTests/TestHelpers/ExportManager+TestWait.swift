@@ -27,27 +27,34 @@ extension ExportManager {
   /// `@MainActor` and forcing every test to hit the safety timeout.
   ///
   /// Preparation handles replace the old 500 ms startup guess. Await only the
-  /// current generation, rechecking after each snapshot. Direct task awaits are
-  /// bounded by the test runner, not the queue-loop deadline below.
+  /// current generation, rechecking after each snapshot. Every await stops when
+  /// the waiting test is cancelled (for example by its `.timeLimit`), so a held
+  /// export cannot keep the test from reaching the teardown that releases it.
   func waitForQueueDrained(safetyTimeout: Duration = .seconds(60)) async {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: safetyTimeout)
-    while clock.now < deadline {
+    while clock.now < deadline, !Task.isCancelled {
       let preparations = currentPreparationTasks
       if !preparations.isEmpty {
-        for task in preparations { await task.value }
+        for task in preparations {
+          if !(await finished(task)) { break }
+        }
         continue
       }
       if pendingJobs.isEmpty, !isRunning, !hasActiveExportWork {
         return
       }
       if let task = currentTask {
-        _ = await task.value
+        _ = await finished(task)
       } else {
         await Task.yield()
       }
     }
-    Issue.record("Export queue did not drain before the safety deadline")
+    if Task.isCancelled {
+      Issue.record("Cancelled while waiting for the export queue to drain")
+    } else {
+      Issue.record("Export queue did not drain before the safety deadline")
+    }
   }
 
   /// Blocks until the current import (if any) has finished. `importTask` is
@@ -55,8 +62,8 @@ extension ExportManager {
   /// and the import body sets `isImporting = false` before returning, so once
   /// `await importTask?.value` resolves the manager is observably idle.
   func waitForImportCompletion() async {
-    if let task = importTask {
-      _ = await task.value
+    if let task = importTask, !(await finished(task)) {
+      Issue.record("Cancelled while waiting for the import to complete")
     }
   }
 }

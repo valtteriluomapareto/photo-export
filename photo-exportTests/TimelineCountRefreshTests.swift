@@ -86,8 +86,8 @@ struct TimelineCountRefreshTests {
     let refresh = Task { await loader.loadCounts(forYears: [2025]) }
     var failure: Error?
     do {
-      let totalStarted = await totalGate.waitForEnter(count: 1, timeout: .seconds(10))
-      let adjustedStarted = await adjustedGate.waitForEnter(count: 1, timeout: .seconds(10))
+      let totalStarted = await totalGate.waitForEnter(count: 1)
+      let adjustedStarted = await adjustedGate.waitForEnter(count: 1)
       try #require(totalStarted && adjustedStarted)
       #expect(loader.assetCountsByYearMonth["2025-1"] == 1)
       #expect(loader.adjustedCountsByYearMonth["2025-1"] == 0)
@@ -161,7 +161,7 @@ struct TimelineCountRefreshTests {
     let old = Task { await loader.loadCounts(forYears: [2025]) }
     var failure: Error?
     do {
-      let started = await gate.waitForEnter(count: 24, timeout: .seconds(10))
+      let started = await gate.waitForEnter(count: 24)
       try #require(started)
       service.cachedCountOverride = { _, adjusted in adjusted ? 1 : 2 }
       await loader.loadCounts(forYears: [2025])

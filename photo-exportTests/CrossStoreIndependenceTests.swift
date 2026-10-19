@@ -167,7 +167,7 @@ struct CrossStoreIndependenceTests {
       let controlPlacement = try #require(collectionStore.placements[favorites.id])
 
       manager.startExportMonth(year: 2025, month: 8)
-      try #require(await gate.waitForEnter(count: 1, timeout: .seconds(60)))
+      try #require(await gate.waitForEnter(count: 1))
       let oldTask = try #require(manager.currentTask)
       tasks.append(oldTask)
       try #require(writer.writeCalls.count == 1)
@@ -239,7 +239,7 @@ struct CrossStoreIndependenceTests {
       let favorites = ExportPlacement.favorites()
 
       manager.startExportFavorites()
-      try #require(await gate.waitForEnter(count: 1, timeout: .seconds(60)))
+      try #require(await gate.waitForEnter(count: 1))
       let oldTask = try #require(manager.currentTask)
       tasks.append(oldTask)
       try #require(writer.writeCalls.count == 1)
