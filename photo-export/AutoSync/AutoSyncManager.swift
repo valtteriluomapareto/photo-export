@@ -350,6 +350,11 @@ final class AutoSyncManager: ObservableObject {
       cancelActiveFanOut()
     }
     dispatch(.enabledChanged(enabled))
+    if !enabled {
+      // Also stop the scope that is exporting now. After the dispatch, so the run's idle
+      // emission reaches a disabled reducer and cannot schedule a follow-up.
+      environment?.exportRunner.cancelAutoSyncRun()
+    }
   }
 
   // MARK: - Dispatch

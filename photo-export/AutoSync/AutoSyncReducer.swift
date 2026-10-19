@@ -621,8 +621,8 @@ enum AutoSyncReducer {
       break
     }
 
-    // Disabling the fan-out does not forcibly stop the export runner. On a quick
-    // re-enable, preserve pending triggers until that old run really becomes idle.
+    // Disabling stops the runner's AutoSync run synchronously, but keep this guard: until
+    // an old run really reports idle, preserve pending triggers on a quick re-enable.
     if state.exportRunState.isAutoSyncActive {
       cancelAnyScheduledDebounce(from: previous, into: &effects)
       if case .running(let reason) = previous { return .running(reason: reason) }

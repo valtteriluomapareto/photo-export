@@ -904,6 +904,33 @@ struct AutoSyncManagerTests {
       "Cancellation must still clear the journal — the defer-block runs on every exit path")
   }
 
+  /// Turning Auto Export off asks the runner to stop the automatic run in progress, and
+  /// the fan-out starts none of its remaining scopes.
+  @Test(.timeLimit(.minutes(1)))
+  func disablingDuringFanOutStopsTheRunnerRunAndStartsNoFurtherScopes() async throws {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let gate = AsyncCheckpoint()
+    defer { Task { await gate.releaseAll() } }
+    builder.exportRunner.gateForInvocation = { $0 == 1 ? gate : nil }
+    builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+    builder.destination.subject.send(safeDestination())
+    builder.scopes.subject.send(AutoExportScopeSelection(timeline: true, favorites: true))
+    manager.attach(to: builder.environment)
+    builder.clock.advance(by: 10)
+    let parked = await gate.waitForEnter(count: 1)
+    try #require(parked)
+    let fanOut = try #require(manager.activeRunFanOutTask)
+
+    manager.setEnabled(false)
+    #expect(builder.exportRunner.cancelAutoSyncRunCalls == 1)
+
+    await gate.release()
+    let ended = await finished(fanOut)
+    try #require(ended)
+    #expect(builder.exportRunner.receivedContexts.count == 1)
+  }
+
   // MARK: - Idempotent attach
 
   @Test func attachIsIdempotent() {

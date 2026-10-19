@@ -54,6 +54,8 @@ Manual exports (any **Export Year / Month / Folder / Album** button, in the tool
 
 The toolbar's **Cancel** button stops the current export and also **turns Auto Export off** so it doesn't restart itself a few seconds later. The reasoning: pressing Cancel during an automatic run usually means "stop, don't keep going" — not "pause for 30 seconds." Re-enable Auto Export from **Settings → Auto Export** whenever you're ready to resume the watch.
 
+Turning Auto Export off in **Settings** or from the menu bar also stops an automatic run that is in progress. Files already exported stay where they are, and the rest is exported the next time Auto Export runs. A manual export you started yourself keeps going.
+
 Switching to another destination stops the old automatic run. Each destination keeps its own last-run summary, retry entries, and pending work. Late results from the abandoned run are discarded, including when you switch away and back before it finishes. They cannot overwrite the current destination’s status or clear a newer run’s diagnostic journal.
 
 ## Failed exports and retry

@@ -610,6 +610,62 @@ struct ExportManagerRunExportTests {
     #expect(harness.writer.writeCalls.count == 1)
   }
 
+  /// A second `runExport` while one is active is rejected with a `.failed` summary for its
+  /// own context instead of trapping. The active run keeps ownership and completes.
+  @Test(.timeLimit(.minutes(1)))
+  func concurrentRunExportIsRejectedWithoutDisturbingTheActiveRun() async throws {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+    let gate = AsyncCheckpoint()
+    harness.writer.checkpoint = gate
+    let asset = TestAssetFactory.makeAsset(id: "held", creationDate: makeDate(2025, 1, 1))
+    seedAssets([asset], for: .timeline, in: harness)
+    var completions: [ExportRunSummary] = []
+    let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+    defer { subscription.cancel() }
+    let first = makeContext(scope: .timelineFullLibrary)
+    let firstRun = Task { await harness.manager.runExport(context: first) }
+    let writing = await gate.waitForEnter(count: 1)
+    try #require(writing)
+
+    let second = makeContext(scope: .favoritesFull)
+    let rejected = await harness.manager.runExport(context: second)
+
+    #expect(rejected.context == second)
+    #expect(rejected.result == .failed)
+    #expect(harness.manager.activeRunContext == first)
+    #expect(completions.isEmpty)
+    await gate.releaseAll()
+    let summary = await firstRun.value
+    #expect(summary.context == first)
+    #expect(summary.result == .completed)
+    #expect(completions == [summary])
+  }
+
+  /// Turning Auto Export off stops only AutoSync-sourced runs; a run with another source
+  /// keeps its ownership and completes.
+  @Test(.timeLimit(.minutes(1)))
+  func cancelAutoSyncRunLeavesAManualSourcedRunRunning() async throws {
+    let harness = makeHarness()
+    defer { Task { await harness.cleanup() } }
+    let gate = AsyncCheckpoint()
+    harness.writer.checkpoint = gate
+    let asset = TestAssetFactory.makeAsset(id: "manual", creationDate: makeDate(2025, 1, 1))
+    seedAssets([asset], for: .timeline, in: harness)
+    let context = makeContext(scope: .timelineFullLibrary)
+    let run = Task { await harness.manager.runExport(context: context) }
+    let writing = await gate.waitForEnter(count: 1)
+    try #require(writing)
+
+    harness.manager.cancelAutoSyncRun()
+
+    #expect(harness.manager.activeRunContext == context)
+    await gate.releaseAll()
+    let summary = await run.value
+    #expect(summary.result == .completed)
+    #expect(harness.writer.writeCalls.count == 1)
+  }
+
   // MARK: - Full-scope run characterization (issue #153)
 
   /// Every supported full scope must resolve an empty scan once. This also pins

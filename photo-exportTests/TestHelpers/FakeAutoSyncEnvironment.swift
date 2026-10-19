@@ -89,6 +89,13 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
     retryVariantDone(scope, assetId, variant)
   }
 
+  /// Records the request only. Parked runs stay parked until `resumeHung(with:)`, so
+  /// tests that resume them later never resume a continuation twice.
+  private(set) var cancelAutoSyncRunCalls = 0
+  func cancelAutoSyncRun() {
+    cancelAutoSyncRunCalls += 1
+  }
+
   /// Resumes every parked `runExport` call with `summary`. Call from the
   /// test teardown to unblock hung iterations so the fan-out can complete
   /// and the cleanup defer can run.

@@ -35,6 +35,7 @@ func bumpGeneration()
 - `cancelAndClear()` (on `ExportManager`, via `queueCoordinator.bumpGeneration()`)
 - `interruptForDestinationUnavailable()` (same path)
 - `supersedeForManualRun()` (same path)
+- `cancelAutoSyncRun()` (same path; only while an AutoSync-sourced run is active). `AutoSyncManager.setEnabled(false)` calls it after the reducer is disabled, so turning Auto Export off stops the automatic run in progress; manual exports keep running.
 - `cancelImport()` (on `ImportCoordinator`, via the injected `queueCoordinator` reference)
 - Destination or history-save failure teardown from `performExport` (through the same manager teardown helper)
 
