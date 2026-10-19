@@ -1,0 +1,28 @@
+# Regression-gate tests: the single list read by check-regression-gates.sh
+# (symbols and documentation) and check-regression-gates-ran.py (xcresult).
+#
+# Row format: <test file>|<gate|pin>|<declaration>
+#   struct SuiteName          a whole-suite gate, or a pin
+#   func SuiteName.methodName a method gate, qualified by its suite
+#
+# A "gate" must exist, run, and pass without being skipped. A "pin" is a suite
+# listed only because it holds method gates: it must exist, but its other tests
+# are not gates. Text from "#" to the end of a line is a comment.
+#
+# Every gate and pin must also appear in the gate lists of
+# docs/reference/architecture-conventions.md, AGENTS.md and CONTRIBUTING.md.
+
+photo-exportTests/AutoSyncSeamCharacterizationTests.swift|gate|struct AutoSyncSeamCharacterizationTests
+photo-exportTests/AutoSyncSeamCharacterizationTests.swift|gate|func AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence
+photo-exportTests/AutoSyncSeamCharacterizationTests.swift|gate|func AutoSyncSeamCharacterizationTests.manualExportSupersedingAutoSyncYieldsCanonicalSequence
+
+photo-exportTests/ExportQueueStateSnapshotTests.swift|pin|struct ExportQueueStateSnapshotTests
+photo-exportTests/ExportQueueStateSnapshotTests.swift|gate|func ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors
+photo-exportTests/ExportQueueStateSnapshotTests.swift|gate|func ExportQueueStateSnapshotTests.pauseResumeCancelStateSnapshot_canonicalTransitions
+
+photo-exportTests/ScreenshotPhotoLibraryServiceOverridesTests.swift|gate|struct ScreenshotPhotoLibraryServiceOverridesTests
+
+photo-exportTests/ImportIdempotencyTests.swift|gate|struct ImportIdempotencyTests
+
+photo-exportTests/ExportManagerRunExportTests.swift|pin|struct ExportManagerRunExportTests
+photo-exportTests/ExportManagerRunExportTests.swift|gate|func ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck

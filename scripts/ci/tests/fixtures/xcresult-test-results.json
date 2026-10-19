@@ -1,0 +1,288 @@
+{
+  "devices": [
+    {
+      "architecture": "arm64",
+      "deviceId": "00000000-0000000000000000",
+      "deviceName": "My Mac",
+      "modelName": "MacBook Pro",
+      "osBuildNumber": "25G83",
+      "osVersion": "26.6.2",
+      "platform": "macOS"
+    }
+  ],
+  "testNodes": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "duration": "6s",
+                  "durationInSeconds": 6.8742451667785645,
+                  "name": "autoSyncSeam_multiSelectTimelineDispatcherIsManualActive()",
+                  "nodeIdentifier": "AutoSyncSeamCharacterizationTests/autoSyncSeam_multiSelectTimelineDispatcherIsManualActive()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/AutoSyncSeamCharacterizationTests/autoSyncSeam_multiSelectTimelineDispatcherIsManualActive()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                },
+                {
+                  "duration": "7s",
+                  "durationInSeconds": 7.368199110031128,
+                  "name": "manualExportThenImportYieldsCanonicalSequence()",
+                  "nodeIdentifier": "AutoSyncSeamCharacterizationTests/manualExportThenImportYieldsCanonicalSequence()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/AutoSyncSeamCharacterizationTests/manualExportThenImportYieldsCanonicalSequence()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                }
+              ],
+              "name": "AutoSyncSeamCharacterizationTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/AutoSyncSeamCharacterizationTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            },
+            {
+              "children": [
+                {
+                  "duration": "5s",
+                  "durationInSeconds": 5.4533398151397705,
+                  "name": "teardownQueue_synchronouslyClearsManagerMirrors()",
+                  "nodeIdentifier": "ExportQueueStateSnapshotTests/teardownQueue_synchronouslyClearsManagerMirrors()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExportQueueStateSnapshotTests/teardownQueue_synchronouslyClearsManagerMirrors()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                },
+                {
+                  "duration": "8s",
+                  "durationInSeconds": 8.582720279693604,
+                  "name": "pauseResumeCancelStateSnapshot_canonicalTransitions()",
+                  "nodeIdentifier": "ExportQueueStateSnapshotTests/pauseResumeCancelStateSnapshot_canonicalTransitions()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExportQueueStateSnapshotTests/pauseResumeCancelStateSnapshot_canonicalTransitions()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                }
+              ],
+              "name": "ExportQueueStateSnapshotTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExportQueueStateSnapshotTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            },
+            {
+              "children": [
+                {
+                  "duration": "3s",
+                  "durationInSeconds": 3.454132080078125,
+                  "name": "countAssetsForYearMonthReturnsCuratedData()",
+                  "nodeIdentifier": "ScreenshotPhotoLibraryServiceOverridesTests/countAssetsForYearMonthReturnsCuratedData()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ScreenshotPhotoLibraryServiceOverridesTests/countAssetsForYearMonthReturnsCuratedData()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                },
+                {
+                  "duration": "3s",
+                  "durationInSeconds": 3.453812837600708,
+                  "name": "fetchCollectionTreeReturnsCuratedTree()",
+                  "nodeIdentifier": "ScreenshotPhotoLibraryServiceOverridesTests/fetchCollectionTreeReturnsCuratedTree()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ScreenshotPhotoLibraryServiceOverridesTests/fetchCollectionTreeReturnsCuratedTree()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                }
+              ],
+              "name": "ScreenshotPhotoLibraryServiceOverridesTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ScreenshotPhotoLibraryServiceOverridesTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            },
+            {
+              "children": [
+                {
+                  "duration": "10s",
+                  "durationInSeconds": 10.858081102371216,
+                  "name": "bulkImportIsIdempotent()",
+                  "nodeIdentifier": "ImportIdempotencyTests/bulkImportIsIdempotent()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ImportIdempotencyTests/bulkImportIsIdempotent()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                },
+                {
+                  "duration": "6s",
+                  "durationInSeconds": 6.262969017028809,
+                  "name": "importStageSequenceMatchesContract()",
+                  "nodeIdentifier": "ImportIdempotencyTests/importStageSequenceMatchesContract()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ImportIdempotencyTests/importStageSequenceMatchesContract()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                }
+              ],
+              "name": "ImportIdempotencyTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ImportIdempotencyTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "duration": "9s",
+                      "durationInSeconds": 9.430431127548218,
+                      "name": "false",
+                      "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExportManagerRunExportTests/autoSyncOnlyAttemptsEligibleMissingVariants(originalAlreadyDone:)?args=fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+                      "nodeType": "Arguments",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "7s",
+                      "durationInSeconds": 7.255168914794922,
+                      "name": "true",
+                      "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExportManagerRunExportTests/autoSyncOnlyAttemptsEligibleMissingVariants(originalAlreadyDone:)?args=b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+                      "nodeType": "Arguments",
+                      "result": "Passed"
+                    }
+                  ],
+                  "duration": "8s",
+                  "durationInSeconds": 8.34280002117157,
+                  "name": "autoSyncOnlyAttemptsEligibleMissingVariants(originalAlreadyDone:)",
+                  "nodeIdentifier": "ExportManagerRunExportTests/autoSyncOnlyAttemptsEligibleMissingVariants(originalAlreadyDone:)",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExportManagerRunExportTests/autoSyncOnlyAttemptsEligibleMissingVariants(originalAlreadyDone:)",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                },
+                {
+                  "duration": "5s",
+                  "durationInSeconds": 5.00212287902832,
+                  "name": "autoSyncRunFilterAlreadyExportedBeforeRetryCheck()",
+                  "nodeIdentifier": "ExportManagerRunExportTests/autoSyncRunFilterAlreadyExportedBeforeRetryCheck()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExportManagerRunExportTests/autoSyncRunFilterAlreadyExportedBeforeRetryCheck()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                }
+              ],
+              "name": "ExportManagerRunExportTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExportManagerRunExportTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "duration": "0,00012s",
+                      "durationInSeconds": 0.00012445449829101562,
+                      "name": ".cancelled",
+                      "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/AutoSyncRunDirtyBoundaryTests/unsuccessfulRunNeverAcknowledgesDirtyWork(result:)?args=06234c1cf33df85364aedb5de2e65dc2fcb144ff65a249457c5f140fde7ee1d4",
+                      "nodeType": "Arguments",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0,00023s",
+                      "durationInSeconds": 0.00022530555725097656,
+                      "name": ".failed",
+                      "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/AutoSyncRunDirtyBoundaryTests/unsuccessfulRunNeverAcknowledgesDirtyWork(result:)?args=33d04bd775e7b6c6436742508b41fa693a15bd2c902fcd994253392abd717740",
+                      "nodeType": "Arguments",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0,00011s",
+                      "durationInSeconds": 0.00011491775512695312,
+                      "name": ".interrupted",
+                      "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/AutoSyncRunDirtyBoundaryTests/unsuccessfulRunNeverAcknowledgesDirtyWork(result:)?args=89adf65813e07e7c8f2ef568099ad92bf51fbe1b8e7900062c50c9e68bba8b2f",
+                      "nodeType": "Arguments",
+                      "result": "Passed"
+                    }
+                  ],
+                  "duration": "0,00015s",
+                  "durationInSeconds": 0.0001548926035563151,
+                  "name": "unsuccessfulRunNeverAcknowledgesDirtyWork(result:)",
+                  "nodeIdentifier": "AutoSyncRunDirtyBoundaryTests/unsuccessfulRunNeverAcknowledgesDirtyWork(result:)",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/AutoSyncRunDirtyBoundaryTests/unsuccessfulRunNeverAcknowledgesDirtyWork(result:)",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                }
+              ],
+              "name": "AutoSyncRunDirtyBoundaryTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/AutoSyncRunDirtyBoundaryTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            },
+            {
+              "children": [
+                {
+                  "duration": "3s",
+                  "durationInSeconds": 3.454806089401245,
+                  "name": "deleteIsNoOpWhenFileMissing()",
+                  "nodeIdentifier": "FileBackedAutoSyncRunSummaryStoreTests/deleteIsNoOpWhenFileMissing()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/FileBackedAutoSyncRunSummaryStoreTests/deleteIsNoOpWhenFileMissing()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                }
+              ],
+              "name": "FileBackedAutoSyncRunSummaryStoreTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/FileBackedAutoSyncRunSummaryStoreTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            },
+            {
+              "children": [
+                {
+                  "duration": "3s",
+                  "durationInSeconds": 3.3947160243988037,
+                  "name": "deleteIsNoOpWhenFileMissing()",
+                  "nodeIdentifier": "FileBackedAutoSyncDirtyStateStoreTests/deleteIsNoOpWhenFileMissing()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/FileBackedAutoSyncDirtyStateStoreTests/deleteIsNoOpWhenFileMissing()",
+                  "nodeType": "Test Case",
+                  "result": "Passed"
+                }
+              ],
+              "name": "FileBackedAutoSyncDirtyStateStoreTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/FileBackedAutoSyncDirtyStateStoreTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "name": "Deliberate failures capture cyclic receivers",
+                      "nodeType": "Expected Failure"
+                    },
+                    {
+                      "name": "Deliberate failures capture cyclic receivers",
+                      "nodeType": "Expected Failure"
+                    }
+                  ],
+                  "duration": "3s",
+                  "durationInSeconds": 3.391733169555664,
+                  "name": "failingExpectationsOnCycleRootsRecordInsteadOfCrashing()",
+                  "nodeIdentifier": "ExpectationReflectionSafetyTests/failingExpectationsOnCycleRootsRecordInsteadOfCrashing()",
+                  "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExpectationReflectionSafetyTests/failingExpectationsOnCycleRootsRecordInsteadOfCrashing()",
+                  "nodeType": "Test Case",
+                  "result": "Expected Failure"
+                }
+              ],
+              "name": "ExpectationReflectionSafetyTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests/ExpectationReflectionSafetyTests",
+              "nodeType": "Test Suite",
+              "result": "Passed"
+            }
+          ],
+          "name": "photo-exportTests",
+          "nodeIdentifierURL": "test://com.apple.xcode/photo-export/photo-exportTests",
+          "nodeType": "Unit test bundle",
+          "result": "Passed"
+        }
+      ],
+      "name": "photo-export",
+      "nodeType": "Test Plan",
+      "result": "Passed"
+    }
+  ],
+  "testPlanConfigurations": [
+    {
+      "configurationId": "1",
+      "configurationName": "Test Scheme Action"
+    }
+  ]
+}
