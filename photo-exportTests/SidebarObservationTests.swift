@@ -82,10 +82,22 @@ import Testing
         window.orderFront(nil)
       }
 
-      func barrier() async {
+      /// Awaits every task the sidebars recorded, including ones recorded meanwhile, then lays
+      /// out what they published. Rendered readiness does not cover the timeline's initial count
+      /// load, whose completion legitimately re-renders the sidebar after the baseline (#293).
+      func quiesce() async {
+        var awaited = 0
+        while awaited < counter.tasks.count {
+          let pending = counter.tasks[awaited...]
+          awaited = counter.tasks.count
+          for task in pending { _ = await finished(task) }
+        }
         window.contentView?.layoutSubtreeIfNeeded()
-        try? await Task.sleep(for: .milliseconds(30))
-        window.contentView?.layoutSubtreeIfNeeded()
+      }
+
+      func changes(since baseline: [String: Int]) -> [String] {
+        counter.snapshot().filter { baseline[$0.key] != $0.value }
+          .map { "\($0.key): \(baseline[$0.key] ?? 0)→\($0.value)" }.sorted()
       }
 
       func close() async {
@@ -102,13 +114,10 @@ import Testing
       }
     }
 
-    private func observe(_ condition: () -> Bool) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(10))
-      while !condition(), clock.now < deadline, !Task.isCancelled {
-        try? await Task.sleep(for: .milliseconds(10))
-      }
-      return condition()
+    private func observe(
+      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -121,8 +130,9 @@ import Testing
             && f.counter.renderedText["collection-sidebar:favorites"]
               == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
         })
-        await f.barrier()
+        await f.quiesce()
         let timelineBodies = f.counter.count(for: "timeline-sidebar-body")
+        let baseline = f.counter.snapshot()
         try #require(timelineBodies > 0)
         for index in 1...5 {
           let key = "queue:\(index)"
@@ -133,8 +143,10 @@ import Testing
               selection: .edited)
           ])
           try #require(await observe { f.counter.count(for: key) > before })
-          await f.barrier()
-          #expect(f.counter.count(for: "timeline-sidebar-body") == timelineBodies)
+          await f.quiesce()
+          #expect(
+            f.counter.count(for: "timeline-sidebar-body") == timelineBodies,
+            "Changes since baseline: \(f.changes(since: baseline))")
         }
         f.collections.markVariantExported(
           assetId: "first", placement: .favorites(), variant: .original,

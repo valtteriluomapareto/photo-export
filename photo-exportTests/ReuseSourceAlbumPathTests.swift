@@ -23,6 +23,7 @@ import Testing
 /// destination, then trigger an export and assert (a) `FileManager.copyItem` was
 /// called with the right source, (b) the PhotoKit writer was not invoked.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ReuseSourceAlbumPathTests {
 
   // MARK: - Fixtures

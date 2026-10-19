@@ -21,6 +21,7 @@ import Testing
 /// refactors that reorder property mutation; asserting canonical transitions
 /// captures the invariant AutoSync actually depends on.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct AutoSyncSeamCharacterizationTests {
 
   // MARK: - Canonical state
@@ -259,11 +260,10 @@ struct AutoSyncSeamCharacterizationTests {
 
     // Drain. Final canonical sequence is the full export lifecycle.
     await fetchGate.releaseAll()
-    let deadline = Date().addingTimeInterval(10)
-    while (harness.manager.isRunning || harness.manager.isEnqueueingAll
-      || harness.manager.queueCount > 0) && Date() < deadline
-    {
-      try? await Task.sleep(nanoseconds: 5_000_000)
+    // Not a `#require`: a stalled drain must still reach the canonical-sequence diff below.
+    _ = await eventually("queue drained") {
+      !(harness.manager.isRunning || harness.manager.isEnqueueingAll
+        || harness.manager.queueCount > 0)
     }
 
     let canonical = Self.canonicalize(runStateEmissions.map(CanonicalRunState.init))

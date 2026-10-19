@@ -8,6 +8,7 @@ import Testing
 /// A Photos change observed after the first run's fetch must survive that run's
 /// completion and cause another export without a second Photos notification.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct AutoSyncMidRunChangeIntegrationTests {
   @MainActor
   private final class SummaryProbe {

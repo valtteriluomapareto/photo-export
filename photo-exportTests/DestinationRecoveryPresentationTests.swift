@@ -6,7 +6,7 @@ import Testing
 
 #if DEBUG
   @MainActor
-  @Suite(.serialized)
+  @Suite(.timeLimit(.minutes(2)), .serialized)
   struct DestinationRecoveryPresentationTests {
     enum Surface: CaseIterable { case root, month, year, collection, folder }
     enum Problem: CaseIterable { case unreachable, permission }
@@ -152,11 +152,10 @@ import Testing
     private let permission =
       "Export folder access needs restoring. Reconnect the drive, then choose the same folder if needed."
 
-    private func observe(_ condition: () -> Bool) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(15))
-      while !condition(), clock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
-      return condition()
+    private func observe(
+      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
     }
 
     @Test func missingFolderIsUnreachableRatherThanNotDirectoryAndCanRecoverIdentity() throws {

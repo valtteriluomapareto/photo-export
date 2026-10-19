@@ -15,6 +15,7 @@ import Testing
 /// is well-covered by `BackupScannerTests`) and a `FakePhotoLibraryService`
 /// to stage Photos-library matches.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ExportManagerImportTests {
 
   // MARK: - Fixtures

@@ -113,15 +113,23 @@ import Testing
         try? await Task.sleep(for: .milliseconds(30))
         window.contentView?.layoutSubtreeIfNeeded()
       }
+
+      var readinessDescription: String {
+        "summary=\(counter.count(for: "summary:0/10000")), "
+          + "scans=\(counter.count(for: "summaryScan")), "
+          + "bodies=\(counter.count(for: "collectionBody")), "
+          + "preheatStarts=\(service.startCachingCalls.count)"
+      }
     }
 
-    private func observe(_ condition: () -> Bool) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(15))
-      while !condition(), !Task.isCancelled, clock.now < deadline {
-        try? await Task.sleep(for: .milliseconds(10))
+    private func observe(
+      in window: NSWindow, _ condition: () -> Bool,
+      sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+      await eventually("observed hosted condition", sourceLocation: sourceLocation) {
+        window.contentView?.layoutSubtreeIfNeeded()
+        return condition()
       }
-      return condition()
     }
 
     @Test(.timeLimit(.minutes(2)))
@@ -129,10 +137,11 @@ import Testing
       let f = Fixture()
       defer { f.close() }
       f.show()
-      let loaded = await observe {
+      let loaded = await observe(in: f.window) {
         f.counter.count(for: "summary:0/10000") > 0 && f.service.startCachingCalls.count == 1
       }
-      try #require(loaded, "Must measure a loaded collection with an actual matching placement")
+      let diagnostics = f.readinessDescription
+      try #require(loaded, "Must measure a loaded collection with an actual matching placement: \(diagnostics)")
       await f.renderBarrier()
       let scans = f.counter.count(for: "summaryScan")
       let bodies = f.counter.count(for: "collectionBody")
@@ -147,7 +156,7 @@ import Testing
             assetLocalIdentifier: "unrelated-\(index)",
             placement: .timeline(year: 2025, month: 1), selection: .edited)
         ])
-        let acknowledged = await observe { f.counter.count(for: key) > parent }
+        let acknowledged = await observe(in: f.window) { f.counter.count(for: key) > parent }
         try #require(acknowledged, "Parent must process the actual queue-count publication")
         await f.renderBarrier()
       }
@@ -182,31 +191,31 @@ import Testing
           filename: "IMG.JPG", exportedAt: Date())
       }
       f.show()
-      let initial = await observe {
+      let initial = await observe(in: f.window) {
         f.counter.count(for: "summary:3/3") > 0 && f.counter.count(for: "selected:adjusted") > 0
       }
       try #require(initial)
       let selectedBefore = f.counter.count(for: "selected:live")
       f.navigation.asset = live
-      let rebound = await observe { f.counter.count(for: "selected:live") > selectedBefore }
+      let rebound = await observe(in: f.window) { f.counter.count(for: "selected:live") > selectedBefore }
       try #require(rebound, "A live binding change must update the pane's selected-thumbnail input")
       #expect(f.navigation.asset == live)
 
       f.manager.versionSelection = .editedWithOriginals
-      let originals = await observe { f.counter.count(for: "summary:2/3") > 0 }
+      let originals = await observe(in: f.window) { f.counter.count(for: "summary:2/3") > 0 }
       try #require(originals)
       f.manager.livePhotosPairedExport = true
-      let paired = await observe { f.counter.count(for: "summary:1/3") > 0 }
+      let paired = await observe(in: f.window) { f.counter.count(for: "summary:1/3") > 0 }
       try #require(paired)
       let beforeStatus = f.counter.count(for: "summary:2/3")
       f.records.markVariantExported(
         assetId: adjusted.id, placement: f.favorite, variant: .original,
         filename: "ORIGINAL.HEIC", exportedAt: Date())
-      let status = await observe { f.counter.count(for: "summary:2/3") > beforeStatus }
+      let status = await observe(in: f.window) { f.counter.count(for: "summary:2/3") > beforeStatus }
       try #require(status)
       f.service.favoritesAssets.append(TestAssetFactory.makeAsset(id: "new-member"))
       f.library.libraryRevision += 1
-      let refreshed = await observe { f.counter.count(for: "summary:2/4") > 0 }
+      let refreshed = await observe(in: f.window) { f.counter.count(for: "summary:2/4") > 0 }
       try #require(refreshed)
       #expect(f.navigation.asset == live)
 
@@ -226,14 +235,14 @@ import Testing
       f.navigation.asset = nil
       f.navigation.selection = .sharedAlbum(collectionId: "shared")
       f.navigation.title = "Updated shared title"
-      let sharedRendered = await observe {
+      let sharedRendered = await observe(in: f.window) {
         f.counter.count(for: "summary:1/1") > 0 && f.counter.count(for: "banner:true") > 0
           && f.counter.count(for: "title:Updated shared title") > 0
       }
       try #require(sharedRendered)
       let bannersBefore = f.counter.count(for: "banner:false")
       f.manager.versionSelection = .edited
-      let bannerRemoved = await observe { f.counter.count(for: "banner:false") > bannersBefore }
+      let bannerRemoved = await observe(in: f.window) { f.counter.count(for: "banner:false") > bannersBefore }
       #expect(bannerRemoved)
     }
 
@@ -255,19 +264,19 @@ import Testing
           id: "shared-action", localIdentifier: "shared-action",
           title: "Shared action", kind: .sharedAlbum, pathComponents: [], children: []))
       f.show()
-      let ready = await observe { f.counter.count(for: "canExport:true") > 0 }
+      let ready = await observe(in: f.window) { f.counter.count(for: "canExport:true") > 0 }
       try #require(ready)
       let disabledBefore = f.counter.count(for: "canExport:false")
       f.records.configure(for: nil)
-      let disabled = await observe { f.counter.count(for: "canExport:false") > disabledBefore }
+      let disabled = await observe(in: f.window) { f.counter.count(for: "canExport:false") > disabledBefore }
       try #require(disabled)
       let enabledBefore = f.counter.count(for: "canExport:true")
       f.records.configure(for: "test")
-      let reenabled = await observe { f.counter.count(for: "canExport:true") > enabledBefore }
+      let reenabled = await observe(in: f.window) { f.counter.count(for: "canExport:true") > enabledBefore }
       try #require(reenabled)
       let action = try #require(f.counter.renderedActions["collectionExport"])
       action()
-      let favoriteRan = await observe {
+      let favoriteRan = await observe(in: f.window) {
         f.records.exportInfo(assetId: "scope-asset", placement: f.favorite) != nil
       }
       try #require(favoriteRan)
@@ -285,11 +294,11 @@ import Testing
         ),
       ] {
         f.navigation.selection = selection
-        let changed = await observe { f.counter.count(for: "scope:\(scopeKey)") > 0 }
+        let changed = await observe(in: f.window) { f.counter.count(for: "scope:\(scopeKey)") > 0 }
         try #require(changed)
         let action = try #require(f.counter.renderedActions["collectionExport"])
         action()
-        let ran = await observe {
+        let ran = await observe(in: f.window) {
           guard
             let placement = f.records.placements(matching: kind).first(where: {
               $0.collectionLocalIdentifier == localId

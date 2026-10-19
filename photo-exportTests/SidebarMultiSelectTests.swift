@@ -15,6 +15,7 @@ import Testing
 /// The bucket-normalize tests are pure value-type tests; the dispatcher tests run
 /// against the same fake-backed `ExportManager` harness `ExportAllAlbumsTests` uses.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct SidebarMultiSelectTests {
 
   // MARK: - LibrarySelection.isTimeline / isCollection
@@ -658,11 +659,8 @@ struct SidebarMultiSelectTests {
   }
 
   private func waitUntil(
-    timeout: TimeInterval = 10, _ condition: @autoclosure () -> Bool
+    _ condition: @autoclosure () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
   ) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    while !condition() && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 5_000_000)
-    }
+    _ = await eventually("waitUntil condition", sourceLocation: sourceLocation) { condition() }
   }
 }

@@ -73,15 +73,26 @@ import Testing
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
       }
+
+      var readinessDescription: String {
+        let loads = counter.count(for: "timeline-counts-loaded")
+        let years = counter.renderedText["timeline-sidebar-years"] ?? []
+        let month = counter.renderedText["timeline-month:2026-9"] ?? []
+        let expandedYear = counter.renderedText["timeline-year:2026"] ?? []
+        let collapsedYear = counter.renderedText["timeline-year:2025"] ?? []
+        return "loads=\(loads), tasks=\(counter.tasks.count), years=\(years), "
+          + "month=\(month), expanded=\(expandedYear), collapsed=\(collapsedYear)"
+      }
     }
 
-    private func observe(_ condition: () -> Bool) async -> Bool {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(10))
-      while !condition(), clock.now < deadline, !Task.isCancelled {
-        try? await Task.sleep(for: .milliseconds(10))
+    private func observe(
+      in window: NSWindow, _ condition: () -> Bool,
+      sourceLocation: SourceLocation = #_sourceLocation
+    ) async -> Bool {
+      await eventually("observed hosted condition", sourceLocation: sourceLocation) {
+        window.contentView?.layoutSubtreeIfNeeded()
+        return condition()
       }
-      return condition()
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -90,13 +101,16 @@ import Testing
       let gate = AsyncCheckpoint()
       var failure: Error?
       do {
-        let initiallyReady = await observe {
-          f.counter.count(for: "timeline-counts-loaded") == 1
+        let initiallyReady = await observe(in: f.window) {
+          f.counter.count(for: "timeline-counts-loaded") > 0
             && f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
             && f.counter.renderedText["timeline-year:2026"] == ["50%"]
             && f.counter.renderedText["timeline-year:2025"] == ["50%"]
         }
-        try #require(initiallyReady)
+        let initialDiagnostics = f.readinessDescription
+        try #require(initiallyReady, "Initial sidebar: \(initialDiagnostics)")
+        // Complete every initial appearance load before changing fake responses.
+        for task in f.counter.tasks { _ = await finished(task) }
         f.service.cachedCountOverride = { scope, adjusted in
           if scope == .timeline(year: 2026, month: 9) { await gate.enter() }
           switch scope {
@@ -104,22 +118,30 @@ import Testing
           default: return 0
           }
         }
+        let tasksBeforeRefresh = f.counter.tasks.count
+        let completionsBeforeRefresh = f.counter.count(for: "timeline-counts-loaded")
         f.library.invalidateCache()
-        let refreshStarted = await gate.waitForEnter(count: 2, timeout: .seconds(10))
+        let refreshStarted = await gate.waitForEnter(count: 2)
         try #require(refreshStarted)
+        let refreshTasks = Array(f.counter.tasks.dropFirst(tasksBeforeRefresh))
+        let capturedRefresh = !refreshTasks.isEmpty
+        try #require(capturedRefresh)
         // Force real row evaluation while counts are held, as another file completes.
         f.store.markVariantExported(
           assetId: "second-2026", variant: .original, year: 2026, month: 9,
           relPath: "2026/09/", filename: "second.jpg", exportedAt: Date())
         f.store.flushPendingNotifications()
-        let badgesStayVisible = await observe {
+        let badgesStayVisible = await observe(in: f.window) {
           f.counter.renderedText["timeline-month:2026-9"] == ["complete"]
             && f.counter.renderedText["timeline-year:2026"] == ["complete"]
             && f.counter.renderedText["timeline-year:2025"] == ["50%"]
         }
-        #expect(badgesStayVisible)
+        let heldDiagnostics = f.readinessDescription
+        #expect(badgesStayVisible, "Held refresh: \(heldDiagnostics)")
         await gate.releaseAll()
-        let refreshed = await observe { f.counter.count(for: "timeline-counts-loaded") == 2 }
+        for task in refreshTasks { _ = await finished(task) }
+        for task in f.counter.tasks { _ = await finished(task) }
+        let refreshed = f.counter.count(for: "timeline-counts-loaded") > completionsBeforeRefresh
         try #require(refreshed)
         f.service.cachedCountOverride = { scope, adjusted in
           if scope == .timeline(year: 2026, month: 9), adjusted {
@@ -130,17 +152,19 @@ import Testing
           default: return 0
           }
         }
+        let completionsBeforeFailure = f.counter.count(for: "timeline-counts-loaded")
         f.library.invalidateCache()
-        let failedCoverageClears = await observe {
-          f.counter.count(for: "timeline-counts-loaded") == 3
+        let failedCoverageClears = await observe(in: f.window) {
+          f.counter.count(for: "timeline-counts-loaded") > completionsBeforeFailure
             && f.counter.renderedText["timeline-month:2026-9"] == ["…"]
             && f.counter.renderedText["timeline-year:2026"] == []
             && f.counter.renderedText["timeline-year:2025"] == ["50%"]
         }
-        #expect(failedCoverageClears)
+        let failedDiagnostics = f.readinessDescription
+        #expect(failedCoverageClears, "Failed coverage: \(failedDiagnostics)")
       } catch { failure = error }
       await gate.releaseAll()
-      for task in f.counter.tasks { await task.value }
+      for task in f.counter.tasks { _ = await finished(task) }
       await f.close()
       if let failure { throw failure }
     }

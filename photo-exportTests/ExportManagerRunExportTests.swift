@@ -10,6 +10,7 @@ import Testing
 /// to the existing fire-and-forget start* methods; targeted asset-id and `.autoExport`
 /// scopes resolve immediately with `.failed` until later slices implement them.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ExportManagerRunExportTests {
 
   enum FullScope: CaseIterable, Sendable {
@@ -891,12 +892,9 @@ struct ExportManagerRunExportTests {
   }
 
   private func waitUntil(
-    timeout: TimeInterval = 10, _ condition: @autoclosure () -> Bool
+    _ condition: @autoclosure () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
   ) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    while !condition() && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 5_000_000)
-    }
+    _ = await eventually("waitUntil condition", sourceLocation: sourceLocation) { condition() }
   }
 
   /// Same regression guard as the user-album test above, but exercising the

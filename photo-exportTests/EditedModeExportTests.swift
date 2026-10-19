@@ -7,6 +7,7 @@ import Testing
 /// Covers the export pipeline for the redesigned two-mode selection: filename contract,
 /// collision pairing, failure propagation, and selection-aware enqueue/skip behaviour.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct EditedModeExportTests {
   // MARK: - Test harness
 

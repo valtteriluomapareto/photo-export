@@ -4,6 +4,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ReconciliationErrorSafetyTests {
   @MainActor
   private final class Fixture {
@@ -254,11 +255,7 @@ struct ReconciliationErrorSafetyTests {
     let operation = Task { try await f.reconcile() }
     var failure: Error?
     do {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(10))
-      while await gate.enteredSoFar == 0, clock.now < deadline, !Task.isCancelled {
-        try? await Task.sleep(for: .milliseconds(10))
-      }
+      await gate.waitForEnter(count: 1)
       try #require(await gate.enteredSoFar == 1)
       try FileManager.default.removeItem(at: f.media)
       await gate.releaseAll()

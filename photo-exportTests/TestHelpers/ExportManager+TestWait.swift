@@ -27,36 +27,49 @@ extension ExportManager {
   /// `@MainActor` and forcing every test to hit the safety timeout.
   ///
   /// Preparation handles replace the old 500 ms startup guess. Await only the
-  /// current generation, rechecking after each snapshot. Direct task awaits are
-  /// bounded by the test runner, not the queue-loop deadline below.
-  func waitForQueueDrained(safetyTimeout: Duration = .seconds(60)) async {
+  /// current generation, rechecking after each snapshot. Every await stops when
+  /// the waiting test is cancelled (for example by its `.timeLimit`), so a held
+  /// export cannot keep the test from reaching the teardown that releases it.
+  func waitForQueueDrained(
+    safetyTimeout: Duration = .seconds(150), sourceLocation: SourceLocation = #_sourceLocation
+  ) async {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: safetyTimeout)
     while clock.now < deadline {
       let preparations = currentPreparationTasks
-      if !preparations.isEmpty {
-        for task in preparations { await task.value }
-        continue
-      }
-      if pendingJobs.isEmpty, !isRunning, !hasActiveExportWork {
+      if preparations.isEmpty, pendingJobs.isEmpty, !isRunning, !hasActiveExportWork {
         return
       }
+      if Task.isCancelled { break }
+      if !preparations.isEmpty {
+        for task in preparations {
+          if !(await finished(task)) { break }
+        }
+        continue
+      }
       if let task = currentTask {
-        _ = await task.value
+        _ = await finished(task)
       } else {
         await Task.yield()
       }
     }
-    Issue.record("Export queue did not drain before the safety deadline")
+    if Task.isCancelled {
+      Issue.record(
+        "Cancelled while waiting for the export queue to drain", sourceLocation: sourceLocation)
+    } else {
+      Issue.record(
+        "Export queue did not drain before the safety deadline", sourceLocation: sourceLocation)
+    }
   }
 
   /// Blocks until the current import (if any) has finished. `importTask` is
   /// assigned synchronously inside `startImport()` (after `isImporting = true`)
   /// and the import body sets `isImporting = false` before returning, so once
   /// `await importTask?.value` resolves the manager is observably idle.
-  func waitForImportCompletion() async {
-    if let task = importTask {
-      _ = await task.value
+  func waitForImportCompletion(sourceLocation: SourceLocation = #_sourceLocation) async {
+    if let task = importTask, !(await finished(task)) {
+      Issue.record(
+        "Cancelled while waiting for the import to complete", sourceLocation: sourceLocation)
     }
   }
 }

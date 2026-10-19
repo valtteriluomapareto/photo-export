@@ -26,15 +26,20 @@ actor AsyncCheckpoint {
   private var pending: [CheckedContinuation<Void, Never>] = []
   private var spareReleases = 0
   private struct Observer {
+    let id: Int
     let target: Int
     let continuation: CheckedContinuation<Void, Never>
   }
   private var observers: [Observer] = []
+  private var nextObserverID = 0
   private var isShutdown = false
 
   /// Number of `enter()` calls that have arrived so far. Lets tests assert
   /// "exactly N writers reached the gate."
   var enteredSoFar: Int { enteredCount }
+
+  /// Registered `waitForEnter` observers; lets tests prove a cancelled wait leaves none behind.
+  var observerCountForTesting: Int { observers.count }
 
   /// Called by the code under test (typically inside a fake's async method).
   /// Records the arrival, fires any matching `waitForEnter` observers, then
@@ -66,23 +71,32 @@ actor AsyncCheckpoint {
     spareReleases += remaining
   }
 
-  /// Suspends until `enteredSoFar >= count`.
-  func waitForEnter(count: Int) async {
-    if enteredCount >= count { return }
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-      observers.append(Observer(target: count, continuation: continuation))
-    }
-  }
-
-  /// Bounded observation for tests that must still run awaited cleanup on failure.
-  /// Unlike the continuation-based overload, cancellation cannot strand this wait.
-  func waitForEnter(count: Int, timeout: Duration) async -> Bool {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: timeout)
-    while enteredCount < count, !isShutdown, !Task.isCancelled, clock.now < deadline {
-      await Task.yield()
+  /// Suspends until `enteredSoFar >= count`, the gate shuts down, or the waiting task is
+  /// cancelled (for example by its test's `.timeLimit`). Returns whether the count was reached,
+  /// so callers can `#require` it without a separate wall-clock deadline.
+  @discardableResult
+  func waitForEnter(count: Int) async -> Bool {
+    if enteredCount >= count || isShutdown { return enteredCount >= count }
+    let id = nextObserverID
+    nextObserverID += 1
+    await withTaskCancellationHandler {
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        // Cancellation that arrived before registration never finds this observer to resume.
+        if Task.isCancelled {
+          continuation.resume()
+        } else {
+          observers.append(Observer(id: id, target: count, continuation: continuation))
+        }
+      }
+    } onCancel: {
+      Task { await self.cancelObserver(id) }
     }
     return enteredCount >= count
+  }
+
+  private func cancelObserver(_ id: Int) {
+    guard let index = observers.firstIndex(where: { $0.id == id }) else { return }
+    observers.remove(at: index).continuation.resume()
   }
 
   /// Permanently opens the gate. Resumes every pending `enter()` and every

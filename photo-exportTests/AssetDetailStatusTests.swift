@@ -97,11 +97,9 @@ import Testing
 
       func expectRows(_ expected: [String], sourceLocation: SourceLocation = #_sourceLocation) async
       {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(2))
-        while counter.renderedText["asset-detail-status"] != expected, clock.now < deadline {
+        _ = await eventually("asset detail rows \(expected)", sourceLocation: sourceLocation) {
           window.contentView?.layoutSubtreeIfNeeded()
-          try? await Task.sleep(for: .milliseconds(10))
+          return counter.renderedText["asset-detail-status"] == expected
         }
         #expect(
           counter.renderedText["asset-detail-status"] == expected, sourceLocation: sourceLocation)

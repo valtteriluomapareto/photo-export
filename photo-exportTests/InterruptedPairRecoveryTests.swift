@@ -4,6 +4,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct InterruptedPairRecoveryTests {
   private final class Gate: @unchecked Sendable {
     let entered = AsyncCheckpoint()
@@ -20,7 +21,8 @@ struct InterruptedPairRecoveryTests {
         })
       else { return }
       Task { await entered.enter() }
-      if semaphore.wait(timeout: .now() + 15) != .success {
+      // Teardown always releases; the bound only keeps a broken test from stranding the worker.
+      if semaphore.wait(timeout: .now() + 150) != .success {
         Issue.record("Interrupted recovery gate timed out")
       }
     }
@@ -311,13 +313,10 @@ struct InterruptedPairRecoveryTests {
     await fixture.cleanup()
   }
 
-  private func reached(_ condition: @MainActor () async -> Bool) async -> Bool {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(10))
-    while !(await condition()), clock.now < deadline, !Task.isCancelled {
-      try? await Task.sleep(for: .milliseconds(10))
-    }
-    return await condition()
+  private func reached(
+    _ condition: @MainActor () async -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+  ) async -> Bool {
+    await eventually("reached condition", sourceLocation: sourceLocation) { await condition() }
   }
 
   private func withGatedCleanup(

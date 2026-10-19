@@ -14,6 +14,7 @@ import Testing
 /// invoked. APFS-clone byte-delta tests are deferred to manual testing per the plan
 /// (`free-space delta on a known-size source file` requires real volume APIs).
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ReuseSourceCopyPathTests {
 
   // MARK: - Fixtures

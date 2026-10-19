@@ -13,6 +13,7 @@ import Testing
 /// is to verify that "export a folder" enqueues exactly the descendant albums and
 /// nothing else — non-descendant albums must remain untouched.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct ExportFolderTests {
 
   // MARK: - Tree walk
@@ -333,12 +334,9 @@ struct ExportFolderTests {
   }
 
   private func waitUntil(
-    timeout: TimeInterval = 10, _ condition: @autoclosure () -> Bool
+    _ condition: @autoclosure () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
   ) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    while !condition() && Date() < deadline {
-      try? await Task.sleep(nanoseconds: 5_000_000)
-    }
+    _ = await eventually("waitUntil condition", sourceLocation: sourceLocation) { condition() }
   }
 
   // MARK: - Enqueue behaviour

@@ -5,7 +5,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
-@Suite(.serialized)
+@Suite(.timeLimit(.minutes(2)), .serialized)
 struct ExportIssuePresentationTests {
   private let created = Date(timeIntervalSince1970: 1_710_244_800)  // March 2024, distinct from failure.
   private let failedAt = Date(timeIntervalSince1970: 1_800_000_000)
@@ -329,12 +329,10 @@ struct ExportIssuePresentationTests {
     }
   }
 
-  private func observe(_ condition: () -> Bool) async -> Bool {
-    let deadline = ContinuousClock.now.advanced(by: .seconds(15))
-    while !condition(), ContinuousClock.now < deadline, !Task.isCancelled {
-      try? await Task.sleep(for: .milliseconds(10))
-    }
-    return condition()
+  private func observe(
+    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
+  ) async -> Bool {
+    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
   }
 
   @Test(.timeLimit(.minutes(1)))

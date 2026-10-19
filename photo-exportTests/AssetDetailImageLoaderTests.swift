@@ -5,6 +5,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct AssetDetailImageLoaderTests {
   @Test(arguments: [false, true], [false, true])
   func lateSuccessOrFailureCannotReplaceNewerPreview(oldFails: Bool, sameAsset: Bool) async {

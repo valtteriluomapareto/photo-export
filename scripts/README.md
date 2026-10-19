@@ -27,7 +27,15 @@ The structural guards also run locally without signing credentials:
 scripts/ci/test-guards.sh
 python3 scripts/ci/check-read-only-photos.py
 python3 scripts/ci/check-version.py
+python3 scripts/ci/check-test-waits.py
 ```
+
+`check-test-waits.py` rejects wall-clock `< deadline` waits in `photo-exportTests/`
+(outside the allow-listed anti-hang backstops in `TestHelpers/`) and requires every
+test file that calls `eventually(` to declare a `.timeLimit(`. Waits re-check progress
+and rely on the test's time limit, because CI's congested main actor makes fixed
+deadlines measure scheduler load rather than progress (#277). It is lexical, like the
+other structural guards.
 
 ### CI area routing
 
