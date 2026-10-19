@@ -29,22 +29,21 @@ struct ExportPipelineTests {
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
     let tempDir =
-      storeRootURL
-      ?? FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportPipelineTest-\(UUID().uuidString)", isDirectory: true)
+      storeRootURL ?? TestScratch.directory("ExportPipelineTest")
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "test")
+    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
+    collections.configure(for: "test")
 
     // Clear the persisted version selection so ExportManager starts at its default
     // regardless of what a sibling test suite may have written.
-    let defaults =
-      userDefaults ?? UserDefaults(
-        suiteName: "test-ExportPipeline-\(UUID().uuidString)")!
+    let defaults = userDefaults ?? TestScratch.defaults("ExportPipeline")
 
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
+      collectionExportRecordStore: collections,
       assetResourceWriter: writer,
       fileSystem: fileSystem,
       userDefaults: defaults

@@ -47,8 +47,11 @@ import Testing
             relPath: "\(year)/09/", filename: "first.jpg", exportedAt: Date())
         }
         store.flushPendingNotifications()
+        let collections = CollectionExportRecordStore(baseDirectoryURL: root)
+        collections.configure(for: "A")
         manager = ExportManager(
           photoLibraryService: service, exportDestination: destination, exportRecordStore: store,
+          collectionExportRecordStore: collections,
           assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         let content = Host(service: service)

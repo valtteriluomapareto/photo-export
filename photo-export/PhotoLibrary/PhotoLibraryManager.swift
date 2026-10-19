@@ -248,7 +248,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// the WindowGroup's `.task` block; idempotent so accidental re-entry from
   /// scene recreation or test harnesses is a no-op.
   ///
-  /// Skips entirely under XCTest / swift-testing: tests run from DerivedData,
+  /// Skips entirely under XCTest / swift-testing (`AppEntry.isRunningInTests`; tests
+  /// construct this manager directly, outside the app): tests run from DerivedData,
   /// and TCC sees that path as a different binary than the released app —
   /// asking for permissions would surface a prompt that blocks the test
   /// process with no automated way to dismiss. AutoSync and PhotoLibrary
@@ -259,7 +260,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// uses `init(overrideService:)`, which produces curated content; running
   /// the real observer here would race with the override.
   func start() {
-    guard !Self.isRunningInTests else { return }
+    guard !AppEntry.isRunningInTests else { return }
     guard overrideService == nil else { return }
     guard !hasStarted else { return }
     hasStarted = true
@@ -272,12 +273,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   private var hasStarted = false
-
-  /// XCTest and Swift Testing both set `XCTestConfigurationFilePath` in
-  /// the test-host environment. Production launches never have it set.
-  private static var isRunningInTests: Bool {
-    ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-  }
 
   /// True when the app was launched with `--screenshot-mode`. Used by `init` to
   /// skip PhotoKit registration so the `ScreenshotPhotoLibraryService` subclass can

@@ -180,7 +180,8 @@ import Testing
     /// (`f`, `fixture`, `h.manager`, `manager`, stores, `vm`, `loader`, `builder`).
     @Test func capturedTestValuesAreFinitelyReflectable() async {
       let f = HostedFixture()
-      let destinationManager = ExportDestinationManager(skipRestore: true)
+      let destinationManager = ExportDestinationManager(
+        skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
       let autoSync = AutoSyncManager()
       let builder = FakeAutoSyncEnvironmentBuilder()
       autoSync.attach(to: builder.environment)

@@ -30,18 +30,19 @@ struct ExportManagerVideoRenderTests {
     let writer = FakeAssetResourceWriter()
     let renderer = FakeMediaRenderer()
     let fileSystem = FakeFileSystem()
-    let tempDir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("VideoRenderTest-\(UUID().uuidString)", isDirectory: true)
+    let tempDir = TestScratch.directory("VideoRenderTest")
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
     store.configure(for: "test")
+    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
+    collections.configure(for: "test")
 
-    let defaults = UserDefaults(
-      suiteName: "test-VideoRender-\(UUID().uuidString)")!
+    let defaults = TestScratch.defaults("VideoRender")
 
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
+      collectionExportRecordStore: collections,
       assetResourceWriter: writer,
       mediaRenderer: renderer,
       fileSystem: fileSystem,

@@ -27,16 +27,17 @@ struct ExportManagerImportTests {
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
-    let storeRoot = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ExportManagerImport-\(UUID().uuidString)", isDirectory: true)
+    let storeRoot = TestScratch.directory("ExportManagerImport")
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     store.configure(for: "test")
-    let defaults = UserDefaults(
-      suiteName: "test-ExportManagerImport-\(UUID().uuidString)")!
+    let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    collections.configure(for: "test")
+    let defaults = TestScratch.defaults("ExportManagerImport")
     let manager = ExportManager(
       photoLibraryService: photoLib,
       exportDestination: dest,
       exportRecordStore: store,
+      collectionExportRecordStore: collections,
       assetResourceWriter: writer,
       fileSystem: fileSystem,
       userDefaults: defaults

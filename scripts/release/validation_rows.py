@@ -168,6 +168,7 @@ ROW_KEYWORDS = {
 
 # Covered by the core smoke alone: changes here need no extra row.
 CORE_ONLY = [
+    "photo-export/App/AppEntry.swift",
     "photo-export/Assets.xcassets/**",
     "photo-export/Resources/**",
     "photo-export/Helpers/**",

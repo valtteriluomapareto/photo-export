@@ -43,7 +43,7 @@ To preview the first-run `OnboardingView` from a Debug build, pass `--force-onbo
 
 The following role map highlights key types under `photo-export/`; it is not an exhaustive file inventory:
 
-- `App/` — app entry point (`photo_exportApp.swift`) plus lifecycle/process-level services: `LoginItemController`, `SystemLoginItemService`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
+- `App/` — app entry point (`AppEntry.swift`, which starts `PhotoExportApp` from `photo_exportApp.swift`, or under hosted tests the empty `TestHostApp`) plus lifecycle/process-level services: `LoginItemController`, `SystemLoginItemService`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
 - `Export/` — the export façade and its collaborators: `ExportManager`, `ExportManager+AutoSyncConformance`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, plus the helper-policy types (`ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`)
 - `Destination/` — destination concerns: `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`
 - `Records/` — record stores (timeline + collection), the shared `JSONLRecordFile` persistence primitive, `RecordStoreRouter` (single placement-kind dispatch), `ExportCompletionPolicy` (single completion/edited-fallback rule), `ReconciliationFileChecker` (detached filesystem probes), and `FinalCommitContext` (transient final-file ownership)
@@ -64,7 +64,7 @@ The Phase-7 folder split (issue #67 item 3) landed in May 2026, replacing the pr
 - **Destination services** (`@MainActor`, in `Destination/`): `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`.
 - **App-level services** (`@MainActor`, in `App/`): `LoginItemController`, `SystemLoginItemService`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`.
 
-**App entry point** (`App/photo_exportApp.swift`): owns library/export managers and app-level services with `@StateObject`. Key environment dependencies of the main library include:
+**App entry point** (`App/AppEntry.swift` → `App/photo_exportApp.swift`): `PhotoExportApp` owns library/export managers and app-level services with `@StateObject`. Under hosted tests (`XCTestConfigurationFilePath` set) `AppEntry` starts the empty `TestHostApp` instead, so tests build the objects they need themselves and keep scratch files and preferences under `TestScratch` (`photo-exportTests/TestHelpers/`). Key environment dependencies of the main library include:
 
 - **PhotoLibraryManager** — Photos framework authorization and asset fetching (thumbnails, full-size images). Uses `PHCachingImageManager`.
 - **ExportDestinationManager** — manages the chosen export destination folder (security-scoped bookmarks) and owns the **stable logical destination id** that keys every per-destination store. Publishes identity (stable id + advisory fingerprint) as one atomic `@Published` value. See [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Destination identity.
