@@ -1,92 +1,129 @@
 # Pre-release Photos validation
 
-Run this smoke on the **final version-bumped candidate before pushing its release tag**, including betas and stable promotions. Attach the evidence below to the release issue or PR. This guide defines required observations; it is not evidence of a completed run.
+Run this on the **final version-bumped candidate before pushing its release tag**, including betas and stable promotions, and attach the evidence to the release issue or PR. Hermetic CI does not establish real authorization, iCloud delivery, rendered bytes, sandboxed bookmarks or removable volumes; keep CI results separate from this evidence. After distribution artifacts exist, also complete [release process step7](release-process.md#7-verify-distribution-artifacts).
 
-Hermetic tests exercise contracts with fakes. They do not establish real authorization, iCloud delivery, rendered bytes, or removable-volume behavior. Keep CI results separate from manual evidence. After distribution artifacts exist, complete the signed-channel checks in [the release process](release-process.md#7-verify-distribution-artifacts).
+## What to run
 
-## Candidate and fixtures
+- **Core smoke** — every release. Pass or fail only; it cannot be skipped or deferred, except core steps 1 and 5 for a beta built without signing (see [Candidate build](#candidate-build)).
+- **Triggered rows** — rows whose files changed since the candidate where that row last passed:
 
-Use an isolated macOS test account, dedicated Photos library, and scratch export folders. Confirm Photo Export displays the intended seeds before testing. Opening another library in Photos alone is insufficient: other apps use the System Photo Library, and iCloud Photos/Shared Albums require it ([Apple's guidance](https://support.apple.com/en-us/104946)). Use only test accounts/libraries for that setup; do not switch or edit a user's primary library.
+  ```bash
+  scripts/release/validation_rows.py --base v<previous release> [--row-base ROW=<last-pass SHA>|never ...]
+  ```
 
-Keep a small fixture manifest with filenames, creation month, media kind, and identifying features:
+  Take the `--row-base` values from the previous release's evidence. A skipped or deferred row stays owed until it passes; a row with no recorded pass is `never`. A row marked *via hub only* lists the commits that touched the hub; the owner may exclude it with a recorded reason that names those commits.
+- **Full matrix** — when the script reports it (entitlements, privacy manifest, build settings, release workflows or scripts, an unmapped app file), or when the validation machine's macOS major version changed since a row's last pass (`--macos-major-changed`).
+- **Betas** may defer triggered rows; they stay owed for the stable release. A stable promotion is a new version-bump commit: run the core smoke on its DMG and every row the beta deferred.
 
-- Local unedited JPEG and HEIC, with unmodified reference files.
-- Edited still with an obvious crop/color change and edited MOV/MP4 with a known trim/duration; retain unmodified references.
-- Unedited Live Photo with still and motion resources.
-- An iCloud-only original whose absence from local storage is verified on this machine. Record how; successful export alone does not prove this precondition. Otherwise mark the case **unexercised**.
-- Favorites and a nested user album containing known subsets; a small Shared Album when available.
+Tiering makes small releases cheap; a long batch still triggers most rows, so releasing more often keeps validation short.
 
-Use unique stems. Before **each matrix row**, reset Auto Export, Include originals, HEIC conversion, video subfolders, and Live Photo pairing to off; enable only the options that row specifies. Record setting changes. Use fresh scratch destinations for new-export option comparisons, then keep the same destination for each repeat/relaunch check. Do not publish private test media.
+## Validation environment (one-time)
 
-Include all intended candidate changes, release notes and the version bump in a reviewed PR. After green CI and merge, select that exact merged candidate and require a clean `git status --short` before building; record its SHA and create the tag at that SHA only after validation and the release decision. Keep the candidate checkout unchanged during the smoke. If it changes, rebuild the new candidate and repeat relevant checks. Build without screenshot overrides:
+Use a dedicated macOS account with its own System Photo Library. A candidate must never read or edit the maintainer's primary library. Photos access and the launch-at-login registration are shared per bundle id, and the signed candidate shares the installed app's sandbox container.
+
+Keep, outside the repository, a fixture manifest and unmodified reference copies with a `shasum -c` checksum file. Use unique stems, none ending in ` (N)`:
+
+- One **core month** with a local JPEG and HEIC, an edited still with an obvious crop or color change, an edited MOV/MP4 with a known trim, and an unedited Live Photo.
+- Favorites and a nested user album with known subsets; a small Shared Album when available.
+- For import: one file whose extension differs from Photos' only by case (`.jpg` vs `.JPG`).
+- Several **iCloud-only** originals. Turn on **Optimize Mac Storage**, then add them from another device; Photos usually keeps them nonlocal until opened. Each export downloads the one it uses, so replenish them and record how each was verified as nonlocal before the run.
+
+Keep Photo Export's state and the first scratch destination between releases; the upgrade step needs both. To return to a fresh install (Terminal needs **App Management** or **Full Disk Access** to remove the container):
 
 ```bash
-xcodebuild \
-  -project photo-export.xcodeproj \
-  -scheme "photo-export" \
-  -configuration Release \
-  -destination 'platform=macOS' \
-  -derivedDataPath build/ReleaseValidation \
-  CODE_SIGNING_ALLOWED=NO \
-  build
+osascript -e 'quit app "Photo Export"'; killall -u "$USER" cfprefsd
+defaults delete com.valtteriluoma.photo-export 2>/dev/null
+rm -rf ~/Library/Containers/com.valtteriluoma.photo-export ~/Library/Application\ Support/com.valtteriluoma.photo-export
+tccutil reset Photos com.valtteriluoma.photo-export
+test ! -e ~/Library/Containers/com.valtteriluoma.photo-export && echo reset-ok
 ```
 
-Quit any installed copy and launch `build/ReleaseValidation/Build/Products/Release/Photo Export.app`. Record its path, executable checksum, configuration, bundle identifier/version, and `git rev-parse HEAD`; confirm About shows the candidate version. This unsigned build does not validate distribution signing, sandbox entitlements, or channel-specific permissions. Retain the later installed-artifact checks.
+Also remove Photo Export from **System Settings → General → Login Items** if present.
 
-## Smoke matrix
+## Candidate build
 
-`<name>` is the fixture's recorded stem; timeline paths use `<YYYY>/<MM>/`. For each row record **pass**, **fail**, or **unexercised**, with actual observations and evidence.
+Validate a signed, notarized build of the candidate SHA made with the release toolchain: run the `release-direct` dry run on a branch at the candidate and download its artifacts (`release-process.md` step3 selects `CANDIDATE_SHA`). Allow for the CI and notarization wait.
 
-| Case | Action | Expected observation |
+```bash
+BRANCH="validation/<version>"
+git push origin "$CANDIDATE_SHA:refs/heads/$BRANCH"
+gh workflow run release-direct.yml --ref "$BRANCH" -f dry_run=true
+until RUN_ID="$(gh run list --workflow release-direct.yml --branch "$BRANCH" --json databaseId,headSha \
+  --jq "map(select(.headSha == \"$CANDIDATE_SHA\"))[0].databaseId // empty")" && [ -n "$RUN_ID" ]; do sleep 5; done
+gh run watch "$RUN_ID" --exit-status
+test "$(gh run view "$RUN_ID" --json headSha --jq .headSha)" = "$CANDIDATE_SHA" && echo candidate-ok
+gh run download "$RUN_ID" -n dmg -n checksum -D "$EVIDENCE"
+(cd "$EVIDENCE/dmg" && shasum -a 256 -c ../checksum/*.sha256)
+git push origin --delete "$BRANCH"
+```
+
+Install the DMG in the validation account; About shows the candidate version (the DMG file is named `0.0.0-dev`). Record the header:
+
+```bash
+APP="/Applications/Photo Export.app"
+/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' -c 'Print CFBundleIdentifier' "$APP/Contents/Info.plist"
+codesign -dv "$APP" 2>&1 | grep -E '^(Authority=Developer ID|TeamIdentifier)'
+sw_vers -productVersion
+```
+
+A local unsigned build runs unsandboxed and cannot exercise the upgrade, bookmark or container behavior. It is acceptable only for a beta, with core steps 1 and 5 recorded as owed until a signed build passes them.
+
+## Core smoke
+
+Keep snapshots in an evidence folder outside the destination. An empty diff and no ` (N).` suffix prove no duplicates or overwrites:
+
+```bash
+snapshot() { (cd "$1" && find . -type f ! -name .DS_Store -print0 | sort -z | xargs -0 shasum -a 256) > "$2"; }
+snapshot "$DEST" "$EVIDENCE/before.txt"   # … run the step …
+snapshot "$DEST" "$EVIDENCE/after.txt"; diff "$EVIDENCE/before.txt" "$EVIDENCE/after.txt"; grep -E ' \([0-9]+\)\.' "$EVIDENCE/after.txt"
+(cd "$DEST/<YYYY>/<MM>" && shasum -a 256 -c "$REFERENCES/originals.sha256")
+mdls -name kMDItemDurationSeconds "$DEST/<YYYY>/<MM>/<edited video>"; file "$DEST/<YYYY>/<MM>/<edited video>"
+```
+
+1. **Upgrade in place.** The state must come from the latest shipped release; if it came from an unreleased candidate, install the shipped DMG, export the core month and Favorites, then continue. Install the candidate over it and launch: the destination resolves without a re-grant, exported months and Favorites show as exported before any run, and repeating both leaves the snapshot unchanged.
+2. **Fresh install.** Reset, then launch: onboarding appears at full size, Photos access is granted from it, and a fresh destination A can be chosen.
+3. **Defaults export of the core month to A.** Originals match the references; the edited still shows its edit and the edited video plays with its trimmed duration and real container; the Live Photo exports its still only.
+4. **Favorites to A.** The fixture subset lands under `Collections/Favorites/`. Take the `before` snapshot of A.
+5. **Repeat and relaunch.** Repeat the month and Favorites on A; quit and relaunch (A resolves without a re-grant and exported state shows before any run); repeat again. The snapshot is unchanged. Save **Help → Save Diagnostic Report…**.
+6. **Include originals** to a fresh destination B. `_orig` companions match the references; edits stay at the natural stem; no suffixed names.
+
+Target: about 20–30 minutes once the environment exists, excluding the CI wait.
+
+## Triggered rows
+
+Before each row, reset Auto Export, Include originals, HEIC conversion, video subfolders and Live Photo pairing to off and enable only what the row names. Use fresh destinations for option comparisons and the same destination for repeat checks.
+
+| Row (script id) | Action | Expected observation |
 | --- | --- | --- |
-| Local originals / HEIC conversion | Export the local month with defaults. On fresh destinations enable HEIC conversion, then conversion plus Include originals. | Defaults preserve original JPEG/HEIC bytes at natural filenames. Conversion writes a decodable JPEG; adding Include originals retains `<name>_orig.HEIC`. JPEG input is unaffected. |
-| Edited still and video | Export with Include originals off, then on to a fresh destination; enable video subfolders on the latter run. | Natural-stem files show the edit and play the trimmed video. `_orig` companions preserve unmodified bytes. Standalone videos and companions share `videos/` when enabled. Verify actual container and duration, not just extension. |
-| Selected preview edit/revert | Keep the edited still selected in Photo Export; edit and revert it in the dedicated Photos library without navigating away, then change an unrelated fixture. | The selected full-size preview follows the edited and reverted content, retaining its image while replacement loads. Unrelated edits leave the displayed selection stable. Record actual before/after content; synthetic image-request tests do not satisfy this row. |
-| iCloud-only delivery | Export the verified nonlocal fixture with network available. | A nonempty original arrives, opens, and matches its unmodified reference. Download/render errors are failures to investigate. If the nonlocal precondition/network is unavailable, record unexercised. |
-| Live Photo pairing | Export with pairing off, then on to a fresh destination; explicitly enable video subfolders for the latter. | Off writes the still only. On writes still plus playable paired video at the same stem, using the resource's extension. Both stay adjacent in the month folder, outside `videos/`. |
-| Collections | Export known Favorites, nested-album, and available Shared Album subsets. | Correct placement counts and files under `Collections/Favorites/`, `Collections/Albums/<folder>/<album>/`, and `Collections/Shared Albums/<album>/`. Shared Albums use served reduced-quality resources; no `_orig` or paired-video promise. |
-| Authorization denial / regrant | In the dedicated test account, keep the candidate running after denial. Use **Open System Settings** to reach **Privacy & Security → Photos**, enable access, then return without manually quitting. Follow and record any OS relaunch prompt. | Denial shows neutral instructions and the Settings action. If the process remains running, returning leaves the authorization pane for onboarding/library without another prompt. Verify fixture access/export. If macOS forces relaunch, record the running-process path as unexercised; fake authorization tests do not validate this OS behavior. Do not assume macOS offers Selected Photos controls. |
-| Cancel / resume | Cancel an active iCloud download or edited-video render, then repeat export; record the interrupted phase. | Unfinished variants are not complete. Retry produces openable/playable output and preserves completed files. Mark a phase unexercised if no active operation could be interrupted. |
-| Destination reconnect | During export to a scratch removable drive, disconnect, reconnect the same volume/folder, and retry. Exercise network remount too when available. | Missing storage is surfaced without false success. The same logical destination retains progress and writes missing work, preserving completed files. Record format, mount paths, and safety confirmation/regrant. |
-| Auto Export / relaunch | Enable one fixture scope; let initial work settle. Add a previously unexported test fixture in Photos, wait for its change-triggered export, then quit/relaunch and repeat that scope. | The new fixture exports, the run finishes, and progress survives relaunch. Unchanged assets/settings produce no extra files. Record run/timing evidence; startup's initial scan alone does not satisfy this case. |
+| Local originals / HEIC conversion (`local`) | On fresh destinations enable HEIC conversion, then conversion plus Include originals. | Conversion writes a decodable JPEG; adding Include originals retains `<name>_orig.HEIC`; JPEG input is unaffected. |
+| Edited still and video (`edited`) | Include originals on, video subfolders on, fresh destination. | Edits at natural stems; `_orig` companions preserve unmodified bytes; standalone videos and companions share `videos/`. Verify container and duration, not just extension. |
+| Selected preview edit/revert (`preview`) | Keep the edited still selected; edit and revert it in Photos, then change an unrelated fixture. | The preview follows the edit and the revert, keeping its image while the replacement loads; unrelated edits leave it stable. |
+| iCloud-only delivery (`icloud`) | Export a verified nonlocal fixture with network available. | A nonempty original arrives, opens and matches its reference. Errors are failures to investigate. |
+| Live Photo pairing (`livephoto`) | Pairing on with video subfolders on, fresh destination. | Still plus playable paired video at the same stem, adjacent in the month folder, outside `videos/`. |
+| Collections (`collections`) | Export the nested-album subset and an available Shared Album. | Files under `Collections/Albums/<folder>/<album>/` and `Collections/Shared Albums/<album>/`; Shared Albums use served resources, without `_orig` or paired video. |
+| Authorization / onboarding (`authorization`) | Deny, then use **Open System Settings** to grant Photos access and return without quitting. | Denial shows neutral instructions and the Settings action; returning moves to onboarding or the library without another prompt. If macOS forces a relaunch, record that path. |
+| Cancel / resume (`cancel`) | Cancel an active iCloud download or edited-video render, then export again; pause a month export, then choose **Export Month** for it again. | Unfinished variants are not complete; the retry produces openable output and preserves completed files. Export Month resumes the paused work in order with its original settings and no duplicates. |
+| Destination reconnect (`destination`) | During export to a removable drive, disconnect, reconnect and retry; repeat with a network share remount when available. | Missing storage is surfaced without false success; the same destination keeps its progress and writes only missing work. Record filesystem and mount paths. |
+| Auto Export / relaunch (`autoexport`) | Enable one scope and launch at login; let it settle; add an unexported fixture in Photos, wait for its export, then log out and in. | The new fixture exports; after login the app starts in the menu bar and its progress survives; unchanged assets produce no files. |
+| Import existing backup / record recovery (`import`) | On a fresh install, import a destination exported earlier (including the case-only extension fixture); then export the same scope. | Counts match the files on disk; the export writes only what is missing; nothing is overwritten or suffixed. |
 
-For each successful run, open outputs in Preview/QuickTime, check detail/export state against disk, and compare preserved originals to identified reference checksums. For rendered/conversion outputs compare visible content, dimensions, and playback/duration; byte equality is not required.
+## Evidence
 
-Repeat unchanged settings/scope on the **same destination**, then quit/relaunch and repeat again. Record counts and checksums: no duplicate suffix files, overwrites, or lost exported state. Do not reset records or use a fresh destination for this persistence check. Save **Help → Save Diagnostic Report…** after normal runs and failures; correlate variant/run records with disk. Record accepted fallback/missing-resource states explicitly and investigate unexpected fallbacks.
-
-## Evidence and release decision
-
-Copy this template into the release issue/PR and link restricted artifacts as appropriate. Blank rows are incomplete. **Failed cases block tag push.** Every unexercised case needs a reason, residual risk, and an explicit release-owner decision to defer or accept that coverage gap; it never counts as passed.
+Copy into the release issue or PR. Blank lines are incomplete. **A failed row blocks the tag.**
 
 ```text
-Candidate version / intended tag:
-Candidate commit / tag target commit:
-App path / executable SHA-256:
-Configuration / bundle identifier / About version:
-macOS / hardware:
-Test library / fixture manifest / iCloud-only verification:
-Destination identity / filesystem / local, removable or network / mount paths:
-CI run URL and head commit (hermetic evidence):
-
-Case | settings + fixture IDs | pass/fail/unexercised | actual result + artifact
-Local originals / HEIC conversion |
-Edited still and video |
-Selected preview edit/revert |
-iCloud-only delivery |
-Live Photo pairing |
-Collections |
-Authorization denial / regrant |
-Cancel / resume (phase) |
-Destination reconnect |
-Auto Export / relaunch |
-Repeat + relaunch counts/checksums / diagnostic report links:
-
-Failures and linked fixes:
-Each unexercised case: reason / residual risk / release-owner decision:
-Candidate changes: diff assessment / cases rerun / new commit:
-Release decision / responsible maintainer / date:
+Candidate: version / merged SHA / CI run
+Build: signed dry-run run URL (head SHA checked) | unsigned fallback / DMG SHA-256 (checksum artifact verified) / macOS
+Upgrade from: version / SHA that produced the state
+iCloud fixtures: how each was verified nonlocal
+Row mapping: <validation_rows.py output, including --row-base values>
+Core smoke: upgrade / fresh install / defaults / Favorites / repeat + relaunch / originals — pass|fail, snapshot diffs
+Triggered rows: <row> — pass|fail, observation
+Excluded hub-only rows: <rows> — reason naming the hub commits; <owner>, <date>
+Skipped or deferred rows: <row> — reason; accepted by <owner>, <date>
+Failures and fixes:
+Row baselines for next release: --row-base <row>=<last-pass SHA>|never … (passed, untriggered and excluded rows move to this candidate)
+Decision: <ship|block>, <owner>, <date>
 ```
 
-After candidate changes, rebuild and record the new commit/artifact plus relevant reruns. Version-only promotion still needs an explicit diff assessment and version verification; never silently reuse beta evidence for a different commit. Verify the intended tag points to the approved candidate before pushing. App Review fixes and retagged unpublished releases follow the same gate.
-
-For deeper exercises, see historical [edited-photo Group A and B1](archive/edited-photos-manual-testing-guide.md#group-a--default-mode) and [Favorites/nested-album scenarios](archive/collections-export-manual-testing-guide.md#2-favorites-export). Their historical notes do not override this matrix or current [feature behavior](../../website/src/content/docs/features.md).
+If the candidate changes, rebuild, rerun the core smoke and the rows its diff triggers, and never reuse evidence for a different commit. Verify the tag points at the validated SHA before pushing it. App Review fixes and retagged unpublished releases follow the same gate.
