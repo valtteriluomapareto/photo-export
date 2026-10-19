@@ -88,6 +88,12 @@ starting conversion. Callers also recheck after exporter awaits and before failu
 mutations. The legacy fixed `.tmp` sweep remains for older builds; unique crash leftovers
 are not automatically scavenged. Staging paths never determine final filenames.
 
+The final move never replaces an existing file. `FileIOService.moveItemAtomically` refuses an
+existing destination with `Export` code 2 ("Destination already exists"), which classifies as a
+destination collision with the `Export:2` error signature (persisted in retry state for Auto
+Export runs); the variant fails and the existing bytes stay. The check precedes
+`FileManager.moveItem`, so a file created between the two steps is not covered by it (#326).
+
 `VariantExporter` checks generation immediately before admitting the final atomic move.
 After admission, a short-lived task owns the physical move, timestamps, record acknowledgement,
 and staging cleanup. A successful move is acknowledged to its captured logical destination even

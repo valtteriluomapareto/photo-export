@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 
 @testable import Photo_Export
 
@@ -25,17 +26,6 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
   // Behavior: if true, creates a small file at the destination (simulating a real write)
   var shouldCreateFile: Bool = true
 
-  /// Delay every `writeResource` call by this many seconds via `Task.sleep`. Used by
-  /// cancellation tests to keep the writer hung long enough for `cancelAndClear` to
-  /// race against the in-flight write deterministically. The sleep is cancellable, so
-  /// the writer cooperates with `Task.isCancelled` checks higher in the stack.
-  ///
-  /// Prefer `checkpoint` over `writeDelaySeconds` for any test that asserts on
-  /// transient queue state — a delay only widens a window, but a checkpoint makes
-  /// arrival deterministic. `writeDelaySeconds` remains useful for coarse "is the
-  /// in-flight cancel path correct" smoke tests where exact timing doesn't matter.
-  var writeDelaySeconds: TimeInterval = 0
-
   /// Optional release-on-demand checkpoint. When set, every `writeResource` call
   /// reaches the checkpoint after recording its `WriteCall`, then suspends until
   /// the test releases it. Replaces the "sleep then poll for transient state"
@@ -45,7 +35,6 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
   /// write task forever).
   var checkpoint: AsyncCheckpoint?
   var afterWriteCheckpoint: AsyncCheckpoint?
-  var requiresUnusedDestination = false
 
   func writeResource(_ resource: ResourceDescriptor, forAssetId assetId: String, to url: URL)
     async throws
@@ -57,15 +46,23 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
     if let checkpoint {
       await checkpoint.enter()
     }
-    if writeDelaySeconds > 0 {
-      try await Task.sleep(nanoseconds: UInt64(writeDelaySeconds * 1_000_000_000))
-    }
     if let error = writeError { throw error }
-    if requiresUnusedDestination, FileManager.default.fileExists(atPath: url.path) {
+    // The pipeline writes only to a fresh hidden staging file and moves it into place.
+    // Refuse anything else so a write aimed at a final name, or over an existing file,
+    // fails the export instead of silently replacing it.
+    guard url.lastPathComponent.hasPrefix(".photo-export-") else {
+      Issue.record("Resource written outside staging: \(url.lastPathComponent)")
+      throw NSError(
+        domain: "FakeAssetResourceWriter", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Write outside staging: \(url.lastPathComponent)"])
+    }
+    if FileManager.default.fileExists(atPath: url.path) {
       throw CocoaError(.fileWriteFileExists)
     }
-    if shouldCreateFile {
-      FileManager.default.createFile(atPath: url.path, contents: Data("fake-content".utf8))
+    if shouldCreateFile,
+      !FileManager.default.createFile(atPath: url.path, contents: Data("fake-content".utf8))
+    {
+      throw CocoaError(.fileWriteUnknown)
     }
     if let afterWriteCheckpoint { await afterWriteCheckpoint.enter() }
   }

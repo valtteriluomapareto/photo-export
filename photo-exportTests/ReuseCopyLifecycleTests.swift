@@ -216,7 +216,6 @@ struct ReuseCopyLifecycleTests {
       try Data("partial".utf8).write(to: output)
       throw CocoaError(.fileReadNoSuchFile)
     }
-    fixture.writer.requiresUnusedDestination = true
     fixture.manager.startExportFavorites()
     await fixture.manager.waitForQueueDrained()
     #expect(fixture.writer.writeCalls.count == 1)

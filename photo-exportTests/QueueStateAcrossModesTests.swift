@@ -153,7 +153,7 @@ struct QueueStateAcrossModesTests {
     defer { h.cleanup() }
 
     // Gate writes so we can deterministically observe the in-flight → paused
-    // transition without racing a `writeDelaySeconds` timer against the runner.
+    // transition without racing a timer against the runner.
     let writeGate = AsyncCheckpoint()
     h.writer.checkpoint = writeGate
 
