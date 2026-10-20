@@ -217,6 +217,13 @@ struct AutoSyncFailureCategoryClassificationTests {
     }
   }
 
+  /// Guard: further writes in the run would hit the same failure only for these.
+  @Test func destinationWideFailuresStopTheRun() {
+    #expect(
+      Set(AutoSyncFailureCategory.allCases.filter(\.stopsCurrentExportRun))
+        == [.destinationNoSpace, .destinationPermission, .destinationUnavailable])
+  }
+
   @Test func sentinelBuildsExplicitSignal() {
     let signal = AutoSyncFailureCategory.sentinel(
       category: .assetMissing, signature: "asset-missing", message: "Asset not found")

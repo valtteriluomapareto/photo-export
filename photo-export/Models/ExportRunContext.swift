@@ -49,6 +49,11 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
   /// `failedCount` is the count of *additions* to this list during the run
   /// — they should agree, but `failures` carries the structured detail.
   let failures: [ExportRunFailureDetail]
+  /// The destination-wide failure that stopped the run (no space, denied access, or an
+  /// unreachable destination). Set only when the export stopped itself on such a failure;
+  /// `nil` for every other ending, including an unmount interruption. AutoSync reads it to
+  /// avoid rescheduling a run that would stop the same way.
+  let stoppedBy: AutoSyncFailureCategory?
 
   init(
     context: ExportRunContext,
@@ -59,7 +64,8 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
     skippedCount: Int,
     cancelReason: ExportCancelReason?,
     result: ExportRunResult,
-    failures: [ExportRunFailureDetail] = []
+    failures: [ExportRunFailureDetail] = [],
+    stoppedBy: AutoSyncFailureCategory? = nil
   ) {
     self.context = context
     self.endedAt = endedAt
@@ -70,6 +76,7 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
     self.cancelReason = cancelReason
     self.result = result
     self.failures = failures
+    self.stoppedBy = stoppedBy
   }
 
   /// Custom decoder so persisted summaries from before the `failures` field
@@ -89,11 +96,14 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
     self.result = try c.decode(ExportRunResult.self, forKey: .result)
     self.failures =
       (try? c.decode([ExportRunFailureDetail].self, forKey: .failures)) ?? []
+    // Optional so summaries saved before the field existed still load, and older builds
+    // ignore it.
+    self.stoppedBy = try c.decodeIfPresent(AutoSyncFailureCategory.self, forKey: .stoppedBy)
   }
 
   private enum CodingKeys: String, CodingKey {
     case context, endedAt, enqueuedCount, completedCount, failedCount, skippedCount,
-      cancelReason, result, failures
+      cancelReason, result, failures, stoppedBy
   }
 
   var duration: TimeInterval {

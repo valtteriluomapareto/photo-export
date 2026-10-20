@@ -1457,6 +1457,7 @@ struct ExportManagerRunExportTests {
 
       #expect(summary.result == .interrupted)
       #expect(summary.cancelReason == .destinationUnavailable)
+      #expect(summary.stoppedBy == nil)
       #expect(harness.manager.activeRunContext == nil)
     } cleanup: {
       await harness.cleanup()

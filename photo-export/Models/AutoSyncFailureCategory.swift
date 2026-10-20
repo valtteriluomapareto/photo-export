@@ -22,6 +22,7 @@ enum AutoSyncFailureCategory: String, Codable, Equatable, CaseIterable, Sendable
   /// Further writes in this run would hit the same destination-wide failure.
   var stopsCurrentExportRun: Bool {
     self == .destinationNoSpace || self == .destinationPermission
+      || self == .destinationUnavailable
   }
 
   /// Whether the retry policy schedules an automatic retry for this category. Hard

@@ -73,7 +73,7 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
         enqueuedCount: summary.enqueuedCount, completedCount: summary.completedCount,
         failedCount: summary.failedCount, skippedCount: summary.skippedCount,
         cancelReason: summary.cancelReason, result: summary.result,
-        failures: summary.failures)
+        failures: summary.failures, stoppedBy: summary.stoppedBy)
     }
     return ExportRunSummary(
       context: context,

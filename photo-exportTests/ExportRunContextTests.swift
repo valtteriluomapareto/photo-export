@@ -40,6 +40,30 @@ struct ExportRunContextTests {
     #expect(summary.duration == 42)
   }
 
+  /// Guard: a summary saved before `stoppedBy` existed decodes with no stop category, and
+  /// one with it round-trips.
+  @Test func summaryStoppedByIsOptionalInSavedJSON() throws {
+    let summary = ExportRunSummary(
+      context: ExportRunContext(
+        runId: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+        source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+        selection: .edited, startedAt: Date(timeIntervalSince1970: 1_700_000_000)),
+      endedAt: Date(timeIntervalSince1970: 1_700_000_060),
+      enqueuedCount: 3, completedCount: 1, failedCount: 1, skippedCount: 0,
+      cancelReason: .destinationUnavailable, result: .interrupted,
+      stoppedBy: .destinationUnavailable)
+    let data = try JSONEncoder().encode(summary)
+    #expect(try JSONDecoder().decode(ExportRunSummary.self, from: data) == summary)
+
+    var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(object["stoppedBy"] as? String == "destinationUnavailable")
+    object.removeValue(forKey: "stoppedBy")
+    let legacy = try JSONDecoder().decode(
+      ExportRunSummary.self, from: JSONSerialization.data(withJSONObject: object))
+    #expect(legacy.stoppedBy == nil)
+    #expect(legacy.result == .interrupted && legacy.cancelReason == .destinationUnavailable)
+  }
+
   @Test func runStateIdleHasNoActiveRun() {
     let state = ExportRunState.idle
 

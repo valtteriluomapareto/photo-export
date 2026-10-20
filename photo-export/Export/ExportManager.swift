@@ -1354,15 +1354,22 @@ final class ExportManager: ObservableObject {
   /// state machine treats `.destinationUnavailable` as "resume when the drive comes
   /// back" rather than "this run failed."
   ///
-  /// MVP scope: identical cleanup to `cancelAndClear` minus the cancel-reason change.
-  /// Phase 0b adds advisory-lock release; persistence of accumulated dirty state lands
-  /// when AutoSyncManager wires up. An in-flight `PHAssetResourceManager.writeData` may
-  /// still complete or fail because there is no cancellation plumbing for that path —
-  /// the in-flight write will surface as a transient failure on the next
-  /// reconciliation.
+  /// Same cleanup as `cancelAndClear` apart from the cancel reason, with one difference:
+  /// when nothing is running, the last manual summary stays. A run that stopped because
+  /// the destination couldn't be reached is often followed by the unmount notification,
+  /// and that must not erase the explanation. During active work the feedback is cleared
+  /// as before. The summary has no `stoppedBy`: this path is the unmount, not a failure
+  /// the export stopped on. An in-flight `PHAssetResourceManager.writeData` may still
+  /// complete or fail because there is no cancellation plumbing for that path — the
+  /// in-flight write will surface as a transient failure on the next reconciliation.
   func interruptForDestinationUnavailable() {
     logger.info("Interrupting current export — destination unavailable")
+    let isIdle =
+      activeRunContext == nil && !hasActiveExportWork && currentPreparationTasks.isEmpty
+      && manualRunFeedback == nil
+    let keptSummary = isIdle ? progressState.manualSummary : nil
     teardownActiveWork()
+    progressState.manualSummary = keptSummary
     finalizeActiveRun(result: .interrupted, cancelReason: .destinationUnavailable)
   }
 
@@ -1641,7 +1648,8 @@ final class ExportManager: ObservableObject {
   private func finalizeActiveRun(
     result: ExportRunResult,
     cancelReason: ExportCancelReason?,
-    jobTotals: (enqueued: Int, completed: Int)? = nil
+    jobTotals: (enqueued: Int, completed: Int)? = nil,
+    stoppedBy: AutoSyncFailureCategory? = nil
   ) {
     flushRecordNotifications()
     guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
@@ -1677,7 +1685,8 @@ final class ExportManager: ObservableObject {
       skippedCount: bookkeeping.skippedCount,
       cancelReason: cancelReason,
       result: effectiveResult,
-      failures: bookkeeping.failures
+      failures: bookkeeping.failures,
+      stoppedBy: stoppedBy
     )
     activeRunContext = nil
     activeRunBookkeeping = nil
@@ -2281,10 +2290,7 @@ final class ExportManager: ObservableObject {
   }
 
   private func stopForDestinationFailure(_ failure: ExportFailureSignal) {
-    let message =
-      failure.category == .destinationNoSpace
-      ? "Export stopped: the destination is full. Free up space, then start a new export."
-      : "Export stopped: write access to the destination was denied. Restore access, then start a new export."
+    let message = Self.destinationStopMessage(for: failure.category)
     // This job will not receive the coordinator's normal completion increment.
     let totals = (enqueued: totalJobsEnqueued, completed: totalJobsCompleted + 1)
     let stopped = manualRunFeedback.map {
@@ -2294,7 +2300,30 @@ final class ExportManager: ObservableObject {
     }
     teardownActiveWork()
     progressState.manualSummary = stopped
-    finalizeActiveRun(result: .failed, cancelReason: nil, jobTotals: totals)
+    // An unreachable destination is transient, like an unmount; the other stops need the
+    // user to fix the destination.
+    let unreachable = failure.category == .destinationUnavailable
+    finalizeActiveRun(
+      result: unreachable ? .interrupted : .failed,
+      cancelReason: unreachable ? .destinationUnavailable : nil, jobTotals: totals,
+      stoppedBy: failure.category)
+  }
+
+  static func destinationStopMessage(for category: AutoSyncFailureCategory) -> String {
+    switch category {
+    case .destinationNoSpace:
+      return "Export stopped: the destination is full. Free up space, then start a new export."
+    case .destinationPermission:
+      return
+        "Export stopped: write access to the destination was denied. Restore access, then start a new export."
+    case .destinationUnavailable:
+      return
+        "Export stopped: the destination can't be reached. Check that the drive or network share is connected and the folder still exists, then start a new export."
+    case .destinationCollision, .assetMissing, .resourceMissing, .photoKitTransient,
+      .iCloudTransient, .unknown:
+      // Not stop categories; kept so a future stop category still explains itself.
+      return "Export stopped. Check the destination, then start a new export."
+    }
   }
 
   /// Called by the coordinator's drain loop on the "queue empty after a job ran" edge.
