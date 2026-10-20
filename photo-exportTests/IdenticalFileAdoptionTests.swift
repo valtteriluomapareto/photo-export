@@ -780,20 +780,27 @@ struct IdenticalFileAdoptionTests {
   }
 
   /// An error looking up a candidate while planning fails that variant with the error's own
-  /// signature and category, as the same error from the commit would.
+  /// signature and category, as the same error from the commit would. An unreachable
+  /// destination or denied access stops the run before the next asset; other errors fail
+  /// only that asset.
   @Test(arguments: [
-    (EIO, AutoSyncFailureCategory.unknown), (ENOTCONN, .unknown), (EACCES, .destinationPermission),
+    (EIO, AutoSyncFailureCategory.unknown, false), (ENOENT, .unknown, false),
+    (ENOTCONN, .destinationUnavailable, true), (EACCES, .destinationPermission, true),
   ])
   func lookupErrorWhilePlanningKeepsItsClassification(
-    code: Int32, category: AutoSyncFailureCategory
+    code: Int32, category: AutoSyncFailureCategory, stops: Bool
   ) async throws {
     let h = Harness()
     try await withCleanup {
-      let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
-      h.photos.yearCounts = [(2025, 1)]
-      h.photos.assetsByYearMonth["2025-6"] = [asset]
-      h.photos.resourcesByAssetId[asset.id] = [
+      let first = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      let second = TestAssetFactory.makeAsset(id: "second", creationDate: Self.june15)
+      h.photos.yearCounts = [(2025, 2)]
+      h.photos.assetsByYearMonth["2025-6"] = [first, second]
+      h.photos.resourcesByAssetId[first.id] = [
         TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      ]
+      h.photos.resourcesByAssetId[second.id] = [
+        TestAssetFactory.makeResource(originalFilename: "IMG_0002.JPG")
       ]
       h.files.identityHook = { url in
         if url.lastPathComponent == "IMG_0001.JPG" {
@@ -808,10 +815,19 @@ struct IdenticalFileAdoptionTests {
 
       #expect(summary.failures.map(\.errorSignature) == ["NSPOSIXErrorDomain:\(code)"])
       #expect(summary.failures.map(\.category) == [category])
-      #expect(h.timeline.exportInfo(assetId: asset.id)?.variants[.original]?.status == .failed)
-      #expect(h.files.moveCalls.isEmpty)
+      #expect(h.timeline.exportInfo(assetId: first.id)?.variants[.original]?.status == .failed)
       let folder = try h.monthFolder()
-      #expect(try h.contents(of: folder) == [])
+      if stops {
+        #expect(summary.stoppedBy == category)
+        #expect(h.timeline.exportInfo(assetId: second.id) == nil)
+        #expect(h.files.moveCalls.isEmpty)
+        #expect(try h.contents(of: folder) == [])
+      } else {
+        #expect(summary.stoppedBy == nil)
+        #expect(h.timeline.exportInfo(assetId: second.id)?.variants[.original]?.status == .done)
+        #expect(h.files.moveCalls.count == 1)
+        #expect(try h.contents(of: folder) == ["IMG_0002.JPG"])
+      }
     } cleanup: {
       await h.cleanup()
     }

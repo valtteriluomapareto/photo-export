@@ -290,6 +290,17 @@ final class AutoSyncManager: ObservableObject {
     dispatch(.destinationChanged(snapshot))
   }
 
+  /// Whether an Auto Export run may attempt this variant at `now`, judged from the current
+  /// destination's retry state. `ExportManager.autoSyncEligibilityCheck` forwards here.
+  func isAutoSyncEligible(
+    assetId: String, placement: ExportPlacement, variant: ExportVariant, now: Date
+  ) -> Bool {
+    let scope = Self.retryScopeKey(for: placement)
+    guard let entry = currentRetryState.entry(scope: scope, assetId: assetId, variant: variant)
+    else { return true }
+    return entry.isEligibleForAutoSync(now: now)
+  }
+
   /// User clicked Export Now (Settings, menu, status item). Dispatches a
   /// `.runNowRequested` event; the reducer routes through the
   /// `.userExportNow` trigger path which uses a 0s debounce. Eligibility

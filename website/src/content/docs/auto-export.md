@@ -64,17 +64,25 @@ Some failures are transient — Photos is busy, an iCloud original isn't ready t
 
 Each missing version has its own retry time. For example, an original can finish while an edited version waits for its retry; an already-exported original does not let the edited version retry early. Due retries run while Auto Export is enabled and the destination is ready, without needing a new Photos change. They wait for any current export or import to finish.
 
+If the destination drive or network share can't be reached mid-run, the run stops at the first such failure; that item is tried again by the next Auto Export run, and untouched items stay pending. Neither waits for **Retry**. The next run starts on the next trigger, such as a Photos change or the drive reconnecting.
+
+A file that goes missing during an export (for example, a temporary file or a copy source) fails only that item. It is listed under _Other_ and retries on its own with the same backoff.
+
 Other failures need your attention — the destination drive is full, you've revoked write permission on the export folder, an asset has been deleted from Photos. Auto Export records these but won't retry on its own; fix the underlying condition (free up space, restore permissions, etc.), then use **Retry** or start a manual export. For a failure with current Auto Export retry history, use **Retry** while Auto Export is enabled; otherwise start a manual export. Fix the underlying problem first.
 
-A full destination or denied write access stops the current export run at its first
+A full, denied or unreachable destination stops the current export run at its first
 such failure, including rendering or conversion. Remaining assets are not downloaded
 or marked failed by that run, and later scopes in the same Auto Export batch stop.
-Fix the destination, then use **Retry** or start a new manual export to queue unfinished
-work again. If saving export history also fails, resolve the history recovery alert first.
+Auto Export does not restart a stopped run on its own while the destination still looks
+connected; pending work waits for the next trigger, such as a Photos change, the drive
+reconnecting, **Export Now** or a settings change. Freeing space or restoring access is not
+a trigger by itself. Fix the destination, then use **Retry**, **Export Now** or a new manual
+export to queue unfinished work again. If saving export history also fails, resolve the
+history recovery alert first.
 
 You can see failed versions recorded by both manual and automatic exports in **Settings → Export Issues**, grouped by category:
 
-- _Destination Unavailable_ — drive went away mid-run
+- _Destination Unavailable_ — drive or network share went away mid-run; retries on the next Auto Export run
 - _Destination Permission_ — folder is read-only or write access has been revoked
 - _Destination Out of Space_ — disk is full
 - _Destination File Conflict_ — an occupied filename needs attention before retrying
@@ -82,6 +90,7 @@ You can see failed versions recorded by both manual and automatic exports in **S
 - _Resource Unavailable_ — Photos couldn't provide the photo's data
 - _Photos Library Transient_ — Photos was momentarily unavailable
 - _iCloud / Network_ — couldn't download an iCloud-only original
+- _Other_ — any other error, including a file that went missing during export; retries on its own
 
 Each row identifies the photo or video by its recorded filename, photo creation date when available, and a readable version name. If a filename was never recorded, Photo Export uses the original filename available from Photos; deleted or inaccessible assets can show **Filename unavailable** or **Date unavailable**. The full asset identifier remains selectable for diagnostics. The saved failure and its last recorded failure time appear separately. Matching Auto Export history adds attempt counts, retry eligibility, and a **Retry** button that clears backoff and requests a run using your configured Auto Export scopes. This button is available while Auto Export is enabled and the destination records are ready. For other failures, start a normal manual export, which bypasses automatic backoff. Clearing retry history alone does not remove a failed record from the list; the row disappears when its version succeeds or its record is removed.
 
