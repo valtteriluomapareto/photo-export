@@ -14,7 +14,7 @@ Photo Export follows a small **SwiftUI + Managers** architecture. Views stay rel
 Long-lived stateful services and pure helpers are split by feature area under `photo-export/`:
 
 - `App/` — entry point + lifecycle services: `photo_exportApp`, `AppCore`, `AppComposition`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
-- `Export/` — façade + collaborators: `ExportManager` (+ `ExportManager+AutoSyncConformance`), `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, and the helper-policy types: `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`
+- `Export/` — façade + collaborators: `ExportManager` (+ `ExportManager+AutoSyncConformance`), `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, and the helper-policy types: `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `FinalNamePlanner`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`
 - `Destination/` — `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`
 - `Records/` — `ExportRecordStore`, `CollectionExportRecordStore`, `JSONLRecordFile`, `RecordStoreRouter` (single placement-kind dispatch), `ExportCompletionPolicy` (single edited-fallback/required-variant rule)
 - `AutoSync/` — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, with `AutoSync/Stores/` for file-backed persistence (dirty state, per-destination tokens, retry state, run summary, scope, global photo-change token)
@@ -186,6 +186,7 @@ in `AppComposition`, which knows the app-state directory roots.
 - `ResourceSelection` picks the right `PHAssetResource` for a variant and is the shared
   classifier for "original-side" vs "edited-side" resources.
 - `FileIOService` centralizes atomic file moves and timestamp handling.
+- `FinalNamePlanner` picks a staged file's final name: the first free ` (n)` suffix, or an existing file with the same bytes that no record names, which is then recorded instead of copied.
 
 ## Views and View Models
 

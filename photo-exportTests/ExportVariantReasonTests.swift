@@ -117,8 +117,8 @@ struct ExportVariantReasonStoreTests {
     for placement in [month, favorite] {
       let commit = try router.captureFinalCommit(
         assetId: asset.id, placement: placement, variant: .original,
-        relPath: "2024/04/", filename: "F_orig.HEIC", subfolder: nil, acceptsEditedFallback: false)
-      await commit(true)
+        relPath: "2024/04/", subfolder: nil, acceptsEditedFallback: false)
+      await commit("F_orig.HEIC")
       router.markVariantFailed(
         assetId: asset.id, placement: placement, variant: .edited,
         error: "Changed copy", reason: .editedUnavailableOriginalBackedUp, at: date)
@@ -197,8 +197,8 @@ struct ExportVariantReasonStoreTests {
         error: "Unavailable", reason: .editedResourceUnavailable, at: date)
       let commit = try router.captureFinalCommit(
         assetId: asset.id, placement: placement, variant: .edited,
-        relPath: "2024/04/", filename: "F.JPG", subfolder: nil, acceptsEditedFallback: false)
-      await commit(true)
+        relPath: "2024/04/", subfolder: nil, acceptsEditedFallback: false)
+      await commit("F.JPG")
     }
     #expect(timeline.exportInfo(assetId: asset.id)?.variants[.edited]?.reason == nil)
     #expect(
@@ -233,9 +233,8 @@ extension ExportVariantReasonStoreTests {
       for placement in [month, favorite] {
         let commit = try router.captureFinalCommit(
           assetId: asset.id, placement: placement, variant: .original,
-          relPath: "2024/04/", filename: paired ? "IMG.JPG" : "IMG_orig.HEIC", subfolder: nil,
-          acceptsEditedFallback: false)
-        await commit(true)
+          relPath: "2024/04/", subfolder: nil, acceptsEditedFallback: false)
+        await commit(paired ? "IMG.JPG" : "IMG_orig.HEIC")
         router.markVariantFailed(
           assetId: asset.id, placement: placement,
           variant: paired ? .originalPairedVideo : .edited,

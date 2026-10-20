@@ -2023,7 +2023,8 @@ final class ExportManager: ObservableObject {
             pairOriginalWithSuffix: pairOriginalWithSuffix,
             generation: gen,
             inFlight: &inFlight,
-            subfolder: subfolder
+            subfolder: subfolder,
+            mayAdoptExisting: !Self.pairedVideoFollows(variant, in: orderedVariants)
           )
           try throwIfCancelledOrStale(gen)
           if let nextGroupStem { groupStem = nextGroupStem }
@@ -2091,6 +2092,15 @@ final class ExportManager: ObservableObject {
   // suffixing, inherited group stem) lives on `ExportDestinationResolver`. Callers go
   // through `self.destinationResolver` or the static helpers
   // `ExportDestinationResolver.splitFilename` / `ExportDestinationResolver.inheritedGroupStem`.
+
+  /// Whether `variant` is an image whose paired video this job writes after it, at its stem.
+  static func pairedVideoFollows(_ variant: ExportVariant, in variants: [ExportVariant]) -> Bool {
+    switch variant {
+    case .original: return variants.contains(.originalPairedVideo)
+    case .edited: return variants.contains(.editedPairedVideo)
+    case .originalPairedVideo, .editedPairedVideo: return false
+    }
+  }
 
   // MARK: - Edited-unavailable fallback (issue #22)
 

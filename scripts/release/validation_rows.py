@@ -73,6 +73,7 @@ RULES = [
     ("photo-export/Export/ExportPlacementPathPolicy.swift", ("livephoto", "edited")),
     ("photo-export/Export/ExportPlacementResolver.swift", ("collections",)),
     ("photo-export/Export/FileIOService.swift", ("local", "cancel", "destination")),
+    ("photo-export/Export/FinalNamePlanner.swift", ("local", "cancel", "destination")),
     ("photo-export/Export/ExportRecordsDirectoryCoordinator.swift", ("destination", "import")),
     ("photo-export/Export/ExportManager+AutoSyncConformance.swift", ("autoexport",)),
     ("photo-export/Export/ImportCoordinator.swift", ("import",)),

@@ -91,7 +91,7 @@ npm run dev
 The app's export pipeline went through a multi-phase architecture refactor in May 2026 that established three cross-cutting contracts (cancellation, actor isolation, AutoSync seam) plus a Host-protocol pattern for `ExportManager`'s collaborators. Before adding a new export entry point, placement kind, variant, collaborator, or `@Published` property AutoSync should observe:
 
 1. Read [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) — the canonical home for the contracts, the canonical `start*` entry-point shape, and the "to add a new X, touch these files" recipes.
-2. If your change touches the queue, AutoSync surface, record stores, the final file commit, or the screenshot photo library service, the following **regression-gate tests** must pass *without re-recording* unless you have explicitly audited the new behavior:
+2. If your change touches the queue, AutoSync surface, record stores, the final file commit or its name planning, or the screenshot photo library service, the following **regression-gate tests** must pass *without re-recording* unless you have explicitly audited the new behavior:
    - `AutoSyncSeamCharacterizationTests` — pins the AutoSync emission sequence.
    - `AutoSyncSeamCharacterizationTests.autoSyncRunYieldsCanonicalSequence` — pins the AutoSync run's state sequence.
    - `AutoSyncSeamCharacterizationTests.manualExportSupersedingAutoSyncYieldsCanonicalSequence` — pins a manual export superseding an AutoSync run.
@@ -104,6 +104,8 @@ The app's export pipeline went through a multi-phase architecture refactor in Ma
    - `CollectionBackupImportTests.importAdoptsAlbumHistorySoExportsWriteNothing` — pins that exporting albums, shared albums and Favorites again, manually or from Auto Export, after Import Existing Backup writes nothing for files already there, against a no-import control that does write.
    - `CollectionBackupImportTests.exportWipeImportRoundTripRestoresPlacements` — pins that an import restores the album placements an export created, by id and folder, and that the second export writes, copies and moves nothing, under unedited originals, Edited mode, Include Originals, a paired Live Photo and flat videos.
    - `FileIOServiceTests.existingFileAtCommitIsNeverReplaced` — pins that the final commit never replaces a file that appears at the final name, on both commit paths.
+   - `IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted` — pins that re-exporting after lost history records an identical existing file instead of writing a ` (1)` copy.
+   - `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss` — pins that two byte-identical assets keep one file each after lost history, in either order.
 
    The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list misses a gate from it or if a gate is skipped.
 3. New collaborator extracted from `ExportManager`? Use the Host-protocol pattern documented in the conventions file (narrow protocol, IUO init, weak host, synchronous mirror sinks). Do not duplicate `@Published` state on the manager.
