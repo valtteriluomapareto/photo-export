@@ -48,6 +48,14 @@ enum ParityCheck: String, CaseIterable {
     "Re-entrant write broke: a write made inside a sink must be delivered inside the outer delivery, and the outer write's value must end up stored"
   case limitedDemand =
     "Limited demand broke: a subscriber without demand must receive the latest value once demand arrives"
+  case writeDuringLimitedReplay =
+    "Write during a limited replay broke: a write made while a subscriber with no further demand receives its replay must arrive once, in order, when it asks"
+  case demandFromReceive =
+    "Demand returned from receive broke: a value kept while the subscriber had no demand must give way to a newer write and never arrive after it"
+  case demandWithoutPending =
+    "Demand without a pending value broke: one unit of demand must take exactly the next write"
+  case steadyDemand =
+    "Steady demand broke: a subscriber that asks for one more with every value must receive every write"
 }
 
 /// Pins the delivery semantics a named publisher accessor has today, so a later change to the
@@ -63,7 +71,8 @@ enum ParityCheck: String, CaseIterable {
 /// - **Unchanged writes:** a write that leaves the value as it is is delivered again, or not
 ///   delivered when the accessor removes repeats or the mutation path skips equal writes.
 /// - **Resubscription:** a new subscription to the same publisher instance, made after `change`,
-///   replays the current value.
+///   replays the current value. This proves nothing when `change` ends on the value it started
+///   from (a run context set and cleared); `ObservableCombineBridgeTests` pins it for the bridge.
 ///
 /// `value` reads what the accessor publishes from the object's current state: the property
 /// itself, or for a derived accessor the same combination of properties.
@@ -172,19 +181,31 @@ struct EdgeSubject<Value> {
   let second: @MainActor () -> Void
 }
 
-/// Requests one value on subscription and more only when asked.
-private final class DemandRecorder<Value>: Subscriber {
+/// Requests `initial` demand on subscription, then more only when asked or when `onReceive`
+/// returns it. `onReceive` gets the index of each value and may write to the publisher's owner.
+final class DemandRecorder<Value>: Subscriber {
   private(set) var received: [Value] = []
-  private var subscription: (any Subscription)?
+  private(set) var subscription: (any Subscription)?
+  private let initial: Subscribers.Demand
+  private let onReceive: @MainActor (Int) -> Subscribers.Demand
+
+  init(
+    initial: Subscribers.Demand = .max(1),
+    onReceive: @escaping @MainActor (Int) -> Subscribers.Demand = { _ in .none }
+  ) {
+    self.initial = initial
+    self.onReceive = onReceive
+  }
 
   func receive(subscription: any Subscription) {
     self.subscription = subscription
-    subscription.request(.max(1))
+    subscription.request(initial)
   }
 
   func receive(_ input: Value) -> Subscribers.Demand {
     received.append(input)
-    return .none
+    let index = received.count - 1
+    return MainActor.assumeIsolated { onReceive(index) }
   }
 
   func receive(completion: Subscribers.Completion<Never>) {}
@@ -204,6 +225,12 @@ private final class DemandRecorder<Value>: Subscriber {
 ///   last delivered.
 /// - **Limited demand:** a subscriber without outstanding demand receives the latest value, and
 ///   only that, once it requests more.
+/// - **Write during a limited replay:** a subscriber with demand for its replay only, writing
+///   while it receives it, gets that write when it next asks, then later writes in order.
+/// - **Demand returned from `receive`:** demand a subscriber returns while a value is kept for
+///   it does not deliver the kept value; the next write replaces it, and it never arrives late.
+/// - **Demand without a pending value:** one unit of demand takes the next write only.
+/// - **Steady demand:** a subscriber returning one more with each value receives every write.
 @MainActor
 func assertSubscriberEdgeParity<Value: Equatable>(
   _ make: @MainActor () -> EdgeSubject<Value>,
@@ -245,10 +272,74 @@ func assertSubscriberEdgeParity<Value: Equatable>(
   let recorder = DemandRecorder<Value>()
   limited.publisher.subscribe(recorder)
   limited.first()
+  let limitedFirst = limited.value()
   limited.second()
   recorder.request(.max(1))
   recorder.cancel()
   check(
-    recorder.received == [limitedStart, limited.value()], .limitedDemand,
-    " (received \(recorder.received), stored \(limited.value()))")
+    limitedFirst != limitedStart && limited.value() != limitedFirst
+      && recorder.received == [limitedStart, limited.value()], .limitedDemand,
+    " (received \(recorder.received), writes \([limitedStart, limitedFirst, limited.value()]))")
+
+  let limitedReplay = make()
+  let limitedReplayStart = limitedReplay.value()
+  let replayWriter = DemandRecorder<Value> { index in
+    if index == 0 { limitedReplay.first() }
+    return .none
+  }
+  limitedReplay.publisher.subscribe(replayWriter)
+  let replayWrite = limitedReplay.value()
+  replayWriter.request(.max(1))
+  limitedReplay.second()
+  replayWriter.request(.max(1))
+  replayWriter.cancel()
+  check(
+    replayWriter.received == [limitedReplayStart, replayWrite, limitedReplay.value()],
+    .writeDuringLimitedReplay, " (received \(replayWriter.received))")
+
+  let returned = make()
+  let returnedStart = returned.value()
+  let demandReturner = DemandRecorder<Value> { index in
+    guard index == 0 else { return .none }
+    returned.first()
+    return .max(1)
+  }
+  returned.publisher.subscribe(demandReturner)
+  let afterSubscribe = demandReturner.received
+  returned.second()
+  demandReturner.request(.max(1))
+  demandReturner.cancel()
+  check(
+    afterSubscribe == [returnedStart]
+      && demandReturner.received == [returnedStart, returned.value()],
+    .demandFromReceive,
+    " (received \(afterSubscribe) after subscribing, \(demandReturner.received) in all)")
+
+  let idle = make()
+  let idleStart = idle.value()
+  let idleRecorder = DemandRecorder<Value>()
+  idle.publisher.subscribe(idleRecorder)
+  idleRecorder.request(.max(1))
+  idle.first()
+  let idleFirst = idle.value()
+  idle.second()
+  let beforeRequest = idleRecorder.received
+  idleRecorder.request(.max(1))
+  idleRecorder.cancel()
+  check(
+    beforeRequest == [idleStart, idleFirst]
+      && idleRecorder.received == [idleStart, idleFirst, idle.value()], .demandWithoutPending,
+    " (received \(beforeRequest) before asking again, \(idleRecorder.received) in all)")
+
+  let steady = make()
+  let steadyStart = steady.value()
+  let steadyRecorder = DemandRecorder<Value> { _ in .max(1) }
+  steady.publisher.subscribe(steadyRecorder)
+  steady.first()
+  let steadyFirst = steady.value()
+  steady.second()
+  steadyRecorder.cancel()
+  check(
+    steadyRecorder.received == [steadyStart, steadyFirst, steady.value()], .steadyDemand,
+    " (received \(steadyRecorder.received))")
 }

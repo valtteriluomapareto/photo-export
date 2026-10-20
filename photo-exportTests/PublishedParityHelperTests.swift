@@ -71,6 +71,26 @@ struct PublishedParityHelperTests {
     var publisher: AnyPublisher<Int, Never> { subject.prepend(stored).eraseToAnyPublisher() }
   }
 
+  /// `@Published` storage whose writes made inside a delivery wait until the outer write has
+  /// stored: the inner value arrives after the outer delivery and ends up stored.
+  @MainActor
+  private final class DeferredReentryBacked: ObservableObject {
+    @Published private(set) var value = 0
+    private var writing = false
+    private var queued: [Int] = []
+
+    func write(_ newValue: Int) {
+      guard !writing else {
+        queued.append(newValue)
+        return
+      }
+      writing = true
+      value = newValue
+      writing = false
+      while !queued.isEmpty { write(queued.removeFirst()) }
+    }
+  }
+
   /// Publishes in willSet without replaying the current value to a new subscriber.
   @MainActor
   private final class PassthroughBacked {
@@ -117,19 +137,33 @@ struct PublishedParityHelperTests {
     }
   }
 
-  /// The edge cases `@Published` handles that a `prepend` replay does not.
-  @Test func prependReplayFailsWriteDuringReplayAndLimitedDemand() async {
+  /// The edge cases `@Published` handles that a `prepend` replay does not: it joins the subject
+  /// after the replay, and the subject keeps nothing for a subscriber without demand.
+  @Test func prependReplayFailsWritesDuringReplayAndHeldValues() async {
     let object = PrependBacked()
     await assertPublishedParity(
       object, \.value, { $0.publisher },
       change: { object.value = 1 },
       unchangedWrite: .before { object.value = object.value })
-    await expectOnly([.writeDuringReplay, .limitedDemand]) {
+    await expectOnly([
+      .writeDuringReplay, .limitedDemand, .writeDuringLimitedReplay, .demandWithoutPending,
+    ]) {
       assertSubscriberEdgeParity {
         let object = PrependBacked()
         return EdgeSubject(
           publisher: object.publisher, value: { object.value },
           first: { object.value = 1 }, second: { object.value = 2 })
+      }
+    }
+  }
+
+  @Test func deferredReentryFailsReentrantWrite() async {
+    await expectOnly([.reentrantWrite]) {
+      assertSubscriberEdgeParity {
+        let object = DeferredReentryBacked()
+        return EdgeSubject(
+          publisher: object.$value.eraseToAnyPublisher(), value: { object.value },
+          first: { object.write(1) }, second: { object.write(2) })
       }
     }
   }

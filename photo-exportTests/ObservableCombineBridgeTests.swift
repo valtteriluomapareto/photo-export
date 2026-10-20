@@ -1,4 +1,5 @@
 import Combine
+import Foundation
 import Observation
 import Testing
 
@@ -174,6 +175,70 @@ struct ObservableCombineBridgeTests {
     owner.value = 1
     #expect(sends == 0)
   }
+
+  // MARK: - Cancellation
+
+  /// A cancelled subscriber receives nothing more, and neither it nor its subscription outlives
+  /// the cancel: the bridge drops the subscription, and the subscription drops the subscriber.
+  @Test(arguments: Shape.allCases)
+  func cancelStopsDeliveryAndReleasesTheSubscriber(_ shape: Shape) {
+    let owner = Self.owner(shape)
+    var recorder: DemandRecorder<Int>? = DemandRecorder(initial: .unlimited)
+    weak var weakRecorder: DemandRecorder<Int>?
+    weak var weakSubscription: AnyObject?
+    weakRecorder = recorder
+    owner.countPublisher.subscribe(recorder!)
+    weakSubscription = recorder?.subscription as AnyObject?
+    recorder?.cancel()
+    owner.count = 1
+    #expect(recorder?.received == [0])
+    recorder = nil
+    // The owner, and so its bridge, must outlive the checks, or releasing it frees the
+    // subscription whether or not the bridge dropped it.
+    withExtendedLifetime(owner) {
+      #expect(weakRecorder == nil)
+      #expect(weakSubscription == nil)
+    }
+  }
+
+  /// A subscriber cancelled by another subscriber's sink during a write does not get that write.
+  /// `@Published` does the same when the cancelling sink is delivered first, but its fan-out order
+  /// is not fixed (it varies between instances); the bridge delivers in subscription order.
+  @Test(arguments: Shape.allCases)
+  func cancelDuringFanOutStopsTheWriteInFlight(_ shape: Shape) {
+    let owner = Self.owner(shape)
+    let second = DemandRecorder<Int>(initial: .unlimited)
+    let first = owner.countPublisher.sink { if $0 == 1 { second.cancel() } }
+    defer { first.cancel() }
+    owner.countPublisher.subscribe(second)
+    owner.count = 1
+    #expect(second.received == [0])
+  }
+
+  /// Releasing a subscription off the main actor is legal with `@Published` (an `AnyCancellable`
+  /// released in a background deinit), so cancelling hops to the main actor instead of trapping.
+  @Test(arguments: Shape.allCases)
+  func cancelOffTheMainActorTakesEffectAfterTheHop(_ shape: Shape) async {
+    let owner = Self.owner(shape)
+    let recorder = DemandRecorder<Int>(initial: .unlimited)
+    owner.countPublisher.subscribe(recorder)
+    let subscription = UncheckedBox(recorder.subscription)
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      DispatchQueue.global().async {
+        subscription.value?.cancel()
+        // Queued on the main queue after the cancel's own hop.
+        DispatchQueue.main.async { continuation.resume() }
+      }
+    }
+    owner.count = 1
+    #expect(recorder.received == [0])
+  }
+}
+
+/// Carries a non-`Sendable` value to another thread in a test that orders the access itself.
+private struct UncheckedBox<Value>: @unchecked Sendable {
+  let value: Value
+  init(_ value: Value) { self.value = value }
 }
 
 @MainActor

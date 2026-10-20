@@ -100,9 +100,18 @@ plain class, not a macro: the owner writes the property by hand around it.
   sink (`PublishedParityHelperTests.subjectReplayFailsNestedReplay`). A `Deferred` `prepend`
   onto a `PassthroughSubject` joins the subject only after the replay, so a write made while
   the subscriber receives its replay never reaches it, and keeps nothing for a subscriber
-  without demand (`prependReplayFailsWriteDuringReplayAndLimitedDemand`). The bridge's
-  subscription joins before it replays and keeps the latest value until demand arrives, as
-  `@Published` does.
+  without demand (`prependReplayFailsWritesDuringReplayAndHeldValues`). The bridge's
+  subscription joins before it replays.
+- **Demand, as `@Published` handles it.** A value is delivered only while the subscriber has
+  demand. Otherwise one value is kept per subscriber, the latest write winning, and delivered
+  when it next requests. Demand a subscriber returns from `receive` is recorded without
+  delivering the kept value: the next write replaces it, so it never arrives after a newer one.
+  Every delivery goes through one path that clears the kept value.
+- **Cancellation is immediate.** A cancelled subscriber receives nothing more, not even the
+  write in flight when another subscriber's sink cancelled it. `@Published` does the same when
+  the cancelling sink is delivered first, but its fan-out order varies between instances; the
+  bridge delivers in subscription order. The bridge drops the subscription, and the
+  subscription drops the subscriber.
 - **Setter order:** `withMutation` (willSet) → deliver → store. A write made inside a sink is
   delivered at once and stored first, so the outer write's value ends up stored, as with
   `@Published` (`assertSubscriberEdgeParity`'s re-entrant check).
@@ -119,9 +128,11 @@ plain class, not a macro: the owner writes the property by hand around it.
   value equals the stored one, as the `@Observable` macro does for an `Equatable` property
   (`ObservationEqualWriteTests`). While the type is still `ObservableObject`, the equal write
   still sends `objectWillChange`, so a view that refreshes through it today still does.
-- **Main actor only.** The bridge is `@MainActor`, like its owners; subscribing, requesting
-  demand or cancelling off the main actor traps. Never `.receive(on:)` or a `MainActor` hop
-  in the bridge or an accessor; AutoSync and the mirrors rely on synchronous delivery.
+- **Main actor only.** The bridge is `@MainActor`, like its owners; subscribing or requesting
+  demand off the main actor traps. Cancelling off the main actor is allowed, as with
+  `@Published` (an `AnyCancellable` released in a background deinit), and takes effect once it
+  reaches the main queue. Never `.receive(on:)` or a `MainActor` hop in the bridge's delivery
+  or an accessor; AutoSync and the mirrors rely on synchronous delivery.
 - **Side effects run after the write,** where `didSet` ran: after delivery and store.
 
   ```swift
@@ -220,15 +231,8 @@ The flip still owes:
   `canExportTimeline` / `canExportCollection` read the record stores' `state`, which refreshes
   views today only because they also observe the stores (until the stores flip, or a
   dependency test covers them);
-- a measurement of `CollectionsSidebarView` (`let exportManager`): today it uses the manager
-  only in its multi-select action, which reads `versionSelection` and `livePhotosPairedExport`
-  outside `body`, so it registers nothing; check its body count after the flip;
 - `@ObservationIgnored` on the collaborators, IUOs, caches and tasks;
-- the wrapper and injection flips;
-- rewriting the tests written for the plumbing shape: the `objectWillChange` event log in
-  `unchangedRunStateWritesDoNotNotifyObservation`, `PublicationProbe`'s `@ObservedObject` in
-  the hosted test, and `PlumbedOwner`, which stays only as the plumbing template;
-- a sync with #337, which changes the same run state, whichever lands second.
+- the wrapper and injection flips.
 
 ## Tests
 
@@ -238,18 +242,24 @@ The flip still owes:
   change returns and before the value is stored (a sink reading the property sees the
   previously delivered value); a subscription made inside the sink replaying the stored value,
   missing the delivery in flight and receiving later ones; a new subscription to the same
-  publisher instance replaying the current value; and what an unchanged write delivers. That is a repeat for a plain `$property`, nothing for an accessor that removes
-  repeats or a mutation path that skips equal writes (`.isDropped`, which pins the
-  `if value != new` guard). Derived accessors (`exportRunStatePublisher`,
-  `isImportingPublisher`, `destinationSnapshotPublisher`) use the overload that takes a `value`
-  closure combining the inputs. Drive everything through the type's real mutation paths; where
-  no path leaves the value unchanged, say why with `.notDrivable(_:)` rather than adding a
-  production test hook. `PublisherParityTests` is a regression gate and does not change in a
-  flip; `PublishedParityHelperTests` shows which check fires for each wrong storage shape.
+  publisher instance replaying the current value (proven only when `change` ends on a value
+  other than the start); and what an unchanged write delivers. That is a repeat for a plain
+  `$property`, nothing for an accessor that removes repeats or a mutation path that skips
+  equal writes (`.isDropped`, which pins the `if value != new` guard). Derived accessors
+  (`exportRunStatePublisher`, `isImportingPublisher`, `destinationSnapshotPublisher`) use the
+  overload that takes a `value` closure combining the inputs. Drive everything through the
+  type's real mutation paths; where no path leaves the value unchanged, say why with
+  `.notDrivable(_:)` rather than adding a production test hook. `PublisherParityTests` is a
+  regression gate and does not change in a flip; `PublishedParityHelperTests` shows which
+  check fires for each wrong storage shape.
 - **Subscriber edge cases.** `assertSubscriberEdgeParity` pins, on a fresh subject with two
   synchronous writes: a write made while a subscriber receives its replay reaches it; a write
   made inside a sink is delivered at once while the outer value ends up stored; a subscriber
-  without demand receives only the latest value once it asks. `@Published` passes it
+  without demand receives only the latest value once it asks; a write made during a replay
+  that used up the demand arrives once, in order, on the next request; demand returned from
+  `receive` does not deliver a kept value, and a newer write replaces it; one unit of demand
+  takes the next write only; a subscriber returning one more with each value gets every write.
+  `@Published` passes it
   (`PublishedParityHelperTests.publishedPasses`), and so does the bridge. It is separate from
   `assertPublishedParity` because not every accessor's real mutation path is synchronous.
 - **Dependency registration.** `ObservationProbe` (`TestHelpers/ObservationProbe.swift`) counts
