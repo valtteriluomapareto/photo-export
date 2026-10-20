@@ -26,6 +26,37 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
   // Behavior: if true, creates a small file at the destination (simulating a real write)
   var shouldCreateFile: Bool = true
 
+  /// Writes the bytes of another asset id instead, keyed by the asset being written, so
+  /// two assets can stand in for byte-identical duplicates in Photos.
+  var contentAssetIds: [String: String] {
+    get { lock.withLock { _contentAssetIds } }
+    set { lock.withLock { _contentAssetIds = newValue } }
+  }
+  private var _contentAssetIds: [String: String] = [:]
+
+  /// Bytes written for `resource` of `assetId`: the same for the same pair, different for
+  /// another asset or resource. Its length is `resource.fileSize` when that is positive, so
+  /// size-based checks see the reported size, and 12 bytes otherwise.
+  static func content(for resource: ResourceDescriptor, assetId: String) -> Data {
+    let length = resource.fileSize.flatMap { $0 > 0 ? Int($0) : nil } ?? 12
+    // FNV-1a over the identity, then a SplitMix64 stream for the bytes.
+    var state: UInt64 = 0xcbf2_9ce4_8422_2325
+    for byte in "\(assetId)|\(resource.type.rawValue)|\(resource.originalFilename)".utf8 {
+      state = (state ^ UInt64(byte)) &* 0x0000_0100_0000_01b3
+    }
+    var bytes = Data(capacity: length)
+    while bytes.count < length {
+      state &+= 0x9e37_79b9_7f4a_7c15
+      var mixed = state
+      mixed = (mixed ^ (mixed >> 30)) &* 0xbf58_476d_1ce4_e5b9
+      mixed = (mixed ^ (mixed >> 27)) &* 0x94d0_49bb_1331_11eb
+      mixed ^= mixed >> 31
+      let remaining = length - bytes.count
+      withUnsafeBytes(of: mixed.littleEndian) { bytes.append(contentsOf: $0.prefix(remaining)) }
+    }
+    return bytes
+  }
+
   /// Optional release-on-demand checkpoint. When set, every `writeResource` call
   /// reaches the checkpoint after recording its `WriteCall`, then suspends until
   /// the test releases it. Replaces the "sleep then poll for transient state"
@@ -60,7 +91,9 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
       throw CocoaError(.fileWriteFileExists)
     }
     if shouldCreateFile,
-      !FileManager.default.createFile(atPath: url.path, contents: Data("fake-content".utf8))
+      !FileManager.default.createFile(
+        atPath: url.path,
+        contents: Self.content(for: resource, assetId: contentAssetIds[assetId] ?? assetId))
     {
       throw CocoaError(.fileWriteUnknown)
     }

@@ -191,7 +191,10 @@ struct FinalCommitCancellationTests {
         f.destination.closed.map(\.path) == [f.destination.root.appendingPathComponent("A").path])
       let final = f.destination.root.appendingPathComponent("A")
         .appendingPathComponent(f.placement.relativePath).appendingPathComponent("FILE.JPG")
-      #expect(try Data(contentsOf: final) == Data("fake-content".utf8))
+      let resource = try #require(f.photos.resourcesByAssetId[f.asset.id]?.first)
+      #expect(
+        try Data(contentsOf: final)
+          == FakeAssetResourceWriter.content(for: resource, assetId: f.asset.id))
       #expect(f.files.timestampCalls.count == 1)
       #expect(f.files.timestampCalls.first?.url.path == final.path)
       #expect(f.files.timestampCalls.first?.date == f.asset.creationDate)

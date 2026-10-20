@@ -199,54 +199,79 @@ struct ExportPipelineTests {
     #expect(leftoverTmp?.isEmpty != false)
   }
 
-  /// A file that appears at the final name after staging is never overwritten. The explicit
-  /// check refuses the move with `Export`/2, the third-party bytes stay, and neither staging
-  /// nor a suffixed copy is left. The window between that check and the move itself is not
-  /// covered here (#326).
+  /// A file that appears at the final name after staging is never overwritten. The commit
+  /// reports the collision, the export plans again, finds the third-party file different
+  /// and commits to ` (1)`. The variant is re-marked in progress under the new name first.
   @Test func lateCollisionAtTheFinalNameKeepsTheExistingFile() async throws {
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
+    let storeRoot = TestScratch.directory("ExportPipelineTest")
+    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness(storeRootURL: storeRoot)
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
       id: "late-collision",
       creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!)
+    let resource = TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
     photoLib.yearCounts = [(2025, 1)]
     photoLib.assetsByYearMonth["2025-6"] = [asset]
-    photoLib.resourcesByAssetId[asset.id] = [
-      TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
-    ]
+    photoLib.resourcesByAssetId[asset.id] = [resource]
     fileSystem.beforeMoveHook = { [fileSystem] _, destination in
-      fileSystem.beforeMoveHook = nil
-      try Data("third-party".utf8).write(to: destination)
+      if destination.lastPathComponent == "IMG_0001.JPG" {
+        fileSystem.beforeMoveHook = nil
+        try Data("third-party".utf8).write(to: destination)
+      }
     }
 
-    // An Auto Export run, so the failure detail carries the signature retry state uses.
+    // An Auto Export run, so a failure would carry the signature retry state uses.
     let summary = await manager.runExport(
       context: ExportRunContext(
         source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
         selection: .edited))
 
-    #expect(summary.failures.map(\.errorSignature) == ["Export:2"])
-    #expect(summary.failures.map(\.category) == [.destinationCollision])
-    #expect(fileSystem.moveCalls.count == 1)
+    #expect(summary.failures.isEmpty)
+    #expect(
+      fileSystem.moveCalls.map(\.to.lastPathComponent) == ["IMG_0001.JPG", "IMG_0001 (1).JPG"])
+    // The history log shows the variant re-marked under the new name before it committed.
+    store.flushForTesting()
+    let log = try String(
+      contentsOf: storeRoot.appendingPathComponent("test")
+        .appendingPathComponent(ExportRecordStore.Constants.logFileName),
+      encoding: .utf8)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let history = try log.split(separator: "\n").compactMap { line in
+      try decoder.decode(ExportRecordMutation.self, from: Data(line.utf8)).record?
+        .variants[.original].map { "\($0.status.rawValue) \($0.filename ?? "")" }
+    }
+    #expect(
+      history == [
+        "inProgress IMG_0001.JPG", "inProgress IMG_0001 (1).JPG", "done IMG_0001 (1).JPG",
+      ])
     let variant = store.exportInfo(assetId: asset.id)?.variants[.original]
-    #expect(variant?.status == .failed)
-    #expect(variant?.lastError == "Destination already exists")
+    #expect(variant?.status == .done)
+    #expect(variant?.filename == "IMG_0001 (1).JPG")
     let monthDir = try dest.urlForMonth(year: 2025, month: 6, createIfNeeded: false)
-    #expect(try FileManager.default.contentsOfDirectory(atPath: monthDir.path) == ["IMG_0001.JPG"])
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: monthDir.path).sorted()
+        == ["IMG_0001 (1).JPG", "IMG_0001.JPG"])
     #expect(
       try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001.JPG"))
         == Data("third-party".utf8))
-    #expect(fileSystem.timestampCalls.isEmpty)
+    #expect(
+      try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001 (1).JPG"))
+        == FakeAssetResourceWriter.content(for: resource, assetId: asset.id))
+    #expect(fileSystem.timestampCalls.map(\.url.lastPathComponent) == ["IMG_0001 (1).JPG"])
   }
 
   /// The exclusive rename itself reports the collision: the file that took the final name
-  /// keeps its bytes and the variant fails with the collision signature.
+  /// keeps its bytes and the export commits to ` (1)` with a second exclusive rename.
   @Test func exclusiveRenameCollisionAtTheFinalNameKeepsTheExistingFile() async throws {
-    let renames = LockedBox<[UInt32]>([])
+    let renames = LockedBox<[(name: String, flags: UInt32)]>([])
     let commit = FileIOService(
-      renamer: { _, destination, flags in
-        renames.mutate { $0.append(flags) }
+      renamer: { source, destination, flags in
+        renames.mutate { $0.append((destination.lastPathComponent, flags)) }
+        guard destination.lastPathComponent == "IMG_0001.JPG" else {
+          return FileIOService.systemRename(source, destination, flags)
+        }
         try? Data("third-party".utf8).write(to: destination)
         return EEXIST
       },
@@ -269,19 +294,111 @@ struct ExportPipelineTests {
         source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
         selection: .edited))
 
-    #expect(renames.value == [UInt32(RENAME_EXCL)])
+    #expect(renames.value.map(\.name) == ["IMG_0001.JPG", "IMG_0001 (1).JPG"])
+    #expect(renames.value.map(\.flags) == [UInt32(RENAME_EXCL), UInt32(RENAME_EXCL)])
+    #expect(summary.failures.isEmpty)
+    #expect(
+      store.exportInfo(assetId: asset.id)?.variants[.original]?.filename == "IMG_0001 (1).JPG")
+    let monthDir = try dest.urlForMonth(year: 2025, month: 6, createIfNeeded: false)
+    // The stage is gone; the file that took the final name is untouched.
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: monthDir.path).sorted()
+        == ["IMG_0001 (1).JPG", "IMG_0001.JPG"])
+    #expect(
+      try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001.JPG"))
+        == Data("third-party".utf8))
+    #expect(fileSystem.timestampCalls.map(\.url.lastPathComponent) == ["IMG_0001 (1).JPG"])
+  }
+
+  /// A name lost at every commit stops after the bounded number of plans. The variant fails
+  /// with the collision signature and every file that took a name keeps its bytes.
+  @Test func repeatedLateCollisionsFailAfterBoundedPlans() async throws {
+    let renames = LockedBox<[String]>([])
+    let commit = FileIOService(
+      renamer: { _, destination, _ in
+        renames.mutate { $0.append(destination.lastPathComponent) }
+        try? Data("third-party".utf8).write(to: destination)
+        return EEXIST
+      },
+      capability: { _ in true })
+    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness(
+      fileSystem: FakeFileSystem(real: commit))
+    defer { dest.cleanup() }
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "always-taken",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!)
+    photoLib.yearCounts = [(2025, 1)]
+    photoLib.assetsByYearMonth["2025-6"] = [asset]
+    photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+    ]
+
+    let summary = await manager.runExport(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+        selection: .edited))
+
+    #expect(VariantExporter.maxCommitAttempts == 3)
+    #expect(renames.value == ["IMG_0001.JPG", "IMG_0001 (1).JPG", "IMG_0001 (2).JPG"])
     #expect(summary.failures.map(\.errorSignature) == ["Export:2"])
     #expect(summary.failures.map(\.category) == [.destinationCollision])
     let variant = store.exportInfo(assetId: asset.id)?.variants[.original]
     #expect(variant?.status == .failed)
     #expect(variant?.lastError == "Destination already exists")
     let monthDir = try dest.urlForMonth(year: 2025, month: 6, createIfNeeded: false)
-    // The stage is removed; only the file that took the final name remains.
-    #expect(try FileManager.default.contentsOfDirectory(atPath: monthDir.path) == ["IMG_0001.JPG"])
-    #expect(
-      try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001.JPG"))
-        == Data("third-party".utf8))
+    let names = try FileManager.default.contentsOfDirectory(atPath: monthDir.path).sorted()
+    #expect(names == ["IMG_0001 (1).JPG", "IMG_0001 (2).JPG", "IMG_0001.JPG"])
+    for name in names {
+      #expect(
+        try Data(contentsOf: monthDir.appendingPathComponent(name)) == Data("third-party".utf8))
+    }
     #expect(fileSystem.timestampCalls.isEmpty)
+  }
+
+  /// A paired original-side slot has one fixed name, so a file that takes it before the
+  /// commit fails that variant with `Export:2` instead of moving the pair to ` (1)`.
+  @Test func lateCollisionAtAPairedSlotStillFails() async throws {
+    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
+    defer { dest.cleanup() }
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "paired-collision",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!,
+      hasAdjustments: true)
+    photoLib.yearCounts = [(2025, 1)]
+    photoLib.assetsByYearMonth["2025-6"] = [asset]
+    photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
+      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG"),
+    ]
+    fileSystem.beforeMoveHook = { _, destination in
+      if destination.lastPathComponent == "IMG_0001_orig.JPG" {
+        try Data("third-party".utf8).write(to: destination)
+      }
+    }
+
+    let summary = await manager.runExport(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+        selection: .editedWithOriginals))
+
+    #expect(summary.failures.map(\.errorSignature) == ["Export:2"])
+    #expect(summary.failures.map(\.category) == [.destinationCollision])
+    let variants = store.exportInfo(assetId: asset.id)?.variants
+    #expect(variants?[.original]?.status == .failed)
+    #expect(variants?[.original]?.lastError == "Destination already exists")
+    #expect(variants?[.edited]?.status == .done)
+    #expect(variants?[.edited]?.filename == "IMG_0001.JPG")
+    #expect(
+      fileSystem.moveCalls.map(\.to.lastPathComponent) == ["IMG_0001_orig.JPG", "IMG_0001.JPG"])
+    let monthDir = try dest.urlForMonth(year: 2025, month: 6, createIfNeeded: false)
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: monthDir.path).sorted()
+        == ["IMG_0001.JPG", "IMG_0001_orig.JPG"])
+    #expect(
+      try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001_orig.JPG"))
+        == Data("third-party".utf8))
   }
 
   // MARK: - Pause/resume cycle
