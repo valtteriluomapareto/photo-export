@@ -78,6 +78,8 @@ import Testing
           assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         destination = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
+        // Deliver the coalesced setup publication now so it cannot land after a test's baseline.
+        records.flushPendingNotifications()
         let hosted = NSHostingView(
           rootView: Parent(
             manager: manager, navigation: navigation,
@@ -132,6 +134,9 @@ import Testing
       }
     }
 
+    /// Guards `CollectionContentView.==`: a fresh action closure from an unrelated queue
+    /// publication must not re-render the pane. SwiftUI applies the view's Equatable
+    /// conformance on its own, so removing the parent's `.equatable()` alone doesn't fail this.
     @Test(.timeLimit(.minutes(2)))
     func unrelatedQueuePublicationsDoNotRescanLoadedCollection() async throws {
       let f = Fixture()
@@ -145,6 +150,7 @@ import Testing
       await f.renderBarrier()
       let scans = f.counter.count(for: "summaryScan")
       let bodies = f.counter.count(for: "collectionBody")
+      let revision = f.records.mutationCounter
       try #require(scans > 0)
       for index in 1...10 {
         let key = "parent:\(index)"
@@ -160,6 +166,10 @@ import Testing
         try #require(acknowledged, "Parent must process the actual queue-count publication")
         await f.renderBarrier()
       }
+      // Surface any record publication still inside its coalescing window.
+      f.records.flushPendingNotifications()
+      await f.renderBarrier()
+      #expect(f.records.mutationCounter == revision, "record publication during the loop")
       let extraScans = f.counter.count(for: "summaryScan") - scans
       let extraBodies = f.counter.count(for: "collectionBody") - bodies
       #expect(extraScans == 0)
