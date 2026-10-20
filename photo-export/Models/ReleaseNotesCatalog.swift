@@ -27,9 +27,10 @@ enum ReleaseNotesCatalog {
         ReleaseNote.Bullet(
           title: "Preserve backup progress through interruptions",
           body:
-            "Export history is better protected when an export is interrupted or "
-            + "cancelled. Export Month on a paused month resumes the queued export, "
-            + "including other months already queued. Import Existing Backup keeps "
+            "Export history is better protected if an export is interrupted or "
+            + "cancelled while a photo is being saved. Choosing Export Month for a "
+            + "paused month resumes it, along with any other months waiting to "
+            + "export. Import Existing Backup keeps "
             + "your progress if checking the backup fails, explains how to recover "
             + "when history can't be read, and no longer keeps scanning in the "
             + "background after you cancel it."
@@ -45,24 +46,22 @@ enum ReleaseNotesCatalog {
         ReleaseNote.Bullet(
           title: "Keep previews and selections current",
           body:
-            "Thumbnails and the large preview update after you edit in Photos. Grid "
-            + "and folder selections stay in place, and sidebar counts stay visible, "
-            + "while your library refreshes."
+            "Thumbnails and the large preview update after you edit in Photos. "
+            + "While your library refreshes, sidebar counts stay visible and grid "
+            + "and folder selections keep the items that are still there."
         ),
         ReleaseNote.Bullet(
           title: "Keep Auto Export work safe for retry",
           body:
-            "Photos changes that arrive during an export wait for the next run. "
-            + "Turning Auto Export off stops an automatic export in progress; the "
-            + "rest exports the next time Auto Export runs. Retries and saved "
-            + "progress recover better from interruptions."
+            "Changes in your Photos library during an export are picked up on the "
+            + "next run. Turning Auto Export off stops an automatic export in "
+            + "progress; the rest exports the next time Auto Export runs."
         ),
         ReleaseNote.Bullet(
           title: "Recover more clearly when a destination is unavailable",
           body:
             "Missing, read-only and inaccessible backup folders get clearer "
-            + "explanations and recovery actions. Delayed work is checked against "
-            + "the current destination before it changes saved progress."
+            + "explanations and recovery actions."
         ),
       ],
       learnMore: nil
