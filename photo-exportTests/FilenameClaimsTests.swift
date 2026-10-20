@@ -80,6 +80,37 @@ struct FilenameClaimsTests {
     #expect(!Self.claimed(store, "IMG.JPG", subfolder: "videos"))
   }
 
+  /// The index is built on the first query; it reflects every mutation made before that one,
+  /// and those made after it.
+  @Test func claimsBuiltOnFirstQueryMatchEarlierAndLaterMutations() {
+    let root = Self.root()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = Self.timelineStore(root)
+    Self.exported(store, "a", filename: "A.JPG")
+    Self.exported(store, "b", filename: "B.JPG")
+    store.removeVariant(assetId: "b", variant: .original)
+    #expect(Self.claimed(store, "A.JPG"))
+    #expect(!Self.claimed(store, "B.JPG"))
+    Self.exported(store, "c", filename: "C.JPG")
+    store.removeVariant(assetId: "a", variant: .original)
+    #expect(Self.claimed(store, "C.JPG"))
+    #expect(!Self.claimed(store, "A.JPG"))
+
+    let collections = CollectionExportRecordStore(baseDirectoryURL: root)
+    collections.configure(for: "dest")
+    let favorites = ExportPlacement.favorites()
+    collections.upsertPlacement(favorites)
+    collections.markVariantExported(
+      assetId: "a", placement: favorites, variant: .original, filename: "A.JPG",
+      exportedAt: Date())
+    #expect(Self.collectionClaimed(collections, "A.JPG", placement: favorites))
+    collections.markVariantExported(
+      assetId: "a", placement: favorites, variant: .original, filename: "A2.JPG",
+      exportedAt: Date())
+    #expect(!Self.collectionClaimed(collections, "A.JPG", placement: favorites))
+    #expect(Self.collectionClaimed(collections, "A2.JPG", placement: favorites))
+  }
+
   /// The own record is subtracted only in the folder it names: another asset's claim in a
   /// different month still counts there.
   @Test func ownRecordIsExcludedOnlyInItsOwnFolder() {

@@ -102,8 +102,11 @@ final class ExportRecordStore: ObservableObject {
       self.subfolder = subfolder ?? ""
     }
   }
-  /// Filenames named by any variant record, kept with `monthCounters`.
-  private var filenameClaims = FilenameClaims<ClaimFolder>()
+  /// Filenames named by any variant record. Built on the first `isFilenameClaimed` query,
+  /// since building it costs about 0.4 s per 500k records and most launches never ask; kept
+  /// with `monthCounters` after that. Nil until then, and again whenever the records are
+  /// replaced wholesale.
+  private var filenameClaims: FilenameClaims<ClaimFolder>?
 
   /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
   @Published private(set) var state: RecordStoreState = .unconfigured
@@ -219,7 +222,7 @@ final class ExportRecordStore: ObservableObject {
     // Reset in-memory state
     recordsById = [:]
     monthCounters = [:]
-    filenameClaims.removeAll()
+    filenameClaims = nil
 
     guard let destinationId else {
       currentStoreDirURL = nil
@@ -348,7 +351,7 @@ final class ExportRecordStore: ObservableObject {
       try jsonl.resetToEmpty(emptySnapshot: [:])
       recordsById = [:]
       monthCounters = [:]
-      filenameClaims.removeAll()
+      filenameClaims = nil
       state = .ready
       replayFinalCompletions()
       changeNotifier.notifyNow()
@@ -518,7 +521,7 @@ final class ExportRecordStore: ObservableObject {
     excludingAssetId assetId: String, variant: ExportVariant
   ) -> Bool {
     let folder = ClaimFolder(year: year, month: month, subfolder: subfolder)
-    var count = filenameClaims.count(filename, in: folder)
+    var count = currentFilenameClaims().count(filename, in: folder)
     if let record = recordsById[assetId], let own = record.variants[variant],
       let ownName = own.filename,
       ClaimFolder(year: record.year, month: record.month, subfolder: own.subfolder) == folder,
@@ -527,6 +530,20 @@ final class ExportRecordStore: ObservableObject {
       count -= 1
     }
     return count > 0
+  }
+
+  private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
+    if let filenameClaims { return filenameClaims }
+    var claims = FilenameClaims<ClaimFolder>()
+    for record in recordsById.values {
+      for variant in record.variants.values {
+        claims.add(
+          variant.filename,
+          in: ClaimFolder(year: record.year, month: record.month, subfolder: variant.subfolder))
+      }
+    }
+    filenameClaims = claims
+    return claims
   }
 
   /// Total number of assets in `year` whose `.original` variant is `.done`. Matches legacy
@@ -1098,21 +1115,21 @@ final class ExportRecordStore: ObservableObject {
       let folder = ClaimFolder(
         year: record.year, month: record.month, subfolder: variantRec.subfolder)
       if sign > 0 {
-        filenameClaims.add(variantRec.filename, in: folder)
+        filenameClaims?.add(variantRec.filename, in: folder)
       } else {
-        filenameClaims.remove(variantRec.filename, in: folder)
+        filenameClaims?.remove(variantRec.filename, in: folder)
       }
     }
   }
 
-  /// Rebuilds `monthCounters` and `filenameClaims` from scratch by walking `recordsById`
-  /// once. Called from `configure(for:)` after the snapshot is loaded and log ops are
-  /// replayed (with counter updates suppressed during replay), after
-  /// `recoverInProgressVariants()` transitions any leftover in-progress variants to failed
-  /// in-memory, and whenever retained records replace the in-memory ones.
+  /// Rebuilds `monthCounters` from scratch by walking `recordsById` once, and drops
+  /// `filenameClaims` for the next query to rebuild. Called from `configure(for:)` after the
+  /// snapshot is loaded and log ops are replayed (with counter updates suppressed during
+  /// replay), after `recoverInProgressVariants()` transitions any leftover in-progress
+  /// variants to failed in-memory, and whenever retained records replace the in-memory ones.
   private func rebuildCountersFromRecords() {
     monthCounters = [:]
-    filenameClaims.removeAll()
+    filenameClaims = nil
     for record in recordsById.values {
       contribute(record, sign: +1)
     }

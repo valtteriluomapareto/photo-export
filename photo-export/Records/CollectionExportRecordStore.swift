@@ -149,9 +149,10 @@ final class CollectionExportRecordStore: ObservableObject {
       self.subfolder = subfolder ?? ""
     }
   }
-  /// Filenames named by any variant record. Maintained in `apply`; rebuilt whenever
-  /// `recordBodies` is replaced wholesale.
-  private var filenameClaims = FilenameClaims<ClaimFolder>()
+  /// Filenames named by any variant record. Built on the first `isFilenameClaimed` query and
+  /// maintained in `apply` after that; nil until then, and again whenever `recordBodies` is
+  /// replaced wholesale. See `ExportRecordStore.filenameClaims` for why it is built lazily.
+  private var filenameClaims: FilenameClaims<ClaimFolder>?
 
   /// Per-store load state. See `RecordStoreState` for semantics.
   @Published private(set) var state: RecordStoreState = .unconfigured
@@ -260,7 +261,7 @@ final class CollectionExportRecordStore: ObservableObject {
 
     placements = [:]
     recordBodies = [:]
-    filenameClaims.removeAll()
+    filenameClaims = nil
 
     guard let destinationId else {
       currentStoreDirURL = nil
@@ -295,7 +296,7 @@ final class CollectionExportRecordStore: ObservableObject {
     if let retained = pendingRecovery[destinationId] {
       placements = retained.placements
       recordBodies = retained.records
-      rebuildFilenameClaims()
+      filenameClaims = nil
       hasUnsavedChanges = true
       persistenceError = "Progress from this destination still needs to be saved."
       state = .persistenceFailed
@@ -337,7 +338,7 @@ final class CollectionExportRecordStore: ObservableObject {
         }
         placements = validPlacements
         recordBodies = snapshot.records.filter { !droppedTimelineIds.contains($0.key) }
-        rebuildFilenameClaims()
+        filenameClaims = nil
       }
       for op in loaded.ops {
         apply(op)
@@ -398,7 +399,7 @@ final class CollectionExportRecordStore: ObservableObject {
       try jsonl.resetToEmpty(emptySnapshot: Snapshot.empty)
       placements = [:]
       recordBodies = [:]
-      filenameClaims.removeAll()
+      filenameClaims = nil
       state = .ready
       replayFinalCompletions()
       changeNotifier.notifyNow()
@@ -692,7 +693,7 @@ final class CollectionExportRecordStore: ObservableObject {
     excludingAssetId assetId: String, variant: ExportVariant
   ) -> Bool {
     let folder = ClaimFolder(placementId: placement.id, subfolder: subfolder)
-    var count = filenameClaims.count(filename, in: folder)
+    var count = currentFilenameClaims().count(filename, in: folder)
     if let own = recordBodies[placement.id]?[assetId]?.variants[variant.rawValue],
       let ownName = own.filename,
       ClaimFolder(placementId: placement.id, subfolder: own.subfolder) == folder,
@@ -872,7 +873,7 @@ final class CollectionExportRecordStore: ObservableObject {
           // when its later reload was unreadable. Retry must retain the new file.
           placements = context.snapshot.placements
           recordBodies = context.snapshot.records
-          rebuildFilenameClaims()
+          filenameClaims = nil
           hasUnsavedChanges = true
         }
         applyCompletion(filename)
@@ -1043,20 +1044,22 @@ final class CollectionExportRecordStore: ObservableObject {
     for variant in body.variants.values {
       let folder = ClaimFolder(placementId: placementId, subfolder: variant.subfolder)
       if adding {
-        filenameClaims.add(variant.filename, in: folder)
+        filenameClaims?.add(variant.filename, in: folder)
       } else {
-        filenameClaims.remove(variant.filename, in: folder)
+        filenameClaims?.remove(variant.filename, in: folder)
       }
     }
   }
 
-  private func rebuildFilenameClaims() {
-    filenameClaims.removeAll()
+  private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
+    if let filenameClaims { return filenameClaims }
+    filenameClaims = FilenameClaims<ClaimFolder>()
     for (placementId, byAsset) in recordBodies {
       for body in byAsset.values {
         updateClaims(placementId: placementId, body: body, adding: true)
       }
     }
+    return filenameClaims ?? FilenameClaims<ClaimFolder>()
   }
 
   /// Converts any variant left as `.inProgress` after load into `.failed` with the

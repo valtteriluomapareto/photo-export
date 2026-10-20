@@ -203,10 +203,12 @@ the variant's subfolder), a count of the filenames its variant records name, cas
 and in NFC. Every status counts, including in-progress, pending and failed, and so do the
 asset's other variants: an edit on an inherited stem must not adopt the file its own
 original is recorded under. Only the variant being written is excluded. An edited fallback's
-`edited` record names no file, on every completion path. The index is maintained in each store's
-`apply`, so log replay, import, prune and reset follow it, and rebuilt wherever the
-in-memory records are replaced wholesale (load, retained recovery, the corrupt-reset path
-and the parked-snapshot restore after an unreadable reload).
+`edited` record names no file, on every completion path. The index is built from the in-memory records on the
+first claim query (about 0.4 s and 50–70 MB for 500k records in an optimized build, so it
+is not paid at load) and maintained in each store's `apply` after that, so log replay,
+import, prune and reset follow it. It is dropped, to be built again on the next query,
+wherever the in-memory records are replaced wholesale (load, retained recovery, the
+corrupt-reset path and the parked-snapshot restore after an unreadable reload).
 
 Known limits: only the folder the variant is being written to is searched, so an identical
 file left in `videos/` (or outside it) by a layout change is not found. Paired groups and
