@@ -52,7 +52,10 @@ struct PublisherParityTests {
     await assertPublishedParity(
       manager, \.identity, { $0.identityPublisher },
       change: { manager.revalidateForTesting() },
-      unchangedWrite: .notDrivable("every write is guarded by `identity != next`"))
+      // Revalidating the unchanged folder computes an equal identity, which
+      // `identity != next` skips.
+      unchangedWrite: .after { manager.revalidateForTesting() },
+      unchangedWriteDelivery: .isDropped)
     #expect(manager.identity.stableId != nil)
   }
 
@@ -80,7 +83,9 @@ struct PublisherParityTests {
     await assertPublishedParity(
       coordinator, \.currentDestination, { $0.currentDestinationPublisher },
       change: { coordinator.apply(destination: Self.snapshot("A")) },
-      unchangedWrite: .notDrivable("`apply` skips a snapshot equal to the current one"))
+      // `apply` skips a snapshot equal to the current one.
+      unchangedWrite: .after { coordinator.apply(destination: Self.snapshot("A")) },
+      unchangedWriteDelivery: .isDropped)
   }
 
   @Test func lifecycleMigrationConflict() async {
@@ -97,7 +102,8 @@ struct PublisherParityTests {
       },
       // A successful configure for a new destination clears the conflict unconditionally.
       unchangedWrite: .before { coordinator.apply(destination: Self.snapshot("B")) })
-    #expect(coordinator.migrationConflict == MigrationConflictState(newId: "new", legacyId: "legacy"))
+    #expect(
+      coordinator.migrationConflict == MigrationConflictState(newId: "new", legacyId: "legacy"))
   }
 
   // MARK: - DestinationSafetyMonitor
@@ -369,7 +375,9 @@ struct PublisherParityTests {
     await assertPublishedParity(
       counts, \.countsByYearMonth, { $0.countsByYearMonthPublisher },
       change: { await counts.loadCounts(forYears: [2025]) },
-      unchangedWrite: .notDrivable("month updates and `reset()` skip equal values"))
+      // An identical refresh: month updates skip equal counts.
+      unchangedWrite: .after { await counts.loadCounts(forYears: [2025]) },
+      unchangedWriteDelivery: .isDropped)
     #expect(counts.assetCountsByYearMonth["2025-1"] == 1)
   }
 
@@ -380,6 +388,8 @@ struct PublisherParityTests {
     let builder = FakeAutoSyncEnvironmentBuilder()
     let destination = DestinationSnapshot(
       fingerprint: Self.fingerprint("A"), isAvailable: true, safety: .safe)
+    let other = DestinationSnapshot(
+      fingerprint: Self.fingerprint("B"), isAvailable: true, safety: .safe)
     let summary = ExportRunSummary(
       context: ExportRunContext(
         source: .autoSync, visibility: .background, reason: .appLaunch,
@@ -387,11 +397,15 @@ struct PublisherParityTests {
       endedAt: Date(), enqueuedCount: 1, completedCount: 1, failedCount: 0, skippedCount: 0,
       cancelReason: nil, result: .completed)
     try builder.runSummaryStore.save(summary, destinationId: try #require(destination.id))
+    try builder.runSummaryStore.save(summary, destinationId: try #require(other.id))
     manager.attach(to: builder.environment)
     await assertPublishedParity(
       manager, \.lastRunSummary, { $0.lastRunSummaryPublisher },
       change: { builder.destination.subject.send(destination) },
-      unchangedWrite: .notDrivable("both writes are guarded by `lastRunSummary != summary`"))
+      // Switching to a destination whose stored summary is equal: `lastRunSummary != summary`
+      // skips the write.
+      unchangedWrite: .after { builder.destination.subject.send(other) },
+      unchangedWriteDelivery: .isDropped)
     #expect(manager.lastRunSummary == summary)
   }
 
@@ -410,7 +424,10 @@ struct PublisherParityTests {
             filename: "PARITY.JPG", exportedAt: Date())
           store.flushPendingNotifications()
         },
-        unchangedWrite: .notDrivable("a counter: every publication increments it"))
+        // A counter: every publication increments it. A flush with nothing pending publishes
+        // nothing.
+        unchangedWrite: .after { store.flushPendingNotifications() },
+        unchangedWriteDelivery: .isDropped)
     } cleanup: {
       try? await store.flush()
       try? FileManager.default.removeItem(at: root)
@@ -432,7 +449,10 @@ struct PublisherParityTests {
             assetId: "parity", placement: placement, variant: .original, filename: "PARITY.JPG")
           store.flushPendingNotifications()
         },
-        unchangedWrite: .notDrivable("a counter: every publication increments it"))
+        // A counter: every publication increments it. A flush with nothing pending publishes
+        // nothing.
+        unchangedWrite: .after { store.flushPendingNotifications() },
+        unchangedWriteDelivery: .isDropped)
     } cleanup: {
       try? await store.flush()
       try? FileManager.default.removeItem(at: root)

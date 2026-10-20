@@ -3,8 +3,8 @@ import Foundation
 import Testing
 
 /// Shows that `assertPublishedParity` accepts `@Published` and rejects the storage shapes a
-/// migration could slip into: a getter that reads the subject's value, an asynchronous hop and a
-/// repeat filter.
+/// migration could slip into. Each rejection must come from exactly the checks named: any other
+/// issue is unmatched and fails the test, and every named check must fire.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct PublishedParityHelperTests {
@@ -23,6 +23,38 @@ struct PublishedParityHelperTests {
     }
   }
 
+  /// Publishes in willSet without replaying the current value to a new subscriber.
+  @MainActor
+  private final class PassthroughBacked {
+    let subject = PassthroughSubject<Int, Never>()
+    var value = 0 { willSet { subject.send(newValue) } }
+  }
+
+  private final class Fired: @unchecked Sendable {
+    private let lock = NSLock()
+    private var checks: Set<ParityCheck> = []
+    func insert(_ check: ParityCheck) { lock.withLock { _ = checks.insert(check) } }
+    var all: Set<ParityCheck> { lock.withLock { checks } }
+  }
+
+  private func expectOnly(
+    _ expected: Set<ParityCheck>, sourceLocation: SourceLocation = #_sourceLocation,
+    _ body: () async -> Void
+  ) async {
+    let fired = Fired()
+    await withKnownIssue {
+      await body()
+    } matching: { issue in
+      let text = issue.comments.map(\.rawValue).joined(separator: " ")
+      guard let check = expected.first(where: { text.hasPrefix($0.rawValue) }) else {
+        return false
+      }
+      fired.insert(check)
+      return true
+    }
+    #expect(fired.all == expected, sourceLocation: sourceLocation)
+  }
+
   @Test func publishedPasses() async {
     let object = Published1()
     await assertPublishedParity(
@@ -31,9 +63,9 @@ struct PublishedParityHelperTests {
       unchangedWrite: .before { object.value = object.value })
   }
 
-  @Test func subjectValueGetterFails() async {
+  @Test func subjectValueGetterFailsDeliveryOrderAndNestedReplay() async {
     let object = SubjectBacked()
-    await withKnownIssue("a sink reading the property sees the new value") {
+    await expectOnly([.storedAfterDelivery, .nestedReplay, .nestedLater]) {
       await assertPublishedParity(
         object, \.value, { $0.subject.eraseToAnyPublisher() },
         change: { object.value = 1 },
@@ -41,9 +73,9 @@ struct PublishedParityHelperTests {
     }
   }
 
-  @Test func asynchronousDeliveryFails() async {
+  @Test func asynchronousDeliveryFailsReplayAndSynchrony() async {
     let object = Published1()
-    await withKnownIssue("the value arrives after the setter returns") {
+    await expectOnly([.replay, .synchronous, .lastIsStored]) {
       await assertPublishedParity(
         object, \.value,
         { $0.$value.receive(on: DispatchQueue.main).eraseToAnyPublisher() },
@@ -52,13 +84,34 @@ struct PublishedParityHelperTests {
     }
   }
 
+  @Test func missingReplayFailsReplay() async {
+    let object = PassthroughBacked()
+    await expectOnly([.replay]) {
+      await assertPublishedParity(
+        object, \.value, { $0.subject.eraseToAnyPublisher() },
+        change: { object.value = 1 },
+        unchangedWrite: .notDrivable("not under test"))
+    }
+  }
+
   @Test func repeatFilterFailsWhereRepeatsMustEmit() async {
     let object = Published1()
-    await withKnownIssue("an unchanged write is dropped") {
+    await expectOnly([.unchangedEmits]) {
       await assertPublishedParity(
         object, \.value, { $0.$value.removeDuplicates().eraseToAnyPublisher() },
         change: { object.value = 1 },
         unchangedWrite: .before { object.value = object.value })
+    }
+  }
+
+  @Test func repeatDeliveryFailsWhereRepeatsMustDrop() async {
+    let object = Published1()
+    await expectOnly([.unchangedDropped]) {
+      await assertPublishedParity(
+        object, \.value, { $0.$value.eraseToAnyPublisher() },
+        change: { object.value = 1 },
+        unchangedWrite: .before { object.value = object.value },
+        unchangedWriteDelivery: .isDropped)
     }
   }
 }
