@@ -92,8 +92,10 @@ import Testing
 
   /// A file that appears at the final name after any check and right before the commit
   /// is refused with the collision signature, and its bytes are never replaced. The
-  /// exclusive case uses the production capability check; the check-then-move case proves
-  /// `moveItem`'s own refusal is reported as `Export`/2, not that its window is closed.
+  /// exclusive case uses the production capability check and also pins that `EEXIST` from
+  /// the rename is the refusal itself, never a reason to retry with check-then-move; the
+  /// check-then-move case proves `moveItem`'s own refusal is reported as `Export`/2, not
+  /// that its window is closed.
   @Test(arguments: CommitPath.allCases)
   func existingFileAtCommitIsNeverReplaced(path: CommitPath) throws {
     let root = try makeRoot()
@@ -125,6 +127,22 @@ import Testing
     switch path {
     case .exclusiveRename: #expect(recorder.calls.map(\.flags) == [UInt32(RENAME_EXCL)])
     case .checkThenMove: #expect(recorder.calls.isEmpty)
+    }
+
+    if path == .exclusiveRename {
+      // With nothing at the name, a fallback would land the file; EEXIST must not fall back.
+      let freeName = root.appendingPathComponent("IMG_0002.JPG")
+      let refusing = FileIOService(renamer: { _, _, _ in EEXIST })
+      do {
+        try refusing.moveItemAtomically(from: source, to: freeName)
+        Issue.record("EEXIST from the exclusive rename must throw")
+      } catch {
+        let signal = AutoSyncFailureCategory.classify(error)
+        #expect(signal.errorSignature == "Export:2")
+        #expect(signal.category == .destinationCollision)
+      }
+      #expect(!FileManager.default.fileExists(atPath: freeName.path))
+      #expect(FileManager.default.fileExists(atPath: source.path))
     }
   }
 
@@ -275,24 +293,6 @@ import Testing
     }
     #expect(try Data(contentsOf: source) == Data("new".utf8))
     #expect(!FileManager.default.fileExists(atPath: destination.path))
-  }
-
-  @Test func renameEEXISTKeepsTheCollisionSignature() throws {
-    let root = try makeRoot()
-    defer { try? FileManager.default.removeItem(at: root) }
-    let source = root.appendingPathComponent(".photo-export-stage.tmp")
-    let destination = root.appendingPathComponent("IMG_0001.JPG")
-    try Data("new".utf8).write(to: source)
-    let service = FileIOService(renamer: { _, _, _ in EEXIST }, capability: { _ in true })
-
-    do {
-      try service.moveItemAtomically(from: source, to: destination)
-      Issue.record("EEXIST must throw")
-    } catch {
-      let signal = AutoSyncFailureCategory.classify(error)
-      #expect(signal.errorSignature == "Export:2")
-      #expect(signal.category == .destinationCollision)
-    }
   }
 
   @Test func scratchVolumeAdvertisesExclusiveRenameAndAMissingFolderDoesNot() throws {

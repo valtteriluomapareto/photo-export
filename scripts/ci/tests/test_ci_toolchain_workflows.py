@@ -152,8 +152,6 @@ class ToolchainWorkflowTests(unittest.TestCase):
         self.assertRegex(text, r"\n    timeout-minutes: \d+\n")
         self.assertIn("run: bash scripts/probe-exclusive-rename.sh\n", text)
         self.assertTrue((ROOT / "scripts/probe-exclusive-rename.sh").exists())
-        # Pull requests are covered by the guard tests instead, which test-guards.sh runs.
-        self.assertTrue((ROOT / "scripts/ci/tests/test_probe_exclusive_rename.py").exists())
 
 
 if __name__ == "__main__":

@@ -127,13 +127,19 @@ behaviour on disk images, weekly and on dispatch, in the toolchain canary (`maco
 bit does not rename a fresh name and refuse an existing one with `EEXIST`, or if APFS or HFS+
 stops advertising it.
 
-| macOS | Volume | `VOL_CAP_INT_RENAME_EXCL` | Exclusive rename, fresh name | Exclusive rename onto a file | Existing bytes | Commit path |
-| --- | --- | --- | --- | --- | --- | --- |
-| macOS 26.6.2 | APFS | yes | ok | `EEXIST` | intact | exclusive rename |
-| macOS 26.6.2 | HFS+ | yes | ok | `EEXIST` | intact | exclusive rename |
-| macOS 26.6.2 | ExFAT (FSKit) | no | `ENOTSUP` | `EEXIST` | intact | check, then move |
-| macOS 26.6.2 | MS-DOS FAT32 (FSKit) | no | ok (emulated) | `EEXIST` (emulated) | intact | check, then move |
-| macOS 15 (`macos-15` runner) | APFS, HFS+, ExFAT, MS-DOS FAT32 | to be filled in from the canary | | | | |
+Results from a local Mac on macOS 26.6.2 (Apple silicon) and the canary's dispatch run
+[39421950567](https://github.com/valtteriluomapareto/photo-export/actions/runs/39421950567):
+the `macos-15` runner (macOS 15.7.9) and the `macos-26` runner (macOS 26.6.2) matched it on every
+volume.
+
+| Volume | `VOL_CAP_INT_RENAME_EXCL` | Exclusive rename, fresh name | Exclusive rename onto a file | Existing bytes | Commit path |
+| --- | --- | --- | --- | --- | --- |
+| APFS | yes | ok | `EEXIST` | intact | exclusive rename |
+| HFS+ | yes | ok | `EEXIST` | intact | exclusive rename |
+| ExFAT (FSKit on macOS 26) | no | `ENOTSUP` | `EEXIST` | intact | check, then move |
+| MS-DOS FAT32 (FSKit on macOS 26) | no | ok (emulated) | `EEXIST` (emulated) | intact | check, then move |
+
+The stage was kept after every refused rename.
 
 SMB shares cannot be imaged, so they stay a manual check before a release that changes this
 commit. Mount a share from a macOS server and one from a NAS (Samba) and record, per share:
@@ -534,7 +540,7 @@ If you rename, move, add or remove one of these tests, update the list file, thi
 | [`ImportIdempotencyTests`](../../photo-exportTests/ImportIdempotencyTests.swift) | The import flow loses idempotency on retry | Audit. Two consecutive `startImport()` runs over the same backup tree must not double-write records. |
 | `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` | The `isExported` predicate runs *after* the retry-gate (instead of before) | Restore the order. `isExported` must run first so already-done assets are not blocked by the retry-gate. |
 | `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` | An AutoSync run starts while the history check after "Same Folder" is still running, or no run follows it | The check must start in the same main-actor turn as the identity publish (`onAmbiguousSameFolderChosen`), and a debounce an import cancels must keep its reason for the resume hook. |
-| [`FileIOServiceTests.existingFileAtCommitIsNeverReplaced`](../../photo-exportTests/FileIOServiceTests.swift) | A file that appears at the final name right before the commit call is replaced, or is refused with a signature other than `Export:2`, or the commit stops using `RENAME_EXCL` on a capable volume (the scratch volume, through the production capability check) | Restore the refusal. The final commit must never replace an existing file, and its collision must keep the `Export:2` signature retry state uses. The check-then-move case only proves that `moveItem`'s own refusal keeps `Export:2`; it cannot prove the window inside `moveItem` is closed. |
+| [`FileIOServiceTests.existingFileAtCommitIsNeverReplaced`](../../photo-exportTests/FileIOServiceTests.swift) | A file that appears at the final name right before the commit call is replaced, or is refused with a signature other than `Export:2`, or the commit stops using `RENAME_EXCL` on a capable volume (the scratch volume, through the production capability check), or an `EEXIST` from that rename falls back to check-then-move | Restore the refusal. The final commit must never replace an existing file, and its collision must keep the `Export:2` signature retry state uses. The check-then-move case only proves that `moveItem`'s own refusal keeps `Export:2`; it cannot prove the window inside `moveItem` is closed. |
 
 ## Extension recipes
 

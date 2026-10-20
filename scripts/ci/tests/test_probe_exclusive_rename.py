@@ -33,6 +33,8 @@ class ProbeExclusiveRenameTests(unittest.TestCase):
             result = subprocess.run(["bash", str(PROBE), "--folder", folder],
                                     capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            # The Swift commit gate needs the same: TMPDIR on a volume that advertises the bit.
+            self.assertIn("capability=yes", result.stdout)
             self.assertIn("existing_rename=EEXIST", result.stdout)
             self.assertIn("destination=intact", result.stdout)
             self.assertEqual(list(pathlib.Path(folder).iterdir()), [])

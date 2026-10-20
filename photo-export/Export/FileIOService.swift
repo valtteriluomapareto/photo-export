@@ -14,7 +14,8 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
 
   /// Test hooks around the final commit.
   struct Hooks: Sendable {
-    /// Runs immediately before the call that commits the file, after any existence check.
+    /// Runs immediately before each commit attempt, after any existence check: twice when
+    /// an exclusive rename is rejected with `ENOTSUP`/`ENOSYS` and check-then-move follows.
     var beforeCommit: (@Sendable (_ source: URL, _ destination: URL) throws -> Void)?
 
     init(beforeCommit: (@Sendable (_ source: URL, _ destination: URL) throws -> Void)? = nil) {
