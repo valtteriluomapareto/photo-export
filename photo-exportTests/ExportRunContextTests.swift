@@ -64,6 +64,25 @@ struct ExportRunContextTests {
     #expect(legacy.result == .interrupted && legacy.cancelReason == .destinationUnavailable)
   }
 
+  /// A stop category this build doesn't know, written by a newer build, is dropped rather
+  /// than failing the whole summary.
+  @Test func summaryWithAnUnknownStopCategoryStillDecodes() throws {
+    let summary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+        selection: .edited, startedAt: Date(timeIntervalSince1970: 1_700_000_000)),
+      endedAt: Date(timeIntervalSince1970: 1_700_000_060),
+      enqueuedCount: 2, completedCount: 1, failedCount: 1, skippedCount: 0,
+      cancelReason: nil, result: .failed, stoppedBy: .destinationNoSpace)
+    var object = try #require(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(summary)) as? [String: Any])
+    object["stoppedBy"] = "destinationQuotaExceeded"
+    let decoded = try JSONDecoder().decode(
+      ExportRunSummary.self, from: JSONSerialization.data(withJSONObject: object))
+    #expect(decoded.stoppedBy == nil)
+    #expect(decoded.result == .failed && decoded.failedCount == 1)
+  }
+
   @Test func runStateIdleHasNoActiveRun() {
     let state = ExportRunState.idle
 
