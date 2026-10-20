@@ -75,8 +75,8 @@ such failure, including rendering or conversion. Remaining assets are not downlo
 or marked failed by that run, and later scopes in the same Auto Export batch stop.
 Auto Export does not restart a stopped run on its own while the destination still looks
 connected; pending work waits for the next trigger, such as a Photos change, the drive
-reconnecting, **Export Now** or a settings change. Freeing space or restoring access is not
-a trigger by itself. Fix the destination, then use **Retry**, **Export Now** or a new manual
+reconnecting, **Export Now**, Photos access returning or a settings change. Freeing space or
+restoring destination access is not a trigger by itself. Fix the destination, then use **Retry**, **Export Now** or a new manual
 export to queue unfinished work again. If saving export history also fails, resolve the
 history recovery alert first.
 
@@ -195,5 +195,5 @@ If in 1.2.3 you chose **Select Photos** rather than full Photos access, that lim
 - **"Action needed — destination needs review"** — the safety scan found pre-existing files at the destination. Click **Review…** in Settings. If you've exported to this folder before, choose **Rebuild Records from Destination** to restore your progress; otherwise choose **Use This Destination** if those files are yours to keep.
 - **"Action needed — pick what to export"** — open Settings → Auto Export and tick at least one category.
 - **Auto Export status stays at "Waiting"** — usually the drive is disconnected or a manual export is in progress. The status row will tell you which. Reconnect the drive or wait for the manual run to finish.
-- **Last run says "0 exported (failed)" and Export Issues is empty** — Photos access is probably off. Turn on Photo Export under **System Settings → Privacy & Security → Photos**. Pending changes are kept and export on the next run.
+- **"Action needed — Photos access needed"** (Settings shows _Blocked — Photos access needed_) — Photos access is off, so Auto Export doesn't run and **Export Now** is unavailable. Turn on Photo Export under **System Settings → Privacy & Security → Photos**. Pending changes are kept and export when you return to Photo Export. Photo Export also notices a revoke made while it was in the background: it checks access before each run and blocks instead of running.
 - **A run failed but I fixed the underlying problem** — open Settings → Export Issues and use **Retry** when available, or start a manual export. If the entire destination changed (e.g. the drive was reformatted), use **File → Import Existing Backup…** to rebuild the local records first.
