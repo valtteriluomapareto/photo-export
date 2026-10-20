@@ -48,6 +48,8 @@ RULES = [
     # Hub files (listed in HUBS) and other widely shared files.
     ("photo-export/Export/ExportManager.swift", EVERY_ROW),
     ("photo-export/App/photo_exportApp.swift", ("authorization", "destination", "autoexport")),
+    ("photo-export/App/AppCore.swift", ("authorization", "destination", "autoexport")),
+    ("photo-export/App/AppComposition.swift", ("authorization", "destination", "autoexport")),
     ("photo-export/PhotoLibrary/PhotoLibraryManager.swift",
      ("local", "edited", "preview", "icloud", "livephoto", "collections", "authorization",
       "autoexport")),

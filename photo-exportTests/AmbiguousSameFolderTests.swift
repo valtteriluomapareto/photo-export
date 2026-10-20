@@ -281,7 +281,7 @@ struct AmbiguousSameFolderTests {
     let lifecycle = AppLifecycleCoordinator(
       cancelActiveWork: {}, interruptForDestinationUnavailable: {},
       configureRecordStores: { newId in
-        PhotoExportApp.configureRecordStores(
+        AppCore.configureRecordStores(
           for: newId, destinationManager: destinationManager,
           timelineStore: timelineStore, collectionStore: collectionStore)
       })
@@ -305,7 +305,7 @@ struct AmbiguousSameFolderTests {
       exportRecordStore: timelineStore, collectionExportRecordStore: collectionStore,
       assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
       userDefaults: builder.userDefaults)
-    PhotoExportApp.connectAmbiguousSameFolderImport(
+    AppCore.connectAmbiguousSameFolderImport(
       destinationManager: destinationManager, exportManager: exportManager,
       hasMigrationConflict: { lifecycle.migrationConflict != nil })
     let autoSync = AutoSyncManager()
@@ -561,7 +561,7 @@ struct AmbiguousSameFolderTests {
     defer { defaults.removePersistentDomain(forName: suite) }
     let destinationManager = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
     var conflict = true
-    PhotoExportApp.connectAmbiguousSameFolderImport(
+    AppCore.connectAmbiguousSameFolderImport(
       destinationManager: destinationManager, exportManager: h.manager,
       hasMigrationConflict: { conflict })
 
