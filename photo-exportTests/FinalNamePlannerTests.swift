@@ -127,6 +127,26 @@ import Testing
     #expect(folder.files.chunkReads.filter { $0.url == natural }.map(\.offset) == [0, 10])
   }
 
+  /// Only a regular file is adopted, even when another kind of entry reports the stage's
+  /// size and its bytes read the same. Defence in depth: the symlink and folder cases in
+  /// `IdenticalFileAdoptionTests` already differ in size or cannot be read.
+  @Test func nonRegularEntryWithTheStagedSizeIsNotAdopted() async throws {
+    let folder = try Folder()
+    defer { folder.cleanup() }
+    _ = try folder.write(Self.bytes, ".stage.tmp")
+    let natural = try folder.write(Self.bytes, "IMG.JPG")
+    folder.files.identityOverride = { url, identity in
+      guard url == natural, let identity else { return identity }
+      return FileItemIdentity(
+        isRegularFile: false, device: identity.device, inode: identity.inode,
+        size: identity.size, modificationSeconds: identity.modificationSeconds,
+        modificationNanoseconds: identity.modificationNanoseconds)
+    }
+
+    #expect(try await folder.plan() == .move(folder.url.appendingPathComponent("IMG (1).JPG")))
+    #expect(!folder.files.chunkReads.contains { $0.url == natural })
+  }
+
   /// A file that cannot be read cannot be shown identical, so it is passed over.
   @Test func unreadableCandidateIsNotAdopted() async throws {
     let folder = try Folder()

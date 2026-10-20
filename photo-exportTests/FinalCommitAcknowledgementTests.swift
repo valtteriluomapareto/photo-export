@@ -169,6 +169,12 @@ struct FinalCommitAcknowledgementTests {
     #expect(f.filename("old") == "OLD.JPG")
     #expect(f.isClaimed("OLD.JPG"))
     #expect(f.isClaimed(Self.committed))
+    // Still unsaved: switching away and back restores the retained history and its claims.
+    f.select("B")
+    f.select("A")
+    #expect(f.state == .persistenceFailed)
+    #expect(f.isClaimed("OLD.JPG"))
+    #expect(f.isClaimed(Self.committed))
     try FileManager.default.removeItem(at: log)
     try logBytes.write(to: log)
     if collection { f.collections.retryPersistence() } else { f.timeline.retryPersistence() }

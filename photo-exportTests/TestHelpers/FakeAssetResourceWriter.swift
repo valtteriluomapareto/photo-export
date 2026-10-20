@@ -35,7 +35,7 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
   private var _contentAssetIds: [String: String] = [:]
 
   /// Bytes written for `resource` of `assetId`: the same for the same pair, different for
-  /// another asset or resource. As long as `resource.fileSize` when it is positive, so
+  /// another asset or resource. Its length is `resource.fileSize` when that is positive, so
   /// size-based checks see the reported size, and 12 bytes otherwise.
   static func content(for resource: ResourceDescriptor, assetId: String) -> Data {
     let length = resource.fileSize.flatMap { $0 > 0 ? Int($0) : nil } ?? 12

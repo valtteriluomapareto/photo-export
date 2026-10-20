@@ -421,9 +421,10 @@ struct IdenticalFileAdoptionTests {
 
   // MARK: - Cancellation and staleness
 
-  /// Cancelling while the bytes are being compared stops the comparison at its next chunk:
-  /// the stage is removed, the existing file is untouched, and nothing is recorded or
-  /// adopted.
+  /// Cancelling while the bytes are being compared stops the comparison before its next
+  /// chunk. The tail is read second and the middle last, so holding the tail read and
+  /// cancelling must leave the middle unread. The stage is removed, the existing file is
+  /// untouched, and nothing is recorded or adopted.
   @Test func cancelDuringTheCompareLeavesNothingBehind() async throws {
     let h = Harness()
     let held = AsyncCheckpoint()
@@ -439,8 +440,9 @@ struct IdenticalFileAdoptionTests {
       let identity = try FileIOService().itemIdentity(at: natural)
       try await h.loseRecords()
       let middle = Int64(FinalNamePlanner.defaultChunkSize)
+      let tail = Self.threeChunks - middle
       h.files.chunkReadHook = { url, offset in
-        if url == natural, offset == middle { await held.enter() }
+        if url == natural, offset == tail { await held.enter() }
       }
 
       h.manager.startExportMonth(year: 2025, month: 6)
@@ -453,6 +455,7 @@ struct IdenticalFileAdoptionTests {
 
       // The held read finishes; no further chunk is read.
       #expect(h.files.chunkReads.count == readsBefore)
+      #expect(!h.files.chunkReads.contains { $0.offset == middle })
       #expect(try h.contents(of: folder) == ["IMG_0001.JPG"])
       #expect(try FileIOService().itemIdentity(at: natural) == identity)
       #expect(h.timeline.exportInfo(assetId: asset.id) == nil)
@@ -480,7 +483,7 @@ struct IdenticalFileAdoptionTests {
       else { return }
       Task { await entered.enter() }
       // Teardown always releases; the bound only keeps a broken test from stranding the worker.
-      if semaphore.wait(timeout: .now() + 150) != .success {
+      if semaphore.wait(timeout: .now() + 60) != .success {
         Issue.record("Adoption gate timed out")
       }
     }
@@ -513,6 +516,10 @@ struct IdenticalFileAdoptionTests {
 
       h.manager.startExportMonth(year: 2025, month: 6)
       #expect(await gate.entered.waitForEnter(count: 1))
+      // Re-marked under the adopted name before the commit was admitted.
+      let marked = h.timeline.exportInfo(assetId: asset.id)?.variants[.original]
+      #expect(marked?.status == .inProgress)
+      #expect(marked?.filename == "IMG_0001.JPG")
       let task = try #require(h.manager.currentTask)
       h.manager.cancelAndClear()
       gate.release()

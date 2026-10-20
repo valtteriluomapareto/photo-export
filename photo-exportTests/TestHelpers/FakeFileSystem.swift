@@ -17,7 +17,7 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   private var _inspectionHook: (@Sendable (URL) throws -> Void)?
   private var _identityHook: (@Sendable (URL) throws -> Void)?
   private var _chunkReadHook: (@Sendable (URL, Int64) async throws -> Void)?
-  private var _identityCalls: [URL] = []
+  private var _identityOverride: (@Sendable (URL, FileItemIdentity?) -> FileItemIdentity?)?
   private var _chunkReads: [(url: URL, offset: Int64, length: Int)] = []
 
   /// Runs before each identity lookup, so it can change what the lookup finds.
@@ -32,7 +32,11 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
     set { lock.withLock { _chunkReadHook = newValue } }
   }
 
-  var identityCalls: [URL] { lock.withLock { _identityCalls } }
+  /// Replaces what an identity lookup reports, given what the real lookup found.
+  var identityOverride: (@Sendable (URL, FileItemIdentity?) -> FileItemIdentity?)? {
+    get { lock.withLock { _identityOverride } }
+    set { lock.withLock { _identityOverride = newValue } }
+  }
   var chunkReads: [(url: URL, offset: Int64, length: Int)] { lock.withLock { _chunkReads } }
 
   var inspectionHook: (@Sendable (URL) throws -> Void)? {
@@ -128,9 +132,9 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   }
 
   func itemIdentity(at url: URL) throws -> FileItemIdentity? {
-    lock.withLock { _identityCalls.append(url) }
     try identityHook?(url)
-    return try real.itemIdentity(at: url)
+    let identity = try real.itemIdentity(at: url)
+    return identityOverride.map { $0(url, identity) } ?? identity
   }
 
   /// Thrown by `storedName(at:)` instead of reading the name.

@@ -80,6 +80,19 @@ struct FilenameClaimsTests {
     #expect(!Self.claimed(store, "IMG.JPG", subfolder: "videos"))
   }
 
+  /// The own record is subtracted only in the folder it names: another asset's claim in a
+  /// different month still counts there.
+  @Test func ownRecordIsExcludedOnlyInItsOwnFolder() {
+    let root = Self.root()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = Self.timelineStore(root)
+    Self.exported(store, "own", filename: "X.JPG", month: 6)
+    Self.exported(store, "other", filename: "X.JPG", month: 7)
+
+    #expect(Self.claimed(store, "X.JPG", month: 7, excluding: "own"))
+    #expect(!Self.claimed(store, "X.JPG", month: 6, excluding: "own"))
+  }
+
   /// Claims follow every mutation: a variant renamed or removed, a record moved to another
   /// month, an import, a reload from the log and snapshot, a prune and a reset.
   @Test func timelineClaimsFollowEveryMutation() async throws {
