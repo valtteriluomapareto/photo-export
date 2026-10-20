@@ -146,6 +146,13 @@ class ToolchainWorkflowTests(unittest.TestCase):
         self.assertIn("bash scripts/ci/check-built-app.sh ${{ matrix.xcode }}", source)
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", source)
 
+    def test_exclusive_rename_probe_runs_on_the_schedule_and_dispatch_only(self):
+        text = jobs(CANARY.read_text())["exclusive-rename-probe"]
+        self.assertIn("    if: github.event_name != 'pull_request'\n", text)
+        self.assertRegex(text, r"\n    timeout-minutes: \d+\n")
+        self.assertIn("run: bash scripts/probe-exclusive-rename.sh\n", text)
+        self.assertTrue((ROOT / "scripts/probe-exclusive-rename.sh").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
