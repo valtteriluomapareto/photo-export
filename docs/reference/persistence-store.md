@@ -317,6 +317,48 @@ persisted. Backup scanning propagates recognized-folder/type errors before impor
 optional date/size values remain optional. A later failure does not roll back matched
 imports or already-verified changes in the other store.
 
+## Import adopts collection placements
+
+Import Existing Backup also rebuilds collection history from the folders under
+`Collections/Favorites/`, `Collections/Albums/` and `Collections/Shared Albums/`, each with
+its optional `videos/` subfolder. It writes only the existing `upsertPlacement` and
+`upsertRecord` operations, so the format is unchanged and older builds read the result.
+
+- **Folders.** A folder is adopted for a current Favorites, album or shared album only when
+  `ExportPlacementResolver` could have given it that folder: the sanitized title under the
+  sanitized parent folders, or that title with a sibling-collision suffix. Names compare
+  case-folded and NFC. A saved placement for the album's current id decides its folder, and
+  folders that saved placements own are not adopted by another album. A renamed or moved
+  album's old folder is not adopted; the import reports it, and the next export uses a new
+  folder.
+- **Evidence.** A new placement needs files in the folder that match the album's assets and
+  no equal claim from another album or folder. When the folder is where the resolver puts
+  the album today and no other album or folder with matches competes for it, one match is
+  enough; otherwise at least half of the folder's files must match. A folder with no matches
+  is never adopted and is reported, which covers an album deleted and recreated under the
+  same title. Equal claims whose folders hold the same files (same names and known sizes)
+  follow the resolver's order; other ties adopt nothing. Files in `videos/` match only
+  videos. Shared albums adopt originals only. A same-extension edit exported in Edited mode
+  without an `_orig` companion is adopted as the original, as on the timeline, so the edit is
+  exported again.
+- **Case.** Folder names compare case-folded, and the stored path is the resolver's spelling.
+  On a case-insensitive volume a folder spelled in another case is the same folder and is
+  adopted. On a case-sensitive volume (the scan reads the volume's setting) folders and
+  saved placements match only by exact NFC spelling: a folder spelled differently from the
+  resolver's or a saved placement's path is not the one exports use, so it is not adopted and
+  is reported, and when both spellings exist the exact one is adopted. Where case is ignored,
+  two folders whose names differ only by case can't be told apart and neither is adopted.
+- **Placements.** An adopted placement has the id the resolver gives the collection and the
+  resolver's spelling of the folder path. It is written before its records in one batch. A
+  placement already in the history keeps its metadata and `relativePath`.
+- **Records.** Each matched file becomes a `done` variant at its folder and subfolder. A
+  variant already `done` is left as it is. A repeated import appends nothing.
+- **Failures.** Collection folders are scanned with the timeline. A scan error, a failed
+  Photos album list or a failed album read fails the import before either history changes.
+  When the collection store is not ready, the timeline is still imported and the report
+  says albums were skipped. Both histories are written in one main-actor turn and then
+  reconciled as above; a later failure does not roll back that commit.
+
 ## Interrupted paired-slot recovery
 
 Original-side paired variants can reuse an existing slot only when their record still

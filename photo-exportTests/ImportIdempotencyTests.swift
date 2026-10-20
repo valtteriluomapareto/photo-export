@@ -289,4 +289,77 @@ struct ImportIdempotencyTests {
     #expect(secondCollectionFiles.log == firstCollectionFiles.log)
     #expect(secondCollectionFiles.snapshot == firstCollectionFiles.snapshot)
   }
+
+  /// Album, shared-album and Favorites folders imported twice: the second import adopts the
+  /// same placements, reports the same counts and writes no bytes to either history.
+  @Test func collectionAdoptionIsIdempotent() async throws {
+    let (manager, photoLib, dest, store, storeRoot, collections) = makeTestHarness()
+    defer {
+      store.flushForTesting()
+      collections.flushForTesting()
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
+    let shotDate = date(year: 2025, month: 6, day: 15)
+    let photo = TestAssetFactory.makeAsset(id: "photo", creationDate: shotDate, mediaType: .image)
+    let shared = TestAssetFactory.makeAsset(
+      id: "shared", creationDate: date(year: 2025, month: 6, day: 16), mediaType: .image)
+    photoLib.resourcesByAssetId["photo"] = [
+      TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+    ]
+    photoLib.resourcesByAssetId["shared"] = [
+      TestAssetFactory.makeResource(originalFilename: "IMG_0002.JPG")
+    ]
+    photoLib.collectionTree = [
+      CollectionBackupFixture.folder(
+        "trips", "Trips", children: [CollectionBackupFixture.album("paris", "Paris", in: ["Trips"])]),
+      CollectionBackupFixture.sharedAlbum("family", "Family"),
+    ]
+    photoLib.assetsByYearMonth["2025-6"] = [photo]
+    photoLib.assetsByAlbumLocalId["paris"] = [photo]
+    photoLib.favoritesAssets = [photo]
+    photoLib.assetsBySharedAlbumLocalId["family"] = [shared]
+    for (folder, name, fileDate) in [
+      ("2025/06/", "IMG_0001.JPG", shotDate),
+      ("Collections/Albums/Trips/Paris/", "IMG_0001.JPG", shotDate),
+      ("Collections/Favorites/", "IMG_0001.JPG", shotDate),
+      ("Collections/Shared Albums/Family/", "IMG_0002.JPG", shared.creationDate!),
+      ("Collections/Albums/Old/", "OLD.JPG", shotDate),
+    ] {
+      try CollectionBackupFixture.plant(at: dest.rootURL, folder, name, date: fileDate)
+    }
+
+    manager.startImport()
+    await manager.waitForImportCompletion()
+    let first = try #require(manager.importResult)
+    try #require(first.collectionMatchedCount == 3)
+    store.flushForTesting()
+    collections.flushForTesting()
+    let firstPlacements = collections.placements
+    let firstRecords = collections.recordBodies
+    let firstTimelineFiles = try persistedBytes(
+      storeRoot: storeRoot, log: "export-records.jsonl", snapshot: "export-records.json")
+    let firstCollectionFiles = try persistedBytes(
+      storeRoot: storeRoot, log: "collection-records.jsonl", snapshot: "collection-records.json")
+
+    manager.importResult = nil
+    manager.startImport()
+    await manager.waitForImportCompletion()
+    let second = try #require(manager.importResult)
+    store.flushForTesting()
+    collections.flushForTesting()
+
+    #expect(second == first)
+    #expect(collections.placements.mapValues(\.relativePath) == firstPlacements.mapValues(\.relativePath))
+    #expect(collections.placements.mapValues(\.createdAt) == firstPlacements.mapValues(\.createdAt))
+    #expect(collections.recordBodies == firstRecords)
+    let secondTimelineFiles = try persistedBytes(
+      storeRoot: storeRoot, log: "export-records.jsonl", snapshot: "export-records.json")
+    let secondCollectionFiles = try persistedBytes(
+      storeRoot: storeRoot, log: "collection-records.jsonl", snapshot: "collection-records.json")
+    #expect(secondTimelineFiles.log == firstTimelineFiles.log)
+    #expect(secondTimelineFiles.snapshot == firstTimelineFiles.snapshot)
+    #expect(secondCollectionFiles.log == firstCollectionFiles.log)
+    #expect(secondCollectionFiles.snapshot == firstCollectionFiles.snapshot)
+  }
 }

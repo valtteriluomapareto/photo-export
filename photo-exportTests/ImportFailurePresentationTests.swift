@@ -133,6 +133,33 @@ import Testing
       return shown
     }
 
+    /// The result lists album and Favorites files matched and album folders no current album
+    /// was matched to, and says when the album history couldn't be rebuilt.
+    @Test(.timeLimit(.minutes(2)))
+    func resultShowsAlbumAndFavoritesRows() async throws {
+      let f = Fixture()
+      defer { f.close() }
+      f.show()
+      f.manager.importResult = ImportReport(
+        matchedCount: 1, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 1,
+        collectionFilesScanned: 4, collectionMatchedCount: 3,
+        unrecognizedCollectionFolders: ["Collections/Albums/Trips/Old/", "Collections/Favorites/"])
+      #expect(await observe { f.counter.renderedText["import-collection-matched"] == ["3"] })
+      #expect(f.counter.renderedText["import-collection-unrecognized"] == ["2"])
+      #expect(
+        f.counter.renderedText["import-collection-unrecognized-caption"]?.first?.hasPrefix(
+          "\u{201C}Trips/Old\u{201D}, \u{201C}Favorites\u{201D}. These are usually albums renamed")
+          == true)
+      #expect(f.counter.renderedText["import-collections-skipped"] == nil)
+
+      f.counter.reset()
+      f.manager.importResult = ImportReport(
+        matchedCount: 1, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 1,
+        collectionFilesScanned: 2, collectionsSkipped: true)
+      #expect(await observe { f.counter.renderedText["import-collections-skipped"] != nil })
+      #expect(f.counter.renderedText["import-collection-unrecognized"] == nil)
+    }
+
     @Test(.timeLimit(.minutes(2)))
     func rootFailureIsTerminalPreservesHistoryAndCanRetry() async throws {
       let f = Fixture()

@@ -10,7 +10,8 @@ extension View {
   /// this they collapse to a near-zero minimum — letting a stale small window
   /// frame (which can survive an App Store reinstall via saved window state)
   /// render as an unusable, non-resizable sliver (issue #125). The library
-  /// state sets its own, larger minimum in `LibraryRootView`.
+  /// state sets its own minimum in `LibraryRootView`: wider, but shorter to
+  /// leave room for its toolbar.
   ///
   /// `maxWidth/maxHeight: .infinity` keeps the window freely resizable larger;
   /// the ideal sizes give a comfortable first-run window.

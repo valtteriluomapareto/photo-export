@@ -193,9 +193,9 @@ struct LibraryRootView: View {
         } : nil
     )
     .focusedSceneValue(\.selectAllSidebarItemsAction, sidebarSelectAllAction)
-    // Window min must fit: sidebar min (220) + content min (480) + ~300pt
-    // for the detail pane to render a useful asset preview.
-    .frame(minWidth: 1100, minHeight: 700)
+    .frame(
+      minWidth: Self.minimumWindowSize.width, minHeight: Self.minimumWindowSize.height
+    )
     .background(Color(.windowBackgroundColor))
   }
 
@@ -308,8 +308,20 @@ struct LibraryRootView: View {
     // ~240pt. Min ≈ ideal so AppKit's persisted NSSplitView dividers can't
     // collapse the sidebar back to its old narrow default; max caps the
     // runaway resize so the content grid stays primary.
-    .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 360)
+    .navigationSplitViewColumnWidth(min: Self.sidebarMinWidth, ideal: 240, max: 360)
   }
+
+  static let sidebarMinWidth: CGFloat = 220
+  static let contentMinWidth: CGFloat = 480
+  /// The width the window minimum reserves for the detail pane, enough for a useful asset
+  /// preview. Not a column constraint: the detail column takes whatever the other two leave.
+  static let detailWidthBudget: CGFloat = 300
+  /// The smallest content size. The window around it must fit a 1024×768 display, the smallest
+  /// the app runs on (small Macs and CI's hosted runners). The width is the sidebar and content
+  /// minimums plus the detail budget. Of the 768pt height, the menu bar takes about 25 and the
+  /// title bar and toolbar 52, so 600 leaves about 90 for a Dock at the bottom.
+  static let minimumWindowSize = CGSize(
+    width: sidebarMinWidth + contentMinWidth + detailWidthBudget, height: 600)
 
   @ViewBuilder
   private var contentArea: some View {
@@ -318,7 +330,7 @@ struct LibraryRootView: View {
       // size. Min is just narrower than 3 columns so the grid never
       // collapses to a single column; max caps so a wide window still
       // leaves room for the detail pane.
-      .navigationSplitViewColumnWidth(min: 480, ideal: 520, max: 900)
+      .navigationSplitViewColumnWidth(min: Self.contentMinWidth, ideal: 520, max: 900)
   }
 
   @ViewBuilder
