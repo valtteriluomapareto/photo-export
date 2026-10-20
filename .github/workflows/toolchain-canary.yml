@@ -1,7 +1,8 @@
 name: Toolchain canary
 
-# Builds and tests on newer Xcode versions than .xcode-version so a toolchain bump is a
-# known list of fixes. Not part of the merge gate: build-and-test in ci.yml never needs it.
+# Builds and tests on the next Xcode, so a toolchain bump is a known list of fixes, and on the
+# oldest macOS the app supports. Not part of the merge gate: build-and-test in ci.yml never
+# needs it.
 on:
   workflow_dispatch:
   schedule:

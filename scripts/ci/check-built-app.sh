@@ -16,7 +16,11 @@ if [[ "${1:-}" == "--app" ]]; then
   app="${2:?--app needs a path}"
   shift 2
 fi
-if [[ $# -gt 0 ]]; then
+if [[ $# -gt 1 || "${1:-}" == -* ]]; then
+  echo "::error::usage: check-built-app.sh [--app <path>] [<xcode version>]" >&2
+  exit 64
+fi
+if [[ $# -eq 1 ]]; then
   version="$1"
 else
   version="$(tr -d '[:space:]' < "${repo_root}/.xcode-version")"

@@ -26,7 +26,7 @@ struct DestinationIdentityIntegrationTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). the CI macOS runner runs this."
+      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner runs this."
     ))
   func remountDriftKeepsEveryKeyOnStableId() async throws {
     let dir = TestScratch.directory("RemountIntegration")

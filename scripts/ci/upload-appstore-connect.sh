@@ -7,9 +7,10 @@ set -euo pipefail
 # discovers it automatically via --apiKey / --apiIssuer.
 #
 # altool is deprecated for notarization (replaced by notarytool) but is
-# still the App Store upload tool; the preflight below fails before an
-# upload if a future Xcode drops --upload-package. The replacement then is
-# iTMSTransporter or the App Store Connect REST API.
+# still the App Store upload tool. check-altool-upload.sh runs in every
+# App Store build, so a toolchain that drops --upload-package fails a
+# build-only run first; the replacement then is iTMSTransporter or the App
+# Store Connect REST API.
 #
 # Required environment variables:
 #   PKG_PATH
@@ -49,12 +50,6 @@ echo "  Build:      ${BUILD_NUMBER}"
 echo "  API Key ID: ${APP_STORE_CONNECT_API_KEY_ID}"
 echo "  Issuer ID:  ${APP_STORE_CONNECT_API_ISSUER_ID}"
 echo ""
-
-echo "Checking that altool still uploads packages..."
-if ! xcrun altool --help 2>&1 | grep -q -- '--upload-package'; then
-  echo "::error::xcrun altool in $(xcode-select -p) has no --upload-package"
-  exit 1
-fi
 
 # altool upload synopsis:
 #   xcrun altool --upload-package <file> --type <macos|ios|...>

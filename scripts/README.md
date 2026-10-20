@@ -119,8 +119,8 @@ release matrix for both.
 `test.log`, `test-start.marker` and `TestResults.xcresult` to the current directory, where the
 diagnostics, coverage and regression-gate steps read them.
 
-`toolchain-canary.yml` builds and tests on newer Xcode versions (one lane per version, each
-naming its runner label) weekly, on demand, and on pull requests that change the version file
+`toolchain-canary.yml` builds and tests on other toolchains than `.xcode-version` (one lane per
+version, each naming its runner label) weekly, on demand, and on pull requests that change the version file
 or these scripts. One lane runs the next Xcode; another runs on `macos-15`, the oldest macOS the
 app supports, so a build made with the 26 SDK is tested where macOS 15 users run it.
 

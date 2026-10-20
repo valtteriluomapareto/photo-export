@@ -77,6 +77,14 @@ class CheckBuiltAppTests(unittest.TestCase):
         result = self.check("--app", str(archived))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_stray_or_misordered_arguments_are_rejected(self):
+        self.build(DTXcode="2710", ITSAppUsesNonExemptEncryption=False)
+        for args in [("27.1", "--app", "X"), ("--verbose",), ("27.1", "26.6")]:
+            with self.subTest(args=args):
+                result = self.check(*args)
+                self.assertEqual(result.returncode, 64, result.stdout + result.stderr)
+                self.assertIn("usage", result.stderr)
+
     def test_missing_app_fails_instead_of_passing_without_evidence(self):
         for args in [(), ("--app", str(self.root / "missing/Photo Export.app"))]:
             with self.subTest(args=args):

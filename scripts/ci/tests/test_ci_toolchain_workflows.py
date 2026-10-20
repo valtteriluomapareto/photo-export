@@ -68,21 +68,29 @@ class ToolchainWorkflowTests(unittest.TestCase):
             with self.subTest(workflow=name, job=job):
                 self.assertIn(job, jobs((ROOT / ".github/workflows" / name).read_text()))
 
-    def test_pinned_jobs_check_their_app_against_the_version_file(self):
-        """Pinned jobs pass no version to the built-app check; only the canary names its lane's."""
-        allowed = re.compile(r'^run: bash ' + re.escape(CHECK) + r'( --app "[^"]+")?$')
+    def test_each_job_checks_the_app_it_ships_against_the_version_file(self):
+        """No version argument outside the canary, and each release checks its shipped bundle."""
+        expected = {
+            ("ci.yml", "app-validation"): f"run: bash {CHECK}",
+            ("release-direct.yml", "build-sign-notarize"): f'run: bash {CHECK} --app "${{APP_PATH}}"',
+            ("release-app-store.yml", "build-sign-upload"):
+                f'run: bash {CHECK} --app "${{ARCHIVE_PATH}}/Products/Applications/${{APP_NAME}}.app"',
+            ("toolchain-canary.yml", "canary"): f"run: bash {CHECK} ${{{{ matrix.xcode }}}}",
+        }
         for workflow in WORKFLOWS:
             for job, text in jobs(workflow.read_text()).items():
                 calls = [line.strip() for line in text.splitlines() if "check-built-app.sh" in line]
-                if not calls:
-                    continue
-                with self.subTest(workflow=workflow.name, job=job):
-                    if workflow == CANARY:
-                        self.assertEqual(calls, [f"run: bash {CHECK} ${{{{ matrix.xcode }}}}"])
-                    else:
-                        self.assertIn((workflow.name, job), PINNED_JOBS)
-                        self.assertEqual(len(calls), 1)
-                        self.assertRegex(calls[0], allowed)
+                if calls:
+                    with self.subTest(workflow=workflow.name, job=job):
+                        self.assertEqual(calls, [expected.get((workflow.name, job))])
+
+    def test_app_store_builds_check_altool_upload_support_before_archiving(self):
+        text = jobs((ROOT / ".github/workflows/release-app-store.yml").read_text())["build-sign-upload"]
+        check = text.find("      - name: Check altool upload support\n")
+        self.assertNotEqual(check, -1)
+        self.assertLess(text.find("      - name: Select Xcode\n"), check)
+        self.assertLess(check, text.find("      - name: Archive\n"))
+        self.assertNotIn("if:", text[check:text.find("      - name:", check + 10)])
 
     def test_shipped_apps_are_checked_before_they_are_packaged_or_uploaded(self):
         """The check sits after the step that produces the app and before anything ships it."""

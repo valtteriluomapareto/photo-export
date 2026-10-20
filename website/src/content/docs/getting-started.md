@@ -107,6 +107,6 @@ cd photo-export
 open photo-export.xcodeproj
 ```
 
-Press Run (Cmd+R) with the `photo-export` scheme selected. Requires Xcode 26.6 or later (the version CI uses is in `.xcode-version`).
+Press Run (Cmd+R) with the `photo-export` scheme selected. Requires Xcode at or above the version in `.xcode-version`, which CI and releases use.
 
 See the [Contributing guide](https://github.com/valtteriluomapareto/photo-export/blob/main/CONTRIBUTING.md) for more details on development setup, running tests, and linting.

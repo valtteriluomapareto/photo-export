@@ -38,7 +38,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). the CI macOS runner returns true so this runs there."
+      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner returns true so this runs there."
     ))
   func stableIdReusedAcrossSimulatedRemountDrift() throws {
     let dir = try makeTempDir()

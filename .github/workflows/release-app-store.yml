@@ -99,6 +99,9 @@ jobs:
       - name: Select Xcode
         run: bash scripts/ci/select-xcode.sh
 
+      - name: Check altool upload support
+        run: bash scripts/ci/check-altool-upload.sh
+
       # ── Keychain & certificates ──────────────────────────────────────
       - name: Set up keychain and certificates
         env:
