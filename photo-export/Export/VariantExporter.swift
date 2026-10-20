@@ -127,7 +127,8 @@ final class VariantExporter {
     mediaRenderer: any MediaRenderer,
     imageConverter: any ImageConverter,
     fileSystem: any FileSystemService,
-    exportDestination: any ExportDestination
+    exportDestination: any ExportDestination,
+    finalNamePlanner: FinalNamePlanner? = nil
   ) {
     self.host = host
     self.queueCoordinator = queueCoordinator
@@ -137,7 +138,7 @@ final class VariantExporter {
     self.mediaRenderer = mediaRenderer
     self.imageConverter = imageConverter
     self.fileSystem = fileSystem
-    self.finalNamePlanner = FinalNamePlanner(fileSystem: fileSystem)
+    self.finalNamePlanner = finalNamePlanner ?? FinalNamePlanner(fileSystem: fileSystem)
     self.exportDestination = exportDestination
   }
 

@@ -437,6 +437,11 @@ struct IdenticalFileAdoptionTests {
   /// chunk. The tail is read second and the middle last, so holding the tail read and
   /// cancelling must leave the middle unread. The stage is removed, the existing file is
   /// untouched, and nothing is recorded or adopted.
+  ///
+  /// `cancelAndClear` also cancels the export's Task, so this pins the per-read Task
+  /// cancellation check. The generation check alone is pinned by
+  /// `VariantExporterTests.staleGenerationStopsTheCompareBeforeItsNextRead` and the
+  /// interval by `FinalNamePlannerTests.stopIsAskedOncePerInterval`.
   @Test func cancelDuringTheCompareLeavesNothingBehind() async throws {
     let h = Harness()
     let held = AsyncCheckpoint()
@@ -625,46 +630,113 @@ struct IdenticalFileAdoptionTests {
     }
   }
 
-  /// An edited Live Photo whose image would be adopted but whose motion file's name holds
-  /// something else is not split across stems: the image is not adopted, so both files land
-  /// at the next stem together.
-  @Test func livePhotoImageIsNotAdoptedAheadOfItsMotionFile() async throws {
+  enum LivePhotoSide: String, CaseIterable, CustomTestStringConvertible {
+    case edited, original
+    var testDescription: String { rawValue }
+  }
+
+  /// A Live Photo whose image is identical to a file on disk but whose motion file's name
+  /// holds something else is not split across stems: both files land at the next stem.
+  ///
+  /// - Edited: the edit inherits the recorded original's stem, so its image is a suffix slot
+  ///   and is held back from adoption because its paired video follows.
+  /// - Original (an unedited asset, so only the original side is written): the group stem
+  ///   is allocated with both slots free, which moves the pair before any adoption is
+  ///   considered. `pairedVideoFollowsItsImageOnEachSide` pins the rule itself.
+  @Test(arguments: LivePhotoSide.allCases)
+  func livePhotoImageIsNotAdoptedAheadOfItsMotionFile(side: LivePhotoSide) async throws {
     let h = Harness()
     try await withCleanup {
+      let edited = side == .edited
       let asset = TestAssetFactory.makeAsset(
-        id: "live", creationDate: Self.june15, hasAdjustments: true, isLivePhoto: true)
+        id: "live", creationDate: Self.june15, hasAdjustments: edited, isLivePhoto: true)
+      let photo = TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC")
       let render = TestAssetFactory.makeResource(
         type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG")
       h.photos.assetsByYearMonth["2025-6"] = [asset]
-      h.photos.resourcesByAssetId[asset.id] = [
-        TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
-        render,
-        TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
-        TestAssetFactory.makeResource(
-          type: .fullSizePairedVideo, originalFilename: "FullSizeRender.MOV"),
-      ]
+      h.photos.resourcesByAssetId[asset.id] =
+        [photo, TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV")]
+        + (edited
+          ? [
+            render,
+            TestAssetFactory.makeResource(
+              type: .fullSizePairedVideo, originalFilename: "FullSizeRender.MOV"),
+          ] : [])
       h.manager.versionSelection = .edited
       h.manager.livePhotosPairedExport = true
-      // The original is recorded, so the edit inherits its stem. The edit's own copy is on
-      // disk without a record; a different file holds the motion file's name.
-      h.timeline.markVariantExported(
-        assetId: asset.id, variant: .original, year: 2025, month: 6, relPath: "2025/06/",
-        filename: "IMG_0001.HEIC", exportedAt: Date())
       let folder = try h.destination.urlForMonth(year: 2025, month: 6, createIfNeeded: true)
-      try Data("original".utf8).write(to: folder.appendingPathComponent("IMG_0001.HEIC"))
-      let renderBytes = FakeAssetResourceWriter.content(for: render, assetId: asset.id)
-      try renderBytes.write(to: folder.appendingPathComponent("IMG_0001.JPG"))
+      let imageName = edited ? "IMG_0001.JPG" : "IMG_0001.HEIC"
+      let imageBytes = FakeAssetResourceWriter.content(
+        for: edited ? render : photo, assetId: asset.id)
+      if edited {
+        // The original is recorded, so the edit inherits its stem.
+        h.timeline.markVariantExported(
+          assetId: asset.id, variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+          filename: "IMG_0001.HEIC", exportedAt: Date())
+        try Data("original".utf8).write(to: folder.appendingPathComponent("IMG_0001.HEIC"))
+      }
+      // The image's own copy is on disk without a record; a different file holds the
+      // motion file's name.
+      try imageBytes.write(to: folder.appendingPathComponent(imageName))
       try Data("third-party".utf8).write(to: folder.appendingPathComponent("IMG_0001.MOV"))
 
       await h.exportMonth()
 
       let variants = h.timeline.exportInfo(assetId: asset.id)?.variants
-      #expect(variants?[.edited]?.filename == "IMG_0001 (1).JPG")
-      #expect(variants?[.editedPairedVideo]?.filename == "IMG_0001 (1).MOV")
-      #expect(try Data(contentsOf: folder.appendingPathComponent("IMG_0001.JPG")) == renderBytes)
+      let image: ExportVariant = edited ? .edited : .original
+      let video: ExportVariant = edited ? .editedPairedVideo : .originalPairedVideo
+      #expect(variants?[image]?.filename == (edited ? "IMG_0001 (1).JPG" : "IMG_0001 (1).HEIC"))
+      #expect(variants?[video]?.filename == "IMG_0001 (1).MOV")
+      #expect(try Data(contentsOf: folder.appendingPathComponent(imageName)) == imageBytes)
       #expect(
         try Data(contentsOf: folder.appendingPathComponent("IMG_0001.MOV"))
           == Data("third-party".utf8))
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  @Test func pairedVideoFollowsItsImageOnEachSide() {
+    let all: [ExportVariant] = [.original, .originalPairedVideo, .edited, .editedPairedVideo]
+    #expect(ExportManager.pairedVideoFollows(.original, in: [.original, .originalPairedVideo]))
+    #expect(ExportManager.pairedVideoFollows(.edited, in: [.edited, .editedPairedVideo]))
+    #expect(!ExportManager.pairedVideoFollows(.original, in: [.original, .edited]))
+    #expect(!ExportManager.pairedVideoFollows(.edited, in: [.original, .originalPairedVideo]))
+    #expect(!ExportManager.pairedVideoFollows(.originalPairedVideo, in: all))
+    #expect(!ExportManager.pairedVideoFollows(.editedPairedVideo, in: all))
+  }
+
+  /// A lookup error at the commit's recheck counts as a change: the export plans again,
+  /// finds the same identical file and adopts it.
+  @Test func lookupErrorAtTheCommitRecheckPlansAgain() async throws {
+    let h = Harness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      ]
+      await h.exportMonth()
+      let folder = try h.monthFolder()
+      let natural = folder.appendingPathComponent("IMG_0001.JPG")
+      try await h.loseRecords()
+      // The first planning walk looks the natural name up once; the commit's recheck is the
+      // second lookup, then a second walk and a second recheck follow.
+      let lookups = LockedBox(0)
+      h.files.identityHook = { url in
+        guard url == natural else { return }
+        lookups.mutate { $0 += 1 }
+        if lookups.value == 2 { throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO)) }
+      }
+
+      await h.exportMonth()
+
+      #expect(lookups.value == 4)
+      let variant = h.timeline.exportInfo(assetId: asset.id)?.variants[.original]
+      #expect(variant?.status == .done)
+      #expect(variant?.filename == "IMG_0001.JPG")
+      #expect(try h.contents(of: folder) == ["IMG_0001.JPG"])
+      #expect(h.files.moveCalls.count == 1)
     } cleanup: {
       await h.cleanup()
     }

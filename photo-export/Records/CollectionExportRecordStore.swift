@@ -1039,25 +1039,34 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   private func updateClaims(placementId: String, body: RecordBody, adding: Bool) {
+    guard filenameClaims != nil else { return }
+    Self.update(&filenameClaims!, placementId: placementId, body: body, adding: adding)
+  }
+
+  private static func update(
+    _ claims: inout FilenameClaims<ClaimFolder>, placementId: String, body: RecordBody,
+    adding: Bool
+  ) {
     for variant in body.variants.values {
       let folder = ClaimFolder(placementId: placementId, subfolder: variant.subfolder)
       if adding {
-        filenameClaims?.add(variant.filename, in: folder)
+        claims.add(variant.filename, in: folder)
       } else {
-        filenameClaims?.remove(variant.filename, in: folder)
+        claims.remove(variant.filename, in: folder)
       }
     }
   }
 
   private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
     if let filenameClaims { return filenameClaims }
-    filenameClaims = FilenameClaims<ClaimFolder>()
+    var claims = FilenameClaims<ClaimFolder>()
     for (placementId, byAsset) in recordBodies {
       for body in byAsset.values {
-        updateClaims(placementId: placementId, body: body, adding: true)
+        Self.update(&claims, placementId: placementId, body: body, adding: true)
       }
     }
-    return filenameClaims ?? FilenameClaims<ClaimFolder>()
+    filenameClaims = claims
+    return claims
   }
 
   /// Converts any variant left as `.inProgress` after load into `.failed` with the

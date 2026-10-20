@@ -102,13 +102,14 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     )
   }
 
-  /// The collision refusal, `Export` code 2. Also reported when an existing file stops
-  /// being the one an export planned to adopt.
+  /// Whether `error` is the collision refusal from `destinationExistsError()`.
   static func isDestinationExists(_ error: Error) -> Bool {
     let error = error as NSError
     return error.domain == "Export" && error.code == 2
   }
 
+  /// The collision refusal, `Export` code 2. Also reported when an existing file stops
+  /// being the one an export planned to adopt.
   static func destinationExistsError() -> NSError {
     NSError(
       domain: "Export", code: 2,
@@ -306,6 +307,8 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     }
 
     private func readNow(offset: Int64, length: Int) throws -> Data {
+      // A closed descriptor number may already belong to another open file.
+      guard !isClosed.withLock({ $0 }) else { throw FileIOService.posixError(EBADF, url) }
       var data = Data(count: length)
       var filled = 0
       try data.withUnsafeMutableBytes { buffer in

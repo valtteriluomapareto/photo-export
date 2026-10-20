@@ -123,6 +123,7 @@ import Testing
 
     #expect(plan == .move(folder.url.appendingPathComponent("IMG (1).JPG")))
     #expect(folder.files.chunkReads.filter { $0.url == natural }.map(\.offset) == [0, 10])
+    #expect(folder.files.readCloses.count == 2)
   }
 
   @Test func differentMiddleRejectsAfterReadingIt() async throws {
@@ -135,6 +136,7 @@ import Testing
 
     #expect(try await folder.plan() == .move(folder.url.appendingPathComponent("IMG (1).JPG")))
     #expect(folder.files.chunkReads.filter { $0.url == natural }.map(\.offset) == [0, 10, 4])
+    #expect(folder.files.readCloses.count == 2)
   }
 
   /// The walk goes past a claimed identical file, a different one and an empty one, and
@@ -172,6 +174,7 @@ import Testing
       try await folder.plan(stop: { reads.value >= 2 })
     }
     #expect(folder.files.chunkReads.filter { $0.url == natural }.map(\.offset) == [0, 10])
+    #expect(folder.files.readCloses.count == 2)
   }
 
   /// Only a regular file is adopted, even when another kind of entry reports the stage's
@@ -205,6 +208,7 @@ import Testing
     }
 
     #expect(try await folder.plan() == .move(folder.url.appendingPathComponent("IMG (1).JPG")))
+    #expect(folder.files.readCloses.count == 2)
   }
 
   /// Without the name the folder stores, an identical file is passed over too.

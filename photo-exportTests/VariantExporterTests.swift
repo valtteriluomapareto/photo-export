@@ -64,6 +64,7 @@ struct VariantExporterTests {
     let renderer: FakeMediaRenderer
     let converter: FakeImageConverter
     let fileSystem: FakeFileSystem
+    let queueCoordinator: ExportQueueCoordinator
     let destDir: URL
     let storeRoot: URL
 
@@ -73,7 +74,7 @@ struct VariantExporterTests {
     }
   }
 
-  private func makeHarness() -> Harness {
+  private func makeHarness(planner: ((FakeFileSystem) -> FinalNamePlanner)? = nil) -> Harness {
     let host = FakeHost()
     let writer = FakeAssetResourceWriter()
     let renderer = FakeMediaRenderer()
@@ -99,10 +100,11 @@ struct VariantExporterTests {
       mediaRenderer: renderer,
       imageConverter: converter,
       fileSystem: fileSystem,
-      exportDestination: dest)
+      exportDestination: dest,
+      finalNamePlanner: planner?(fileSystem))
     return Harness(
       exporter: exporter, host: host, writer: writer, renderer: renderer,
-      converter: converter, fileSystem: fileSystem,
+      converter: converter, fileSystem: fileSystem, queueCoordinator: queueCoordinator,
       destDir: destDir, storeRoot: storeRoot)
   }
 
@@ -508,5 +510,42 @@ extension VariantExporterTests {
       #expect(AutoSyncFailureCategory.classify(error).category == .unknown)
       #expect(AutoSyncFailureCategory.classify(error).errorSignature == "Export:9")
     }
+  }
+
+  // MARK: - Final-name planning
+
+  /// A run that goes stale without its Task being cancelled stops comparing at the next
+  /// generation check: here every read, so the middle is never read and nothing is recorded.
+  @Test func staleGenerationStopsTheCompareBeforeItsNextRead() async throws {
+    let h = makeHarness(planner: {
+      FinalNamePlanner(fileSystem: $0, edgeChunkSize: 4, middleChunkSize: 4, stopCheckInterval: 1)
+    })
+    defer { h.cleanup() }
+    let asset = TestAssetFactory.makeAsset(id: "asset")
+    let resource = TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+    let natural = h.destDir.appendingPathComponent("IMG_0001.JPG")
+    // Twelve bytes: the head, the tail at 8, then the middle at 4.
+    let bytes = FakeAssetResourceWriter.content(for: resource, assetId: asset.id)
+    try bytes.write(to: natural)
+    let coordinator = h.queueCoordinator
+    h.fileSystem.chunkReadHook = { url, offset in
+      if url == natural, offset == 8 { await coordinator.bumpGeneration() }
+    }
+    var inFlight: (assetId: String, variant: ExportVariant)?
+
+    await #expect(throws: CancellationError.self) {
+      _ = try await h.exporter.exportSingleVariant(
+        variant: .original, descriptor: asset, resources: [resource], destDir: h.destDir,
+        relPath: "2025/07/",
+        job: ExportManager.ExportJob(
+          assetLocalIdentifier: asset.id, placement: .timeline(year: 2025, month: 7),
+          selection: .edited),
+        groupStem: nil, pairOriginalWithSuffix: false, generation: 0, inFlight: &inFlight)
+    }
+    #expect(h.fileSystem.chunkReads.filter { $0.url == natural }.map(\.offset) == [0, 8])
+    #expect(h.fileSystem.moveCalls.isEmpty)
+    #expect(try Data(contentsOf: natural) == bytes)
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: h.destDir.path) == ["IMG_0001.JPG"])
   }
 }

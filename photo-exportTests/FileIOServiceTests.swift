@@ -475,6 +475,13 @@ import Testing
       #expect(try await handle.read(offset: 12, length: 4).isEmpty)
       handle.close()
       handle.close()
+      do {
+        _ = try await handle.read(offset: 0, length: 4)
+        Issue.record("Reading a closed handle must fail")
+      } catch {
+        #expect((error as NSError).domain == NSPOSIXErrorDomain)
+        #expect((error as NSError).code == Int(EBADF))
+      }
     }
     do {
       _ = try service.openForReading(at: link, bypassingCache: false)

@@ -18,6 +18,7 @@ protocol FileReadHandle: Sendable {
   /// Up to `length` bytes from `offset`, read off the caller's actor. Fewer only at the end
   /// of the file.
   func read(offset: Int64, length: Int) async throws -> Data
+  /// Closes the file; a later `read` throws `EBADF`. Do not call while a `read` is in flight.
   func close()
 }
 

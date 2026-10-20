@@ -2024,7 +2024,7 @@ final class ExportManager: ObservableObject {
             generation: gen,
             inFlight: &inFlight,
             subfolder: subfolder,
-            mayAdoptExisting: !pairedVideoFollows(variant, in: orderedVariants)
+            mayAdoptExisting: !Self.pairedVideoFollows(variant, in: orderedVariants)
           )
           try throwIfCancelledOrStale(gen)
           if let nextGroupStem { groupStem = nextGroupStem }
@@ -2094,7 +2094,7 @@ final class ExportManager: ObservableObject {
   // `ExportDestinationResolver.splitFilename` / `ExportDestinationResolver.inheritedGroupStem`.
 
   /// Whether `variant` is an image whose paired video this job writes after it, at its stem.
-  private func pairedVideoFollows(_ variant: ExportVariant, in variants: [ExportVariant]) -> Bool {
+  static func pairedVideoFollows(_ variant: ExportVariant, in variants: [ExportVariant]) -> Bool {
     switch variant {
     case .original: return variants.contains(.originalPairedVideo)
     case .edited: return variants.contains(.editedPairedVideo)
