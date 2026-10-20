@@ -110,7 +110,7 @@ struct ExportDestinationResolver: Sendable {
   /// marks the variant `.failed` rather than splitting the pair across stems. A file at the
   /// name is checked first and keeps its message ("Paired original filename already exists
   /// on disk"), pinned by `EditedModeExportTests`. A name another record claims, with or
-  /// without a file, throws "Paired original filename is recorded by another export".
+  /// without a file, throws "Paired original filename is recorded for another exported file".
   func resolveSlot(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -148,9 +148,8 @@ struct ExportDestinationResolver: Sendable {
             domain: "Export", code: 5,
             userInfo: [
               NSLocalizedDescriptionKey:
-                "Paired original filename is recorded by another export: \(filename). If that "
-                + "file was deleted, run File > Import Existing Backup, or retry the other item "
-                + "in Export Issues."
+                "Paired original filename is recorded for another exported file: \(filename). "
+                + "If you deleted that file, run File > Import Existing Backup."
             ])
         }
         return Slot(directory: destDir, filename: filename, policy: .refuse(stem: stem))

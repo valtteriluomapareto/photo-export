@@ -171,12 +171,16 @@ The final name of a file written alone is chosen once its bytes are staged. A pa
 original-side slot (`_orig`, or a still or motion file that shares a pre-allocated group
 stem) has one fixed name, and an existing file there fails the variant as above.
 `resolveSlot` also fails it, before staging, when a record other than this variant's own
-names it (`Export:5`, "Paired original filename is recorded by another export"). The file is
-checked first, so a name that both holds a file and is claimed keeps the on-disk message. A
-verified interrupted file excuses only the file, never the claim. This matters on a stem
-inherited from a completed record, which nothing allocates: the variant fails on every run
-until Import Existing Backup drops a completed claimant whose file is gone, or the claimant's
-failed record is retried. A group stem
+names it (`Export:5`, "Paired original filename is recorded for another exported file"). The
+file is checked first, so a name that both holds a file and is claimed keeps the on-disk
+message. A verified interrupted file excuses only the file, never the claim. This matters on a
+stem inherited from a completed record, which nothing allocates; the variant fails on every
+run while the claim stands. Import Existing Backup clears a completed claim whose file was
+deleted. A failed claim blocks the name until the claimant's retry lands at another name; if
+the retry writes this name itself, the variant then fails with the on-disk message. The
+asset's own other variants count too: a reverted Live Photo edit whose `.editedPairedVideo`
+record names `IMG_0001.MOV`, with that file deleted, fails the `.originalPairedVideo` there,
+which is accepted. A group stem
 is allocated before staging (`allocatePairedGroupStem`, and `allocateUnusedOrigStem` for an
 edited fallback) where every name of the group is empty and no other asset's record names it;
 the asset's own records in the placement do not count, so a retry keeps its names. Every other

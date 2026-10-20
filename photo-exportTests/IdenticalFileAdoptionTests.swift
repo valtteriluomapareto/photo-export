@@ -1285,8 +1285,8 @@ struct IdenticalFileAdoptionTests {
   }
 
   private static func claimedPairedNameMessage(_ name: String) -> String {
-    "Paired original filename is recorded by another export: \(name). If that file was "
-      + "deleted, run File > Import Existing Backup, or retry the other item in Export Issues."
+    "Paired original filename is recorded for another exported file: \(name). If you "
+      + "deleted that file, run File > Import Existing Backup."
   }
 
   enum InheritedPairedName: String, CaseIterable, CustomTestStringConvertible {
@@ -1298,7 +1298,8 @@ struct IdenticalFileAdoptionTests {
   /// completed record names it, with its file deleted, so the variant fails with `Export:5`
   /// before anything is staged or marked, and that record and the folder stay as they were
   /// (the exact listing shows no `.photo-export-*.tmp` stage either):
-  /// - original: the claim is `IMG_0001_orig.HEIC`;
+  /// - original: the claim is `IMG_0001_orig.HEIC`. The message's remedy works: Import
+  ///   Existing Backup drops the claimant's record, and the next run writes the `_orig`;
   /// - pairedVideo: the claim is only `IMG_0001_orig.MOV`, so the still's `_orig` is written
   ///   and only the motion file's fails.
   @Test(arguments: InheritedPairedName.allCases)
@@ -1329,6 +1330,18 @@ struct IdenticalFileAdoptionTests {
         try h.contents(of: h.monthFolder())
           == (live ? editNames + ["IMG_0001_orig.HEIC"] : editNames).sorted())
       #expect(try await h.inProgressNames(of: asset.id, variant: failing).isEmpty)
+      guard !live else { return }
+
+      h.manager.startImport()
+      await h.manager.waitForImportCompletion()
+      #expect(h.timeline.exportInfo(assetId: "other")?.variants[.original] == nil)
+      let retry = await h.runTimeline(selection: .editedWithOriginals)
+
+      #expect(retry.failures.isEmpty)
+      let original = h.timeline.exportInfo(assetId: asset.id)?.variants[.original]
+      #expect(original?.status == .done)
+      #expect(original?.filename == "IMG_0001_orig.HEIC")
+      #expect(try h.contents(of: h.monthFolder()) == ["IMG_0001.JPG", "IMG_0001_orig.HEIC"])
     } cleanup: {
       await h.cleanup()
     }
@@ -1368,47 +1381,79 @@ struct IdenticalFileAdoptionTests {
 
   /// The claimant's record failed rather than completed. Import Existing Backup keeps it,
   /// since it drops only completed records whose file is missing, so the paired name stays
-  /// refused. Retrying the claimant clears it: its edit was since reverted, so its original
-  /// lands at `IMG_0001.HEIC`, and the next run writes the `_orig`.
-  @Test func failedClaimOnAnInheritedPairedNameHoldsUntilItIsRetried() async throws {
+  /// refused on the next run.
+  @Test func failedClaimOnAnInheritedPairedNameSurvivesImport() async throws {
+    let h = Harness()
+    try await withCleanup {
+      let (asset, editNames) = try await exportEditAlone(h)
+      h.recordOther(named: "IMG_0001_orig.HEIC", as: .otherAssetFailed)
+      let original = { h.timeline.exportInfo(assetId: asset.id)?.variants[.original] }
+      let message = Self.claimedPairedNameMessage("IMG_0001_orig.HEIC")
+
+      _ = await h.runTimeline(selection: .editedWithOriginals)
+      try #require(original()?.status == .failed)
+      try #require(original()?.lastError == message)
+      h.manager.startImport()
+      await h.manager.waitForImportCompletion()
+      let summary = await h.runTimeline(selection: .editedWithOriginals)
+
+      let other = h.timeline.exportInfo(assetId: "other")?.variants[.original]
+      #expect(other?.status == .failed)
+      #expect(other?.filename == "IMG_0001_orig.HEIC")
+      #expect(summary.failures.map(\.errorSignature) == ["Export:5"])
+      #expect(original()?.status == .failed)
+      #expect(original()?.lastError == message)
+      #expect(try h.contents(of: h.monthFolder()) == editNames)
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// A failed claimant whose retry still inherits the stem writes the paired name itself:
+  /// its edit is recorded at `IMG_0001.HEIC`, so its `_orig` is `IMG_0001_orig.HEIC` too. The
+  /// name is then on disk, so the other asset's `_orig` fails with the on-disk message and
+  /// the claimant's file is left as it is.
+  @Test func failedClaimantsRetryWritesThePairedName() async throws {
     let h = Harness()
     try await withCleanup {
       let (asset, _) = try await exportEditAlone(h)
-      let other = TestAssetFactory.makeAsset(id: "other", creationDate: Self.june15)
+      let other = TestAssetFactory.makeAsset(
+        id: "other", creationDate: Self.june15, hasAdjustments: true)
+      let otherPhoto = TestAssetFactory.makeResource(
+        type: .photo, originalFilename: "IMG_0001.HEIC")
       h.photos.resourcesByAssetId[other.id] = [
-        TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC")
+        otherPhoto,
+        TestAssetFactory.makeResource(
+          type: .fullSizePhoto, originalFilename: "FullSizeRender.HEIC"),
       ]
-      h.recordOther(named: "IMG_0001_orig.HEIC", as: .otherAssetFailed)
-      let otherRecord = { h.timeline.exportInfo(assetId: other.id)?.variants[.original] }
-      let original = { h.timeline.exportInfo(assetId: asset.id)?.variants[.original] }
-      let message = Self.claimedPairedNameMessage("IMG_0001_orig.HEIC")
       let folder = try h.monthFolder()
+      try Data("other-edit".utf8).write(to: folder.appendingPathComponent("IMG_0001.HEIC"))
+      h.timeline.markVariantExported(
+        assetId: other.id, variant: .edited, year: 2025, month: 6, relPath: "2025/06/",
+        filename: "IMG_0001.HEIC", exportedAt: Date())
+      h.recordOther(named: "IMG_0001_orig.HEIC", as: .otherAssetFailed)
+      let original = { (id: String) in h.timeline.exportInfo(assetId: id)?.variants[.original] }
 
       _ = await h.runTimeline(selection: .editedWithOriginals)
-      #expect(original()?.status == .failed)
-      #expect(original()?.lastError == message)
-
-      h.manager.startImport()
-      await h.manager.waitForImportCompletion()
-      #expect(otherRecord()?.status == .failed)
-      #expect(otherRecord()?.filename == "IMG_0001_orig.HEIC")
-      _ = await h.runTimeline(selection: .editedWithOriginals)
-      #expect(original()?.status == .failed)
-      #expect(original()?.lastError == message)
-      #expect(try h.contents(of: folder) == ["IMG_0001.JPG"])
-
+      try #require(
+        original(asset.id)?.lastError == Self.claimedPairedNameMessage("IMG_0001_orig.HEIC"))
       h.photos.assetsByYearMonth["2025-6"] = [other]
       let retry = await h.runTimeline(selection: .editedWithOriginals)
-      #expect(retry.failures.isEmpty)
-      #expect(otherRecord()?.status == .done)
-      #expect(otherRecord()?.filename == "IMG_0001.HEIC")
-
+      try #require(retry.failures.isEmpty)
+      try #require(original(other.id)?.status == .done)
+      try #require(original(other.id)?.filename == "IMG_0001_orig.HEIC")
       h.photos.assetsByYearMonth["2025-6"] = [asset, other]
       let summary = await h.runTimeline(selection: .editedWithOriginals)
 
-      #expect(summary.failures.isEmpty)
-      #expect(original()?.status == .done)
-      #expect(original()?.filename == "IMG_0001_orig.HEIC")
+      #expect(summary.failures.map(\.assetId) == [asset.id])
+      #expect(summary.failures.map(\.errorSignature) == ["Export:5"])
+      #expect(original(asset.id)?.status == .failed)
+      #expect(
+        original(asset.id)?.lastError
+          == "Paired original filename already exists on disk: IMG_0001_orig.HEIC")
+      #expect(
+        try Data(contentsOf: folder.appendingPathComponent("IMG_0001_orig.HEIC"))
+          == FakeAssetResourceWriter.content(for: otherPhoto, assetId: other.id))
       #expect(
         try h.contents(of: folder) == ["IMG_0001.HEIC", "IMG_0001.JPG", "IMG_0001_orig.HEIC"])
     } cleanup: {

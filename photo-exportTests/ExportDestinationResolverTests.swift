@@ -456,8 +456,8 @@ struct ExportDestinationResolverTests {
       }
     }
     let claimedMessage =
-      "Paired original filename is recorded by another export: IMG_0001_orig.HEIC. If that file "
-      + "was deleted, run File > Import Existing Backup, or retry the other item in Export Issues."
+      "Paired original filename is recorded for another exported file: IMG_0001_orig.HEIC. "
+      + "If you deleted that file, run File > Import Existing Backup."
 
     #expect(try slot(stem: "IMG_0002").filename == "IMG_0002_orig.HEIC")
     #expect(asked == ["IMG_0002_orig.HEIC"])

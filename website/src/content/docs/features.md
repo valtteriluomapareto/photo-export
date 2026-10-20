@@ -76,9 +76,9 @@ bytes and no other exported item uses it, for example after the export history w
 the folder was set up as a new destination, Photo Export records that file instead of
 writing another copy, and leaves it as it is. This covers files exported on their own; an edit with its
 `_orig` companion and a Live Photo with its paired video still get new copies. An `_orig`
-companion added later fails, and is listed in Export Issues, while another item still records
-its name: Import Existing Backup clears a completed record whose file was deleted, and
-retrying the other item clears a failed one.
+companion or paired video added later fails, and appears in Export Issues, while another
+exported file still records its name; if you deleted that file, Import Existing Backup clears
+the record.
 
 ### Format options (Settings → Advanced)
 
