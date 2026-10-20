@@ -169,7 +169,18 @@ commit. Mount a share from a macOS server and one from a NAS (Samba) and record,
 
 The final name of a file written alone is chosen once its bytes are staged. A paired
 original-side slot (`_orig`, or a still or motion file that shares a pre-allocated group
-stem) has one fixed name, and an existing file there fails the variant as above. A group stem
+stem) has one fixed name, and an existing file there fails the variant as above.
+`resolveSlot` also fails it, before staging, when a record other than this variant's own
+names it (`Export:5`, "Paired original filename is recorded for another exported file"). The
+file is checked first, so a name that both holds a file and is claimed keeps the on-disk
+message. A verified interrupted file excuses only the file, never the claim. This matters on a
+stem inherited from a completed record, which nothing allocates; the variant fails on every
+run while the claim stands. Import Existing Backup clears a completed claim whose file was
+deleted. A failed claim blocks the name until the claimant's retry lands at another name; if
+the retry writes this name itself, the variant then fails with the on-disk message. The
+asset's own other variants count too: a reverted Live Photo edit whose `.editedPairedVideo`
+record names `IMG_0001.MOV`, with that file deleted, fails the `.originalPairedVideo` there,
+which is accepted. A group stem
 is allocated before staging (`allocatePairedGroupStem`, and `allocateUnusedOrigStem` for an
 edited fallback) where every name of the group is empty and no other asset's record names it;
 the asset's own records in the placement do not count, so a retry keeps its names. Every other
@@ -239,11 +250,10 @@ Known limits: only the folder the variant is being written to is searched, so an
 file left in `videos/` (or outside it) by a layout change is not found. Paired groups and
 `_orig` slots are allocated before staging and are never adopted. Neither is an image whose
 paired video the same job writes next at its stem: adopting the image could find the video's
-name taken and split the pair, so the image takes a free name and the video follows it. A
-paired original-side name on an inherited stem is refused only when a file is there, not when
-another record claims it (#360). Claims are keyed by placement id, so two placements whose
-folders are one folder on disk (for example names that differ only by case on a volume that
-ignores case) do not see each other's claims (#360). An edit on a newly allocated stem can
+name taken and split the pair, so the image takes a free name and the video follows it.
+Claims are keyed by placement id, so two placements whose folders are one folder on disk (for
+example names that differ only by case on a volume that ignores case) do not see each other's
+claims (#368). An edit on a newly allocated stem can
 still land at ` (1)` when the asset's own failed original still names that stem's natural
 name; the next run resolves it. A failed or interrupted record keeps its name reserved until
 it is retried, including one for an asset since deleted from Photos; Import Existing Backup
