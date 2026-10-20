@@ -7,13 +7,13 @@ Photo Export follows a small **SwiftUI + Managers** architecture. Views stay rel
 
 ## App entry point
 
-[`App/photo_exportApp.swift`](https://github.com/valtteriluomapareto/photo-export/blob/main/photo-export/App/photo_exportApp.swift) creates the shared app state and injects it into the view tree with `@EnvironmentObject`.
+[`App/AppCore.swift`](https://github.com/valtteriluomapareto/photo-export/blob/main/photo-export/App/AppCore.swift) creates the shared app state from an `AppComposition` (preferences, the app-state folder and the Photos, file-system, clock and login-item services) and runs the startup sequence. [`App/photo_exportApp.swift`](https://github.com/valtteriluomapareto/photo-export/blob/main/photo-export/App/photo_exportApp.swift) builds the production core and injects its objects into the view tree with `@EnvironmentObject`.
 
 ## Folder layout
 
 Long-lived stateful services and pure helpers are split by feature area under `photo-export/`:
 
-- `App/` — entry point + lifecycle services: `photo_exportApp`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
+- `App/` — entry point + lifecycle services: `photo_exportApp`, `AppCore`, `AppComposition`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
 - `Export/` — façade + collaborators: `ExportManager` (+ `ExportManager+AutoSyncConformance`), `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, and the helper-policy types: `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`
 - `Destination/` — `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`
 - `Records/` — `ExportRecordStore`, `CollectionExportRecordStore`, `JSONLRecordFile`, `RecordStoreRouter` (single placement-kind dispatch), `ExportCompletionPolicy` (single edited-fallback/required-variant rule)
@@ -174,7 +174,7 @@ and surfaces it as `@Published needsSafetyConfirmation`, which
 Owns destination-change handling and the migration-conflict detection
 that surfaces as `.unsafeMigrationConflict`. `gcLegacyState` closure-based
 dependency keeps filesystem layout decisions out of the coordinator and
-in `PhotoExportApp` where the record-store directory roots are known.
+in `AppComposition`, which knows the app-state directory roots.
 
 ## Supporting Services
 
