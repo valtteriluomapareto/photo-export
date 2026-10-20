@@ -129,20 +129,12 @@ final class AppCore {
     let scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: defaults)
     let asm = AutoSyncManager()
     // AutoSync retry eligibility for ExportManager, evaluated at enqueue time and before each
-    // variant attempt. Reads `AutoSyncManager.currentRetryState`, which the manager keeps
-    // current after every `.recordRetryFailures` effect and on destination change. `[weak
-    // asm]` so the closure doesn't keep the manager alive.
+    // variant attempt. `AutoSyncManager` reads its current retry state, kept up to date after
+    // every recorded failure and on destination change. `[weak asm]` so the closure doesn't
+    // keep the manager alive.
     em.autoSyncEligibilityCheck = { [weak asm] assetId, placement, variant, now in
-      guard let asm else { return true }
-      let scope = AutoSyncManager.retryScopeKey(for: placement)
-      guard
-        let entry = asm.currentRetryState.entry(
-          scope: scope, assetId: assetId, variant: variant)
-      else { return true }
-      // Hard category (nextEligibleAt == nil) means user action is required; not eligible
-      // to auto-retry.
-      guard let nextEligibleAt = entry.nextEligibleAt else { return false }
-      return nextEligibleAt <= now
+      asm?.isAutoSyncEligible(
+        assetId: assetId, placement: placement, variant: variant, now: now) ?? true
     }
 
     let changeSource = composition.persistentChangeSource ?? photoAdapter

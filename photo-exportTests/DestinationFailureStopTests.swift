@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Photos
 import Testing
 
 @testable import Photo_Export
@@ -36,7 +37,7 @@ struct DestinationFailureStopTests {
     let photos = FakePhotoLibraryService()
     let destination = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
-    let files = FakeFileSystem()
+    let files: FakeFileSystem
     let renderer = FakeMediaRenderer()
     let converter = FakeImageConverter()
     let timeline: ExportRecordStore
@@ -46,8 +47,12 @@ struct DestinationFailureStopTests {
     let ids = (0..<5).map { "asset-\($0)" }
     var placement: ExportPlacement { collection ? .favorites() : .timeline(year: 2026, month: 9) }
 
-    init(collection: Bool = false, logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()) {
+    init(
+      collection: Bool = false, logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO(),
+      files: FakeFileSystem = FakeFileSystem()
+    ) {
       self.collection = collection
+      self.files = files
       timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
       collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
       timeline.configure(for: "A")
@@ -72,6 +77,34 @@ struct DestinationFailureStopTests {
         manager.startExportFavorites()
       } else {
         manager.startExportMonth(year: 2026, month: 9)
+      }
+    }
+
+    func runManualExport() async -> ExportRunSummary {
+      await manager.runExport(
+        context: .init(
+          source: .manual, visibility: .userVisible,
+          scope: collection ? .favoritesFull : .timelineFullLibrary, selection: .edited))
+    }
+
+    /// Replaces the five photos with ones of the given shape, one resource each.
+    func useAssets(
+      mediaType: PHAssetMediaType = .image, hasAdjustments: Bool = false,
+      originalUTI: String? = nil, resourceType: PHAssetResourceType = .photo,
+      ext: String = "JPG"
+    ) {
+      let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
+      let assets = ids.map {
+        TestAssetFactory.makeAsset(
+          id: $0, creationDate: date, mediaType: mediaType, hasAdjustments: hasAdjustments,
+          originalUTI: originalUTI)
+      }
+      photos.assetsByYearMonth["2026-9"] = assets
+      photos.favoritesAssets = assets
+      for id in ids {
+        photos.resourcesByAssetId[id] = [
+          .init(type: resourceType, originalFilename: "\(id).\(ext)")
+        ]
       }
     }
 
@@ -106,7 +139,31 @@ struct DestinationFailureStopTests {
     }
   }
 
-  @Test(arguments: [false, true], [Int(ENOSPC), Int(EACCES)])
+  static let unavailableMessage =
+    "Export stopped: the destination can't be reached. Check that the drive or network share is connected and the folder still exists, then start a new export."
+  static let fullMessage =
+    "Export stopped: the destination is full. Free up space, then start a new export."
+  static let deniedMessage =
+    "Export stopped: write access to the destination was denied. Restore access, then start a new export."
+
+  static func category(forCode code: Int) -> AutoSyncFailureCategory {
+    switch Int32(code) {
+    case ENOSPC: return .destinationNoSpace
+    case EACCES, EPERM, EROFS: return .destinationPermission
+    default: return .destinationUnavailable
+    }
+  }
+
+  static func message(for category: AutoSyncFailureCategory) -> String? {
+    switch category {
+    case .destinationUnavailable: return unavailableMessage
+    case .destinationNoSpace: return fullMessage
+    case .destinationPermission: return deniedMessage
+    default: return nil
+    }
+  }
+
+  @Test(arguments: [false, true], [Int(ENOSPC), Int(EACCES), Int(ENOTCONN), Int(ETIMEDOUT)])
   func manualFailureStopsBeforeOtherAssetsAndExplicitRetryWorks(collection: Bool, code: Int)
     async throws
   {
@@ -119,8 +176,9 @@ struct DestinationFailureStopTests {
     for id in f.ids.dropFirst() { #expect(f.variants(id).isEmpty) }
     #expect(f.manager.progressState.manualSummary?.completedCount == 1)
     #expect(f.manager.progressState.manualSummary?.failedCount == 1)
-    let message = f.manager.progressState.manualSummary?.failureMessage?.lowercased()
-    #expect(message?.contains(code == Int(ENOSPC) ? "full" : "access") == true)
+    #expect(
+      f.manager.progressState.manualSummary?.failureMessage
+        == Self.message(for: Self.category(forCode: code)))
     f.writer.writeError = nil
     f.start()
     await f.manager.waitForQueueDrained()
@@ -130,7 +188,9 @@ struct DestinationFailureStopTests {
     await f.close()
   }
 
-  @Test(arguments: [ExportRunSource.manual, .autoSync], [Int(ENOSPC), Int(EACCES)])
+  @Test(
+    arguments: [ExportRunSource.manual, .autoSync],
+    [Int(ENOSPC), Int(EACCES), Int(ENOTCONN), Int(ETIMEDOUT)])
   func awaitableRunStopsWithAccurateCounts(source: ExportRunSource, code: Int) async throws {
     let f = Fixture()
     f.writer.writeError = NSError(domain: NSPOSIXErrorDomain, code: code)
@@ -138,14 +198,16 @@ struct DestinationFailureStopTests {
       context: .init(
         source: source, visibility: source == .manual ? .userVisible : .background,
         scope: .timelineFullLibrary, selection: .edited))
-    #expect(summary.result == .failed)
+    let category = Self.category(forCode: code)
+    let unavailable = category == .destinationUnavailable
+    #expect(summary.result == (unavailable ? .interrupted : .failed))
+    #expect(summary.cancelReason == (unavailable ? .destinationUnavailable : nil))
+    #expect(summary.stoppedBy == category)
     #expect(summary.enqueuedCount == 5)
     #expect(summary.completedCount == 1)
     #expect(summary.failedCount == 1)
     #expect(summary.failures.count == 1)
-    #expect(
-      summary.failures.first?.category
-        == (code == Int(ENOSPC) ? .destinationNoSpace : .destinationPermission))
+    #expect(summary.failures.first?.category == category)
     #expect(f.writer.writeCalls.count == 1)
     for id in f.ids.dropFirst() { #expect(f.variants(id).isEmpty) }
     await f.close()
@@ -302,7 +364,210 @@ struct DestinationFailureStopTests {
     #expect(f.manager.generation == generation)
     #expect(f.manager.progressState.manualSummary?.completedCount == 5)
     #expect(f.manager.progressState.manualSummary?.failureMessage == nil)
+    let summary = await f.runManualExport()
+    #expect(f.writer.writeCalls.count == 10)
+    #expect(summary.result == .failed && summary.cancelReason == nil)
+    #expect(summary.stoppedBy == nil)
+    #expect(summary.completedCount == 5 && summary.failures.count == 5)
     await f.close()
+  }
+
+  // MARK: - Stop outcome per destination failure
+
+  struct StopCase: Sendable, CustomTestStringConvertible {
+    let code: Int32
+    let category: AutoSyncFailureCategory
+    let testDescription: String
+    init(_ code: Int32, _ name: String, _ category: AutoSyncFailureCategory) {
+      self.code = code
+      self.category = category
+      self.testDescription = name
+    }
+  }
+
+  static let commitStopCases: [StopCase] = [
+    StopCase(ENOTCONN, "ENOTCONN", .destinationUnavailable),
+    StopCase(ETIMEDOUT, "ETIMEDOUT", .destinationUnavailable),
+    StopCase(ESTALE, "ESTALE", .destinationUnavailable),
+    StopCase(EHOSTDOWN, "EHOSTDOWN", .destinationUnavailable),
+    StopCase(EHOSTUNREACH, "EHOSTUNREACH", .destinationUnavailable),
+    StopCase(ENETDOWN, "ENETDOWN", .destinationUnavailable),
+    StopCase(ENETUNREACH, "ENETUNREACH", .destinationUnavailable),
+    StopCase(ENXIO, "ENXIO", .destinationUnavailable),
+    StopCase(ENOSPC, "ENOSPC", .destinationNoSpace),
+    StopCase(EACCES, "EACCES", .destinationPermission),
+    StopCase(EROFS, "EROFS", .destinationPermission),
+  ]
+
+  /// A commit whose exclusive rename fails with `code` for `filename` (every name when nil)
+  /// and succeeds otherwise, as the real `FileIOService` reports it.
+  static func failingCommit(
+    _ code: Int32, filename: String? = nil, while failing: LockedBox<Bool> = LockedBox(true)
+  ) -> FakeFileSystem {
+    FakeFileSystem(
+      real: FileIOService(
+        renamer: { source, destination, flags in
+          if failing.value, filename == nil || destination.lastPathComponent == filename {
+            return code
+          }
+          return FileIOService.systemRename(source, destination, flags)
+        },
+        capability: { _ in true }))
+  }
+
+  /// A manual export of the five assets stops at the first one: one failure with the
+  /// category and signature, the matching result and message, and nothing else touched.
+  private func expectStop(
+    _ f: Fixture, category: AutoSyncFailureCategory, signature: String
+  ) async {
+    let summary = await f.runManualExport()
+    let unavailable = category == .destinationUnavailable
+    #expect(summary.result == (unavailable ? .interrupted : .failed))
+    #expect(summary.cancelReason == (unavailable ? .destinationUnavailable : nil))
+    #expect(summary.stoppedBy == category)
+    #expect(summary.failures.map(\.category) == [category])
+    #expect(summary.failures.map(\.errorSignature) == [signature])
+    #expect(summary.enqueuedCount == 5 && summary.completedCount == 1)
+    #expect(f.manager.progressState.manualSummary?.failureMessage == Self.message(for: category))
+    #expect(f.manager.progressState.manualSummary?.completedCount == 1)
+    #expect(f.manager.progressState.manualSummary?.failedCount == 1)
+    for id in f.ids.dropFirst() { #expect(f.variants(id).isEmpty) }
+  }
+
+  @Test(arguments: commitStopCases)
+  func commitFailureStopsTheRunWithItsCategory(stop: StopCase) async {
+    let f = Fixture(files: Self.failingCommit(stop.code))
+    await expectStop(f, category: stop.category, signature: "NSPOSIXErrorDomain:\(stop.code)")
+    #expect(f.writer.writeCalls.count == 1)
+    #expect(f.variants(f.ids[0])[.original]?.status == .failed)
+    await f.close()
+  }
+
+  enum StopRoute: String, CaseIterable, Sendable { case directory, render, conversion }
+
+  /// The folder, render and conversion steps each stop on an unreachable destination and
+  /// on a hard destination failure. The render and conversion errnos are injected bare; a
+  /// real AVFoundation failure arrives as -11800 wrapping the errno, which is not unwrapped
+  /// and still becomes edited-unavailable. That is a known limit.
+  @Test(arguments: StopRoute.allCases, [true, false])
+  func eachProducerRouteStopsTheRun(route: StopRoute, unavailable: Bool) async {
+    let f = Fixture(collection: route == .directory)
+    let error: Error
+    let category: AutoSyncFailureCategory
+    switch route {
+    case .directory:
+      f.useAssets(hasAdjustments: true)
+      let cause =
+        unavailable
+        ? NSError(
+          domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError,
+          userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTCONN))]
+        )
+        : NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError)
+      error = ExportDestinationManager.ExportDestinationError.failedToCreateFolder(
+        f.destination.rootURL.appendingPathComponent(f.placement.relativePath), underlying: cause)
+      category = unavailable ? .destinationUnavailable : .destinationPermission
+      f.destination.urlForRelativeDirectoryError = error
+    case .render:
+      f.useAssets(mediaType: .video, hasAdjustments: true, resourceType: .video, ext: "MOV")
+      error =
+        unavailable
+        ? NSError(domain: NSPOSIXErrorDomain, code: Int(ETIMEDOUT))
+        : NSError(domain: AVFoundationErrorDomain, code: AVError.Code.diskFull.rawValue)
+      category = unavailable ? .destinationUnavailable : .destinationNoSpace
+      f.renderer.renderError = error
+    case .conversion:
+      f.useAssets(originalUTI: "public.heic", ext: "HEIC")
+      f.manager.convertHEICToJPEG = true
+      error =
+        unavailable
+        ? NSError(domain: NSPOSIXErrorDomain, code: Int(ENETUNREACH))
+        : CocoaError(.fileWriteOutOfSpace)
+      category = unavailable ? .destinationUnavailable : .destinationNoSpace
+      f.converter.convertError = error
+    }
+    let bridged = error as NSError
+    await expectStop(f, category: category, signature: "\(bridged.domain):\(bridged.code)")
+    await f.close()
+  }
+
+  /// A missing file at the commit can come from the source side, so it fails one item and
+  /// the run goes on.
+  @Test func missingFileAtTheCommitFailsOneItemAndContinues() async {
+    let f = Fixture(files: Self.failingCommit(ENOENT, filename: "asset-0.JPG"))
+    let summary = await f.runManualExport()
+    #expect(summary.result == .failed && summary.cancelReason == nil)
+    #expect(summary.stoppedBy == nil)
+    #expect(summary.failures.map(\.category) == [.unknown])
+    #expect(summary.failures.map(\.errorSignature) == ["NSPOSIXErrorDomain:\(ENOENT)"])
+    #expect(summary.completedCount == 5)
+    #expect(f.variants(f.ids[0])[.original]?.status == .failed)
+    for id in f.ids.dropFirst() { #expect(f.variants(id)[.original]?.status == .done) }
+    #expect(f.manager.progressState.manualSummary?.failureMessage == nil)
+    await f.close()
+  }
+
+  /// After a stop on an unreachable destination, the next manual export picks up what the
+  /// stopped run left: the failed item and the ones it never reached.
+  @Test func nextManualExportAfterAnUnavailableStopQueuesWhatTheStopLeft() async {
+    let failing = LockedBox(true)
+    let f = Fixture(files: Self.failingCommit(ENOTCONN, filename: "asset-1.JPG", while: failing))
+    let stopped = await f.runManualExport()
+    #expect(stopped.result == .interrupted && stopped.stoppedBy == .destinationUnavailable)
+    #expect(f.variants(f.ids[0])[.original]?.status == .done)
+    #expect(f.variants(f.ids[1])[.original]?.status == .failed)
+    for id in f.ids.dropFirst(2) { #expect(f.variants(id).isEmpty) }
+
+    failing.mutate { $0 = false }
+    let next = await f.runManualExport()
+    #expect(next.result == .completed)
+    #expect(next.enqueuedCount == 4)
+    // The first run wrote asset-0 and asset-1; asset-0 is not written again.
+    #expect(f.writer.writeCalls.map(\.assetId) == [f.ids[0], f.ids[1]] + f.ids.dropFirst())
+    for id in f.ids { #expect(f.variants(id)[.original]?.status == .done) }
+    await f.close()
+  }
+
+  /// The unmount notification that follows a dropped share must not erase the stop
+  /// message while nothing is running.
+  @Test func stopMessageSurvivesALaterUnmountWhileIdle() async {
+    let f = Fixture(files: Self.failingCommit(ENOTCONN))
+    f.start()
+    await f.manager.waitForQueueDrained()
+    let stopped = f.manager.progressState.manualSummary
+    #expect(stopped?.failureMessage == Self.unavailableMessage)
+    f.manager.interruptForDestinationUnavailable()
+    #expect(f.manager.progressState.manualSummary == stopped)
+    await f.close()
+  }
+
+  /// Guard: an unmount during an active export clears the feedback, including a summary
+  /// that is showing. Starting an export already clears the last summary, and no current
+  /// path sets one while work is active, so the summary is placed by hand; the rule that
+  /// keeps it only while idle is defensive here.
+  @Test(.timeLimit(.minutes(1)))
+  func unmountDuringAnActiveExportClearsTheFeedback() async throws {
+    let f = Fixture()
+    let gate = AsyncCheckpoint()
+    f.writer.checkpoint = gate
+    f.start()
+    var physical: Task<Void, Never>?
+    var failure: Error?
+    do {
+      try #require(await reached(gate))
+      physical = f.manager.currentTask
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 1, failedCount: 1, failureMessage: Self.fullMessage)
+      f.manager.interruptForDestinationUnavailable()
+      #expect(f.manager.progressState.manualSummary == nil)
+      await gate.releaseAll()
+      await physical?.value
+      #expect(f.manager.progressState.manualSummary == nil)
+    } catch { failure = error }
+    await gate.releaseAll()
+    await physical?.value
+    await f.close()
+    if let failure { throw failure }
   }
 
   @Test func historyFailureTakesPrecedenceOverDestinationFailure() async throws {

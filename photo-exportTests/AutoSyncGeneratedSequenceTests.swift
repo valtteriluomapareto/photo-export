@@ -90,10 +90,16 @@ struct AutoSyncGeneratedSequenceTests {
       builder.exportRunner.receivedContexts.isEmpty, "The export clock remains stopped. \(trace)")
   }
 
+  /// Run outcomes, including the two shapes of a destination stop.
+  private static let outcomes: [(ExportRunResult, AutoSyncFailureCategory?)] = [
+    (.completed, nil), (.cancelled, nil), (.interrupted, nil), (.failed, nil),
+    (.interrupted, .destinationUnavailable), (.failed, .destinationNoSpace),
+  ]
+
   @Test(arguments: seeds)
   func ownedRunBoundariesKeepPostStartChangesAndRejectStaleCompletion(seed: UInt64) {
     var generator = SequenceGenerator(seed: seed)
-    for episode in 0..<16 {
+    for episode in 0..<24 {
       var trace = SequenceTrace(seed: seed)
       let now = Date(timeIntervalSince1970: 1_700_000_000)
       let scope = AutoExportLibraryScope.allCases[
@@ -184,16 +190,19 @@ struct AutoSyncGeneratedSequenceTests {
       let before = state.dirtyStateByDestination
       let boundaryBefore = state.runDirtyBoundary
       apply(.exportRunStateChanged(.idle), "idle before summary")
-      let outcome = [ExportRunResult.completed, .cancelled, .interrupted, .failed][episode / 4]
+      let (outcome, stoppedBy) = Self.outcomes[episode / 4]
       let summary = ExportRunSummary(
         context: context, endedAt: now,
         enqueuedCount: 1, completedCount: outcome == .completed ? 1 : 0,
         failedCount: outcome == .failed ? 1 : 0, skippedCount: 0,
-        cancelReason: outcome == .cancelled ? .userCancelled : nil, result: outcome)
+        cancelReason: outcome == .cancelled
+          ? .userCancelled : stoppedBy == .destinationUnavailable ? .destinationUnavailable : nil,
+        result: outcome, stoppedBy: stoppedBy)
       apply(
         source == .autoSync
           ? .autoSyncRunCompleted(summary, destinationId: "A")
-          : .manualFullExportCompleted(summary), "finish original A \(context.runId): \(outcome)")
+          : .manualFullExportCompleted(summary),
+        "finish original A \(context.runId): \(outcome) \(stoppedBy?.rawValue ?? "")")
       if mode == 0 {
         let pending = state.dirtyStateByDestination["A"]?.scope(scope)
         #expect(
@@ -210,6 +219,156 @@ struct AutoSyncGeneratedSequenceTests {
         #expect(state.runDirtyBoundary == boundaryBefore, "\(trace)")
       }
       #expect(state.dirtyStateByDestination["B"] == before["B"], "\(trace)")
+    }
+  }
+
+  /// After an Auto Export run stops on a destination-wide failure while the destination
+  /// stays available, nothing schedules until a trigger or a resolving blocker arrives,
+  /// whatever arrived during the run and in whichever order idle and the summary land. An
+  /// Export Now pressed during the run is the exception and still runs.
+  @Test(arguments: seeds)
+  func destinationStopsWaitForATriggerOrABlockerToResolve(seed: UInt64) {
+    var generator = SequenceGenerator(seed: seed)
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    func scheduled(_ state: AutoSyncReducer.State) -> Bool {
+      if case .scheduled = state.current { return true }
+      return false
+    }
+    func schedules(_ effects: [AutoSyncEffect]) -> Bool {
+      effects.contains { if case .scheduleDebounce = $0 { true } else { false } }
+    }
+    for episode in 0..<32 {
+      var trace = SequenceTrace(seed: seed)
+      var state = AutoSyncReducer.State.initial
+      state.enabled = true
+      state.current = .idle
+      state.destination = destination("A")
+      state.scopeSelection = AutoExportScopeSelection(timeline: true)
+      var effects: [AutoSyncEffect] = []
+      func apply(_ event: AutoSyncEvent, _ label: String) {
+        trace.append("episode \(episode) \(label)")
+        let result = AutoSyncReducer.reduce(event, in: state, now: now)
+        state = result.0
+        effects = result.1
+      }
+      if generator.pick(2) == 0 {
+        apply(
+          .photosChanged(
+            PhotoLibraryPersistentChangeEvent(insertedLocalIdentifiers: ["before"], observedAt: now)
+          ),
+          "pending work before the run")
+        state.current = .idle
+      }
+      let context = ExportRunContext(
+        source: .autoSync, visibility: .background, reason: .photosChanged,
+        scope: .timelineFullLibrary, selection: .edited, startedAt: now)
+      state.current = .running(reason: .photosChanged)
+      apply(.exportRunStarted(context, destinationId: "A"), "start")
+      apply(
+        .exportRunStateChanged(
+          ExportRunState(activeContext: context, isManualActive: false, isAutoSyncActive: true)),
+        "running")
+      var exportNow = false
+      for index in 0..<generator.pick(4) {
+        switch generator.pick(5) {
+        case 0:
+          apply(
+            .photosChanged(
+              PhotoLibraryPersistentChangeEvent(
+                insertedLocalIdentifiers: ["mid-\(index)"], observedAt: now)), "mid-run change")
+        case 1:
+          let favorites = !state.scopeSelection.includes(.favorites)
+          apply(
+            .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: favorites)),
+            "mid-run scope change")
+        case 2:
+          apply(
+            .versionSelectionChanged(
+              state.versionSelection == .edited ? .editedWithOriginals : .edited),
+            "mid-run version change")
+        case 3:
+          exportNow = true
+          apply(.runNowRequested, "mid-run Export Now")
+        default:
+          apply(
+            .photosChanged(
+              PhotoLibraryPersistentChangeEvent(deletedLocalIdentifiers: ["gone"], observedAt: now)),
+            "mid-run delete")
+        }
+      }
+      let (result, stoppedBy) =
+        generator.pick(2) == 0
+        ? (ExportRunResult.interrupted, AutoSyncFailureCategory.destinationUnavailable)
+        : (.failed, .destinationNoSpace)
+      let stop = ExportRunSummary(
+        context: context, endedAt: now, enqueuedCount: 2, completedCount: 1, failedCount: 1,
+        skippedCount: 0,
+        cancelReason: stoppedBy == .destinationUnavailable ? .destinationUnavailable : nil,
+        result: result, stoppedBy: stoppedBy)
+      if generator.pick(2) == 0 {
+        apply(.exportRunStateChanged(.idle), "idle")
+        apply(.autoSyncRunCompleted(stop, destinationId: "A"), "stop summary \(stoppedBy)")
+      } else {
+        apply(.autoSyncRunCompleted(stop, destinationId: "A"), "stop summary first \(stoppedBy)")
+        apply(.exportRunStateChanged(.idle), "idle")
+      }
+      if exportNow {
+        #expect(state.current == .scheduled(reason: .userExportNow, fireAt: now), "\(trace)")
+        continue
+      }
+      #expect(state.current == .idle, "\(trace)")
+      for _ in 0..<(1 + generator.pick(4)) {
+        switch generator.pick(6) {
+        case 0:
+          apply(
+            .destinationDirtyStateLoaded(
+              destinationId: "A", dirtyState: state.dirtyStateByDestination["A"] ?? .empty),
+            "dirty state loaded")
+        case 1: apply(.exportRunStateChanged(.idle), "repeated idle")
+        case 2: apply(.autoSyncRunCompleted(stop, destinationId: "A"), "repeated summary")
+        case 3: apply(.retryTimerFired, "retry timer, nothing due")
+        case 4:
+          apply(
+            .retryStateChanged(destinationId: "A", retryState: .empty), "retry state changed")
+        default:
+          apply(
+            .photosChanged(
+              PhotoLibraryPersistentChangeEvent(deletedLocalIdentifiers: ["gone"], observedAt: now)),
+            "delete-only change")
+        }
+        #expect(state.current == .idle, "\(trace)")
+        #expect(!schedules(effects), "\(trace)")
+      }
+      let hasWork =
+        state.pendingTriggerReason != nil
+        || state.dirtyStateByDestination["A"]?.isEmpty == false
+      switch generator.pick(4) {
+      case 0:
+        apply(
+          .photosChanged(
+            PhotoLibraryPersistentChangeEvent(insertedLocalIdentifiers: ["after"], observedAt: now)),
+          "Photos change")
+        #expect(scheduled(state), "\(trace)")
+      case 1:
+        apply(.runNowRequested, "Export Now")
+        #expect(state.current == .scheduled(reason: .userExportNow, fireAt: now), "\(trace)")
+      case 2:
+        apply(.importStateChanged(isImporting: true), "import starts")
+        apply(.importStateChanged(isImporting: false), "import ends")
+        #expect(scheduled(state) == hasWork, "\(trace)")
+      default:
+        apply(
+          .destinationChanged(
+            DestinationSnapshot(stableId: "A", fingerprint: nil, isAvailable: false, safety: .safe)),
+          "unmounted")
+        apply(.destinationChanged(destination("A")), "remounted")
+        #expect(
+          state.current
+            == .scheduled(
+              reason: .destinationBecameAvailable,
+              fireAt: now.addingTimeInterval(
+                AutoSyncReducer.debounceDelay(for: .destinationBecameAvailable))), "\(trace)")
+      }
     }
   }
 
