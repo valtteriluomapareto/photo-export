@@ -57,7 +57,7 @@ import Testing
         destinationManager.configureForScreenshotMode()
         scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: defaults)
         safetyMonitor = DestinationSafetyMonitor(
-          identityPublisher: destinationManager.$identity.eraseToAnyPublisher(),
+          identityPublisher: destinationManager.identityPublisher,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
           confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { false })
         photoChangeAdapter = PhotoLibraryPersistentChangeAdapter(

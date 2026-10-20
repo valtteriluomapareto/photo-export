@@ -66,7 +66,7 @@ struct DestinationIdentityIntegrationTests {
     let confirmationStore = InMemoryDestinationSafetyConfirmationStore()
     try confirmationStore.confirm(destinationId: stableId)
     let safetyMonitor = DestinationSafetyMonitor(
-      identityPublisher: manager.$identity.eraseToAnyPublisher(),
+      identityPublisher: manager.identityPublisher,
       exportRecordStore: timelineStore,
       collectionExportRecordStore: collectionStore,
       confirmationStore: confirmationStore,
@@ -78,7 +78,7 @@ struct DestinationIdentityIntegrationTests {
 
     coordinator.attach(
       initial: DestinationIdentitySnapshot(identity: manager.identity),
-      identityPublisher: manager.$identity.eraseToAnyPublisher())
+      identityPublisher: manager.identityPublisher)
     safetyMonitor.attach()
 
     var snapshots: [DestinationSnapshot] = []

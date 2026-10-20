@@ -26,6 +26,12 @@ import os
 @MainActor
 final class DestinationSafetyMonitor: ObservableObject {
   @Published private(set) var needsSafetyConfirmation: Bool = false
+  /// `$needsSafetyConfirmation` for subscribers outside this type: synchronous, delivered
+  /// before the value is stored, and replaying the current value (pinned by
+  /// `PublisherParityTests`).
+  var needsSafetyConfirmationPublisher: AnyPublisher<Bool, Never> {
+    $needsSafetyConfirmation.eraseToAnyPublisher()
+  }
 
   private let identityPublisher: AnyPublisher<DestinationIdentity, Never>
   private let exportRecordStore: ExportRecordStore
@@ -96,7 +102,7 @@ final class DestinationSafetyMonitor: ObservableObject {
       }
     }
     self.init(
-      identityPublisher: destinationManager.$identity.eraseToAnyPublisher(),
+      identityPublisher: destinationManager.identityPublisher,
       exportRecordStore: exportRecordStore,
       collectionExportRecordStore: collectionExportRecordStore,
       confirmationStore: confirmationStore,

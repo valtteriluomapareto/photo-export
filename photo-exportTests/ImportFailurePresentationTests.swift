@@ -139,7 +139,7 @@ import Testing
       defer { f.close() }
       var started = false
       var terminal: (error: String?, stage: BackupScanner.ImportStage?, report: ImportReport?)?
-      let subscription = f.manager.$isImporting.sink { active in
+      let subscription = f.manager.isImportingFlagPublisher.sink { active in
         if active {
           started = true
         } else if started {
@@ -347,7 +347,7 @@ import Testing
         }
         #expect(!old.isCancelled)
         var lateStages: [BackupScanner.ImportStage?] = []
-        let subscription = f.manager.$importStage.dropFirst().sink { lateStages.append($0) }
+        let subscription = f.manager.importStagePublisher.dropFirst().sink { lateStages.append($0) }
         defer { subscription.cancel() }
         await gate.releaseAll()
         await old.value

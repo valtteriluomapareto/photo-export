@@ -158,7 +158,7 @@ import Testing
         }, countInvalidationWaitObserver: { waits += 1 })
       var revisionAtAuthorization: Int?
       var query: Task<Int, Error>?
-      let observation = manager.$isAuthorized.dropFirst().sink { authorized in
+      let observation = manager.isAuthorizedPublisher.dropFirst().sink { authorized in
         guard authorized else { return }
         revisionAtAuthorization = manager.libraryRevision
         query = Task { try await manager.cachedCountAssets(in: scope) }

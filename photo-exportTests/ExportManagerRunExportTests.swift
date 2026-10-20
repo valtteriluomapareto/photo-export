@@ -272,7 +272,7 @@ struct ExportManagerRunExportTests {
       return true
     }
     let finished = AsyncStream<Void>.makeStream()
-    let observation = harness.manager.$isEnqueueingAll.dropFirst().filter { !$0 }.sink { _ in
+    let observation = harness.manager.isEnqueueingAllPublisher.dropFirst().filter { !$0 }.sink { _ in
       finished.continuation.yield(())
     }
     harness.manager.livePhotosPairedExport = true
@@ -1471,7 +1471,7 @@ struct ExportManagerRunExportTests {
     let harness = makeHarness()
     await withCleanup {
       var observedContexts: [ExportRunContext?] = []
-      let cancellable = harness.manager.$activeRunContext.sink { ctx in
+      let cancellable = harness.manager.activeRunContextPublisher.sink { ctx in
         observedContexts.append(ctx)
       }
       defer { cancellable.cancel() }
@@ -1599,7 +1599,7 @@ struct ExportManagerRunExportTests {
       // Capture the real message publication so its normal expiry cannot race the assertion.
       harness.manager.videoLayout = .subfolder
       var messages: [String] = []
-      let observation = harness.manager.progressState.$emptyRunMessage.compactMap { $0 }.sink {
+      let observation = harness.manager.progressState.emptyRunMessagePublisher.compactMap { $0 }.sink {
         messages.append($0)
       }
       harness.manager.startExportMonth(year: 2026, month: 3)

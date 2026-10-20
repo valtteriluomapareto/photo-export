@@ -17,7 +17,7 @@ struct AutoSyncMidRunChangeIntegrationTests {
     private var cancellable: AnyCancellable?
 
     init(manager: AutoSyncManager) {
-      cancellable = manager.$lastRunSummary.compactMap { $0 }.sink { [weak self] summary in
+      cancellable = manager.lastRunSummaryPublisher.compactMap { $0 }.sink { [weak self] summary in
         MainActor.assumeIsolated { self?.receive(summary) }
       }
     }

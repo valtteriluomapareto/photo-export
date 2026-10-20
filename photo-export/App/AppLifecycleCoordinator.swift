@@ -82,7 +82,17 @@ final class AppLifecycleCoordinator: ObservableObject {
   private let log: Logger
 
   @Published private(set) var currentDestination: DestinationIdentitySnapshot = .none
+  /// `$currentDestination` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var currentDestinationPublisher: AnyPublisher<DestinationIdentitySnapshot, Never> {
+    $currentDestination.eraseToAnyPublisher()
+  }
   @Published private(set) var migrationConflict: MigrationConflictState?
+  /// `$migrationConflict` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var migrationConflictPublisher: AnyPublisher<MigrationConflictState?, Never> {
+    $migrationConflict.eraseToAnyPublisher()
+  }
 
   /// Convenience accessor for the id of the most recently configured destination. Equals
   /// `currentDestination.id`.

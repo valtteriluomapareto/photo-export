@@ -18,6 +18,11 @@ final class AutoSyncManager: ObservableObject {
   /// Most recently completed run's summary. `nil` until the first run finishes.
   /// Persisted per-destination in subsequent slices.
   @Published private(set) var lastRunSummary: ExportRunSummary?
+  /// `$lastRunSummary` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var lastRunSummaryPublisher: AnyPublisher<ExportRunSummary?, Never> {
+    $lastRunSummary.eraseToAnyPublisher()
+  }
 
   /// Whether the user has Auto Export enabled. Surfaced separately from `state`
   /// because the toggle copy stays "on" even when AutoSync is currently

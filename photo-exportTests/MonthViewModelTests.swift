@@ -420,7 +420,7 @@ struct MonthViewModelTests {
     try await withCleanup {
       let vm = MonthViewModel(photoLibraryService: svc)
       let firstVisible = AsyncCheckpoint()
-      let subscription = vm.$selectedAssetId.sink { id in
+      let subscription = vm.selectedAssetIdPublisher.sink { id in
         if id == "first" { Task { await firstVisible.enter() } }
       }
       try await withCleanup {

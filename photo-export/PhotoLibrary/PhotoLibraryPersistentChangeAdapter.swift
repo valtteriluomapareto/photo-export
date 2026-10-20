@@ -121,7 +121,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangePro
   /// the user grants access from inside the app — without it, an adapter
   /// `start()`-ed during `.notDetermined` would stay un-registered until the
   /// next launch. `nil` is acceptable in tests where the fake never observes
-  /// auth state; production wires `PhotoLibraryManager.$authorizationStatus`.
+  /// auth state; production wires `PhotoLibraryManager.authorizationStatusPublisher`.
   ///
   /// `clock` and `reconcileInterval` drive the periodic safety-net reconcile
   /// (issue #69). `onPotentialLibraryChange` is invoked after any reconcile

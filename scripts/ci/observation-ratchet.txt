@@ -49,9 +49,8 @@ published|photo-export/ViewModels/AssetDetailImageLoader.swift|1
 published|photo-export/ViewModels/MonthViewModel.swift|4
 published|photo-export/ViewModels/TimelineSidebarCounts.swift|2
 
-external-publisher|photo-export/App/photo_exportApp.swift|2
-external-publisher|photo-export/Destination/DestinationSafetyMonitor.swift|1
-external-publisher|photo-export/Destination/DestinationSnapshotAdapter.swift|4
+# The coordinator -> manager mirror sinks (AutoSync seam); both coordinators stay
+# ObservableObject, so these stay as they are.
 external-publisher|photo-export/Export/ExportManager.swift|9
 
 environment-object|photo-export/App/photo_exportApp.swift|24

@@ -81,7 +81,7 @@ struct TimelineCountRefreshTests {
       return adjusted ? 1 : 2
     }
     var observed: [String] = []
-    let subscription = loader.$countsByYearMonth.sink { snapshot in
+    let subscription = loader.countsByYearMonthPublisher.sink { snapshot in
       observed.append("\(snapshot["2025-1"]?.total ?? -1):\(snapshot["2025-1"]?.adjusted ?? -1)")
     }
     let refresh = Task { await loader.loadCounts(forYears: [2025]) }
@@ -118,7 +118,7 @@ struct TimelineCountRefreshTests {
     var publications = 0
     let subscription = loader.objectWillChange.sink { publications += 1 }
     var snapshots = 0
-    let countSubscription = loader.$countsByYearMonth.dropFirst().sink { _ in snapshots += 1 }
+    let countSubscription = loader.countsByYearMonthPublisher.dropFirst().sink { _ in snapshots += 1 }
     await loader.loadCounts(forYears: [2025])
     #expect(publications == 0)
     #expect(snapshots == 0)

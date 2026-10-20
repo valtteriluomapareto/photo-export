@@ -20,6 +20,14 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Published properties to track authorization status
   @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
   @Published var isAuthorized: Bool = false
+  /// `$authorizationStatus` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never> {
+    $authorizationStatus.eraseToAnyPublisher()
+  }
+  /// `$isAuthorized` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var isAuthorizedPublisher: AnyPublisher<Bool, Never> { $isAuthorized.eraseToAnyPublisher() }
 
   /// Bumps on every `photoLibraryDidChange`. Sidebar/grid views that depend on the
   /// current PhotoKit state observe this to trigger a re-fetch — without it, a user who
@@ -328,7 +336,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   /// Subscribes `livePhotoDetectionFallbackEnabled` to a Bool publisher — typically
-  /// `ExportManager.$livePhotosPairedExport`. Drives the `descriptor(from:)` resource
+  /// `ExportManager.livePhotosPairedExportPublisher`. Drives the `descriptor(from:)` resource
   /// fallback so it fires only when the user has opted into paired-video export.
   /// Synchronous sink (no `.receive(on:)`) so the value is observable immediately when
   /// the next fetch starts. Calling this multiple times replaces the prior binding.

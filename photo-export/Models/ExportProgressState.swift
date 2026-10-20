@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// Frequently-mutating per-job / per-variant state, split off from `ExportManager`
@@ -37,6 +38,11 @@ final class ExportProgressState: ObservableObject {
   /// was nothing new to do." Cleared on any new `startExport*`, version-selection
   /// change, `cancelAndClear`, or after the timeout managed by `ExportManager`.
   @Published var emptyRunMessage: String?
+  /// `$emptyRunMessage` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var emptyRunMessagePublisher: AnyPublisher<String?, Never> {
+    $emptyRunMessage.eraseToAnyPublisher()
+  }
 
   /// Persistent warning attached to active queue work — e.g. "couldn't list every
   /// album, continuing with what was queued." Rendered alongside the progress

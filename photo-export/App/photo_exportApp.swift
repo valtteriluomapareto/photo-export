@@ -155,7 +155,7 @@ struct PhotoExportApp: App {
     // plm]` to avoid pinning the manager past App teardown.
     let photoAdapter = PhotoLibraryPersistentChangeAdapter(
       tokenStore: tokenStore,
-      authorizationStatusPublisher: plm.$authorizationStatus.eraseToAnyPublisher(),
+      authorizationStatusPublisher: plm.authorizationStatusPublisher,
       clock: clock,
       onPotentialLibraryChange: { [weak plm] in plm?.invalidateCache() }
     )
@@ -247,8 +247,7 @@ struct PhotoExportApp: App {
           lifecycleCoordinator.attach(
             initial: DestinationIdentitySnapshot(
               identity: exportDestinationManager.identity),
-            identityPublisher: exportDestinationManager.$identity
-              .eraseToAnyPublisher()
+            identityPublisher: exportDestinationManager.identityPublisher
           )
           // Skip the entire AutoSync wiring in screenshot mode. The
           // `PhotoLibraryPersistentChangeAdapter.start()` call further down
