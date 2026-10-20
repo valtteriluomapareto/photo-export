@@ -231,7 +231,12 @@ final class ExportManager: ObservableObject {
 
   /// Combine publisher for the import flag.
   var isImportingPublisher: AnyPublisher<Bool, Never> {
-    $isImporting.eraseToAnyPublisher()
+    // A "previous backup missing" result holds AutoSync like a running import until the user
+    // decides, so nothing is exported into the folder they were just told is wrong.
+    $isImporting.combineLatest($previousBackupMissing)
+      .map { $0 || $1 }
+      .removeDuplicates()
+      .eraseToAnyPublisher()
   }
 
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
@@ -641,6 +646,11 @@ final class ExportManager: ObservableObject {
   private func canStartExport(in scope: ExportStoreScope, logTag: String) -> Bool {
     guard !isImporting else {
       logger.warning("\(logTag, privacy: .public) ignored: import in progress")
+      return false
+    }
+    guard !previousBackupMissing else {
+      logger.warning(
+        "\(logTag, privacy: .public) ignored: waiting for a decision about the export folder")
       return false
     }
     let ready = scope == .timeline ? canExportTimeline : canExportCollection
@@ -1309,6 +1319,7 @@ final class ExportManager: ObservableObject {
 
   func cancelAndClear() {
     logger.info("Cancelling current export and clearing queue due to destination change")
+    importCoordinator.clearPreviousBackupMissing()
     teardownActiveWork()
     finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
   }
@@ -2428,7 +2439,17 @@ final class ExportManager: ObservableObject {
   /// there, and asks the library window to show the Import sheet.
   func startImportForConfirmedSameFolder() {
     importCoordinator.startImport(requiringPreviousBackup: true)
+    requestImportSheet()
+  }
+
+  /// Asks the library window to show the Import sheet.
+  func requestImportSheet() {
     importSheetRequest = UUID()
+  }
+
+  /// Ends the wait after a "previous backup missing" result. Forwarder.
+  func clearPreviousBackupMissing() {
+    importCoordinator.clearPreviousBackupMissing()
   }
 
   /// Cancels an in-progress import. Forwarder to the `ImportCoordinator`.

@@ -124,13 +124,15 @@ struct PhotoExportApp: App {
         .appendingPathComponent(legacyId, isDirectory: true)
       try? FileManager.default.removeItem(at: autoSyncLegacyDir)
     }
-    Self.connectAmbiguousSameFolderImport(destinationManager: edm, exportManager: em)
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { [em] in em.cancelAndClear() },
       interruptForDestinationUnavailable: { [em] in em.interruptForDestinationUnavailable() },
       configureRecordStores: configure,
       gcLegacyState: gcLegacy
     )
+    Self.connectAmbiguousSameFolderImport(
+      destinationManager: edm, exportManager: em,
+      hasMigrationConflict: { [weak coordinator] in coordinator?.migrationConflict != nil })
 
     let destinationsRoot = autoSyncRoot.appendingPathComponent(
       "destinations", isDirectory: true)
@@ -440,6 +442,19 @@ struct PhotoExportApp: App {
       .appendingPathComponent("AutoSync", isDirectory: true)
   }
 
+  /// "Same Folder" for a pick that couldn't be compared with the previous destination checks
+  /// the export history against the folder (#334). Not while a migration conflict is open: its
+  /// recovery owns the records until resolved.
+  static func connectAmbiguousSameFolderImport(
+    destinationManager: ExportDestinationManager, exportManager: ExportManager,
+    hasMigrationConflict: @escaping @MainActor () -> Bool
+  ) {
+    destinationManager.onAmbiguousSameFolderChosen = { [weak exportManager] in
+      guard !hasMigrationConflict() else { return }
+      exportManager?.startImportForConfirmedSameFolder()
+    }
+  }
+
   /// Runs the per-destination directory coordinator (Phase 0 lazy migration) and then
   /// reconfigures both record stores. The coordinator runs **once** per destination change,
   /// before either store touches the directory, so the legacy `<oldId>` → `<newId>` rename
@@ -449,16 +464,6 @@ struct PhotoExportApp: App {
   /// Static so `AppLifecycleCoordinator` can call it from a closure captured at app-init time
   /// without holding a reference to `PhotoExportApp` (which is a struct value type recreated by
   /// SwiftUI on every body evaluation).
-  /// "Same Folder" for a pick that couldn't be compared with the previous destination checks
-  /// the export history against the folder (#334).
-  static func connectAmbiguousSameFolderImport(
-    destinationManager: ExportDestinationManager, exportManager: ExportManager
-  ) {
-    destinationManager.onAmbiguousSameFolderChosen = { [weak exportManager] in
-      exportManager?.startImportForConfirmedSameFolder()
-    }
-  }
-
   static func configureRecordStores(
     for newId: String?,
     destinationManager: ExportDestinationManager,

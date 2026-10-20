@@ -54,7 +54,8 @@ final class ImportCoordinator: ObservableObject {
   @Published private(set) var importStage: BackupScanner.ImportStage?
   @Published private(set) var importError: String?
   /// Set when an import that required the previous backup found none of the export history's
-  /// files in the folder. Nothing was imported or pruned.
+  /// files in the folder. Nothing was imported or pruned, and exports wait until the user picks
+  /// another folder or starts a new history (`clearPreviousBackupMissing()`).
   @Published private(set) var previousBackupMissing: Bool = false
 
   /// Why `startImport` didn't start.
@@ -165,10 +166,11 @@ final class ImportCoordinator: ObservableObject {
     let operationID = UUID()
     activeImportID = operationID
     importError = nil
-    previousBackupMissing = false
     host.setImportResult(nil)
     importStage = .scanningBackupFolder
     isImporting = true
+    // After `isImporting`, so exports stay held without a gap when a re-pick checks again.
+    previousBackupMissing = false
 
     importTask = Task { [weak self, weak host] in
       guard let self, let host else { return }
@@ -339,6 +341,12 @@ final class ImportCoordinator: ObservableObject {
       }
     }
     return nil
+  }
+
+  /// Ends the wait after a "previous backup missing" result: the user chose what to do, or the
+  /// destination changed.
+  func clearPreviousBackupMissing() {
+    previousBackupMissing = false
   }
 
   /// Cancels an in-progress import. Bumps the queue coordinator's generation so any

@@ -300,6 +300,19 @@ struct AutoSyncReducerTests {
     #expect(resumed.pendingTriggerReason == nil)
   }
 
+  /// Photos-change reasons aren't kept: the resume hook's dirty-state check already knows
+  /// whether a manual run exported that work in the meantime.
+  @Test func cancelledPhotosChangeDebounceIsLeftToTheDirtyStateCheck() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .scheduled(reason: .photosChanged, fireAt: now.addingTimeInterval(30))
+
+    let (held, _) = AutoSyncReducer.reduce(
+      .importStateChanged(isImporting: true), in: state, now: now)
+
+    #expect(held.current == .waiting(.importActive))
+    #expect(held.pendingTriggerReason == nil)
+  }
+
   // MARK: - versionSelectionChanged
 
   @Test func versionSelectionChangeSchedulesDebounce() {

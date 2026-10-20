@@ -271,6 +271,43 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   func selectFolder() {
+    if let url = runFolderPanel() {
+      processSelectedFolder(url)
+    }
+  }
+
+  /// Re-picks the previous backup after the folder chosen with "Same Folder" held none of the
+  /// export history's files. The pick keeps the history and is checked again: it is never treated
+  /// as a different folder, because the stored bookmark now points at the folder just rejected.
+  /// Returns false when the user cancels the panel.
+  @discardableResult
+  func selectFolderKeepingHistory() -> Bool {
+    guard let url = runFolderPanel() else { return false }
+    applySelection(url, decision: .sameDestination, checkHistory: true)
+    return true
+  }
+
+  /// Outcome of `useSelectedFolderAsNewDestination()`.
+  enum NewDestinationOutcome: Equatable {
+    /// A fresh, empty history now belongs to the folder.
+    case newHistory
+    /// The folder's identity is the one the history already uses, so no new history could start.
+    case sameIdentity
+    /// The bookmark couldn't be saved; nothing changed.
+    case notSaved
+  }
+
+  /// Starts a fresh history for the selected folder, leaving the previous history in place for
+  /// its own folder.
+  func useSelectedFolderAsNewDestination() -> NewDestinationOutcome {
+    guard let url = selectedFolderURL else { return .notSaved }
+    let previous = identity.stableId
+    guard applyFolderSelection(url, decision: .newDestination) else { return .notSaved }
+    guard let current = identity.stableId, current != previous else { return .sameIdentity }
+    return .newHistory
+  }
+
+  private func runFolderPanel() -> URL? {
     let panel = NSOpenPanel()
     panel.title = "Choose Export Folder"
     panel.message = "Select a folder where your photos and videos will be exported."
@@ -279,10 +316,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     panel.allowsMultipleSelection = false
     panel.canCreateDirectories = true
     panel.prompt = "Choose"
-
-    if panel.runModal() == .OK, let url = panel.url {
-      processSelectedFolder(url)
-    }
+    return panel.runModal() == .OK ? panel.url : nil
   }
 
   /// Resolves the same-vs-different-folder decision for an explicitly picked folder, then
@@ -299,8 +333,18 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     case .ambiguous:
       decision = ambiguityResolver?(url) ?? resolveAmbiguousSelection(for: url)
     }
+    applySelection(
+      url, decision: decision,
+      checkHistory: evidence == .ambiguous && decision == .sameDestination)
+  }
+
+  /// Applies a pick and, when `checkHistory`, asks the app to check the export history against
+  /// the folder once the selection is saved and the folder is available.
+  private func applySelection(
+    _ url: URL, decision: FolderSelectionDecision, checkHistory: Bool
+  ) {
     let applied = applyFolderSelection(url, decision: decision)
-    if evidence == .ambiguous, decision == .sameDestination, applied, identity.stableId != nil {
+    if checkHistory, applied, identity.stableId != nil {
       onAmbiguousSameFolderChosen?()
     }
   }
@@ -526,6 +570,11 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// re-selection rule.
   func selectFolderForTesting(_ url: URL) {
     processSelectedFolder(url)
+  }
+
+  /// `selectFolderKeepingHistory()` without the `NSOpenPanel`.
+  func selectFolderKeepingHistoryForTesting(_ url: URL) {
+    applySelection(url, decision: .sameDestination, checkHistory: true)
   }
 
   /// Re-runs validation against the current selection, mirroring what the volume

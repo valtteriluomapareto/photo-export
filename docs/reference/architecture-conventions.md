@@ -418,8 +418,13 @@ root-cause fix for #127 (a network-share remount re-exporting everything).
   (`AmbiguousFolderPrompt`). "Same Folder" keeps the id and then calls
   `onAmbiguousSameFolderChosen` synchronously, which runs Import Existing Backup with
   `requiringPreviousBackup`: if the history has completed files and none of them are in the
-  folder, nothing is imported or pruned. The import starts in the same main-actor turn as the
-  identity publish, so AutoSync waits for it, and the debounce it cancels keeps its reason.
+  folder, nothing is imported or pruned, and `previousBackupMissing` holds exports
+  (`isImportingPublisher` stays true, manual starts are refused) until the user re-picks with
+  `selectFolderKeepingHistory()` — which applies `.sameDestination`, because the stored bookmark
+  now points at the rejected folder — or starts a new history, or the destination changes. The
+  import starts in the same main-actor turn as the identity publish, so AutoSync waits for it,
+  and the debounce it cancels keeps its reason (photos-change reasons excepted; the resume hook's
+  dirty-state check covers those).
 - **One atomic identity value.** The manager publishes `@Published identity: DestinationIdentity`
   (stable id + advisory fingerprint) as **one** value — not two `@Published` fields. The old
   `destinationFingerprint` + `destinationId` pair-write is **retired**: it had a mid-emission gap

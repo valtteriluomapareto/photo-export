@@ -8,6 +8,12 @@ struct ImportView: View {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(\.dismiss) private var dismiss
 
+  /// Called for "Choose Another Folder…" after a "previous backup missing" result. The presenter
+  /// closes the sheet and opens the folder panel once it has closed.
+  var onChooseAnotherFolder: (() -> Void)?
+
+  @State private var newFolderError: String?
+
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
@@ -35,6 +41,9 @@ struct ImportView: View {
     }
     .padding(24)
     .frame(width: 420)
+    // The user must decide what to do with a folder that isn't their previous backup; exports
+    // wait until then.
+    .interactiveDismissDisabled(exportManager.previousBackupMissing)
   }
 
   // MARK: - Progress View
@@ -145,19 +154,21 @@ struct ImportView: View {
   /// it. The history was kept; offer the two ways forward.
   private var previousBackupMissingView: some View {
     let folderName = exportDestinationManager.selectedFolderURL?.lastPathComponent ?? "this folder"
-    let chooseAnother = {
-      dismiss()
-      // Let the sheet close before the folder panel opens.
-      Task { @MainActor in
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        exportDestinationManager.selectFolder()
-      }
-    }
+    let chooseAnother: () -> Void = { onChooseAnotherFolder?() }
     let useAsNew = {
-      if let url = exportDestinationManager.selectedFolderURL {
-        exportDestinationManager.applyFolderSelection(url, decision: .newDestination)
+      switch exportDestinationManager.useSelectedFolderAsNewDestination() {
+      case .newHistory:
+        exportManager.clearPreviousBackupMissing()
+        dismiss()
+      case .sameIdentity:
+        // The folder is the one the history was created for; make the history match what's in
+        // it, which re-exports what's missing.
+        exportManager.clearPreviousBackupMissing()
+        exportManager.startImport()
+      case .notSaved:
+        newFolderError =
+          "Photo Export couldn\u{2019}t save access to this folder. Choose it again, or choose another folder."
       }
-      dismiss()
     }
     #if DEBUG
       bodyCounter?.recordText(["false"], for: "import-progress")
@@ -179,10 +190,18 @@ struct ImportView: View {
           key: "import-message")
       )
       .multilineTextAlignment(.center)
+      if let newFolderError {
+        Text(observed(newFolderError, key: "import-new-folder-error"))
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .multilineTextAlignment(.center)
+      }
       HStack(spacing: 12) {
         Button("Use as New Folder", action: useAsNew)
-        Button("Choose Another Folder\u{2026}", action: chooseAnother)
-          .keyboardShortcut(.defaultAction)
+        if onChooseAnotherFolder != nil {
+          Button("Choose Another Folder\u{2026}", action: chooseAnother)
+            .keyboardShortcut(.defaultAction)
+        }
       }
       .buttonStyle(.bordered)
     }

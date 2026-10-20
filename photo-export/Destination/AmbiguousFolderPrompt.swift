@@ -13,9 +13,9 @@ struct AmbiguousFolderPrompt: Equatable {
   var title: String { "Is this your previous backup folder?" }
 
   var message: String {
-    "Photo Export can't reach the folder you used before, so it can't tell whether "
-      + "\u{201C}\(folderName)\u{201D} is the same one. This happens when a drive is "
-      + "disconnected or a network share reconnects under a new name.\n\n"
+    "Photo Export can't reach the folder you used before (for example, its drive is "
+      + "disconnected), so it can't tell whether \u{201C}\(folderName)\u{201D} is the same "
+      + "one.\n\n"
       + "Same Folder keeps your export history and checks it against this folder, so "
       + "nothing is exported twice.\n"
       + "New Folder starts an empty history and exports everything to this folder."
