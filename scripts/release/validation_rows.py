@@ -208,6 +208,7 @@ FULL_MATRIX_PATHS = [
     "scripts/ci/install-provisioning-profile.sh",
     "scripts/ci/setup-keychain-appstore.sh",
     ".xcode-version",
+    "scripts/ci/select-xcode.sh",
 ]
 
 PROJECT = "photo-export.xcodeproj/project.pbxproj"

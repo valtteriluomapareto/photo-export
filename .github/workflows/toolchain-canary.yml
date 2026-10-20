@@ -1,0 +1,116 @@
+name: Toolchain canary
+
+# Builds and tests on newer Xcode versions than .xcode-version so a toolchain bump is a
+# known list of fixes. Not part of the merge gate: build-and-test in ci.yml never needs it.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '47 4 * * 1'
+  pull_request:
+    paths:
+      - .xcode-version
+      - scripts/ci/select-xcode.sh
+      - scripts/ci/build-app.sh
+      - scripts/ci/run-unit-tests.sh
+      - scripts/ci/report-built-app.sh
+      - .github/workflows/toolchain-canary.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchain-canary-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  canary:
+    name: canary (Xcode ${{ matrix.xcode }})
+    runs-on: ${{ matrix.runs-on }}
+    # Counts from when a runner picks the job up. A preview label with no runner leaves the
+    # job queued (GitHub cancels it after 24 hours); that is a missing runner, not a result.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Newest Xcode on a generally available image: the likely bump target.
+          - runs-on: macos-26
+            xcode: "26.6"
+          # The maintainer's local toolchain, on the public-preview image.
+          - runs-on: xcode-27
+            xcode: "27.1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report runner image
+        run: |
+          echo "::group::Runner image"
+          echo "Runner label: ${{ matrix.runs-on }}"
+          echo "Image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          sw_vers
+          echo "::endgroup::"
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh ${{ matrix.xcode }}
+
+      - name: Build Debug
+        run: bash scripts/ci/build-app.sh Debug
+
+      - name: Check xcresult diagnostics export support
+        continue-on-error: true
+        run: xcrun xcresulttool export diagnostics --help > /dev/null
+
+      - name: Run Unit Tests (Debug, with coverage)
+        id: unit-tests
+        timeout-minutes: 15
+        env:
+          TEST_RUNNER_REQUIRE_SCOPE_TESTS: "1"
+        run: bash scripts/ci/run-unit-tests.sh
+
+      - name: Check regression gates ran
+        if: success()
+        run: |
+          echo "::group::Regression-gate result check"
+          xcrun xcresulttool version
+          python3 -B scripts/ci/check-regression-gates-ran.py --result-bundle TestResults.xcresult
+          echo "::endgroup::"
+
+      - name: Build Release
+        run: bash scripts/ci/build-app.sh Release
+
+      - name: Report built Release app
+        run: bash scripts/ci/report-built-app.sh ${{ matrix.xcode }}
+
+      - name: Print build and test failure diagnostics
+        if: failure()
+        run: |
+          for log in debug-build.log test.log release-build.log; do
+            if [[ -f "$log" ]]; then
+              echo "::group::Failure diagnostics: $log"
+              grep -nE '✘|↳|recorded an issue|Expectation failed|error:' "$log" || true
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Collect test process diagnostics
+        if: ${{ failure() && steps.unit-tests.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          python3 -B scripts/ci/collect_test_diagnostics.py \
+            --since test-start.marker \
+            --result-bundle TestResults.xcresult \
+            --output TestDiagnostics
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: TestResults-${{ matrix.xcode }}
+          path: |
+            TestResults.xcresult
+            debug-build.log
+            test.log
+            release-build.log
+            TestDiagnostics/

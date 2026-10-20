@@ -68,7 +68,7 @@ If Photos access is denied, choose **Open System Settings**, enable access under
 ## Requirements
 
 - macOS 15.0+
-- Xcode 16.2+ (tested in CI) for building from source
+- Xcode at or above the version in [`.xcode-version`](.xcode-version) for building from source; CI and releases use exactly that version
 - No third-party runtime dependencies
 
 ## Build from source
