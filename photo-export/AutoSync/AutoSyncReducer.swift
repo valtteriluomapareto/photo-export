@@ -44,6 +44,9 @@ enum AutoSyncReducer {
     /// `versionSelection`.
     var convertHEICToJPEG: Bool
     var importActive: Bool
+    /// Photos access as last refreshed. Kept out of `DestinationSnapshot`, whose changes
+    /// drive the destination triggers.
+    var photosAuthorized = true
     var exportRunState: ExportRunState
     /// Per-destination accumulated dirty state. Updated by `photosChanged` events
     /// (asset id targeting + cost-cap rollover) and by full-reconciliation completion.
@@ -199,6 +202,37 @@ enum AutoSyncReducer {
 
     case .importStateChanged(let isImporting):
       newState.importActive = isImporting
+
+    case .photosAuthorizationChanged(let authorized):
+      guard authorized != state.photosAuthorized else { return (state, []) }
+      newState.photosAuthorized = authorized
+      // Losing access only blocks, through the recompute below. A run already exporting is
+      // never cancelled: its scan reports the missing access and the run ends `.failed`.
+      // Access returning is handled like a failed change fetch: changes made while access
+      // was off aren't reliably reported, so every selected scope gets a full reconciliation.
+      if authorized, state.enabled, let destinationId = state.destination.id,
+        !state.scopeSelection.isEmpty
+      {
+        var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
+        for scope in state.scopeSelection.enabledScopes {
+          var scopeState = dirty.scope(scope)
+          scopeState.pendingFullReconciliation = true
+          scopeState.pendingAssetIds.removeAll()
+          invalidateRunBoundary(scope, destinationId: destinationId, in: &newState)
+          dirty.setScope(scope, scopeState)
+        }
+        dirty.markUpdated(at: now)
+        newState.dirtyStateByDestination[destinationId] = dirty
+        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
+        // A pending reason that runs at least as soon as a Photos change (Export Now, a
+        // retry, a settings change) runs as itself; the recompute serves it.
+        let pendingRunsAsSoon = state.pendingTriggerReason.map {
+          debounceDelay(for: $0) <= debounceDelay(for: .photosChanged)
+        }
+        if pendingRunsAsSoon != true {
+          triggerReason = .photosChanged
+        }
+      }
 
     case .exportRunStarted(let context, let destinationId):
       captureRunBoundary(context, destinationId: destinationId, in: &newState)
@@ -493,7 +527,7 @@ enum AutoSyncReducer {
       reason != .photosChanged, reason != .photosChangeFallback
     {
       switch newState.current {
-      case .waiting(.importActive), .waiting(.manualExportActive):
+      case .waiting(.importActive), .waiting(.manualExportActive), .blocked(.photosAccessMissing):
         newState.pendingTriggerReason = reason
       default:
         break
@@ -711,7 +745,7 @@ enum AutoSyncReducer {
     // `ExportManager.runExport`'s single-active-run precondition. The fan-out's
     // own `await runExport` is already keeping `activeRunContext != nil`; we
     // must not start a second concurrent run.
-    state.enabled && !state.importActive && !state.scopeSelection.isEmpty
+    state.enabled && !state.importActive && state.photosAuthorized && !state.scopeSelection.isEmpty
       && state.destination.id != nil && state.destination.isAvailable
       && state.destination.safety == .safe
       && !state.exportRunState.isManualActive
@@ -739,6 +773,13 @@ enum AutoSyncReducer {
     if state.exportRunState.isManualActive {
       cancelAnyScheduledDebounce(from: previous, into: &effects)
       return .waiting(.manualExportActive)
+    }
+    // After the import and manual-export waits, so their resume rules still apply; before
+    // every other blocker, since none of them can be fixed without access. An Auto Export
+    // run in progress shows blocked too and finishes on its own.
+    if !state.photosAuthorized {
+      cancelAnyScheduledDebounce(from: previous, into: &effects)
+      return .blocked(.photosAccessMissing)
     }
     if state.scopeSelection.isEmpty {
       cancelAnyScheduledDebounce(from: previous, into: &effects)

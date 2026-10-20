@@ -397,8 +397,8 @@ schedule clears the record. A summary that arrives while the reducer is still `.
 suppresses the hook for that run instead.
 
 - Dirty work is kept and waits for the next real trigger: a Photos change,
-  `destinationBecameAvailable`, Export Now, launch, or a scope or settings change. Freeing
-  space or restoring access fires no trigger by itself.
+  `destinationBecameAvailable`, Export Now, launch, Photos access returning, or a scope or
+  settings change. Freeing space or restoring destination access fires no trigger by itself.
 - An Export Now pressed during the run is exempt and still runs. A later trigger during
   the run does not replace it as the pending reason. Switching destinations drops any
   pending reason, Export Now included; the new destination gets its own trigger.
@@ -410,6 +410,44 @@ suppresses the hook for that run instead.
   its own: a new trigger replaces it, or a resolving blocker (an import or manual export
   ending) serves it.
 - A failed summary without `stoppedBy` keeps the existing reschedule.
+
+### AutoSync Photos access
+
+`AutoSyncEnvironment.photosAuthorization` (`AutoSyncPhotosAuthorizationProviding`, required)
+publishes the cached flag `PhotoLibraryManager.isAuthorized`, which the export guards and the
+main window also read. Missing access is `.blocked(.photosAccessMissing)`: below the import
+and manual-export waits, so their resume rules still apply, and above every other blocker,
+since none of them can be fixed without access. A run in progress is never cancelled
+mid-scope; its scan reports the missing access, the run ends `.failed`, and going idle from
+`.blocked` schedules nothing. Access returning during a run that then stops on the
+destination is held like any other trigger during it.
+
+macOS posts no notification when access changes, so access is refreshed at three points:
+before each fired debounce (the only path to a run), before each scope of the AutoSync
+fan-out (stopping the fan-out if access is gone), and app-wide on
+`NSApplication.didBecomeActiveNotification`. `refreshAuthorization()` publishes
+synchronously before it returns, so the reducer is blocked before the event that would start
+the run; the sink must use the value it receives. A grant made without bringing the app
+forward waits for the next activation or launch.
+
+Access returning is handled like a failed change fetch: every selected scope gets
+`pendingFullReconciliation`, the dirty state is saved, and `.photosChanged` is triggered
+unless a pending reason with an equal or shorter delay (Export Now, a retry, a settings
+change) exists, which then runs. A scheduled run cancelled by losing access keeps its reason,
+as it does for an import.
+
+Without access PhotoKit returns empty results, not an error. So `PhotoLibraryManager` keeps
+one rule for live versus cached reads: scan entry points that could otherwise report an
+empty library as complete read the live status (`fetchAssetsProgressive`,
+`availableYearsWithCounts`, and `fetchCollectionTree` on a cache miss), as do the scope
+counts `countAssets(in:)` and `countAdjustedAssets(in:)`; the UI-only counts (by year or
+month, adjusted counts by year or month) read the cached `isAuthorized`. A revoke inside a
+scope fails it at its next fetch, and a live denial while the cached flag is still set
+refreshes that flag, so the main window switches and Auto Export blocks at once.
+`ExportManager`'s enqueue guards read the service's cached `isAuthorized`; the fetch that
+follows each guard is the live check. A cached collection tree is returned without the live
+check, which keeps the album sidebar during the stale window; every collection scan still
+meets the check in `fetchAssetsProgressive`.
 
 ### AutoSync dirty-state persistence acknowledgement
 

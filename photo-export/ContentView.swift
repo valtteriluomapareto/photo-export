@@ -87,7 +87,6 @@ struct AuthorizationView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  var activationNotifications: NotificationCenter = .default
   @ObservedObject var photoLibraryManager: PhotoLibraryManager
 
   var body: some View {
@@ -136,9 +135,7 @@ struct AuthorizationView: View {
     }
     .padding()
     .firstRunWindowMinSize()
-    .onReceive(activationNotifications.publisher(for: NSApplication.didBecomeActiveNotification)) {
-      _ in photoLibraryManager.refreshAuthorizationStatus()
-    }
+    // `PhotoLibraryManager.observeAppActivation` refreshes access on every activation.
     .task {
       photoLibraryManager.refreshAuthorizationStatus()
       if photoLibraryManager.authorizationStatus == .notDetermined {

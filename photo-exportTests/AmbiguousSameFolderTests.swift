@@ -338,6 +338,7 @@ struct AmbiguousSameFolderTests {
         retryStateStore: builder.retryStore, runSummaryStore: builder.runSummaryStore,
         perDestinationTokenStore: builder.perDestinationTokenStore,
         currentRunStore: builder.currentRunStore, clock: builder.clock,
+        photosAuthorization: builder.photosAuthorization,
         userDefaults: builder.userDefaults))
     let runner = builder.exportRunner
     func runFinished(_ count: Int) -> Bool {

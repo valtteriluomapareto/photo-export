@@ -225,7 +225,8 @@ struct AutoSyncGeneratedSequenceTests {
   /// After an Auto Export run stops on a destination-wide failure while the destination
   /// stays available, nothing schedules until a trigger or a resolving blocker arrives,
   /// whatever arrived during the run and in whichever order idle and the summary land. An
-  /// Export Now pressed during the run is the exception and still runs.
+  /// Export Now pressed during the run, or Photos access returning during it, is the
+  /// exception and still runs.
   @Test(arguments: seeds)
   func destinationStopsWaitForATriggerOrABlockerToResolve(seed: UInt64) {
     var generator = SequenceGenerator(seed: seed)
@@ -269,8 +270,16 @@ struct AutoSyncGeneratedSequenceTests {
           ExportRunState(activeContext: context, isManualActive: false, isAutoSyncActive: true)),
         "running")
       var exportNow = false
+      var accessToggled = false
+      func expectScheduled(_ reason: AutoSyncReason) {
+        #expect(
+          state.current
+            == .scheduled(
+              reason: reason, fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: reason))),
+          "\(trace)")
+      }
       for index in 0..<generator.pick(4) {
-        switch generator.pick(5) {
+        switch generator.pick(6) {
         case 0:
           apply(
             .photosChanged(
@@ -289,6 +298,10 @@ struct AutoSyncGeneratedSequenceTests {
         case 3:
           exportNow = true
           apply(.runNowRequested, "mid-run Export Now")
+        case 4:
+          accessToggled = true
+          apply(.photosAuthorizationChanged(false), "mid-run Photos access lost")
+          apply(.photosAuthorizationChanged(true), "mid-run Photos access restored")
         default:
           apply(
             .photosChanged(
@@ -317,6 +330,13 @@ struct AutoSyncGeneratedSequenceTests {
         continue
       }
       #expect(state.current == .idle, "\(trace)")
+      // Access returning during the run is held like any other change made during it; its
+      // saved full reconciliation waits for the next trigger.
+      if accessToggled {
+        #expect(
+          state.dirtyStateByDestination["A"]?.scope(.timeline).pendingFullReconciliation == true,
+          "\(trace)")
+      }
       for _ in 0..<(1 + generator.pick(4)) {
         switch generator.pick(6) {
         case 0:
@@ -342,13 +362,21 @@ struct AutoSyncGeneratedSequenceTests {
       let hasWork =
         state.pendingTriggerReason != nil
         || state.dirtyStateByDestination["A"]?.isEmpty == false
-      switch generator.pick(4) {
+      switch generator.pick(5) {
       case 0:
         apply(
           .photosChanged(
             PhotoLibraryPersistentChangeEvent(insertedLocalIdentifiers: ["after"], observedAt: now)),
           "Photos change")
-        #expect(scheduled(state), "\(trace)")
+        expectScheduled(.photosChanged)
+      case 4:
+        // A reason held after the stop runs as itself when it is due as soon as a Photos
+        // change; every held reason is.
+        let held = state.pendingTriggerReason
+        apply(.photosAuthorizationChanged(false), "Photos access lost")
+        #expect(state.current == .blocked(.photosAccessMissing), "\(trace)")
+        apply(.photosAuthorizationChanged(true), "Photos access restored")
+        expectScheduled(held ?? .photosChanged)
       case 1:
         apply(.runNowRequested, "Export Now")
         #expect(state.current == .scheduled(reason: .userExportNow, fireAt: now), "\(trace)")
@@ -375,7 +403,7 @@ struct AutoSyncGeneratedSequenceTests {
   @Test(arguments: seeds)
   func retrySequencesRespectDeadlinesAndBlockersWithoutImmediateLoops(seed: UInt64) async throws {
     var generator = SequenceGenerator(seed: seed)
-    var remaining = ["none", "manual", "import", "disabled", "unselected", "destination"]
+    var remaining = ["none", "manual", "import", "disabled", "unselected", "destination", "photos"]
     while !remaining.isEmpty {
       let blocker = remaining.remove(at: generator.pick(remaining.count))
       var trace = SequenceTrace(seed: seed)
@@ -401,6 +429,8 @@ struct AutoSyncGeneratedSequenceTests {
       case "import": builder.importing.subject.send(true)
       case "disabled": manager.setEnabled(false)
       case "destination": builder.destination.subject.send(.none)
+      // Revoked in the background: only the refresh before the retry's run notices.
+      case "photos": builder.photosAuthorization.live = false
       default: break
       }
       builder.clock.advance(by: delay - 10 - 0.25)
@@ -424,6 +454,10 @@ struct AutoSyncGeneratedSequenceTests {
       case "import": builder.importing.subject.send(false)
       case "disabled": manager.setEnabled(true)
       case "destination": builder.destination.subject.send(destination("A"))
+      case "photos":
+        #expect(manager.state == .blocked(.photosAccessMissing), "\(trace)")
+        builder.photosAuthorization.live = true
+        builder.photosAuthorization.refreshAuthorization()
       default: break
       }
       builder.clock.advance(by: 0)

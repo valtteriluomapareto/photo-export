@@ -112,6 +112,54 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     status == .authorized || status == .limited
   }
 
+  /// Reads the system's current Photos authorization. Used only when `overrideService` is
+  /// nil; tests inject a stub so the production PhotoKit paths can be checked without
+  /// touching the library.
+  nonisolated private let liveAuthorizationStatus: @Sendable () -> PHAuthorizationStatus
+
+  nonisolated private static let systemAuthorizationStatus: @Sendable () -> PHAuthorizationStatus =
+    {
+      PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    }
+
+  /// Photos access as the system reports it now, not the cached `isAuthorized`. Without
+  /// access PhotoKit returns empty results rather than an error, so the scan entry points
+  /// check this: a revoke the app hasn't refreshed yet then fails the scan as unauthorized
+  /// instead of reading as an empty library.
+  nonisolated private func isLiveAuthorizationSufficient() -> Bool {
+    Self.isAuthorizationSufficient(liveAuthorizationStatus())
+  }
+
+  /// A live check found access gone. If the cached flag still says authorized, refresh it
+  /// so the main window switches to the access screen and Auto Export blocks at once.
+  private func noteLiveDenial() {
+    guard isAuthorized else { return }
+    refreshAuthorizationStatus()
+  }
+
+  /// `noteLiveDenial()` from the detached scan paths, awaited before they throw.
+  nonisolated private func noteLiveDenialOnMain() async {
+    await MainActor.run { self.noteLiveDenial() }
+  }
+
+  /// The live check at a main-actor scan entry point. These can run inside a view body
+  /// (`fetchCollectionTree` on a cache miss), so the refresh waits for the next main-actor
+  /// turn instead of publishing during the view update.
+  private func requireLiveAuthorization() throws {
+    guard isLiveAuthorizationSufficient() else {
+      Task { @MainActor [weak self] in self?.noteLiveDenial() }
+      throw PhotoLibraryError.authorizationDenied
+    }
+  }
+
+  /// The live check at a detached scan entry point.
+  nonisolated private func requireLiveAuthorizationAsync() async throws {
+    guard isLiveAuthorizationSufficient() else {
+      await noteLiveDenialOnMain()
+      throw PhotoLibraryError.authorizationDenied
+    }
+  }
+
   /// Production initializer: no override. Does NOT touch PhotoKit — the
   /// `PHPhotoLibrary.shared().register(self)` + authorization probe move into
   /// `start()`, called from the WindowGroup's `.task` after SwiftUI has rendered.
@@ -127,9 +175,22 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// into `ExportManager` directly and don't construct a manager).
   override init() {
     self.overrideService = nil
+    self.liveAuthorizationStatus = Self.systemAuthorizationStatus
     super.init()
     setupDecodedThumbnailCache()
   }
+
+  #if DEBUG
+    /// The production PhotoKit paths with a stubbed status reader, for tests of the live
+    /// authorization guards. A method whose guard the stub passes reads the real library,
+    /// so tests call only methods whose guard the stub fails.
+    init(liveAuthorizationStatus: @escaping @Sendable () -> PHAuthorizationStatus) {
+      self.overrideService = nil
+      self.liveAuthorizationStatus = liveAuthorizationStatus
+      super.init()
+      setupDecodedThumbnailCache()
+    }
+  #endif
 
   /// Composition entry point: `overrideService` (when non-nil) replaces every
   /// `PhotoLibraryService` method on this manager. PhotoKit registration is skipped
@@ -141,6 +202,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     countInvalidationWaitObserver: (@MainActor () -> Void)? = nil
   ) {
     self.overrideService = overrideService
+    self.liveAuthorizationStatus = Self.systemAuthorizationStatus
     self.countInvalidationOverride = countInvalidationOverride
     self.countInvalidationWaitObserver = countInvalidationWaitObserver
     super.init()
@@ -265,11 +327,12 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     guard overrideService == nil else { return }
     guard !hasStarted else { return }
     hasStarted = true
+    observeAppActivation()
     verifyPhotoLibraryPermissions()
     // Observe library changes to invalidate cache
     PHPhotoLibrary.shared().register(self)
     // Initialize with current authorization status
-    authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    authorizationStatus = liveAuthorizationStatus()
     isAuthorized = Self.isAuthorizationSufficient(authorizationStatus)
   }
 
@@ -295,12 +358,30 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
+  /// Re-reads Photos access each time the app becomes active, whichever window is
+  /// showing, or none: macOS posts nothing when access changes in System Settings, so the
+  /// main window and Auto Export learn of a grant or revoke on return. Idempotent. `start()`
+  /// calls it; tests pass their own center.
+  func observeAppActivation(notificationCenter: NotificationCenter = .default) {
+    guard appActivationSubscription == nil else { return }
+    appActivationSubscription =
+      notificationCenter
+      .publisher(for: NSApplication.didBecomeActiveNotification)
+      .sink { [weak self] _ in
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          self?.refreshAuthorizationStatus()
+        }
+      }
+  }
+
+  private var appActivationSubscription: AnyCancellable?
+
   /// Re-reads existing permission without prompting. Install fresh-cache barriers
   /// before an authorization subscriber can start work against the newly visible library.
   func refreshAuthorizationStatus() {
     let status =
-      overrideService?.authorizationStatus
-      ?? PHPhotoLibrary.authorizationStatus(for: .readWrite)
+      overrideService?.authorizationStatus ?? liveAuthorizationStatus()
     guard status != authorizationStatus else { return }
     invalidateCache()
     authorizationStatus = status
@@ -431,9 +512,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
           continuation.finish()
           return
         }
-        let isAuthorized = await MainActor.run { self.isAuthorized }
-        guard isAuthorized else {
-          continuation.finish(throwing: PhotoLibraryError.authorizationDenied)
+        do {
+          try await self.requireLiveAuthorizationAsync()
+        } catch {
+          continuation.finish(throwing: error)
           return
         }
         let useResourceFallback = await MainActor.run {
@@ -517,12 +599,9 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// detached-task implementation here.
   nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
     if let s = overrideService { return try await s.countAssets(in: scope) }
+    try await requireLiveAuthorizationAsync()
     return try await runDetached(priority: .userInitiated) {
       try Task.checkCancellation()
-      let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-      guard Self.isAuthorizationSufficient(status) else {
-        throw PhotoLibraryError.authorizationDenied
-      }
       let opts = Self.fetchOptions(for: scope)
       switch scope {
       case .timeline, .favorites:
@@ -591,12 +670,9 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// main actor.
   nonisolated func countAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int {
     if let s = overrideService { return try await s.countAdjustedAssets(in: scope) }
+    try await requireLiveAuthorizationAsync()
     return try await runDetached(priority: .userInitiated) {
       try Task.checkCancellation()
-      let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-      guard Self.isAuthorizationSufficient(status) else {
-        throw PhotoLibraryError.authorizationDenied
-      }
       let opts = Self.fetchOptions(for: scope)
       let result: PHFetchResult<PHAsset>
       switch scope {
@@ -696,7 +772,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Returns descending list of years with at least one asset, together with per-year asset counts.
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
     if let s = overrideService { return try s.availableYearsWithCounts() }
-    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    try requireLiveAuthorization()
 
     let opts = PHFetchOptions()
     opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
@@ -1166,8 +1242,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// collections we surface and how.
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
     if let s = overrideService { return try s.fetchCollectionTree() }
-    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    // A cache hit stays cheap and keeps the album sidebar while access is being rechecked.
+    // Every collection scan still meets the live check in `fetchAssetsProgressive`.
     if let cached = cachedCollectionTree { return cached }
+    try requireLiveAuthorization()
     var tree: [PhotoCollectionDescriptor] = []
     tree.append(
       PhotoCollectionDescriptor(

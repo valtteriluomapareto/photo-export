@@ -106,6 +106,7 @@ struct AutoSyncDestinationStopIntegrationTests {
         perDestinationTokenStore: builder.perDestinationTokenStore,
         currentRunStore: builder.currentRunStore,
         clock: builder.clock,
+        photosAuthorization: builder.photosAuthorization,
         userDefaults: builder.userDefaults
       )
       builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
