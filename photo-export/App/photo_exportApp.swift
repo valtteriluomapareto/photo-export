@@ -300,6 +300,8 @@ struct PhotoExportApp: App {
     // state supplies its own minimum: `LibraryRootView` uses its
     // `minimumWindowSize`, sized to fit a 1024x768 display with the title bar
     // and toolbar, while the first-run states use `firstRunWindowMinSize()`.
+    // The library's minimum height (600) is deliberately below the first-run
+    // one (640) because its toolbar adds 52pt that the first-run states lack.
     // The window stays freely resizable larger because every state's
     // `maxWidth/maxHeight` is `.infinity`. Mirrors the Settings scene below.
     .windowResizability(.contentMinSize)

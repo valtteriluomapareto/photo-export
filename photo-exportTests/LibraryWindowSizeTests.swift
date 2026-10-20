@@ -6,10 +6,16 @@ import Testing
 
 /// The library window must fit the smallest display the app runs on: 1024×768, on small Macs and
 /// CI's hosted runners, where a larger minimum left the window unshown.
+///
+/// This measures the minimum that the hosted `LibraryRootView` imposes on an AppKit window through
+/// its layout. It does not run the app's scene, whose `.windowResizability(.contentMinSize)` turns
+/// the same content minimum into the window's minimum.
 @MainActor
-@Suite(.timeLimit(.minutes(2)), .serialized)
+@Suite(.timeLimit(.minutes(2)))
 struct LibraryWindowSizeTests {
-  /// The menu bar on a display without a notch.
+  /// The menu bar of a display without a notch, as at 1024×768. The bound leaves nothing for the
+  /// Dock: it can be hidden or at the side and windows may overlap it, so only a window taller
+  /// than the screen below the menu bar fails to fit.
   private static let menuBarHeight: CGFloat = 25
   private static let smallestDisplay = CGSize(width: 1024, height: 768)
 
