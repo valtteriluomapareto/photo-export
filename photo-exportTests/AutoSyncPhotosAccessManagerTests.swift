@@ -76,6 +76,7 @@ struct AutoSyncPhotosAccessManagerTests {
     #expect(await finished(fanOut))
 
     #expect(builder.exportRunner.receivedContexts.map(\.scope) == [.timelineFullLibrary])
+    #expect(builder.currentRunStore.load(destinationId: destinationId) == nil)
     #expect(builder.runSummaryStore.load(destinationId: destinationId)?.context.scope == .timelineFullLibrary)
     let dirty = builder.dirtyStore.load(destinationId: destinationId)
     #expect(dirty.scope(.timeline).isEmpty)

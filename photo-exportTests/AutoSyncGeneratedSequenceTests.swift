@@ -271,6 +271,13 @@ struct AutoSyncGeneratedSequenceTests {
         "running")
       var exportNow = false
       var accessToggled = false
+      func expectScheduled(_ reason: AutoSyncReason) {
+        #expect(
+          state.current
+            == .scheduled(
+              reason: reason, fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: reason))),
+          "\(trace)")
+      }
       for index in 0..<generator.pick(4) {
         switch generator.pick(6) {
         case 0:
@@ -322,15 +329,14 @@ struct AutoSyncGeneratedSequenceTests {
         #expect(state.current == .scheduled(reason: .userExportNow, fireAt: now), "\(trace)")
         continue
       }
-      // Access returning is a real trigger, so the stop doesn't hold its catch-up.
+      #expect(state.current == .idle, "\(trace)")
+      // Access returning during the run is held like any other change made during it; its
+      // saved full reconciliation waits for the next trigger.
       if accessToggled {
-        #expect(scheduled(state), "\(trace)")
         #expect(
           state.dirtyStateByDestination["A"]?.scope(.timeline).pendingFullReconciliation == true,
           "\(trace)")
-        continue
       }
-      #expect(state.current == .idle, "\(trace)")
       for _ in 0..<(1 + generator.pick(4)) {
         switch generator.pick(6) {
         case 0:
@@ -362,12 +368,15 @@ struct AutoSyncGeneratedSequenceTests {
           .photosChanged(
             PhotoLibraryPersistentChangeEvent(insertedLocalIdentifiers: ["after"], observedAt: now)),
           "Photos change")
-        #expect(scheduled(state), "\(trace)")
+        expectScheduled(.photosChanged)
       case 4:
+        // A reason held after the stop runs as itself when it is due as soon as a Photos
+        // change; every held reason is.
+        let held = state.pendingTriggerReason
         apply(.photosAuthorizationChanged(false), "Photos access lost")
         #expect(state.current == .blocked(.photosAccessMissing), "\(trace)")
         apply(.photosAuthorizationChanged(true), "Photos access restored")
-        #expect(scheduled(state), "\(trace)")
+        expectScheduled(held ?? .photosChanged)
       case 1:
         apply(.runNowRequested, "Export Now")
         #expect(state.current == .scheduled(reason: .userExportNow, fireAt: now), "\(trace)")

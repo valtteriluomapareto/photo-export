@@ -228,6 +228,7 @@ struct AutoSyncPhotosAccessReducerTests {
   /// Export Now and retries keep their zero delay. Otherwise a Photos change runs.
   @Test(arguments: [
     AutoSyncReason?.none, .userExportNow, .retryBackoff, .scopeSelectionChanged,
+    .photosChangeFallback,
   ])
   func accessReturningRunsAFullCatchUpUnderThePendingReason(pending: AutoSyncReason?) {
     var state = reduce(.photosAuthorizationChanged(false), ready()).0
@@ -242,13 +243,15 @@ struct AutoSyncPhotosAccessReducerTests {
       state = apply(
         [.retryStateChanged(destinationId: destinationId, retryState: retryDue()), .retryTimerFired],
         to: state)
+    case .photosChangeFallback?: state = reduce(.photosChangeFetchFailed(.tokenExpired), state).0
     default: break
     }
     #expect(state.pendingTriggerReason == pending)
     #expect(state.current == .blocked(.photosAccessMissing))
 
     let (restored, effects) = reduce(.photosAuthorizationChanged(true), state)
-    let reason = pending ?? .photosChanged
+    // The fallback's 2-minute delay is longer than a Photos change's, so it doesn't win.
+    let reason = pending == .photosChangeFallback ? .photosChanged : pending ?? .photosChanged
     #expect(
       restored.current
         == .scheduled(
@@ -284,7 +287,7 @@ struct AutoSyncPhotosAccessReducerTests {
   // MARK: - Stopped runs
 
   enum ToggleOrder: String, CaseIterable, Sendable {
-    /// Access goes and returns while the run is still active.
+    /// Access goes and returns while the run is still active, so the stop holds it.
     case bothDuringRun
     /// Access goes during the run and returns after the run stopped.
     case acrossTheStop
@@ -292,11 +295,14 @@ struct AutoSyncPhotosAccessReducerTests {
     case bothAfterStop
   }
 
-  /// A destination stop holds dirty work until the next real trigger. Access returning is
-  /// one, like Export Now, so it schedules the catch-up whichever way the toggle and the
-  /// stop interleave, and whether the stop summary arrives before or after the idle state.
+  /// A destination stop holds dirty work until the next real trigger, because a retry would
+  /// hit the same full or unreachable drive, and access returning says nothing about the
+  /// drive. Returning during the stopped run is held like any other change made during it;
+  /// the saved full reconciliation exports on the next trigger. Returning once the stop is
+  /// known (the reducer is blocked or idle) schedules the catch-up. Either way, whether the
+  /// stop summary arrives before or after the idle state.
   @Test(arguments: ToggleOrder.allCases, [false, true])
-  func accessReturningSchedulesACatchUpAfterAStoppedRun(order: ToggleOrder, summaryFirst: Bool) {
+  func accessReturningAroundAStoppedRun(order: ToggleOrder, summaryFirst: Bool) {
     let run = context()
     let lost = AutoSyncEvent.photosAuthorizationChanged(false)
     let back = AutoSyncEvent.photosAuthorizationChanged(true)
@@ -313,11 +319,16 @@ struct AutoSyncPhotosAccessReducerTests {
     case .bothAfterStop: events = stop + [lost, back]
     }
     let state = apply(events, to: running(run))
-    #expect(
-      state.current
-        == .scheduled(
-          reason: .photosChanged,
-          fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: .photosChanged))))
+    if order == .bothDuringRun {
+      #expect(state.current == .idle)
+      #expect(state.pendingTriggerReason == nil)
+    } else {
+      #expect(
+        state.current
+          == .scheduled(
+            reason: .photosChanged,
+            fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: .photosChanged))))
+    }
     #expect(state.dirtyStateByDestination[destinationId]?.scope(.timeline).pendingFullReconciliation == true)
   }
 }

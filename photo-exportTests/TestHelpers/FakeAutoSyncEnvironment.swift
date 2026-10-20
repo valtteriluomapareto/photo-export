@@ -156,7 +156,6 @@ final class FakeAutoSyncImportProvider: AutoSyncImportProviding {
 final class FakePhotosAuthorizationProvider: AutoSyncPhotosAuthorizationProviding {
   var live: Bool
   private let subject: CurrentValueSubject<Bool, Never>
-  private(set) var refreshCalls = 0
 
   init(authorized: Bool = true) {
     live = authorized
@@ -170,7 +169,6 @@ final class FakePhotosAuthorizationProvider: AutoSyncPhotosAuthorizationProvidin
   }
 
   func refreshAuthorization() {
-    refreshCalls += 1
     subject.send(live)
   }
 }
