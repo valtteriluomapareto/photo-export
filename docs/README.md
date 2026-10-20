@@ -65,6 +65,7 @@ Completed or superseded plans, kept as decision records:
 
 - [`reference/architecture-conventions.md`](reference/architecture-conventions.md) — cross-cutting contracts, Host-protocol pattern, canonical `start*` shape, regression-gate tests, and extension recipes for adding new placements/variants/collaborators. Read before touching `ExportManager` or anything AutoSync observes.
 - [`reference/swift-swiftui-best-practices.md`](reference/swift-swiftui-best-practices.md) — Swift/SwiftUI patterns and style notes
+- [`reference/observation-migration-recipe.md`](reference/observation-migration-recipe.md) — how a type moves from `ObservableObject` to `@Observable`: the class and wrapper flips, the Combine bridge rules, the parity and dependency-registration tests, and the observation ratchet ([issue #315](https://github.com/valtteriluomapareto/photo-export/issues/315))
 - [`reference/persistence-store.md`](reference/persistence-store.md) — export record persistence format and behavior
 - [`reference/competitors.md`](reference/competitors.md) — competitor app research for the comparison page
 
