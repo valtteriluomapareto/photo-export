@@ -80,7 +80,7 @@ class TestScratchGuardTests(unittest.TestCase):
         result = self.run_guard()
         self.assertEqual(result.returncode, 1)
         self.assertIn("CoreTests.swift:3: shipping composition", result.stdout)
-        self.assertIn("CoreTests.swift:4: shipping composition", result.stdout)
+        self.assertIn("CoreTests.swift:5: shipping composition", result.stdout)
         self.assertIn("CoreTests.swift:6: shipping composition", result.stdout)
         self.assertIn("3 test-scratch problem(s) found.", result.stdout)
 
@@ -112,6 +112,28 @@ class TestScratchGuardTests(unittest.TestCase):
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_leading_dot_shipping_compositions_fail_in_any_position(self):
+        self.write(
+            "MemberTests.swift",
+            "struct MemberTests {\n"
+            "  func returned() -> AppComposition {\n"
+            "    return .production()\n  }\n"
+            "  func ternary(_ flag: Bool) -> AppComposition {\n"
+            "    flag ? .screenshot(windowSize: nil) : makeTestComposition()\n  }\n"
+            "  func reassigned() {\n"
+            "    var composition = makeTestComposition()\n"
+            "    composition =\n"
+            "      .forLaunch(arguments: [])\n"
+            "    let all: [AppComposition] = [makeTestComposition(), .production()]\n"
+            "    let liked = AppComposition.productionLike\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("MemberTests.swift:3: shipping composition", result.stdout)
+        self.assertIn("MemberTests.swift:6: shipping composition", result.stdout)
+        self.assertIn("MemberTests.swift:10: shipping composition", result.stdout)
+        self.assertIn("MemberTests.swift:12: shipping composition", result.stdout)
+        self.assertIn("4 test-scratch problem(s) found.", result.stdout)
+
     def test_composing_the_app_fails(self):
         self.write(
             "AppTests.swift",
@@ -120,13 +142,18 @@ class TestScratchGuardTests(unittest.TestCase):
             "    let app = PhotoExportApp()\n"
             "    let other = PhotoExportApp.init()\n"
             "    let wrapped = PhotoExportApp\n"
-            "      .init()\n  }\n}\n")
+            "      .init()\n"
+            "    PhotoExportApp.main()\n"
+            "    let typed: PhotoExportApp = .init()\n"
+            "    let flag = PhotoExportApp.wasComposed\n  }\n}\n")
         result = self.run_guard()
         self.assertEqual(result.returncode, 1)
         self.assertIn("AppTests.swift:3: composes the real app", result.stdout)
         self.assertIn("AppTests.swift:4: composes the real app", result.stdout)
         self.assertIn("AppTests.swift:5: composes the real app", result.stdout)
-        self.assertIn("3 test-scratch problem(s) found.", result.stdout)
+        self.assertIn("AppTests.swift:7: composes the real app", result.stdout)
+        self.assertIn("AppTests.swift:8: composes the real app", result.stdout)
+        self.assertIn("5 test-scratch problem(s) found.", result.stdout)
 
     def test_multi_line_uses_fail_at_their_first_line(self):
         self.write(

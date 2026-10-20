@@ -49,7 +49,9 @@ enum ScreenshotSurfaceResolver {
     return String(raw.split(separator: "=", maxSplits: 1).last ?? "")
   }
 
-  /// Reads `--screenshot-surface=<key>` from `arguments` and resolves to a `Surface`.
+  /// Test convenience: reads `--screenshot-surface=<key>` from `arguments` and resolves to a
+  /// `Surface`. The app parses the key once in `AppComposition.forLaunch(arguments:)` and
+  /// resolves it with `resolve(key:now:)`.
   static func resolve(from arguments: [String], now: Date = Date()) -> Surface? {
     resolve(key: surfaceKey(from: arguments), now: now)
   }

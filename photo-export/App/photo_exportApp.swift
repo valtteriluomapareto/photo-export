@@ -11,9 +11,9 @@ import SwiftUI
 /// type holds its objects as `@StateObject`s and lays out the scenes.
 struct PhotoExportApp: App {
   private let core: AppCore
-  // The core's objects, held as `@StateObject`s so `body` re-renders when they publish (the
-  // menu bar label reads `autoSyncManager.state`). Scenes get the same instances through
-  // `photoExportEnvironment(core)`.
+  // The core's objects, held as `@StateObject`s. Only `autoSyncManager` is read in `body`, for
+  // the menu bar label; the other wrappers are dropped in the fixture-mode slice. Scenes get
+  // the same instances through `photoExportEnvironment(core)`.
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var photoLibraryManager: PhotoLibraryManager
   @StateObject private var exportRecordStore: ExportRecordStore

@@ -7,10 +7,11 @@ import Testing
 
 /// The app's object graph and startup sequence. Every core here is built from a `TestScratch`
 /// root and suite with fake Photos, change-source, writer, file-system, clock and login-item
-/// services, through `makeCore`, while the app's own preferences domain is watched; the
-/// shipping compositions are only inspected, never built into a core.
+/// services, through `makeCore`, while the app's own preferences domain is watched. The suite
+/// is serialized so each domain snapshot sees only its own test. The shipping compositions
+/// are only inspected, never built into a core.
 @MainActor
-@Suite(.timeLimit(.minutes(1))) struct AppCoreTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct AppCoreTests {
   private final class FakeLoginItemService: LoginItemService {
     var status: LoginItemController.Status = .notRegistered
     func register() throws {}
@@ -74,76 +75,74 @@ import Testing
   // MARK: - Startup
 
   @Test func startAttachesEachServiceOnceInLaunchOrder() async throws {
-    try await withAppDomainUntouched { try startAttachesEachServiceOnceInLaunchOrderBody() }
-  }
+    try await withAppDomainUntouched {
+      let source = FakePersistentChangeSource()
+      var composition = makeTestComposition(label: "app-core-start")
+      composition.persistentChangeSource = source
+      composition.wiresAutoSync = true
+      let core = makeCore(composition)
+      let destination = core.exportDestinationManager
+      destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-first"))
+      let firstId = try #require(destination.destinationId)
 
-  private func startAttachesEachServiceOnceInLaunchOrderBody() throws {
-    let source = FakePersistentChangeSource()
-    var composition = makeTestComposition(label: "app-core-start")
-    composition.persistentChangeSource = source
-    composition.wiresAutoSync = true
-    let core = makeCore(composition)
-    let destination = core.exportDestinationManager
-    destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-first"))
-    let firstId = try #require(destination.destinationId)
+      struct Probe: Equatable {
+        let event: String
+        let storesConfigured: Bool
+        let safetyAttached: Bool
+        let launchInProgress: Bool
+      }
+      var probes: [Probe] = []
+      @MainActor func probe(_ event: String) {
+        probes.append(
+          Probe(
+            event: event,
+            storesConfigured: core.lifecycleCoordinator.lastConfiguredDestinationId == firstId,
+            safetyAttached: core.destinationSafetyMonitor.isAttached,
+            launchInProgress: AppDiagnostics.isLaunchInProgress))
+      }
+      source.onSubscribe = { probe("AutoSync subscribed") }
+      source.onStart = { probe("change source started") }
+      // The core holds the source through its composition; the probes hold the core.
+      defer {
+        source.onSubscribe = nil
+        source.onStart = nil
+      }
 
-    struct Probe: Equatable {
-      let event: String
-      let storesConfigured: Bool
-      let safetyAttached: Bool
-      let launchInProgress: Bool
+      AppDiagnostics.beginLaunch()
+      #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == nil)
+      #expect(!core.destinationSafetyMonitor.isAttached)
+
+      core.start()
+
+      // The lifecycle coordinator configures the stores before AutoSync attaches; AutoSync
+      // subscribes before the change source starts; the safety monitor attaches after both.
+      #expect(
+        probes == [
+          Probe(
+            event: "AutoSync subscribed", storesConfigured: true, safetyAttached: false,
+            launchInProgress: true),
+          Probe(
+            event: "change source started", storesConfigured: true, safetyAttached: false,
+            launchInProgress: true),
+        ])
+      #expect(core.destinationSafetyMonitor.isAttached)
+      #expect(!AppDiagnostics.isLaunchInProgress)
+      #expect(
+        FileManager.default.fileExists(
+          atPath: composition.recordsRoot.appendingPathComponent(firstId).path))
+
+      // A second window's `.task` starts the core again: nothing re-attaches or re-starts.
+      core.start()
+      #expect(probes.count == 2)
+      #expect(source.startCount == 1)
+
+      // The coordinator stays subscribed: a new destination reaches the record stores.
+      destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-second"))
+      let secondId = try #require(destination.destinationId)
+      #expect(secondId != firstId)
+      #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == secondId)
+      #expect(!PhotoExportApp.wasComposed, "an AppCore alone must not compose the app")
     }
-    var probes: [Probe] = []
-    func probe(_ event: String) {
-      probes.append(
-        Probe(
-          event: event,
-          storesConfigured: core.lifecycleCoordinator.lastConfiguredDestinationId == firstId,
-          safetyAttached: core.destinationSafetyMonitor.isAttached,
-          launchInProgress: AppDiagnostics.isLaunchInProgress))
-    }
-    source.onSubscribe = { probe("AutoSync subscribed") }
-    source.onStart = { probe("change source started") }
-    // The core holds the source through its composition; the probes hold the core.
-    defer {
-      source.onSubscribe = nil
-      source.onStart = nil
-    }
-
-    AppDiagnostics.beginLaunch()
-    #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == nil)
-    #expect(!core.destinationSafetyMonitor.isAttached)
-
-    core.start()
-
-    // The lifecycle coordinator configures the stores before AutoSync attaches; AutoSync
-    // subscribes before the change source starts; the safety monitor attaches after both.
-    #expect(
-      probes == [
-        Probe(
-          event: "AutoSync subscribed", storesConfigured: true, safetyAttached: false,
-          launchInProgress: true),
-        Probe(
-          event: "change source started", storesConfigured: true, safetyAttached: false,
-          launchInProgress: true),
-      ])
-    #expect(core.destinationSafetyMonitor.isAttached)
-    #expect(!AppDiagnostics.isLaunchInProgress)
-    #expect(
-      FileManager.default.fileExists(
-        atPath: composition.recordsRoot.appendingPathComponent(firstId).path))
-
-    // A second window's `.task` starts the core again: nothing re-attaches or re-starts.
-    core.start()
-    #expect(probes.count == 2)
-    #expect(source.startCount == 1)
-
-    // The coordinator stays subscribed: a new destination reaches the record stores.
-    destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-second"))
-    let secondId = try #require(destination.destinationId)
-    #expect(secondId != firstId)
-    #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == secondId)
-    #expect(!PhotoExportApp.wasComposed, "an AppCore alone must not compose the app")
   }
 
   @Test func withoutAutoSyncTheChangeSourceIsNeverStarted() async throws {
@@ -178,7 +177,7 @@ import Testing
 
   private final class EnvironmentReading {
     var isScreenshotMode: Bool?
-    var surfaceKey: String??
+    var surfaceKey: String?
     var storedValue: String?
   }
 
@@ -197,7 +196,7 @@ import Testing
 
     private func record() {
       reading.isScreenshotMode = isScreenshotMode
-      reading.surfaceKey = .some(surfaceKey)
+      reading.surfaceKey = surfaceKey
       reading.storedValue = storedValue
     }
   }
@@ -222,7 +221,7 @@ import Testing
 
       #expect(await eventually("probe rendered") { reading.isScreenshotMode != nil })
       #expect(reading.isScreenshotMode == true)
-      #expect(reading.surfaceKey == .some("collections-favorites"))
+      #expect(reading.surfaceKey == "collections-favorites")
       #expect(reading.storedValue == "from the suite")
     }
   }

@@ -48,11 +48,12 @@ breaks: `UserDefaults(suiteName:` (also via `.init`), `UserDefaults.standard`,
 `UserDefaults()`, `.temporaryDirectory`, `NSTemporaryDirectory(`,
 `.itemReplacementDirectory`, `.applicationSupportDirectory`, `.cachesDirectory` and the
 no-argument `ExportRecordStore()` / `CollectionExportRecordStore()`, and the shipping
-compositions (`AppComposition.production`, `.screenshot`, `.forLaunch`, also as
-`AppCore(composition: .production…` or a typed `AppComposition = .production…` binding),
-which hold the app's own preferences, Application Support folder and PhotoKit, and
-`PhotoExportApp(` / `PhotoExportApp.init(`, which composes the real app. Build a core from
-a composition with `TestScratch` roots and fakes. Use
+compositions (`AppComposition.production`, `.screenshot`, `.forLaunch`, qualified or
+called through a leading dot anywhere, such as `.production(` or
+`.screenshot(windowSize:`), which hold the app's own preferences, Application Support
+folder and PhotoKit, and `PhotoExportApp(`, `PhotoExportApp.init(`, `PhotoExportApp.main`
+or a typed `: PhotoExportApp = .init`, which compose the real app. Build a core from a
+composition with `TestScratch` roots and fakes. Use
 `TestScratch.defaults(_:)` for a fresh suite, `TestScratch.suiteName(_:)` with
 `TestScratch.defaults(suiteName:)` when two objects share or reopen one suite, and
 `TestScratch.directory(_:)` for folders. A test that must exercise the real path keeps the

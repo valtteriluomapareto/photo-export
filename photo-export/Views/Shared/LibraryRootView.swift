@@ -36,7 +36,7 @@ struct LibraryRootView: View {
   /// production launches it is `nil` and the defaults below apply (Timeline / current
   /// month). The mapping lives in `ScreenshotSurfaceResolver` so it's testable without
   /// instantiating SwiftUI views.
-  init(screenshotSurfaceKey: String? = nil) {
+  init(screenshotSurfaceKey: String?) {
     let surface = ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
     let now = Date()
     let currentYear = Calendar.current.component(.year, from: now)

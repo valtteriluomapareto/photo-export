@@ -19,10 +19,12 @@ breaks. Outside TestScratch.swift it flags:
 - the no-argument `ExportRecordStore()` and `CollectionExportRecordStore()`, which
   open the real Application Support records;
 - the shipping compositions, `AppComposition.production`, `.screenshot` and `.forLaunch`,
-  also as `AppCore(composition: .production…` or a typed `AppComposition = .production…`
-  binding: they hold the app's own preferences, Application Support folder and PhotoKit.
-  Build a core from a composition with TestScratch roots and fakes instead;
-- `PhotoExportApp(` and `PhotoExportApp.init(`, which compose the real app.
+  qualified or called through a leading dot (`.production(`, `.forLaunch(`,
+  `.screenshot(windowSize:`) anywhere: they hold the app's own preferences, Application
+  Support folder and PhotoKit. Build a core from a composition with TestScratch roots and
+  fakes instead;
+- `PhotoExportApp(`, `PhotoExportApp.init(`, `PhotoExportApp.main` and a typed
+  `: PhotoExportApp = .init`, which compose the real app.
 
 A use that deliberately exercises real-path behavior is allowed when the line where it
 starts, or the line above, carries a `// test-scratch: allow` comment followed by a
@@ -41,6 +43,7 @@ EXEMPT = {TESTS / "TestHelpers" / "TestScratch.swift"}
 SUITE = "named preferences suite; use TestScratch.defaults or TestScratch.suiteName"
 STANDARD = "the app's own preferences domain; use TestScratch.defaults"
 FOLDER = "real system folder; use TestScratch.directory"
+APP = "composes the real app (its preferences, Application Support and Photos)"
 COMPOSITION = ("shipping composition (real preferences, Application Support and Photos); "
                "build AppCore from a TestScratch composition")
 BANNED = [
@@ -55,15 +58,15 @@ BANNED = [
      FOLDER),
     (re.compile(r"(?<![\w.])(?:Collection)?ExportRecordStore\s*\(\s*\)"),
      "record store on the real Application Support path; pass a TestScratch directory"),
+    # Qualified, including an unapplied reference such as `AppComposition.production`.
     (re.compile(r"\bAppComposition\s*\.\s*(?:production|screenshot|forLaunch)\b"), COMPOSITION),
-    (re.compile(
-        r"\bAppCore\s*\(\s*composition\s*:\s*\.\s*(?:production|screenshot|forLaunch)\b"),
-     COMPOSITION),
-    (re.compile(
-        r"\bAppComposition\s*\??\s*=\s*\.\s*(?:production|screenshot|forLaunch)\b"),
-     COMPOSITION),
-    (re.compile(r"\bPhotoExportApp\s*(?:\.\s*init\s*)?\("),
-     "composes the real app (its preferences, Application Support and Photos)"),
+    # Called through a leading dot in any position: an argument, a return, a ternary arm, a
+    # reassignment or a collection element.
+    (re.compile(r"\s*\.\s*(?:production|forLaunch)\s*\("), COMPOSITION),
+    (re.compile(r"\s*\.\s*screenshot\s*\(\s*windowSize\s*:"), COMPOSITION),
+    (re.compile(r"\bPhotoExportApp\s*(?:\.\s*init\s*)?\("), APP),
+    (re.compile(r"\bPhotoExportApp\s*\.\s*main\b"), APP),
+    (re.compile(r":\s*PhotoExportApp\s*=\s*\.\s*init\b"), APP),
 ]
 # The reason must follow the marker, so a bare marker does not silence the guard.
 ALLOW = re.compile(r"\btest-scratch:\s*allow\b\W*\w")
