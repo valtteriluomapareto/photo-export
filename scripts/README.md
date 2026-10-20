@@ -121,9 +121,16 @@ diagnostics, coverage and regression-gate steps read them.
 
 `toolchain-canary.yml` builds and tests on newer Xcode versions (one lane per version, each
 naming its runner label) weekly, on demand, and on pull requests that change the version file
-or these scripts. `report-built-app.sh <version>` prints the Release app's `DTXcode`, SDK and
-`ITSAppUsesNonExemptEncryption` values, and fails if the plist is missing or `DTXcode` does not
-match the selected version. The canary is not part of the merge gate, so a red lane reports what
+or these scripts. One lane runs the next Xcode; another runs on `macos-15`, the oldest macOS the
+app supports, so a build made with the 26 SDK is tested where macOS 15 users run it.
+
+`check-built-app.sh [--app <path>] [<version>]` prints a built app's `DTXcode`, SDK,
+`LSMinimumSystemVersion` and `ITSAppUsesNonExemptEncryption` values. It fails if the app is
+missing, was built by another Xcode than `.xcode-version` (or the canary's lane version), or lacks
+`ITSAppUsesNonExemptEncryption = false`, without which App Store Connect asks the encryption
+question for every build. It runs after the Release build in `app-validation`, on the exported app
+before the DMG in `release-direct`, and on the archived app before packaging and upload in
+`release-app-store`. The canary is not part of the merge gate, so a red lane reports what
 a bump would break without blocking work. A lane that stays queued means no runner has its
 label; GitHub cancels it after 24 hours, and that is not a toolchain result.
 

@@ -6,8 +6,8 @@ import Foundation
 /// security-scope path.
 ///
 /// `URL.startAccessingSecurityScopedResource()` is documented to return
-/// `true` (and be a no-op) for URLs that aren't security-scoped. CI's
-/// `macos-15` runner honours that documented behaviour; some local dev
+/// `true` (and be a no-op) for URLs that aren't security-scoped. The CI
+/// macOS runner honours that documented behaviour; some local dev
 /// macOS builds (observed on macOS 15.6.1, the integration-branch
 /// maintainer's machine) return `false` instead, which trips the
 /// post-#92 bail-out in `ExportDestinationManager.validate(url:)`. The

@@ -11,7 +11,7 @@ import Testing
 ///
 /// They materialise a real folder under the sandbox temp dir and exercise the security-scope
 /// path in `validate(url:)`, so they share the `BareTmpScopeProbe` disable guard with
-/// `ExportDestinationManagerIdentityTests` — CI's `macos-15` runner runs them.
+/// `ExportDestinationManagerIdentityTests` — the CI macOS runner runs them.
 @MainActor
 struct StableDestinationIdentityTests {
 
@@ -38,7 +38,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). CI's macos-15 runner returns true so this runs there."
+      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). the CI macOS runner returns true so this runs there."
     ))
   func stableIdReusedAcrossSimulatedRemountDrift() throws {
     let dir = try makeTempDir()
@@ -71,7 +71,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func highConfidenceAbsentIdSeedsToFingerprintId() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -94,7 +94,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func nilFingerprintAtValidateDefersSeedingThenSeedsWhenReadable() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -127,7 +127,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func remountAfterUnavailableReusesSameStableIdWithoutReseeding() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -159,7 +159,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func clearSelectionDropsStableIdSoNextSelectionReseeds() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -197,7 +197,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func sameFolderReSelectionViaRealEvidenceKeepsStableId() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -223,7 +223,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func differentFolderReSelectionViaRealEvidenceMintsNewId() throws {
     let dirA = try makeTempDir()
     let dirB = try makeTempDir()
@@ -255,7 +255,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func ambiguousSelectionResolvedAsSameKeepsStableId() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -281,7 +281,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func ambiguousSelectionResolvedAsNewMintsStableId() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -311,7 +311,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func unresolvableStoredBookmarkIsAmbiguousAndDelegatesToResolver() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -343,7 +343,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func firstEverSelectionViaRealEvidenceSeedsFreshId() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -370,7 +370,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func restoredManagerReusesPersistedStableIdUnderDriftedFingerprint() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -402,7 +402,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func failedBookmarkSaveOnNewDestinationKeepsPriorStableId() throws {
     let dirA = try makeTempDir()
     let dirB = try makeTempDir()
@@ -438,7 +438,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func resolvedButUnscopableStoredBookmarkIsAmbiguous() throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -471,7 +471,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func fileIdentityUnreadableKeepsIdOnSamePathAndIsAmbiguousOnDifferentPath() throws {
     let dir = try makeTempDir()
     let other = try makeTempDir()
@@ -516,7 +516,7 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on CI's macos-15 runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."))
   func failedRestoreKeepsLegacyHashSoSameFolderReselectMigrates() throws {
     let dir = try makeTempDir()
     let recordsRoot = TestScratch.directory("StableId-Records")

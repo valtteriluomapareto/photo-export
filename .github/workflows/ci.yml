@@ -71,7 +71,7 @@ jobs:
   app-validation:
     needs: changes
     if: needs.changes.outputs.app == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -179,6 +179,9 @@ jobs:
 
       - name: Build Release
         run: bash scripts/ci/build-app.sh Release
+
+      - name: Check built Release app
+        run: bash scripts/ci/check-built-app.sh
 
       - name: Print build and test failure diagnostics
         if: failure()
