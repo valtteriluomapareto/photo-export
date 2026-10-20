@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// How two filenames are compared for claims and adoption: case-folded and in NFC, as the
 /// volumes an export lands on usually do.
@@ -18,8 +19,9 @@ enum FilenameKey {
 
 /// The filenames that variant records name, per folder, counted so each record adds and
 /// removes its own claim. Every status counts, including in-progress and failed, since
-/// either may name a file on disk. Names compare as `FilenameKey` does, so an existing file
-/// another record names is never adopted for a different asset or variant.
+/// either may name a file on disk. Names compare as `FilenameKey` does. A claimed name is
+/// taken for every other asset or variant, whether or not a file is at it: an existing file
+/// there is never adopted, and an empty name is never written.
 struct FilenameClaims<Folder: Hashable> {
   private var counts: [Folder: [String: Int]] = [:]
 
@@ -27,16 +29,33 @@ struct FilenameClaims<Folder: Hashable> {
     counts[folder]?[FilenameKey.key(filename)] ?? 0
   }
 
-  /// `count(filename, in: folder)` without the claim of `own`, one record's filename and
-  /// folder, when that is one of them.
+  /// `count(filename, in: folder)` without the claims of `own`, the filenames and folders of
+  /// the variant records that may reuse the name.
   func count(
-    _ filename: String, in folder: Folder, excluding own: (filename: String?, folder: Folder)?
+    _ filename: String, in folder: Folder,
+    excluding own: some Sequence<(filename: String?, folder: Folder)>
   ) -> Int {
-    let total = count(filename, in: folder)
-    guard let own, own.folder == folder, let ownName = own.filename,
-      FilenameKey.sameName(ownName, filename)
-    else { return total }
-    return total - 1
+    let ownClaims = own.filter {
+      $0.folder == folder && $0.filename.map { FilenameKey.sameName($0, filename) } == true
+    }
+    return count(filename, in: folder) - ownClaims.count
+  }
+
+  /// An index filled by `add`, with a debug log of how long that took for `recordCount`
+  /// records. Each store builds its index on the main actor.
+  static func build(
+    recordCount: Int, logger: Logger, _ add: (inout FilenameClaims) -> Void
+  ) -> FilenameClaims {
+    let started = ContinuousClock.now
+    var claims = FilenameClaims()
+    add(&claims)
+    let elapsed = started.duration(to: .now)
+    let milliseconds =
+      Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
+    logger.debug(
+      "Built filename claims for \(recordCount, privacy: .public) records in \(milliseconds, format: .fixed(precision: 1), privacy: .public) ms"
+    )
+    return claims
   }
 
   mutating func add(_ filename: String?, in folder: Folder) {

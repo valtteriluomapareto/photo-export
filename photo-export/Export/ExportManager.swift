@@ -1797,6 +1797,14 @@ final class ExportManager: ObservableObject {
     var intendedVariant: ExportVariant = .original
     do {
       try throwIfCancelledOrStale(gen)
+      // Claims are kept per month, so without one every name would read as claimed and
+      // each walk would try all 10,000 suffixes before failing.
+      if job.placement.kind == .timeline, job.placement.timelineYearMonth == nil {
+        assertionFailure("Timeline placement \(job.placement.id) has no year and month")
+        throw NSError(
+          domain: "Export", code: 11,
+          userInfo: [NSLocalizedDescriptionKey: "Timeline placement has no year and month"])
+      }
 
       guard let descriptor = photoLibraryService.fetchAssetDescriptor(for: job.assetLocalIdentifier)
       else {
@@ -1916,6 +1924,12 @@ final class ExportManager: ObservableObject {
       // bare stem. The image-side `.edited` flag is sufficient: a Live Photo whose still side
       // is edited always has its motion side considered edited too.
       let pairOriginalWithSuffix = required.contains(.edited)
+      // A stem chosen for the whole group skips names another asset's records hold, so no
+      // member is later refused a claimed name or pushed alone onto another stem.
+      let claimedByAnotherAsset = { [recordStoreRouter] (name: String) in
+        recordStoreRouter.isFilenameClaimed(
+          name, placement: job.placement, subfolder: subfolder, exceptAsset: descriptor.id)
+      }
 
       var groupStem = ExportDestinationResolver.inheritedGroupStem(
         from: existingRecord, descriptor: descriptor, resources: resources)
@@ -1976,7 +1990,8 @@ final class ExportManager: ObservableObject {
               editedExt: editedExt,
               destDir: destDir,
               pairOriginalWithSuffix: true,
-              pairedVideoExt: pairedVideoExt)
+              pairedVideoExt: pairedVideoExt,
+              isClaimed: claimedByAnotherAsset)
           }
         } else if editedLivePhotoOnly {
           // 2-slot edited-only path: the only image side written is the edited variant.
@@ -1993,7 +2008,8 @@ final class ExportManager: ObservableObject {
               editedExt: nil,
               destDir: destDir,
               pairOriginalWithSuffix: false,
-              pairedVideoExt: pairedVideoExt)
+              pairedVideoExt: pairedVideoExt,
+              isClaimed: claimedByAnotherAsset)
           }
         } else {
           // 2-slot unedited path: the only image side written is the original.
@@ -2003,7 +2019,8 @@ final class ExportManager: ObservableObject {
             editedExt: nil,
             destDir: destDir,
             pairOriginalWithSuffix: false,
-            pairedVideoExt: pairedVideoExt)
+            pairedVideoExt: pairedVideoExt,
+            isClaimed: claimedByAnotherAsset)
         }
       }
 
@@ -2147,7 +2164,11 @@ final class ExportManager: ObservableObject {
     let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
     let originalExt = (originalRes.originalFilename as NSString).pathExtension
     let stem = destinationResolver.allocateUnusedOrigStem(
-      baseStem: baseStem, originalExt: originalExt, destDir: destDir)
+      baseStem: baseStem, originalExt: originalExt, destDir: destDir
+    ) { [recordStoreRouter] name in
+      recordStoreRouter.isFilenameClaimed(
+        name, placement: job.placement, subfolder: subfolder, exceptAsset: descriptor.id)
+    }
     do {
       try throwIfCancelledOrStale(gen)
       _ = try await variantExporter.exportSingleVariant(
