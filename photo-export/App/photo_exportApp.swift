@@ -289,18 +289,21 @@ struct PhotoExportApp: App {
           AppDiagnostics.endLaunch()
         }
     }
-    // Default sized so the sidebar (~240) + content grid (~560) + detail
-    // (~480) all fit at their ideal widths set in `LibraryRootView.body`.
+    // Default sized so the sidebar (240) and content grid (520) sit at their
+    // ideal widths set in `LibraryRootView`, leaving ~520 for the detail pane.
     // The user can resize either column past these defaults; new windows
     // start at this size.
     .defaultSize(width: 1280, height: 800)
     // Make the window's minimum track its content minimum explicitly rather
     // than relying on `.automatic`'s implicit resolution, which has shifted
     // across macOS releases (issue #125 surfaced on Tahoe 26.5). Each routed
-    // state supplies its own minimum: `LibraryRootView` pins 1100x700, while
-    // the first-run states use `firstRunWindowMinSize()`. The window stays
-    // freely resizable larger because every state's `maxWidth/maxHeight` is
-    // `.infinity`. Mirrors the Settings scene below.
+    // state supplies its own minimum: `LibraryRootView` uses its
+    // `minimumWindowSize`, sized to fit a 1024x768 display with the title bar
+    // and toolbar, while the first-run states use `firstRunWindowMinSize()`.
+    // The library's minimum height (600) is deliberately below the first-run
+    // one (640) because its toolbar adds 52pt that the first-run states lack.
+    // The window stays freely resizable larger because every state's
+    // `maxWidth/maxHeight` is `.infinity`. Mirrors the Settings scene below.
     .windowResizability(.contentMinSize)
     .commands {
       CommandGroup(replacing: .appInfo) {
