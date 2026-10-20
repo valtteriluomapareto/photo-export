@@ -432,6 +432,56 @@ struct CollectionBackupMatchingTests {
 
   /// On a case-sensitive volume a folder spelled in another case than the resolver's is not
   /// the one exports use, so it is not adopted.
+  /// On a case-sensitive volume a saved placement owns only the folder spelled as its path:
+  /// `trip/` is neither the saved `Trip/` nor taken by it, so it is reported.
+  @Test func savedPlacementOnACaseSensitiveVolumeOwnsOnlyItsExactSpelling() async throws {
+    let tree = [F.album("a1", "Trip")]
+    library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
+    let resolved = try ExportPlacementResolver().placement(
+      for: .album(collectionId: "a1"), collections: tree, existingPlacements: [])
+    let directories = [F.directory(.albums, ["trip"], [F.file("X.JPG", date: F.date(1))])]
+
+    let sensitive = try await match(
+      directories, tree: tree, existing: [resolved], caseSensitiveVolume: true)
+    #expect(sensitive.adoptions.isEmpty)
+    #expect(sensitive.unrecognizedFolders == ["Collections/Albums/trip/"])
+    let insensitive = try await match(directories, tree: tree, existing: [resolved])
+    #expect(insensitive.adoptions.map(\.placement.relativePath) == ["Collections/Albums/Trip/"])
+  }
+
+  /// On a case-sensitive volume `Trip/` and `trip/` are two folders: the one spelled as exports
+  /// spell it is adopted and the other is reported.
+  @Test func bothSpellingsOnACaseSensitiveVolumeAdoptTheExactOne() async throws {
+    let tree = [F.album("a1", "Trip")]
+    library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
+    let result = try await match(
+      [
+        F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))]),
+        F.directory(.albums, ["trip"], [F.file("X.JPG", date: F.date(1))]),
+      ], tree: tree, caseSensitiveVolume: true)
+    #expect(adoptedPaths(result) == ["a1": "Collections/Albums/Trip/"])
+    #expect(result.unrecognizedFolders == ["Collections/Albums/trip/"])
+  }
+
+  /// One album with matches in two folders competes with itself: its own folder, mostly other
+  /// files, must clear the floor, so the suffixed folder whose files all match is adopted.
+  @Test func albumWithMatchesInTwoFoldersAppliesTheFloorToItsOwnFolder() async throws {
+    let tree = [F.album("a1", "Trip")]
+    library.assetsByAlbumLocalId["a1"] =
+      (1...3).map { asset("x\($0)", "X\($0).JPG", index: $0) }
+      + (4...5).map { asset("y\($0)", "Y\($0).JPG", index: $0) }
+    let others = (6...14).map { F.file("O\($0).JPG", date: F.date(20 + $0)) }
+    let result = try await match(
+      [
+        F.directory(
+          .albums, ["Trip"], (1...3).map { F.file("X\($0).JPG", date: F.date($0)) } + others),
+        F.directory(
+          .albums, ["Trip_2"], (4...5).map { F.file("Y\($0).JPG", date: F.date($0)) }),
+      ], tree: tree)
+    #expect(adoptedPaths(result) == ["a1": "Collections/Albums/Trip_2/"])
+    #expect(result.unrecognizedFolders == ["Collections/Albums/Trip/"])
+  }
+
   @Test func caseVariantFolderOnACaseSensitiveVolumeIsNotAdopted() async throws {
     let tree = [F.album("trip", "trip")]
     library.assetsByAlbumLocalId["trip"] = [asset("t", "T.JPG", index: 2)]
@@ -452,8 +502,8 @@ struct CollectionBackupMatchingTests {
     library.assetsByAlbumLocalId["a2"] = [x, y]
     let result = try await match(
       [
-        F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))]),
-        F.directory(.albums, ["Trip_2"], [F.file("Y.JPG", date: F.date(2))]),
+        F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1), size: 9)]),
+        F.directory(.albums, ["Trip_2"], [F.file("Y.JPG", date: F.date(2), size: 9)]),
       ], tree: tree)
     #expect(result.adoptions.isEmpty)
     #expect(

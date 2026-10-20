@@ -343,10 +343,11 @@ its optional `videos/` subfolder. It writes only the existing `upsertPlacement` 
   exported again.
 - **Case.** Folder names compare case-folded, and the stored path is the resolver's spelling.
   On a case-insensitive volume a folder spelled in another case is the same folder and is
-  adopted. On a case-sensitive volume (the scan reads the volume's setting) a folder spelled
-  differently from the resolver's spelling is not the one exports use: it is not adopted and
-  is reported, and the album exports to the resolver's folder. Two folders whose names differ
-  only by case are not adopted.
+  adopted. On a case-sensitive volume (the scan reads the volume's setting) folders and
+  saved placements match only by exact NFC spelling: a folder spelled differently from the
+  resolver's or a saved placement's path is not the one exports use, so it is not adopted and
+  is reported, and when both spellings exist the exact one is adopted. Where case is ignored,
+  two folders whose names differ only by case can't be told apart and neither is adopted.
 - **Placements.** An adopted placement has the id the resolver gives the collection and the
   resolver's spelling of the folder path. It is written before its records in one batch. A
   placement already in the history keeps its metadata and `relativePath`.

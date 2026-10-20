@@ -202,7 +202,8 @@ extension BackupScanner {
     }
 
     let plan = CollectionBackupPlanner.assign(
-      scores, directories: directories, existingPlacements: existingPlacements)
+      scores, directories: directories, existingPlacements: existingPlacements,
+      caseSensitiveVolume: scanned.isCaseSensitiveVolume)
     logger.info(
       "Collection match complete: \(plan.adoptions.count) folders adopted, \(plan.unrecognizedFolders.count) unrecognized"
     )

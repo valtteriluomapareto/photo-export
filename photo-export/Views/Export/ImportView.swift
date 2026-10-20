@@ -330,11 +330,12 @@ struct ImportView: View {
       + "exported. Their files are left as they are."
   }
 
-  /// `Collections/Albums/Trips/Paris/` → `Trips/Paris`.
+  /// `Collections/Albums/Trips/Paris/` → `Trips/Paris`; a root folder such as
+  /// `Collections/Favorites/` → `Favorites`.
   private func collectionFolderName(_ path: String) -> String {
     let components = path.split(separator: "/").map(String.init)
-    let below = components.count > 2 ? components.dropFirst(2) : components[...]
-    return below.joined(separator: "/")
+    guard components.count > 2 else { return components.last ?? path }
+    return components.dropFirst(2).joined(separator: "/")
   }
 
   private func pruneSummary(_ report: ImportReport) -> String {

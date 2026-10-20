@@ -41,9 +41,10 @@ struct ScannedCollections: Sendable {
 ///   collide therefore share candidates and are told apart by content, whatever order they were
 ///   exported in. A suffixed name that is another album's own title is not a candidate, and
 ///   folders saved placements own are not candidates for anyone else.
-/// - Folders whose names differ only by case (possible on a case-sensitive volume) are not
-///   candidates: which one an export wrote can't be told. On a case-sensitive volume a folder
-///   spelled differently from the resolver's spelling is not a candidate either.
+/// - On a case-sensitive volume only a folder spelled as the placement path (after NFC) is a
+///   candidate or owned by a saved placement; differently cased folders are other folders.
+///   Where the volume ignores case, two folders whose names differ only by case can't be told
+///   apart, so neither is a candidate.
 /// - A renamed or moved album's old folder is not a candidate: its name or parent path no
 ///   longer fits, so the next export uses a new folder and the old one is reported.
 ///
@@ -137,7 +138,8 @@ enum CollectionBackupPlanner {
     caseSensitiveVolume: Bool = false,
     resolver: ExportPlacementResolver = ExportPlacementResolver()
   ) -> [Candidate] {
-    let index = FolderIndex(directories: directories, resolver: resolver)
+    let index = FolderIndex(
+      directories: directories, caseSensitive: caseSensitiveVolume, resolver: resolver)
     let owned = Set(existingPlacements.compactMap { index.key(forRelativePath: $0.relativePath) })
     var result: [Candidate] = []
     // On a case-sensitive volume a folder spelled differently from the placement is not the
@@ -299,7 +301,7 @@ enum CollectionBackupPlanner {
 
   static func assign(
     _ scores: [Score], directories: [ScannedCollectionDirectory],
-    existingPlacements: [ExportPlacement],
+    existingPlacements: [ExportPlacement], caseSensitiveVolume: Bool = false,
     resolver: ExportPlacementResolver = ExportPlacementResolver()
   ) -> Plan {
     // Only folders with matches compete: a leftover folder that matches nothing doesn't make
@@ -353,7 +355,8 @@ enum CollectionBackupPlanner {
 
     plan.unrecognizedFolders = unrecognizedFolders(
       directories: directories, adopted: Set(plan.adoptions.map(\.folderPath)),
-      existingPlacements: existingPlacements, resolver: resolver)
+      existingPlacements: existingPlacements, caseSensitiveVolume: caseSensitiveVolume,
+      resolver: resolver)
     return plan
   }
 
@@ -395,12 +398,13 @@ enum CollectionBackupPlanner {
 
   private static func unrecognizedFolders(
     directories: [ScannedCollectionDirectory], adopted: Set<String>,
-    existingPlacements: [ExportPlacement], resolver: ExportPlacementResolver
+    existingPlacements: [ExportPlacement], caseSensitiveVolume: Bool,
+    resolver: ExportPlacementResolver
   ) -> [String] {
-    let index = FolderIndex(directories: directories, resolver: resolver)
+    let index = FolderIndex(
+      directories: directories, caseSensitive: caseSensitiveVolume, resolver: resolver)
     let ownedKeys = Set(
       existingPlacements.compactMap { index.key(forRelativePath: $0.relativePath) })
-    let accounted = adopted
     var result = Set<String>()
     for directory in directories where !directory.files.isEmpty {
       let isRoot = directory.root != .favorites && directory.components.isEmpty
@@ -413,10 +417,10 @@ enum CollectionBackupPlanner {
       let isVideosFolder =
         isNamedVideos && (directory.root == .favorites || !parentComponents.isEmpty)
       let key = index.key(directory.root, directory.components)
-      if accounted.contains(directory.relativePath) || ownedKeys.contains(key) { continue }
+      if adopted.contains(directory.relativePath) || ownedKeys.contains(key) { continue }
       if isVideosFolder {
         let parentKey = index.key(directory.root, parentComponents)
-        if accounted.contains(parentPath) || ownedKeys.contains(parentKey) { continue }
+        if adopted.contains(parentPath) || ownedKeys.contains(parentKey) { continue }
         result.insert(parentPath)
       } else {
         result.insert(directory.relativePath)
@@ -426,16 +430,23 @@ enum CollectionBackupPlanner {
   }
 }
 
-/// Scanned folders keyed by the resolver's case-folded, NFC sibling keys. Folders that share a
-/// key with another folder (or sit under one that does) are ambiguous and never returned.
+/// Scanned folders keyed by path. On a case-insensitive volume the keys are the resolver's
+/// case-folded, NFC sibling keys, and folders that share a key with another folder (or sit
+/// under one that does) are ambiguous and never returned. On a case-sensitive volume the keys
+/// are the NFC names, so differently cased folders, and placement paths, are told apart.
 private struct FolderIndex {
   let resolver: ExportPlacementResolver
+  let caseSensitive: Bool
   private var directories: [String: ScannedCollectionDirectory] = [:]
   private var ambiguousKeys = Set<String>()
   private var childrenByParent: [String: [ScannedCollectionDirectory]] = [:]
 
-  init(directories scanned: [ScannedCollectionDirectory], resolver: ExportPlacementResolver) {
+  init(
+    directories scanned: [ScannedCollectionDirectory], caseSensitive: Bool,
+    resolver: ExportPlacementResolver
+  ) {
     self.resolver = resolver
+    self.caseSensitive = caseSensitive
     for directory in scanned {
       let key = key(directory.root, directory.components)
       if directories.updateValue(directory, forKey: key) != nil { ambiguousKeys.insert(key) }
@@ -451,7 +462,11 @@ private struct FolderIndex {
   }
 
   func key(_ root: ScannedCollectionDirectory.Root, _ components: [String]) -> String {
-    ([root.rawValue] + components.map(resolver.siblingLeafKey)).joined(separator: "/")
+    let names =
+      caseSensitive
+      ? components.map(\.precomposedStringWithCanonicalMapping)
+      : components.map(resolver.siblingLeafKey)
+    return ([root.rawValue] + names).joined(separator: "/")
   }
 
   /// The key of a placement's folder, or `nil` for a path outside the collection roots.
