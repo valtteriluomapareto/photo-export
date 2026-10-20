@@ -1,8 +1,9 @@
 name: Toolchain canary
 
 # Builds and tests on the next Xcode, so a toolchain bump is a known list of fixes, and on the
-# oldest macOS the app supports. Not part of the merge gate: build-and-test in ci.yml never
-# needs it.
+# oldest macOS the app supports. Also records, on the schedule and on dispatch, how an exclusive
+# rename behaves on HFS+, ExFAT and FAT disk images. Not part of the merge gate: build-and-test
+# in ci.yml never needs it.
 on:
   workflow_dispatch:
   schedule:
@@ -116,3 +117,28 @@ jobs:
             test.log
             release-build.log
             TestDiagnostics/
+
+  exclusive-rename-probe:
+    name: exclusive rename probe (${{ matrix.runs-on }})
+    # The final export commit relies on these results; a pull request cannot change them.
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runs-on: [macos-26, macos-15]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report runner image
+        run: |
+          echo "::group::Runner image"
+          echo "Runner label: ${{ matrix.runs-on }}"
+          echo "Image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          sw_vers
+          echo "::endgroup::"
+
+      - name: Probe exclusive rename on disk images
+        run: bash scripts/probe-exclusive-rename.sh
