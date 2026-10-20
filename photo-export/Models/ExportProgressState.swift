@@ -19,8 +19,8 @@ import Observation
 /// The fields here are read only by `ExportProgressBar` (counters / filename /
 /// render activity / messages) and `MonthRow` (`currentJobPlacement` for the
 /// in-flight spinner). AutoSync's seam is preserved — it subscribes to
-/// `$activeRunContext / $isRunning / $queueCount` on `ExportManager`, none of
-/// which move here.
+/// `ExportManager.exportRunStatePublisher` (the run context, running flag, queue
+/// count and bulk-enqueue flag), none of which move here.
 ///
 /// Tests that read `manager.totalJobsEnqueued` etc. continue to compile because
 /// `ExportManager` keeps read-only computed forwarders.
