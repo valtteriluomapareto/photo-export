@@ -23,7 +23,7 @@ struct YearContentView: View {
   @Binding var selectedAsset: AssetDescriptor?
 
   private let photoLibraryService: any PhotoLibraryService
-  @StateObject private var counts: TimelineSidebarCounts
+  @State private var counts: TimelineSidebarCounts
 
   init(
     year: Int,
@@ -35,8 +35,7 @@ struct YearContentView: View {
     self._selection = selection
     self._selectedAsset = selectedAsset
     self.photoLibraryService = photoLibraryService
-    _counts = StateObject(
-      wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
+    _counts = State(wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
   }
 
   @State private var totalCount: Int?

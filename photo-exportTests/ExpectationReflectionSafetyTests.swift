@@ -17,7 +17,7 @@ import Testing
       @EnvironmentObject var store: ExportRecordStore
       @EnvironmentObject var collections: CollectionExportRecordStore
       @EnvironmentObject var progress: ExportProgressState
-      @ObservedObject var counts: TimelineSidebarCounts
+      let counts: TimelineSidebarCounts
       var body: some View {
         Text(
           "\(manager.queueCount) \(library.libraryRevision) \(store.state) \(progress.totalJobsCompleted)"
