@@ -245,7 +245,7 @@ struct SidebarMultiSelectTests {
 
   /// Partial-failure recovery: year A enqueues successfully, year B's fetch
   /// throws. The catch branch must (a) surface the queue-warning message,
-  /// (b) drain year A's queued jobs, and (c) set `partialBulkScan` so any
+  /// (b) drain year A's queued jobs, and (c) set `incompleteScan` so any
   /// scoped wrapper sees the partial state.
   @Test func timelineSelectionPartialFailureDrainsQueuedJobs() async throws {
     let h = makeHarness()

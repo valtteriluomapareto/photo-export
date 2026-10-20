@@ -35,6 +35,9 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   var hqThumbnailsByAssetId: [String: NSImage] = [:]
   var fullImagesByAssetId: [String: NSImage] = [:]
   var yearCounts: [(year: Int, count: Int)] = []
+  /// Thrown by the year-listing calls. Production throws `authorizationDenied` there
+  /// without Photos access, so access tests set both this and `isAuthorized`.
+  var availableYearsError: Error?
 
   // Call tracking
   var fetchAssetsCalls: [(year: Int, month: Int?, mediaType: PHAssetMediaType?)] = []
@@ -167,11 +170,13 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   func availableYears() throws -> [Int] {
-    yearCounts.map(\.year)
+    if let error = availableYearsError { throw error }
+    return yearCounts.map(\.year)
   }
 
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
-    yearCounts
+    if let error = availableYearsError { throw error }
+    return yearCounts
   }
 
   // MARK: - Phase 2: Collections

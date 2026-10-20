@@ -22,6 +22,8 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 
 If Photos access is denied, choose **Open System Settings**, enable access under **Privacy & Security → Photos**, then return to Photo Export. The app checks access again so you can continue setup or browsing.
 
+If Auto Export's last run reads "0 exported (failed)" and Export Issues is empty, Photos access is probably off; pending changes are kept and export on the next run after you turn it back on.
+
 ## Features
 
 - Browse your library two ways via a Timeline / Collections segmented control
