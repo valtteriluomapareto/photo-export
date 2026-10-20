@@ -11,6 +11,8 @@ final class InMemoryAutoSyncRunSummaryStore: AutoSyncRunSummaryStore {
 
   var nextSaveError: Error?
   var nextDeleteError: Error?
+  /// Successful saves, so tests can assert that no run wrote a summary.
+  private(set) var saveCount = 0
 
   init(initial: [String: ExportRunSummary] = [:]) {
     self.storage = initial
@@ -26,6 +28,7 @@ final class InMemoryAutoSyncRunSummaryStore: AutoSyncRunSummaryStore {
       throw error
     }
     storage[destinationId] = summary
+    saveCount += 1
   }
 
   func deleteSummary(destinationId: String) throws {

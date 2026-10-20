@@ -164,6 +164,7 @@ final class AppCore {
       perDestinationTokenStore: perDestinationTokenStore,
       currentRunStore: currentRunStore,
       clock: clock,
+      photosAuthorization: plm,
       userDefaults: defaults)
   }
 

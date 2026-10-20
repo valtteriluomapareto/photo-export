@@ -1493,6 +1493,7 @@ struct ExportManagerRunExportTests {
           retryStateStore: builder.retryStore, runSummaryStore: builder.runSummaryStore,
           perDestinationTokenStore: builder.perDestinationTokenStore,
           currentRunStore: builder.currentRunStore, clock: builder.clock,
+          photosAuthorization: builder.photosAuthorization,
           userDefaults: builder.userDefaults))
 
       // Normal UI entry point has no awaitable run context or completion summary.

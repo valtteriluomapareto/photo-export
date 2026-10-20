@@ -226,7 +226,9 @@ final class VariantExporter {
       groupStem: groupStem,
       pairOriginalWithSuffix: pairOriginalWithSuffix,
       interruptedFilename: interruptedFilename
-    )
+    ) { name in
+      isClaimed(name, job: job, subfolder: subfolder, variant: variant, of: descriptor)
+    }
     // Provisional: the final name is planned against the staged bytes before the commit.
     // Skipping claimed names keeps the in-progress mark off another record's name, so an
     // interruption cannot leave two records naming it.

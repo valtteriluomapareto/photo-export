@@ -23,5 +23,8 @@ struct AutoSyncEnvironment {
   /// session's silent shutdown is observable from the saved `.txt`.
   let currentRunStore: any AutoSyncCurrentRunStore
   let clock: any AutoSyncClock
+  /// Photos access. Required, with no default: a missing provider would read as always
+  /// authorized and let runs scan a library they cannot see.
+  let photosAuthorization: any AutoSyncPhotosAuthorizationProviding
   let userDefaults: UserDefaults
 }

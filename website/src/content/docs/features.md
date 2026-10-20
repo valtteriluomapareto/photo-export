@@ -75,7 +75,10 @@ export writes those items again under their own names. If the file already there
 bytes and no other exported item uses it, for example after the export history was reset or
 the folder was set up as a new destination, Photo Export records that file instead of
 writing another copy, and leaves it as it is. This covers files exported on their own; an edit with its
-`_orig` companion and a Live Photo with its paired video still get new copies.
+`_orig` companion and a Live Photo with its paired video still get new copies. An `_orig`
+companion or paired video added later fails, and appears in Export Issues, while another
+exported file still records its name; if you deleted that file, Import Existing Backup clears
+the record.
 
 ### Format options (Settings → Advanced)
 

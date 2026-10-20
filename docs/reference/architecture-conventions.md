@@ -169,7 +169,18 @@ commit. Mount a share from a macOS server and one from a NAS (Samba) and record,
 
 The final name of a file written alone is chosen once its bytes are staged. A paired
 original-side slot (`_orig`, or a still or motion file that shares a pre-allocated group
-stem) has one fixed name, and an existing file there fails the variant as above. A group stem
+stem) has one fixed name, and an existing file there fails the variant as above.
+`resolveSlot` also fails it, before staging, when a record other than this variant's own
+names it (`Export:5`, "Paired original filename is recorded for another exported file"). The
+file is checked first, so a name that both holds a file and is claimed keeps the on-disk
+message. A verified interrupted file excuses only the file, never the claim. This matters on a
+stem inherited from a completed record, which nothing allocates; the variant fails on every
+run while the claim stands. Import Existing Backup clears a completed claim whose file was
+deleted. A failed claim blocks the name until the claimant's retry lands at another name; if
+the retry writes this name itself, the variant then fails with the on-disk message. The
+asset's own other variants count too: a reverted Live Photo edit whose `.editedPairedVideo`
+record names `IMG_0001.MOV`, with that file deleted, fails the `.originalPairedVideo` there,
+which is accepted. A group stem
 is allocated before staging (`allocatePairedGroupStem`, and `allocateUnusedOrigStem` for an
 edited fallback) where every name of the group is empty and no other asset's record names it;
 the asset's own records in the placement do not count, so a retry keeps its names. Every other
@@ -239,11 +250,10 @@ Known limits: only the folder the variant is being written to is searched, so an
 file left in `videos/` (or outside it) by a layout change is not found. Paired groups and
 `_orig` slots are allocated before staging and are never adopted. Neither is an image whose
 paired video the same job writes next at its stem: adopting the image could find the video's
-name taken and split the pair, so the image takes a free name and the video follows it. A
-paired original-side name on an inherited stem is refused only when a file is there, not when
-another record claims it (#360). Claims are keyed by placement id, so two placements whose
-folders are one folder on disk (for example names that differ only by case on a volume that
-ignores case) do not see each other's claims (#360). An edit on a newly allocated stem can
+name taken and split the pair, so the image takes a free name and the video follows it.
+Claims are keyed by placement id, so two placements whose folders are one folder on disk (for
+example names that differ only by case on a volume that ignores case) do not see each other's
+claims (#368). An edit on a newly allocated stem can
 still land at ` (1)` when the asset's own failed original still names that stem's natural
 name; the next run resolves it. A failed or interrupted record keeps its name reserved until
 it is retried, including one for an asset since deleted from Photos; Import Existing Backup
@@ -387,8 +397,8 @@ schedule clears the record. A summary that arrives while the reducer is still `.
 suppresses the hook for that run instead.
 
 - Dirty work is kept and waits for the next real trigger: a Photos change,
-  `destinationBecameAvailable`, Export Now, launch, or a scope or settings change. Freeing
-  space or restoring access fires no trigger by itself.
+  `destinationBecameAvailable`, Export Now, launch, Photos access returning, or a scope or
+  settings change. Freeing space or restoring destination access fires no trigger by itself.
 - An Export Now pressed during the run is exempt and still runs. A later trigger during
   the run does not replace it as the pending reason. Switching destinations drops any
   pending reason, Export Now included; the new destination gets its own trigger.
@@ -400,6 +410,44 @@ suppresses the hook for that run instead.
   its own: a new trigger replaces it, or a resolving blocker (an import or manual export
   ending) serves it.
 - A failed summary without `stoppedBy` keeps the existing reschedule.
+
+### AutoSync Photos access
+
+`AutoSyncEnvironment.photosAuthorization` (`AutoSyncPhotosAuthorizationProviding`, required)
+publishes the cached flag `PhotoLibraryManager.isAuthorized`, which the export guards and the
+main window also read. Missing access is `.blocked(.photosAccessMissing)`: below the import
+and manual-export waits, so their resume rules still apply, and above every other blocker,
+since none of them can be fixed without access. A run in progress is never cancelled
+mid-scope; its scan reports the missing access, the run ends `.failed`, and going idle from
+`.blocked` schedules nothing. Access returning during a run that then stops on the
+destination is held like any other trigger during it.
+
+macOS posts no notification when access changes, so access is refreshed at three points:
+before each fired debounce (the only path to a run), before each scope of the AutoSync
+fan-out (stopping the fan-out if access is gone), and app-wide on
+`NSApplication.didBecomeActiveNotification`. `refreshAuthorization()` publishes
+synchronously before it returns, so the reducer is blocked before the event that would start
+the run; the sink must use the value it receives. A grant made without bringing the app
+forward waits for the next activation or launch.
+
+Access returning is handled like a failed change fetch: every selected scope gets
+`pendingFullReconciliation`, the dirty state is saved, and `.photosChanged` is triggered
+unless a pending reason with an equal or shorter delay (Export Now, a retry, a settings
+change) exists, which then runs. A scheduled run cancelled by losing access keeps its reason,
+as it does for an import.
+
+Without access PhotoKit returns empty results, not an error. So `PhotoLibraryManager` keeps
+one rule for live versus cached reads: scan entry points that could otherwise report an
+empty library as complete read the live status (`fetchAssetsProgressive`,
+`availableYearsWithCounts`, and `fetchCollectionTree` on a cache miss), as do the scope
+counts `countAssets(in:)` and `countAdjustedAssets(in:)`; the UI-only counts (by year or
+month, adjusted counts by year or month) read the cached `isAuthorized`. A revoke inside a
+scope fails it at its next fetch, and a live denial while the cached flag is still set
+refreshes that flag, so the main window switches and Auto Export blocks at once.
+`ExportManager`'s enqueue guards read the service's cached `isAuthorized`; the fetch that
+follows each guard is the live check. A cached collection tree is returned without the live
+check, which keeps the album sidebar during the stale window; every collection scan still
+meets the check in `fetchAssetsProgressive`.
 
 ### AutoSync dirty-state persistence acknowledgement
 

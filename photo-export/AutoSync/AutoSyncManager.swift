@@ -180,6 +180,19 @@ final class AutoSyncManager: ObservableObject {
       }
       .store(in: &subscriptions)
 
+    // Before the enabled flag below, so attaching without access blocks the launch run
+    // instead of scheduling it. The value comes from the last refresh; see the refresh
+    // points in `scheduleDebounce` and `startRun`.
+    environment.photosAuthorization.isAuthorizedPublisher
+      .removeDuplicates()
+      .sink { [weak self] authorized in
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          self?.dispatch(.photosAuthorizationChanged(authorized))
+        }
+      }
+      .store(in: &subscriptions)
+
     environment.photos.changes
       .sink { [weak self] outcome in
         dispatchPrecondition(condition: .onQueue(.main))
@@ -598,6 +611,10 @@ final class AutoSyncManager: ObservableObject {
     let delay = max(0, fireAt.timeIntervalSince(clock.now()))
     let token = clock.schedule(after: delay) { [weak self] in
       self?.debounceTokens.removeValue(forKey: reason)
+      // The only path to a run. Access revoked while the app was in the background leaves
+      // the cached flag set; the refresh publishes the change synchronously, so the reducer
+      // is blocked before it sees the fired debounce.
+      self?.environment?.photosAuthorization.refreshAuthorization()
       self?.dispatch(.debounceFired(reason))
     }
     debounceTokens[reason] = token
@@ -683,6 +700,11 @@ final class AutoSyncManager: ObservableObject {
       }
       for runScope in runScopes {
         guard !Task.isCancelled, self?.activeRunFanOutID == fanOutID else { return }
+        // Access revoked during the previous scope would leave this scope's scan reading
+        // the cached flag, finding nothing and acknowledging its pending work. Stop instead;
+        // the reducer is blocked and the scope's dirty state stays.
+        environment.photosAuthorization.refreshAuthorization()
+        guard self?.reducerState.photosAuthorized == true else { return }
         // Update the journal with the sub-scope about to start. Done
         // *before* the `await` so a SIGKILL during the await leaves the
         // journal pointing at the in-flight scope, not the previous one.
