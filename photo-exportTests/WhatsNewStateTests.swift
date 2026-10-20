@@ -184,19 +184,18 @@ struct WhatsNewStateTests {
     let state = WhatsNewState(
       userDefaults: defaults, currentVersion: "1.3.0", catalog: [makeNote("1.3.0")])
     let sheet = ObservationProbe { _ = state.shouldShow }
-    let content = ObservationProbe {
-      _ = state.isFirstLaunch
-      _ = state.upgradeNotes
-    }
+    let firstLaunch = ObservationProbe { _ = state.isFirstLaunch }
+    let notes = ObservationProbe { _ = state.upgradeNotes }
 
     state.markAsSeen()
     #expect(sheet.changeCount == 1)
-    #expect(content.changeCount >= 1)
+    #expect(firstLaunch.changeCount == 1)
+    #expect(notes.changeCount == 1)
 
-    let contentChanges = content.changeCount
     state.markAsSeen()
     #expect(sheet.changeCount == 1, "Dismissing again must not re-notify the sheet")
-    #expect(content.changeCount == contentChanges, "Dismissing again stores equal values")
+    #expect(firstLaunch.changeCount == 1, "Dismissing again stores an equal version")
+    #expect(notes.changeCount == 1, "Dismissing again stores equal notes")
   }
 
   @Test func lastSeenEqualToCurrentReturnsEmptyNotes() {

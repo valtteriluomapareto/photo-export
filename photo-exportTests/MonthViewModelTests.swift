@@ -884,10 +884,40 @@ struct MonthViewModelTests {
 
   /// The month and collection grids own the model as `@State`, which builds a new one on every
   /// view init and keeps only the first, so building one must not touch the library.
-  @Test func initMakesNoServiceCalls() {
+  @Test func initMakesNoServiceCalls() async {
     let service = RecordingPhotoLibraryService()
-    _ = MonthViewModel(photoLibraryService: service)
+    let model = MonthViewModel(photoLibraryService: service)
+    // Work the init schedules on the main actor would have run by now.
+    for _ in 0..<10 { await Task.yield() }
     #expect(service.calls.isEmpty)
+    withExtendedLifetime(model) {}
+  }
+
+  /// The grids' error overlay reads `errorMessage`: a failing load must notify it once (the
+  /// load's opening clear of an absent message stores an equal value).
+  @Test func errorMessageReadersAreNotifiedByAFailingLoad() async {
+    let service = FakePhotoLibraryService()
+    service.fetchAssetsError = NSError(
+      domain: "Test", code: 7, userInfo: [NSLocalizedDescriptionKey: "boom"])
+    let model = MonthViewModel(photoLibraryService: service)
+    let error = ObservationProbe { _ = model.errorMessage }
+    await model.loadAssets(for: .timeline(year: 2025, month: 4))
+    #expect(error.changeCount == 1)
+    #expect(model.errorMessage == "boom")
+  }
+
+  /// The grids' spinner reads `isLoading`: a load on a new scope turns it on, then off at the
+  /// first batch, and the later stores of `false` are equal writes.
+  @Test func isLoadingReadersFollowAFreshLoad() async {
+    let service = FakePhotoLibraryService()
+    service.assetsByYearMonth["2025-6"] = [makeAsset(id: "a0")]
+    service.assetsByYearMonth["2025-7"] = [makeAsset(id: "b0")]
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .timeline(year: 2025, month: 6))
+    let loading = ObservationProbe { _ = model.isLoading }
+    await model.loadAssets(for: .timeline(year: 2025, month: 7))
+    #expect(loading.changeCount == 2)
+    #expect(!model.isLoading)
   }
 
   /// The grid bodies render `assets`, `isLoading` and `errorMessage`; the selection reaches

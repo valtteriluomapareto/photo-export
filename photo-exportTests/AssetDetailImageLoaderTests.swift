@@ -126,6 +126,8 @@ struct AssetDetailImageLoaderTests {
     #expect(!loader.state.isLoading)
   }
 
+  // No init-service test, unlike the grid models: the loader holds no service.
+
   /// `AssetDetailView` renders `state(for:)`, so each step of a load re-renders it: the
   /// spinner, the image, and clearing on disappear.
   @Test func detailReadersAreNotifiedForEachPreviewStep() async {

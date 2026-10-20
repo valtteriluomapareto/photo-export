@@ -6,6 +6,7 @@ import Testing
 
 #if DEBUG
   @MainActor
+  @Suite(.serialized)
   struct TimelineSidebarBadgeRefreshTests {
     private struct Host: View {
       let service: FakePhotoLibraryService

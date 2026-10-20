@@ -191,10 +191,13 @@ struct TimelineSidebarCountsTests {
 
   /// The sidebar and year pane own the loader as `@State`, which builds a new one on every
   /// view init and keeps only the first, so building one must not touch the library.
-  @Test func initMakesNoServiceCalls() {
+  @Test func initMakesNoServiceCalls() async {
     let service = RecordingPhotoLibraryService()
-    _ = TimelineSidebarCounts(service: service)
+    let loader = TimelineSidebarCounts(service: service)
+    // Work the init schedules on the main actor would have run by now.
+    for _ in 0..<10 { await Task.yield() }
     #expect(service.calls.isEmpty)
+    withExtendedLifetime(loader) {}
   }
 
   /// `YearRow`, `MonthRow` and the year tiles render from `countsByYearMonth`: each month
