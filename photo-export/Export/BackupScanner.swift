@@ -994,11 +994,10 @@ struct BackupScanner {
   /// Reads the duration of a video file.
   /// Uses the legacy synchronous `duration` property since this is only called
   /// for the rare ambiguous-file fallback path, not the hot loop.
-  @available(macOS, deprecated: 13.0, message: "Acceptable: only used in rare fallback path")
   private static func videoDuration(at url: URL) -> TimeInterval {
     let avAsset = AVURLAsset(
       url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-    let duration = avAsset.duration
+    let duration = (avAsset as any SynchronousDuration).duration
     guard duration.timescale > 0 else { return 0 }
     return CMTimeGetSeconds(duration)
   }
@@ -1059,3 +1058,13 @@ struct BackupScanner {
     return month
   }
 }
+
+/// `AVAsset.duration` is deprecated (macOS 13) in favour of the async `load(.duration)`. The
+/// backup scan reads it synchronously on purpose (see `videoDuration(at:)`), so it goes through
+/// this protocol, which accepts the deprecation without a warning that would fail the
+/// warnings-as-errors build.
+private protocol SynchronousDuration {
+  var duration: CMTime { get }
+}
+
+extension AVURLAsset: SynchronousDuration {}

@@ -89,7 +89,7 @@ struct FolderTileView: View {
 
   private var accessibilityTraits: AccessibilityTraits {
     var traits: AccessibilityTraits = .isButton
-    if isSelected { traits.insert(.isSelected) }
+    if isSelected { traits.formUnion(.isSelected) }
     return traits
   }
 
