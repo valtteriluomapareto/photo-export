@@ -10,7 +10,7 @@ The patterns and contracts below were established by the May 2026 architecture r
 
 ## The architecture in one paragraph
 
-`ExportManager` is the façade. It owns the export-run lifecycle, the AutoSync-observable `@Published` properties, and `UserDefaults`-backed user choices (`versionSelection`). Real work is delegated to extracted collaborators: `ExportQueueCoordinator` runs the drain loop, owns queue state, and owns the Phase-0 cancellation seam (`generation`, `isCurrent`, `throwIfCancelledOrStale`, `bumpGeneration`); `VariantExporter` writes each variant; `ImportCoordinator` runs the Import Existing Backup flow; `ExportDestinationResolver` allocates filenames; `ExportJobPlanner` plans jobs; `RecordStoreRouter` dispatches record reads/writes by placement kind; `ExportCompletionPolicy` decides what counts as "done". `VariantExporter` and `ImportCoordinator` hold a direct weak reference to `ExportQueueCoordinator` for the seam; each collaborator also holds a narrow `Host` protocol back to the manager for the remaining UI-state mutations.
+`ExportManager` is the façade. It owns the export-run lifecycle, the AutoSync-observable published properties, and `UserDefaults`-backed user choices (`versionSelection`). Real work is delegated to extracted collaborators: `ExportQueueCoordinator` runs the drain loop, owns queue state, and owns the Phase-0 cancellation seam (`generation`, `isCurrent`, `throwIfCancelledOrStale`, `bumpGeneration`); `VariantExporter` writes each variant; `ImportCoordinator` runs the Import Existing Backup flow; `ExportDestinationResolver` allocates filenames; `ExportJobPlanner` plans jobs; `RecordStoreRouter` dispatches record reads/writes by placement kind; `ExportCompletionPolicy` decides what counts as "done". `VariantExporter` and `ImportCoordinator` hold a direct weak reference to `ExportQueueCoordinator` for the seam; each collaborator also holds a narrow `Host` protocol back to the manager for the remaining UI-state mutations.
 
 ## Cross-cutting contracts
 
@@ -212,22 +212,25 @@ Rules:
 
 ```swift
 var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
-  Publishers.CombineLatest4($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)
-    .map { context, isRunning, queueCount, isEnqueueingAll in
-      let manualFireAndForget =
-        context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
-      return ExportRunState(
-        activeContext: context,
-        isManualActive: context?.source == .manual || manualFireAndForget,
-        isAutoSyncActive: context?.source == .autoSync
-      )
-    }
-    .removeDuplicates()
-    .eraseToAnyPublisher()
+  Publishers.CombineLatest4(
+    activeRunContextBridge.publisher, isRunningBridge.publisher,
+    queueCountBridge.publisher, isEnqueueingAllBridge.publisher
+  )
+  .map { context, isRunning, queueCount, isEnqueueingAll in
+    let manualFireAndForget =
+      context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
+    return ExportRunState(
+      activeContext: context,
+      isManualActive: context?.source == .manual || manualFireAndForget,
+      isAutoSyncActive: context?.source == .autoSync
+    )
+  }
+  .removeDuplicates()
+  .eraseToAnyPublisher()
 }
 ```
 
-The `CombineLatest4` over `($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)` is the AutoSync contract. The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isEnqueueingAll` participates so the bulk-enqueue window (after the dispatcher flips it true but before the first job lands in `pendingJobs`) is observable as busy too (issue #67 item 4a). Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
+The `CombineLatest4` over `(activeRunContext, isRunning, queueCount, isEnqueueingAll)` is the AutoSync contract. Each is held in an `ObservableCombineBridge`, which delivers exactly as `@Published` does while views track the properties through Observation ([`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge). The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isEnqueueingAll` participates so the bulk-enqueue window (after the dispatcher flips it true but before the first job lands in `pendingJobs`) is observable as busy too (issue #67 item 4a). Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
 
 **Mirror pattern** (when state lives on a coordinator but AutoSync needs to see it via the manager):
 
@@ -584,11 +587,11 @@ The `placement.kind` switch is *not* duplicated across `ExportManager` anymore �
 5. Verify the AutoSync seam: run [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift). If the emission sequence changes, the mirror sinks are wrong (likely async, or in the wrong order).
 6. Verify the synchrony pin: run [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) if the new collaborator owns any queue-adjacent state.
 
-### Adding a new `@Published` property AutoSync should observe
+### Adding a new published property AutoSync should observe
 
-1. Add the `@Published` to the right *owner* — the collaborator if conceptually theirs; `ExportManager` if conceptually the manager's.
-2. If the owner is a collaborator: add a same-named `@Published` on `ExportManager` and `.sink` from the coordinator's publisher in `init`.
-3. If the new property changes `ExportRunState`'s shape: add it to the `CombineLatest` (you may need to bump to `CombineLatest4`). Re-record `AutoSyncSeamCharacterizationTests` after verifying the new emission sequence is correct.
+1. Add the property to the right *owner* — the collaborator if conceptually theirs; `ExportManager` if conceptually the manager's. On a collaborator it is `@Published`; on `ExportManager`, a property that feeds `exportRunStatePublisher` is held in an `ObservableCombineBridge` instead (see [`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge).
+2. If the owner is a collaborator: add a same-named property on `ExportManager` (bridged if it feeds `exportRunStatePublisher`, otherwise `@Published`) and `.sink` from the coordinator's publisher in `init`.
+3. If the new property changes `ExportRunState`'s shape: add it to the `CombineLatest` (its bridge's `publisher`, not `$x`; you may need to bump to `CombineLatest4`). Re-record `AutoSyncSeamCharacterizationTests` after verifying the new emission sequence is correct.
 4. Mention the new field in `ExportManager+AutoSyncConformance.swift` if AutoSync needs to read it directly (not via the publisher).
 
 ## Deferred follow-ups

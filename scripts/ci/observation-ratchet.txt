@@ -35,7 +35,7 @@ type|photo-export/ViewModels/TimelineSidebarCounts.swift|TimelineSidebarCounts
 # ObservableObject, so these stay as they are.
 external-publisher|photo-export/Export/ExportManager.swift|9
 
-total|published|67
+total|published|63
 total|environment-object|38
 total|environment-object-property|73
 total|state-object|17
