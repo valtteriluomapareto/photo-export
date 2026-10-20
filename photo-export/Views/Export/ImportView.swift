@@ -41,6 +41,10 @@ struct ImportView: View {
     }
     .padding(24)
     .frame(width: 420)
+    // Size to the content's full height so error and recovery text is never cut off. If the
+    // height followed truncated text, a fitted sheet or window would shrink a line at a time until
+    // AppKit aborts the layout pass.
+    .fixedSize(horizontal: false, vertical: true)
     // The user must decide what to do with a folder that isn't their previous backup; exports
     // wait until then.
     .interactiveDismissDisabled(exportManager.previousBackupMissing)
