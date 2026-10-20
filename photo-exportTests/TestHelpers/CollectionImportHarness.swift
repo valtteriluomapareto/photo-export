@@ -48,17 +48,22 @@ final class CollectionImportHarness {
     await manager.waitForImportCompletion()
   }
 
-  /// Adds `asset` with a single original resource named `filename`.
+  /// Adds `asset` with an original resource named `filename`, plus `extraResources` (an
+  /// edit's `.fullSizePhoto` or a Live Photo's `.pairedVideo`).
   @discardableResult
   func addAsset(
-    _ id: String, _ filename: String, date: Date, mediaType: PHAssetMediaType = .image
+    _ id: String, _ filename: String, date: Date, mediaType: PHAssetMediaType = .image,
+    hasAdjustments: Bool = false, isLivePhoto: Bool = false,
+    extraResources: [ResourceDescriptor] = []
   ) -> AssetDescriptor {
     let asset = TestAssetFactory.makeAsset(
-      id: id, creationDate: date, mediaType: mediaType, pixelWidth: 100, pixelHeight: 100)
-    library.resourcesByAssetId[id] = [
-      TestAssetFactory.makeResource(
-        type: mediaType == .video ? .video : .photo, originalFilename: filename)
-    ]
+      id: id, creationDate: date, mediaType: mediaType, pixelWidth: 100, pixelHeight: 100,
+      hasAdjustments: hasAdjustments, isLivePhoto: isLivePhoto)
+    library.resourcesByAssetId[id] =
+      [
+        TestAssetFactory.makeResource(
+          type: mediaType == .video ? .video : .photo, originalFilename: filename)
+      ] + extraResources
     return asset
   }
 

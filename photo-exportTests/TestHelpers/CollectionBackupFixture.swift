@@ -75,8 +75,9 @@ enum CollectionBackupFixture {
     return url
   }
 
-  /// Every regular file under `root`, relative path → (size, modification date), skipping
-  /// hidden staging files. Two equal listings mean nothing was written, moved or removed.
+  /// Every regular file under `root`, including hidden staging files, as relative path →
+  /// size and modification date. Two equal listings mean nothing was written, moved or
+  /// removed.
   static func listing(of root: URL) throws -> [String: String] {
     var result: [String: String] = [:]
     let base = root.resolvingSymlinksInPath().path

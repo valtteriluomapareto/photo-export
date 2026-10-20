@@ -33,7 +33,7 @@ struct CollectionBackupMatchingTests {
   private func match(
     _ directories: [ScannedCollectionDirectory], tree: [PhotoCollectionDescriptor],
     existing: [ExportPlacement] = []
-  ) async throws -> BackupScanner.CollectionMatchResult {
+  ) async throws -> CollectionBackupPlanner.Plan {
     library.collectionTree = tree
     return try await BackupScanner.matchCollectionFolders(
       directories, collections: tree, existingPlacements: existing,
@@ -50,9 +50,9 @@ struct CollectionBackupMatchingTests {
     ).id
   }
 
-  private func adoptedPaths(_ result: BackupScanner.CollectionMatchResult) -> [String: String] {
+  private func adoptedPaths(_ result: CollectionBackupPlanner.Plan) -> [String: String] {
     var paths: [String: String] = [:]
-    for adoption in result.plan.adoptions {
+    for adoption in result.adoptions {
       paths[adoption.placement.collectionLocalIdentifier ?? adoption.placement.id] =
         adoption.placement.relativePath
     }
@@ -74,14 +74,13 @@ struct CollectionBackupMatchingTests {
           [F.file("IMG_1.JPG", date: F.date(1)), F.file("IMG_2.JPG", date: F.date(2))]),
       ], tree: tree)
 
-    let adoption = try #require(result.plan.adoptions.first)
-    #expect(result.plan.adoptions.count == 1)
+    let adoption = try #require(result.adoptions.first)
+    #expect(result.adoptions.count == 1)
     #expect(adoption.placement.id == (try resolvedId(.album(collectionId: "paris"), tree: tree)))
     #expect(adoption.placement.relativePath == "Collections/Albums/Trips/Paris/")
     #expect(adoption.placement.kind == .album)
     #expect(Set(adoption.matched.map(\.asset.id)) == ["p1", "p2"])
-    #expect(result.plan.unrecognizedFolders.isEmpty)
-    #expect(result.filesScanned == 2)
+    #expect(result.unrecognizedFolders.isEmpty)
   }
 
   @Test func collidingAlbumsAreAssignedTheirOwnSuffixedFolders() async throws {
@@ -110,7 +109,7 @@ struct CollectionBackupMatchingTests {
       ], tree: tree)
     #expect(
       adoptedPaths(result) == ["a1": "Collections/Albums/Trip_2/", "a2": "Collections/Albums/Trip/"])
-    #expect(result.plan.unrecognizedFolders.isEmpty)
+    #expect(result.unrecognizedFolders.isEmpty)
   }
 
   @Test func albumWhoseSiblingWasDeletedKeepsItsSuffixedFolder() async throws {
@@ -123,7 +122,7 @@ struct CollectionBackupMatchingTests {
         F.directory(.albums, ["Trip_2"], [F.file("Y.JPG", date: F.date(2))]),
       ], tree: tree)
     #expect(adoptedPaths(result) == ["a2": "Collections/Albums/Trip_2/"])
-    #expect(result.plan.unrecognizedFolders == ["Collections/Albums/Trip/"])
+    #expect(result.unrecognizedFolders == ["Collections/Albums/Trip/"])
   }
 
   /// An album literally titled "Trip_2" owns that folder; a third "Trip" skips the name, as
@@ -153,8 +152,8 @@ struct CollectionBackupMatchingTests {
     library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
     let result = try await match(
       [F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))])], tree: tree)
-    #expect(result.plan.adoptions.isEmpty)
-    #expect(result.plan.unrecognizedFolders == ["Collections/Albums/Trip/"])
+    #expect(result.adoptions.isEmpty)
+    #expect(result.unrecognizedFolders == ["Collections/Albums/Trip/"])
   }
 
   @Test func movedAlbumDoesNotAdoptItsOldFolder() async throws {
@@ -162,8 +161,8 @@ struct CollectionBackupMatchingTests {
     library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
     let result = try await match(
       [F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))])], tree: tree)
-    #expect(result.plan.adoptions.isEmpty)
-    #expect(result.plan.unrecognizedFolders == ["Collections/Albums/Trip/"])
+    #expect(result.adoptions.isEmpty)
+    #expect(result.unrecognizedFolders == ["Collections/Albums/Trip/"])
   }
 
   @Test func savedPlacementClaimsItsFolder() async throws {
@@ -184,7 +183,7 @@ struct CollectionBackupMatchingTests {
       ], tree: tree, existing: [savedAtBare])
 
     let byAlbum = Dictionary(
-      uniqueKeysWithValues: result.plan.adoptions.map { ($0.placement.collectionLocalIdentifier!, $0) })
+      uniqueKeysWithValues: result.adoptions.map { ($0.placement.collectionLocalIdentifier!, $0) })
     #expect(byAlbum["a2"]?.placement.relativePath == "Collections/Albums/Trip/")
     #expect(byAlbum["a2"]?.placement.createdAt == savedAtBare.createdAt, "the saved placement is kept")
     #expect(byAlbum["a1"]?.placement.relativePath == "Collections/Albums/Trip_2/")
@@ -200,7 +199,7 @@ struct CollectionBackupMatchingTests {
     let result = try await match(
       [F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))])], tree: tree,
       existing: [stale])
-    #expect(result.plan.adoptions.isEmpty)
+    #expect(result.adoptions.isEmpty)
   }
 
   // MARK: - videos/ subfolders
@@ -223,7 +222,7 @@ struct CollectionBackupMatchingTests {
       ], tree: tree)
 
     let byAlbum = Dictionary(
-      uniqueKeysWithValues: result.plan.adoptions.map { ($0.placement.collectionLocalIdentifier!, $0) })
+      uniqueKeysWithValues: result.adoptions.map { ($0.placement.collectionLocalIdentifier!, $0) })
     let trip = try #require(byAlbum["trip"])
     #expect(trip.placement.relativePath == "Collections/Albums/Trip/")
     #expect(
@@ -251,7 +250,7 @@ struct CollectionBackupMatchingTests {
       adoptedPaths(result) == [
         "a1": "Collections/Albums/Trip/", "s1": "Collections/Shared Albums/Trip/",
       ])
-    let shared = try #require(result.plan.adoptions.first { $0.placement.kind == .sharedAlbum })
+    let shared = try #require(result.adoptions.first { $0.placement.kind == .sharedAlbum })
     #expect(shared.placement.id == (try resolvedId(.sharedAlbum(collectionId: "s1"), tree: tree)))
     #expect(shared.matched.map(\.asset.id) == ["s"])
   }
@@ -269,7 +268,7 @@ struct CollectionBackupMatchingTests {
           .sharedAlbums, ["Party"],
           [F.file("S.JPG", date: F.date(2)), F.file("S_orig.JPG", date: F.date(2))])
       ], tree: tree)
-    let shared = try #require(result.plan.adoptions.first)
+    let shared = try #require(result.adoptions.first)
     #expect(shared.matched.map(\.variant) == [.original])
     #expect(shared.matched.map(\.file.filename) == ["S.JPG"])
   }
@@ -278,7 +277,7 @@ struct CollectionBackupMatchingTests {
     library.favoritesAssets = [asset("f", "F.JPG", index: 4)]
     let result = try await match(
       [F.directory(.favorites, [], [F.file("F.JPG", date: F.date(4))])], tree: [F.favorites])
-    let favorites = try #require(result.plan.adoptions.first)
+    let favorites = try #require(result.adoptions.first)
     #expect(favorites.placement.id == ExportPlacement.favorites().id)
     #expect(favorites.placement.relativePath == "Collections/Favorites/")
   }
@@ -302,16 +301,20 @@ struct CollectionBackupMatchingTests {
 
   // MARK: - Evidence
 
+  /// The only folder an export would use for the album, with nothing matching: not adopted,
+  /// and not reported as a renamed, moved or deleted album's folder, since the album is there.
   @Test func folderWithoutMatchingFilesIsNotAdopted() async throws {
     let tree = [F.album("a1", "Trip")]
     library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
     let result = try await match(
       [F.directory(.albums, ["Trip"], [F.file("UNKNOWN.JPG", date: F.date(7))])], tree: tree)
-    #expect(result.plan.adoptions.isEmpty)
-    #expect(result.plan.unrecognizedFolders == ["Collections/Albums/Trip/"])
+    #expect(result.adoptions.isEmpty)
+    #expect(result.unrecognizedFolders.isEmpty)
   }
 
-  @Test func folderMostlyOfOtherFilesIsNotAdopted() async throws {
+  /// Nothing else could claim the folder the album exports to, so one match is enough: an
+  /// album whose photos were mostly removed since the export keeps the folder.
+  @Test func uncontestedFolderIsAdoptedOnAnyMatch() async throws {
     let tree = [F.album("a1", "Trip")]
     library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
     let result = try await match(
@@ -323,23 +326,75 @@ struct CollectionBackupMatchingTests {
             F.file("O2.JPG", date: F.date(6)), F.file("O3.JPG", date: F.date(7)),
           ])
       ], tree: tree)
-    #expect(result.plan.adoptions.isEmpty)
-    #expect(result.plan.unrecognizedFolders == ["Collections/Albums/Trip/"])
+    #expect(adoptedPaths(result) == ["a1": "Collections/Albums/Trip/"])
+    #expect(result.unrecognizedFolders.isEmpty)
   }
 
-  @Test func tiedClaimsLeaveTheFoldersUnrecognized() async throws {
+  /// With colliding albums, a folder must be mostly the album's files.
+  @Test func contestedFolderNeedsMostOfItsFilesToMatch() async throws {
+    let tree = [F.album("a1", "Trip"), F.album("a2", "Trip")]
+    library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
+    library.assetsByAlbumLocalId["a2"] = [asset("y", "Y.JPG", index: 2)]
+    let result = try await match(
+      [
+        F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))]),
+        F.directory(
+          .albums, ["Trip_2"],
+          [
+            F.file("Y.JPG", date: F.date(2)), F.file("O1.JPG", date: F.date(5)),
+            F.file("O2.JPG", date: F.date(6)), F.file("O3.JPG", date: F.date(7)),
+          ]),
+      ], tree: tree)
+    #expect(adoptedPaths(result) == ["a1": "Collections/Albums/Trip/"])
+    #expect(result.unrecognizedFolders == ["Collections/Albums/Trip_2/"])
+  }
+
+  /// Both albums hold the same photo and both folders the same file, so either assignment
+  /// writes nothing: the resolver's order decides.
+  @Test func tiedClaimsWithTheSameFilesFollowTheResolversOrder() async throws {
     let tree = [F.album("a1", "Trip"), F.album("a2", "Trip")]
     let shared = asset("x", "X.JPG", index: 1)
     library.assetsByAlbumLocalId["a1"] = [shared]
     library.assetsByAlbumLocalId["a2"] = [shared]
     let result = try await match(
       [
-        F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))]),
-        F.directory(.albums, ["Trip_2"], [F.file("X.JPG", date: F.date(1))]),
+        F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1), size: 9)]),
+        F.directory(.albums, ["Trip_2"], [F.file("X.JPG", date: F.date(1), size: 9)]),
       ], tree: tree)
-    #expect(result.plan.adoptions.isEmpty)
     #expect(
-      result.plan.unrecognizedFolders == ["Collections/Albums/Trip/", "Collections/Albums/Trip_2/"])
+      adoptedPaths(result) == ["a1": "Collections/Albums/Trip/", "a2": "Collections/Albums/Trip_2/"])
+    #expect(result.unrecognizedFolders.isEmpty)
+  }
+
+  @Test func tiedClaimsWithDifferentFilesLeaveTheFoldersUnrecognized() async throws {
+    let tree = [F.album("a1", "Trip"), F.album("a2", "Trip")]
+    let x = asset("x", "X.JPG", index: 1)
+    let y = asset("y", "Y.JPG", index: 2)
+    library.assetsByAlbumLocalId["a1"] = [x, y]
+    library.assetsByAlbumLocalId["a2"] = [x, y]
+    let result = try await match(
+      [
+        F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))]),
+        F.directory(.albums, ["Trip_2"], [F.file("Y.JPG", date: F.date(2))]),
+      ], tree: tree)
+    #expect(result.adoptions.isEmpty)
+    #expect(
+      result.unrecognizedFolders == ["Collections/Albums/Trip/", "Collections/Albums/Trip_2/"])
+  }
+
+  /// On a case-sensitive volume "Trip" and "trip" are two folders; neither is adopted rather
+  /// than guessing which one an export wrote.
+  @Test func foldersDifferingOnlyByCaseAreNotAdopted() async throws {
+    let tree = [F.album("a1", "Trip")]
+    library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
+    let result = try await match(
+      [
+        F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))]),
+        F.directory(.albums, ["trip"], [F.file("X.JPG", date: F.date(1))]),
+      ], tree: tree)
+    #expect(result.adoptions.isEmpty)
+    #expect(
+      result.unrecognizedFolders == ["Collections/Albums/Trip/", "Collections/Albums/trip/"])
   }
 
   @Test func albumsWithoutFoldersOnDiskAreNotFetched() async throws {

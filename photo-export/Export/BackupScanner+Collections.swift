@@ -129,27 +129,21 @@ extension BackupScanner {
 
   // MARK: - Matching
 
-  struct CollectionMatchResult {
-    var plan = CollectionBackupPlanner.Plan()
-    /// Files in every scanned collection folder.
-    var filesScanned = 0
-  }
-
   /// Matches the scanned collection folders to the current collections and decides which
   /// folder each adopts (see `CollectionBackupPlanner`). Each collection with a candidate
   /// folder has its assets fetched once; a fetch failure throws, so no album is silently left
   /// without history. Files in a `videos/` subfolder match only video assets, and shared
-  /// albums, which hold one resource per asset, match originals only.
+  /// albums, which hold one resource per asset, match originals only. `isCurrent` is checked
+  /// before each fetch; a superseded caller stops with `CancellationError`.
   static func matchCollectionFolders(
     _ directories: [ScannedCollectionDirectory],
     collections: [PhotoCollectionDescriptor],
     existingPlacements: [ExportPlacement],
     photoLibraryService: any PhotoLibraryService,
     fingerprintCache: FingerprintCache,
+    isCurrent: @MainActor () -> Bool = { true },
     progress: @MainActor (ImportStage) -> Void
-  ) async throws -> CollectionMatchResult {
-    var result = CollectionMatchResult()
-    result.filesScanned = directories.reduce(0) { $0 + $1.files.count }
+  ) async throws -> CollectionBackupPlanner.Plan {
     let candidates = CollectionBackupPlanner.candidates(
       directories: directories, collections: collections, existingPlacements: existingPlacements)
 
@@ -161,6 +155,7 @@ extension BackupScanner {
     var scores: [CollectionBackupPlanner.Score] = []
     for candidate in candidates {
       try Task.checkCancellation()
+      guard await isCurrent() else { throw CancellationError() }
       let library: Library
       if let cached = libraries[candidate.target] {
         library = cached
@@ -169,6 +164,7 @@ extension BackupScanner {
         let assets = try await photoLibraryService.fetchAssets(
           in: candidate.target.scope, mediaType: nil)
         try Task.checkCancellation()
+        guard await isCurrent() else { throw CancellationError() }
         var fingerprints = await fingerprintCache.fingerprints(
           for: assets, using: photoLibraryService)
         if case .sharedAlbum = candidate.target {
@@ -190,12 +186,12 @@ extension BackupScanner {
       scores.append(CollectionBackupPlanner.Score(candidate: candidate, matched: matched))
     }
 
-    result.plan = CollectionBackupPlanner.assign(
+    let plan = CollectionBackupPlanner.assign(
       scores, directories: directories, existingPlacements: existingPlacements)
     logger.info(
-      "Collection match complete: \(result.plan.adoptions.count) folders adopted, \(result.plan.unrecognizedFolders.count) unrecognized"
+      "Collection match complete: \(plan.adoptions.count) folders adopted, \(plan.unrecognizedFolders.count) unrecognized"
     )
-    return result
+    return plan
   }
 }
 

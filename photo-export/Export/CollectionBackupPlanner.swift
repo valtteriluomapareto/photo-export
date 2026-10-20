@@ -34,17 +34,22 @@ struct ScannedCollectionDirectory: Equatable, Sendable {
 ///   collide therefore share candidates and are told apart by content, whatever order they were
 ///   exported in. A suffixed name that is another album's own title is not a candidate, and
 ///   folders saved placements own are not candidates for anyone else.
+/// - Folders whose names differ only by case (possible on a case-sensitive volume) are not
+///   candidates: which one an export wrote can't be told.
 /// - A renamed or moved album's old folder is not a candidate: its name or parent path no
 ///   longer fits, so the next export uses a new folder and the old one is reported.
 ///
-/// A folder is adopted only on evidence: at least one matched file, at least
-/// `precisionFloor` of the folder's files matched, and no equal claim from another album on
-/// the folder or from another folder on the album. The adopted placement has the id the
-/// resolver gives the album and the resolver's spelling of the path, so the next export
-/// resolves to it.
+/// A folder is adopted on evidence: at least one matched file and no equal claim from another
+/// album on the folder or from another folder on the album. When the folder is the only one
+/// the album could have used and no other album could have used it (the folder the next export
+/// would write to anyway), one match is enough. Otherwise at least `precisionFloor` of the
+/// folder's files must match. Equal claims with the same evidence in every folder are settled
+/// by the resolver's own order, since either assignment exports nothing. The adopted placement
+/// has the id the resolver gives the album and the resolver's spelling of the path, so the next
+/// export resolves to it.
 enum CollectionBackupPlanner {
-  /// Smallest share of a folder's files that must match an album for the folder to be adopted
-  /// by a new placement. Folders saved placements own need only one match.
+  /// Smallest share of a folder's files that must match an album when several albums or
+  /// folders compete.
   static let precisionFloor = 0.5
 
   enum Target: Hashable, Sendable {
@@ -79,6 +84,8 @@ enum CollectionBackupPlanner {
     let files: [BackupScanner.ScannedFile]
     /// The placement is already in the history.
     let isSaved: Bool
+    /// The folder is where the resolver puts the album today.
+    let isResolverChoice: Bool
   }
 
   /// A candidate's matching evidence.
@@ -107,8 +114,9 @@ enum CollectionBackupPlanner {
 
   struct Plan {
     var adoptions: [Adoption] = []
-    /// Folders with files that no current collection was adopted into and no saved placement
-    /// owns, sorted. A `videos/` folder is reported as its parent folder.
+    /// Folders with files that no current collection was adopted into, sorted. Left out: a
+    /// folder a saved placement owns, and the only folder a current album could have used (the
+    /// album wasn't renamed, moved or deleted). A `videos/` folder is reported as its parent.
     var unrecognizedFolders: [String] = []
   }
 
@@ -126,12 +134,12 @@ enum CollectionBackupPlanner {
 
     func savedCandidate(_ target: Target, _ saved: ExportPlacement) {
       guard let key = index.key(forRelativePath: saved.relativePath),
-        let directory = index.directories[key]
+        let directory = index.directory(forKey: key), let files = index.files(in: directory)
       else { return }
       result.append(
         Candidate(
-          target: target, folderPath: directory.relativePath, placement: saved,
-          files: index.files(in: directory), isSaved: true))
+          target: target, folderPath: directory.relativePath, placement: saved, files: files,
+          isSaved: true, isResolverChoice: true))
     }
 
     // Favorites has one fixed folder.
@@ -139,11 +147,13 @@ enum CollectionBackupPlanner {
       for: .favorites, collections: collections, existingPlacements: existingPlacements)
     {
       savedCandidate(.favorites, saved)
-    } else if let directory = index.directories[index.key(.favorites, [])] {
+    } else if let directory = index.directory(forKey: index.key(.favorites, [])),
+      let files = index.files(in: directory)
+    {
       result.append(
         Candidate(
           target: .favorites, folderPath: directory.relativePath, placement: .favorites(),
-          files: index.files(in: directory), isSaved: false))
+          files: files, isSaved: false, isResolverChoice: true))
     }
 
     // Shared albums never nest; like the resolver, only top-level ones are their siblings.
@@ -165,6 +175,8 @@ enum CollectionBackupPlanner {
         savedCandidate(target, saved)
         continue
       }
+      let resolved = try? resolver.placement(
+        for: selection, collections: collections, existingPlacements: existingPlacements)
 
       let parent = resolver.sanitizedFolderPath(descriptor.pathComponents)
       let leaf = ExportPathPolicy.sanitizeComponent(descriptor.title)
@@ -180,33 +192,50 @@ enum CollectionBackupPlanner {
         root, descriptor.pathComponents.map(ExportPathPolicy.sanitizeComponent))
 
       for directory in index.children(ofKey: parentKey) {
-        guard let name = directory.components.last,
-          let suffix = collisionSuffix(of: resolver.siblingLeafKey(name), base: leafKey)
-        else { continue }
-        let folderLeaf = suffix.map { "\(leaf)_\($0)" } ?? leaf
-        if suffix != nil, reserved.contains(resolver.siblingLeafKey(folderLeaf)) { continue }
+        guard let name = directory.components.last else { continue }
+        let folderLeaf: String
+        switch FolderName(resolver.siblingLeafKey(name), base: leafKey) {
+        case .other: continue
+        case .bare: folderLeaf = leaf
+        case .suffixed(let number):
+          folderLeaf = "\(leaf)_\(number)"
+          if reserved.contains(resolver.siblingLeafKey(folderLeaf)) { continue }
+        }
         guard let key = index.key(forRelativePath: directory.relativePath), !owned.contains(key),
+          let files = index.files(in: directory),
           let placement = resolver.adoptedPlacement(for: descriptor, leaf: folderLeaf)
         else { continue }
         result.append(
           Candidate(
             target: target, folderPath: directory.relativePath, placement: placement,
-            files: index.files(in: directory), isSaved: false))
+            files: files, isSaved: false,
+            isResolverChoice: resolved?.relativePath == placement.relativePath))
       }
     }
     return result
   }
 
-  /// `nil` when `name` isn't `base` or `base_N`; `.some(nil)` for `base`; `.some(N)` for a
-  /// resolver suffix (`N ≥ 2`, no leading zero).
-  private static func collisionSuffix(of name: String, base: String) -> Int?? {
-    if name == base { return .some(nil) }
-    guard name.hasPrefix(base + "_") else { return nil }
-    let digits = name.dropFirst(base.count + 1)
-    guard let first = digits.first, first != "0", digits.allSatisfy({ $0.isASCII && $0.isNumber }),
-      let number = Int(digits), number >= 2
-    else { return nil }
-    return .some(number)
+  /// How a folder name relates to an album's sanitized title (both as sibling keys).
+  private enum FolderName {
+    case bare
+    /// The resolver's sibling-collision suffix: `_N`, `N ≥ 2`, no leading zero.
+    case suffixed(Int)
+    case other
+
+    init(_ name: String, base: String) {
+      if name == base {
+        self = .bare
+        return
+      }
+      let digits = name.dropFirst(base.count + 1)
+      guard name.hasPrefix(base + "_"), let first = digits.first, first != "0",
+        digits.allSatisfy({ $0.isASCII && $0.isNumber }), let number = Int(digits), number >= 2
+      else {
+        self = .other
+        return
+      }
+      self = .suffixed(number)
+    }
   }
 
   /// Files an album could own in a candidate folder: every file in the folder, and the video
@@ -219,32 +248,54 @@ enum CollectionBackupPlanner {
 
   // MARK: - Assignment
 
+  private struct Claim {
+    let score: Score
+    let matched: Int
+    let considered: Int
+    var target: Target { score.candidate.target }
+    var folder: String { score.candidate.folderPath }
+
+    func ranksEqual(_ other: Claim) -> Bool {
+      matched == other.matched && matched * other.considered == other.matched * considered
+    }
+    func ranksAbove(_ other: Claim) -> Bool {
+      if matched != other.matched { return matched > other.matched }
+      return matched * other.considered > other.matched * considered
+    }
+    /// What the folder holds for the album: equal evidence means equal files to export.
+    var evidence: Set<String> {
+      Set(
+        score.matched.map {
+          [
+            $0.asset.id, $0.variant.rawValue, $0.file.filename, $0.file.subfolder ?? "",
+            $0.file.fileSize.map(String.init) ?? "?",
+          ].joined(separator: "\u{0}")
+        })
+    }
+  }
+
   static func assign(
     _ scores: [Score], directories: [ScannedCollectionDirectory],
     existingPlacements: [ExportPlacement],
     resolver: ExportPlacementResolver = ExportPlacementResolver()
   ) -> Plan {
-    struct Claim {
-      let score: Score
-      let matched: Int
-      let considered: Int
-      var target: Target { score.candidate.target }
-      var folder: String { score.candidate.folderPath }
-
-      func ranksEqual(_ other: Claim) -> Bool {
-        matched == other.matched && matched * other.considered == other.matched * considered
-      }
-      func ranksAbove(_ other: Claim) -> Bool {
-        if matched != other.matched { return matched > other.matched }
-        return matched * other.considered > other.matched * considered
-      }
+    var candidatesPerTarget: [Target: Int] = [:]
+    var candidatesPerFolder: [String: Int] = [:]
+    for score in scores {
+      candidatesPerTarget[score.candidate.target, default: 0] += 1
+      candidatesPerFolder[score.candidate.folderPath, default: 0] += 1
+    }
+    func isUncontested(_ candidate: Candidate) -> Bool {
+      candidate.isSaved
+        || (candidate.isResolverChoice && candidatesPerTarget[candidate.target] == 1
+          && candidatesPerFolder[candidate.folderPath] == 1)
     }
 
     var claims: [Claim] = scores.compactMap { score in
       let matched = Set(score.matched.map(\.file.url)).count
       let considered = max(ownableFileCount(score.candidate.files), matched)
       guard matched > 0 else { return nil }
-      if !score.candidate.isSaved,
+      if !isUncontested(score.candidate),
         Double(matched) < precisionFloor * Double(considered)
       {
         return nil
@@ -261,53 +312,88 @@ enum CollectionBackupPlanner {
     var settledTargets = Set<Target>()
     var settledFolders = Set<String>()
     while let top = claims.first {
-      let rivals = claims.filter {
-        $0.ranksEqual(top) && ($0.target == top.target || $0.folder == top.folder)
-      }
+      let rivals = tiedGroup(of: top, in: claims)
       for claim in rivals {
         settledTargets.insert(claim.target)
         settledFolders.insert(claim.folder)
       }
-      if rivals.count == 1 {
+      for claim in rivals.count == 1 ? rivals : resolverOrder(rivals) {
         plan.adoptions.append(
           Adoption(
-            placement: top.score.candidate.placement, folderPath: top.folder,
-            matched: top.score.matched))
+            placement: claim.score.candidate.placement, folderPath: claim.folder,
+            matched: claim.score.matched))
       }
       claims.removeAll { settledTargets.contains($0.target) || settledFolders.contains($0.folder) }
     }
 
     plan.unrecognizedFolders = unrecognizedFolders(
       directories: directories, adopted: Set(plan.adoptions.map(\.folderPath)),
+      known: Set(scores.map(\.candidate).filter(isUncontested).map(\.folderPath)),
       existingPlacements: existingPlacements, resolver: resolver)
     return plan
   }
 
+  /// The claims ranked equal to `top` and linked to it through a shared album or folder.
+  private static func tiedGroup(of top: Claim, in claims: [Claim]) -> [Claim] {
+    var group = [top]
+    var targets: Set<Target> = [top.target]
+    var folders: Set<String> = [top.folder]
+    var grew = true
+    while grew {
+      grew = false
+      for claim in claims
+      where claim.ranksEqual(top)
+        && !group.contains(where: { $0.score.candidate == claim.score.candidate })
+      {
+        if targets.contains(claim.target) || folders.contains(claim.folder) {
+          group.append(claim)
+          targets.insert(claim.target)
+          folders.insert(claim.folder)
+          grew = true
+        }
+      }
+    }
+    return group
+  }
+
+  /// Each album's claim on the folder the resolver gives it, when every tied claim holds the
+  /// same files and those folders cover every album once; otherwise none (all abstain).
+  private static func resolverOrder(_ tied: [Claim]) -> [Claim] {
+    guard let evidence = tied.first?.evidence, tied.allSatisfy({ $0.evidence == evidence })
+    else { return [] }
+    let chosen = tied.filter(\.score.candidate.isResolverChoice)
+    let targets = Set(tied.map(\.target))
+    guard Set(chosen.map(\.target)) == targets, chosen.count == targets.count,
+      Set(chosen.map(\.folder)).count == chosen.count
+    else { return [] }
+    return chosen
+  }
+
   private static func unrecognizedFolders(
-    directories: [ScannedCollectionDirectory], adopted: Set<String>,
+    directories: [ScannedCollectionDirectory], adopted: Set<String>, known: Set<String>,
     existingPlacements: [ExportPlacement], resolver: ExportPlacementResolver
   ) -> [String] {
     let index = FolderIndex(directories: directories, resolver: resolver)
-    let adoptedKeys = Set(adopted.compactMap { index.key(forRelativePath: $0) })
     let ownedKeys = Set(
       existingPlacements.compactMap { index.key(forRelativePath: $0.relativePath) })
+    let accounted = adopted.union(known)
     var result = Set<String>()
     for directory in directories where !directory.files.isEmpty {
       let isRoot = directory.root != .favorites && directory.components.isEmpty
       if isRoot { continue }
-      let key = index.key(directory.root, directory.components)
       let parentComponents = Array(directory.components.dropLast())
+      let parentPath =
+        "Collections/\(directory.root.rawValue)/" + parentComponents.map { $0 + "/" }.joined()
       let isNamedVideos =
         directory.components.last.map { resolver.siblingLeafKey($0) == "videos" } ?? false
       let isVideosFolder =
         isNamedVideos && (directory.root == .favorites || !parentComponents.isEmpty)
-      let parentKey = index.key(directory.root, parentComponents)
-      if adoptedKeys.contains(key) || ownedKeys.contains(key) { continue }
+      let key = index.key(directory.root, directory.components)
+      if accounted.contains(directory.relativePath) || ownedKeys.contains(key) { continue }
       if isVideosFolder {
-        if adoptedKeys.contains(parentKey) || ownedKeys.contains(parentKey) { continue }
-        result.insert(
-          "Collections/\(directory.root.rawValue)/"
-            + parentComponents.map { $0 + "/" }.joined())
+        let parentKey = index.key(directory.root, parentComponents)
+        if accounted.contains(parentPath) || ownedKeys.contains(parentKey) { continue }
+        result.insert(parentPath)
       } else {
         result.insert(directory.relativePath)
       }
@@ -316,19 +402,22 @@ enum CollectionBackupPlanner {
   }
 }
 
-/// Scanned folders keyed by the resolver's case-folded, NFC sibling keys.
+/// Scanned folders keyed by the resolver's case-folded, NFC sibling keys. Folders that share a
+/// key with another folder (or sit under one that does) are ambiguous and never returned.
 private struct FolderIndex {
   let resolver: ExportPlacementResolver
-  private(set) var directories: [String: ScannedCollectionDirectory] = [:]
+  private var directories: [String: ScannedCollectionDirectory] = [:]
+  private var ambiguousKeys = Set<String>()
   private var childrenByParent: [String: [ScannedCollectionDirectory]] = [:]
 
   init(directories scanned: [ScannedCollectionDirectory], resolver: ExportPlacementResolver) {
     self.resolver = resolver
     for directory in scanned {
-      directories[key(directory.root, directory.components)] = directory
+      let key = key(directory.root, directory.components)
+      if directories.updateValue(directory, forKey: key) != nil { ambiguousKeys.insert(key) }
       if !directory.components.isEmpty {
         childrenByParent[
-          key(directory.root, Array(directory.components.dropLast())), default: []
+          self.key(directory.root, Array(directory.components.dropLast())), default: []
         ].append(directory)
       }
     }
@@ -352,14 +441,32 @@ private struct FolderIndex {
     return nil
   }
 
-  func children(ofKey key: String) -> [ScannedCollectionDirectory] {
-    childrenByParent[key] ?? []
+  private func isAmbiguous(_ root: ScannedCollectionDirectory.Root, _ components: [String])
+    -> Bool
+  {
+    (0...components.count).contains {
+      ambiguousKeys.contains(key(root, Array(components.prefix($0))))
+    }
   }
 
-  /// A folder's files, then its `videos/` subfolder's files tagged with that subfolder.
-  func files(in directory: ScannedCollectionDirectory) -> [BackupScanner.ScannedFile] {
+  func directory(forKey key: String) -> ScannedCollectionDirectory? {
+    guard let directory = directories[key],
+      !isAmbiguous(directory.root, directory.components)
+    else { return nil }
+    return directory
+  }
+
+  func children(ofKey key: String) -> [ScannedCollectionDirectory] {
+    (childrenByParent[key] ?? []).filter { !isAmbiguous($0.root, $0.components) }
+  }
+
+  /// A folder's files, then its `videos/` subfolder's files tagged with that subfolder; `nil`
+  /// when the `videos/` folder is ambiguous.
+  func files(in directory: ScannedCollectionDirectory) -> [BackupScanner.ScannedFile]? {
     var files = directory.files
-    let videos = directories[key(directory.root, directory.components + ["videos"])]
+    let videosComponents = directory.components + ["videos"]
+    if isAmbiguous(directory.root, videosComponents) { return nil }
+    let videos = directories[key(directory.root, videosComponents)]
     for file in videos?.files ?? [] {
       files.append(
         BackupScanner.ScannedFile(

@@ -2506,16 +2506,13 @@ struct ImportReport: Equatable {
   let prunedRecords: Int
   /// Files found in album, shared-album and Favorites folders under `Collections/`.
   let collectionFilesScanned: Int
-  /// Collection files the album history now records as exported.
+  /// Collection files the album history records as exported after the import's reconcile.
   let collectionMatchedCount: Int
   /// Folders under `Collections/` with files that no current album, shared album or Favorites
   /// was matched to, as destination-relative paths.
   let unrecognizedCollectionFolders: [String]
   /// The album history wasn't ready, so collection folders were not imported.
   let collectionsSkipped: Bool
-
-  /// Collection files not recorded as exported.
-  var collectionUnmatchedCount: Int { max(0, collectionFilesScanned - collectionMatchedCount) }
 
   init(
     matchedCount: Int, ambiguousCount: Int, unmatchedCount: Int, totalScanned: Int,

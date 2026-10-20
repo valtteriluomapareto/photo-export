@@ -146,6 +146,9 @@ import Testing
         unrecognizedCollectionFolders: ["Collections/Albums/Old/"])
       #expect(await observe { f.counter.renderedText["import-collection-matched"] == ["3"] })
       #expect(f.counter.renderedText["import-collection-unrecognized"] == ["1"])
+      #expect(
+        f.counter.renderedText["import-collection-unrecognized-caption"]?.first?.hasPrefix(
+          "\u{201C}Old\u{201D}. Usually albums renamed") == true)
       #expect(f.counter.renderedText["import-collections-skipped"] == nil)
 
       f.counter.reset()

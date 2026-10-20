@@ -66,7 +66,24 @@ struct CollectionBackupImportTests {
     }
   }
 
+  /// Without the import the same exports, manual and from Auto Export, write the files
+  /// again; with it they write nothing. The control keeps the gate from passing on exports
+  /// that never ran.
   @Test func importAdoptsAlbumHistorySoExportsWriteNothing() async throws {
+    let control = CollectionImportHarness("CollectionBackupImportControl")
+    try plantExportedCollections(in: control)
+    let favorites = await control.manager.runExport(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .favoritesFull, selection: .edited))
+    await control.manager.waitForQueueDrained()
+    control.manager.startExportAlbum(collectionId: "paris")
+    await control.manager.waitForQueueDrained()
+    try #require(favorites.enqueuedCount == 2, "Auto Export without history exports Favorites")
+    try #require(
+      Set(control.writer.writeCalls.map(\.assetId)).isSuperset(of: ["photo", "favorite"]),
+      "without history the exports write files again")
+    await control.cleanup()
+
     let h = CollectionImportHarness("CollectionBackupImportRepro")
     try plantExportedCollections(in: h)
     let before = try F.listing(of: h.root)
@@ -85,46 +102,74 @@ struct CollectionBackupImportTests {
     await h.cleanup()
   }
 
-  /// Without the import the same exports write every file again, so the gate above is proving
-  /// the adoption and not an export that never ran.
-  @Test func withoutTheImportTheSameExportsWriteAgain() async throws {
-    let h = CollectionImportHarness("CollectionBackupImportControl")
-    try plantExportedCollections(in: h)
-    let before = try F.listing(of: h.root)
-
-    h.manager.startExportAlbum(collectionId: "paris")
-    await h.manager.waitForQueueDrained()
-
-    #expect(!h.writer.writeCalls.isEmpty)
-    #expect(try F.listing(of: h.root) != before)
-    await h.cleanup()
-  }
-
   // MARK: - Export, forget, import, export again
 
-  @Test func exportWipeImportRoundTripRestoresPlacements() async throws {
-    let h = CollectionImportHarness("CollectionBackupImportRoundTrip")
+  /// Export settings the round trip runs under.
+  enum RoundTrip: String, CaseIterable, Sendable {
+    /// Unedited originals, videos in a `videos/` subfolder.
+    case originals
+    /// A HEIC photo edited to JPEG, in Edited mode. (A same-extension edit without an `_orig`
+    /// companion is indistinguishable from the original by name, as on the timeline, so it is
+    /// imported as the original and exported again.)
+    case editedPhotos
+    /// That edit and a same-extension edit with Include Originals, so `_orig` companions are
+    /// written.
+    case editedWithOriginals
+    /// A Live Photo in Favorites with its paired video.
+    case livePhotoPaired
+    /// Videos next to the photos instead of in `videos/`.
+    case flatVideos
+
+    var selection: ExportVersionSelection {
+      switch self {
+      case .editedWithOriginals: .editedWithOriginals
+      default: .edited
+      }
+    }
+    var edits: Bool { self == .editedPhotos || self == .editedWithOriginals }
+  }
+
+  @Test(arguments: RoundTrip.allCases)
+  func exportWipeImportRoundTripRestoresPlacements(_ roundTrip: RoundTrip) async throws {
+    let h = CollectionImportHarness(
+      "CollectionBackupImportRoundTrip",
+      videoLayout: roundTrip == .flatVideos ? .flat : .subfolder)
+    h.manager.versionSelection = roundTrip.selection
+    h.manager.livePhotosPairedExport = roundTrip == .livePhotoPaired
     h.library.collectionTree = [
       F.favorites,
       F.folder(
         "trips", "Trips",
         children: [
           F.album("paris", "Paris", in: ["Trips"]),
-          F.folder("y2024", "2024", in: ["Trips"], children: [F.album("rome", "Rome", in: ["Trips", "2024"])]),
+          F.folder(
+            "y2024", "2024", in: ["Trips"],
+            children: [F.album("rome", "Rome", in: ["Trips", "2024"])]),
         ]),
       F.album("beach-b", "Beach"),
       F.album("beach-a", "Beach"),
       F.album("plans", "Q1: Plans?"),
       F.sharedAlbum("friends", "Friends"),
     ]
+    let render = [
+      TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG")
+    ]
     let assets = [
-      h.addAsset("paris-1", "P1.JPG", date: F.date(1)),
+      h.addAsset(
+        "paris-1", "P1.HEIC", date: F.date(1), hasAdjustments: roundTrip.edits,
+        extraResources: roundTrip.edits ? render : []),
       h.addAsset("rome-1", "R1.HEIC", date: F.date(2)),
       h.addAsset("rome-clip", "R2.MOV", date: F.date(3), mediaType: .video),
-      h.addAsset("beach-1", "B1.JPG", date: F.date(4)),
+      h.addAsset(
+        "beach-1", "B1.JPG", date: F.date(4),
+        hasAdjustments: roundTrip == .editedWithOriginals,
+        extraResources: roundTrip == .editedWithOriginals ? render : []),
       h.addAsset("beach-2", "B2.JPG", date: F.date(5)),
       h.addAsset("plans-1", "Q1.PNG", date: F.date(6)),
-      h.addAsset("fav-1", "F1.JPG", date: F.date(7)),
+      h.addAsset(
+        "fav-1", "F1.HEIC", date: F.date(7), isLivePhoto: roundTrip == .livePhotoPaired,
+        extraResources: roundTrip == .livePhotoPaired
+          ? [TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "F1.MOV")] : []),
       h.addAsset("friends-1", "S1.JPG", date: F.date(8)),
     ]
     let byId = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
@@ -138,13 +183,16 @@ struct CollectionBackupImportTests {
     h.library.favoritesAssets = [byId["fav-1"]!, byId["paris-1"]!]
     h.library.assetsBySharedAlbumLocalId["friends"] = [byId["friends-1"]!]
 
-    h.manager.startExportAlbums(collectionIds: ["paris", "rome", "beach-b", "beach-a", "plans"])
-    await h.manager.waitForQueueDrained()
-    h.manager.startExportFavorites()
-    await h.manager.waitForQueueDrained()
-    h.manager.startExportSharedAlbum(collectionId: "friends")
-    await h.manager.waitForQueueDrained()
+    func exportEverything() async {
+      h.manager.startExportAlbums(collectionIds: ["paris", "rome", "beach-b", "beach-a", "plans"])
+      await h.manager.waitForQueueDrained()
+      h.manager.startExportFavorites()
+      await h.manager.waitForQueueDrained()
+      h.manager.startExportSharedAlbum(collectionId: "friends")
+      await h.manager.waitForQueueDrained()
+    }
 
+    await exportEverything()
     let exported = h.collections.placements
     let paths = Set(exported.values.map(\.relativePath))
     try #require(
@@ -154,14 +202,21 @@ struct CollectionBackupImportTests {
         "Collections/Albums/Q1_ Plans_/", "Collections/Favorites/",
         "Collections/Shared Albums/Friends/",
       ])
+    let video = roundTrip == .flatVideos ? "Rome/R2.MOV" : "Rome/videos/R2.MOV"
     try #require(
       FileManager.default.fileExists(
-        atPath: h.root.appendingPathComponent("Collections/Albums/Trips/2024/Rome/videos/R2.MOV")
-          .path))
+        atPath: h.root.appendingPathComponent("Collections/Albums/Trips/2024/" + video).path))
+    let listing = try F.listing(of: h.root)
+    let expectedFiles: Int
+    switch roundTrip {
+    case .originals, .flatVideos, .editedPhotos: expectedFiles = 9
+    case .editedWithOriginals: expectedFiles = 12
+    case .livePhotoPaired: expectedFiles = 10
+    }
+    try #require(listing.count == expectedFiles, "\(listing.keys.sorted())")
     let writes = h.writer.writeCalls.count
     let copies = h.fileSystem.copyCalls.count
     let moves = h.fileSystem.moveCalls.count
-    let listing = try F.listing(of: h.root)
 
     h.wipeHistory()
     try #require(h.collections.placements.isEmpty)
@@ -177,14 +232,11 @@ struct CollectionBackupImportTests {
         adopted[id]?.collectionLocalIdentifier == original.collectionLocalIdentifier, "\(id)")
     }
 
-    h.manager.startExportAlbums(collectionIds: ["paris", "rome", "beach-b", "beach-a", "plans"])
-    await h.manager.waitForQueueDrained()
-    h.manager.startExportFavorites()
-    await h.manager.waitForQueueDrained()
-    h.manager.startExportSharedAlbum(collectionId: "friends")
-    await h.manager.waitForQueueDrained()
+    await exportEverything()
 
-    #expect(h.writer.writeCalls.count == writes)
+    #expect(
+      h.writer.writeCalls.count == writes,
+      "\(h.writer.writeCalls.dropFirst(writes).map(\.url.lastPathComponent))")
     #expect(h.fileSystem.copyCalls.count == copies)
     #expect(h.fileSystem.moveCalls.count == moves)
     #expect(try F.listing(of: h.root) == listing)

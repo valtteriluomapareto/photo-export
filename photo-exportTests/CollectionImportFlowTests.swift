@@ -60,7 +60,6 @@ struct CollectionImportFlowTests {
     #expect(report.totalScanned == 1)
     #expect(report.collectionFilesScanned == 3)
     #expect(report.collectionMatchedCount == 2)
-    #expect(report.collectionUnmatchedCount == 1)
     #expect(report.unrecognizedCollectionFolders == ["Collections/Albums/Old Trip/"])
     #expect(!report.collectionsSkipped)
     #expect(report.prunedRecords == 2, "both missing-file records are pruned after adoption")
@@ -148,6 +147,102 @@ struct CollectionImportFlowTests {
     #expect(h.manager.importError == nil)
     let adopted = Set(h.collections.placements.values.compactMap(\.collectionLocalIdentifier))
     #expect(adopted == ["paris", "rome", "gone"])
+    await h.cleanup()
+  }
+
+  /// After the import, exporting the month and both albums again writes nothing, and the
+  /// album export doesn't copy the timeline file either.
+  @Test func exportingTheTimelineAndAlbumsAgainWritesNothing() async throws {
+    let h = try makeScenario("CollectionImportReexport")
+    await h.importBackup()
+    try #require(h.manager.importError == nil)
+    let listing = try F.listing(of: h.root)
+    let month = Calendar.current.dateComponents([.year, .month], from: F.date(1))
+
+    h.manager.startExportMonth(year: month.year!, month: month.month!)
+    await h.manager.waitForQueueDrained()
+    h.manager.startExportAlbums(collectionIds: ["paris", "rome"])
+    await h.manager.waitForQueueDrained()
+
+    #expect(h.writer.writeCalls.isEmpty)
+    #expect(h.fileSystem.copyCalls.isEmpty)
+    #expect(h.fileSystem.moveCalls.isEmpty)
+    #expect(try F.listing(of: h.root) == listing)
+    await h.cleanup()
+  }
+
+  /// An album that kept 2 of the 10 photos it was exported with keeps its folder.
+  @Test func albumThatLostMostOfItsPhotosKeepsItsFolder() async throws {
+    let h = CollectionImportHarness("CollectionImportShrunkAlbum")
+    h.library.collectionTree = [F.album("trip", "Trip")]
+    var kept: [AssetDescriptor] = []
+    for index in 1...10 {
+      let asset = h.addAsset("a\(index)", "IMG_\(index).JPG", date: F.date(index))
+      if index <= 2 { kept.append(asset) }
+      try F.plant(at: h.root, "Collections/Albums/Trip/", "IMG_\(index).JPG", date: F.date(index))
+    }
+    h.library.assetsByAlbumLocalId["trip"] = kept
+    let listing = try F.listing(of: h.root)
+
+    await h.importBackup()
+    #expect(h.manager.importResult?.collectionMatchedCount == 2)
+    #expect(h.manager.importResult?.unrecognizedCollectionFolders == [])
+    h.manager.startExportAlbum(collectionId: "trip")
+    await h.manager.waitForQueueDrained()
+
+    #expect(h.writer.writeCalls.isEmpty)
+    #expect(h.fileSystem.copyCalls.isEmpty)
+    #expect(try F.listing(of: h.root) == listing)
+    await h.cleanup()
+  }
+
+  /// A folder spelled in another case than the album: where the volume ignores case it is the
+  /// album's folder and the reconcile right after the import keeps its records; where case
+  /// matters it is another folder, and the reconcile drops them so the album exports again.
+  @Test func caseVariantFolderIsKeptOnlyWhereTheVolumeIgnoresCase() async throws {
+    let h = CollectionImportHarness("CollectionImportCaseVariant")
+    h.library.collectionTree = [F.album("trip", "Trip")]
+    let asset = h.addAsset("a1", "IMG_1.JPG", date: F.date(1))
+    h.library.assetsByAlbumLocalId["trip"] = [asset]
+    try F.plant(at: h.root, "Collections/Albums/trip/", "IMG_1.JPG", date: F.date(1))
+    let caseSensitive = try #require(
+      try h.root.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+        .volumeSupportsCaseSensitiveNames)
+
+    await h.importBackup()
+
+    #expect(h.manager.importError == nil)
+    let placement = try #require(h.collections.placements.values.first)
+    #expect(placement.relativePath == "Collections/Albums/Trip/")
+    let recorded = h.collections.exportInfo(assetId: "a1", placement: placement)?
+      .variants[.original]?.status == .done
+    #expect(recorded == !caseSensitive)
+    if !caseSensitive {
+      h.manager.startExportAlbum(collectionId: "trip")
+      await h.manager.waitForQueueDrained()
+      #expect(h.writer.writeCalls.isEmpty)
+    }
+    await h.cleanup()
+  }
+
+  /// A destination change during the album step invalidates the import without cancelling its
+  /// task; no further album is read and neither history changes.
+  @Test func destinationTeardownDuringAlbumMatchingStopsAlbumReads() async throws {
+    let h = try makeScenario("CollectionImportTeardown")
+    let gate = AsyncCheckpoint()
+    h.library.fetchAssetsCheckpointByAlbumId["paris"] = gate
+    let before = h.historyBytes()
+
+    h.manager.startImport()
+    let task = try #require(h.manager.importTask)
+    #expect(await gate.waitForEnter(count: 1))
+    h.manager.cancelAndClear()
+    await gate.releaseAll()
+    _ = await finished(task)
+
+    #expect(h.library.scopeFetchCalls == [.album(collectionId: "paris")])
+    #expect(h.manager.importResult == nil)
+    #expect(h.historyBytes() == before)
     await h.cleanup()
   }
 }

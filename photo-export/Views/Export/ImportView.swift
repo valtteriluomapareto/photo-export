@@ -214,8 +214,8 @@ struct ImportView: View {
 
       VStack(alignment: .leading, spacing: 8) {
         reportRow(
-          label: "Files scanned",
-          value: "\(report.totalScanned + report.collectionFilesScanned)",
+          label: "Timeline files scanned",
+          value: "\(report.totalScanned)",
           icon: "doc.on.doc"
         )
         reportRow(
@@ -237,24 +237,31 @@ struct ImportView: View {
             icon: "xmark.circle"
           )
         }
-        if report.collectionMatchedCount > 0 || report.collectionFilesScanned > 0 {
+        if report.collectionFilesScanned > 0 {
+          reportRow(
+            label: "Album and Favorites files scanned",
+            value: "\(report.collectionFilesScanned)",
+            icon: "rectangle.stack"
+          )
           reportRow(
             label: "Album and Favorites files matched",
             value: observed("\(report.collectionMatchedCount)", key: "import-collection-matched"),
-            icon: "rectangle.stack"
+            icon: "checkmark.rectangle.stack"
           )
         }
         if !report.unrecognizedCollectionFolders.isEmpty {
           VStack(alignment: .leading, spacing: 2) {
             reportRow(
-              label: "Album folders with no matching album",
+              label: "Album folders not linked to an album",
               value: observed(
                 "\(report.unrecognizedCollectionFolders.count)",
                 key: "import-collection-unrecognized"),
               icon: "folder.badge.questionmark"
             )
             Text(
-              "Albums renamed, moved or deleted in Photos since they were exported. Their files stay in place."
+              observed(
+                unlinkedFoldersCaption(report.unrecognizedCollectionFolders),
+                key: "import-collection-unrecognized-caption")
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -275,7 +282,7 @@ struct ImportView: View {
 
       if recognized > 0 {
         Text(
-          "The app now recognizes \(recognized) previously exported files. Future exports will skip these assets."
+          "The app now recognizes \(recognized) previously exported files. Future exports will skip these files."
         )
         .font(.caption)
         .foregroundColor(.secondary)
@@ -311,6 +318,17 @@ struct ImportView: View {
         .buttonStyle(.borderedProminent)
       }
     }
+  }
+
+  /// Names up to three unlinked folders by their last component, then the explanation.
+  private func unlinkedFoldersCaption(_ folders: [String]) -> String {
+    let names = folders.prefix(3).map {
+      "\u{201C}\($0.split(separator: "/").last.map(String.init) ?? $0)\u{201D}"
+    }
+    let more = folders.count > 3 ? " and \(folders.count - 3) more" : ""
+    return names.joined(separator: ", ") + more
+      + ". Usually albums renamed, moved or deleted in Photos since they were exported. "
+      + "Their files are left as they are."
   }
 
   private func pruneSummary(_ report: ImportReport) -> String {

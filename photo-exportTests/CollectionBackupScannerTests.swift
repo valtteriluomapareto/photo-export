@@ -126,7 +126,8 @@ struct CollectionBackupScannerTests {
     let scanned = try BackupScanner.scanCollectionsFolder(at: root)
     let cafe = try #require(scanned.first { !$0.files.isEmpty })
     #expect(cafe.components.count == 1)
-    #expect(cafe.components[0].precomposedStringWithCanonicalMapping == "Caf\u{E9}")
+    // `String ==` compares canonically, so compare the scalars to see the raw spelling.
+    #expect(Array(cafe.components[0].unicodeScalars) == Array(decomposed.unicodeScalars))
   }
 
   @Test func foldersNestedPastTheLimitFailTheScan() throws {

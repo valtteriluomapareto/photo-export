@@ -254,15 +254,18 @@ final class ImportCoordinator: ObservableObject {
         // Photos tree; a tree or album fetch failure fails the import before any change.
         let collectionStore = host.collectionExportRecordStore
         let collectionFilesScanned = scan.collections.reduce(0) { $0 + $1.files.count }
-        var collectionMatch = BackupScanner.CollectionMatchResult()
+        var collectionPlan = CollectionBackupPlanner.Plan()
         var collectionsSkipped = false
         if collectionFilesScanned > 0 {
           if collectionStore.state == .ready {
             let tree = try host.photoLibraryService.fetchCollectionTree()
-            collectionMatch = try await BackupScanner.matchCollectionFolders(
+            collectionPlan = try await BackupScanner.matchCollectionFolders(
               scan.collections, collections: tree,
               existingPlacements: Array(collectionStore.placements.values),
               photoLibraryService: host.photoLibraryService, fingerprintCache: fingerprints,
+              isCurrent: { [weak self] in
+                self?.isCurrentImport(operationID, generation: importGen) == true
+              },
               progress: progress)
             try Task.checkCancellation()
             guard self.isCurrentImport(operationID, generation: importGen) else { return }
@@ -311,7 +314,7 @@ final class ImportCoordinator: ObservableObject {
           )
           records.append(record)
         }
-        let collectionBatches = collectionMatch.plan.adoptions.map {
+        let collectionBatches = collectionPlan.adoptions.map {
           $0.importBatch(exportedAt: now)
         }
 
@@ -322,10 +325,7 @@ final class ImportCoordinator: ObservableObject {
         let collectionsReady = collectionStore.state == .ready
         if !collectionsReady && !collectionBatches.isEmpty { collectionsSkipped = true }
         host.exportRecordStore.bulkImportRecords(records)
-        let collectionImport =
-          collectionsReady
-          ? collectionStore.bulkImportRecords(collectionBatches)
-          : CollectionExportRecordStore.BulkImportSummary()
+        if collectionsReady { collectionStore.bulkImportRecords(collectionBatches) }
 
         guard self.isCurrentImport(operationID, generation: importGen) else { return }
 
@@ -354,6 +354,9 @@ final class ImportCoordinator: ObservableObject {
           guard self.isCurrentImport(operationID, generation: importGen) else { return }
         }
 
+        // Counted after the reconcile, so a file gone since the scan isn't reported as matched.
+        let collectionMatchedCount =
+          collectionsReady ? collectionStore.recordedVariantCount(of: collectionBatches) : 0
         let totalPrunedVariants =
           timelineSummary.prunedVariants + collectionSummary.prunedVariants
         let totalPrunedRecords =
@@ -368,16 +371,16 @@ final class ImportCoordinator: ObservableObject {
             prunedVariants: totalPrunedVariants,
             prunedRecords: totalPrunedRecords,
             collectionFilesScanned: collectionFilesScanned,
-            collectionMatchedCount: collectionImport.recordedVariants,
+            collectionMatchedCount: collectionMatchedCount,
             unrecognizedCollectionFolders: collectionsSkipped
-              ? [] : collectionMatch.plan.unrecognizedFolders,
+              ? [] : collectionPlan.unrecognizedFolders,
             collectionsSkipped: collectionsSkipped
           ))
 
         self.finishOwnedImport(operationID, stage: .done)
 
         self.logger.info(
-          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; \(collectionImport.recordedVariants) of \(collectionFilesScanned) collection files recorded, \(collectionMatch.plan.unrecognizedFolders.count) unrecognized collection folders\(collectionsSkipped ? " (album history unavailable)" : ""); pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
+          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; \(collectionMatchedCount) of \(collectionFilesScanned) collection files recorded, \(collectionPlan.unrecognizedFolders.count) unrecognized collection folders\(collectionsSkipped ? " (album history unavailable)" : ""); pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
         )
       } catch is CancellationError {
         guard self.isCurrentImport(operationID, generation: importGen) else { return }

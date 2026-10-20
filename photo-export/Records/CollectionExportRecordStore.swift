@@ -619,6 +619,22 @@ final class CollectionExportRecordStore: ObservableObject {
     return summary
   }
 
+  /// How many of the batches' variants the history records as exported now, for reporting
+  /// what an import adopted after the reconcile that follows it.
+  func recordedVariantCount(of batches: [ImportBatch]) -> Int {
+    var count = 0
+    for batch in batches {
+      guard let placement = placements[batch.placement.id],
+        placement.relativePath == batch.placement.relativePath
+      else { continue }
+      for (assetId, variants) in batch.records {
+        let body = recordBodies[placement.id]?[assetId]
+        count += variants.keys.filter { body?.variants[$0.rawValue]?.status == .done }.count
+      }
+    }
+    return count
+  }
+
   // MARK: - Reconcile against filesystem
 
   /// Result of `reconcileAgainstFilesystem(at:)`. Same shape as the timeline store's
