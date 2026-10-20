@@ -181,9 +181,13 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     return collectionTree
   }
 
+  /// Every `fetchAssets(in:mediaType:)` scope, in call order.
+  private(set) var scopeFetchCalls: [PhotoFetchScope] = []
+
   func fetchAssets(in scope: PhotoFetchScope, mediaType: PHAssetMediaType?) async throws
     -> [AssetDescriptor]
   {
+    scopeFetchCalls.append(scope)
     if let error = fetchAssetsError { throw error }
     switch scope {
     case .timeline(let year, let month):
@@ -471,8 +475,12 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     return image
   }
 
+  /// `resources(for:)` calls per asset id.
+  private(set) var resourcesCallCounts: [String: Int] = [:]
+
   func resources(for assetId: String) -> [ResourceDescriptor] {
-    resourcesByAssetId[assetId] ?? []
+    resourcesCallCounts[assetId, default: 0] += 1
+    return resourcesByAssetId[assetId] ?? []
   }
 
   func assetDetails(for assetId: String) -> AssetDetails? {

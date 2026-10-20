@@ -203,17 +203,18 @@ struct ImportView: View {
     #if DEBUG
       bodyCounter?.recordText(["false"], for: "import-progress")
     #endif
+    let recognized = report.matchedCount + report.collectionMatchedCount
     return VStack(spacing: 16) {
-      Image(systemName: report.matchedCount > 0 ? "checkmark.circle.fill" : "info.circle.fill")
+      Image(systemName: recognized > 0 ? "checkmark.circle.fill" : "info.circle.fill")
         .font(.system(size: 36))
-        .foregroundColor(report.matchedCount > 0 ? .green : .blue)
+        .foregroundColor(recognized > 0 ? .green : .blue)
 
       Text(observed("Import Complete", key: "import-title"))
         .font(.headline)
 
       VStack(alignment: .leading, spacing: 8) {
         reportRow(
-          label: "Files scanned",
+          label: "Timeline files scanned",
           value: "\(report.totalScanned)",
           icon: "doc.on.doc"
         )
@@ -236,6 +237,37 @@ struct ImportView: View {
             icon: "xmark.circle"
           )
         }
+        if report.collectionFilesScanned > 0 {
+          reportRow(
+            label: "Album and Favorites files scanned",
+            value: "\(report.collectionFilesScanned)",
+            icon: "rectangle.stack"
+          )
+          reportRow(
+            label: "Album and Favorites files matched",
+            value: observed("\(report.collectionMatchedCount)", key: "import-collection-matched"),
+            icon: "checkmark.rectangle.stack"
+          )
+        }
+        if !report.unrecognizedCollectionFolders.isEmpty {
+          VStack(alignment: .leading, spacing: 2) {
+            reportRow(
+              label: "Album folders not linked to an album",
+              value: observed(
+                "\(report.unrecognizedCollectionFolders.count)",
+                key: "import-collection-unrecognized"),
+              icon: "folder.badge.questionmark"
+            )
+            Text(
+              observed(
+                unlinkedFoldersCaption(report.unrecognizedCollectionFolders),
+                key: "import-collection-unrecognized-caption")
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.leading, 28)
+          }
+        }
         if report.prunedRecords > 0 || report.prunedVariants > 0 {
           reportRow(
             label: "Records pruned (file missing)",
@@ -248,12 +280,23 @@ struct ImportView: View {
       .background(Color(.controlBackgroundColor))
       .cornerRadius(8)
 
-      if report.matchedCount > 0 {
+      if recognized > 0 {
         Text(
-          "The app now recognizes \(report.matchedCount) previously exported files. Future exports will skip these assets."
+          "The app now recognizes \(recognized) previously exported files. Future exports will skip these files."
         )
         .font(.caption)
         .foregroundColor(.secondary)
+        .multilineTextAlignment(.center)
+      }
+
+      if report.collectionsSkipped {
+        Text(
+          observed(
+            "Album and Favorites history wasn\u{2019}t rebuilt because it isn\u{2019}t available. Resolve the export history alert, then import again.",
+            key: "import-collections-skipped")
+        )
+        .font(.caption)
+        .foregroundStyle(.orange)
         .multilineTextAlignment(.center)
       }
 
@@ -275,6 +318,24 @@ struct ImportView: View {
         .buttonStyle(.borderedProminent)
       }
     }
+  }
+
+  /// Names up to three unlinked folders by their path below `Collections/<root>/`, then the
+  /// explanation.
+  private func unlinkedFoldersCaption(_ folders: [String]) -> String {
+    let names = folders.prefix(3).map { "\u{201C}\(collectionFolderName($0))\u{201D}" }
+    let more = folders.count > 3 ? " and \(folders.count - 3) more" : ""
+    return names.joined(separator: ", ") + more
+      + ". These are usually albums renamed, moved or deleted in Photos since they were "
+      + "exported. Their files are left as they are."
+  }
+
+  /// `Collections/Albums/Trips/Paris/` → `Trips/Paris`; a root folder such as
+  /// `Collections/Favorites/` → `Favorites`.
+  private func collectionFolderName(_ path: String) -> String {
+    let components = path.split(separator: "/").map(String.init)
+    guard components.count > 2 else { return components.last ?? path }
+    return components.dropFirst(2).joined(separator: "/")
   }
 
   private func pruneSummary(_ report: ImportReport) -> String {
