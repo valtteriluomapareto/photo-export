@@ -245,7 +245,7 @@ final class ExportManager: ObservableObject {
 
   /// `$isImporting` alone. `isImportingPublisher` is AutoSync's hold, which also covers a
   /// missing previous backup and drops repeats.
-  var isImportingFlagPublisher: AnyPublisher<Bool, Never> {
+  var isImportingFlagOnlyPublisher: AnyPublisher<Bool, Never> {
     $isImporting.eraseToAnyPublisher()
   }
 

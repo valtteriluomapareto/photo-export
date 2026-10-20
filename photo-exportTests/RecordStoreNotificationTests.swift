@@ -412,7 +412,7 @@ struct RecordStoreNotificationTests {
     f.collections.markVariantInProgress(
       assetId: "pending", placement: f.placement, variant: .original, filename: nil)
     var terminalValues: [(Int, Int)] = []
-    let observation = manager.isImportingFlagPublisher.dropFirst().sink { importing in
+    let observation = manager.isImportingFlagOnlyPublisher.dropFirst().sink { importing in
       if !importing {
         terminalValues.append((f.timeline.mutationCounter, f.collections.mutationCounter))
       }

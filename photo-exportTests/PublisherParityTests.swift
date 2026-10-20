@@ -241,7 +241,7 @@ struct PublisherParityTests {
     let f = ManagerFixture()
     await withCleanup {
       await assertPublishedParity(
-        f.manager, \.isImporting, { $0.isImportingFlagPublisher },
+        f.manager, \.isImporting, { $0.isImportingFlagOnlyPublisher },
         change: { f.manager.startImport() },
         unchangedWrite: .notDrivable(
           "set when an import starts and cleared once by the import that owns it"))

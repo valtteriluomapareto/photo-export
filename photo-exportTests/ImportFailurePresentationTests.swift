@@ -139,7 +139,7 @@ import Testing
       defer { f.close() }
       var started = false
       var terminal: (error: String?, stage: BackupScanner.ImportStage?, report: ImportReport?)?
-      let subscription = f.manager.isImportingFlagPublisher.sink { active in
+      let subscription = f.manager.isImportingFlagOnlyPublisher.sink { active in
         if active {
           started = true
         } else if started {

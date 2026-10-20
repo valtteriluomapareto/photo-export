@@ -118,7 +118,8 @@ struct TimelineCountRefreshTests {
     var publications = 0
     let subscription = loader.objectWillChange.sink { publications += 1 }
     var snapshots = 0
-    let countSubscription = loader.countsByYearMonthPublisher.dropFirst().sink { _ in snapshots += 1 }
+    let countSubscription = loader.countsByYearMonthPublisher.dropFirst()
+      .sink { _ in snapshots += 1 }
     await loader.loadCounts(forYears: [2025])
     #expect(publications == 0)
     #expect(snapshots == 0)
