@@ -24,15 +24,10 @@ import Testing
     }
   }
 
-  /// Records every rename call and forwards it to the system call unless told otherwise.
+  /// Records every rename call and forwards it to the system call.
   final class RecordingRenamer: @unchecked Sendable {
     private let lock = NSLock()
     private var _calls: [(source: URL, destination: URL, flags: UInt32)] = []
-    private let result: (@Sendable (URL, URL, UInt32) -> Int32)?
-
-    init(result: (@Sendable (URL, URL, UInt32) -> Int32)? = nil) {
-      self.result = result
-    }
 
     var calls: [(source: URL, destination: URL, flags: UInt32)] {
       lock.withLock { _calls }
@@ -41,11 +36,13 @@ import Testing
     var renamer: FileIOService.Renamer {
       { [self] source, destination, flags in
         lock.withLock { _calls.append((source, destination, flags)) }
-        if let result { return result(source, destination, flags) }
         return FileIOService.systemRename(source, destination, flags)
       }
     }
   }
+
+  private static let exclusiveRenameVolumeRequired: Comment =
+    "TMPDIR must be on a volume with VOL_CAP_INT_RENAME_EXCL (APFS or HFS+)"
 
   private func makeRoot() throws -> URL {
     let root = TestScratch.directory("FileIOService")
@@ -74,7 +71,7 @@ import Testing
     try Data("existing".utf8).write(to: destination)
 
     expectDestinationExists {
-      try FileIOService.moveItemAtomically(from: source, to: destination)
+      try FileIOService().moveItemAtomically(from: source, to: destination)
     }
     #expect(try Data(contentsOf: destination) == Data("existing".utf8))
     #expect(try Data(contentsOf: source) == Data("new".utf8))
@@ -87,35 +84,48 @@ import Testing
     let destination = root.appendingPathComponent("2025/03/IMG_0001.JPG")
     try Data("new".utf8).write(to: source)
 
-    try FileIOService.moveItemAtomically(from: source, to: destination)
+    try FileIOService().moveItemAtomically(from: source, to: destination)
 
     #expect(try Data(contentsOf: destination) == Data("new".utf8))
     #expect(!FileManager.default.fileExists(atPath: source.path))
   }
 
   /// A file that appears at the final name after any check and right before the commit
-  /// is refused with the collision signature, and its bytes are never replaced.
+  /// is refused with the collision signature, and its bytes are never replaced. The
+  /// exclusive case uses the production capability check; the check-then-move case proves
+  /// `moveItem`'s own refusal is reported as `Export`/2, not that its window is closed.
   @Test(arguments: CommitPath.allCases)
   func existingFileAtCommitIsNeverReplaced(path: CommitPath) throws {
     let root = try makeRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     if path == .exclusiveRename {
-      try #require(FileIOService.volumeSupportsExclusiveRename(root))
+      try #require(
+        FileIOService.volumeSupportsExclusiveRename(root), Self.exclusiveRenameVolumeRequired)
     }
     let source = root.appendingPathComponent(".photo-export-stage.tmp")
     let destination = root.appendingPathComponent("IMG_0001.JPG")
     try Data("new".utf8).write(to: source)
-    let service = FileIOService(
-      capability: path.capability,
-      hooks: .init(beforeCommit: { _, destination in
-        try Data("third-party".utf8).write(to: destination)
-      }))
+    let recorder = RecordingRenamer()
+    let hooks = FileIOService.Hooks(beforeCommit: { _, destination in
+      try Data("third-party".utf8).write(to: destination)
+    })
+    let service =
+      switch path {
+      case .exclusiveRename: FileIOService(renamer: recorder.renamer, hooks: hooks)
+      case .checkThenMove:
+        FileIOService(renamer: recorder.renamer, capability: { _ in false }, hooks: hooks)
+      }
 
     expectDestinationExists {
       try service.moveItemAtomically(from: source, to: destination)
     }
-    #expect(try Data(contentsOf: destination) == Data("third-party".utf8))
-    #expect(try Data(contentsOf: source) == Data("new".utf8))
+    let destinationBytes = try String(contentsOf: destination, encoding: .utf8)
+    #expect(destinationBytes == "third-party")
+    #expect(FileManager.default.fileExists(atPath: source.path))
+    switch path {
+    case .exclusiveRename: #expect(recorder.calls.map(\.flags) == [UInt32(RENAME_EXCL)])
+    case .checkThenMove: #expect(recorder.calls.isEmpty)
+    }
   }
 
   @Test func capableVolumeCommitsWithAnExclusiveRenameAndNoPreCheck() throws {
@@ -142,15 +152,20 @@ import Testing
     let source = root.appendingPathComponent(".photo-export-stage.tmp")
     let destination = root.appendingPathComponent("2025/03/IMG_0001.JPG")
     try Data("new".utf8).write(to: source)
-    let asked = LockedBox<[URL]>([])
+    let asked = LockedBox<[(folder: URL, existed: Bool)]>([])
     let service = FileIOService(capability: { directory in
-      asked.mutate { $0.append(directory) }
+      var isDirectory: ObjCBool = false
+      let existed =
+        FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory)
+        && isDirectory.boolValue
+      asked.mutate { $0.append((directory, existed)) }
       return FileIOService.volumeSupportsExclusiveRename(directory)
     })
 
     try service.moveItemAtomically(from: source, to: destination)
 
-    #expect(asked.value == [destination.deletingLastPathComponent()])
+    #expect(asked.value.map(\.folder) == [destination.deletingLastPathComponent()])
+    #expect(asked.value.map(\.existed) == [true])
     #expect(try Data(contentsOf: destination) == Data("new".utf8))
   }
 
@@ -181,6 +196,47 @@ import Testing
     #expect(recorder.calls.isEmpty)
     #expect(try Data(contentsOf: destination) == Data("new".utf8))
     #expect(!FileManager.default.fileExists(atPath: source.path))
+  }
+
+  /// A volume that advertises the bit but rejects the flag falls back to check-then-move;
+  /// a failed `renamex_np` leaves the stage where it was.
+  @Test(arguments: [ENOTSUP, ENOSYS])
+  func unsupportedExclusiveRenameFallsBackToCheckThenMove(code: Int32) throws {
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent(".photo-export-stage.tmp")
+    let destination = root.appendingPathComponent("2025/03/IMG_0001.JPG")
+    try Data("new".utf8).write(to: source)
+    let renames = LockedBox<[UInt32]>([])
+    let service = FileIOService(
+      renamer: { _, _, flags in
+        renames.mutate { $0.append(flags) }
+        return code
+      },
+      capability: { _ in true })
+
+    try service.moveItemAtomically(from: source, to: destination)
+
+    #expect(renames.value == [UInt32(RENAME_EXCL)])
+    #expect(try Data(contentsOf: destination) == Data("new".utf8))
+    #expect(!FileManager.default.fileExists(atPath: source.path))
+  }
+
+  @Test(arguments: [ENOTSUP, ENOSYS])
+  func unsupportedExclusiveRenameFallbackStillRefusesAnExistingFile(code: Int32) throws {
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent(".photo-export-stage.tmp")
+    let destination = root.appendingPathComponent("IMG_0001.JPG")
+    try Data("new".utf8).write(to: source)
+    try Data("existing".utf8).write(to: destination)
+    let service = FileIOService(renamer: { _, _, _ in code }, capability: { _ in true })
+
+    expectDestinationExists {
+      try service.moveItemAtomically(from: source, to: destination)
+    }
+    #expect(try Data(contentsOf: destination) == Data("existing".utf8))
+    #expect(try Data(contentsOf: source) == Data("new".utf8))
   }
 
   struct ErrnoCase: Sendable, CustomTestStringConvertible {
@@ -249,12 +305,48 @@ import Testing
       !FileIOService.volumeSupportsExclusiveRename(root.appendingPathComponent("missing")))
   }
 
+  struct CapabilityCase: Sendable, CustomTestStringConvertible {
+    let capabilities: vol_capabilities_attr_t
+    let expected: Bool
+    let testDescription: String
+
+    init(_ name: String, format: (UInt32, UInt32), interfaces: (UInt32, UInt32), _ expected: Bool) {
+      capabilities = vol_capabilities_attr_t(
+        capabilities: (format.0, interfaces.0, 0, 0), valid: (format.1, interfaces.1, 0, 0))
+      self.expected = expected
+      testDescription = name
+    }
+  }
+
+  private static let renameExcl = UInt32(VOL_CAP_INT_RENAME_EXCL)
+  private static let renameSwap = UInt32(VOL_CAP_INT_RENAME_SWAP)
+
+  /// Pairs are (supported, valid). Only the interfaces word decides.
+  @Test(arguments: [
+    CapabilityCase(
+      "valid and supported", format: (0, 0), interfaces: (renameExcl, renameExcl), true),
+    CapabilityCase("valid only", format: (0, 0), interfaces: (0, renameExcl), false),
+    CapabilityCase("supported only", format: (0, 0), interfaces: (renameExcl, 0), false),
+    CapabilityCase(
+      "neighbouring bit", format: (0, 0), interfaces: (renameSwap, renameSwap), false),
+    CapabilityCase(
+      "bit in the format word", format: (renameExcl, renameExcl), interfaces: (0, 0), false),
+  ])
+  func capabilityDecoding(capabilityCase: CapabilityCase) {
+    #expect(
+      FileIOService.advertisesExclusiveRename(capabilityCase.capabilities)
+        == capabilityCase.expected)
+  }
+
   // MARK: - Unicode normalization
 
   private static let nfcName = "Kes\u{E4}.JPG"
   private static let nfdName = "Kesa\u{308}.JPG"
 
-  private func scalars(_ name: String) -> [Unicode.Scalar] { Array(name.unicodeScalars) }
+  /// Compares scalars, since Swift's `==` treats the two spellings as equal.
+  private func isEitherSpelling(_ name: String) -> Bool {
+    [Self.nfcName, Self.nfdName].contains { Array($0.unicodeScalars) == Array(name.unicodeScalars) }
+  }
 
   /// Creates a file whose on-disk name is exactly `name`'s bytes. Foundation's file-system
   /// representation decomposes names, so this goes through `open(2)` directly.
@@ -267,14 +359,14 @@ import Testing
     try #require(write(descriptor, bytes, bytes.count) == bytes.count)
   }
 
-  /// Both paths store the spelling Foundation's file-system representation gives, which
-  /// is the decomposed one, and the file is found under either spelling.
+  /// Either spelling commits to exactly one file, found under both spellings.
   @Test(arguments: CommitPath.allCases)
   func composedAndDecomposedNamesCommit(path: CommitPath) throws {
     let root = try makeRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     if path == .exclusiveRename {
-      try #require(FileIOService.volumeSupportsExclusiveRename(root))
+      try #require(
+        FileIOService.volumeSupportsExclusiveRename(root), Self.exclusiveRenameVolumeRequired)
     }
     let service = FileIOService(capability: path.capability)
 
@@ -286,7 +378,8 @@ import Testing
       try service.moveItemAtomically(from: source, to: folder.appendingPathComponent(name))
 
       let listed = try FileManager.default.contentsOfDirectory(atPath: folder.path)
-      #expect(listed.map(scalars) == [scalars(Self.nfdName)])
+      #expect(listed.count == 1)
+      #expect(listed.allSatisfy(isEitherSpelling))
       for spelling in [Self.nfcName, Self.nfdName] {
         #expect(
           try Data(contentsOf: folder.appendingPathComponent(spelling)) == Data(name.utf8))
@@ -302,7 +395,8 @@ import Testing
     let root = try makeRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     if path == .exclusiveRename {
-      try #require(FileIOService.volumeSupportsExclusiveRename(root))
+      try #require(
+        FileIOService.volumeSupportsExclusiveRename(root), Self.exclusiveRenameVolumeRequired)
     }
     let service = FileIOService(capability: path.capability)
 
@@ -317,22 +411,11 @@ import Testing
         try service.moveItemAtomically(from: source, to: folder.appendingPathComponent(committed))
       }
       let listed = try FileManager.default.contentsOfDirectory(atPath: folder.path)
-      #expect(listed.map(scalars) == [scalars(existing)])
+      #expect(listed.count == 1)
+      #expect(listed.allSatisfy(isEitherSpelling))
       #expect(
         try Data(contentsOf: folder.appendingPathComponent(existing)) == Data("existing".utf8))
       #expect(try Data(contentsOf: source) == Data("new".utf8))
     }
   }
-}
-
-/// A value shared with `@Sendable` closures in a synchronous test.
-private final class LockedBox<Value>: @unchecked Sendable {
-  private let lock = NSLock()
-  private var _value: Value
-
-  init(_ value: Value) { _value = value }
-
-  var value: Value { lock.withLock { _value } }
-
-  func mutate(_ body: (inout Value) -> Void) { lock.withLock { body(&_value) } }
 }

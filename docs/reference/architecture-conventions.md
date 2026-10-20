@@ -96,31 +96,44 @@ It creates the destination folder, then asks the folder's volume whether it adve
 `VOL_CAP_INT_RENAME_EXCL` (`getattrlist` `ATTR_VOL_CAPABILITIES`, asked on every commit):
 
 - **Advertised:** one `renamex_np(stage, final, RENAME_EXCL)` with no pre-check, so the refusal
-  and the move are a single step. `EEXIST` becomes `Export:2`; any other errno is thrown as
-  `NSPOSIXErrorDomain` with that code, so `ENOSPC`, `EACCES`/`EPERM`/`EROFS` and
-  `ENOENT`/`ENXIO` keep their categories (`EXDEV` stays `unknown`; the stage always shares the
-  final file's folder).
+  and the move are a single step. `EEXIST` becomes `Export:2`. `ENOTSUP` or `ENOSYS` means the
+  volume advertised the flag but rejected it: a failed rename leaves the stage in place, so the
+  commit logs a notice (once per volume per launch) and takes the check-then-move path below.
+  Any other errno is logged and thrown as `NSPOSIXErrorDomain` with that code, so `ENOSPC`,
+  `EACCES`/`EPERM`/`EROFS` and `ENOENT`/`ENXIO` keep their categories (`EXDEV` stays `unknown`;
+  the stage always shares the final file's folder).
 - **Not advertised:** check, then `FileManager.moveItem`, unchanged. `moveItem` refuses an
   existing file itself, and that refusal is reported as `Export:2` too. Neither check is one
   step with the rename, so on these volumes a file written in the moment between `moveItem`'s
   own check and its rename can still be replaced. This window is the documented limit for
   ExFAT, FAT and any network share that does not advertise the bit.
 
+Before the commit used `renamex_np`, those failures came from `FileManager.moveItem` as
+`NSCocoaErrorDomain` errors. On capable volumes they now carry `NSPOSIXErrorDomain:<errno>`
+signatures, so an Auto Export retry count for a recurring non-collision failure starts again
+once after upgrading, and users see Foundation's POSIX message (for example "The operation
+couldn’t be completed. No space left on device") instead of the Cocoa one. Collisions keep
+`Export:2` on both paths.
+
 The capability is read from the volume rather than inferred from errno: on file systems that do
 not advertise it, XNU emulates `RENAME_EXCL` with a lookup before the rename (racy in the same
-way), and ExFAT returns `ENOTSUP` even for a fresh name. No placeholder file is ever created at
-the final name.
+way, and it answers `EEXIST` like the real flag), and ExFAT returns `ENOTSUP` even for a fresh
+name. The `ENOTSUP`/`ENOSYS` fallback only covers a volume whose advertised bit turns out
+wrong. No placeholder file is ever created at the final name.
 
 [`scripts/probe-exclusive-rename.sh`](../../scripts/probe-exclusive-rename.sh) records the
 behaviour on disk images, weekly and on dispatch, in the toolchain canary (`macos-15` and
-`macos-26`). It fails if any volume replaces an existing file. On macOS 26.6.2 (Apple silicon):
+`macos-26`). It fails if any volume replaces an existing file, if a volume that advertises the
+bit does not rename a fresh name and refuse an existing one with `EEXIST`, or if APFS or HFS+
+stops advertising it.
 
-| Volume | `VOL_CAP_INT_RENAME_EXCL` | Exclusive rename, fresh name | Exclusive rename onto a file | Existing bytes | Commit path |
-| --- | --- | --- | --- | --- | --- |
-| APFS | yes | ok | `EEXIST` | intact | exclusive rename |
-| HFS+ | yes | ok | `EEXIST` | intact | exclusive rename |
-| ExFAT (FSKit) | no | `ENOTSUP` | `EEXIST` | intact | check, then move |
-| MS-DOS FAT32 (FSKit) | no | ok (emulated) | `EEXIST` (emulated) | intact | check, then move |
+| macOS | Volume | `VOL_CAP_INT_RENAME_EXCL` | Exclusive rename, fresh name | Exclusive rename onto a file | Existing bytes | Commit path |
+| --- | --- | --- | --- | --- | --- | --- |
+| macOS 26.6.2 | APFS | yes | ok | `EEXIST` | intact | exclusive rename |
+| macOS 26.6.2 | HFS+ | yes | ok | `EEXIST` | intact | exclusive rename |
+| macOS 26.6.2 | ExFAT (FSKit) | no | `ENOTSUP` | `EEXIST` | intact | check, then move |
+| macOS 26.6.2 | MS-DOS FAT32 (FSKit) | no | ok (emulated) | `EEXIST` (emulated) | intact | check, then move |
+| macOS 15 (`macos-15` runner) | APFS, HFS+, ExFAT, MS-DOS FAT32 | to be filled in from the canary | | | | |
 
 SMB shares cannot be imaged, so they stay a manual check before a release that changes this
 commit. Mount a share from a macOS server and one from a NAS (Samba) and record, per share:
@@ -135,9 +148,9 @@ commit. Mount a share from a macOS server and one from a NAS (Samba) and record,
 3. During an export of a large month, copy a different file from another Mac to the final name
    of an item not yet exported. The copied file must survive, and that item must fail with
    "Destination already exists" or land under ` (1)`.
-4. Disconnect the share during an export. Items must fail as destination unavailable, and no
-   zero-byte or partial file may appear under a final name (hidden `.photo-export-*.tmp`
-   stages may remain).
+4. Disconnect the share during an export. Items must fail as destination unavailable or an
+   unknown, retryable error; never a zero-byte or partial file at a final name (hidden
+   `.photo-export-*.tmp` stages may remain).
 
 `VariantExporter` checks generation immediately before admitting the final atomic move.
 After admission, a short-lived task owns the physical move, timestamps, record acknowledgement,
@@ -521,7 +534,7 @@ If you rename, move, add or remove one of these tests, update the list file, thi
 | [`ImportIdempotencyTests`](../../photo-exportTests/ImportIdempotencyTests.swift) | The import flow loses idempotency on retry | Audit. Two consecutive `startImport()` runs over the same backup tree must not double-write records. |
 | `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` | The `isExported` predicate runs *after* the retry-gate (instead of before) | Restore the order. `isExported` must run first so already-done assets are not blocked by the retry-gate. |
 | `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` | An AutoSync run starts while the history check after "Same Folder" is still running, or no run follows it | The check must start in the same main-actor turn as the identity publish (`onAmbiguousSameFolderChosen`), and a debounce an import cancels must keep its reason for the resume hook. |
-| [`FileIOServiceTests.existingFileAtCommitIsNeverReplaced`](../../photo-exportTests/FileIOServiceTests.swift) | A file that appears at the final name right before the commit call is replaced, or is refused with a signature other than `Export:2`, on the exclusive-rename path or the check-then-move path | Restore the refusal. The final commit must never replace an existing file, and its collision must keep the `Export:2` signature retry state uses. |
+| [`FileIOServiceTests.existingFileAtCommitIsNeverReplaced`](../../photo-exportTests/FileIOServiceTests.swift) | A file that appears at the final name right before the commit call is replaced, or is refused with a signature other than `Export:2`, or the commit stops using `RENAME_EXCL` on a capable volume (the scratch volume, through the production capability check) | Restore the refusal. The final commit must never replace an existing file, and its collision must keep the `Export:2` signature retry state uses. The check-then-move case only proves that `moveItem`'s own refusal keeps `Export:2`; it cannot prove the window inside `moveItem` is closed. |
 
 ## Extension recipes
 

@@ -243,10 +243,10 @@ struct ExportPipelineTests {
   /// The exclusive rename itself reports the collision: the file that took the final name
   /// keeps its bytes and the variant fails with the collision signature.
   @Test func exclusiveRenameCollisionAtTheFinalNameKeepsTheExistingFile() async throws {
-    let renames = LockedFlags()
+    let renames = LockedBox<[UInt32]>([])
     let commit = FileIOService(
       renamer: { _, destination, flags in
-        renames.append(flags)
+        renames.mutate { $0.append(flags) }
         try? Data("third-party".utf8).write(to: destination)
         return EEXIST
       },
@@ -269,7 +269,7 @@ struct ExportPipelineTests {
         source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
         selection: .edited))
 
-    #expect(renames.values == [UInt32(RENAME_EXCL)])
+    #expect(renames.value == [UInt32(RENAME_EXCL)])
     #expect(summary.failures.map(\.errorSignature) == ["Export:2"])
     #expect(summary.failures.map(\.category) == [.destinationCollision])
     let variant = store.exportInfo(assetId: asset.id)?.variants[.original]
@@ -577,14 +577,4 @@ struct ExportPipelineTests {
     #expect(rec1?.relPath == "2025/03/")
     #expect(rec2?.relPath == "2025/03/")
   }
-}
-
-/// Rename flags recorded from a `@Sendable` renamer.
-private final class LockedFlags: @unchecked Sendable {
-  private let lock = NSLock()
-  private var _values: [UInt32] = []
-
-  var values: [UInt32] { lock.withLock { _values } }
-
-  func append(_ value: UInt32) { lock.withLock { _values.append(value) } }
 }

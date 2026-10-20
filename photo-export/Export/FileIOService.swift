@@ -47,6 +47,9 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
 
   /// Reads `VOL_CAP_INT_RENAME_EXCL` from the volume's interface capabilities. A volume
   /// that cannot be queried, or does not mark the bit valid, is treated as not capable.
+  /// getattrlist(2) documents `EINVAL` for volume attributes on a path that is not the
+  /// volume root, but XNU answers for any path on the volume;
+  /// `scratchVolumeAdvertisesExclusiveRenameAndAMissingFolderDoesNot` covers that.
   static let volumeSupportsExclusiveRename: ExclusiveRenameCapability = { directory in
     struct VolumeCapabilities {
       var length: UInt32 = 0
@@ -62,16 +65,40 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
         getattrlist(path, &request, $0.baseAddress, $0.count, 0)
       }
     }
-    guard status == 0 else { return false }
-    let index = Int(VOL_CAPABILITIES_INTERFACES)
-    let bit = UInt32(VOL_CAP_INT_RENAME_EXCL)
-    let valid = withUnsafeBytes(of: reply.capabilities.valid) {
-      $0.load(fromByteOffset: index * MemoryLayout<UInt32>.size, as: UInt32.self)
+    guard status == 0 else {
+      let code = errno
+      logger.debug(
+        "getattrlist failed for \(directory.path, privacy: .public): errno \(code, privacy: .public)"
+      )
+      return false
     }
-    let supported = withUnsafeBytes(of: reply.capabilities.capabilities) {
-      $0.load(fromByteOffset: index * MemoryLayout<UInt32>.size, as: UInt32.self)
+    return advertisesExclusiveRename(reply.capabilities)
+  }
+
+  /// True when the interfaces word marks `VOL_CAP_INT_RENAME_EXCL` both valid and supported.
+  static func advertisesExclusiveRename(_ caps: vol_capabilities_attr_t) -> Bool {
+    let offset = Int(VOL_CAPABILITIES_INTERFACES) * MemoryLayout<UInt32>.size
+    let bit = UInt32(VOL_CAP_INT_RENAME_EXCL)
+    let valid = withUnsafeBytes(of: caps.valid) {
+      $0.load(fromByteOffset: offset, as: UInt32.self)
+    }
+    let supported = withUnsafeBytes(of: caps.capabilities) {
+      $0.load(fromByteOffset: offset, as: UInt32.self)
     }
     return valid & bit != 0 && supported & bit != 0
+  }
+
+  private static let unsupportedVolumesLogged = OSAllocatedUnfairLock(initialState: Set<dev_t>())
+
+  /// Logs the first rejected exclusive rename per volume in this process.
+  private static func noteUnsupportedExclusiveRename(in folder: URL, code: Int32) {
+    var info = stat()
+    let device = stat(folder.path, &info) == 0 ? info.st_dev : -1
+    let isFirst = unsupportedVolumesLogged.withLock { $0.insert(device).inserted }
+    guard isFirst else { return }
+    logger.notice(
+      "Exclusive rename rejected in \(folder.path, privacy: .public) (errno \(code, privacy: .public)); checking, then moving on this volume"
+    )
   }
 
   private static func destinationExistsError() -> NSError {
@@ -80,11 +107,7 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
       userInfo: [NSLocalizedDescriptionKey: "Destination already exists"])
   }
 
-  // MARK: - Static API (existing call sites)
-
-  static func moveItemAtomically(from src: URL, to dst: URL) throws {
-    try FileIOService().moveItemAtomically(from: src, to: dst)
-  }
+  // MARK: - Timestamps
 
   static func applyTimestamps(creationDate: Date, to url: URL) {
     do {
@@ -115,9 +138,9 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
 
   /// Commits a staged file at its final name and never replaces an existing file there.
   /// A volume that advertises an exclusive rename commits with `renamex_np(RENAME_EXCL)`,
-  /// so the refusal and the move are one step. Elsewhere the existence check precedes
-  /// `FileManager.moveItem`, which also refuses an existing file; a file created between
-  /// the two can still be lost to a non-atomic move on those volumes.
+  /// so the refusal and the move are one step. Elsewhere an existence check precedes
+  /// `FileManager.moveItem`, which refuses an existing file itself; a file that appears
+  /// inside `moveItem`, between its own check and its rename, can still be replaced there.
   func moveItemAtomically(from src: URL, to dst: URL) throws {
     let fm = FileManager.default
     let folder = dst.deletingLastPathComponent()
@@ -130,10 +153,21 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
         return
       case EEXIST:
         throw Self.destinationExistsError()
+      case ENOTSUP, ENOSYS:
+        // The volume advertised the flag but rejected it. A failed rename leaves the stage
+        // in place, so the check-then-move path below can still commit it.
+        Self.noteUnsupportedExclusiveRename(in: folder, code: code)
       default:
+        Self.logger.error(
+          "Exclusive rename failed in \(folder.path, privacy: .public): errno \(code, privacy: .public)"
+        )
         throw NSError(
           domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: dst.path])
       }
+    } else {
+      Self.logger.debug(
+        "No exclusive rename on the volume of \(folder.path, privacy: .public); checking, then moving"
+      )
     }
     if fm.fileExists(atPath: dst.path) {
       throw Self.destinationExistsError()
