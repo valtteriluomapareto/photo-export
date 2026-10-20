@@ -171,22 +171,25 @@ name first, then ` (1)`, ` (2)`… (`FinalNamePlanner`, off the main actor throu
 
 - **Nothing there** (`lstat` finds no entry): commit the stage there.
 - **An existing file is adopted** instead of writing a copy when all of these hold: it is a
-  regular file (a symbolic link is never followed); its size is non-zero and equal to the
-  stage's; no record other than this variant's own names it in that folder (see claims
-  below); and its bytes equal the stage's. The compare keeps one read handle open per file
+  regular file (a symbolic link is never followed) with one link, since a second hard link
+  would give one file two names that different records could claim; its size is non-zero
+  and equal to the stage's; no record other than this variant's own names it in that folder
+  (see claims below); its bytes equal the stage's; and its folder stores it under a spelling
+  of the candidate's name (`getattrlist` `ATTR_CMN_NAME`). The compare keeps one read handle open per file
   (the existing file's with `F_NOCACHE`), reads the head and the tail in 1 MiB pieces, then
   the rest in order in 8 MiB pieces, and stops at the first difference. Task cancellation is
   checked before every read; the run's generation, a main-actor hop, before the first and
   then once per 32 MiB. An open or read error on either file, or a stored name that cannot
-  be read, passes the candidate over. No digests are stored or
-  computed.
+  be read, passes the candidate over. No digests are stored or computed.
 - **Anything else** (other bytes, another size, empty, a link, a folder, claimed): try the
   next suffix.
 
 The variant is marked in progress under the provisional name (the first free one, as before
-staging) and re-marked under the planned name whenever planning picks another. The commit
-of an adopted file re-runs `lstat` and requires the same device, inode, size and
-modification time as when its bytes were compared; it then removes the stage, applies no
+staging) and re-marked under the planned name whenever planning picks another. Planning reads
+claims through main-actor hops while it compares, so before a planned adoption is marked the
+exporter asks again synchronously on the main actor; a name claimed by then counts as a
+collision. The commit of an adopted file re-runs `lstat` and requires the same device, inode,
+link count, size and modification time as when its bytes were compared; it then removes the stage, applies no
 timestamps and acknowledges the file under its stored name (`getattrlist`
 `ATTR_CMN_NAME`), which can differ from the resource's name in case or normalization. A
 changed file, or `Export:2` from the exclusive rename, makes the commit report a collision
@@ -198,15 +201,18 @@ across a re-plan only while the run is current.
 Claims: each record store keeps, per folder (timeline month or collection placement, plus
 the variant's subfolder), a count of the filenames its variant records name, case-folded
 and in NFC. Every status counts, including in-progress, pending and failed, and so do the
-asset's other variants (an edited fallback's `edited` record carries the original's name).
-Only the variant being written is excluded. The index is maintained in each store's
+asset's other variants: an edit on an inherited stem must not adopt the file its own
+original is recorded under. Only the variant being written is excluded. An edited fallback's
+`edited` record names no file, on every completion path. The index is maintained in each store's
 `apply`, so log replay, import, prune and reset follow it, and rebuilt wherever the
 in-memory records are replaced wholesale (load, retained recovery, the corrupt-reset path
 and the parked-snapshot restore after an unreadable reload).
 
 Known limits: only the folder the variant is being written to is searched, so an identical
 file left in `videos/` (or outside it) by a layout change is not found. Paired groups and
-`_orig` slots are allocated before staging and are never adopted. Rendered video and
+`_orig` slots are allocated before staging and are never adopted. Neither is an image whose
+paired video the same job writes next at its stem: adopting the image could find the video's
+name taken and split the pair, so the image takes a free name and the video follows it. Rendered video and
 HEIC-to-JPEG output usually differ byte for byte from an earlier export, so they get a
 suffix, which is safe. On a network volume that is case- or normalization-sensitive, a file
 whose stored name differs from the resource's only in normalization is not found by

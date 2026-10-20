@@ -34,10 +34,14 @@ struct FinalCommitAcknowledgementTests {
 
     var state: RecordStoreState { collection ? collections.state : timeline.state }
 
-    func capture() throws -> (String?) async -> Void {
+    func capture(fallback: Bool = false) throws -> (String?) async -> Void {
       try router.captureFinalCommit(
         assetId: "asset", placement: placement, variant: .original,
-        relPath: placement.relativePath, subfolder: nil, acceptsEditedFallback: false)
+        relPath: placement.relativePath, subfolder: nil, acceptsEditedFallback: fallback)
+    }
+
+    func variant(_ variant: ExportVariant) -> ExportVariantRecord? {
+      router.variants(forAssetId: "asset", placement: placement)[variant]
     }
 
     func filename(_ assetId: String = "asset") -> String? {
@@ -183,5 +187,24 @@ struct FinalCommitAcknowledgementTests {
     f.select("A")
     #expect(f.filename() == Self.committed)
     #expect(f.isClaimed(Self.committed))
+  }
+
+  /// An edited fallback records the edit as backed up by the original without naming a
+  /// file, whether the store was active or parked when the commit was acknowledged, so the
+  /// original's file is claimed only by the original.
+  @Test(arguments: [false, true], [false, true])
+  func editedFallbackNamesNoFile(collection: Bool, parked: Bool) async throws {
+    let f = Fixture(collection: collection)
+    defer { f.cleanup() }
+    let acknowledge = try f.capture(fallback: true)
+    if parked { f.select("B") }
+    await acknowledge("IMG_0001_orig.JPG")
+    if parked { f.select("A") }
+
+    #expect(f.variant(.original)?.filename == "IMG_0001_orig.JPG")
+    #expect(f.variant(.edited)?.reason == .editedUnavailableOriginalBackedUp)
+    #expect(f.variant(.edited)?.filename == nil)
+    #expect(!f.isClaimed("IMG_0001_orig.JPG", excluding: "asset"))
+    #expect(f.isClaimed("IMG_0001_orig.JPG"))
   }
 }

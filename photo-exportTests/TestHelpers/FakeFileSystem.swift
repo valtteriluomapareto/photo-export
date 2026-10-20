@@ -141,15 +141,15 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
     return identityOverride.map { $0(url, identity) } ?? identity
   }
 
-  /// Thrown by `storedName(at:)` instead of reading the name.
-  var storedNameError: Error? {
-    get { lock.withLock { _storedNameError } }
-    set { lock.withLock { _storedNameError = newValue } }
+  /// Answers `storedName(at:)` instead of reading the name.
+  var storedNameOverride: (@Sendable (URL) throws -> String)? {
+    get { lock.withLock { _storedNameOverride } }
+    set { lock.withLock { _storedNameOverride = newValue } }
   }
-  private var _storedNameError: Error?
+  private var _storedNameOverride: (@Sendable (URL) throws -> String)?
 
   func storedName(at url: URL) throws -> String {
-    if let error = storedNameError { throw error }
+    if let override = storedNameOverride { return try override(url) }
     return try real.storedName(at: url)
   }
 

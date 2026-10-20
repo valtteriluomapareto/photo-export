@@ -185,7 +185,7 @@ import Testing
     folder.files.identityOverride = { url, identity in
       guard url == natural, let identity else { return identity }
       return FileItemIdentity(
-        isRegularFile: false, device: identity.device, inode: identity.inode,
+        isRegularFile: false, linkCount: identity.linkCount, device: identity.device, inode: identity.inode,
         size: identity.size, modificationSeconds: identity.modificationSeconds,
         modificationNanoseconds: identity.modificationNanoseconds)
     }
@@ -213,7 +213,19 @@ import Testing
     defer { folder.cleanup() }
     _ = try folder.write(Self.bytes, ".stage.tmp")
     _ = try folder.write(Self.bytes, "IMG.JPG")
-    folder.files.storedNameError = CocoaError(.fileReadUnknown)
+    folder.files.storedNameOverride = { _ in throw CocoaError(.fileReadUnknown) }
+
+    #expect(try await folder.plan() == .move(folder.url.appendingPathComponent("IMG (1).JPG")))
+  }
+
+  /// A stored name that is not a spelling of the candidate's (another hard link's name, for
+  /// instance) is not recorded; the candidate is passed over.
+  @Test func storedNameForAnotherEntryIsNotAdopted() async throws {
+    let folder = try Folder()
+    defer { folder.cleanup() }
+    _ = try folder.write(Self.bytes, ".stage.tmp")
+    _ = try folder.write(Self.bytes, "IMG.JPG")
+    folder.files.storedNameOverride = { _ in "OTHER.JPG" }
 
     #expect(try await folder.plan() == .move(folder.url.appendingPathComponent("IMG (1).JPG")))
   }

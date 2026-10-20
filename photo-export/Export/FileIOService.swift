@@ -217,7 +217,8 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
       throw Self.posixError(code, url)
     }
     return FileItemIdentity(
-      isRegularFile: info.st_mode & S_IFMT == S_IFREG, device: Int64(info.st_dev),
+      isRegularFile: info.st_mode & S_IFMT == S_IFREG, linkCount: Int(info.st_nlink),
+      device: Int64(info.st_dev),
       inode: UInt64(info.st_ino), size: Int64(info.st_size),
       modificationSeconds: Int(info.st_mtimespec.tv_sec),
       modificationNanoseconds: Int(info.st_mtimespec.tv_nsec))

@@ -47,6 +47,13 @@ struct IdenticalFileAdoptionTests {
       collections.configure(for: "history-\(historyGeneration)")
     }
 
+    /// Records another asset's original under `name` in June 2025.
+    func recordOther(named name: String) {
+      timeline.markVariantExported(
+        assetId: "other", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+        filename: name, exportedAt: Date())
+    }
+
     func exportMonth(year: Int = 2025, month: Int = 6) async {
       manager.startExportMonth(year: year, month: month)
       await manager.waitForQueueDrained()
@@ -149,7 +156,8 @@ struct IdenticalFileAdoptionTests {
   // MARK: - What is not adopted
 
   enum Unadoptable: String, CaseIterable, CustomTestStringConvertible {
-    case differentBytes, middleChunkDiffers, truncated, longer, empty, symlink, directory
+    case differentBytes, middleChunkDiffers, truncated, longer, empty, symlink, hardLink
+    case directory
     var testDescription: String { rawValue }
   }
 
@@ -159,7 +167,7 @@ struct IdenticalFileAdoptionTests {
   /// Whatever sits at the natural name stays exactly as it was, and the export lands at
   /// ` (1)`: a file of the same size but other bytes (also when only a middle chunk
   /// differs), a shorter or longer file, an empty file, a symbolic link to an identical
-  /// file, and a folder.
+  /// file, a second hard link to an identical file, and a folder.
   @Test(arguments: Unadoptable.allCases)
   func nonIdenticalOrIrregularTargetsAreSuffixedAndUntouched(target: Unadoptable) async throws {
     let h = Harness()
@@ -190,6 +198,10 @@ struct IdenticalFileAdoptionTests {
         let identical = folder.appendingPathComponent("elsewhere.bin")
         try bytes.write(to: identical)
         try FileManager.default.createSymbolicLink(at: natural, withDestinationURL: identical)
+      case .hardLink:
+        let identical = folder.appendingPathComponent("elsewhere.bin")
+        try bytes.write(to: identical)
+        try FileManager.default.linkItem(at: identical, to: natural)
       case .directory:
         try FileManager.default.createDirectory(at: natural, withIntermediateDirectories: false)
       }
@@ -574,6 +586,123 @@ struct IdenticalFileAdoptionTests {
           == "IMG_0001 (1).JPG")
       #expect(try Data(contentsOf: natural) == replacement)
       #expect(try h.contents(of: folder) == ["IMG_0001 (1).JPG", "IMG_0001.JPG"])
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// A claim recorded while the bytes were being compared still prevents the adoption: the
+  /// claim is checked again on the main actor before the variant is marked under the name.
+  @Test func claimRecordedDuringTheCompareStopsTheAdoption() async throws {
+    let h = Harness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      let resource = TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [resource]
+      await h.exportMonth()
+      let folder = try h.monthFolder()
+      let natural = folder.appendingPathComponent("IMG_0001.JPG")
+      try await h.loseRecords()
+      let claimed = LockedBox(false)
+      h.files.chunkReadHook = { url, _ in
+        guard url == natural, !claimed.value else { return }
+        claimed.mutate { $0 = true }
+        await h.recordOther(named: "IMG_0001.JPG")
+      }
+
+      await h.exportMonth()
+
+      #expect(claimed.value)
+      #expect(
+        h.timeline.exportInfo(assetId: asset.id)?.variants[.original]?.filename
+          == "IMG_0001 (1).JPG")
+      #expect(
+        h.timeline.exportInfo(assetId: "other")?.variants[.original]?.filename == "IMG_0001.JPG")
+      #expect(try h.contents(of: folder) == ["IMG_0001 (1).JPG", "IMG_0001.JPG"])
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// An edited Live Photo whose image would be adopted but whose motion file's name holds
+  /// something else is not split across stems: the image is not adopted, so both files land
+  /// at the next stem together.
+  @Test func livePhotoImageIsNotAdoptedAheadOfItsMotionFile() async throws {
+    let h = Harness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(
+        id: "live", creationDate: Self.june15, hasAdjustments: true, isLivePhoto: true)
+      let render = TestAssetFactory.makeResource(
+        type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG")
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+        render,
+        TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+        TestAssetFactory.makeResource(
+          type: .fullSizePairedVideo, originalFilename: "FullSizeRender.MOV"),
+      ]
+      h.manager.versionSelection = .edited
+      h.manager.livePhotosPairedExport = true
+      // The original is recorded, so the edit inherits its stem. The edit's own copy is on
+      // disk without a record; a different file holds the motion file's name.
+      h.timeline.markVariantExported(
+        assetId: asset.id, variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+        filename: "IMG_0001.HEIC", exportedAt: Date())
+      let folder = try h.destination.urlForMonth(year: 2025, month: 6, createIfNeeded: true)
+      try Data("original".utf8).write(to: folder.appendingPathComponent("IMG_0001.HEIC"))
+      let renderBytes = FakeAssetResourceWriter.content(for: render, assetId: asset.id)
+      try renderBytes.write(to: folder.appendingPathComponent("IMG_0001.JPG"))
+      try Data("third-party".utf8).write(to: folder.appendingPathComponent("IMG_0001.MOV"))
+
+      await h.exportMonth()
+
+      let variants = h.timeline.exportInfo(assetId: asset.id)?.variants
+      #expect(variants?[.edited]?.filename == "IMG_0001 (1).JPG")
+      #expect(variants?[.editedPairedVideo]?.filename == "IMG_0001 (1).MOV")
+      #expect(try Data(contentsOf: folder.appendingPathComponent("IMG_0001.JPG")) == renderBytes)
+      #expect(
+        try Data(contentsOf: folder.appendingPathComponent("IMG_0001.MOV"))
+          == Data("third-party".utf8))
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// An error looking up a candidate while planning fails that variant with the error's own
+  /// signature and category, as the same error from the commit would.
+  @Test(arguments: [
+    (EIO, AutoSyncFailureCategory.unknown), (ENOTCONN, .unknown), (EACCES, .destinationPermission),
+  ])
+  func lookupErrorWhilePlanningKeepsItsClassification(
+    code: Int32, category: AutoSyncFailureCategory
+  ) async throws {
+    let h = Harness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      h.photos.yearCounts = [(2025, 1)]
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      ]
+      h.files.identityHook = { url in
+        if url.lastPathComponent == "IMG_0001.JPG" {
+          throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+      }
+
+      let summary = await h.manager.runExport(
+        context: ExportRunContext(
+          source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+          selection: .edited))
+
+      #expect(summary.failures.map(\.errorSignature) == ["NSPOSIXErrorDomain:\(code)"])
+      #expect(summary.failures.map(\.category) == [category])
+      #expect(h.timeline.exportInfo(assetId: asset.id)?.variants[.original]?.status == .failed)
+      #expect(h.files.moveCalls.isEmpty)
+      let folder = try h.monthFolder()
+      #expect(try h.contents(of: folder) == [])
     } cleanup: {
       await h.cleanup()
     }

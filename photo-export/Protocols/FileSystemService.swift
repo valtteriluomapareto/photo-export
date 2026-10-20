@@ -4,6 +4,8 @@ import Foundation
 /// of it is unchanged since its bytes were compared.
 struct FileItemIdentity: Equatable, Sendable {
   let isRegularFile: Bool
+  /// Hard links to the entry, itself included.
+  let linkCount: Int
   let device: Int64
   let inode: UInt64
   let size: Int64

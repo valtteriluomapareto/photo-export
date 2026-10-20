@@ -5,8 +5,9 @@ import OSLog
 ///
 /// A `.suffix` slot's candidates are walked in order (`IMG.JPG`, `IMG (1).JPG`, …). The first
 /// with nothing at it is a move. An earlier candidate is adopted instead when it is a regular
-/// file, not empty, the size of the stage, named by no other record, and byte-for-byte equal
-/// to the stage. A `.refuse` slot always moves to its one name.
+/// file with one link, not empty, the size of the stage, named by no other record,
+/// byte-for-byte equal to the stage, and its folder stores it under a spelling of the
+/// candidate's name. A `.refuse` slot always moves to its one name.
 ///
 /// Reads go through the `FileSystemService` seam and run off the main actor. No digests are
 /// kept: both files are on disk, so a chunked compare that stops at the first difference is
@@ -45,12 +46,13 @@ struct FinalNamePlanner: Sendable {
     self.stopCheckInterval = stopCheckInterval
   }
 
-  /// `isClaimed` says whether another record names a candidate. Task cancellation is checked
+  /// With `mayAdopt` false the walk only looks for a free name. `isClaimed` says whether
+  /// another record names a candidate. Task cancellation is checked
   /// before every chunk read; `shouldStop` before the first and then once per
   /// `stopCheckInterval` bytes. Either stops planning with `CancellationError`, and nothing
   /// is adopted.
   func plan(
-    slot: ExportDestinationResolver.Slot, stagedURL: URL,
+    slot: ExportDestinationResolver.Slot, stagedURL: URL, mayAdopt: Bool = true,
     isClaimed: @Sendable (String) async -> Bool,
     shouldStop: @Sendable () async -> Bool
   ) async throws -> Plan {
@@ -62,24 +64,38 @@ struct FinalNamePlanner: Sendable {
       guard let identity = try fileSystem.itemIdentity(at: candidate) else {
         return .move(candidate)
       }
-      if identity.isRegularFile, identity.size > 0, identity.size == stagedSize,
+      // A second hard link would leave two names for one file; another record could claim
+      // the other.
+      if mayAdopt, identity.isRegularFile, identity.linkCount == 1, identity.size > 0,
+        identity.size == stagedSize,
         await !isClaimed(candidate.lastPathComponent),
         try await contentsEqual(
-          stagedURL, candidate, size: identity.size, shouldStop: shouldStop)
+          stagedURL, candidate, size: identity.size, shouldStop: shouldStop),
+        let storedName = storedName(of: candidate)
       {
-        // Without the stored spelling the record could name a file the folder does not list.
-        do {
-          let storedName = try fileSystem.storedName(at: candidate)
-          return .adopt(candidate, storedName: storedName, identity: identity)
-        } catch {
-          Self.logger.notice(
-            "No stored name for \(candidate.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
-          )
-        }
+        return .adopt(candidate, storedName: storedName, identity: identity)
       }
       index += 1
     }
     throw FileIOService.destinationExistsError()
+  }
+
+  /// The candidate's name as its folder stores it, or nil when it cannot be read or is not
+  /// a spelling of the candidate's own name. Without it the record could name a file the
+  /// folder does not list under that name.
+  private func storedName(of candidate: URL) -> String? {
+    do {
+      let storedName = try fileSystem.storedName(at: candidate)
+      if FilenameKey.sameName(storedName, candidate.lastPathComponent) { return storedName }
+      Self.logger.notice(
+        "\(candidate.lastPathComponent, privacy: .public) is stored as \(storedName, privacy: .public); not adopted"
+      )
+    } catch {
+      Self.logger.notice(
+        "No stored name for \(candidate.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
+      )
+    }
+    return nil
   }
 
   /// Compares the two files chunk by chunk in `chunkRanges` order, through one open handle

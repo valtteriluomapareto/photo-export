@@ -522,7 +522,7 @@ final class ExportRecordStore: ObservableObject {
     if let record = recordsById[assetId], let own = record.variants[variant],
       let ownName = own.filename,
       ClaimFolder(year: record.year, month: record.month, subfolder: own.subfolder) == folder,
-      FilenameClaims<ClaimFolder>.sameName(ownName, filename)
+      FilenameKey.sameName(ownName, filename)
     {
       count -= 1
     }
@@ -947,7 +947,10 @@ final class ExportRecordStore: ObservableObject {
         record.relPath = relPath
         record.variants[variant] = done
         if acceptsEditedFallback {
-          var edited = record.variants[.edited] ?? done
+          // As `markVariantFailed` does: a new edited record names no file.
+          var edited =
+            record.variants[.edited]
+            ?? ExportVariantRecord(filename: nil, status: .pending, exportDate: nil, lastError: nil)
           edited.status = .failed
           edited.exportDate = exportedAt
           edited.lastError = ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage

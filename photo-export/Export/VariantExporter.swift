@@ -148,6 +148,9 @@ final class VariantExporter {
   ///
   /// `groupStem` is either inherited from a prior done variant record for this asset or,
   /// within the same job, pre-allocated when both variants will be written together.
+  ///
+  /// `mayAdoptExisting` is false for an image whose paired video is written next at its
+  /// stem: adopting the image could leave the video's name taken and split the pair.
   func exportSingleVariant(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -160,7 +163,8 @@ final class VariantExporter {
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
     subfolder: String? = nil,
-    acceptsEditedFallback: Bool = false
+    acceptsEditedFallback: Bool = false,
+    mayAdoptExisting: Bool = true
   ) async throws -> String? {
     try queueCoordinator?.throwIfCancelledOrStale(gen)
     // Renderer activity must always be cleared on the way out of this function —
@@ -400,7 +404,8 @@ final class VariantExporter {
     let committedName = try await commitStaged(
       tempURL, slot: slot, markedName: finalURL.lastPathComponent, descriptor: descriptor,
       job: job, variant: variant, relPath: relPath, subfolder: subfolder,
-      acceptsEditedFallback: acceptsEditedFallback, generation: gen)
+      acceptsEditedFallback: acceptsEditedFallback, mayAdoptExisting: mayAdoptExisting,
+      generation: gen)
     inFlight = nil
     logger.info(
       "Exported \(committedName, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(destDir.path, privacy: .public)"
@@ -417,14 +422,28 @@ final class VariantExporter {
   private func commitStaged(
     _ stagedURL: URL, slot: ExportDestinationResolver.Slot, markedName: String,
     descriptor: AssetDescriptor, job: ExportManager.ExportJob, variant: ExportVariant,
-    relPath: String, subfolder: String?, acceptsEditedFallback: Bool, generation gen: Int
+    relPath: String, subfolder: String?, acceptsEditedFallback: Bool, mayAdoptExisting: Bool,
+    generation gen: Int
   ) async throws -> String {
     var markedName = markedName
     var collision: Error = FileIOService.destinationExistsError()
     for attempt in 1...Self.maxCommitAttempts {
       let commit = try await planCommit(
         stagedURL, slot: slot, descriptor: descriptor, job: job, variant: variant,
-        subfolder: subfolder, generation: gen)
+        subfolder: subfolder, mayAdopt: mayAdoptExisting, generation: gen)
+      // Claims were read off the main actor while the bytes were compared. Ask again here,
+      // where no other record can change before the variant is marked under the name.
+      if case .adopt(_, let storedName, _) = commit,
+        recordStoreRouter.isFilenameClaimed(
+          storedName, placement: job.placement, subfolder: subfolder,
+          excludingAssetId: descriptor.id, variant: variant)
+      {
+        collision = FileIOService.destinationExistsError()
+        logger.notice(
+          "\(storedName, privacy: .public) was claimed while it was compared (attempt \(attempt, privacy: .public)) for id: \(descriptor.id, privacy: .public)"
+        )
+        continue
+      }
       if commit.recordedName != markedName {
         markedName = commit.recordedName
         host?.setCurrentAssetFilename(markedName)
@@ -459,7 +478,7 @@ final class VariantExporter {
   /// after cancellation, because the surrounding export holds scoped access until then.
   private func planCommit(
     _ stagedURL: URL, slot: ExportDestinationResolver.Slot, descriptor: AssetDescriptor,
-    job: ExportManager.ExportJob, variant: ExportVariant, subfolder: String?,
+    job: ExportManager.ExportJob, variant: ExportVariant, subfolder: String?, mayAdopt: Bool,
     generation gen: Int
   ) async throws -> FinalCommit {
     guard case .suffix = slot.policy else { return .move(slot.naturalURL) }
@@ -472,7 +491,7 @@ final class VariantExporter {
       do {
         return .success(
           try await planner.plan(
-            slot: slot, stagedURL: stagedURL,
+            slot: slot, stagedURL: stagedURL, mayAdopt: mayAdopt,
             isClaimed: { name in
               await router.isFilenameClaimed(
                 name, placement: placement, subfolder: subfolder, excludingAssetId: assetId,
@@ -521,6 +540,8 @@ final class VariantExporter {
             try fileSystem.moveItemAtomically(from: tempURL, to: url)
           }
         case .adopt(let url, _, let identity):
+          // A lookup error counts as a change: the variant plans again, and the planning
+          // walk's own lookup then reports the real error.
           let current = try? await Self.onUtilityQueue { try fileSystem.itemIdentity(at: url) }
           guard current == identity else { throw FileIOService.destinationExistsError() }
         case .interrupted:
