@@ -10,7 +10,7 @@ import Testing
 /// dependencies, so a view reading them refreshes without holding the manager as an
 /// `ObservableObject`, while `objectWillChange` keeps firing as `@Published` fires it.
 @MainActor
-@Suite(.timeLimit(.minutes(2)))
+@Suite(.timeLimit(.minutes(2)), .serialized)
 struct ExportManagerObservationTests {
   @MainActor
   private final class Fixture {
@@ -87,22 +87,64 @@ struct ExportManagerObservationTests {
     }
   }
 
-  /// The derived reads views make (toolbar, Settings, Import, sidebars) register through the
-  /// bridged properties they combine.
-  @Test func derivedRunStateReadsRegisterDependencies() async {
+  // The derived reads views make (toolbar, Settings, Import, sidebars) follow each bridged
+  // input they combine, so a getter that read a bridge's value directly would fail here.
+
+  @Test func derivedReadsFollowQueueDepth() async {
     let f = Fixture()
     await withCleanup {
       let activeWork = ObservationProbe { _ = f.manager.hasActiveExportWork }
       let canPause = ObservationProbe { _ = f.manager.canTogglePause }
-      let supersede = ObservationProbe { _ = f.manager.manualExportShouldConfirmSupersede }
       f.enqueueOne()
       #expect(activeWork.changeCount == 1)
       #expect(canPause.changeCount == 1)
+    } cleanup: {
+      await f.close()
+    }
+  }
+
+  @Test func derivedReadsFollowRunningFlag() async {
+    let f = Fixture()
+    await withCleanup {
+      f.enqueueOne()
+      let activeWork = ObservationProbe { _ = f.manager.hasActiveExportWork }
+      let canPause = ObservationProbe { _ = f.manager.canTogglePause }
+      let queueCount = ObservationProbe { _ = f.manager.queueCount }
+      f.manager.queueCoordinator.processQueueIfNeeded()
+      // Only `isRunning` changes: the depth stays 1 as the job moves to in flight.
+      #expect(queueCount.changeCount == 0)
+      #expect(activeWork.changeCount == 1)
+      #expect(canPause.changeCount == 1)
+    } cleanup: {
+      await f.close()
+    }
+  }
+
+  @Test func derivedReadsFollowBulkFlag() async {
+    let f = Fixture()
+    await withCleanup {
+      let activeWork = ObservationProbe { _ = f.manager.hasActiveExportWork }
+      let canPause = ObservationProbe { _ = f.manager.canTogglePause }
+      // Sets `isEnqueueingAll` before its first await; nothing else it reads changes yet.
+      let enqueue = f.manager.startExportAll()
+      #expect(activeWork.changeCount == 1)
+      #expect(canPause.changeCount == 0)
+      if let enqueue { _ = await finished(enqueue) }
+    } cleanup: {
+      await f.close()
+    }
+  }
+
+  @Test func supersedeReadFollowsRunContext() async {
+    let f = Fixture()
+    await withCleanup {
+      let supersede = ObservationProbe { _ = f.manager.manualExportShouldConfirmSupersede }
+      f.enqueueOne()
       #expect(supersede.changeCount == 0)
+      f.manager.cancelAndClear()
       let run = ExportRunContext(
         source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
         selection: .edited)
-      f.manager.cancelAndClear()
       _ = await f.manager.runExport(context: run)
       #expect(supersede.changeCount == 2)
     } cleanup: {
@@ -112,7 +154,8 @@ struct ExportManagerObservationTests {
 
   /// Tearing down an idle queue writes every run-state input with the value it already holds.
   /// Observation is not notified, as for an equal write to an `@Observable` property, while
-  /// `objectWillChange` fires once per `@Published`-style write, as it does today.
+  /// `objectWillChange` fires once per write, as it does for `@Published`, and before the
+  /// bridged delivery.
   @Test func unchangedRunStateWritesDoNotNotifyObservation() async {
     let f = Fixture()
     await withCleanup {
@@ -122,14 +165,21 @@ struct ExportManagerObservationTests {
         _ = f.manager.queueCount
         _ = f.manager.isEnqueueingAll
       }
-      var willChange = 0
-      let subscription = f.manager.objectWillChange.sink { willChange += 1 }
-      defer { subscription.cancel() }
+      var events: [String] = []
+      let subscriptions = [
+        f.manager.objectWillChange.sink { events.append("will") },
+        f.manager.isEnqueueingAllPublisher.sink { events.append("enqueueing \($0)") },
+      ]
+      defer { subscriptions.forEach { $0.cancel() } }
       f.manager.cancelAndClear()
       #expect(runState.changeCount == 0)
-      // isRunning, isPaused, queueCount and isEnqueueingAll, written by the teardown, and
-      // previousBackupMissing, cleared by cancelAndClear.
-      #expect(willChange == 5)
+      // In order: previousBackupMissing (cleared by cancelAndClear); isRunning, isPaused and
+      // queueCount (the queue teardown's mirrors); then isEnqueueingAll, whose bridge
+      // delivers right after its own objectWillChange.
+      #expect(
+        events == [
+          "enqueueing false", "will", "will", "will", "will", "will", "enqueueing false",
+        ])
     } cleanup: {
       await f.close()
     }
@@ -179,9 +229,11 @@ struct ExportManagerObservationTests {
           await eventually("first render") {
             counter.count(for: "run-state:false:0") > 0
           })
+        window.contentView?.layoutSubtreeIfNeeded()
         let readerBodies = counter.count(for: "run-state:false:0")
 
-        // A publication the reader does not read must not re-run it.
+        // Not evidence that Observation is wired: an unbridged manager passes this too. It pins
+        // that the reader does not start re-running for a publication it does not read.
         f.manager.versionSelection = .editedWithOriginals
         try #require(
           await eventually("unrelated publication rendered") {

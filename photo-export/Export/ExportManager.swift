@@ -61,18 +61,18 @@ final class ExportManager: ObservableObject, Observable {
 
   // MARK: - Published State (Export)
   // `isRunning`, `queueCount`, `activeRunContext` and `isEnqueueingAll` feed
-  // `exportRunStatePublisher`. They are stored in `ObservableCombineBridge`s so views track
+  // `exportRunStatePublisher`. Each is held in an `ObservableCombineBridge` so views track
   // them through Observation while AutoSync keeps `@Published` delivery (see `bridgedWrite`).
   private(set) var isRunning: Bool {
-    get { bridgedRead(isRunningStorage, \.isRunning) }
-    set { bridgedWrite(isRunningStorage, \.isRunning, newValue) }
+    get { bridgedRead(isRunningBridge, \.isRunning) }
+    set { bridgedWrite(isRunningBridge, \.isRunning, newValue) }
   }
-  private let isRunningStorage = ObservableCombineBridge(false)
+  private let isRunningBridge = ObservableCombineBridge(false)
   private(set) var queueCount: Int {
-    get { bridgedRead(queueCountStorage, \.queueCount) }
-    set { bridgedWrite(queueCountStorage, \.queueCount, newValue) }
+    get { bridgedRead(queueCountBridge, \.queueCount) }
+    set { bridgedWrite(queueCountBridge, \.queueCount, newValue) }
   }
-  private let queueCountStorage = ObservableCombineBridge(0)
+  private let queueCountBridge = ObservableCombineBridge(0)
   @Published private(set) var isPaused: Bool = false
 
   /// Frequently-mutating progress-bar state lives here so the per-asset filename and
@@ -194,10 +194,10 @@ final class ExportManager: ObservableObject, Observable {
   /// awaitable run; no event is emitted for runs started via the existing fire-and-forget
   /// `start*` methods.
   private(set) var activeRunContext: ExportRunContext? {
-    get { bridgedRead(activeRunContextStorage, \.activeRunContext) }
-    set { bridgedWrite(activeRunContextStorage, \.activeRunContext, newValue) }
+    get { bridgedRead(activeRunContextBridge, \.activeRunContext) }
+    set { bridgedWrite(activeRunContextBridge, \.activeRunContext, newValue) }
   }
-  private let activeRunContextStorage = ObservableCombineBridge<ExportRunContext?>(nil)
+  private let activeRunContextBridge = ObservableCombineBridge<ExportRunContext?>(nil)
 
   /// Composite run-state observable for AutoSync. Republishes whenever the active
   /// context, the running flag, the queue depth, or the bulk-enqueue flag changes
@@ -210,8 +210,8 @@ final class ExportManager: ObservableObject, Observable {
   /// user-initiated bulk export. See issue #67 item 4a.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
     Publishers.CombineLatest4(
-      activeRunContextStorage.publisher, isRunningStorage.publisher,
-      queueCountStorage.publisher, isEnqueueingAllStorage.publisher
+      activeRunContextBridge.publisher, isRunningBridge.publisher,
+      queueCountBridge.publisher, isEnqueueingAllBridge.publisher
     )
     .map { context, isRunning, queueCount, isEnqueueingAll in
       let manualFireAndForget =
@@ -275,12 +275,12 @@ final class ExportManager: ObservableObject, Observable {
 
   /// `activeRunContext`, from its bridge.
   var activeRunContextPublisher: AnyPublisher<ExportRunContext?, Never> {
-    activeRunContextStorage.publisher
+    activeRunContextBridge.publisher
   }
 
   /// `isEnqueueingAll`, from its bridge.
   var isEnqueueingAllPublisher: AnyPublisher<Bool, Never> {
-    isEnqueueingAllStorage.publisher
+    isEnqueueingAllBridge.publisher
   }
 
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
@@ -530,10 +530,10 @@ final class ExportManager: ObservableObject, Observable {
   /// item 4a — without this, AutoSync would race to start a background run
   /// during the multi-select / Export-All dispatcher's mid-enqueue window.
   private(set) var isEnqueueingAll: Bool {
-    get { bridgedRead(isEnqueueingAllStorage, \.isEnqueueingAll) }
-    set { bridgedWrite(isEnqueueingAllStorage, \.isEnqueueingAll, newValue) }
+    get { bridgedRead(isEnqueueingAllBridge, \.isEnqueueingAll) }
+    set { bridgedWrite(isEnqueueingAllBridge, \.isEnqueueingAll, newValue) }
   }
-  private let isEnqueueingAllStorage = ObservableCombineBridge(false)
+  private let isEnqueueingAllBridge = ObservableCombineBridge(false)
   /// Forwarder to the import coordinator's task handle so existing test reads
   /// (`manager.importTask`) and the `waitForImportCompletion` test helper continue to
   /// resolve against the same in-flight Task.
@@ -675,18 +675,18 @@ final class ExportManager: ObservableObject, Observable {
   private let observationRegistrar = ObservationRegistrar()
 
   private func bridgedRead<Value>(
-    _ storage: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
   ) -> Value {
     observationRegistrar.access(self, keyPath: keyPath)
-    return storage.value
+    return bridge.value
   }
 
   private func bridgedWrite<Value>(
-    _ storage: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>,
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>,
     _ newValue: Value
   ) {
     objectWillChange.send()
-    storage.write(newValue) { observationRegistrar.withMutation(of: self, keyPath: keyPath, $0) }
+    bridge.write(newValue) { observationRegistrar.withMutation(of: self, keyPath: keyPath, $0) }
   }
 
   // MARK: - Lifetime contract
