@@ -417,9 +417,10 @@ suppresses the hook for that run instead.
 publishes the cached flag `PhotoLibraryManager.isAuthorized`, which the export guards and the
 main window also read. Missing access is `.blocked(.photosAccessMissing)`: below the import
 and manual-export waits, so their resume rules still apply, and above every other blocker,
-since none of them can be fixed without access. A run in progress is never cancelled; its scan
-reports the missing access, the run ends `.failed`, and going idle from `.blocked` schedules
-nothing.
+since none of them can be fixed without access. A run in progress is never cancelled
+mid-scope; its scan reports the missing access, the run ends `.failed`, and going idle from
+`.blocked` schedules nothing. Access returning during a run that then stops on the
+destination is held like any other trigger during it.
 
 macOS posts no notification when access changes, so access is refreshed at three points:
 before each fired debounce (the only path to a run), before each scope of the AutoSync

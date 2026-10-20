@@ -22,7 +22,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 
 If Photos access is denied, choose **Open System Settings**, enable access under **Privacy & Security → Photos**, then return to Photo Export. The app checks access again so you can continue setup or browsing.
 
-If Auto Export shows "Blocked — Photos access needed", Photos access is off and Auto Export doesn't run. Turn it back on under **System Settings → Privacy & Security → Photos**; pending changes are kept and export when you return to Photo Export.
+If Auto Export shows "Blocked — Photos access needed", Photos access is off and Auto Export doesn't run. Turn it back on under **System Settings → Privacy & Security → Photos**; pending changes are kept and export shortly after you return to Photo Export.
 
 ## Features
 
