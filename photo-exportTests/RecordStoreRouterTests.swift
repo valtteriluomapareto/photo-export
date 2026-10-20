@@ -112,8 +112,8 @@ struct RecordStoreRouterTests {
     let placement = timeline(year: 2019, month: 12)
     let commit = try h.router.captureFinalCommit(
       assetId: "a", placement: placement, variant: .original,
-      relPath: "2019/12/", filename: "X.HEIC", subfolder: "videos", acceptsEditedFallback: false)
-    await commit(true)
+      relPath: "2019/12/", subfolder: "videos", acceptsEditedFallback: false)
+    await commit("X.HEIC")
 
     for reload in [false, true] {
       if reload { h.timeline.configure(for: "test") }
@@ -135,8 +135,8 @@ struct RecordStoreRouterTests {
       if placement.kind != .timeline { h.collection.upsertPlacement(placement) }
       let commit = try h.router.captureFinalCommit(
         assetId: "asset", placement: placement, variant: .original,
-        relPath: "2025/07/", filename: "saved.jpg", subfolder: nil, acceptsEditedFallback: false)
-      await commit(true)
+        relPath: "2025/07/", subfolder: nil, acceptsEditedFallback: false)
+      await commit("saved.jpg")
     }
     try await h.timeline.flush()
     try await h.collection.flush()
@@ -183,9 +183,9 @@ struct RecordStoreRouterTests {
     h.collection.upsertPlacement(alb)
     let commit = try h.router.captureFinalCommit(
       assetId: "a1", placement: alb, variant: .edited,
-      relPath: alb.relativePath, filename: "v.HEIC", subfolder: "videos",
+      relPath: alb.relativePath, subfolder: "videos",
       acceptsEditedFallback: false)
-    await commit(true)
+    await commit("v.HEIC")
 
     for reload in [false, true] {
       if reload { h.collection.configure(for: "test") }
@@ -233,8 +233,8 @@ struct RecordStoreRouterTests {
     // Timeline path: .done is NOT removed (only .inProgress is).
     let commit = try h.router.captureFinalCommit(
       assetId: "done", placement: timeline(), variant: .original,
-      relPath: "2025/07/", filename: "D.HEIC", subfolder: nil, acceptsEditedFallback: false)
-    await commit(true)
+      relPath: "2025/07/", subfolder: nil, acceptsEditedFallback: false)
+    await commit("D.HEIC")
     h.router.removeInProgressVariant(
       assetId: "done", placement: timeline(), variant: .original)
     #expect(h.timeline.exportInfo(assetId: "done")?.variants[.original]?.status == .done)
@@ -255,8 +255,8 @@ struct RecordStoreRouterTests {
 
     let commit = try h.router.captureFinalCommit(
       assetId: "kept", placement: alb, variant: .original,
-      relPath: alb.relativePath, filename: "K.HEIC", subfolder: nil, acceptsEditedFallback: false)
-    await commit(true)
+      relPath: alb.relativePath, subfolder: nil, acceptsEditedFallback: false)
+    await commit("K.HEIC")
     h.router.removeInProgressVariant(
       assetId: "kept", placement: alb, variant: .original)
     #expect(

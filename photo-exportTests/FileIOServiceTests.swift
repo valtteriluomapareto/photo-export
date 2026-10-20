@@ -418,4 +418,65 @@ import Testing
       #expect(try Data(contentsOf: source) == Data("new".utf8))
     }
   }
+
+  // MARK: - Inspecting an existing file
+
+  @Test func itemIdentityDoesNotFollowLinks() throws {
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let service = FileIOService()
+    let file = root.appendingPathComponent("IMG_0001.JPG")
+    try Data("0123456789".utf8).write(to: file)
+    let link = root.appendingPathComponent("link.JPG")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+
+    let identity = try #require(try service.itemIdentity(at: file))
+    #expect(identity.isRegularFile)
+    #expect(identity.size == 10)
+    #expect(try service.itemIdentity(at: link)?.isRegularFile == false)
+    #expect(try service.itemIdentity(at: root.appendingPathComponent("missing.JPG")) == nil)
+    #expect(try service.itemIdentity(at: file.appendingPathComponent("below-a-file")) == nil)
+
+    // A replacement with the same size is a different identity.
+    try FileManager.default.removeItem(at: file)
+    try Data("9876543210".utf8).write(to: file)
+    #expect(try service.itemIdentity(at: file) != identity)
+  }
+
+  /// The name comes from the folder, not from the spelling used to look the file up.
+  @Test func storedNameIsTheFolderSpelling() throws {
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try writeExactName(Self.nfdName, in: root, contents: "stored")
+    let service = FileIOService()
+    let lookedUp = root.appendingPathComponent(Self.nfcName.lowercased())
+    guard FileManager.default.fileExists(atPath: lookedUp.path) else {
+      // A case- or normalization-sensitive scratch volume has no other spelling to resolve.
+      #expect(try service.storedName(at: root.appendingPathComponent(Self.nfdName)) == Self.nfdName)
+      return
+    }
+    let stored = try service.storedName(at: lookedUp)
+    #expect(Array(stored.unicodeScalars) == Array(Self.nfdName.unicodeScalars))
+  }
+
+  @Test func readChunkReadsTheRangeAndRefusesLinks() async throws {
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let service = FileIOService()
+    let file = root.appendingPathComponent("IMG_0001.JPG")
+    try Data("0123456789".utf8).write(to: file)
+    let link = root.appendingPathComponent("link.JPG")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+
+    #expect(try await service.readChunk(at: file, offset: 3, length: 4) == Data("3456".utf8))
+    #expect(try await service.readChunk(at: file, offset: 8, length: 4) == Data("89".utf8))
+    #expect(try await service.readChunk(at: file, offset: 12, length: 4).isEmpty)
+    do {
+      _ = try await service.readChunk(at: link, offset: 0, length: 4)
+      Issue.record("Reading through a symbolic link must fail")
+    } catch {
+      #expect((error as NSError).domain == NSPOSIXErrorDomain)
+      #expect((error as NSError).code == Int(ELOOP))
+    }
+  }
 }

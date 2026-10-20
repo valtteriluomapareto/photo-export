@@ -102,7 +102,9 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     )
   }
 
-  private static func destinationExistsError() -> NSError {
+  /// The collision refusal, `Export` code 2. Also reported when an existing file stops
+  /// being the one an export planned to adopt.
+  static func destinationExistsError() -> NSError {
     NSError(
       domain: "Export", code: 2,
       userInfo: [NSLocalizedDescriptionKey: "Destination already exists"])
@@ -198,6 +200,101 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
     guard attributes[.type] as? FileAttributeType == .typeRegular else { return nil }
     return (attributes[.size] as? NSNumber)?.int64Value
+  }
+
+  func itemIdentity(at url: URL) throws -> FileItemIdentity? {
+    var info = stat()
+    let status = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+      guard let path else {
+        errno = EINVAL
+        return -1
+      }
+      return lstat(path, &info)
+    }
+    guard status == 0 else {
+      let code = errno
+      if code == ENOENT || code == ENOTDIR { return nil }
+      throw Self.posixError(code, url)
+    }
+    return FileItemIdentity(
+      isRegularFile: info.st_mode & S_IFMT == S_IFREG, device: Int64(info.st_dev),
+      inode: UInt64(info.st_ino), size: Int64(info.st_size),
+      modificationSeconds: Int(info.st_mtimespec.tv_sec),
+      modificationNanoseconds: Int(info.st_mtimespec.tv_nsec))
+  }
+
+  /// Reads `ATTR_CMN_NAME`, which reports the name the folder stores rather than the
+  /// spelling used to look the entry up. A symbolic link is not followed.
+  func storedName(at url: URL) throws -> String {
+    var request = attrlist()
+    request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+    request.commonattr = attrgroup_t(ATTR_CMN_NAME)
+    let referenceOffset = MemoryLayout<UInt32>.size
+    var reply = [UInt8](
+      repeating: 0, count: referenceOffset + MemoryLayout<attrreference_t>.size + Int(MAXPATHLEN))
+    let status = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+      guard let path else {
+        errno = EINVAL
+        return -1
+      }
+      return reply.withUnsafeMutableBytes {
+        getattrlist(path, &request, $0.baseAddress, $0.count, UInt32(FSOPT_NOFOLLOW))
+      }
+    }
+    guard status == 0 else { throw Self.posixError(errno, url) }
+    return try reply.withUnsafeBytes { raw in
+      let reference = raw.loadUnaligned(fromByteOffset: referenceOffset, as: attrreference_t.self)
+      let start = referenceOffset + Int(reference.attr_dataoffset)
+      // The length counts the terminating NUL.
+      let length = Int(reference.attr_length) - 1
+      guard start >= referenceOffset, length > 0, start + length <= raw.count,
+        let name = String(bytes: raw[start..<(start + length)], encoding: .utf8)
+      else {
+        throw Self.posixError(EIO, url)
+      }
+      return name
+    }
+  }
+
+  func readChunk(at url: URL, offset: Int64, length: Int) async throws -> Data {
+    try await withCheckedThrowingContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async {
+        continuation.resume(with: Result { try Self.read(url, offset: offset, length: length) })
+      }
+    }
+  }
+
+  private static func read(_ url: URL, offset: Int64, length: Int) throws -> Data {
+    let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+      guard let path else {
+        errno = EINVAL
+        return -1
+      }
+      return open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    }
+    guard descriptor >= 0 else { throw posixError(errno, url) }
+    defer { close(descriptor) }
+    var data = Data(count: length)
+    var filled = 0
+    try data.withUnsafeMutableBytes { buffer in
+      // A network volume may return fewer bytes than asked for before the end of the file.
+      while filled < length {
+        let count = pread(
+          descriptor, buffer.baseAddress! + filled, length - filled, off_t(offset) + off_t(filled))
+        if count < 0 {
+          if errno == EINTR { continue }
+          throw posixError(errno, url)
+        }
+        if count == 0 { break }
+        filled += count
+      }
+    }
+    data.count = filled
+    return data
+  }
+
+  private static func posixError(_ code: Int32, _ url: URL) -> NSError {
+    NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: url.path])
   }
 
   func removeItem(at url: URL) throws {

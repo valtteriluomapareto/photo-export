@@ -91,7 +91,8 @@ are not automatically scavenged. Staging paths never determine final filenames.
 The final move never replaces an existing file. `FileIOService.moveItemAtomically` refuses an
 existing destination with `Export` code 2 ("Destination already exists"), which classifies as a
 destination collision with the `Export:2` error signature (persisted in retry state for Auto
-Export runs); the variant fails, the existing bytes stay, and the commit task removes the stage.
+Export runs). The existing bytes stay. A paired slot's variant fails and the commit task removes
+the stage; any other slot plans its name again (see [Choosing the final name](#choosing-the-final-name)).
 It creates the destination folder, then asks the folder's volume whether it advertises
 `VOL_CAP_INT_RENAME_EXCL` (`getattrlist` `ATTR_VOL_CAPABILITIES`, asked on every commit):
 
@@ -149,8 +150,9 @@ commit. Mount a share from a macOS server and one from a NAS (Samba) and record,
    With the bit, exports take the exclusive path; without it, check-then-move.
 2. Export one month to the share, quit the app, remove that destination's record folder (see
    [persistence-store.md](persistence-store.md)) and export the month again. Every existing
-   file must stay byte-identical; the second run may add ` (1)` copies or report
-   "Destination already exists", but must never replace a file.
+   file must stay byte-identical. Single files should be recorded against their identical
+   copies; paired groups, and any name the share reports in another normalization, may add
+   ` (1)` copies or report "Destination already exists". No file may ever be replaced.
 3. During an export of a large month, copy a different file from another Mac to the final name
    of an item not yet exported. The copied file must survive, and that item must fail with
    "Destination already exists" or land under ` (1)`.
@@ -158,10 +160,64 @@ commit. Mount a share from a macOS server and one from a NAS (Samba) and record,
    unknown, retryable error; never a zero-byte or partial file at a final name (hidden
    `.photo-export-*.tmp` stages may remain).
 
+#### Choosing the final name
+
+The final name of a file written alone is chosen once its bytes are staged. A paired
+original-side slot (`_orig`, or a still or motion file that shares a pre-allocated group
+stem) has one fixed name, and an existing file there fails the variant as above. Every other
+slot (a single original, an edit on an inherited or fresh stem) is walked in order, natural
+name first, then ` (1)`, ` (2)`… (`FinalNamePlanner`, off the main actor through
+`runDetached`, generation rechecked afterwards):
+
+- **Nothing there** (`lstat` finds no entry): commit the stage there.
+- **An existing file is adopted** instead of writing a copy when all of these hold: it is a
+  regular file (a symbolic link is never followed); its size is non-zero and equal to the
+  stage's; no record other than this variant's own names it in that folder (see claims
+  below); and its bytes equal the stage's. The compare reads both files in 1 MiB chunks,
+  head, then tail, then the rest in order, stops at the first difference, and checks the
+  run's generation and Task cancellation before every chunk. A read error on either file,
+  or a stored name that cannot be read, passes the candidate over. No digests are stored or
+  computed.
+- **Anything else** (other bytes, another size, empty, a link, a folder, claimed): try the
+  next suffix.
+
+The variant is marked in progress under the provisional name (the first free one, as before
+staging) and re-marked under the planned name whenever planning picks another. The commit
+of an adopted file re-runs `lstat` and requires the same device, inode, size and
+modification time as when its bytes were compared; it then removes the stage, applies no
+timestamps and acknowledges the file under its stored name (`getattrlist`
+`ATTR_CMN_NAME`), which can differ from the resource's name in case or normalization. A
+changed file, or `Export:2` from the exclusive rename, makes the commit report a collision
+without acknowledging anything; the exporter plans again from the natural name, at most
+`VariantExporter.maxCommitAttempts` (3) times, rechecking generation each time, before the
+variant fails with `Export:2`. A paired slot fails at the first collision. The stage is kept
+across a re-plan only while the run is current.
+
+Claims: each record store keeps, per folder (timeline month or collection placement, plus
+the variant's subfolder), a count of the filenames its variant records name, case-folded
+and in NFC. Every status counts, including in-progress, pending and failed, and so do the
+asset's other variants (an edited fallback's `edited` record carries the original's name).
+Only the variant being written is excluded. The index is maintained in each store's
+`apply`, so log replay, import, prune and reset follow it, and rebuilt wherever the
+in-memory records are replaced wholesale (load, retained recovery, the corrupt-reset path
+and the parked-snapshot restore after an unreadable reload).
+
+Known limits: only the folder the variant is being written to is searched, so an identical
+file left in `videos/` (or outside it) by a layout change is not found. Paired groups and
+`_orig` slots are allocated before staging and are never adopted. Rendered video and
+HEIC-to-JPEG output usually differ byte for byte from an earlier export, so they get a
+suffix, which is safe. On a network volume that is case- or normalization-sensitive, a file
+whose stored name differs from the resource's only in normalization is not found by
+`lstat` and the export lands at ` (1)`. Adoptions are logged (`VariantExporter`, "Adopted
+existing identical …"); they are not counted in the run summary or shown as Export Issues.
+
 `VariantExporter` checks generation immediately before admitting the final atomic move.
-After admission, a short-lived task owns the physical move, timestamps, record acknowledgement,
-and staging cleanup. A successful move is acknowledged to its captured logical destination even
-if the run becomes stale. `RecordStoreRouter` captures that store's existing JSONL owner; each
+After admission, a short-lived task owns the physical move or adoption check, timestamps,
+record acknowledgement, and staging cleanup. A successful move or adoption is acknowledged to
+its captured logical destination even if the run becomes stale. The acknowledgement carries the
+committed name (`nil` when nothing was committed), and every completion path in both stores
+records that name: the direct completion, the completion deferred behind a corrupt load, the
+write into a parked destination's history, and the restore of a parked snapshot. `RecordStoreRouter` captures that store's existing JSONL owner; each
 store parks its latest snapshot only when switching away, merges the completed variant, and
 retains write failures through the existing non-destructive persistence recovery path. A corrupt
 load keeps its alert and bytes intact; only the known completion delta is deferred until a valid
@@ -193,7 +249,7 @@ the owning generation before changing UI state.
 | `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager`, `ExportRecordStore`, `CollectionExportRecordStore` |
 | Main-actor collaborator without `@Published` (mutates shared state from MainActor only) | `@MainActor final class` | `VariantExporter`, `RecordStoreRouter`, `JSONLRecordFile` |
 | Main-actor composition wrapper — final, conforms to `PhotoLibraryService`, optionally wraps an injected service for curated screenshot content | `@MainActor final class` | `PhotoLibraryManager` (wraps `overrideService`), `ScreenshotPhotoLibraryService` (peer, no inheritance) |
-| Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `BackupScanner`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` |
+| Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `BackupScanner`, `FileIOService`, `FinalNamePlanner`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` |
 | Concurrent state holder | `actor` | `CollectionCountCache` |
 | Heavy work that must hop off MainActor | `nonisolated async` selectively on protocol-conforming methods | `PhotoLibraryService` (selectively `nonisolated` count methods), `MediaRenderer`, `AssetResourceWriter`, `FileSystemService` |
 
@@ -541,6 +597,8 @@ If you rename, move, add or remove one of these tests, update the list file, thi
 | `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` | The `isExported` predicate runs *after* the retry-gate (instead of before) | Restore the order. `isExported` must run first so already-done assets are not blocked by the retry-gate. |
 | `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` | An AutoSync run starts while the history check after "Same Folder" is still running, or no run follows it | The check must start in the same main-actor turn as the identity publish (`onAmbiguousSameFolderChosen`), and a debounce an import cancels must keep its reason for the resume hook. |
 | [`FileIOServiceTests.existingFileAtCommitIsNeverReplaced`](../../photo-exportTests/FileIOServiceTests.swift) | A file that appears at the final name right before the commit call is replaced, or is refused with a signature other than `Export:2`, or the commit stops using `RENAME_EXCL` on a capable volume (the scratch volume, through the production capability check), or an `EEXIST` from that rename falls back to check-then-move | Restore the refusal. The final commit must never replace an existing file, and its collision must keep the `Export:2` signature retry state uses. The check-then-move case only proves that `moveItem`'s own refusal keeps `Export:2`; it cannot prove the window inside `moveItem` is closed. |
+| [`IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted`](../../photo-exportTests/IdenticalFileAdoptionTests.swift) | Re-exporting a month after its history is lost writes `IMG_0001 (1).JPG` beside an identical `IMG_0001.JPG`, records another name, or moves or re-timestamps the existing file | Restore adoption: an unclaimed regular file with the staged size and bytes is recorded under its stored name, with no move and no timestamps (§Final file commit boundary). |
+| `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss` | Two byte-identical assets, re-exported after lost history in either order, end up recorded against one file, or write new ` (n)` copies | Restore the claim rule. A file another record names is never adopted, so each asset's record keeps a file of its own. |
 
 ## Extension recipes
 

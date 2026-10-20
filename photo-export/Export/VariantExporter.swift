@@ -9,7 +9,9 @@ import OSLog
 /// - Reuse-source copy path (cross-placement clone of an existing `.done` write).
 /// - Byte production: static resources via `AssetResourceWriter`; rendered media via
 ///   `MediaRenderer` directly (Phase 3b).
-/// - Atomic move of `.tmp` into place + timestamp application.
+/// - Final-name planning against the staged bytes (via `FinalNamePlanner`): the atomic
+///   move of `.tmp` into place + timestamp application, or adoption of an identical
+///   existing file that no record names.
 /// - Per-variant exported / failed record write.
 ///
 /// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 3b, the
@@ -76,9 +78,36 @@ final class VariantExporter {
   /// `quality:` parameter is the seam.
   private static let heicJPEGQuality: Double = 0.85
   private let fileSystem: any FileSystemService
+  private let finalNamePlanner: FinalNamePlanner
   private let exportDestination: any ExportDestination
   // Physical final IO outlives queue teardown. Replacement jobs await its history barrier.
-  private var finalCommitTask: Task<Result<Void, Error>, Never>?
+  private var finalCommitTask: Task<Result<CommitOutcome, Error>, Never>?
+
+  /// Plans after a lost race for the final name, before the variant fails as a collision.
+  static let maxCommitAttempts = 3
+
+  /// What a final commit does with the staged file.
+  private enum FinalCommit {
+    /// Exclusive rename of the stage to the URL.
+    case move(URL)
+    /// Record the existing identical file; the stage is removed.
+    case adopt(URL, storedName: String, identity: FileItemIdentity)
+    /// A verified interrupted paired slot already holds the file.
+    case interrupted(URL)
+
+    var recordedName: String {
+      switch self {
+      case .move(let url), .interrupted(let url): return url.lastPathComponent
+      case .adopt(_, let storedName, _): return storedName
+      }
+    }
+  }
+
+  private enum CommitOutcome {
+    case committed(filename: String)
+    /// Another file held the name, or the file planned for adoption changed.
+    case collision(Error)
+  }
 
   func waitForFinalCommit(onWait: (() -> Void)?) async {
     while let task = finalCommitTask {
@@ -106,6 +135,7 @@ final class VariantExporter {
     self.mediaRenderer = mediaRenderer
     self.imageConverter = imageConverter
     self.fileSystem = fileSystem
+    self.finalNamePlanner = FinalNamePlanner(fileSystem: fileSystem)
     self.exportDestination = exportDestination
   }
 
@@ -180,7 +210,7 @@ final class VariantExporter {
       variant: variant, descriptor: descriptor, producer: producer, destDir: destDir,
       relPath: relPath, job: job, groupStem: groupStem, subfolder: subfolder, generation: gen)
 
-    let (finalURL, chosenStem) = try destinationResolver.resolveDestination(
+    let slot = try destinationResolver.resolveSlot(
       variant: variant,
       descriptor: descriptor,
       originalFilename: originalFilename,
@@ -190,15 +220,17 @@ final class VariantExporter {
       pairOriginalWithSuffix: pairOriginalWithSuffix,
       interruptedFilename: interruptedFilename
     )
+    // Provisional: the final name is planned against the staged bytes before the commit.
+    let finalURL = destinationResolver.firstFreeURL(in: slot)
 
     if finalURL.lastPathComponent == interruptedFilename,
       fileSystem.fileExists(atPath: finalURL.path)
     {
-      try await commitFile(
-        stagedURL: nil, finalURL: finalURL, descriptor: descriptor, job: job,
+      _ = try await commitFile(
+        .interrupted(finalURL), stagedURL: nil, descriptor: descriptor, job: job,
         variant: variant, relPath: relPath, subfolder: subfolder,
         acceptsEditedFallback: acceptsEditedFallback, generation: gen)
-      return chosenStem
+      return slot.chosenStem(forFilename: finalURL.lastPathComponent)
     }
 
     let reuseSource: (url: URL, relativePath: String)?
@@ -365,70 +397,177 @@ final class VariantExporter {
     // by `defer`, but only if we throw before the move.
     try queueCoordinator?.throwIfCancelledOrStale(gen)
 
-    try await commitFile(
-      stagedURL: tempURL, finalURL: finalURL, descriptor: descriptor, job: job,
-      variant: variant, relPath: relPath, subfolder: subfolder,
+    let committedName = try await commitStaged(
+      tempURL, slot: slot, markedName: finalURL.lastPathComponent, descriptor: descriptor,
+      job: job, variant: variant, relPath: relPath, subfolder: subfolder,
       acceptsEditedFallback: acceptsEditedFallback, generation: gen)
     inFlight = nil
     logger.info(
-      "Exported \(finalURL.lastPathComponent, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(finalURL.deletingLastPathComponent().path, privacy: .public)"
+      "Exported \(committedName, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(destDir.path, privacy: .public)"
     )
-    return chosenStem
+    return slot.chosenStem(forFilename: committedName)
   }
 
   // MARK: - Helpers
 
-  /// A nil stage acknowledges a verified interrupted paired slot through the same
-  /// bounded commit and captured-destination barrier as a newly moved file.
-  private func commitFile(
-    stagedURL: URL?, finalURL: URL, descriptor: AssetDescriptor, job: ExportManager.ExportJob,
-    variant: ExportVariant, relPath: String, subfolder: String?, acceptsEditedFallback: Bool,
+  /// Plans the final name for the staged file and commits it. When another file takes the
+  /// planned name first, or a file planned for adoption changes, a `.suffix` slot plans
+  /// again from the start; a `.refuse` slot fails as a collision. Each plan that picks a
+  /// different name re-marks the variant in progress under it.
+  private func commitStaged(
+    _ stagedURL: URL, slot: ExportDestinationResolver.Slot, markedName: String,
+    descriptor: AssetDescriptor, job: ExportManager.ExportJob, variant: ExportVariant,
+    relPath: String, subfolder: String?, acceptsEditedFallback: Bool, generation gen: Int
+  ) async throws -> String {
+    var markedName = markedName
+    var collision: Error = FileIOService.destinationExistsError()
+    for attempt in 1...Self.maxCommitAttempts {
+      let commit = try await planCommit(
+        stagedURL, slot: slot, descriptor: descriptor, job: job, variant: variant,
+        subfolder: subfolder, generation: gen)
+      if commit.recordedName != markedName {
+        markedName = commit.recordedName
+        host?.setCurrentAssetFilename(markedName)
+        recordStoreRouter.markVariantInProgress(
+          assetId: descriptor.id, placement: job.placement, variant: variant,
+          relPath: relPath, filename: markedName, subfolder: subfolder)
+      }
+      switch try await commitFile(
+        commit, stagedURL: stagedURL, descriptor: descriptor, job: job, variant: variant,
+        relPath: relPath, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback,
+        generation: gen)
+      {
+      case .committed(let filename):
+        if case .adopt = commit {
+          logger.info(
+            "Adopted existing identical \(filename, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
+          )
+        }
+        return filename
+      case .collision(let error):
+        guard case .suffix = slot.policy else { throw error }
+        collision = error
+        logger.notice(
+          "\(commit.recordedName, privacy: .public) was taken before its commit (attempt \(attempt, privacy: .public)) for id: \(descriptor.id, privacy: .public)"
+        )
+      }
+    }
+    throw collision
+  }
+
+  /// Walks the slot off the main actor. Physical reads finish before this returns, even
+  /// after cancellation, because the surrounding export holds scoped access until then.
+  private func planCommit(
+    _ stagedURL: URL, slot: ExportDestinationResolver.Slot, descriptor: AssetDescriptor,
+    job: ExportManager.ExportJob, variant: ExportVariant, subfolder: String?,
     generation gen: Int
-  ) async throws {
+  ) async throws -> FinalCommit {
+    guard case .suffix = slot.policy else { return .move(slot.naturalURL) }
+    let planner = finalNamePlanner
+    let router = recordStoreRouter
+    let coordinator = queueCoordinator
+    let placement = job.placement
+    let assetId = descriptor.id
+    let result: Result<FinalNamePlanner.Plan, Error> = await runDetached(priority: .utility) {
+      do {
+        return .success(
+          try await planner.plan(
+            slot: slot, stagedURL: stagedURL,
+            isClaimed: { name in
+              await router.isFilenameClaimed(
+                name, placement: placement, subfolder: subfolder, excludingAssetId: assetId,
+                variant: variant)
+            },
+            shouldStop: { await coordinator?.isCurrent(gen) != true }))
+      } catch {
+        return .failure(error)
+      }
+    }
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
+    switch try result.get() {
+    case .move(let url):
+      return .move(url)
+    case .adopt(let url, let storedName, let identity):
+      return .adopt(url, storedName: storedName, identity: identity)
+    }
+  }
+
+  /// A nil stage acknowledges a verified interrupted paired slot through the same
+  /// bounded commit and captured-destination barrier as a newly moved file. An adopted
+  /// file is acknowledged once `lstat` shows it unchanged since its bytes were compared;
+  /// it gets no timestamps.
+  private func commitFile(
+    _ commit: FinalCommit, stagedURL: URL?, descriptor: AssetDescriptor,
+    job: ExportManager.ExportJob, variant: ExportVariant, relPath: String, subfolder: String?,
+    acceptsEditedFallback: Bool, generation gen: Int
+  ) async throws -> CommitOutcome {
     try queueCoordinator?.throwIfCancelledOrStale(gen)
     let acknowledge = try recordStoreRouter.captureFinalCommit(
       assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder,
-      acceptsEditedFallback: acceptsEditedFallback)
-    let commit = Task { [fileSystem] () -> Result<Void, Error> in
+      relPath: relPath, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback)
+    let task = Task { [fileSystem] () -> Result<CommitOutcome, Error> in
+      var keepsStage = false
       defer {
-        if let tempURL = stagedURL, fileSystem.fileExists(atPath: tempURL.path) {
+        if !keepsStage, let tempURL = stagedURL, fileSystem.fileExists(atPath: tempURL.path) {
           try? fileSystem.removeItem(at: tempURL)
         }
         finalCommitTask = nil
       }
       do {
-        if let tempURL = stagedURL {
-          try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .utility).async {
-              continuation.resume(
-                with: Result { try fileSystem.moveItemAtomically(from: tempURL, to: finalURL) })
-            }
+        switch commit {
+        case .move(let url):
+          guard let tempURL = stagedURL else { preconditionFailure("A move needs a stage") }
+          try await Self.onUtilityQueue {
+            try fileSystem.moveItemAtomically(from: tempURL, to: url)
           }
+        case .adopt(let url, _, let identity):
+          let current = try? await Self.onUtilityQueue { try fileSystem.itemIdentity(at: url) }
+          guard current == identity else { throw FileIOService.destinationExistsError() }
+        case .interrupted:
+          break
         }
+      } catch let error as NSError where error.domain == "Export" && error.code == 2 {
+        await acknowledge(nil)
+        // A current run plans again with the same stage; a stale one stops here.
+        keepsStage = queueCoordinator?.isCurrent(gen) == true
+        return .success(.collision(error))
       } catch {
-        await acknowledge(false)
+        await acknowledge(nil)
         return .failure(error)
       }
       // The file is now committed. Finish this bounded acknowledgement even when
       // its run was cancelled or its store switched destinations during physical IO.
-      if let createdAt = descriptor.creationDate {
-        await withCheckedContinuation { continuation in
-          DispatchQueue.global(qos: .utility).async {
-            fileSystem.applyTimestamps(creationDate: createdAt, to: finalURL)
-            continuation.resume()
+      switch commit {
+      case .move(let url), .interrupted(let url):
+        if let createdAt = descriptor.creationDate {
+          await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+              fileSystem.applyTimestamps(creationDate: createdAt, to: url)
+              continuation.resume()
+            }
           }
         }
+      case .adopt:
+        break
       }
-      await acknowledge(true)
-      return .success(())
+      await acknowledge(commit.recordedName)
+      return .success(.committed(filename: commit.recordedName))
     }
-    finalCommitTask = commit
-    let result = await commit.value
+    finalCommitTask = task
+    let result = await task.value
     // Stale errors and successes cannot reach replacement bookkeeping or UI.
     try queueCoordinator?.throwIfCancelledOrStale(gen)
-    try result.get()
+    return try result.get()
+  }
+
+  private nonisolated static func onUtilityQueue<T: Sendable>(
+    _ work: @escaping @Sendable () throws -> T
+  ) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async {
+        continuation.resume(with: Result { try work() })
+      }
+    }
   }
 
   private func verifiedInterruptedFilename(

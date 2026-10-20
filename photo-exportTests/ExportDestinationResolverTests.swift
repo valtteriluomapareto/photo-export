@@ -113,6 +113,9 @@ struct ExportDestinationResolverTests {
       func moveItemAtomically(from src: URL, to dst: URL) throws {}
       func applyTimestamps(creationDate: Date, to url: URL) {}
       func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws {}
+      func itemIdentity(at url: URL) throws -> FileItemIdentity? { nil }
+      func storedName(at url: URL) throws -> String { url.lastPathComponent }
+      func readChunk(at url: URL, offset: Int64, length: Int) async throws -> Data { Data() }
       func removeItem(at url: URL) throws {}
       func copyItem(from src: URL, to dst: URL) throws {}
     }

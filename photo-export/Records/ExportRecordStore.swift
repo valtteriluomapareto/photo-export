@@ -90,6 +90,21 @@ final class ExportRecordStore: ObservableObject {
   }
   private var monthCounters: [MonthKey: MonthCounters] = [:]
 
+  /// A variant's folder: its month plus the subfolder it was written into.
+  private struct ClaimFolder: Hashable {
+    let year: Int
+    let month: Int
+    let subfolder: String
+
+    init(year: Int, month: Int, subfolder: String?) {
+      self.year = year
+      self.month = month
+      self.subfolder = subfolder ?? ""
+    }
+  }
+  /// Filenames named by any variant record, kept with `monthCounters`.
+  private var filenameClaims = FilenameClaims<ClaimFolder>()
+
   /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
   @Published private(set) var state: RecordStoreState = .unconfigured
   @Published private(set) var persistenceError: String?
@@ -204,6 +219,7 @@ final class ExportRecordStore: ObservableObject {
     // Reset in-memory state
     recordsById = [:]
     monthCounters = [:]
+    filenameClaims.removeAll()
 
     guard let destinationId else {
       currentStoreDirURL = nil
@@ -332,6 +348,7 @@ final class ExportRecordStore: ObservableObject {
       try jsonl.resetToEmpty(emptySnapshot: [:])
       recordsById = [:]
       monthCounters = [:]
+      filenameClaims.removeAll()
       state = .ready
       replayFinalCompletions()
       changeNotifier.notifyNow()
@@ -492,6 +509,24 @@ final class ExportRecordStore: ObservableObject {
 
   func exportInfo(assetId: String) -> ExportRecord? {
     recordsById[assetId]
+  }
+
+  /// Whether a record other than `assetId`'s own `variant` names `filename` in the folder
+  /// for `year`/`month` and `subfolder`. The asset's other variants count.
+  func isFilenameClaimed(
+    _ filename: String, year: Int, month: Int, subfolder: String?,
+    excludingAssetId assetId: String, variant: ExportVariant
+  ) -> Bool {
+    let folder = ClaimFolder(year: year, month: month, subfolder: subfolder)
+    var count = filenameClaims.count(filename, in: folder)
+    if let record = recordsById[assetId], let own = record.variants[variant],
+      let ownName = own.filename,
+      ClaimFolder(year: record.year, month: record.month, subfolder: own.subfolder) == folder,
+      FilenameClaims<ClaimFolder>.sameName(ownName, filename)
+    {
+      count -= 1
+    }
+    return count > 0
   }
 
   /// Total number of assets in `year` whose `.original` variant is `.done`. Matches legacy
@@ -850,11 +885,13 @@ final class ExportRecordStore: ObservableObject {
   }
 
   /// Captures the existing writer before physical final IO. A successful move is
-  /// acknowledged even after cancellation; failure retains history for Retry.
+  /// acknowledged even after cancellation; failure retains history for Retry. The
+  /// acknowledgement carries the name the file was committed or adopted under, or `nil`
+  /// when nothing was committed.
   func captureFinalCommit(
     assetId: String, variant: ExportVariant, year: Int, month: Int, relPath: String,
-    filename: String, subfolder: String?, acceptsEditedFallback: Bool
-  ) throws -> (_ committed: Bool) async -> Void {
+    subfolder: String?, acceptsEditedFallback: Bool
+  ) throws -> (_ finalFilename: String?) async -> Void {
     guard state == .ready, let destinationId = configuredDestinationId, let file = jsonl else {
       throw RecordPersistenceUnavailable()
     }
@@ -862,7 +899,7 @@ final class ExportRecordStore: ObservableObject {
     let context = FinalCommitContext(
       destinationId: destinationId, file: file, snapshot: [:])
     finalCommitContext = context
-    let applyCompletion = { [weak self] in
+    let applyCompletion = { [weak self] (filename: String) in
       guard let self else { return }
       let date = Date()
       self.markVariantExported(
@@ -875,14 +912,14 @@ final class ExportRecordStore: ObservableObject {
           reason: .editedUnavailableOriginalBackedUp, at: date)
       }
     }
-    return { [self] committed in
+    return { [self] finalFilename in
       defer { if finalCommitContext === context { finalCommitContext = nil } }
-      guard committed else { return }
+      guard let filename = finalFilename else { return }
       let exportedAt = Date()
       if context.needsCorruptionRecovery
         || (configuredDestinationId == destinationId && state == .failed)
       {
-        deferredFinalCompletions[destinationId, default: []].append(applyCompletion)
+        deferredFinalCompletions[destinationId, default: []].append { applyCompletion(filename) }
         return
       }
       if configuredDestinationId == destinationId {
@@ -893,7 +930,7 @@ final class ExportRecordStore: ObservableObject {
           rebuildCountersFromRecords()
           hasUnsavedChanges = true
         }
-        applyCompletion()
+        applyCompletion(filename)
         if state == .persistenceFailed {
           retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
           return
@@ -1054,14 +1091,25 @@ final class ExportRecordStore: ObservableObject {
       counters.pairedVideoIncomplete += sign
     }
     monthCounters[key] = counters
+    for variantRec in record.variants.values {
+      let folder = ClaimFolder(
+        year: record.year, month: record.month, subfolder: variantRec.subfolder)
+      if sign > 0 {
+        filenameClaims.add(variantRec.filename, in: folder)
+      } else {
+        filenameClaims.remove(variantRec.filename, in: folder)
+      }
+    }
   }
 
-  /// Rebuilds `monthCounters` from scratch by walking `recordsById` once. Called from
-  /// `configure(for:)` after the snapshot is loaded and log ops are replayed (with
-  /// counter updates suppressed during replay), and after `recoverInProgressVariants()`
-  /// transitions any leftover in-progress variants to failed in-memory.
+  /// Rebuilds `monthCounters` and `filenameClaims` from scratch by walking `recordsById`
+  /// once. Called from `configure(for:)` after the snapshot is loaded and log ops are
+  /// replayed (with counter updates suppressed during replay), after
+  /// `recoverInProgressVariants()` transitions any leftover in-progress variants to failed
+  /// in-memory, and whenever retained records replace the in-memory ones.
   private func rebuildCountersFromRecords() {
     monthCounters = [:]
+    filenameClaims.removeAll()
     for record in recordsById.values {
       contribute(record, sign: +1)
     }

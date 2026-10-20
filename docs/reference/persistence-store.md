@@ -135,6 +135,14 @@ asset are written together (an edit with its `_orig` companion, or a still with 
 video), the exporter picks one stem at which every file's name is free, so the group
 shares one stem and its collision suffix rather than being split across stems.
 
+A file written alone can instead be recorded against an existing file at its natural name
+or one of its suffixes, when that file has the same bytes and no other record in either
+store names it in that folder (see architecture-conventions § Final file commit boundary).
+Its `filename` is then the name as the folder spells it, which can differ from the
+resource's name in case or Unicode normalization. Every record with a `filename`, whatever
+its status, keeps that name from being adopted for another asset or variant. The index
+behind that check is built from the records in memory; nothing new is persisted.
+
 Shared albums record only `original`. Their placement kind maps to the `singleResource`
 variant policy (`ExportPlacement.Kind.variantPolicy`, not persisted): Photos exposes one
 downscaled resource per shared-album asset, so there is no `edited` variant, no `_orig`

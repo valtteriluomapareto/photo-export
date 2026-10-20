@@ -15,6 +15,25 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   private var _afterTimestampsHook: (@Sendable (URL) -> Void)?
   private var _copyHook: (@Sendable (URL, URL) throws -> Void)?
   private var _inspectionHook: (@Sendable (URL) throws -> Void)?
+  private var _identityHook: (@Sendable (URL) throws -> Void)?
+  private var _chunkReadHook: (@Sendable (URL, Int64) async throws -> Void)?
+  private var _identityCalls: [URL] = []
+  private var _chunkReads: [(url: URL, offset: Int64, length: Int)] = []
+
+  /// Runs before each identity lookup, so it can change what the lookup finds.
+  var identityHook: (@Sendable (URL) throws -> Void)? {
+    get { lock.withLock { _identityHook } }
+    set { lock.withLock { _identityHook = newValue } }
+  }
+
+  /// Runs before each chunk read, so a test can hold or fail a byte comparison part way.
+  var chunkReadHook: (@Sendable (URL, Int64) async throws -> Void)? {
+    get { lock.withLock { _chunkReadHook } }
+    set { lock.withLock { _chunkReadHook = newValue } }
+  }
+
+  var identityCalls: [URL] { lock.withLock { _identityCalls } }
+  var chunkReads: [(url: URL, offset: Int64, length: Int)] { lock.withLock { _chunkReads } }
 
   var inspectionHook: (@Sendable (URL) throws -> Void)? {
     get { lock.withLock { _inspectionHook } }
@@ -106,6 +125,30 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
     let size = try real.regularFileSize(at: url)
     try inspectionHook?(url)
     return size
+  }
+
+  func itemIdentity(at url: URL) throws -> FileItemIdentity? {
+    lock.withLock { _identityCalls.append(url) }
+    try identityHook?(url)
+    return try real.itemIdentity(at: url)
+  }
+
+  /// Thrown by `storedName(at:)` instead of reading the name.
+  var storedNameError: Error? {
+    get { lock.withLock { _storedNameError } }
+    set { lock.withLock { _storedNameError = newValue } }
+  }
+  private var _storedNameError: Error?
+
+  func storedName(at url: URL) throws -> String {
+    if let error = storedNameError { throw error }
+    return try real.storedName(at: url)
+  }
+
+  func readChunk(at url: URL, offset: Int64, length: Int) async throws -> Data {
+    lock.withLock { _chunkReads.append((url: url, offset: offset, length: length)) }
+    try await chunkReadHook?(url, offset)
+    return try await real.readChunk(at: url, offset: offset, length: length)
   }
 
   func removeItem(at url: URL) throws {

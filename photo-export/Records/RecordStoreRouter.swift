@@ -69,6 +69,25 @@ final class RecordStoreRouter {
     }
   }
 
+  /// Whether a record other than this asset's own `variant` names `filename` in the folder
+  /// the variant is written to. Every status counts, as do the asset's other variants.
+  func isFilenameClaimed(
+    _ filename: String, placement: ExportPlacement, subfolder: String?,
+    excludingAssetId assetId: String, variant: ExportVariant
+  ) -> Bool {
+    switch placement.kind {
+    case .timeline:
+      guard let (year, month) = placement.timelineYearMonth else { return true }
+      return timelineStore.isFilenameClaimed(
+        filename, year: year, month: month, subfolder: subfolder,
+        excludingAssetId: assetId, variant: variant)
+    case .favorites, .album, .sharedAlbum:
+      return collectionStore.isFilenameClaimed(
+        filename, placement: placement, subfolder: subfolder,
+        excludingAssetId: assetId, variant: variant)
+    }
+  }
+
   /// Waits for preceding mutations in the affected store to become durable.
   func flush(placement: ExportPlacement) async throws {
     switch placement.kind {
@@ -124,21 +143,22 @@ final class RecordStoreRouter {
     }
   }
 
-  /// Retains the destination that owns an imminent final file commit.
+  /// Retains the destination that owns an imminent final file commit. The returned
+  /// acknowledgement takes the committed filename, or `nil` when nothing was committed.
   func captureFinalCommit(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
-    relPath: String, filename: String, subfolder: String?, acceptsEditedFallback: Bool
-  ) throws -> (_ committed: Bool) async -> Void {
+    relPath: String, subfolder: String?, acceptsEditedFallback: Bool
+  ) throws -> (_ finalFilename: String?) async -> Void {
     switch placement.kind {
     case .timeline:
       let (year, month) = placement.timelineYearMonth ?? (0, 0)
       return try timelineStore.captureFinalCommit(
         assetId: assetId, variant: variant, year: year, month: month, relPath: relPath,
-        filename: filename, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback)
+        subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback)
     case .favorites, .album, .sharedAlbum:
       return try collectionStore.captureFinalCommit(
         assetId: assetId, variant: variant, placement: placement,
-        filename: filename, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback)
+        subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback)
     }
   }
 

@@ -32,3 +32,7 @@ photo-exportTests/AmbiguousSameFolderTests.swift|gate|func AmbiguousSameFolderTe
 
 photo-exportTests/FileIOServiceTests.swift|pin|struct FileIOServiceTests
 photo-exportTests/FileIOServiceTests.swift|gate|func FileIOServiceTests.existingFileAtCommitIsNeverReplaced
+
+photo-exportTests/IdenticalFileAdoptionTests.swift|pin|struct IdenticalFileAdoptionTests
+photo-exportTests/IdenticalFileAdoptionTests.swift|gate|func IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted
+photo-exportTests/IdenticalFileAdoptionTests.swift|gate|func IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss

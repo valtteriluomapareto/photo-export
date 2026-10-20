@@ -26,6 +26,14 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
   // Behavior: if true, creates a small file at the destination (simulating a real write)
   var shouldCreateFile: Bool = true
 
+  /// Writes the bytes of another asset id instead, keyed by the asset being written, so
+  /// two assets can stand in for byte-identical duplicates in Photos.
+  var contentAssetIds: [String: String] {
+    get { lock.withLock { _contentAssetIds } }
+    set { lock.withLock { _contentAssetIds = newValue } }
+  }
+  private var _contentAssetIds: [String: String] = [:]
+
   /// Bytes written for `resource` of `assetId`: the same for the same pair, different for
   /// another asset or resource. As long as `resource.fileSize` when it is positive, so
   /// size-based checks see the reported size, and 12 bytes otherwise.
@@ -84,7 +92,8 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
     }
     if shouldCreateFile,
       !FileManager.default.createFile(
-        atPath: url.path, contents: Self.content(for: resource, assetId: assetId))
+        atPath: url.path,
+        contents: Self.content(for: resource, assetId: contentAssetIds[assetId] ?? assetId))
     {
       throw CocoaError(.fileWriteUnknown)
     }

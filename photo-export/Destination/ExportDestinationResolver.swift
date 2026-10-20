@@ -27,7 +27,50 @@ struct ExportDestinationResolver: Sendable {
 
   // MARK: - Top-level resolution
 
-  /// Decides the final destination URL and `chosenStem` for the variant being written.
+  /// Where a variant may land, before its bytes exist. The final name is chosen against the
+  /// staged bytes at commit time.
+  struct Slot: Equatable, Sendable {
+    enum CollisionPolicy: Equatable, Sendable {
+      /// One fixed name: a paired original-side slot. An existing file there is a collision.
+      case refuse(stem: String)
+      /// The natural name, then ` (1)`, ` (2)`… An existing file may be adopted.
+      case suffix(base: String, ext: String)
+    }
+
+    let directory: URL
+    let filename: String
+    let policy: CollisionPolicy
+
+    var naturalURL: URL { directory.appendingPathComponent(filename) }
+
+    /// Candidate `index` of the walk, where 0 is the natural name. A `.refuse` slot has only
+    /// that one candidate.
+    func candidate(_ index: Int) -> URL? {
+      switch policy {
+      case .refuse:
+        return index == 0 ? naturalURL : nil
+      case .suffix(let base, let ext):
+        guard index <= ExportDestinationResolver.maxSuffixIndex else { return nil }
+        let name = index == 0 ? base : "\(base) (\(index))"
+        return directory.appendingPathComponent(name).appendingPathExtension(ext)
+      }
+    }
+
+    /// The group stem a file committed under `filename` gives the variants after it.
+    func chosenStem(forFilename filename: String) -> String {
+      switch policy {
+      case .refuse(let stem): return stem
+      case .suffix: return (filename as NSString).deletingPathExtension
+      }
+    }
+  }
+
+  /// The highest suffix a walk tries, as in `uniqueFileURL`.
+  static let maxSuffixIndex = 10_000
+
+  /// Decides the final destination URL and `chosenStem` for the variant being written,
+  /// from the first candidate with nothing at it. Exports go through `resolveSlot` and
+  /// choose the final name once the bytes are staged.
   ///
   /// `groupStem` is the pre-allocated stem when both `.original` and `.edited` are being
   /// written together for this asset. When `nil`, only one variant is being written and
@@ -55,6 +98,26 @@ struct ExportDestinationResolver: Sendable {
     pairOriginalWithSuffix: Bool,
     interruptedFilename: String? = nil
   ) throws -> (URL, String) {
+    let slot = try resolveSlot(
+      variant: variant, descriptor: descriptor, originalFilename: originalFilename,
+      resources: resources, destDir: destDir, groupStem: groupStem,
+      pairOriginalWithSuffix: pairOriginalWithSuffix, interruptedFilename: interruptedFilename)
+    let url = firstFreeURL(in: slot)
+    return (url, slot.chosenStem(forFilename: url.lastPathComponent))
+  }
+
+  /// The slot for the variant being written. Same parameters and paired-original refusal as
+  /// `resolveDestination`.
+  func resolveSlot(
+    variant: ExportVariant,
+    descriptor: AssetDescriptor,
+    originalFilename: String,
+    resources: [ResourceDescriptor],
+    destDir: URL,
+    groupStem: String?,
+    pairOriginalWithSuffix: Bool,
+    interruptedFilename: String? = nil
+  ) throws -> Slot {
     switch variant {
     case .original, .originalPairedVideo:
       // The original-side filename rule is extension-agnostic: the image variant uses the
@@ -75,12 +138,11 @@ struct ExportDestinationResolver: Sendable {
                 "Paired original filename already exists on disk: \(candidate.lastPathComponent)"
             ])
         }
-        return (candidate, stem)
+        return Slot(directory: destDir, filename: filename, policy: .refuse(stem: stem))
       }
-      // Fresh single-variant `.original`: no pairing, use uniqueFileURL collision handling.
+      // Fresh single-variant `.original`: no pairing, suffixed on collision.
       let (origStem, _) = Self.splitFilename(originalFilename)
-      let finalURL = uniqueFileURL(in: destDir, baseName: origStem, ext: origExt)
-      return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
+      return Self.suffixSlot(in: destDir, base: origStem, ext: origExt)
 
     case .edited, .editedPairedVideo:
       // Same extension-agnostic story as `.original`: image side gets the rendered image
@@ -92,11 +154,10 @@ struct ExportDestinationResolver: Sendable {
           stem: stem, editedResourceFilename: originalFilename)
         let (base, ext) = Self.splitFilename(filename)
         // If the inherited natural stem is already taken (post-edit case where the prior
-        // `.original.done` occupies it), uniqueFileURL splits the pair onto a `(N)`
+        // `.original.done` occupies it), the suffix walk splits the pair onto a `(N)`
         // suffix. This is the documented one-time cost on first re-export after each new
         // edit.
-        let finalURL = uniqueFileURL(in: destDir, baseName: base, ext: ext)
-        return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
+        return Self.suffixSlot(in: destDir, base: base, ext: ext)
       }
       // Fresh single-variant `.edited` (default mode adjusted asset, no prior records).
       // Use the original-side resource's stem so the edited file lands at e.g.
@@ -111,9 +172,22 @@ struct ExportDestinationResolver: Sendable {
       } else {
         baseStem = Self.splitFilename(originalFilename).base
       }
-      let finalURL = uniqueFileURL(in: destDir, baseName: baseStem, ext: editedExt)
-      return (finalURL, finalURL.deletingPathExtension().lastPathComponent)
+      return Self.suffixSlot(in: destDir, base: baseStem, ext: editedExt)
     }
+  }
+
+  private static func suffixSlot(in directory: URL, base: String, ext: String) -> Slot {
+    let natural = directory.appendingPathComponent(base).appendingPathExtension(ext)
+    return Slot(
+      directory: directory, filename: natural.lastPathComponent,
+      policy: .suffix(base: base, ext: ext))
+  }
+
+  /// The first candidate of `slot` with nothing at it, following symbolic links as
+  /// `fileExists` does. A `.refuse` slot's only candidate is returned as is.
+  func firstFreeURL(in slot: Slot) -> URL {
+    guard case .suffix(let base, let ext) = slot.policy else { return slot.naturalURL }
+    return uniqueFileURL(in: slot.directory, baseName: base, ext: ext)
   }
 
   // MARK: - Stem allocation

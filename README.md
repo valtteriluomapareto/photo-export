@@ -29,7 +29,7 @@ If Photos access is denied, choose **Open System Settings**, enable access under
   - **Collections** — Favorites plus your Photos albums and folders
 - Preview thumbnails and selected assets as the first batch loads. Detail export status follows the current Timeline, Favorites, album, or Shared Album placement, including recorded converted versions and recovery messages
 - Photos changes refresh the grid in place and update selected details. A surviving selection stays selected; removing it selects the first remaining asset, and an empty scope clears details. Edited thumbnails and the selected full-size preview refresh; current images stay visible during replacement, and older refreshes or image responses cannot replace newer results
-- Export a month, a year, an album, or the full queue without overwriting existing files
+- Export a month, a year, an album, or the full queue without overwriting existing files. A taken name gets a ` (1)` suffix, except that a file already there with the same bytes, which no other exported item uses, is recorded instead of copied again (for example after export history was reset). An edit with its `_orig` companion and a Live Photo with its paired video still get new copies
 - Export progress appears in the content column below the toolbar; pause, resume, and cancel controls remain in the toolbar
 - Clicking **Export Month** when that month has paused work resumes the existing queue with its original settings, including other months already queued, without adding duplicate jobs
 - Export preparation uses progressive Photos enumeration and yields between planning slices of at most 200 assets. Each scope commits after its scan succeeds; preparation can still retain scope-sized data.
