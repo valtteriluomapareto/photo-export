@@ -33,6 +33,21 @@ struct FilenameClaimsTests {
     #expect(claims.count("", in: "f") == 0)
   }
 
+  /// Every own claim on the name in the folder is subtracted, and none from another folder.
+  @Test func severalOwnClaimsAreSubtracted() {
+    var claims = FilenameClaims<String>()
+    claims.add("IMG.JPG", in: "f")
+    claims.add("img.jpg", in: "f")
+    claims.add("IMG.JPG", in: "g")
+    let own: [(filename: String?, folder: String)] = [
+      ("IMG.JPG", "f"), ("IMG.JPG", "g"), (nil, "f"), ("OTHER.JPG", "f"),
+    ]
+    #expect(claims.count("IMG.JPG", in: "f", excluding: own.prefix(1)) == 1)
+    #expect(claims.count("IMG.JPG", in: "f", excluding: own) == 1)
+    #expect(claims.count("IMG.JPG", in: "f", excluding: own + [(filename: "Img.jpg", folder: "f")]) == 0)
+    #expect(claims.count("IMG.JPG", in: "g", excluding: own) == 0)
+  }
+
   private static func root() -> URL { TestScratch.directory("FilenameClaims") }
 
   private static func timelineStore(_ root: URL) -> ExportRecordStore {
@@ -109,6 +124,58 @@ struct FilenameClaimsTests {
       exportedAt: Date())
     #expect(!Self.collectionClaimed(collections, "A.JPG", placement: favorites))
     #expect(Self.collectionClaimed(collections, "A2.JPG", placement: favorites))
+  }
+
+  /// A query for a whole asset leaves out every one of its own variants, and only in the
+  /// folder they name: another asset's record still counts there and elsewhere.
+  @Test func timelineClaimsCanExcludeAWholeAsset() {
+    let root = Self.root()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = Self.timelineStore(root)
+    Self.exported(store, "asset", filename: "IMG.JPG")
+    Self.exported(store, "asset", .edited, filename: "IMG (1).JPG")
+    Self.exported(store, "other", filename: "OTHER.JPG")
+    Self.exported(store, "july", filename: "IMG.JPG", month: 7)
+    let claimed = { (name: String, assetId: String, month: Int) in
+      store.isFilenameClaimed(
+        name, year: 2025, month: month, subfolder: nil, exceptAsset: assetId)
+    }
+
+    #expect(!claimed("IMG.JPG", "asset", 6))
+    #expect(!claimed("img (1).jpg", "asset", 6))
+    #expect(claimed("IMG.JPG", "other", 6))
+    #expect(claimed("OTHER.JPG", "asset", 6))
+    #expect(claimed("IMG.JPG", "asset", 7))
+    #expect(!claimed("IMG.JPG", "july", 7))
+  }
+
+  @Test func collectionClaimsCanExcludeAWholeAsset() {
+    let root = Self.root()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = CollectionExportRecordStore(baseDirectoryURL: root)
+    store.configure(for: "dest")
+    let favorites = ExportPlacement.favorites()
+    let album = ExportPlacement(
+      kind: .album, id: "album:1", displayName: "Trip", collectionLocalIdentifier: "1",
+      relativePath: "Collections/Albums/Trip/", createdAt: Date())
+    store.upsertPlacement(favorites)
+    store.upsertPlacement(album)
+    for variant in [ExportVariant.original, .edited] {
+      store.markVariantExported(
+        assetId: "a", placement: favorites, variant: variant,
+        filename: variant == .original ? "A_orig.JPG" : "A.JPG", exportedAt: Date())
+    }
+    store.markVariantExported(
+      assetId: "a", placement: album, variant: .original, filename: "B.JPG", exportedAt: Date())
+    let claimed = { (name: String, placement: ExportPlacement, assetId: String) in
+      store.isFilenameClaimed(name, placement: placement, subfolder: nil, exceptAsset: assetId)
+    }
+
+    #expect(!claimed("A.JPG", favorites, "a"))
+    #expect(!claimed("A_orig.JPG", favorites, "a"))
+    #expect(claimed("A.JPG", favorites, "b"))
+    #expect(!claimed("B.JPG", album, "a"))
+    #expect(claimed("B.JPG", album, "b"))
   }
 
   /// The own record is subtracted only in the folder it names: another asset's claim in a

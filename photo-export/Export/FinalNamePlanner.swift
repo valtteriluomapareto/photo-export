@@ -4,10 +4,12 @@ import OSLog
 /// Chooses the name a staged file commits under, from what its folder already holds.
 ///
 /// A `.suffix` slot's candidates are walked in order (`IMG.JPG`, `IMG (1).JPG`, …). The first
-/// with nothing at it is a move. An earlier candidate is adopted instead when it is a regular
-/// file with one link, not empty, the size of the stage, named by no other record,
-/// byte-for-byte equal to the stage, and its folder stores it under a spelling of the
-/// candidate's name. A `.refuse` slot always moves to its one name.
+/// with nothing at it that no other record names is a move: a record whose file was deleted
+/// keeps its name until Import Existing Backup drops it. An earlier candidate is adopted
+/// instead when it is a regular file with one link, not empty, the size of the stage, named
+/// by no other record, byte-for-byte equal to the stage, and its folder stores it under a
+/// spelling of the candidate's name. A `.refuse` slot is always planned as a move to its one
+/// name: claims are not checked, and the commit fails if a file is there.
 ///
 /// Reads go through the `FileSystemService` seam and run off the main actor. No digests are
 /// kept: both files are on disk, so a chunked compare that stops at the first difference is
@@ -47,10 +49,10 @@ struct FinalNamePlanner: Sendable {
   }
 
   /// With `mayAdopt` false the walk only looks for a free name. `isClaimed` says whether
-  /// another record names a candidate. Task cancellation is checked
-  /// before every chunk read; `shouldStop` before the first and then once per
-  /// `stopCheckInterval` bytes. Either stops planning with `CancellationError`, and nothing
-  /// is adopted.
+  /// another record names a candidate; such a candidate is never moved to or adopted. Task
+  /// cancellation is checked before every chunk read; `shouldStop` before the first and then
+  /// once per `stopCheckInterval` bytes. Either stops planning with `CancellationError`, and
+  /// nothing is adopted.
   func plan(
     slot: ExportDestinationResolver.Slot, stagedURL: URL, mayAdopt: Bool = true,
     isClaimed: @Sendable (String) async -> Bool,
@@ -62,7 +64,9 @@ struct FinalNamePlanner: Sendable {
     while let candidate = slot.candidate(index) {
       try Task.checkCancellation()
       guard let identity = try fileSystem.itemIdentity(at: candidate) else {
-        return .move(candidate)
+        if await !isClaimed(candidate.lastPathComponent) { return .move(candidate) }
+        index += 1
+        continue
       }
       // A second hard link would leave two names for one file; another record could claim
       // the other.

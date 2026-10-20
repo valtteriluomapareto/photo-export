@@ -149,9 +149,10 @@ final class CollectionExportRecordStore: ObservableObject {
       self.subfolder = subfolder ?? ""
     }
   }
-  /// Filenames named by any variant record. Built on the first `isFilenameClaimed` query and
-  /// maintained in `apply` after that; nil until then, and again whenever `recordBodies` is
-  /// replaced wholesale. See `ExportRecordStore.filenameClaims` for why it is built lazily.
+  /// Filenames named by any variant record. Built on the first `isFilenameClaimed` query, at
+  /// a session's first collection export, and maintained in `apply` after that; nil until
+  /// then, and again whenever `recordBodies` is replaced wholesale. See
+  /// `ExportRecordStore.filenameClaims` for why it is built lazily.
   private var filenameClaims: FilenameClaims<ClaimFolder>?
 
   /// Per-store load state. See `RecordStoreState` for semantics.
@@ -784,7 +785,28 @@ final class CollectionExportRecordStore: ObservableObject {
     _ filename: String, placement: ExportPlacement, subfolder: String?,
     exceptVariant variant: ExportVariant, of assetId: String
   ) -> Bool {
-    let own = recordBodies[placement.id]?[assetId]?.variants[variant.rawValue].map {
+    isFilenameClaimed(
+      filename, placement: placement, subfolder: subfolder, assetId: assetId,
+      excluding: { $0 == variant.rawValue })
+  }
+
+  /// Whether another asset's record names `filename` in the folder for `placement` and
+  /// `subfolder`. None of `assetId`'s own variants in the placement count.
+  func isFilenameClaimed(
+    _ filename: String, placement: ExportPlacement, subfolder: String?,
+    exceptAsset assetId: String
+  ) -> Bool {
+    isFilenameClaimed(
+      filename, placement: placement, subfolder: subfolder, assetId: assetId,
+      excluding: { _ in true })
+  }
+
+  private func isFilenameClaimed(
+    _ filename: String, placement: ExportPlacement, subfolder: String?, assetId: String,
+    excluding isOwn: (String) -> Bool
+  ) -> Bool {
+    let variants = recordBodies[placement.id]?[assetId]?.variants ?? [:]
+    let own = variants.filter { isOwn($0.key) }.values.map {
       (
         filename: $0.filename,
         folder: ClaimFolder(placementId: placement.id, subfolder: $0.subfolder)
@@ -1151,10 +1173,13 @@ final class CollectionExportRecordStore: ObservableObject {
 
   private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
     if let filenameClaims { return filenameClaims }
-    var claims = FilenameClaims<ClaimFolder>()
-    for (placementId, byAsset) in recordBodies {
-      for body in byAsset.values {
-        Self.update(&claims, placementId: placementId, body: body, adding: true)
+    let recordCount = recordBodies.values.reduce(0) { $0 + $1.count }
+    let claims = FilenameClaims<ClaimFolder>.build(recordCount: recordCount, logger: logger) {
+      claims in
+      for (placementId, byAsset) in recordBodies {
+        for body in byAsset.values {
+          Self.update(&claims, placementId: placementId, body: body, adding: true)
+        }
       }
     }
     filenameClaims = claims

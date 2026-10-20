@@ -28,7 +28,7 @@ import Testing
     /// Four-byte reads throughout; `shouldStop` is asked before every one unless
     /// `stopInterval` says otherwise.
     func plan(
-      middle: Int = 4, stopInterval: Int = 1, claimed: Set<String> = [],
+      middle: Int = 4, stopInterval: Int = 1, mayAdopt: Bool = true, claimed: Set<String> = [],
       stop: @escaping @Sendable () -> Bool = {
         false
       }
@@ -37,7 +37,7 @@ import Testing
         fileSystem: files, edgeChunkSize: 4, middleChunkSize: middle,
         stopCheckInterval: stopInterval
       ).plan(
-        slot: slot, stagedURL: url.appendingPathComponent(".stage.tmp"),
+        slot: slot, stagedURL: url.appendingPathComponent(".stage.tmp"), mayAdopt: mayAdopt,
         isClaimed: { claimed.contains($0) }, shouldStop: { stop() })
     }
 
@@ -159,6 +159,30 @@ import Testing
     #expect(read == [".stage.tmp", "IMG (1).JPG", "IMG (3).JPG"])
   }
 
+  /// A name another record claims is skipped even with nothing at it, with adoption on or
+  /// off: the record keeps the name until Import Existing Backup drops it.
+  @Test(arguments: [true, false])
+  func claimedEmptyNameIsSkipped(mayAdopt: Bool) async throws {
+    let folder = try Folder()
+    defer { folder.cleanup() }
+    _ = try folder.write(Self.bytes, ".stage.tmp")
+
+    let plan = try await folder.plan(mayAdopt: mayAdopt, claimed: ["IMG.JPG"])
+
+    #expect(plan == .move(folder.url.appendingPathComponent("IMG (1).JPG")))
+  }
+
+  /// Every claimed empty name is skipped, not only the natural one.
+  @Test func walkSkipsEveryClaimedEmptyName() async throws {
+    let folder = try Folder()
+    defer { folder.cleanup() }
+    _ = try folder.write(Self.bytes, ".stage.tmp")
+
+    let plan = try await folder.plan(claimed: ["IMG.JPG", "IMG (1).JPG"])
+
+    #expect(plan == .move(folder.url.appendingPathComponent("IMG (2).JPG")))
+  }
+
   /// A stop request ends the compare before its next chunk.
   @Test func stopRequestEndsTheCompare() async throws {
     let folder = try Folder()
@@ -234,6 +258,8 @@ import Testing
     #expect(try await folder.plan() == .move(folder.url.appendingPathComponent("IMG (1).JPG")))
   }
 
+  /// A `.refuse` slot has one name, so it moves there whatever is on disk and whatever the
+  /// claims say; the exporter refuses an occupied paired name before staging.
   @Test func refuseSlotAlwaysMovesToItsName() async throws {
     let folder = try Folder()
     defer { folder.cleanup() }
@@ -244,7 +270,7 @@ import Testing
 
     let plan = try await FinalNamePlanner(fileSystem: folder.files).plan(
       slot: slot, stagedURL: folder.url.appendingPathComponent(".stage.tmp"),
-      isClaimed: { _ in false }, shouldStop: { false })
+      isClaimed: { _ in true }, shouldStop: { false })
 
     #expect(plan == .move(fixed))
     #expect(folder.files.chunkReads.isEmpty)

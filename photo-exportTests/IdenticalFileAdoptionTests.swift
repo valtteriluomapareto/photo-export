@@ -47,11 +47,81 @@ struct IdenticalFileAdoptionTests {
       collections.configure(for: "history-\(historyGeneration)")
     }
 
-    /// Records another asset's original under `name` in June 2025.
-    func recordOther(named name: String) {
-      timeline.markVariantExported(
-        assetId: "other", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
-        filename: name, exportedAt: Date())
+    /// Gives another asset's original a record naming `name` with `claim`'s status, in the
+    /// folder for 2025/`month` or its `subfolder`. That asset is not in the photo library, so
+    /// no export touches its record.
+    func recordOther(
+      named name: String, as claim: Claim = .otherAssetDone, month: Int = 6,
+      subfolder: String? = nil
+    ) {
+      let relPath = String(format: "2025/%02d/", month) + (subfolder.map { "\($0)/" } ?? "")
+      switch claim {
+      case .otherAssetDone:
+        timeline.markVariantExported(
+          assetId: "other", variant: .original, year: 2025, month: month, relPath: relPath,
+          filename: name, exportedAt: Date(), subfolder: subfolder)
+      case .otherAssetFailed:
+        timeline.markVariantInProgress(
+          assetId: "other", variant: .original, year: 2025, month: month, relPath: relPath,
+          filename: name, subfolder: subfolder)
+        timeline.markVariantFailed(
+          assetId: "other", variant: .original, error: "Interrupted", reason: .interrupted,
+          at: Date())
+      case .otherAssetInProgress:
+        timeline.markVariantInProgress(
+          assetId: "other", variant: .original, year: 2025, month: month, relPath: relPath,
+          filename: name, subfolder: subfolder)
+      case .otherAssetPending:
+        timeline.bulkImportRecords([
+          ExportRecord(
+            id: "other", year: 2025, month: month, relPath: relPath,
+            variants: [
+              .original: ExportVariantRecord(
+                filename: name, status: .pending, exportDate: nil, lastError: nil,
+                subfolder: subfolder)
+            ])
+        ])
+      }
+    }
+
+    /// Every name `assetId`'s `variant` was marked in progress under, in order, read back
+    /// from both record logs of the current history. The log of the store the export wrote,
+    /// the collection store's when `inCollection`, must exist; a missing one fails the test.
+    func inProgressNames(
+      of assetId: String, variant: ExportVariant = .original, inCollection: Bool = false
+    ) async throws -> [String] {
+      try await timeline.flush()
+      try await collections.flush()
+      let folder = storeRoot.appendingPathComponent("history-\(historyGeneration)")
+      let decoder = JSONDecoder()
+      decoder.dateDecodingStrategy = .iso8601
+      var names: [String] = []
+      let inProgress = { (record: ExportVariantRecord?) in
+        if let record, record.status == .inProgress, let name = record.filename {
+          names.append(name)
+        }
+      }
+      let timelineLog = folder.appendingPathComponent(ExportRecordStore.Constants.logFileName)
+      let collectionLog = folder.appendingPathComponent(
+        CollectionExportRecordStore.Constants.logFileName)
+      try #require(
+        FileManager.default.fileExists(atPath: (inCollection ? collectionLog : timelineLog).path))
+      for line in try Self.lines(of: timelineLog) {
+        let mutation = try decoder.decode(ExportRecordMutation.self, from: line)
+        if mutation.id == assetId { inProgress(mutation.record?.variants[variant]) }
+      }
+      for line in try Self.lines(of: collectionLog) {
+        let op = try decoder.decode(CollectionExportRecordStore.LogOp.self, from: line)
+        if case .upsertRecord(_, assetId, let body) = op {
+          inProgress(body.variants[variant.rawValue])
+        }
+      }
+      return names
+    }
+
+    private static func lines(of file: URL) throws -> [Data] {
+      guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+      return try Data(contentsOf: file).split(separator: UInt8(ascii: "\n")).map { Data($0) }
     }
 
     func exportMonth(year: Int = 2025, month: Int = 6) async {
@@ -245,34 +315,7 @@ struct IdenticalFileAdoptionTests {
       h.photos.resourcesByAssetId[asset.id] = [resource]
       await h.exportMonth()
       try await h.loseRecords()
-      let store = h.timeline
-      let name = "IMG_0001.JPG"
-      switch claim {
-      case .otherAssetDone:
-        store.markVariantExported(
-          assetId: "other", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
-          filename: name, exportedAt: Date())
-      case .otherAssetFailed:
-        store.markVariantInProgress(
-          assetId: "other", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
-          filename: name)
-        store.markVariantFailed(
-          assetId: "other", variant: .original, error: "Interrupted", reason: .interrupted,
-          at: Date())
-      case .otherAssetInProgress:
-        store.markVariantInProgress(
-          assetId: "other", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
-          filename: name)
-      case .otherAssetPending:
-        store.bulkImportRecords([
-          ExportRecord(
-            id: "other", year: 2025, month: 6, relPath: "2025/06/",
-            variants: [
-              .original: ExportVariantRecord(
-                filename: name, status: .pending, exportDate: nil, lastError: nil)
-            ])
-        ])
-      }
+      h.recordOther(named: "IMG_0001.JPG", as: claim)
 
       await h.exportMonth()
 
@@ -791,6 +834,411 @@ struct IdenticalFileAdoptionTests {
         #expect(h.files.moveCalls.count == 1)
         #expect(try h.contents(of: folder) == ["IMG_0002.JPG"])
       }
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  // MARK: - Claimed names with nothing on disk
+
+  /// A name another record names is taken even when nothing is at it, whatever that record's
+  /// status. The export lands at ` (1)`, is never marked under the claimed name, and the
+  /// other record keeps its name.
+  @Test(arguments: Claim.allCases)
+  func claimedNameWithNoFileIsSkipped(claim: Claim) async throws {
+    let h = Harness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      ]
+      h.recordOther(named: "IMG_0001.JPG", as: claim)
+
+      await h.exportMonth()
+
+      let folder = try h.monthFolder()
+      let variant = h.timeline.exportInfo(assetId: asset.id)?.variants[.original]
+      #expect(variant?.status == .done)
+      #expect(variant?.filename == "IMG_0001 (1).JPG")
+      #expect(try h.contents(of: folder) == ["IMG_0001 (1).JPG"])
+      #expect(
+        h.timeline.exportInfo(assetId: "other")?.variants[.original]?.filename == "IMG_0001.JPG")
+      #expect(try await h.inProgressNames(of: asset.id) == ["IMG_0001 (1).JPG"])
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  enum ClaimSpelling: String, CaseIterable, CustomTestStringConvertible {
+    case lowerCase, otherNormalization, videosSubfolder
+    var testDescription: String { rawValue }
+  }
+
+  /// A claim matches however its name is spelled in case or Unicode normalization, and
+  /// claims in a timeline month's `videos/` are kept apart from the month itself.
+  @Test(arguments: ClaimSpelling.allCases)
+  func claimedNameWithNoFileIsSkippedInAnySpelling(spelling: ClaimSpelling) async throws {
+    let h = Harness()
+    try await withCleanup {
+      let resourceName: String
+      let claimedName: String
+      let expected: String
+      var subfolder: String?
+      let asset: AssetDescriptor
+      switch spelling {
+      case .lowerCase:
+        asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+        (resourceName, claimedName, expected) = ("IMG_0001.JPG", "img_0001.jpg", "IMG_0001 (1).JPG")
+      case .otherNormalization:
+        asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+        (resourceName, claimedName, expected) =
+          ("Caf\u{E9}.JPG", "Cafe\u{301}.JPG", "Caf\u{E9} (1).JPG")
+      case .videosSubfolder:
+        asset = TestAssetFactory.makeAsset(
+          id: "asset", creationDate: Self.june15, mediaType: .video)
+        (resourceName, claimedName, expected) = ("CLIP.MOV", "CLIP.MOV", "CLIP (1).MOV")
+        subfolder = "videos"
+        h.manager.videoLayout = .subfolder
+      }
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(
+          type: asset.mediaType == .video ? .video : .photo, originalFilename: resourceName)
+      ]
+      h.recordOther(named: claimedName, subfolder: subfolder)
+
+      await h.exportMonth()
+
+      let variant = h.timeline.exportInfo(assetId: asset.id)?.variants[.original]
+      #expect(variant?.status == .done)
+      // String equality is canonical, so either normalization of the name passes.
+      #expect(variant?.filename == expected)
+      #expect(variant?.subfolder == subfolder)
+      let folder = try h.destination.urlForRelativeDirectory(
+        "2025/06/" + (subfolder.map { "\($0)/" } ?? ""), createIfNeeded: false)
+      #expect(try h.contents(of: folder).count == 1)
+      #expect(try await h.inProgressNames(of: asset.id).count == 1)
+      #expect(try await h.inProgressNames(of: asset.id).first == expected)
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// An album's claims work as a month's: the album's earlier asset was exported as
+  /// `IMG_0001.JPG`, its file deleted and the asset removed from the album. A new asset with
+  /// the same filename lands at ` (1)`.
+  @Test func claimedNameWithNoFileIsSkippedInAnAlbum() async throws {
+    let h = Harness()
+    try await withCleanup {
+      let other = TestAssetFactory.makeAsset(id: "other", creationDate: Self.june15)
+      let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      let resource = TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      h.photos.resourcesByAssetId[other.id] = [resource]
+      h.photos.resourcesByAssetId[asset.id] = [resource]
+      h.photos.collectionTree = [
+        PhotoCollectionDescriptor(
+          id: "album:trip", localIdentifier: "trip", title: "Trip", kind: .album,
+          pathComponents: [], children: [])
+      ]
+      h.photos.assetsByAlbumLocalId["trip"] = [other]
+      h.manager.startExportAlbum(collectionId: "trip")
+      await h.manager.waitForQueueDrained()
+      let placement = try #require(h.collections.placements(matching: .album).first)
+      let folder = try h.destination.urlForRelativeDirectory(
+        placement.relativePath, createIfNeeded: false)
+      try FileManager.default.removeItem(at: folder.appendingPathComponent("IMG_0001.JPG"))
+      h.photos.assetsByAlbumLocalId["trip"] = [asset]
+
+      h.manager.startExportAlbum(collectionId: "trip")
+      await h.manager.waitForQueueDrained()
+
+      #expect(h.collections.placements(matching: .album).map(\.id) == [placement.id])
+      let variants = { (id: String) in
+        h.collections.exportInfo(assetId: id, placement: placement)?.variants[.original]
+      }
+      #expect(variants(asset.id)?.status == .done)
+      #expect(variants(asset.id)?.filename == "IMG_0001 (1).JPG")
+      #expect(variants(other.id)?.filename == "IMG_0001.JPG")
+      #expect(try h.contents(of: folder) == ["IMG_0001 (1).JPG"])
+      #expect(try await h.inProgressNames(of: asset.id, inCollection: true) == ["IMG_0001 (1).JPG"])
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  enum OtherFolder: String, CaseIterable, CustomTestStringConvertible {
+    case otherMonth, videosSubfolder
+    var testDescription: String { rawValue }
+  }
+
+  /// A guard: a claim in another folder, another month or the month's `videos/`, leaves the
+  /// name free here.
+  @Test(arguments: OtherFolder.allCases)
+  func claimInAnotherFolderLeavesTheNameFree(folder other: OtherFolder) async throws {
+    let h = Harness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      ]
+      switch other {
+      case .otherMonth: h.recordOther(named: "IMG_0001.JPG", month: 7)
+      case .videosSubfolder: h.recordOther(named: "IMG_0001.JPG", subfolder: "videos")
+      }
+
+      await h.exportMonth()
+
+      let folder = try h.monthFolder()
+      #expect(
+        h.timeline.exportInfo(assetId: asset.id)?.variants[.original]?.filename
+          == "IMG_0001.JPG")
+      #expect(try h.contents(of: folder) == ["IMG_0001.JPG"])
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// The walk goes past every claimed or occupied candidate: with ` (1)` claimed, the natural
+  /// name claimed too or holding a different file, the export lands at ` (2)`.
+  @Test(arguments: [false, true])
+  func walkSkipsEveryClaimedOrOccupiedName(naturalHoldsAFile: Bool) async throws {
+    let h = Harness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      ]
+      let folder = try h.destination.urlForMonth(year: 2025, month: 6, createIfNeeded: true)
+      if naturalHoldsAFile {
+        try Data("different".utf8).write(to: folder.appendingPathComponent("IMG_0001.JPG"))
+      } else {
+        h.recordOther(named: "IMG_0001.JPG")
+      }
+      h.timeline.markVariantExported(
+        assetId: "third", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+        filename: "IMG_0001 (1).JPG", exportedAt: Date())
+
+      await h.exportMonth()
+
+      #expect(
+        h.timeline.exportInfo(assetId: asset.id)?.variants[.original]?.filename
+          == "IMG_0001 (2).JPG")
+      #expect(
+        try h.contents(of: folder)
+          == (naturalHoldsAFile ? ["IMG_0001 (2).JPG", "IMG_0001.JPG"] : ["IMG_0001 (2).JPG"]))
+      #expect(try await h.inProgressNames(of: asset.id) == ["IMG_0001 (2).JPG"])
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// A guard: the asset's own interrupted record names `IMG_0001.JPG` and nothing is there.
+  /// Its own claim does not count, so the retry commits at that name and is never marked
+  /// under ` (1)`.
+  @Test func ownClaimedNameIsReclaimed() async throws {
+    let h = Harness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      ]
+      h.timeline.markVariantInProgress(
+        assetId: asset.id, variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+        filename: "IMG_0001.JPG")
+      h.timeline.markVariantFailed(
+        assetId: asset.id, variant: .original, error: "Interrupted", reason: .interrupted,
+        at: Date())
+
+      await h.exportMonth()
+
+      let folder = try h.monthFolder()
+      let variant = h.timeline.exportInfo(assetId: asset.id)?.variants[.original]
+      #expect(variant?.status == .done)
+      #expect(variant?.filename == "IMG_0001.JPG")
+      #expect(try h.contents(of: folder) == ["IMG_0001.JPG"])
+      #expect(try await !h.inProgressNames(of: asset.id).contains("IMG_0001 (1).JPG"))
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// An edit on its original's inherited stem gets the original's name. With the original's
+  /// file deleted that name is free on disk but still the original's, so the edit lands at
+  /// ` (1)` and the original's record keeps its name.
+  @Test func editSharingItsOriginalsNameSkipsItAfterTheFileIsDeleted() async throws {
+    let h = Harness()
+    try await withCleanup {
+      let unedited = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
+      let edited = TestAssetFactory.makeAsset(
+        id: "asset", creationDate: Self.june15, hasAdjustments: true)
+      let original = TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
+      let render = TestAssetFactory.makeResource(
+        type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG")
+      h.manager.versionSelection = .editedWithOriginals
+      h.photos.assetsByYearMonth["2025-6"] = [unedited]
+      h.photos.resourcesByAssetId[edited.id] = [original]
+      await h.exportMonth()
+      let folder = try h.monthFolder()
+      try FileManager.default.removeItem(at: folder.appendingPathComponent("IMG_0001.JPG"))
+      h.photos.assetsByYearMonth["2025-6"] = [edited]
+      h.photos.resourcesByAssetId[edited.id] = [original, render]
+
+      await h.exportMonth()
+
+      let variants = h.timeline.exportInfo(assetId: edited.id)?.variants
+      #expect(variants?[.original]?.status == .done)
+      #expect(variants?[.original]?.filename == "IMG_0001.JPG")
+      #expect(variants?[.edited]?.status == .done)
+      #expect(variants?[.edited]?.filename == "IMG_0001 (1).JPG")
+      #expect(try h.contents(of: folder) == ["IMG_0001 (1).JPG"])
+      #expect(try await h.inProgressNames(of: edited.id, variant: .edited) == ["IMG_0001 (1).JPG"])
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// A deleted file's name stays reserved until Import Existing Backup drops its record:
+  /// another asset with the same filename lands at ` (1)`, the import finds the first
+  /// asset's file missing and drops its record, and the next export writes that asset back
+  /// at its own name.
+  @Test func missingFileReturnsAfterReconcile() async throws {
+    let h = Harness()
+    try await withCleanup {
+      let first = TestAssetFactory.makeAsset(id: "first", creationDate: Self.june15)
+      let second = TestAssetFactory.makeAsset(id: "second", creationDate: Self.june15)
+      let resource = TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+      h.photos.assetsByYearMonth["2025-6"] = [first]
+      h.photos.resourcesByAssetId[first.id] = [resource]
+      h.photos.resourcesByAssetId[second.id] = [resource]
+      await h.exportMonth()
+      let folder = try h.monthFolder()
+      try FileManager.default.removeItem(at: folder.appendingPathComponent("IMG_0001.JPG"))
+      h.photos.assetsByYearMonth["2025-6"] = [first, second]
+
+      await h.exportMonth()
+      let filename = { (id: String) in
+        h.timeline.exportInfo(assetId: id)?.variants[.original]?.filename
+      }
+      try #require(filename(second.id) == "IMG_0001 (1).JPG")
+
+      h.manager.startImport()
+      await h.manager.waitForImportCompletion()
+      try #require(h.timeline.exportInfo(assetId: first.id)?.variants[.original] == nil)
+      await h.exportMonth()
+
+      #expect(try h.contents(of: folder) == ["IMG_0001 (1).JPG", "IMG_0001.JPG"])
+      #expect(h.timeline.exportInfo(assetId: first.id)?.variants[.original]?.status == .done)
+      #expect(filename(first.id) == "IMG_0001.JPG")
+      #expect(filename(second.id) == "IMG_0001 (1).JPG")
+      for (asset, name) in [(first, "IMG_0001.JPG"), (second, "IMG_0001 (1).JPG")] {
+        #expect(
+          try Data(contentsOf: folder.appendingPathComponent(name))
+            == FakeAssetResourceWriter.content(for: resource, assetId: asset.id))
+      }
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  enum PairedClaim: String, CaseIterable, CustomTestStringConvertible {
+    case editedName, originalCompanion, motionFile, fallbackCompanion
+    var testDescription: String { rawValue }
+  }
+
+  /// A group whose stem is chosen before staging moves past a stem with any claimed name, so
+  /// its files stay on one stem:
+  /// - an edit with its `_orig` companion, the edit's or the companion's name claimed;
+  /// - an unedited Live Photo, its motion file's name claimed;
+  /// - an edit Photos can't provide, whose original falls back to `_orig`, that name claimed.
+  @Test(arguments: PairedClaim.allCases)
+  func pairedStemMovesPastAClaimedName(claim: PairedClaim) async throws {
+    let h = Harness()
+    try await withCleanup {
+      let photo = TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC")
+      let render = TestAssetFactory.makeResource(
+        type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG")
+      let asset: AssetDescriptor
+      let claimedName: String
+      let expected: [ExportVariant: String]
+      switch claim {
+      case .editedName, .originalCompanion:
+        asset = TestAssetFactory.makeAsset(
+          id: "asset", creationDate: Self.june15, hasAdjustments: true)
+        h.photos.resourcesByAssetId[asset.id] = [photo, render]
+        h.manager.versionSelection = .editedWithOriginals
+        claimedName = claim == .editedName ? "IMG_0001.JPG" : "IMG_0001_orig.HEIC"
+        expected = [.original: "IMG_0001 (1)_orig.HEIC", .edited: "IMG_0001 (1).JPG"]
+      case .motionFile:
+        asset = TestAssetFactory.makeAsset(
+          id: "asset", creationDate: Self.june15, isLivePhoto: true)
+        h.photos.resourcesByAssetId[asset.id] = [
+          photo, TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+        ]
+        h.manager.versionSelection = .edited
+        h.manager.livePhotosPairedExport = true
+        claimedName = "IMG_0001.MOV"
+        expected = [.original: "IMG_0001 (1).HEIC", .originalPairedVideo: "IMG_0001 (1).MOV"]
+      case .fallbackCompanion:
+        asset = TestAssetFactory.makeAsset(
+          id: "asset", creationDate: Self.june15, hasAdjustments: true)
+        h.photos.resourcesByAssetId[asset.id] = [photo]
+        h.manager.versionSelection = .edited
+        claimedName = "IMG_0001_orig.HEIC"
+        expected = [.original: "IMG_0001 (1)_orig.HEIC"]
+      }
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.recordOther(named: claimedName)
+
+      await h.exportMonth()
+
+      let folder = try h.monthFolder()
+      let variants = h.timeline.exportInfo(assetId: asset.id)?.variants ?? [:]
+      for (variant, name) in expected {
+        #expect(variants[variant]?.status == .done, "\(variant)")
+        #expect(variants[variant]?.filename == name, "\(variant)")
+        #expect(try await !h.inProgressNames(of: asset.id, variant: variant).contains(claimedName))
+      }
+      #expect(try h.contents(of: folder) == expected.values.sorted())
+    } cleanup: {
+      await h.cleanup()
+    }
+  }
+
+  /// A guard: names the asset's own failed records hold do not move its group. An interrupted
+  /// edit and `_orig` companion are written again under their own names.
+  @Test func pairedStemKeepsTheAssetsOwnNames() async throws {
+    let h = Harness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(
+        id: "asset", creationDate: Self.june15, hasAdjustments: true)
+      h.photos.assetsByYearMonth["2025-6"] = [asset]
+      h.photos.resourcesByAssetId[asset.id] = [
+        TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
+        TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG"),
+      ]
+      h.manager.versionSelection = .editedWithOriginals
+      for (variant, name) in [(ExportVariant.original, "IMG_0001_orig.HEIC"), (.edited, "IMG_0001.JPG")] {
+        h.timeline.markVariantInProgress(
+          assetId: asset.id, variant: variant, year: 2025, month: 6, relPath: "2025/06/",
+          filename: name)
+        h.timeline.markVariantFailed(
+          assetId: asset.id, variant: variant, error: "Interrupted", reason: .interrupted,
+          at: Date())
+      }
+
+      await h.exportMonth()
+
+      let folder = try h.monthFolder()
+      let variants = h.timeline.exportInfo(assetId: asset.id)?.variants
+      #expect(variants?[.original]?.status == .done)
+      #expect(variants?[.original]?.filename == "IMG_0001_orig.HEIC")
+      #expect(variants?[.edited]?.status == .done)
+      #expect(variants?[.edited]?.filename == "IMG_0001.JPG")
+      #expect(try h.contents(of: folder) == ["IMG_0001.JPG", "IMG_0001_orig.HEIC"])
     } cleanup: {
       await h.cleanup()
     }
