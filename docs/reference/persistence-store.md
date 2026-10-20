@@ -399,6 +399,17 @@ inaccessible or corrupt history. Unknown scope and variant keys survive valid re
 Failed removals remain published until persistence succeeds; pending in-memory history
 does not survive quitting before a successful save.
 
+`lastRunSummary.json` holds the last Auto Export run's `ExportRunSummary`. Its optional
+`stoppedBy` field names the destination-wide failure category (`destinationUnavailable`,
+`destinationNoSpace` or `destinationPermission`) when the run stopped itself on one, and is
+absent otherwise. A summary saved before the field existed decodes with no stop category,
+and older builds ignore the key.
+
+A saved `retryState.json` entry in the `destinationUnavailable` category with no
+`nextEligibleAt`, including one an older build recorded for a missing file (`ENOENT`), is
+eligible for the next Auto Export run. If that attempt fails with `ENOENT` again, the entry
+is replaced by an `unknown` one at attempt 1 with the normal backoff.
+
 ## Migrations
 
 - Schema changes are handled by reading both the snapshot and the log using compatible

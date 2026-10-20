@@ -101,8 +101,11 @@ It creates the destination folder, then asks the folder's volume whether it adve
   volume advertised the flag but rejected it: a failed rename leaves the stage in place, so the
   commit logs a notice (once per volume per launch) and takes the check-then-move path below.
   Any other errno is logged and thrown as `NSPOSIXErrorDomain` with that code, so `ENOSPC`,
-  `EACCES`/`EPERM`/`EROFS` and `ENOENT`/`ENXIO` keep their categories (`EXDEV` stays `unknown`;
-  the stage always shares the final file's folder).
+  `EACCES`/`EPERM`/`EROFS` and the unreachable-destination errnos (`ENOTCONN`, `ETIMEDOUT`,
+  `ESTALE`, `EHOSTDOWN`, `EHOSTUNREACH`, `ENETDOWN`, `ENETUNREACH`, `ENXIO`) keep their
+  categories. `ENOENT` and `EIO` are `unknown`, because either can come from somewhere other
+  than a lost destination, and `EXDEV` stays `unknown` (the stage always shares the final
+  file's folder).
 - **Not advertised:** check, then `FileManager.moveItem`, unchanged. `moveItem` refuses an
   existing file itself, and that refusal is reported as `Export:2` too. Neither check is one
   step with the rename, so on these volumes a file written in the moment between `moveItem`'s
@@ -156,9 +159,11 @@ commit. Mount a share from a macOS server and one from a NAS (Samba) and record,
 3. During an export of a large month, copy a different file from another Mac to the final name
    of an item not yet exported. The copied file must survive, and that item must fail with
    "Destination already exists" or land under ` (1)`.
-4. Disconnect the share during an export. Items must fail as destination unavailable or an
-   unknown, retryable error; never a zero-byte or partial file at a final name (hidden
-   `.photo-export-*.tmp` stages may remain).
+4. Disconnect the share during an export. The first item that fails as destination
+   unavailable stops the run, and a manual export says the destination can't be reached.
+   An `EIO` may still fail items as an unknown, retryable error until the unmount
+   notification interrupts the run. There must never be a zero-byte or partial file at a
+   final name (hidden `.photo-export-*.tmp` stages may remain).
 
 #### Choosing the final name
 
@@ -335,11 +340,32 @@ These guards are transient; persisted run-summary, retry, and dirty-state format
 
 ### AutoSync retry lifecycle
 
-Retry eligibility is per destination, placement, asset, and variant. Enqueue checks only missing variants; execution checks again immediately before each variant attempt, including an edited export's original fallback. Manual runs bypass automatic backoff. Keep the full required-variant set for filename pairing and completion policy even when only one variant is eligible.
+Retry eligibility is per destination, placement, asset, and variant, decided by `RetryEntry.isEligibleForAutoSync(now:)` through `AutoSyncManager.isAutoSyncEligible`. A deadline decides when there is one. Without one, only `destinationUnavailable` is eligible: Auto Export runs only while the destination is available, so the next run is its retry and it never arms the retry timer. Other entries without a deadline wait for user action. Enqueue checks only missing variants; execution checks again immediately before each variant attempt, including an edited export's original fallback. Manual runs bypass automatic backoff. Keep the full required-variant set for filename pairing and completion policy even when only one variant is eligible.
 
 The reducer schedules the earliest automatically retryable entry in enabled scopes. Firing consumes the exact entry in transient state so a removed asset or deselected variant cannot cause a zero-delay loop. Changed failures and settings can make work eligible again. A due retry waits for manual work, imports, and the entire current automatic fan-out; switching destinations or disabling Auto Export cancels its ownership.
 
 Matched completion prunes only sparse retry tuples that `AutoSyncExportRunning.isRetryVariantDone` confirms in a healthy, fully flushed record store. Legacy manual runs use their idle transition as a cleanup opportunity; cancellation can also publish idle, so unacknowledged writes must keep retry entries intact. The JSONL layer tracks submitted and flushed revisions in memory so an append during an async flush cannot be mistaken for an acknowledged write. A completed summary alone cannot prove that every failed variant was selected or saved. Existing retry JSON and record formats remain unchanged, and unknown scope or variant keys are preserved.
+
+### AutoSync resume after a destination stop
+
+The work-preservation hook reschedules pending work when a run goes idle, and production
+publishes that idle state before the run's summary. A run that stopped on a
+destination-wide failure (`stoppedBy` set) while the destination still looks available
+would stop the same way again, every 30 seconds. So the hook records the exact
+`(reason, fireAt)` it scheduled, and a `stoppedBy` summary arriving while the destination
+is available cancels that schedule only if it is still the current one; any other
+schedule clears the record. A summary that arrives while the reducer is still `.running`
+suppresses the hook for that run instead.
+
+- Dirty work is kept and waits for the next real trigger: a Photos change,
+  `destinationBecameAvailable`, Export Now, launch, or a scope or settings change. Freeing
+  space or restoring access fires no trigger by itself.
+- An Export Now pressed during the run is exempt and still runs.
+- Another reason that arrived during the run and adds no dirty work, such as a scope
+  change, goes back into `pendingTriggerReason`. While idle, a held reason never fires on
+  its own: a new trigger replaces it, or a resolving blocker (an import or manual export
+  ending) serves it.
+- A failed summary without `stoppedBy` keeps the existing reschedule.
 
 ### AutoSync dirty-state persistence acknowledgement
 
@@ -519,11 +545,23 @@ Persistence teardown snapshots a stopped outcome before clearing ownership. Canc
 supersession and destination interruption clear feedback. Dismissal and success expiry
 retire the terminal row without resetting coordinator counters or revealing old N/N UI.
 
-Destination no-space/permission failures return their original private job-stop signal
-after one failure record. The post-job history flush precedes teardown; a flush failure
+Destination no-space, permission and unavailable failures return their original private
+job-stop signal after one failure record. Unavailable means the destination can't be
+reached: a network errno, `ENXIO` or `ExportDestinationError.notAvailable`. A missing file
+(`ENOENT`, Cocoa 4/260) and `EIO` are `unknown` and fail only their item. A Cocoa error
+that would otherwise be `unknown` is classified by a direct POSIX `NSUnderlyingError`, and a
+folder that couldn't be created by its underlying error; both keep the outer signature. An
+unavailable stop ends `.interrupted` with `cancelReason: .destinationUnavailable`, the same
+summary shape as an unmount; no-space and permission stops end `.failed`. Only these stops
+set `ExportRunSummary.stoppedBy`. The manual message comes from a `switch` on the category.
+An unmount that arrives while nothing is running keeps the last manual summary, so the stop
+message stays; during active work it clears the feedback as before.
+The post-job history flush precedes teardown; a flush failure
 uses the existing persistence recovery message. Renderer/converter wrapping preserves
-these hard destination errors after checking generation; source-side reuse copy failures
-retain their PhotoKit fallback. Native AVFoundation disk-full uses the same category.
+these destination errors after checking generation; source-side reuse copy failures
+retain their PhotoKit fallback. Native AVFoundation disk-full uses the same category. An
+AVFoundation error that wraps a network errno is not unwrapped, so it still becomes the
+edited-unavailable failure.
 Stop summaries snapshot totals before teardown and account for the current job once,
 since the coordinator's normal completion increment is suppressed by the generation
 change. Completion publication/awaiter resumption follows teardown. Manual feedback
