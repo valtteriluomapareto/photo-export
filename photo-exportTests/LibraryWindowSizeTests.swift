@@ -58,7 +58,7 @@ struct LibraryWindowSizeTests {
       rootView: LibraryRootView()
         .environmentObject(library).environmentObject(timeline).environmentObject(collections)
         .environmentObject(manager).environmentObject(manager.progressState)
-        .environmentObject(destination).environmentObject(autoSync).environmentObject(whatsNew)
+        .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
         .defaultAppStorage(defaults))
     try await withCleanup {
       window.orderFront(nil)

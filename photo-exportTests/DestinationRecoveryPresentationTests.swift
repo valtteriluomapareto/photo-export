@@ -119,7 +119,7 @@ import Testing
           rootView: pane(surface).frame(width: 1200, height: 800)
             .environmentObject(library).environmentObject(timeline).environmentObject(collections)
             .environmentObject(manager).environmentObject(manager.progressState)
-            .environmentObject(destination).environmentObject(autoSync).environmentObject(whatsNew)
+            .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
             .environment(\.bodyInvalidationCounter, counter))
         let owned = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
