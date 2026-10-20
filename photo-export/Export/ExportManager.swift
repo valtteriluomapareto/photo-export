@@ -289,15 +289,16 @@ final class ExportManager: ObservableObject {
     /// with a retry reason in the run summary." Reported on the summary;
     /// the per-variant detail is reconstructable from `AutoSyncRetryState`.
     var skippedCount: Int = 0
-    /// Set when a bulk-album enqueue (`enqueueBulkAlbumExport`) threw partway
-    /// through and the catch block elected to drain the partial queue instead
-    /// of cancelling. Without this, the natural queue-drain finalize would
-    /// resolve the run as `.completed` — and `AutoSyncReducer.coveredScopes`
-    /// would then clear the scope's dirty flag, hiding the albums that the
-    /// enqueue loop never reached from the next reconciliation pass. The flag
-    /// flips `finalizeActiveRun`'s `.completed` to `.failed` so the dirty
-    /// state survives and the next change-event-driven debounce retries.
-    var partialBulkScan: Bool = false
+    /// Set when the run's scan did not cover its whole scope: a bulk enqueue
+    /// threw partway through and the catch block elected to drain the partial
+    /// queue, or a scan returned `.unauthorized` because Photos access is
+    /// missing. Without this, the natural queue-drain finalize would resolve
+    /// the run as `.completed` — and `AutoSyncReducer.coveredScopes` would then
+    /// clear the scope's dirty flag, hiding the items the scan never reached
+    /// from the next reconciliation pass. The flag flips `finalizeActiveRun`'s
+    /// `.completed` to `.failed` so the dirty state survives and the next
+    /// change-event-driven debounce retries.
+    var incompleteScan: Bool = false
   }
   private var activeRunBookkeeping: ActiveRunBookkeeping?
 
@@ -991,8 +992,10 @@ final class ExportManager: ObservableObject {
   /// duplicating: the `Task { [weak self] in }` wrapper, the
   /// `isEnqueueingAll = false` teardown for the owning generation, the success
   /// finalize (empty/done message + `processQueueIfNeeded()`), and the
-  /// partial-failure recovery on throw (queue warning + `partialBulkScan` +
-  /// drain if any jobs already queued; otherwise finalize as failed).
+  /// partial-failure recovery on throw (queue warning + `incompleteScan` +
+  /// drain if any jobs already queued; otherwise finalize as failed). An
+  /// unauthorized item does not throw; its scan sets `incompleteScan` itself,
+  /// so the drain after a `.completed(totals)` body still resolves `.failed`.
   ///
   /// Callers supply just (a) the bulk-loop body that does the enqueue work
   /// and returns `BulkExportOutcome`, (b) the empty/done message factory used
@@ -1038,12 +1041,12 @@ final class ExportManager: ObservableObject {
         self.noteManualPreparationFailure(
           "Some requested photos could not be scanned. Try exporting again.")
         // Partial-failure recovery: if any jobs already landed in the queue,
-        // drain them and surface a warning + flag the run as `partialBulkScan`
+        // drain them and surface a warning + flag the run as `incompleteScan`
         // so AutoSync's dirty-flag bookkeeping survives the partial scan.
         // Otherwise finalize the active run (if any) as failed.
         if !self.pendingJobs.isEmpty {
           self.setQueueWarningMessage(partialScanWarning())
-          self.activeRunBookkeeping?.partialBulkScan = true
+          self.activeRunBookkeeping?.incompleteScan = true
           self.processQueueIfNeeded()
         } else {
           self.finalizeActiveRun(result: .failed, cancelReason: nil)
@@ -1266,10 +1269,7 @@ final class ExportManager: ObservableObject {
     generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else {
-      noteManualPreparationFailure("Photos access is required to scan this selection.")
-      return .unauthorized
-    }
+    guard photoLibraryService.isAuthorized else { return unauthorizedScan() }
 
     // Resolve the placement. For `.album` and `.sharedAlbum`, the resolver needs the
     // collection tree to find the descriptor and any colliding siblings; for
@@ -1466,6 +1466,15 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Queue Handling
 
+  /// Shared by the enqueue scans when Photos access is missing. The scan covers nothing,
+  /// so the active run, if any, is marked incomplete: its drain resolves `.failed`
+  /// and AutoSync keeps the scope's pending work for the next run.
+  private func unauthorizedScan() -> EnqueueOutcome {
+    noteManualPreparationFailure("Photos access is required to scan this selection.")
+    activeRunBookkeeping?.incompleteScan = true
+    return .unauthorized
+  }
+
   /// Scans the month and returns the enqueue outcome. Callers use the outcome to decide
   /// whether to surface the "already exported" toolbar message.
   @discardableResult
@@ -1476,10 +1485,7 @@ final class ExportManager: ObservableObject {
     year: Int, month: Int, settings: ExportSettingsSnapshot, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else {
-      noteManualPreparationFailure("Photos access is required to scan this selection.")
-      return .unauthorized
-    }
+    guard photoLibraryService.isAuthorized else { return unauthorizedScan() }
     let placement = ExportPlacement.timeline(year: year, month: month)
     var skippedCount = 0
     let newJobs = try await planAssetsProgressively(
@@ -1509,10 +1515,7 @@ final class ExportManager: ObservableObject {
     year: Int, settings: ExportSettingsSnapshot, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else {
-      noteManualPreparationFailure("Photos access is required to scan this selection.")
-      return .unauthorized
-    }
+    guard photoLibraryService.isAuthorized else { return unauthorizedScan() }
     var skippedCount = 0
     let newJobs = try await planAssetsProgressively(
       in: .timeline(year: year, month: nil), generation: gen
@@ -1652,15 +1655,16 @@ final class ExportManager: ObservableObject {
     //   1. Any variants failed during this run — callers (AutoSync's retry path,
     //      Export Issues UI) need to distinguish a clean run from one that needs
     //      retry-store inspection.
-    //   2. The bulk-enqueue catch block elected to drain a partial queue — the
-    //      unreached albums in the batch never got a chance to enqueue, so a
+    //   2. The scan did not cover its whole scope — the bulk-enqueue catch block
+    //      elected to drain a partial queue, or a scan found Photos access
+    //      missing. The unreached items never got a chance to enqueue, so a
     //      `.completed` summary would over-report what the run actually covered
-    //      and `AutoSyncReducer` would clear dirty state for albums that weren't
+    //      and `AutoSyncReducer` would clear dirty state for items that weren't
     //      reconciled.
     // Explicit cancel/interrupt paths keep their incoming result untouched.
     let effectiveResult: ExportRunResult
     if result == .completed
-      && (bookkeeping.failedCount > 0 || bookkeeping.partialBulkScan)
+      && (bookkeeping.failedCount > 0 || bookkeeping.incompleteScan)
     {
       effectiveResult = .failed
     } else {
