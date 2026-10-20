@@ -87,27 +87,111 @@ and cover every scene root with a hosted render test that is built the way the a
 
 ## Types with Combine subscribers: the bridge
 
-A property whose named accessor has subscribers keeps `@Published` delivery through a
-hand-written bridge (`ObservableCombineBridge`): the value plus a `CurrentValueSubject`. These
-rules come from the plan review and the parity tests check them:
+A property whose named accessor has subscribers keeps `@Published` delivery through
+`ObservableCombineBridge` (`photo-export/Helpers/ObservableCombineBridge.swift`). It is a
+plain class, not a macro: the owner writes the property by hand around it. The rules come
+from the plan review; `ObservableCombineBridgeTests` and the parity tests check them.
 
-- **Storage:** the value lives in its own storage. The getter never reads
-  `CurrentValueSubject.value`: `send` updates `.value` before delivering, while `@Published`
-  sinks read the *old* value. (`PublishedParityHelperTests.subjectValueGetterFails` shows the
-  parity helper catching exactly this.)
-- **Setter order:** `withMutation` (willSet) → publish → store. Replay to a new subscriber comes
-  from the stored value, so a subscription made inside a sink replays the previous value.
+- **Storage:** the bridge stores the value itself, and the getter returns that. The getter
+  never reads `CurrentValueSubject.value`: `send` updates `.value` before delivering, while
+  `@Published` sinks read the *old* value.
+- **Replay comes from the stored value, so the subject is a `PassthroughSubject`.** The
+  publisher is `Deferred { subject.prepend(stored) }`. A `CurrentValueSubject` fails even with
+  separate storage: a subscription made inside a sink replays the subject's value, which is
+  already the one in flight (`PublishedParityHelperTests.subjectReplayFailsNestedReplay`).
+- **Setter order:** `withMutation` (willSet) → deliver → store.
 - **While the type is still `ObservableObject`** (plumbing a bridge in before the flip),
-  `objectWillChange.send()` comes before the subject's send.
-- **Every write is published,** including one that stores the value already held: `@Published`
-  emits on unchanged writes, and accessors that drop repeats do so with an explicit
-  `removeDuplicates()`.
+  `objectWillChange.send()` comes first, on every write, as `@Published` sends it.
+- **Every write is delivered,** including one that stores the value already held:
+  `@Published` emits on unchanged writes, and accessors that drop repeats do so with an
+  explicit `removeDuplicates()`.
+- **An equal write does not notify Observation.** The bridge skips `withMutation` when the new
+  value equals the stored one, as the `@Observable` macro does for an `Equatable` property
+  (`ObservationEqualWriteTests`). While the type is still `ObservableObject`, the equal write
+  still sends `objectWillChange`, so a view that refreshes through it today still does.
 - Never `.receive(on:)` or a `MainActor` hop in the bridge or an accessor; AutoSync and the
   mirrors rely on synchronous delivery.
 
-Bridge contract tests: a read inside the sink returns the old value; a subscribe nested inside
-a sink is replayed; willSet comes before the Combine send; emission is synchronous; an
-unchanged write emits; a `withObservationTracking` `onChange` fires.
+**While the owner is still `ObservableObject`** (`ExportManager` today), it conforms to
+`Observable` by hand and holds its own registrar:
+
+```swift
+@MainActor
+final class ExportManager: ObservableObject, Observable {
+  private(set) var isRunning: Bool {
+    get { bridgedRead(isRunningStorage, \.isRunning) }
+    set { bridgedWrite(isRunningStorage, \.isRunning, newValue) }
+  }
+  private let isRunningStorage = ObservableCombineBridge(false)
+
+  private let observationRegistrar = ObservationRegistrar()
+
+  private func bridgedRead<Value>(
+    _ storage: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
+  ) -> Value {
+    observationRegistrar.access(self, keyPath: keyPath)
+    return storage.value
+  }
+
+  private func bridgedWrite<Value>(
+    _ storage: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>,
+    _ newValue: Value
+  ) {
+    objectWillChange.send()
+    storage.write(newValue) { observationRegistrar.withMutation(of: self, keyPath: keyPath, $0) }
+  }
+}
+```
+
+The accessor reads the bridge: `isRunningStorage.publisher`, or a combination such as
+`Publishers.CombineLatest4(activeRunContextStorage.publisher, isRunningStorage.publisher, …)`.
+`$isRunning` no longer exists, so a missed subscriber is a compile error.
+
+**After the flip** the macro supplies the registrar. Drop `objectWillChange`, the registrar
+and the helpers, and keep the hand-written property (the macro leaves computed properties and
+`let`s alone):
+
+```swift
+@Observable
+@MainActor
+final class ExportManager {
+  private(set) var isRunning: Bool {
+    get {
+      access(keyPath: \.isRunning)
+      return isRunningStorage.value
+    }
+    set { isRunningStorage.write(newValue) { withMutation(keyPath: \.isRunning, $0) } }
+  }
+  private let isRunningStorage = ObservableCombineBridge(false)
+}
+```
+
+`ObservableCombineBridgeTests` runs the same contract over both shapes: `@Published` parity
+(through `assertPublishedParity`); Observation notified before delivery; an equal write
+delivered without an Observation notification; `objectWillChange` before every delivery
+while plumbed; a read tracking only the property it reads; delivery before the write returns.
+
+### `ExportManager`: the run-state bridge
+
+The four inputs of `exportRunStatePublisher` (`activeRunContext`, `isRunning`, `queueCount`,
+`isEnqueueingAll`) are bridged in the plumbing shape above. `PublisherParityTests`,
+`AutoSyncSeamCharacterizationTests` and the `ExportQueueStateSnapshotTests` gates pass
+unchanged. `ExportManagerObservationTests` shows that the properties and the derived reads
+views make (`hasActiveExportWork`, `canTogglePause`, `manualExportShouldConfirmSupersede`)
+register dependencies, and that a view holding the manager as a plain `let` refreshes for
+queued work and not for a publication it does not read. An idle teardown rewrites every
+input with its current value: Observation stays silent and `objectWillChange` fires five
+times, as it did with `@Published`.
+
+The flip still owes:
+
+- bridges for the other contract accessors (`versionSelection`, `convertHEICToJPEG`,
+  `livePhotosPairedExport`, `isImporting`, `previousBackupMissing`, `importStage`);
+- a mirror or a dependency for every read-through property that stops refreshing once
+  `objectWillChange` is gone: `pendingJobs`, `currentTask`, `queuedCountsByPlacementId`,
+  `isProcessing` and `queuedCount(year:month:)` read the coordinator's unpublished state;
+- `@ObservationIgnored` on the collaborators, IUOs, caches and tasks;
+- the wrapper and injection flips.
 
 ## Tests
 

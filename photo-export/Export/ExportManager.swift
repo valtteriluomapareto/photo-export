@@ -1,12 +1,13 @@
 import AppKit
 import Combine
 import Foundation
+import Observation
 import Photos
 import SwiftUI
 import os
 
 @MainActor
-final class ExportManager: ObservableObject {
+final class ExportManager: ObservableObject, Observable {
   /// User-facing persistence key for the active version selection.
   static let versionSelectionDefaultsKey = "exportVersionSelection"
   /// Persistence key for the Live Photo paired-video export toggle (issue #49).
@@ -59,8 +60,19 @@ final class ExportManager: ObservableObject {
   }
 
   // MARK: - Published State (Export)
-  @Published private(set) var isRunning: Bool = false
-  @Published private(set) var queueCount: Int = 0
+  // `isRunning`, `queueCount`, `activeRunContext` and `isEnqueueingAll` feed
+  // `exportRunStatePublisher`. They are stored in `ObservableCombineBridge`s so views track
+  // them through Observation while AutoSync keeps `@Published` delivery (see `bridgedWrite`).
+  private(set) var isRunning: Bool {
+    get { bridgedRead(isRunningStorage, \.isRunning) }
+    set { bridgedWrite(isRunningStorage, \.isRunning, newValue) }
+  }
+  private let isRunningStorage = ObservableCombineBridge(false)
+  private(set) var queueCount: Int {
+    get { bridgedRead(queueCountStorage, \.queueCount) }
+    set { bridgedWrite(queueCountStorage, \.queueCount, newValue) }
+  }
+  private let queueCountStorage = ObservableCombineBridge(0)
   @Published private(set) var isPaused: Bool = false
 
   /// Frequently-mutating progress-bar state lives here so the per-asset filename and
@@ -181,7 +193,11 @@ final class ExportManager: ObservableObject {
   /// observing this property see exactly one transition `nil → context → nil` per
   /// awaitable run; no event is emitted for runs started via the existing fire-and-forget
   /// `start*` methods.
-  @Published private(set) var activeRunContext: ExportRunContext?
+  private(set) var activeRunContext: ExportRunContext? {
+    get { bridgedRead(activeRunContextStorage, \.activeRunContext) }
+    set { bridgedWrite(activeRunContextStorage, \.activeRunContext, newValue) }
+  }
+  private let activeRunContextStorage = ObservableCombineBridge<ExportRunContext?>(nil)
 
   /// Composite run-state observable for AutoSync. Republishes whenever the active
   /// context, the running flag, the queue depth, or the bulk-enqueue flag changes
@@ -193,18 +209,21 @@ final class ExportManager: ObservableObject {
   /// `pendingJobs.append`, and race to start its own background run on top of a
   /// user-initiated bulk export. See issue #67 item 4a.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
-    Publishers.CombineLatest4($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)
-      .map { context, isRunning, queueCount, isEnqueueingAll in
-        let manualFireAndForget =
-          context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
-        return ExportRunState(
-          activeContext: context,
-          isManualActive: context?.source == .manual || manualFireAndForget,
-          isAutoSyncActive: context?.source == .autoSync
-        )
-      }
-      .removeDuplicates()
-      .eraseToAnyPublisher()
+    Publishers.CombineLatest4(
+      activeRunContextStorage.publisher, isRunningStorage.publisher,
+      queueCountStorage.publisher, isEnqueueingAllStorage.publisher
+    )
+    .map { context, isRunning, queueCount, isEnqueueingAll in
+      let manualFireAndForget =
+        context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
+      return ExportRunState(
+        activeContext: context,
+        isManualActive: context?.source == .manual || manualFireAndForget,
+        isAutoSyncActive: context?.source == .autoSync
+      )
+    }
+    .removeDuplicates()
+    .eraseToAnyPublisher()
   }
 
   /// Combine publisher for `versionSelection` so AutoSync can subscribe to user
@@ -239,9 +258,9 @@ final class ExportManager: ObservableObject {
       .eraseToAnyPublisher()
   }
 
-  // The accessors below expose single `@Published` properties to subscribers outside this
-  // type with `$property` semantics: synchronous, delivered before the value is stored, and
-  // replaying the current value (pinned by `PublisherParityTests`).
+  // The accessors below expose single properties to subscribers outside this type with
+  // `$property` semantics: synchronous, delivered before the value is stored, and replaying
+  // the current value (pinned by `PublisherParityTests`), from `@Published` or a bridge.
 
   /// `$isImporting` alone. `isImportingPublisher` is AutoSync's hold, which also covers a
   /// missing previous backup and drops repeats.
@@ -254,14 +273,14 @@ final class ExportManager: ObservableObject {
     $importStage.eraseToAnyPublisher()
   }
 
-  /// `$activeRunContext`.
+  /// `activeRunContext`, from its bridge.
   var activeRunContextPublisher: AnyPublisher<ExportRunContext?, Never> {
-    $activeRunContext.eraseToAnyPublisher()
+    activeRunContextStorage.publisher
   }
 
-  /// `$isEnqueueingAll`.
+  /// `isEnqueueingAll`, from its bridge.
   var isEnqueueingAllPublisher: AnyPublisher<Bool, Never> {
-    $isEnqueueingAll.eraseToAnyPublisher()
+    isEnqueueingAllStorage.publisher
   }
 
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
@@ -505,12 +524,16 @@ final class ExportManager: ObservableObject {
   /// preserves `manager.generation` as a stable read surface for tests and
   /// in-module callers.
   var generation: Int { queueCoordinator.generation }
-  /// `@Published` so AutoSync's `exportRunStatePublisher` can include the
+  /// Published (through its bridge) so AutoSync's `exportRunStatePublisher` can include the
   /// bulk-enqueue window (after the dispatcher flips this true but before the
   /// first job lands in `pendingJobs`) in its idle/active decision. Issue #67
   /// item 4a — without this, AutoSync would race to start a background run
   /// during the multi-select / Export-All dispatcher's mid-enqueue window.
-  @Published private(set) var isEnqueueingAll: Bool = false
+  private(set) var isEnqueueingAll: Bool {
+    get { bridgedRead(isEnqueueingAllStorage, \.isEnqueueingAll) }
+    set { bridgedWrite(isEnqueueingAllStorage, \.isEnqueueingAll, newValue) }
+  }
+  private let isEnqueueingAllStorage = ObservableCombineBridge(false)
   /// Forwarder to the import coordinator's task handle so existing test reads
   /// (`manager.importTask`) and the `waitForImportCompletion` test helper continue to
   /// resolve against the same in-flight Task.
@@ -639,6 +662,31 @@ final class ExportManager: ObservableObject {
     self.importCoordinator.$previousBackupMissing
       .sink { [weak self] in self?.previousBackupMissing = $0 }
       .store(in: &importCancellables)
+  }
+
+  // MARK: - Observation bridge
+  //
+  // `ExportManager` is still an `ObservableObject`, and also `Observable` for the bridged
+  // properties: a read registers an Observation dependency, and a write sends
+  // `objectWillChange` first, as `@Published` does, so `@EnvironmentObject` holders refresh
+  // as before. An equal write is delivered to Combine subscribers and sends
+  // `objectWillChange`, but does not notify Observation.
+
+  private let observationRegistrar = ObservationRegistrar()
+
+  private func bridgedRead<Value>(
+    _ storage: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
+  ) -> Value {
+    observationRegistrar.access(self, keyPath: keyPath)
+    return storage.value
+  }
+
+  private func bridgedWrite<Value>(
+    _ storage: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>,
+    _ newValue: Value
+  ) {
+    objectWillChange.send()
+    storage.write(newValue) { observationRegistrar.withMutation(of: self, keyPath: keyPath, $0) }
   }
 
   // MARK: - Lifetime contract
