@@ -41,9 +41,9 @@ struct ImportView: View {
     }
     .padding(24)
     .frame(width: 420)
-    // Keep the height at the content's ideal. Multi-line text that may truncate would otherwise
-    // let a sheet or window shrink the view, cut off a line, and shrink it again on every layout
-    // pass until AppKit aborts.
+    // Size to the content's full height so error and recovery text is never cut off. If the
+    // height followed truncated text, a fitted sheet or window would shrink a line at a time until
+    // AppKit aborts the layout pass.
     .fixedSize(horizontal: false, vertical: true)
     // The user must decide what to do with a folder that isn't their previous backup; exports
     // wait until then.

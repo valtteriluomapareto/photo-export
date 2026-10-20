@@ -43,6 +43,8 @@ import Testing
       let defaults: UserDefaults
       let favorites = ExportPlacement.favorites()
       var window: NSWindow?
+      var hosted: NSView?
+      static let hostHeight: CGFloat = 600
 
       init(fault: History? = nil) {
         defaults = TestScratch.defaults(suiteName: defaultsName)
@@ -94,11 +96,12 @@ import Testing
             .environmentObject(manager).environmentObject(timeline).environmentObject(collections)
             .environmentObject(destinationManager).environment(\.bodyInvalidationCounter, counter))
         let hostWindow = NSWindow(
-          contentRect: NSRect(x: -10000, y: -10000, width: 460, height: 600),
+          contentRect: NSRect(x: -10000, y: -10000, width: 460, height: Self.hostHeight),
           styleMask: [.borderless], backing: .buffered, defer: false)
         hostWindow.isReleasedWhenClosed = false
         hostWindow.contentView = hosted
         window = hostWindow
+        self.hosted = hosted
         hostWindow.orderFront(nil)
       }
 
@@ -108,6 +111,7 @@ import Testing
         window?.contentView = nil
         window?.close()
         window = nil
+        hosted = nil
         counter.reset()
         io.arm(false)
         timeline.flushForTesting()
@@ -235,9 +239,7 @@ import Testing
           == f.destination.closedScopeURLs.map(\.path).sorted())
     }
 
-    /// A failure that is already showing when the view is first laid out must render whole. The
-    /// host window then starts taller than the content, so a height that shrinks with truncated
-    /// text keeps resizing the window until AppKit aborts the layout pass.
+    /// A failure already showing at the first layout must render whole.
     @Test(.timeLimit(.minutes(1)))
     func failureViewRendersWhenItIsTheFirstLayout() async throws {
       let f = Fixture()
@@ -248,13 +250,17 @@ import Testing
       let importError = try #require(f.manager.importError)
       f.show()
       guard await shows("Import Failed", in: f) else { return }
-      // Wait for the display cycle that fits the window (shown 600pt tall) to the view, so
-      // teardown can't pre-empt the layout pass this test is about.
-      let fitted = await observe { (f.window?.frame.height ?? 600) < 600 }
+      let window = try #require(f.window)
+      let hosted = try #require(f.hosted)
+      // Wait for the display cycle that fits the window to the view, so teardown can't pre-empt
+      // the layout pass this test is about.
+      let fitted = await observe { window.frame.height < Fixture.hostHeight }
       try #require(fitted)
+      #expect(window.contentLayoutRect.height >= hosted.fittingSize.height)
       #expect(f.counter.renderedText["import-message"] == [importError])
       #expect(f.counter.renderedText["import-recovery"]?.first?.isEmpty == false)
       #expect(f.counter.renderedText["import-progress"] == ["false"])
+      #expect(f.counter.renderedActions["import-close"] != nil)
     }
 
     @Test(.timeLimit(.minutes(1)))
