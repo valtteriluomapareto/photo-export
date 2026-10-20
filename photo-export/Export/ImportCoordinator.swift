@@ -53,6 +53,14 @@ final class ImportCoordinator: ObservableObject {
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
   @Published private(set) var importError: String?
+  /// Set when an import that required the previous backup found none of the export history's
+  /// files in the folder. Nothing was imported or pruned.
+  @Published private(set) var previousBackupMissing: Bool = false
+
+  /// Why `startImport` didn't start.
+  enum StartRefusal: Equatable {
+    case alreadyImporting, exportActive, noDestination, historyNotReady
+  }
 
   /// Handle to the in-flight import Task. Same-module readers (the test target via
   /// `@testable import`) can `await importTask?.value` for deterministic completion.
@@ -109,34 +117,55 @@ final class ImportCoordinator: ObservableObject {
 
   /// Starts the Import Existing Backup flow. Idempotent: re-entry while an import is
   /// already in flight is a no-op. Other guards (no destination, store not ready,
-  /// active export work) silently log and return.
-  func startImport() {
-    guard !isImporting else { return }
-    guard let host else { return }
-    guard !host.hasActiveExportWork else {
+  /// active export work) log and return the reason.
+  ///
+  /// `requiringPreviousBackup` is for a folder the user said is their previous backup: when the
+  /// history has completed files and none of them are in the folder, nothing is imported or
+  /// pruned and `previousBackupMissing` is set. A refusal also sets `importError`, so the user
+  /// learns why the check didn't run.
+  @discardableResult
+  func startImport(requiringPreviousBackup: Bool = false) -> StartRefusal? {
+    guard !isImporting else { return .alreadyImporting }
+    guard let host else { return .noDestination }
+    let refusal: StartRefusal?
+    if host.hasActiveExportWork {
       logger.warning("Cannot import while export is active")
-      return
-    }
-    guard let rootURL = host.exportDestination.selectedFolderURL else {
+      refusal = .exportActive
+    } else if host.exportDestination.selectedFolderURL == nil {
       logger.warning("Cannot import: no destination selected")
-      return
-    }
-    // Gate the import on a `.ready` timeline store. Otherwise the scanner would happily
-    // run, the bulkImportRecords call would silently drop every record (its `.ready`
-    // guard short-circuits on `.unconfigured`/`.failed`), and the user would see a
-    // success report with the matched counts despite nothing being persisted. This is
-    // the same hazard `canExportTimeline` guards on the export-start side.
-    guard host.exportRecordStore.state == .ready else {
+      refusal = .noDestination
+    } else if host.exportRecordStore.state != .ready {
+      // Gate the import on a `.ready` timeline store. Otherwise the scanner would happily
+      // run, the bulkImportRecords call would silently drop every record (its `.ready`
+      // guard short-circuits on `.unconfigured`/`.failed`), and the user would see a
+      // success report with the matched counts despite nothing being persisted. This is
+      // the same hazard `canExportTimeline` guards on the export-start side.
       logger.error(
         "Cannot import: timeline record store state=\(String(describing: host.exportRecordStore.state), privacy: .public) (need .ready)"
       )
-      return
+      refusal = .historyNotReady
+    } else {
+      refusal = nil
     }
+    if let refusal {
+      if requiringPreviousBackup {
+        previousBackupMissing = false
+        importStage = nil
+        host.setImportResult(nil)
+        importError =
+          refusal == .exportActive
+          ? "Photo Export couldn\u{2019}t check this folder against your export history while an export is running. Your export history was kept. Choose File \u{2192} Import Existing Backup\u{2026} when the export finishes."
+          : "Photo Export couldn\u{2019}t check this folder against your export history. Your export history was kept."
+      }
+      return refusal
+    }
+    guard let rootURL = host.exportDestination.selectedFolderURL else { return .noDestination }
 
     let importGen = queueCoordinator?.generation ?? 0
     let operationID = UUID()
     activeImportID = operationID
     importError = nil
+    previousBackupMissing = false
     host.setImportResult(nil)
     importStage = .scanningBackupFolder
     isImporting = true
@@ -155,6 +184,34 @@ final class ImportCoordinator: ObservableObject {
           return
         }
         defer { host.exportDestination.endScopedAccess(for: scopedURL) }
+
+        if requiringPreviousBackup {
+          let isCurrent: @MainActor () -> Bool = { [weak self] in
+            self?.queueCoordinator?.isCurrent(importGen) == true
+          }
+          let timelineHas = try await host.exportRecordStore.containsCompletedFile(
+            at: rootURL, isCurrent: isCurrent)
+          try Task.checkCancellation()
+          guard self.isCurrentImport(operationID, generation: importGen) else { return }
+          var hasHistory = timelineHas != nil
+          var found = timelineHas == true
+          if !found {
+            let collectionsHave = try await host.collectionExportRecordStore
+              .containsCompletedFile(at: rootURL, isCurrent: isCurrent)
+            try Task.checkCancellation()
+            guard self.isCurrentImport(operationID, generation: importGen) else { return }
+            hasHistory = hasHistory || collectionsHave != nil
+            found = collectionsHave == true
+          }
+          if hasHistory, !found {
+            self.logger.info(
+              "Import skipped: none of the export history's files are in \(rootURL.path, privacy: .public)"
+            )
+            self.previousBackupMissing = true
+            self.finishOwnedImport(operationID)
+            return
+          }
+        }
 
         // The throwing scanner verifies recognized directories before any import or pruning.
         self.importStage = .scanningBackupFolder
@@ -281,6 +338,7 @@ final class ImportCoordinator: ObservableObject {
         self.finishOwnedImport(operationID, error: "Import failed: \(error.localizedDescription)")
       }
     }
+    return nil
   }
 
   /// Cancels an in-progress import. Bumps the queue coordinator's generation so any
@@ -293,6 +351,7 @@ final class ImportCoordinator: ObservableObject {
     queueCoordinator?.bumpGeneration()
     host?.setImportResult(nil)
     importError = nil
+    previousBackupMissing = false
     importStage = nil
     flushRecordNotifications()
     // A synchronous notification subscriber may cancel and start another import.

@@ -557,33 +557,8 @@ final class CollectionExportRecordStore: ObservableObject {
     reconciliationRevision &+= 1
     let revision = reconciliationRevision
 
-    struct Probe: Sendable {
-      let placementId: String
-      let assetId: String
-      let variantKey: String
-      let path: String
-    }
-    var probes: [Probe] = []
-
     // Phase 1 (main): invalid placement metadata cannot prove a file missing.
-    for (placementId, byAsset) in recordBodies {
-      guard let placement = placements[placementId] else {
-        throw ReconciliationVerificationError(
-          path: root.path, detail: "History is missing a placement")
-      }
-      for (assetId, body) in byAsset {
-        for (variantKey, vr) in body.variants where vr.status == .done {
-          // Issue #38: per-variant subfolder. A standalone-video asset's variants
-          // may live in `<placement>/videos/`, while image-asset variants live at
-          // the bare placement path. Probe each variant against its own stored
-          // subfolder.
-          let path = try ReconciliationFileChecker.filePath(
-            root: root, placement: placement, filename: vr.filename, subfolder: vr.subfolder)
-          probes.append(
-            Probe(placementId: placementId, assetId: assetId, variantKey: variantKey, path: path))
-        }
-      }
-    }
+    let probes = try completedVariantProbes(root: root)
 
     // Phase 2 (off-main): preserve errors until ownership has been checked.
     let probesCopy = probes
@@ -632,6 +607,49 @@ final class CollectionExportRecordStore: ObservableObject {
     )
     return ReconcileSummary(
       prunedVariants: prunedVariants, prunedRecords: prunedRecords)
+  }
+
+  private struct CompletedVariantProbe: Sendable {
+    let placementId: String
+    let assetId: String
+    let variantKey: String
+    let path: String
+  }
+
+  private func completedVariantProbes(root: URL) throws -> [CompletedVariantProbe] {
+    var probes: [CompletedVariantProbe] = []
+    for (placementId, byAsset) in recordBodies {
+      guard let placement = placements[placementId] else {
+        throw ReconciliationVerificationError(
+          path: root.path, detail: "History is missing a placement")
+      }
+      for (assetId, body) in byAsset {
+        for (variantKey, vr) in body.variants where vr.status == .done {
+          // Issue #38: per-variant subfolder. A standalone-video asset's variants
+          // may live in `<placement>/videos/`, while image-asset variants live at
+          // the bare placement path. Probe each variant against its own stored
+          // subfolder.
+          let path = try ReconciliationFileChecker.filePath(
+            root: root, placement: placement, filename: vr.filename, subfolder: vr.subfolder)
+          probes.append(
+            CompletedVariantProbe(
+              placementId: placementId, assetId: assetId, variantKey: variantKey, path: path))
+        }
+      }
+    }
+    return probes
+  }
+
+  /// Whether any completed variant's file is under `root`, or `nil` when there is no completed
+  /// variant to look for (or the store isn't ready). Read-only, like the timeline store's.
+  func containsCompletedFile(
+    at root: URL, isCurrent: @MainActor () -> Bool = { true }
+  ) async throws -> Bool? {
+    guard isCurrent(), !Task.isCancelled, state == .ready else { return nil }
+    let paths = try completedVariantProbes(root: root).map(\.path)
+    guard !paths.isEmpty else { return nil }
+    let fileChecker = reconciliationFileChecker
+    return try await runDetached { try await fileChecker.containsAnyFile(paths, root: root) }
   }
 
   // MARK: - Read API

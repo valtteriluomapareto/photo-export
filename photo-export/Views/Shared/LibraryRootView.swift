@@ -125,6 +125,11 @@ struct LibraryRootView: View {
       ImportView()
         .environmentObject(exportManager)
     }
+    // An import the app started itself (checking the history after "Same Folder") shows the
+    // same sheet, so its progress, result or refusal is visible.
+    .onChange(of: exportManager.importSheetRequest) { _, request in
+      if request != nil { isShowingImportSheet = true }
+    }
     // First launch on a new app version shows a brief "What's New" sheet
     // explaining new UI surfaces and reassuring the user about file safety.
     // Attached here (not on `ContentView`) so it only renders post-auth /

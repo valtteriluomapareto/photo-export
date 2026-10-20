@@ -168,7 +168,11 @@ final class ExportManager: ObservableObject {
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
   @Published private(set) var importError: String?
+  @Published private(set) var previousBackupMissing: Bool = false
   @Published var importResult: ImportReport?
+  /// Changes each time the app starts an import the user didn't open the Import sheet for, so the
+  /// library window shows the sheet (progress, result, or why it didn't run).
+  @Published private(set) var importSheetRequest: UUID?
 
   // MARK: - Awaitable run lifecycle (auto-sync Phase 0a)
 
@@ -601,6 +605,9 @@ final class ExportManager: ObservableObject {
       .store(in: &importCancellables)
     self.importCoordinator.$importError
       .sink { [weak self] in self?.importError = $0 }
+      .store(in: &importCancellables)
+    self.importCoordinator.$previousBackupMissing
+      .sink { [weak self] in self?.previousBackupMissing = $0 }
       .store(in: &importCancellables)
   }
 
@@ -2414,6 +2421,14 @@ final class ExportManager: ObservableObject {
   /// Starts the "Import Existing Backup…" flow. Forwarder to the `ImportCoordinator`.
   func startImport() {
     importCoordinator.startImport()
+  }
+
+  /// Checks the export history against a folder the user just said is their previous backup:
+  /// runs Import Existing Backup, which keeps the history untouched when none of its files are
+  /// there, and asks the library window to show the Import sheet.
+  func startImportForConfirmedSameFolder() {
+    importCoordinator.startImport(requiringPreviousBackup: true)
+    importSheetRequest = UUID()
   }
 
   /// Cancels an in-progress import. Forwarder to the `ImportCoordinator`.

@@ -124,6 +124,7 @@ struct PhotoExportApp: App {
         .appendingPathComponent(legacyId, isDirectory: true)
       try? FileManager.default.removeItem(at: autoSyncLegacyDir)
     }
+    Self.connectAmbiguousSameFolderImport(destinationManager: edm, exportManager: em)
     let coordinator = AppLifecycleCoordinator(
       cancelActiveWork: { [em] in em.cancelAndClear() },
       interruptForDestinationUnavailable: { [em] in em.interruptForDestinationUnavailable() },
@@ -448,6 +449,16 @@ struct PhotoExportApp: App {
   /// Static so `AppLifecycleCoordinator` can call it from a closure captured at app-init time
   /// without holding a reference to `PhotoExportApp` (which is a struct value type recreated by
   /// SwiftUI on every body evaluation).
+  /// "Same Folder" for a pick that couldn't be compared with the previous destination checks
+  /// the export history against the folder (#334).
+  static func connectAmbiguousSameFolderImport(
+    destinationManager: ExportDestinationManager, exportManager: ExportManager
+  ) {
+    destinationManager.onAmbiguousSameFolderChosen = { [weak exportManager] in
+      exportManager?.startImportForConfirmedSameFolder()
+    }
+  }
+
   static func configureRecordStores(
     for newId: String?,
     destinationManager: ExportDestinationManager,

@@ -100,6 +100,7 @@ The app's export pipeline went through a multi-phase architecture refactor in Ma
    - `ScreenshotPhotoLibraryServiceOverridesTests` — pins screenshot-mode override coverage.
    - `ImportIdempotencyTests` — pins import idempotency.
    - `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` — pins the already-exported check before retry eligibility.
+   - `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` — pins that Auto Export waits for, then runs after, the history check that "Same Folder" starts.
 
    The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list misses a gate from it or if a gate is skipped.
 3. New collaborator extracted from `ExportManager`? Use the Host-protocol pattern documented in the conventions file (narrow protocol, IUO init, weak host, synchronous mirror sinks). Do not duplicate `@Published` state on the manager.

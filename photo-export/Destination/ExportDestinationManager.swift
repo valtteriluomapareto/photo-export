@@ -66,6 +66,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// (`resolveAmbiguousSelection(for:)`).
   private let ambiguityResolver: ((URL) -> FolderSelectionDecision)?
 
+  /// Called when the user answers "Same Folder" for a pick that couldn't be compared with the
+  /// previous destination, once the selection is saved and the folder is available. The app runs
+  /// Import Existing Backup from here so the history is checked against the folder. Called
+  /// synchronously after the new identity is published, so the import starts in the same
+  /// main-actor turn and AutoSync waits for it instead of running first.
+  var onAmbiguousSameFolderChosen: (() -> Void)?
+
   /// Persists a security-scoped bookmark for a URL, returning success. Injectable so the
   /// save-failure branch of `applyFolderSelection` (which must NOT drop the prior stable id) is
   /// unit-testable; `nil` uses the production `saveBookmark(for:)`.
@@ -292,23 +299,24 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     case .ambiguous:
       decision = ambiguityResolver?(url) ?? resolveAmbiguousSelection(for: url)
     }
-    applyFolderSelection(url, decision: decision)
+    let applied = applyFolderSelection(url, decision: decision)
+    if evidence == .ambiguous, decision == .sameDestination, applied, identity.stableId != nil {
+      onAmbiguousSameFolderChosen?()
+    }
   }
 
   /// The stored bookmark won't resolve, so we can't tell whether the user re-picked the same
-  /// backup folder or a new one. Ask. Defaulting to "same folder" keeps the duplicate-re-export
-  /// (#127) failure mode off the highlighted button; the user can still choose "different".
+  /// backup folder or a new one. Ask; the first button ("Same Folder") is the default.
   private func resolveAmbiguousSelection(for url: URL) -> FolderSelectionDecision {
+    let prompt = AmbiguousFolderPrompt(folderName: url.lastPathComponent)
     let alert = NSAlert()
-    alert.messageText = "Is this the same backup folder as before?"
-    alert.informativeText =
-      "Photo Export couldn't confirm whether \"\(url.lastPathComponent)\" is the destination you "
-      + "used previously. Choosing \"Same folder\" keeps your existing export history so nothing "
-      + "is re-exported. Choose \"Different folder\" only if this is a new backup destination."
+    alert.messageText = prompt.title
+    alert.informativeText = prompt.message
     alert.alertStyle = .warning
-    alert.addButton(withTitle: "Same folder")
-    alert.addButton(withTitle: "Different folder")
-    return alert.runModal() == .alertFirstButtonReturn ? .sameDestination : .newDestination
+    for title in prompt.buttons { alert.addButton(withTitle: title) }
+    let index =
+      alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+    return prompt.decision(forButtonAt: index)
   }
 
   func revealInFinder() {
@@ -534,7 +542,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Applies an explicit folder selection. The `decision` controls stable-id continuity:
   /// `.sameDestination` keeps the persisted stable id and stashed legacy id (re-grant of the
   /// same folder); `.newDestination` forgets both so a fresh id is seeded by `validate`.
-  func applyFolderSelection(_ url: URL, decision: FolderSelectionDecision) {
+  /// Returns false when the bookmark couldn't be saved and nothing changed.
+  @discardableResult
+  func applyFolderSelection(_ url: URL, decision: FolderSelectionDecision) -> Bool {
     logger.info(
       "User selected export folder: \(url.path, privacy: .public) (decision: \(String(describing: decision), privacy: .public))"
     )
@@ -545,7 +555,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // fingerprint and re-key its records.
     guard bookmarkSaver?(url) ?? saveBookmark(for: url) else {
       status = .bookmarkSaveFailed
-      return
+      return false
     }
     switch decision {
     case .newDestination:
@@ -566,6 +576,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
     selectedFolderURL = url
     validate(url: url)
+    return true
   }
 
   /// Derives a stable `destinationId` for a folder URL.

@@ -414,6 +414,12 @@ root-cause fix for #127 (a network-share remount re-exporting everything).
   as long as the stored bookmark resolves to the same folder. It is refreshed only when the user
   explicitly selects a *different* folder (decided by **bookmark/file-identity equivalence**, not
   path — the path is the drift-prone signal). `clearSelection()` drops it.
+- **Unclear picks.** When the stored bookmark can't be compared with a pick, the user answers
+  (`AmbiguousFolderPrompt`). "Same Folder" keeps the id and then calls
+  `onAmbiguousSameFolderChosen` synchronously, which runs Import Existing Backup with
+  `requiringPreviousBackup`: if the history has completed files and none of them are in the
+  folder, nothing is imported or pruned. The import starts in the same main-actor turn as the
+  identity publish, so AutoSync waits for it, and the debounce it cancels keeps its reason.
 - **One atomic identity value.** The manager publishes `@Published identity: DestinationIdentity`
   (stable id + advisory fingerprint) as **one** value — not two `@Published` fields. The old
   `destinationFingerprint` + `destinationId` pair-write is **retired**: it had a mid-emission gap
@@ -464,6 +470,7 @@ If you rename, move, add or remove one of these tests, update the list file, thi
 | [`ScreenshotPhotoLibraryServiceOverridesTests`](../../photo-exportTests/ScreenshotPhotoLibraryServiceOverridesTests.swift) | A `PhotoLibraryService` method on `ScreenshotPhotoLibraryService` returns production-PhotoKit-shaped empties instead of curated synthetic data | The tests pin every method's curated output. The "newly-added method silently inherits production" hole that prompted this gate's original wording is closed structurally — `ScreenshotPhotoLibraryService` is a peer conformance (no inheritance) since issue #67 item 1, so a new protocol method fails to compile until it has a real implementation. |
 | [`ImportIdempotencyTests`](../../photo-exportTests/ImportIdempotencyTests.swift) | The import flow loses idempotency on retry | Audit. Two consecutive `startImport()` runs over the same backup tree must not double-write records. |
 | `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` | The `isExported` predicate runs *after* the retry-gate (instead of before) | Restore the order. `isExported` must run first so already-done assets are not blocked by the retry-gate. |
+| `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` | An AutoSync run starts while the history check after "Same Folder" is still running, or no run follows it | The check must start in the same main-actor turn as the identity publish (`onAmbiguousSameFolderChosen`), and a debounce an import cancels must keep its reason for the resume hook. |
 
 ## Extension recipes
 
