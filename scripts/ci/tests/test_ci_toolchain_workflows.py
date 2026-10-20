@@ -8,6 +8,7 @@ WORKFLOWS = sorted((ROOT / ".github/workflows").glob("*.yml"))
 CANARY = ROOT / ".github/workflows/toolchain-canary.yml"
 SELECT = "scripts/ci/select-xcode.sh"
 TOOL = re.compile(r"\b(xcodebuild|xcrun|swift|plutil)\b")
+SWITCH = re.compile(r"xcode-select\s+(-s|--?switch)\b")
 # CI scripts that run Xcode tools, found from their contents so a new one is covered too.
 XCODE_SCRIPTS = sorted(
     path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts/ci").glob("*.sh")
@@ -30,9 +31,11 @@ class ToolchainWorkflowTests(unittest.TestCase):
     def test_no_workflow_pins_or_overrides_xcode_outside_the_version_file(self):
         for workflow in WORKFLOWS:
             source = workflow.read_text()
-            for token in ["Xcode_", "xcode-select -s", "XCODE_PATH", "DEVELOPER_DIR"]:
+            for token in ["Xcode_", "XCODE_PATH", "DEVELOPER_DIR"]:
                 with self.subTest(workflow=workflow.name, token=token):
                     self.assertNotIn(token, source)
+            with self.subTest(workflow=workflow.name, token="xcode-select switch"):
+                self.assertIsNone(SWITCH.search(source))
 
     def test_ci_scripts_never_override_the_selected_toolchain(self):
         self.assertIn("scripts/ci/build-app.sh", XCODE_SCRIPTS)
@@ -40,22 +43,26 @@ class ToolchainWorkflowTests(unittest.TestCase):
         for path in (ROOT / "scripts/ci").glob("*.sh"):
             if path.name == "select-xcode.sh":
                 continue
-            for token in ["DEVELOPER_DIR", "TOOLCHAINS", "xcode-select -s"]:
+            text = path.read_text()
+            for token in ["DEVELOPER_DIR", "TOOLCHAINS"]:
                 with self.subTest(script=path.name, token=token):
-                    self.assertNotIn(token, path.read_text())
+                    self.assertNotIn(token, text)
+            with self.subTest(script=path.name, token="xcode-select switch"):
+                self.assertIsNone(SWITCH.search(text))
 
     def test_pinned_jobs_take_the_version_from_the_file_and_only_the_canary_names_one(self):
         for workflow in WORKFLOWS:
             for job, text in jobs(workflow.read_text()).items():
-                calls = re.findall(r"^\s+run: (bash " + re.escape(SELECT) + r".*)$", text, re.M)
+                # Every mention, so a `run: |` block or another spelling cannot hide an argument.
+                calls = [line.strip() for line in text.splitlines() if "select-xcode.sh" in line]
                 if not calls:
                     continue
                 with self.subTest(workflow=workflow.name, job=job):
                     if workflow == CANARY:
-                        self.assertEqual(calls, [f"bash {SELECT} ${{{{ matrix.xcode }}}}"])
+                        self.assertEqual(calls, [f"run: bash {SELECT} ${{{{ matrix.xcode }}}}"])
                     else:
                         self.assertIn((workflow.name, job), PINNED_JOBS)
-                        self.assertEqual(calls, [f"bash {SELECT}"])
+                        self.assertEqual(calls, [f"run: bash {SELECT}"])
         for name, job in PINNED_JOBS:
             with self.subTest(workflow=name, job=job):
                 self.assertIn(job, jobs((ROOT / ".github/workflows" / name).read_text()))

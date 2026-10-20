@@ -9,8 +9,12 @@ IFS=. read -r major minor patch <<< "${version}"
 # Xcode 26.6 -> DTXcode 2660; 16.2.1 -> 1621.
 expected="$(printf '%d%d%d' "${major}" "${minor:-0}" "${patch:-0}")"
 
-settings="$(xcodebuild -project photo-export.xcodeproj -scheme "photo-export" \
-  -configuration Release -showBuildSettings 2>/dev/null)"
+if ! settings="$(xcodebuild -project photo-export.xcodeproj -scheme "photo-export" \
+  -configuration Release -showBuildSettings 2>&1)"; then
+  echo "${settings}" | tail -20
+  echo "::error::xcodebuild -showBuildSettings failed; cannot locate the Release app" >&2
+  exit 1
+fi
 setting() { awk -F' = ' -v key="$1" '$1 ~ "^ *" key "$" { print $2; exit }' <<< "${settings}"; }
 plist="$(setting TARGET_BUILD_DIR)/$(setting FULL_PRODUCT_NAME)/Contents/Info.plist"
 
