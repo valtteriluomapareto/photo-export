@@ -4,104 +4,13 @@ import Testing
 
 @testable import Photo_Export
 
-/// Keeps values that failing expectations capture finitely reflectable under the CI toolchain's
-/// Swift Testing (Xcode 16.2, swift-testing 6.0.3). See `ExpectationReflectionSafety.swift` and
-/// issue #277.
+/// A failing expectation whose captured value has reference cycles must record an issue, not
+/// overflow the stack while Swift Testing reflects it (#277). swift-testing 6.0.3 (Xcode 16.2) did,
+/// and needed leaf mirrors on the cyclic types; 6.1+ bounds reflection itself (#302).
 #if DEBUG
   @MainActor
   @Suite(.timeLimit(.minutes(1)))
   struct ExpectationReflectionSafetyTests {
-    /// Model of swift-testing 6.0.3's `__Expression.Value.init(_reflecting:label:seenObjects:)`:
-    /// https://github.com/swiftlang/swift-testing/blob/18c42c19cac3fafd61cab1156d4088664b7424ae/Sources/Testing/SourceAttribution/Expression.swift#L193-L257
-    /// (Apache License v2.0 with Runtime Library Exception, Copyright Apple Inc. and the Swift
-    /// project authors). Only the child traversal and its `seenObjects` bookkeeping are kept,
-    /// including the repeated-visit removal fixed upstream by swiftlang/swift-testing#787. A
-    /// node budget is added so an unbounded traversal is reported instead of overflowing.
-    private struct SwiftTesting603Reflection {
-      let budget: Int
-      private(set) var visited = 0
-      private(set) var deepestPath: [String] = []
-      private var path: [String] = []
-
-      init(budget: Int = 10_000) { self.budget = budget }
-
-      /// Returns `false` when the traversal exceeds the node budget.
-      mutating func terminates(reflecting subject: Any) -> Bool {
-        var seenObjects: [ObjectIdentifier: AnyObject] = [:]
-        reflect(subject, label: nil, seenObjects: &seenObjects)
-        return visited <= budget
-      }
-
-      private mutating func reflect(
-        _ subject: Any, label: String?, seenObjects: inout [ObjectIdentifier: AnyObject]
-      ) {
-        visited += 1
-        guard visited <= budget else { return }
-        path.append("\(label ?? "_"): \(type(of: subject))")
-        defer { path.removeLast() }
-        if path.count > deepestPath.count { deepestPath = path }
-
-        let mirror = Mirror(reflecting: subject)
-        var objectIdentifierTeRemove: ObjectIdentifier?
-        var shouldIncludeChildren = true
-        if mirror.displayStyle == .class, type(of: subject) is AnyObject.Type {
-          let object = subject as AnyObject
-          let objectIdentifier = ObjectIdentifier(object)
-          let oldValue = seenObjects.updateValue(object, forKey: objectIdentifier)
-          if oldValue != nil {
-            shouldIncludeChildren = false
-          }
-          objectIdentifierTeRemove = objectIdentifier
-        }
-        defer {
-          if let objectIdentifierTeRemove {
-            seenObjects[objectIdentifierTeRemove] = nil
-          }
-        }
-        if shouldIncludeChildren {
-          for child in mirror.children {
-            reflect(child.value, label: child.label, seenObjects: &seenObjects)
-            if visited > budget { return }
-          }
-        }
-      }
-    }
-
-    private func expectFinite(
-      _ name: String, _ subject: Any, sourceLocation: SourceLocation = #_sourceLocation
-    ) {
-      var model = SwiftTesting603Reflection()
-      let finite = model.terminates(reflecting: subject)
-      let cycle = model.deepestPath.suffix(12).joined(separator: " > ")
-      #expect(
-        finite,
-        "\(name) is not finitely reflectable by swift-testing 6.0.3; deepest path: … \(cycle)",
-        sourceLocation: sourceLocation)
-    }
-
-    private final class Node {
-      var first: Node?
-      var second: Node?
-    }
-
-    /// Two objects that each reference the other twice re-enter forever in 6.0.3. This proves the
-    /// model still reproduces the defect, so the checks below cannot pass vacuously.
-    @Test func modelReproducesTheRepeatedVisitDefect() {
-      let a = Node()
-      let b = Node()
-      a.first = b
-      a.second = b
-      b.first = a
-      b.second = a
-      defer {
-        a.first = nil
-        a.second = nil
-      }
-      var model = SwiftTesting603Reflection()
-      let finite = model.terminates(reflecting: a)
-      #expect(!finite)
-    }
-
     private struct SubscribingView: View {
       @EnvironmentObject var manager: ExportManager
       @EnvironmentObject var library: PhotoLibraryManager
@@ -176,47 +85,29 @@ import Testing
       }
     }
 
-    /// Roots chosen by the types that expectations capture as receivers or operands
-    /// (`f`, `fixture`, `h.manager`, `manager`, stores, `vm`, `loader`, `builder`).
-    @Test func capturedTestValuesAreFinitelyReflectable() async {
-      let f = HostedFixture()
-      let destinationManager = ExportDestinationManager(
-        skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
-      let autoSync = AutoSyncManager()
-      let builder = FakeAutoSyncEnvironmentBuilder()
-      autoSync.attach(to: builder.environment)
-      let lifecycle = AppLifecycleCoordinator(
-        cancelActiveWork: {}, interruptForDestinationUnavailable: {},
-        configureRecordStores: { _ in .success })
-
-      expectFinite("hosted fixture", f)
-      expectFinite("NSHostingView", f.hostingView)
-      expectFinite("ExportManager", f.manager)
-      expectFinite(
-        "ExportQueueCoordinator", f.manager.queueCoordinator as ExportQueueCoordinator)
-      expectFinite("ExportProgressState", f.manager.progressState)
-      expectFinite("ExportRecordStore", f.timeline)
-      expectFinite("CollectionExportRecordStore", f.collections)
-      expectFinite("PhotoLibraryManager", f.library)
-      expectFinite("TimelineSidebarCounts", f.counts)
-      expectFinite("MonthViewModel", f.monthViewModel)
-      expectFinite("ExportDestinationManager", destinationManager)
-      expectFinite("AutoSyncManager", autoSync)
-      expectFinite("FakeAutoSyncEnvironmentBuilder", builder)
-      expectFinite("AppLifecycleCoordinator", lifecycle)
-
-      await f.close()
+    /// Counts the issues a known-issue block matched. The matcher is `@Sendable`.
+    private final class IssueCount: @unchecked Sendable {
+      private let lock = NSLock()
+      private var count = 0
+      var value: Int { lock.withLock { count } }
+      func increment() { lock.withLock { count += 1 } }
     }
 
     /// End-to-end on the real library: each failing expectation captures a receiver whose graph
-    /// contains the cycles above. On swift-testing 6.0.3 without the leaf mirrors this overflows
-    /// the main thread's stack; newer toolchains bound reflection and pass regardless.
+    /// has reference cycles (Combine subscriptions, collaborator back-references, SwiftUI hosting
+    /// internals). Both must be recorded as failed expectations; a crash ends the test run.
     @Test func failingExpectationsOnCycleRootsRecordInsteadOfCrashing() async {
       let f = HostedFixture()
+      let failures = IssueCount()
       withKnownIssue("Deliberate failures capture cyclic receivers") {
         #expect(f.manager.isRunning)
         #expect(f.isLoaded)
+      } matching: { issue in
+        guard case .expectationFailed = issue.kind else { return false }
+        failures.increment()
+        return true
       }
+      #expect(failures.value == 2)
       await f.close()
     }
   }
