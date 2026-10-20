@@ -399,8 +399,7 @@ suppresses the hook for that run instead.
 - Dirty work is kept and waits for the next real trigger: a Photos change,
   `destinationBecameAvailable`, Export Now, launch, Photos access returning, or a scope or
   settings change. Freeing space or restoring destination access fires no trigger by itself.
-- An Export Now pressed during the run is exempt and still runs, and so is the catch-up
-  Photos access returning owes (`photosAccessReturnOwed`, cleared when a run starts). A later trigger during
+- An Export Now pressed during the run is exempt and still runs. A later trigger during
   the run does not replace it as the pending reason. Switching destinations drops any
   pending reason, Export Now included; the new destination gets its own trigger.
 - A manual export whose summary (`runExport`) reports a stop suppresses the next resume the
