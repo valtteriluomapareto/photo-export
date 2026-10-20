@@ -70,7 +70,8 @@ enum AutoSyncReducer {
     /// only while it is still the current schedule; any other schedule clears it.
     var resumeHookSchedule: ResumeHookSchedule?
     /// A stop summary arrived while its run still looked active, so the resume hook skips
-    /// the reschedule when that run goes idle. Cleared once the reducer leaves `.running`.
+    /// the reschedule when that run goes idle. Cleared once the reducer leaves `.running` or
+    /// `.waiting(.manualExportActive)`.
     var resumeSuppressedForStop = false
 
     static let initial = State(
@@ -254,16 +255,8 @@ enum AutoSyncReducer {
       }
       effects.append(.pruneDoneRetryEntries(destinationId: destinationId))
       acknowledgeRun(summary, in: &newState, now: now, effects: &effects)
-      // A run that stopped because the destination is unreachable, full or denied while it
-      // still looks available would stop the same way again. Its dirty work waits for the
-      // next real trigger instead of a resume every 30 seconds.
-      if summary.stoppedBy != nil, newState.destination.isAvailable {
-        if case .running = state.current {
-          newState.resumeSuppressedForStop = true
-        } else {
-          cancelsResumeHookSchedule = true
-        }
-      }
+      noteDestinationStop(
+        summary, previous: state.current, in: &newState, cancelsHook: &cancelsResumeHookSchedule)
 
     case .debounceFired(let reason):
       // Honor the timer only if the state still expects this reason. A debounce
@@ -418,6 +411,10 @@ enum AutoSyncReducer {
         boundary.destinationId == newState.destination.id
       {
         effects.append(.pruneDoneRetryEntries(destinationId: boundary.destinationId))
+        // A manual stop would cost one Auto Export attempt 30 seconds later otherwise.
+        noteDestinationStop(
+          summary, previous: state.current, in: &newState,
+          cancelsHook: &cancelsResumeHookSchedule)
       }
       acknowledgeRun(summary, in: &newState, now: now, effects: &effects)
 
@@ -448,13 +445,21 @@ enum AutoSyncReducer {
     // Save the trigger reason for resume *before* recompute decides whether to
     // schedule. If recompute lands the state in idle/scheduled, the trigger fires
     // there and we clear pendingTriggerReason. If it lands blocked/waiting, the
-    // trigger is preserved for resume.
-    if let triggerReason {
+    // trigger is preserved for resume. While a run that a destination stop can end is in
+    // progress, a later trigger does not replace a pending Export Now: the stop suppresses
+    // every other resume reason, so replacing it would swallow the user's request.
+    if let triggerReason,
+      triggerReason == .userExportNow || newState.pendingTriggerReason != .userExportNow
+        || !suppressibleRunInProgress(state.current)
+    {
       newState.pendingTriggerReason = triggerReason
     }
 
-    // A reason held while idle (see the stop handling below) is served only by a new
-    // trigger, which replaces it, or when a blocker resolves; never by bookkeeping events.
+    // Invariant: a pending reason sits at `.idle` only when `holdAfterStop` left it there
+    // after a destination stop; everywhere else reaching `.idle` consumes or never had one.
+    // The rule itself is general: at `.idle`, only an event that carries its own trigger
+    // (which replaces the pending reason) recomputes with one. Bookkeeping events never
+    // serve it; a blocker that comes and goes does, through its own transition.
     let servedTrigger: AutoSyncReason?
     if case .idle = state.current, triggerReason == nil {
       servedTrigger = nil
@@ -466,6 +471,8 @@ enum AutoSyncReducer {
       triggerReason: servedTrigger, now: now,
       effects: &effects)
     newState.current = nextCurrent
+    // A new schedule is not the hook's, even when it lands on the same reason and instant;
+    // the equality check at the end of reduce cannot tell those apart.
     if effects.contains(where: { if case .scheduleDebounce = $0 { true } else { false } }) {
       newState.resumeHookSchedule = nil
     }
@@ -540,9 +547,7 @@ enum AutoSyncReducer {
       newState.pendingTriggerReason = holdAfterStop(hook.reason)
     }
 
-    if case .running = newState.current {
-      // The suppressed run has not gone idle yet.
-    } else {
+    if !suppressibleRunInProgress(newState.current) {
       newState.resumeSuppressedForStop = false
     }
     if let hook = newState.resumeHookSchedule,
@@ -553,6 +558,32 @@ enum AutoSyncReducer {
 
     reconcileRetryTimer(in: &newState, previous: state, effects: &effects)
     return (newState, effects)
+  }
+
+  /// A run that stopped because the destination is unreachable, full or denied while it
+  /// still looks available would stop the same way again, so its dirty work waits for the
+  /// next real trigger instead of a resume 30 seconds later. If the run still looks active,
+  /// the coming resume is suppressed; otherwise the hook already rescheduled it, and that
+  /// exact schedule is cancelled.
+  private static func noteDestinationStop(
+    _ summary: ExportRunSummary, previous: AutoSyncState, in state: inout State,
+    cancelsHook: inout Bool
+  ) {
+    guard summary.stoppedBy != nil, state.destination.isAvailable else { return }
+    if suppressibleRunInProgress(previous) {
+      state.resumeSuppressedForStop = true
+    } else {
+      cancelsHook = true
+    }
+  }
+
+  /// The states a destination stop's summary can arrive in before its run goes idle: an
+  /// Auto Export run, or a manual export that AutoSync waits for.
+  private static func suppressibleRunInProgress(_ current: AutoSyncState) -> Bool {
+    switch current {
+    case .running, .waiting(.manualExportActive): return true
+    default: return false
+    }
   }
 
   /// What a trigger that arrived during a stopped run leaves pending. Photos-change work is

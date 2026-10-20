@@ -15,8 +15,8 @@ struct AutoSyncStopResumeTests {
     .destinationUnavailable, .destinationNoSpace, .destinationPermission,
   ]
 
-  private func destination() -> DestinationSnapshot {
-    DestinationSnapshot(stableId: "stop-A", fingerprint: nil, isAvailable: true, safety: .safe)
+  private func destination(safety: DestinationSafetyState = .safe) -> DestinationSnapshot {
+    DestinationSnapshot(stableId: "stop-A", fingerprint: nil, isAvailable: true, safety: safety)
   }
 
   private var destinationId: String { destination().id! }
@@ -31,6 +31,18 @@ struct AutoSyncStopResumeTests {
   private func running(
     _ context: ExportRunContext, dirty: Bool = true
   ) -> AutoSyncReducer.State {
+    var state = idle(dirty: dirty)
+    state.current = .running(reason: context.reason ?? .photosChanged)
+    state = reduce(.exportRunStarted(context, destinationId: destinationId), state).0
+    return reduce(
+      .exportRunStateChanged(
+        ExportRunState(activeContext: context, isManualActive: false, isAutoSyncActive: true)),
+      state
+    ).0
+  }
+
+  /// Enabled and idle with Timeline, optionally with one pending asset.
+  private func idle(dirty: Bool) -> AutoSyncReducer.State {
     var state = AutoSyncReducer.State.initial
     state.enabled = true
     state.destination = destination()
@@ -42,13 +54,8 @@ struct AutoSyncStopResumeTests {
       work.setScope(.timeline, scope)
       state.dirtyStateByDestination[destinationId] = work
     }
-    state.current = .running(reason: context.reason ?? .photosChanged)
-    state = reduce(.exportRunStarted(context, destinationId: destinationId), state).0
-    return reduce(
-      .exportRunStateChanged(
-        ExportRunState(activeContext: context, isManualActive: false, isAutoSyncActive: true)),
-      state
-    ).0
+    state.current = .idle
+    return state
   }
 
   private func summary(
@@ -154,8 +161,11 @@ struct AutoSyncStopResumeTests {
     #expect(pendingAssets(idle) == ["pending"])
   }
 
-  /// The runner can resolve its awaiter after the run state is already idle in the
-  /// reducer's view, so the summary itself ends the run. That transition is suppressed too.
+  /// The summary itself ends the run when the reducer never saw the run's state change:
+  /// it is still `.running` from the debounce, with an idle run state. `ExportManager`
+  /// always publishes the active and idle states first, so no production order gives this;
+  /// `FakeAutoSyncExportRunner` does, since it never publishes a run state, and a runner
+  /// that resolves without publishing would. That transition is suppressed too.
   @Test func stopSummaryThatEndsTheRunDoesNotReschedule() {
     let run = context()
     var state = running(run)
@@ -240,5 +250,156 @@ struct AutoSyncStopResumeTests {
     #expect(effects.contains(.cancelDebounce(.photosChanged)))
     #expect(next.pendingTriggerReason == nil)
     #expect(pendingAssets(next) == ["mid-run"])
+  }
+
+  // MARK: - A reason held while idle
+
+  /// The state `midRunScopeChangeIsHeldForTheNextTrigger` reaches: idle after a stop, no
+  /// dirty work, `.scopeSelectionChanged` held.
+  private func heldAfterStop() -> AutoSyncReducer.State {
+    let run = context()
+    let (changed, _) = reduce(
+      .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: true)),
+      running(run, dirty: false))
+    let idle = reduce(.exportRunStateChanged(.idle), changed).0
+    return completed(summary(run, stoppedBy: .destinationUnavailable), idle).0
+  }
+
+  enum QuietEvent: String, CaseIterable, Sendable {
+    case dirtyStateLoaded, repeatedIdle, staleCompletion, retryTimerWithNothingDue
+    case deleteOnlyPhotosChange
+  }
+
+  /// Events that are not triggers leave the held reason held and schedule nothing.
+  @Test(arguments: QuietEvent.allCases)
+  func quietEventsDoNotServeAHeldReason(event: QuietEvent) {
+    let held = heldAfterStop()
+    #expect(held.current == .idle && held.pendingTriggerReason == .scopeSelectionChanged)
+    let input: AutoSyncEvent
+    switch event {
+    case .dirtyStateLoaded:
+      input = .destinationDirtyStateLoaded(destinationId: destinationId, dirtyState: .empty)
+    case .repeatedIdle:
+      input = .exportRunStateChanged(.idle)
+    case .staleCompletion:
+      input = .autoSyncRunCompleted(
+        summary(context(), stoppedBy: nil), destinationId: destinationId)
+    case .retryTimerWithNothingDue:
+      input = .retryTimerFired
+    case .deleteOnlyPhotosChange:
+      input = .photosChanged(
+        PhotoLibraryPersistentChangeEvent(deletedLocalIdentifiers: ["gone"], observedAt: later))
+    }
+    let (next, effects) = reduce(input, held, at: later)
+    #expect(next.current == .idle)
+    #expect(schedules(effects).isEmpty)
+    #expect(next.pendingTriggerReason == .scopeSelectionChanged)
+  }
+
+  enum Blocker: String, CaseIterable, Sendable { case manualExport, unsafeDestination }
+
+  /// A blocker that comes and goes serves the held reason, or replaces it with its own.
+  @Test(arguments: Blocker.allCases)
+  func resolvingABlockerSchedulesTheHeldWork(blocker: Blocker) {
+    let held = heldAfterStop()
+    let blocked: AutoSyncReducer.State
+    let resolved: (AutoSyncReducer.State, [AutoSyncEffect])
+    let expected: AutoSyncReason
+    switch blocker {
+    case .manualExport:
+      blocked =
+        reduce(
+          .exportRunStateChanged(
+            ExportRunState(activeContext: nil, isManualActive: true, isAutoSyncActive: false)),
+          held, at: later
+        ).0
+      #expect(blocked.current == .waiting(.manualExportActive))
+      resolved = reduce(.exportRunStateChanged(.idle), blocked, at: later)
+      expected = .scopeSelectionChanged
+    case .unsafeDestination:
+      blocked =
+        reduce(
+          .destinationChanged(destination(safety: .unsafeNeedsConfirmation)), held, at: later
+        ).0
+      #expect(blocked.current == .blocked(.destinationUnsafe))
+      resolved = reduce(.destinationChanged(destination()), blocked, at: later)
+      // A safety change is itself a destination trigger, which replaces the held reason.
+      expected = .destinationSelected
+    }
+    let fireAt = later.addingTimeInterval(AutoSyncReducer.debounceDelay(for: expected))
+    #expect(resolved.0.current == .scheduled(reason: expected, fireAt: fireAt))
+    #expect(schedules(resolved.1) == [expected])
+    #expect(resolved.0.pendingTriggerReason == nil)
+  }
+
+  /// A new trigger replaces the held reason and schedules for itself.
+  @Test func newTriggerReplacesTheHeldReason() {
+    let change = PhotoLibraryPersistentChangeEvent(
+      insertedLocalIdentifiers: ["new"], observedAt: later)
+    let (next, effects) = reduce(.photosChanged(change), heldAfterStop(), at: later)
+    #expect(
+      next.current == .scheduled(reason: .photosChanged, fireAt: later.addingTimeInterval(30)))
+    #expect(schedules(effects) == [.photosChanged])
+    #expect(next.pendingTriggerReason == nil)
+  }
+
+  /// Turning Auto Export off and on runs once for launch and leaves nothing held.
+  @Test func disableThenEnableLeavesNoHeldReason() {
+    let disabled = reduce(.enabledChanged(false), heldAfterStop(), at: later).0
+    #expect(disabled.current == .disabled)
+    let (enabled, effects) = reduce(.enabledChanged(true), disabled, at: later)
+    #expect(enabled.current == .scheduled(reason: .appLaunch, fireAt: later.addingTimeInterval(10)))
+    #expect(schedules(effects) == [.appLaunch])
+    #expect(enabled.pendingTriggerReason == nil)
+    let idle = reduce(.debounceFired(.appLaunch), enabled, at: later).0
+    #expect(idle.pendingTriggerReason == nil)
+  }
+
+  // MARK: - Manual runs
+
+  private func manualRun(_ dirty: Bool = true) -> (ExportRunContext, AutoSyncReducer.State) {
+    let run = ExportRunContext(
+      source: .manual, visibility: .userVisible, scope: .timelineFullLibrary,
+      selection: .edited, startedAt: now)
+    let state = reduce(
+      .exportRunStateChanged(
+        ExportRunState(activeContext: run, isManualActive: true, isAutoSyncActive: false)),
+      idle(dirty: dirty)
+    ).0
+    return (run, state)
+  }
+
+  /// A manual export that stopped on a destination-wide failure does not leave an Auto
+  /// Export run scheduled 30 seconds later to stop the same way.
+  @Test(arguments: [false, true])
+  func manualStopDoesNotScheduleAnAutoExportRun(summaryFirst: Bool) {
+    let (run, active) = manualRun()
+    #expect(active.current == .waiting(.manualExportActive))
+    let stop = summary(run, stoppedBy: .destinationUnavailable)
+    let next: AutoSyncReducer.State
+    if summaryFirst {
+      let first = reduce(.manualFullExportCompleted(stop), active)
+      let second = reduce(.exportRunStateChanged(.idle), first.0)
+      #expect(schedules(first.1 + second.1).isEmpty)
+      next = second.0
+    } else {
+      let first = reduce(.exportRunStateChanged(.idle), active)
+      #expect(
+        first.0.current == .scheduled(reason: .photosChanged, fireAt: now.addingTimeInterval(30)))
+      let second = reduce(.manualFullExportCompleted(stop), first.0)
+      #expect(second.1.contains(.cancelDebounce(.photosChanged)))
+      next = second.0
+    }
+    #expect(next.current == .idle)
+    #expect(pendingAssets(next) == ["pending"])
+  }
+
+  /// Guard: a manual run that ends without a stop keeps the follow-up for pending work.
+  @Test func manualRunWithoutAStopKeepsTheFollowUp() {
+    let (run, active) = manualRun()
+    let idle = reduce(.exportRunStateChanged(.idle), active).0
+    let (next, effects) = reduce(.manualFullExportCompleted(summary(run, stoppedBy: nil)), idle)
+    #expect(next.current == .scheduled(reason: .photosChanged, fireAt: now.addingTimeInterval(30)))
+    #expect(!effects.contains(.cancelDebounce(.photosChanged)))
   }
 }
