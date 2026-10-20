@@ -7,6 +7,10 @@ import Testing
 /// Runs a Favorites-only Auto Export through the real export queue and AutoSync effect
 /// runner. Without Photos access Auto Export is blocked: nothing runs or is written, and the
 /// pending change exports once access returns instead of being acknowledged by an empty scan.
+///
+/// As in production, one `PhotoLibraryManager` is both the export's photo service and the
+/// access provider, so the export guards read its cached flag. The fake service behind it
+/// stands in for the system: its status is what a refresh reads.
 @MainActor
 @Suite(.timeLimit(.minutes(2)))
 struct AutoSyncPhotosAccessIntegrationTests {
@@ -44,6 +48,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
     let asset = TestAssetFactory.makeAsset(
       id: "favorite-A", creationDate: Date(timeIntervalSince1970: 1_700_000_000))
     let photoLibrary = FakePhotoLibraryService()
+    let library: PhotoLibraryManager
     let destination = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let storeRoot = TestScratch.directory("AutoSyncPhotosAccess")
@@ -60,6 +65,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
       photoLibrary.resourcesByAssetId[asset.id] = [
         TestAssetFactory.makeResource(originalFilename: "favorite-A.jpg")
       ]
+      library = PhotoLibraryManager(overrideService: photoLibrary)
       destinationSnapshot = DestinationSnapshot(
         fingerprint: .makeHigh(
           volumeUUIDString: "photos-access-test-volume",
@@ -75,7 +81,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
       collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
       collectionStore.configure(for: destinationSnapshot.id!)
       exportManager = ExportManager(
-        photoLibraryService: photoLibrary,
+        photoLibraryService: library,
         exportDestination: destination,
         exportRecordStore: timelineStore,
         collectionExportRecordStore: collectionStore,
@@ -90,16 +96,15 @@ struct AutoSyncPhotosAccessIntegrationTests {
       builder.dirtyStore.load(destinationId: destinationId).scope(.favorites)
     }
 
-    /// What the system reports now: the photo service and the provider's live value agree.
-    /// The cached value Auto Export reads changes only when it refreshes.
+    /// What the system reports now. `library.isAuthorized`, the cached flag the export
+    /// guards and Auto Export read, changes only when something refreshes it.
     func setAccess(_ authorized: Bool) {
       photoLibrary.isAuthorized = authorized
       photoLibrary.authorizationStatus = authorized ? .authorized : .denied
-      builder.photosAuthorization.live = authorized
     }
 
     /// The app becoming active refreshes access.
-    func activate() { builder.photosAuthorization.refreshAuthorization() }
+    func activate() { library.refreshAuthorization() }
 
     func attach() {
       builder.userDefaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
@@ -118,7 +123,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
           perDestinationTokenStore: builder.perDestinationTokenStore,
           currentRunStore: builder.currentRunStore,
           clock: builder.clock,
-          photosAuthorization: builder.photosAuthorization,
+          photosAuthorization: library,
           userDefaults: builder.userDefaults
         ))
       summaries = SummaryProbe(manager: autoSync)
@@ -218,7 +223,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
     f.attach()
     f.pushChange()
     f.setAccess(false)
-    #expect(f.builder.photosAuthorization.cached)
+    #expect(f.library.isAuthorized)
     f.builder.clock.advance(by: 30)
     #expect(f.autoSync.state == .blocked(.photosAccessMissing))
     #expect(f.autoSync.activeRunFanOutTask == nil)
@@ -228,15 +233,18 @@ struct AutoSyncPhotosAccessIntegrationTests {
     #expect(f.favorites.pendingAssetIds.contains(f.asset.id))
   }
 
-  /// Access revoked after the refresh but before the scan: the scan reports it, the run
-  /// fails and keeps the change, and the next refresh blocks instead of running again.
-  @Test func revokeBetweenTheRefreshAndTheScanFailsOnceThenBlocks() async {
+  /// Access revoked inside a scope, after the refresh before it: the fetch reads the live
+  /// status and reports missing access instead of an empty library, so the scope ends
+  /// `.failed` with its change kept, not `.completed`. The next refresh then blocks.
+  @Test func revokeDuringAScopesFetchFailsTheScopeAndTheNextRefreshBlocks() async {
     let f = Fixture()
     defer { f.tearDown() }
     f.attach()
     f.pushChange()
-    f.photoLibrary.isAuthorized = false
-    f.photoLibrary.authorizationStatus = .denied
+    f.photoLibrary.progressiveStreamOverride = { [weak f] _ in
+      f?.setAccess(false)
+      return AsyncThrowingStream { $0.finish(throwing: PhotoLibraryManager.PhotoLibraryError.authorizationDenied) }
+    }
     f.builder.clock.advance(by: 30)
     guard case .running = f.autoSync.state else {
       Issue.record("Expected the scheduled run to start, got \(f.autoSync.state)")
@@ -244,16 +252,18 @@ struct AutoSyncPhotosAccessIntegrationTests {
     }
     await f.summaries?.waitForCount(1)
     #expect(f.summaries?.summaries.first?.result == .failed)
+    #expect(f.library.isAuthorized, "Nothing refreshed the cached flag during the scope.")
     #expect(f.writer.writeCalls.isEmpty)
+    #expect(f.collectionStore.placements(matching: .favorites).isEmpty)
     #expect(f.favorites.pendingAssetIds.contains(f.asset.id))
     guard case .scheduled(.photosChanged, _) = f.autoSync.state else {
       Issue.record("Expected the kept change to stay scheduled, got \(f.autoSync.state)")
       return
     }
 
-    f.builder.photosAuthorization.live = false
     f.builder.clock.advance(by: 30)
     #expect(f.autoSync.state == .blocked(.photosAccessMissing))
+    #expect(!f.library.isAuthorized)
     #expect(f.autoSync.activeRunFanOutTask == nil)
     #expect(f.builder.runSummaryStore.saveCount == 1)
     #expect(f.builder.clock.pendingCount == 0)
