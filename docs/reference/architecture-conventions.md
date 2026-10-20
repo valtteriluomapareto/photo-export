@@ -476,6 +476,7 @@ If you rename, move, add or remove one of these tests, update the list file, thi
 | [`ImportIdempotencyTests`](../../photo-exportTests/ImportIdempotencyTests.swift) | The import flow loses idempotency on retry | Audit. Two consecutive `startImport()` runs over the same backup tree must not double-write records. |
 | `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` | The `isExported` predicate runs *after* the retry-gate (instead of before) | Restore the order. `isExported` must run first so already-done assets are not blocked by the retry-gate. |
 | `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` | An AutoSync run starts while the history check after "Same Folder" is still running, or no run follows it | The check must start in the same main-actor turn as the identity publish (`onAmbiguousSameFolderChosen`), and a debounce an import cancels must keep its reason for the resume hook. |
+| [`PublisherParityTests`](../../photo-exportTests/PublisherParityTests.swift) | A named publisher accessor (`identityPublisher`, `exportRunStatePublisher`, …) stops replaying its current value, delivers asynchronously or after the value is stored, replays a nested subscription differently, or changes whether an unchanged write is delivered | Audit. These pin `@Published` delivery; a migration of the property's storage (the Observation bridge) must match it rather than re-record. See [`observation-migration-recipe.md`](observation-migration-recipe.md). |
 
 ## Extension recipes
 
