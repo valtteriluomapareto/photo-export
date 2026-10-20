@@ -125,6 +125,7 @@ The behavioral regression gates are the same in this guide, `CONTRIBUTING.md`, a
 - `ImportIdempotencyTests`
 - `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck`
 - `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds`
+- `PublisherParityTests`
 
 Run these without re-recording unless the new behavior has been explicitly audited. They are listed once in `scripts/ci/regression-gates.txt`, which also pins containing-suite declarations to support method-level gates; those pins are not additional behavioral gates. CI checks that this list names every gate in the file and that every gate ran and passed.
 

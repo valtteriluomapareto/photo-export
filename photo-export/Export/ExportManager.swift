@@ -239,6 +239,31 @@ final class ExportManager: ObservableObject {
       .eraseToAnyPublisher()
   }
 
+  // The accessors below expose single `@Published` properties to subscribers outside this
+  // type with `$property` semantics: synchronous, delivered before the value is stored, and
+  // replaying the current value (pinned by `PublisherParityTests`).
+
+  /// `$isImporting` alone. `isImportingPublisher` is AutoSync's hold, which also covers a
+  /// missing previous backup and drops repeats.
+  var isImportingFlagOnlyPublisher: AnyPublisher<Bool, Never> {
+    $isImporting.eraseToAnyPublisher()
+  }
+
+  /// `$importStage`.
+  var importStagePublisher: AnyPublisher<BackupScanner.ImportStage?, Never> {
+    $importStage.eraseToAnyPublisher()
+  }
+
+  /// `$activeRunContext`.
+  var activeRunContextPublisher: AnyPublisher<ExportRunContext?, Never> {
+    $activeRunContext.eraseToAnyPublisher()
+  }
+
+  /// `$isEnqueueingAll`.
+  var isEnqueueingAllPublisher: AnyPublisher<Bool, Never> {
+    $isEnqueueingAll.eraseToAnyPublisher()
+  }
+
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
   /// terminal state. Used by AutoSync to detect manual-run completion (so it
   /// can clear compatible dirty state per plan §"Dirty State"). Fire-and-forget

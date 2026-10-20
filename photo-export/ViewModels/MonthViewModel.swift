@@ -15,6 +15,11 @@ final class MonthViewModel: ObservableObject {
 
   // Selection is tracked via id to avoid retaining assets strongly across updates
   @Published var selectedAssetId: String?
+  /// `$selectedAssetId` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var selectedAssetIdPublisher: AnyPublisher<String?, Never> {
+    $selectedAssetId.eraseToAnyPublisher()
+  }
 
   private let photoLibraryService: any PhotoLibraryService
 

@@ -50,10 +50,10 @@ final class DestinationSnapshotAdapter: AutoSyncDestinationProviding {
     safetyMonitor: DestinationSafetyMonitor
   ) -> AnyPublisher<DestinationSnapshot, Never> {
     Publishers.CombineLatest4(
-      destinationManager.$identity,
-      destinationManager.$isAvailable,
-      lifecycleCoordinator.$migrationConflict,
-      safetyMonitor.$needsSafetyConfirmation
+      destinationManager.identityPublisher,
+      destinationManager.isAvailablePublisher,
+      lifecycleCoordinator.migrationConflictPublisher,
+      safetyMonitor.needsSafetyConfirmationPublisher
     )
     .map { identity, isAvailable, conflict, needsConfirm in
       let safety: DestinationSafetyState

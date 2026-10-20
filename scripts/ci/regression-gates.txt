@@ -29,3 +29,5 @@ photo-exportTests/ExportManagerRunExportTests.swift|gate|func ExportManagerRunEx
 
 photo-exportTests/AmbiguousSameFolderTests.swift|pin|struct AmbiguousSameFolderTests
 photo-exportTests/AmbiguousSameFolderTests.swift|gate|func AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds
+
+photo-exportTests/PublisherParityTests.swift|gate|struct PublisherParityTests

@@ -405,7 +405,7 @@ struct ExportAllAlbumsTests {
       filename: "d1.HEIC", exportedAt: Date())
 
     var messages: [String] = []
-    let subscription = h.manager.progressState.$emptyRunMessage
+    let subscription = h.manager.progressState.emptyRunMessagePublisher
       .compactMap { $0 }
       .sink { messages.append($0) }
     defer { subscription.cancel() }

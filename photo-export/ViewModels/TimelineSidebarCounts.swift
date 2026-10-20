@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// Loader for the per-(year, month) total + adjusted asset counts the
@@ -35,6 +36,11 @@ final class TimelineSidebarCounts: ObservableObject {
   }
 
   @Published private(set) var countsByYearMonth: [String: MonthCounts] = [:]
+  /// `$countsByYearMonth` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var countsByYearMonthPublisher: AnyPublisher<[String: MonthCounts], Never> {
+    $countsByYearMonth.eraseToAnyPublisher()
+  }
   /// Last error encountered while fetching counts. Surfaces once so a future
   /// view-side banner can mention "couldn't load progress" without us having
   /// to thread Result types throughout the loader.

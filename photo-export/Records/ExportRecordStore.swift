@@ -108,6 +108,9 @@ final class ExportRecordStore: ObservableObject {
 
   // Published bump used to notify SwiftUI of logical changes
   @Published private(set) var mutationCounter: Int = 0
+  /// `$mutationCounter` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var mutationCounterPublisher: AnyPublisher<Int, Never> { $mutationCounter.eraseToAnyPublisher() }
 
   /// Mirror of `ExportManager.convertHEICToJPEG`. Kept in sync by the manager
   /// (init + didSet on the published property). Read by `isExported(asset:
