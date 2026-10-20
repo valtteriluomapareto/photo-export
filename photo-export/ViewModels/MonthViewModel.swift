@@ -1,27 +1,41 @@
 import AppKit
 import Combine
 import Foundation
+import Observation
 import Photos
 import SwiftUI
 
 /// Owns the asset list for a single scope (timeline month, favorites, album)
 /// and the `PHCachingImageManager` preheat lifecycle. Thumbnail loading
 /// itself lives on the cell.
+@Observable
 @MainActor
-final class MonthViewModel: ObservableObject {
-  @Published private(set) var assets: [AssetDescriptor] = []
-  @Published var isLoading: Bool = false
-  @Published var errorMessage: String?
+final class MonthViewModel {
+  private(set) var assets: [AssetDescriptor] = []
+  var isLoading: Bool = false
+  var errorMessage: String?
 
   // Selection is tracked via id to avoid retaining assets strongly across updates
-  @Published var selectedAssetId: String?
-  /// `$selectedAssetId` for subscribers outside this type: synchronous, delivered before the
-  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  @ObservationIgnored private let selectedAssetIdBridge = ObservableCombineBridge<String?>(nil)
+  var selectedAssetId: String? {
+    get {
+      access(keyPath: \.selectedAssetId)
+      return selectedAssetIdBridge.value
+    }
+    set {
+      guard selectedAssetIdBridge.needsNotification(for: newValue) else {
+        return selectedAssetIdBridge.send(newValue)
+      }
+      withMutation(keyPath: \.selectedAssetId) { selectedAssetIdBridge.send(newValue) }
+    }
+  }
+  /// `selectedAssetId` for Combine subscribers: synchronous, delivered before the value is
+  /// stored, and replaying the current value (pinned by `PublisherParityTests`).
   var selectedAssetIdPublisher: AnyPublisher<String?, Never> {
-    $selectedAssetId.eraseToAnyPublisher()
+    selectedAssetIdBridge.publisher
   }
 
-  private let photoLibraryService: any PhotoLibraryService
+  @ObservationIgnored private let photoLibraryService: any PhotoLibraryService
 
   /// Upper bound on how many assets we hand to `PHCachingImageManager` at once.
   /// `startCachingImages` is designed for the visible window (Apple's sample
@@ -43,22 +57,22 @@ final class MonthViewModel: ObservableObject {
   /// `cachingWindowSize`. `refresh(for:)`'s diff (added/removed) is computed
   /// against this windowed set, not the full scope, so the cache delta stays
   /// bounded.
-  private var cachedAssets: [AssetDescriptor] = []
+  @ObservationIgnored private var cachedAssets: [AssetDescriptor] = []
 
   /// The displayed scope and its request owner. Scope alone cannot distinguish
   /// two overlapping requests for the same scope, including A → B → A navigation.
-  private var currentScope: PhotoFetchScope?
-  private var requestGeneration: UInt64 = 0
+  @ObservationIgnored private var currentScope: PhotoFetchScope?
+  @ObservationIgnored private var requestGeneration: UInt64 = 0
   // isLoading ends at the first batch; only a complete snapshot proves absence.
-  private var hasCompleteSnapshot = false
+  @ObservationIgnored private var hasCompleteSnapshot = false
 
   struct SelectionUpdate {
     let asset: AssetDescriptor?
   }
 
-  // Emit after committing state, rather than using @Published's willSet values.
+  // Emit after committing state, rather than using Observation's willSet notifications.
   // The payloadless event is not another owner of selection or asset data.
-  private let selectionChanges = PassthroughSubject<Void, Never>()
+  @ObservationIgnored private let selectionChanges = PassthroughSubject<Void, Never>()
   var selectionUpdates: AnyPublisher<Void, Never> { selectionChanges.eraseToAnyPublisher() }
 
   private func ownsRequest(_ generation: UInt64, scope: PhotoFetchScope) -> Bool {

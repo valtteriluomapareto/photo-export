@@ -879,4 +879,45 @@ struct MonthViewModelTests {
     #expect(vm.assets.map(\.id) == ["wrapper"])
     #expect(vm.selectedAssetId == "wrapper")
   }
+
+  // MARK: - Observation
+
+  /// The month and collection grids own the model as `@State`, which builds a new one on every
+  /// view init and keeps only the first, so building one must not touch the library.
+  @Test func initMakesNoServiceCalls() {
+    let service = RecordingPhotoLibraryService()
+    _ = MonthViewModel(photoLibraryService: service)
+    #expect(service.calls.isEmpty)
+  }
+
+  /// The grid bodies render `assets`, `isLoading` and `errorMessage`; the selection reaches
+  /// them through the binding instead. Selecting, an idle deactivate and a refresh that finds
+  /// the same assets must not re-render the grid, and a refresh with new content must.
+  @Test func gridReadersFollowContentButNotSelection() async {
+    let service = FakePhotoLibraryService()
+    service.assetsByYearMonth["2025-6"] = (0..<3).map { makeAsset(id: "a\($0)") }
+    let model = MonthViewModel(photoLibraryService: service)
+    let scope = PhotoFetchScope.timeline(year: 2025, month: 6)
+    await model.loadAssets(for: scope)
+    let grid = ObservationProbe {
+      _ = model.assets
+      _ = model.isLoading
+      _ = model.errorMessage
+    }
+    let selection = ObservationProbe { _ = model.selectedAssetId }
+
+    model.select(assetId: "a1")
+    model.select(assetId: "a1")
+    await model.refresh(for: scope)
+    #expect(grid.changeCount == 0)
+    #expect(selection.changeCount == 1)
+
+    service.assetsByYearMonth["2025-6"]?.append(makeAsset(id: "a3"))
+    await model.refresh(for: scope)
+    #expect(grid.changeCount == 1)
+    #expect(selection.changeCount == 1, "The selected asset survived the refresh")
+
+    model.deactivate()
+    #expect(grid.changeCount == 1, "Deactivating an idle grid stores an unchanged isLoading")
+  }
 }
