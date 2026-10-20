@@ -2452,6 +2452,31 @@ final class ExportManager: ObservableObject {
     importCoordinator.clearPreviousBackupMissing()
   }
 
+  /// Follows up "Use as New Folder" after a "previous backup missing" result. Returns a message
+  /// to show when nothing changed.
+  /// - `.newHistory`: the wait ends; the fresh history starts empty.
+  /// - `.sameIdentity`: the folder is the one the history was created for, so make the history
+  ///   match what's in it (a plain import, which re-exports what's missing). The import ends the
+  ///   wait itself once it is running, so exports stay held throughout.
+  /// - `.notSaved`: nothing changed and the wait continues.
+  func continueAfterUsingFolderAsNew(
+    _ outcome: ExportDestinationManager.NewDestinationOutcome
+  ) -> String? {
+    switch outcome {
+    case .newHistory:
+      clearPreviousBackupMissing()
+      return nil
+    case .sameIdentity:
+      startImport()
+      return previousBackupMissing
+        ? "Photo Export couldn\u{2019}t read this folder right now. Check that it\u{2019}s connected, then try again."
+        : nil
+    case .notSaved:
+      return
+        "Photo Export couldn\u{2019}t save access to this folder. Choose it again, or choose another folder."
+    }
+  }
+
   /// Cancels an in-progress import. Forwarder to the `ImportCoordinator`.
   func cancelImport() {
     importCoordinator.cancelImport()

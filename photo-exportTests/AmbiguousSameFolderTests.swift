@@ -389,12 +389,19 @@ struct AmbiguousSameFolderTests {
       builder.clock.advance(by: 60)
       #expect(runner.receivedContexts.count == 1)
 
-      // The user chooses the folder that has the backup.
+      // The user chooses the folder that has the backup. The hold has no gap while the check
+      // starts over.
       try Data("x".utf8).write(to: backupFile)
-      destinationManager.selectFolderKeepingHistoryForTesting(pickedDir)
+      var held: [Bool] = []
+      let heldSink = exportManager.isImportingPublisher.sink { held.append($0) }
+      defer { heldSink.cancel() }
+      #expect(destinationManager.selectFolderKeepingHistoryForTesting(pickedDir))
       #expect(destinationManager.destinationId == stableId)
       #expect(exportManager.isImporting)
+      #expect(held == [true])
+      #expect(builder.clock.pendingCount == 0)
       await exportManager.waitForImportCompletion()
+      #expect(held == [true, false])
     }
     #expect(!exportManager.previousBackupMissing)
 
@@ -565,5 +572,92 @@ struct AmbiguousSameFolderTests {
     conflict = false
     destinationManager.onAmbiguousSameFolderChosen?()
     #expect(h.manager.importSheetRequest != nil)
+  }
+
+  /// After "Use as New Folder", the export manager ends the wait only when something changed;
+  /// on the history's own folder it makes the history match the folder without a gap in the hold.
+  @Test(arguments: NewFolderCase.allCases)
+  func continuingAfterUseAsNewFolderEndsTheWaitOnlyWhenSomethingChanged(
+    _ newFolder: NewFolderCase
+  ) async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    seedHistory(h)
+    h.manager.startImportForConfirmedSameFolder()
+    await h.manager.waitForImportCompletion()
+    #expect(h.manager.previousBackupMissing)
+    var held: [Bool] = []
+    let cancellable = h.manager.isImportingPublisher.sink { held.append($0) }
+    defer { cancellable.cancel() }
+
+    let outcome: ExportDestinationManager.NewDestinationOutcome =
+      switch newFolder {
+      case .differentIdentity: .newHistory
+      case .sameIdentity: .sameIdentity
+      case .notSaved: .notSaved
+      }
+    let message = h.manager.continueAfterUsingFolderAsNew(outcome)
+
+    switch newFolder {
+    case .differentIdentity:
+      #expect(message == nil)
+      #expect(!h.manager.previousBackupMissing)
+      #expect(held == [true, false])
+    case .sameIdentity:
+      #expect(message == nil)
+      #expect(h.manager.isImporting)
+      #expect(!h.manager.previousBackupMissing)
+      #expect(held == [true])
+      await h.manager.waitForImportCompletion()
+      #expect(h.timeline.recordsById.isEmpty)  // the folder holds none of them
+      #expect(held == [true, false])
+    case .notSaved:
+      #expect(message?.contains("couldn\u{2019}t save access") == true)
+      #expect(h.manager.previousBackupMissing)
+      #expect(held == [true])
+    }
+  }
+
+  /// A check refused because an export is running says so.
+  @Test func checkRefusedDuringAnExportSaysWhy() async throws {
+    let date = Date(timeIntervalSince1970: 1_700_000_000)
+    let year = Calendar.current.component(.year, from: date)
+    let month = Calendar.current.component(.month, from: date)
+    let asset = TestAssetFactory.makeAsset(id: "asset-busy", creationDate: date)
+    let library = FakePhotoLibraryService()
+    library.yearCounts = [(year: year, count: 1)]
+    library.assetsByYearMonth["\(year)-\(month)"] = [asset]
+    library.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "busy.jpg")
+    ]
+    let writer = FakeAssetResourceWriter()
+    let gate = AsyncCheckpoint()
+    writer.checkpoint = gate
+    let dest = FakeExportDestination()
+    let storeRoot = TestScratch.directory("UnclearPickBusy")
+    let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
+    timeline.configure(for: "test")
+    let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    collection.configure(for: "test")
+    let manager = ExportManager(
+      photoLibraryService: library, exportDestination: dest,
+      exportRecordStore: timeline, collectionExportRecordStore: collection,
+      assetResourceWriter: writer, fileSystem: FakeFileSystem(),
+      userDefaults: TestScratch.defaults("UnclearPickBusy"))
+    defer {
+      manager.cancelAndClear()
+      timeline.flushForTesting()
+      collection.flushForTesting()
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
+
+    manager.startExportAll()
+    await gate.waitForEnter(count: 1)
+    manager.startImportForConfirmedSameFolder()
+
+    #expect(!manager.isImporting)
+    #expect(manager.importError?.contains("while an export is running") == true)
+    await gate.releaseAll()
   }
 }

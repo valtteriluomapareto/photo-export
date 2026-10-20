@@ -156,19 +156,9 @@ struct ImportView: View {
     let folderName = exportDestinationManager.selectedFolderURL?.lastPathComponent ?? "this folder"
     let chooseAnother: () -> Void = { onChooseAnotherFolder?() }
     let useAsNew = {
-      switch exportDestinationManager.useSelectedFolderAsNewDestination() {
-      case .newHistory:
-        exportManager.clearPreviousBackupMissing()
-        dismiss()
-      case .sameIdentity:
-        // The folder is the one the history was created for; make the history match what's in
-        // it, which re-exports what's missing.
-        exportManager.clearPreviousBackupMissing()
-        exportManager.startImport()
-      case .notSaved:
-        newFolderError =
-          "Photo Export couldn\u{2019}t save access to this folder. Choose it again, or choose another folder."
-      }
+      let outcome = exportDestinationManager.useSelectedFolderAsNewDestination()
+      newFolderError = exportManager.continueAfterUsingFolderAsNew(outcome)
+      if outcome == .newHistory { dismiss() }
     }
     #if DEBUG
       bodyCounter?.recordText(["false"], for: "import-progress")

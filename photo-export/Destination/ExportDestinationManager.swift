@@ -279,12 +279,12 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Re-picks the previous backup after the folder chosen with "Same Folder" held none of the
   /// export history's files. The pick keeps the history and is checked again: it is never treated
   /// as a different folder, because the stored bookmark now points at the folder just rejected.
-  /// Returns false when the user cancels the panel.
+  /// Returns whether the check started: false when the user cancels the panel, or the pick
+  /// couldn't be saved or isn't available.
   @discardableResult
   func selectFolderKeepingHistory() -> Bool {
     guard let url = runFolderPanel() else { return false }
-    applySelection(url, decision: .sameDestination, checkHistory: true)
-    return true
+    return applySelection(url, decision: .sameDestination, checkHistory: true)
   }
 
   /// Outcome of `useSelectedFolderAsNewDestination()`.
@@ -340,13 +340,15 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   /// Applies a pick and, when `checkHistory`, asks the app to check the export history against
   /// the folder once the selection is saved and the folder is available.
+  /// Returns whether the check was requested.
+  @discardableResult
   private func applySelection(
     _ url: URL, decision: FolderSelectionDecision, checkHistory: Bool
-  ) {
+  ) -> Bool {
     let applied = applyFolderSelection(url, decision: decision)
-    if checkHistory, applied, identity.stableId != nil {
-      onAmbiguousSameFolderChosen?()
-    }
+    guard checkHistory, applied, identity.stableId != nil else { return false }
+    onAmbiguousSameFolderChosen?()
+    return true
   }
 
   /// The stored bookmark won't resolve, so we can't tell whether the user re-picked the same
@@ -573,7 +575,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   /// `selectFolderKeepingHistory()` without the `NSOpenPanel`.
-  func selectFolderKeepingHistoryForTesting(_ url: URL) {
+  @discardableResult
+  func selectFolderKeepingHistoryForTesting(_ url: URL) -> Bool {
     applySelection(url, decision: .sameDestination, checkHistory: true)
   }
 
