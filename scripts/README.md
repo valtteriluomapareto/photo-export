@@ -31,6 +31,7 @@ python3 scripts/ci/check-version.py
 python3 scripts/ci/check-test-waits.py
 python3 scripts/ci/check-test-scratch.py
 python3 scripts/ci/check-persistence-doc.py
+python3 scripts/ci/check-observation-ratchet.py
 ```
 
 `check-test-waits.py` rejects wall-clock `< deadline` waits in `photo-exportTests/`
@@ -53,6 +54,19 @@ no-argument `ExportRecordStore()` / `CollectionExportRecordStore()`. Use
 `TestScratch.directory(_:)` for folders. A test that must exercise the real path keeps the
 construct and marks it with a `// test-scratch: allow <reason>` comment on the line where
 the use starts or the line above. It is lexical, like the other guards.
+
+`check-observation-ratchet.py` holds the app's remaining `ObservableObject`-era
+patterns to the ceilings in [`ci/observation-ratchet.txt`](ci/observation-ratchet.txt)
+while types move to `@Observable`
+([`docs/reference/observation-migration-recipe.md`](../docs/reference/observation-migration-recipe.md)).
+Per file under `photo-export/` it counts `ObservableObject` conformances (by type name,
+across line breaks), `@Published` declarations, `$property` publishers reached through
+another object (`manager.$identity`; the owner's own `$property` and `self.$property` are
+not counted) and `.environmentObject(` calls. It fails when a count rises or an unlisted
+type or file appears, and also when a count falls or a type stops conforming: lower or
+remove the row in the same change, so the ceiling cannot creep back up. Expose a named
+`AnyPublisher` accessor on the owning type instead of a new external `$property`. It is
+lexical, like the other guards.
 
 `check-persistence-doc.py` compares the "Record-store value sets" table in
 [`docs/reference/persistence-store.md`](../docs/reference/persistence-store.md) with the
