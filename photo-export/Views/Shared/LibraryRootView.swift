@@ -313,12 +313,15 @@ struct LibraryRootView: View {
 
   static let sidebarMinWidth: CGFloat = 220
   static let contentMinWidth: CGFloat = 480
-  /// Enough for the detail pane to render a useful asset preview.
-  static let detailMinWidth: CGFloat = 300
-  /// The sum of the column minimums. It fits a 1024×768 display, the smallest the app runs on
-  /// (small Macs and CI's hosted runners).
+  /// The width the window minimum reserves for the detail pane, enough for a useful asset
+  /// preview. Not a column constraint: the detail column takes whatever the other two leave.
+  static let detailWidthBudget: CGFloat = 300
+  /// The smallest content size. The window around it must fit a 1024×768 display, the smallest
+  /// the app runs on (small Macs and CI's hosted runners). The width is the sidebar and content
+  /// minimums plus the detail budget. Of the 768pt height, the menu bar takes about 25 and the
+  /// title bar and toolbar 52, so 600 leaves about 90 for a Dock at the bottom.
   static let minimumWindowSize = CGSize(
-    width: sidebarMinWidth + contentMinWidth + detailMinWidth, height: 700)
+    width: sidebarMinWidth + contentMinWidth + detailWidthBudget, height: 600)
 
   @ViewBuilder
   private var contentArea: some View {
