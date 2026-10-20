@@ -433,8 +433,15 @@ Access returning is handled like a failed change fetch: every selected scope get
 `pendingFullReconciliation`, the dirty state is saved, and `.photosChanged` is triggered
 unless a pending reason with an equal or shorter delay (Export Now, a retry, a settings
 change) exists, which then runs. A scheduled run cancelled by losing access keeps its reason,
-as it does for an import. A revoke between a refresh and the scan is still caught by the
-scan's unauthorized result, and the next refresh blocks.
+as it does for an import.
+
+Without access PhotoKit returns empty results, not an error. So the fetches Auto Export runs
+(`fetchAssetsProgressive`, `availableYearsWithCounts`, `fetchCollectionTree`, and the scope
+counts) read the live status through `PhotoLibraryManager.isLiveAuthorizationSufficient()`:
+a revoke inside a scope, after its refresh, fails that scope as unauthorized instead of
+reading as an empty library, and the next refresh blocks. `ExportManager`'s enqueue guards
+still read the service's cached `isAuthorized`; the fetch that follows each guard is the
+live check.
 
 ### AutoSync dirty-state persistence acknowledgement
 

@@ -112,6 +112,14 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     status == .authorized || status == .limited
   }
 
+  /// Photos access as the system reports it now, not the cached `isAuthorized`. Without
+  /// access PhotoKit returns empty results rather than an error, so the scans Auto Export
+  /// runs check this: a revoke the app hasn't refreshed yet then fails the scan as
+  /// unauthorized instead of reading as an empty library.
+  nonisolated static func isLiveAuthorizationSufficient() -> Bool {
+    isAuthorizationSufficient(PHPhotoLibrary.authorizationStatus(for: .readWrite))
+  }
+
   /// Production initializer: no override. Does NOT touch PhotoKit — the
   /// `PHPhotoLibrary.shared().register(self)` + authorization probe move into
   /// `start()`, called from the WindowGroup's `.task` after SwiftUI has rendered.
@@ -451,8 +459,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
           continuation.finish()
           return
         }
-        let isAuthorized = await MainActor.run { self.isAuthorized }
-        guard isAuthorized else {
+        guard Self.isLiveAuthorizationSufficient() else {
           continuation.finish(throwing: PhotoLibraryError.authorizationDenied)
           return
         }
@@ -539,8 +546,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     if let s = overrideService { return try await s.countAssets(in: scope) }
     return try await runDetached(priority: .userInitiated) {
       try Task.checkCancellation()
-      let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-      guard Self.isAuthorizationSufficient(status) else {
+      guard Self.isLiveAuthorizationSufficient() else {
         throw PhotoLibraryError.authorizationDenied
       }
       let opts = Self.fetchOptions(for: scope)
@@ -613,8 +619,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     if let s = overrideService { return try await s.countAdjustedAssets(in: scope) }
     return try await runDetached(priority: .userInitiated) {
       try Task.checkCancellation()
-      let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-      guard Self.isAuthorizationSufficient(status) else {
+      guard Self.isLiveAuthorizationSufficient() else {
         throw PhotoLibraryError.authorizationDenied
       }
       let opts = Self.fetchOptions(for: scope)
@@ -716,7 +721,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Returns descending list of years with at least one asset, together with per-year asset counts.
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
     if let s = overrideService { return try s.availableYearsWithCounts() }
-    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    guard Self.isLiveAuthorizationSufficient() else { throw PhotoLibraryError.authorizationDenied }
 
     let opts = PHFetchOptions()
     opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
@@ -1186,7 +1191,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// collections we surface and how.
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
     if let s = overrideService { return try s.fetchCollectionTree() }
-    guard isAuthorized else { throw PhotoLibraryError.authorizationDenied }
+    guard Self.isLiveAuthorizationSufficient() else { throw PhotoLibraryError.authorizationDenied }
     if let cached = cachedCollectionTree { return cached }
     var tree: [PhotoCollectionDescriptor] = []
     tree.append(
