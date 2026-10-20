@@ -134,9 +134,10 @@ import Testing
       }
     }
 
-    /// Guards `CollectionContentView.==`: a fresh action closure from an unrelated queue
-    /// publication must not re-render the pane. SwiftUI applies the view's Equatable
-    /// conformance on its own, so removing the parent's `.equatable()` alone doesn't fail this.
+    /// Unrelated queue publications must not re-render the pane, through either its inputs (the
+    /// `CollectionContentView.==` conformance) or its observations. SwiftUI currently applies the
+    /// view's Equatable conformance even without `.equatable()`, so removing the parent's
+    /// modifier alone doesn't fail this.
     @Test(.timeLimit(.minutes(2)))
     func unrelatedQueuePublicationsDoNotRescanLoadedCollection() async throws {
       let f = Fixture()
