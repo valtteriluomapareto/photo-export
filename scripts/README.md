@@ -120,6 +120,18 @@ release matrix for both.
 `test.log`, `test-start.marker` and `TestResults.xcresult` to the current directory, where the
 diagnostics, coverage and regression-gate steps read them.
 
+`SWIFT_WARNINGS_AS_ERRORS=1` makes `build-app.sh` pass `SWIFT_TREAT_WARNINGS_AS_ERRORS=YES`, so
+any Swift compiler warning fails the build; unset or `0` leaves it off, and any other value is
+rejected. The script prints whether it is on, and when a build fails it prints each distinct
+`error:` line from the full log, which the 200-line tail can cut off. `app-validation` turns it
+on for the Debug build, so a new warning fails the merge gate on `.xcode-version`. The release
+workflows build with `xcodebuild archive` and never set it, so a warning cannot block a release.
+The canary keeps its normal builds and adds a last step, `Build Debug with warnings as errors`,
+that runs even after a failed step (but not after a cancel), so a warning on another Xcode
+turns that step red without skipping the tests or the Release build. It overwrites
+`debug-build.log`. `test_ci_build_app.py` and `test_ci_toolchain_workflows.py` pin this.
+To reproduce the gate locally, run `SWIFT_WARNINGS_AS_ERRORS=1 bash scripts/ci/build-app.sh Debug`.
+
 `toolchain-canary.yml` builds and tests on other toolchains than `.xcode-version` (one lane per
 version, each naming its runner label) weekly, on demand, and on pull requests that change the version file
 or these scripts. One lane runs the next Xcode; another runs on `macos-15`, the oldest macOS the
