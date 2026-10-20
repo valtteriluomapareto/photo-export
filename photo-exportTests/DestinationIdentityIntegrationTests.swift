@@ -15,7 +15,7 @@ import Testing
 /// `AutoSyncReducerTests.remountWithDriftedFingerprintKeepsStableIdAndPreservesDirty`.
 ///
 /// Exercises the real security-scope path in `validate(url:)`, so it shares the
-/// `BareTmpScopeProbe` disable guard — runs on CI's `macos-15` runner.
+/// `BareTmpScopeProbe` disable guard — runs on the CI macOS runner.
 @MainActor
 struct DestinationIdentityIntegrationTests {
 
@@ -26,7 +26,7 @@ struct DestinationIdentityIntegrationTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). CI's macos-15 runner runs this."
+      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner runs this."
     ))
   func remountDriftKeepsEveryKeyOnStableId() async throws {
     let dir = TestScratch.directory("RemountIntegration")

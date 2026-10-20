@@ -1,7 +1,8 @@
 name: Toolchain canary
 
-# Builds and tests on newer Xcode versions than .xcode-version so a toolchain bump is a
-# known list of fixes. Not part of the merge gate: build-and-test in ci.yml never needs it.
+# Builds and tests on the next Xcode, so a toolchain bump is a known list of fixes, and on the
+# oldest macOS the app supports. Not part of the merge gate: build-and-test in ci.yml never
+# needs it.
 on:
   workflow_dispatch:
   schedule:
@@ -12,7 +13,7 @@ on:
       - scripts/ci/select-xcode.sh
       - scripts/ci/build-app.sh
       - scripts/ci/run-unit-tests.sh
-      - scripts/ci/report-built-app.sh
+      - scripts/ci/check-built-app.sh
       - .github/workflows/toolchain-canary.yml
 
 permissions:
@@ -33,12 +34,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Newest Xcode on a generally available image: the likely bump target.
-          - runs-on: macos-26
-            xcode: "26.6"
-          # The maintainer's local toolchain, on the public-preview image.
+          # The maintainer's local toolchain, on the public-preview image: the next bump.
           - runs-on: xcode-27
             xcode: "27.1"
+          # The oldest macOS the app supports, with the newest Xcode that image has, so a
+          # 26-SDK build is tested where macOS 15 users run it.
+          - runs-on: macos-15
+            xcode: "26.3"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,8 +81,8 @@ jobs:
       - name: Build Release
         run: bash scripts/ci/build-app.sh Release
 
-      - name: Report built Release app
-        run: bash scripts/ci/report-built-app.sh ${{ matrix.xcode }}
+      - name: Check built Release app
+        run: bash scripts/ci/check-built-app.sh ${{ matrix.xcode }}
 
       - name: Print build and test failure diagnostics
         if: failure()

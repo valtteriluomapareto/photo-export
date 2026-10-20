@@ -129,7 +129,7 @@ struct ExportDestinationValidationTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). CI's macos-15 runner returns true (per Apple's docs) so this runs there."))
+      "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner returns true (per Apple's docs) so this runs there."))
   func persistedBookmarkRestoresFolderAcrossManagerInstances() throws {
     let dir = TestScratch.directory("ExportDestBookmark")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

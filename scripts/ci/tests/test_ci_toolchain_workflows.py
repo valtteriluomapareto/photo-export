@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = sorted((ROOT / ".github/workflows").glob("*.yml"))
 CANARY = ROOT / ".github/workflows/toolchain-canary.yml"
 SELECT = "scripts/ci/select-xcode.sh"
+CHECK = "scripts/ci/check-built-app.sh"
 TOOL = re.compile(r"\b(xcodebuild|xcrun|swift|plutil)\b")
 SWITCH = re.compile(r"xcode-select\s+(-s|--?switch)\b")
 # CI scripts that run Xcode tools, found from their contents so a new one is covered too.
@@ -67,6 +68,47 @@ class ToolchainWorkflowTests(unittest.TestCase):
             with self.subTest(workflow=name, job=job):
                 self.assertIn(job, jobs((ROOT / ".github/workflows" / name).read_text()))
 
+    def test_each_job_checks_the_app_it_ships_against_the_version_file(self):
+        """No version argument outside the canary, and each release checks its shipped bundle."""
+        expected = {
+            ("ci.yml", "app-validation"): f"run: bash {CHECK}",
+            ("release-direct.yml", "build-sign-notarize"): f'run: bash {CHECK} --app "${{APP_PATH}}"',
+            ("release-app-store.yml", "build-sign-upload"):
+                f'run: bash {CHECK} --app "${{ARCHIVE_PATH}}/Products/Applications/${{APP_NAME}}.app"',
+            ("toolchain-canary.yml", "canary"): f"run: bash {CHECK} ${{{{ matrix.xcode }}}}",
+        }
+        for workflow in WORKFLOWS:
+            for job, text in jobs(workflow.read_text()).items():
+                calls = [line.strip() for line in text.splitlines() if "check-built-app.sh" in line]
+                if calls:
+                    with self.subTest(workflow=workflow.name, job=job):
+                        self.assertEqual(calls, [expected.get((workflow.name, job))])
+
+    def test_app_store_builds_check_altool_upload_support_before_archiving(self):
+        text = jobs((ROOT / ".github/workflows/release-app-store.yml").read_text())["build-sign-upload"]
+        check = text.find("      - name: Check altool upload support\n")
+        self.assertNotEqual(check, -1)
+        self.assertLess(text.find("      - name: Select Xcode\n"), check)
+        self.assertLess(check, text.find("      - name: Archive\n"))
+        self.assertNotIn("if:", text[check:text.find("      - name:", check + 10)])
+
+    def test_shipped_apps_are_checked_before_they_are_packaged_or_uploaded(self):
+        """The check sits after the step that produces the app and before anything ships it."""
+        orders = {
+            ("ci.yml", "app-validation"): ["Build Release", "Check built Release app"],
+            ("release-direct.yml", "build-sign-notarize"): [
+                "Export archive", "Check exported app", "Create DMG", "Notarize DMG"],
+            ("release-app-store.yml", "build-sign-upload"): [
+                "Archive", "Check archived app", "Export", "Prepare package",
+                "Upload to App Store Connect"],
+        }
+        for (name, job), steps in orders.items():
+            text = jobs((ROOT / ".github/workflows" / name).read_text())[job]
+            positions = [text.find(f"      - name: {step}\n") for step in steps]
+            with self.subTest(workflow=name, job=job):
+                self.assertNotIn(-1, positions)
+                self.assertEqual(positions, sorted(positions))
+
     def test_every_job_selects_xcode_before_using_it(self):
         checked = 0
         for workflow in WORKFLOWS:
@@ -101,7 +143,7 @@ class ToolchainWorkflowTests(unittest.TestCase):
         self.assertIn('TEST_RUNNER_REQUIRE_SCOPE_TESTS: "1"', unit)
         self.assertIn("timeout-minutes: 15", unit)
         self.assertIn("name: TestResults-${{ matrix.xcode }}", source)
-        self.assertIn("bash scripts/ci/report-built-app.sh ${{ matrix.xcode }}", source)
+        self.assertIn("bash scripts/ci/check-built-app.sh ${{ matrix.xcode }}", source)
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", source)
 
 

@@ -13,7 +13,7 @@ Photo Export is a small macOS project. Prefer focused pull requests, clear reaso
 Requirements:
 
 - macOS 15.0+
-- Xcode 16.2+
+- Xcode at or above the version in [`.xcode-version`](.xcode-version) (CI and releases use exactly that version)
 
 Open the project:
 

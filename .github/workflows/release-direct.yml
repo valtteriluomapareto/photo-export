@@ -30,7 +30,7 @@ env:
 
 jobs:
   build-sign-notarize:
-    runs-on: macos-15
+    runs-on: macos-26
     environment: direct-release
     steps:
       # ── Checkout ──────────────────────────────────────────────────────
@@ -260,6 +260,10 @@ jobs:
           echo "EXPORT_PATH=${EXPORT_PATH}" >> "$GITHUB_ENV"
           echo "APP_PATH=${APP_PATH}" >> "$GITHUB_ENV"
           echo "::endgroup::"
+
+      # The exported app is what ships: built by the pinned Xcode, with the compliance key.
+      - name: Check exported app
+        run: bash scripts/ci/check-built-app.sh --app "${APP_PATH}"
 
       # ── Create DMG ────────────────────────────────────────────────────
       - name: Install create-dmg

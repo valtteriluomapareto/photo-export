@@ -6,10 +6,11 @@ set -euo pipefail
 # The API key is placed in the standard search directory so altool
 # discovers it automatically via --apiKey / --apiIssuer.
 #
-# Note: xcrun altool --upload-package is deprecated for notarization
-# (replaced by notarytool) but still works for App Store uploads as of
-# Xcode 16.2. If Apple removes it in a future Xcode, switch to
-# iTMSTransporter or the App Store Connect REST API.
+# altool is deprecated for notarization (replaced by notarytool) but is
+# still the App Store upload tool. check-altool-upload.sh runs in every
+# App Store build, so a toolchain that drops --upload-package fails a
+# build-only run first; the replacement then is iTMSTransporter or the App
+# Store Connect REST API.
 #
 # Required environment variables:
 #   PKG_PATH
@@ -50,7 +51,7 @@ echo "  API Key ID: ${APP_STORE_CONNECT_API_KEY_ID}"
 echo "  Issuer ID:  ${APP_STORE_CONNECT_API_ISSUER_ID}"
 echo ""
 
-# altool synopsis on the current GitHub-hosted Xcode 16.2 runner:
+# altool upload synopsis:
 #   xcrun altool --upload-package <file> --type <macos|ios|...>
 #     --apple-id <id> --bundle-id <id> --bundle-version <string>
 #     --bundle-short-version-string <string> authentication [options]

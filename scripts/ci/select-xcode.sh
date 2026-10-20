@@ -26,7 +26,7 @@ else
   echo "Requested Xcode: ${version} (.xcode-version)"
 fi
 [[ "${version}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
-  || fail "Xcode version '${version}' must look like 16.2 or 16.2.1"
+  || fail "Xcode version '${version}' must look like 26.6 or 26.6.1"
 
 echo "Installed Xcode apps in ${apps_dir}:"
 shopt -s nullglob

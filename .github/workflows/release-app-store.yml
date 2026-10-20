@@ -31,7 +31,7 @@ jobs:
     # App Store Connect rejects hyphen-suffixed CFBundleShortVersionString,
     # so betas ship through the direct-distribution channel only.
     if: "!startsWith(github.ref, 'refs/tags/v') || !contains(github.ref, '-')"
-    runs-on: macos-15
+    runs-on: macos-26
     environment: app-store-release
     steps:
       # ── Checkout ──────────────────────────────────────────────────────
@@ -99,6 +99,9 @@ jobs:
       - name: Select Xcode
         run: bash scripts/ci/select-xcode.sh
 
+      - name: Check altool upload support
+        run: bash scripts/ci/check-altool-upload.sh
+
       # ── Keychain & certificates ──────────────────────────────────────
       - name: Set up keychain and certificates
         env:
@@ -120,6 +123,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           BUILD_NUMBER: ${{ steps.ctx.outputs.build_number }}
         run: bash scripts/ci/archive-appstore.sh
+
+      # Built by the pinned Xcode, with the compliance key, before it is packaged and uploaded.
+      - name: Check archived app
+        run: bash scripts/ci/check-built-app.sh --app "${ARCHIVE_PATH}/Products/Applications/${APP_NAME}.app"
 
       # ── Export ────────────────────────────────────────────────────────
       - name: Export
