@@ -256,15 +256,7 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     }
   }
 
-  func readChunk(at url: URL, offset: Int64, length: Int) async throws -> Data {
-    try await withCheckedThrowingContinuation { continuation in
-      DispatchQueue.global(qos: .utility).async {
-        continuation.resume(with: Result { try Self.read(url, offset: offset, length: length) })
-      }
-    }
-  }
-
-  private static func read(_ url: URL, offset: Int64, length: Int) throws -> Data {
+  func openForReading(at url: URL, bypassingCache: Bool) throws -> any FileReadHandle {
     let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
       guard let path else {
         errno = EINVAL
@@ -272,25 +264,61 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
       }
       return open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
     }
-    guard descriptor >= 0 else { throw posixError(errno, url) }
-    defer { close(descriptor) }
-    var data = Data(count: length)
-    var filled = 0
-    try data.withUnsafeMutableBytes { buffer in
-      // A network volume may return fewer bytes than asked for before the end of the file.
-      while filled < length {
-        let count = pread(
-          descriptor, buffer.baseAddress! + filled, length - filled, off_t(offset) + off_t(filled))
-        if count < 0 {
-          if errno == EINTR { continue }
-          throw posixError(errno, url)
+    guard descriptor >= 0 else { throw Self.posixError(errno, url) }
+    // Advisory: a volume that ignores it still reads correctly.
+    if bypassingCache { _ = fcntl(descriptor, F_NOCACHE, 1) }
+    return DescriptorReadHandle(descriptor: descriptor, url: url)
+  }
+
+  /// Reads with `pread` on a utility worker. The descriptor closes once.
+  private final class DescriptorReadHandle: FileReadHandle, @unchecked Sendable {
+    private let descriptor: Int32
+    private let url: URL
+    private let isClosed = OSAllocatedUnfairLock(initialState: false)
+
+    init(descriptor: Int32, url: URL) {
+      self.descriptor = descriptor
+      self.url = url
+    }
+
+    deinit { close() }
+
+    func read(offset: Int64, length: Int) async throws -> Data {
+      try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue.global(qos: .utility).async { [self] in
+          continuation.resume(with: Result { try readNow(offset: offset, length: length) })
         }
-        if count == 0 { break }
-        filled += count
       }
     }
-    data.count = filled
-    return data
+
+    func close() {
+      let wasOpen = isClosed.withLock { closed in
+        defer { closed = true }
+        return !closed
+      }
+      if wasOpen { Darwin.close(descriptor) }
+    }
+
+    private func readNow(offset: Int64, length: Int) throws -> Data {
+      var data = Data(count: length)
+      var filled = 0
+      try data.withUnsafeMutableBytes { buffer in
+        // A network volume may return fewer bytes than asked for before the end of the file.
+        while filled < length {
+          let count = pread(
+            descriptor, buffer.baseAddress! + filled, length - filled,
+            off_t(offset) + off_t(filled))
+          if count < 0 {
+            if errno == EINTR { continue }
+            throw FileIOService.posixError(errno, url)
+          }
+          if count == 0 { break }
+          filled += count
+        }
+      }
+      data.count = filled
+      return data
+    }
   }
 
   private static func posixError(_ code: Int32, _ url: URL) -> NSError {

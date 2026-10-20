@@ -25,13 +25,18 @@ import Testing
         directory: url, filename: "IMG.JPG", policy: .suffix(base: "IMG", ext: "JPG"))
     }
 
+    /// Four-byte reads throughout; `shouldStop` is asked before every one unless
+    /// `stopInterval` says otherwise.
     func plan(
-      chunkSize: Int = 4, claimed: Set<String> = [],
+      middle: Int = 4, stopInterval: Int = 1, claimed: Set<String> = [],
       stop: @escaping @Sendable () -> Bool = {
         false
       }
     ) async throws -> FinalNamePlanner.Plan {
-      try await FinalNamePlanner(fileSystem: files, chunkSize: chunkSize).plan(
+      try await FinalNamePlanner(
+        fileSystem: files, edgeChunkSize: 4, middleChunkSize: middle,
+        stopCheckInterval: stopInterval
+      ).plan(
         slot: slot, stagedURL: url.appendingPathComponent(".stage.tmp"),
         isClaimed: { claimed.contains($0) }, shouldStop: { stop() })
     }
@@ -42,12 +47,54 @@ import Testing
   private static let bytes: [UInt8] = Array(0..<14)
 
   @Test func chunkRangesReadHeadThenTailThenTheRest() {
-    #expect(FinalNamePlanner.chunkRanges(size: 0, chunkSize: 4).isEmpty)
-    #expect(FinalNamePlanner.chunkRanges(size: 6, chunkSize: 4).map(\.offset) == [0, 4])
-    #expect(FinalNamePlanner.chunkRanges(size: 6, chunkSize: 4).map(\.length) == [4, 2])
-    let ranges = FinalNamePlanner.chunkRanges(size: 14, chunkSize: 4)
+    #expect(FinalNamePlanner.chunkRanges(size: 0, edge: 4, middle: 8).isEmpty)
+    #expect(FinalNamePlanner.chunkRanges(size: 6, edge: 4, middle: 8).map(\.offset) == [0, 4])
+    #expect(FinalNamePlanner.chunkRanges(size: 6, edge: 4, middle: 8).map(\.length) == [4, 2])
+    let ranges = FinalNamePlanner.chunkRanges(size: 14, edge: 4, middle: 4)
     #expect(ranges.map(\.offset) == [0, 10, 4, 8])
     #expect(ranges.map(\.length) == [4, 4, 4, 2])
+    // The middle is read in larger pieces than the head and the tail.
+    let wide = FinalNamePlanner.chunkRanges(size: 30, edge: 4, middle: 8)
+    #expect(wide.map(\.offset) == [0, 26, 4, 12, 20])
+    #expect(wide.map(\.length) == [4, 4, 8, 8, 6])
+  }
+
+  /// Each file is opened once for the whole compare, the existing one past the buffer cache,
+  /// and both are closed afterwards.
+  @Test func compareKeepsOneHandlePerFile() async throws {
+    let folder = try Folder()
+    defer { folder.cleanup() }
+    let stage = try folder.write(Self.bytes, ".stage.tmp")
+    let natural = try folder.write(Self.bytes, "IMG.JPG")
+
+    _ = try await folder.plan()
+
+    #expect(folder.files.readOpens.map(\.url) == [stage, natural])
+    #expect(folder.files.readOpens.map(\.bypassingCache) == [false, true])
+    #expect(Set(folder.files.readCloses) == [stage, natural])
+    #expect(folder.files.readCloses.count == 2)
+    #expect(folder.files.chunkReads.filter { $0.url == natural }.count == 4)
+  }
+
+  /// Task cancellation is checked before every read, but the main-actor `shouldStop` only
+  /// before the first and then once per interval.
+  @Test func stopIsAskedOncePerInterval() async throws {
+    let folder = try Folder()
+    defer { folder.cleanup() }
+    let bytes: [UInt8] = Array(0..<30)
+    _ = try folder.write(bytes, ".stage.tmp")
+    _ = try folder.write(bytes, "IMG.JPG")
+    let asked = LockedBox(0)
+
+    _ = try await folder.plan(
+      stopInterval: 8,
+      stop: {
+        asked.mutate { $0 += 1 }
+        return false
+      })
+
+    // Reads of 4, 4, 4, 4, 4, 4, 4 and 2 bytes: asked before the 1st, 3rd, 5th and 7th.
+    #expect(asked.value == 4)
   }
 
   @Test func identicalFileIsAdoptedAfterReadingEveryChunk() async throws {

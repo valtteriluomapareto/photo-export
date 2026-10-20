@@ -11,6 +11,14 @@ struct FileItemIdentity: Equatable, Sendable {
   let modificationNanoseconds: Int
 }
 
+/// A file opened for reading byte ranges. Closed by `close()`, or when released.
+protocol FileReadHandle: Sendable {
+  /// Up to `length` bytes from `offset`, read off the caller's actor. Fewer only at the end
+  /// of the file.
+  func read(offset: Int64, length: Int) async throws -> Data
+  func close()
+}
+
 /// Abstracts file system operations for testability.
 /// FileIOService conforms in production; tests inject a fake.
 protocol FileSystemService: Sendable {
@@ -25,8 +33,10 @@ protocol FileSystemService: Sendable {
   /// The entry's name as its folder stores it, which can differ from `url` in case or
   /// Unicode normalization on volumes that ignore either.
   func storedName(at url: URL) throws -> String
-  /// Up to `length` bytes of the file at `url` from `offset`, read off the caller's actor.
-  func readChunk(at url: URL, offset: Int64, length: Int) async throws -> Data
+  /// Opens the file at `url` for reading without following a symbolic link. One handle
+  /// serves a whole comparison, so a network volume is not asked to open the file per read.
+  /// `bypassingCache` keeps the bytes read out of the buffer cache where the volume allows.
+  func openForReading(at url: URL, bypassingCache: Bool) throws -> any FileReadHandle
   func removeItem(at url: URL) throws
   /// Copies a file from `src` to `dst`. On APFS volumes (typical for the user's chosen
   /// destination), `FileManager.copyItem(at:to:)` performs copy-on-write at the

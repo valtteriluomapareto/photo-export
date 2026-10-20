@@ -154,7 +154,7 @@ struct IdenticalFileAdoptionTests {
   }
 
   /// Three chunks, so a compare reads the head, the tail, then the middle chunk.
-  private static let threeChunks = Int64(3 * FinalNamePlanner.defaultChunkSize)
+  private static let threeChunks = Int64(3 * FinalNamePlanner.defaultEdgeChunkSize)
 
   /// Whatever sits at the natural name stays exactly as it was, and the export lands at
   /// ` (1)`: a file of the same size but other bytes (also when only a middle chunk
@@ -178,7 +178,7 @@ struct IdenticalFileAdoptionTests {
         bytes[bytes.startIndex] ^= 0xff
         try bytes.write(to: natural)
       case .middleChunkDiffers:
-        bytes[FinalNamePlanner.defaultChunkSize + 7] ^= 0xff
+        bytes[FinalNamePlanner.defaultEdgeChunkSize + 7] ^= 0xff
         try bytes.write(to: natural)
       case .truncated:
         try bytes.dropLast().write(to: natural)
@@ -208,7 +208,7 @@ struct IdenticalFileAdoptionTests {
           == FakeAssetResourceWriter.content(for: resource, assetId: asset.id))
       if target == .middleChunkDiffers {
         let offsets = h.files.chunkReads.filter { $0.url == natural }.map(\.offset)
-        let chunk = Int64(FinalNamePlanner.defaultChunkSize)
+        let chunk = Int64(FinalNamePlanner.defaultEdgeChunkSize)
         #expect(offsets == [0, Self.threeChunks - chunk, chunk])
       }
     } cleanup: {
@@ -439,7 +439,7 @@ struct IdenticalFileAdoptionTests {
       let natural = folder.appendingPathComponent("IMG_0001.JPG")
       let identity = try FileIOService().itemIdentity(at: natural)
       try await h.loseRecords()
-      let middle = Int64(FinalNamePlanner.defaultChunkSize)
+      let middle = Int64(FinalNamePlanner.defaultEdgeChunkSize)
       let tail = Self.threeChunks - middle
       h.files.chunkReadHook = { url, offset in
         if url == natural, offset == tail { await held.enter() }

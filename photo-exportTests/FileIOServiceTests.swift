@@ -459,7 +459,7 @@ import Testing
     #expect(Array(stored.unicodeScalars) == Array(Self.nfdName.unicodeScalars))
   }
 
-  @Test func readChunkReadsTheRangeAndRefusesLinks() async throws {
+  @Test func readHandleReadsRangesAndRefusesLinks() async throws {
     let root = try makeRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let service = FileIOService()
@@ -468,12 +468,17 @@ import Testing
     let link = root.appendingPathComponent("link.JPG")
     try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
 
-    #expect(try await service.readChunk(at: file, offset: 3, length: 4) == Data("3456".utf8))
-    #expect(try await service.readChunk(at: file, offset: 8, length: 4) == Data("89".utf8))
-    #expect(try await service.readChunk(at: file, offset: 12, length: 4).isEmpty)
+    for bypassingCache in [false, true] {
+      let handle = try service.openForReading(at: file, bypassingCache: bypassingCache)
+      #expect(try await handle.read(offset: 3, length: 4) == Data("3456".utf8))
+      #expect(try await handle.read(offset: 8, length: 4) == Data("89".utf8))
+      #expect(try await handle.read(offset: 12, length: 4).isEmpty)
+      handle.close()
+      handle.close()
+    }
     do {
-      _ = try await service.readChunk(at: link, offset: 0, length: 4)
-      Issue.record("Reading through a symbolic link must fail")
+      _ = try service.openForReading(at: link, bypassingCache: false)
+      Issue.record("Opening through a symbolic link must fail")
     } catch {
       #expect((error as NSError).domain == NSPOSIXErrorDomain)
       #expect((error as NSError).code == Int(ELOOP))

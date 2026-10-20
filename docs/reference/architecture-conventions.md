@@ -173,10 +173,12 @@ name first, then ` (1)`, ` (2)`… (`FinalNamePlanner`, off the main actor throu
 - **An existing file is adopted** instead of writing a copy when all of these hold: it is a
   regular file (a symbolic link is never followed); its size is non-zero and equal to the
   stage's; no record other than this variant's own names it in that folder (see claims
-  below); and its bytes equal the stage's. The compare reads both files in 1 MiB chunks,
-  head, then tail, then the rest in order, stops at the first difference, and checks the
-  run's generation and Task cancellation before every chunk. A read error on either file,
-  or a stored name that cannot be read, passes the candidate over. No digests are stored or
+  below); and its bytes equal the stage's. The compare keeps one read handle open per file
+  (the existing file's with `F_NOCACHE`), reads the head and the tail in 1 MiB pieces, then
+  the rest in order in 8 MiB pieces, and stops at the first difference. Task cancellation is
+  checked before every read; the run's generation, a main-actor hop, before the first and
+  then once per 32 MiB. An open or read error on either file, or a stored name that cannot
+  be read, passes the candidate over. No digests are stored or
   computed.
 - **Anything else** (other bytes, another size, empty, a link, a folder, claimed): try the
   next suffix.
