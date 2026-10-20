@@ -23,6 +23,21 @@ struct PublishedParityHelperTests {
     }
   }
 
+  /// Keeps the value in its own storage, delivers before storing, but replays from a
+  /// `CurrentValueSubject`, whose value changes before it delivers.
+  @MainActor
+  private final class SubjectReplayBacked {
+    let subject = CurrentValueSubject<Int, Never>(0)
+    private var stored = 0
+    var value: Int {
+      get { stored }
+      set {
+        subject.send(newValue)
+        stored = newValue
+      }
+    }
+  }
+
   /// Publishes in willSet without replaying the current value to a new subscriber.
   @MainActor
   private final class PassthroughBacked {
@@ -66,6 +81,18 @@ struct PublishedParityHelperTests {
   @Test func subjectValueGetterFailsDeliveryOrderAndNestedReplay() async {
     let object = SubjectBacked()
     await expectOnly([.storedAfterDelivery, .nestedReplay, .nestedLater]) {
+      await assertPublishedParity(
+        object, \.value, { $0.subject.eraseToAnyPublisher() },
+        change: { object.value = 1 },
+        unchangedWrite: .before { object.value = object.value })
+    }
+  }
+
+  /// Separate storage alone is not enough: a subscription made inside a sink replays the
+  /// subject's value, which is already the one in flight.
+  @Test func subjectReplayFailsNestedReplay() async {
+    let object = SubjectReplayBacked()
+    await expectOnly([.nestedReplay, .nestedLater]) {
       await assertPublishedParity(
         object, \.value, { $0.subject.eraseToAnyPublisher() },
         change: { object.value = 1 },
