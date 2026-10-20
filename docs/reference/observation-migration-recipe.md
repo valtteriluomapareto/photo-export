@@ -116,12 +116,15 @@ unchanged write emits; a `withObservationTracking` `onChange` fires.
   one accessor: synchronous replay of the current value; every delivery arriving before the
   change returns and before the value is stored (a sink reading the property sees the
   previously delivered value); a subscription made inside the sink replaying the stored value,
-  missing the delivery in flight and receiving later ones; and an unchanged write being
-  delivered again (or dropped, for accessors that remove repeats). Derived accessors
-  (`exportRunStatePublisher`, `isImportingPublisher`, `destinationSnapshotPublisher`) use the
-  overload that takes a `value` closure combining the inputs. Drive changes through the type's
-  real mutation paths; where no real path writes an unchanged value, say why with
-  `.notDrivable(_:)` rather than adding a production test hook.
+  missing the delivery in flight and receiving later ones; and what an unchanged write
+  delivers. That is a repeat for a plain `$property`, nothing for an accessor that removes
+  repeats or a mutation path that skips equal writes (`.isDropped`, which pins the
+  `if value != new` guard). Derived accessors (`exportRunStatePublisher`,
+  `isImportingPublisher`, `destinationSnapshotPublisher`) use the overload that takes a `value`
+  closure combining the inputs. Drive everything through the type's real mutation paths; where
+  no path leaves the value unchanged, say why with `.notDrivable(_:)` rather than adding a
+  production test hook. `PublisherParityTests` is a regression gate and does not change in a
+  flip; `PublishedParityHelperTests` shows which check fires for each wrong storage shape.
 - **Dependency registration.** `ObservationProbe` (`TestHelpers/ObservationProbe.swift`) counts
   `withObservationTracking` notifications synchronously and re-registers after each one, so a
   test can assert straight after a write: for example, a record-store query's `onChange` fires
@@ -139,44 +142,43 @@ unchanged write emits; a `withObservationTracking` `onChange` fires.
   flip removes the wrapper.
 - **Gate files** change only in their subscription expression (`$x` → accessor); no assertion,
   expected value or fixture changes, and the accessor's parity test lands in the same PR.
-- **Toolchain drift.** Whether Observation notifies on a write of an equal value differs
-  between toolchains (the macro on Xcode 26.6 skips unchanged `Equatable` writes; 16.2 does
-  not). Record no expectation about it on 16.2; the bridge publishes every write regardless,
-  and a characterization test of unchanged writes, run by the toolchain canary, catches drift.
+- **Equal-value writes and the toolchain.** Whether Observation notifies on a write that
+  stores an equal value depends on the toolchain. `ObservationEqualWriteTests` records what
+  the toolchain that builds the tests does: an equal `Equatable` write and an identical
+  reference write do not notify, and a non-`Equatable` write does (recorded on Xcode 27.1; CI
+  runs it on the toolchain in `.xcode-version`). A toolchain
+  bump that changes this fails there first (the 27.1 canary runs it). The Combine side does not
+  depend on it: the bridge publishes every write, as the parity tests require.
+- **Each flip runs:** the build (a missed `@EnvironmentObject` → `@Environment` swap is a
+  compile error; a missed injection is not), the type's own tests, `PublisherParityTests`, the
+  hosted suites for every view that reads the type (also repeated with
+  `-test-iterations 10 -run-tests-until-failure` and compared with the baseline below), the
+  full suite and `check-regression-gates-ran.py`, with gates run without re-recording.
 
 ## The ratchet
 
 [`scripts/ci/check-observation-ratchet.py`](../../scripts/ci/check-observation-ratchet.py)
-holds the remaining `ObservableObject` types, `@Published` declarations, external `$property`
-uses and `.environmentObject(` calls in `photo-export/` to
-[`scripts/ci/observation-ratchet.txt`](../../scripts/ci/observation-ratchet.txt). A flip lowers
-or removes its rows in the same change; the guard fails until it does, and fails on any new
-old-pattern use, including one arriving from main at a sync. See
-[`scripts/README.md`](../../scripts/README.md).
+holds `photo-export/` to [`scripts/ci/observation-ratchet.txt`](../../scripts/ci/observation-ratchet.txt):
+`ObservableObject` types and external `$property` uses per file, and repository totals of
+`@Published`, `.environmentObject(`, `@EnvironmentObject`, `@StateObject`, `@ObservedObject`
+and external `objectWillChange`. A flip lowers or removes its rows in the same change; the
+guard fails until it does, and fails on any new old-pattern use, including one arriving from
+main at a sync. See [`scripts/README.md`](../../scripts/README.md).
 
-## Verification checklist
-
-1. Build. A missed `@EnvironmentObject` → `@Environment` swap in a consumer is a compile error;
-   a missed injection is not.
-2. Run the type's own tests, `PublisherParityTests`, `ObservationProbeTests`, and the hosted
-   suites for every view that reads the type.
-3. Run the full suite and `check-regression-gates-ran.py`; the gates run without re-recording.
-4. Run `check-observation-ratchet.py` and lower the ceilings.
-5. Repeat the hosted suites with `-test-iterations 10 -run-tests-until-failure` and compare with
-   the baseline below.
+When it was introduced it counted 18 `ObservableObject` types. The plan's inventory said 19;
+no 19th conformance exists in `photo-export/` (17 are single-line `class` declarations, and
+`PhotoLibraryPersistentChangeAdapter` wraps its conformance onto the next line). The four
+test-local `ObservableObject` types in `photo-exportTests/` are not counted.
 
 ## Hosted-suite flake baseline
 
-Recorded on the `ObservableObject` code before any type flipped, with
-`-test-iterations 10 -run-tests-until-failure` (Xcode 27.1, macOS 26.6, Apple silicon), over `RootViewObservationTests`,
-`SidebarObservationTests`, `CollectionContentObservationTests`,
-`TimelineSidebarBadgeRefreshTests`, `TimelineCountRefreshTests`, `PublisherParityTests` and
-`ObservationProbeTests`:
-
-- **Clean:** 45 tests, 490 test runs over 10 iterations, no failures.
-- **Known failure, not a flake:**
-  `CollectionContentObservationTests.unrelatedQueuePublicationsDoNotRescanLoadedCollection`
-  fails `extraScans == 0` / `extraBodies == 0` on every iteration when its suite runs on its
-  own on this toolchain, and failed once in the combined run above. It fails the same way on
-  main before this work, so it is excluded from the clean count and needs its own issue.
-  Compare against it, not against a pass.
+Recorded on local Xcode 27.1 (macOS 26.6), before any type flipped, over the hosted
+observation suites plus `PublisherParityTests` and `ObservationProbeTests`. With
+`-test-iterations 10 -run-tests-until-failure` the first run stopped at the iteration where
+`CollectionContentObservationTests.unrelatedQueuePublicationsDoNotRescanLoadedCollection`
+failed (497 test runs, that one failure). Rerun with that test skipped, all 10 iterations ran
+clean (45 tests, 490 test runs). That test fails on every iteration when its suite runs alone,
+on main as well, so it is a known failure rather than a flake:
+[issue #344](https://github.com/valtteriluomapareto/photo-export/issues/344). Re-record the
+baseline on the CI toolchain before comparing a flip against it. Resolving #344 is an entry
+condition for flipping `PhotoLibraryManager` and the record stores.
