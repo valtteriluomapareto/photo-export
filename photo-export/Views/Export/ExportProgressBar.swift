@@ -21,7 +21,7 @@ struct ExportProgressBar: View {
   /// per-asset filename / per-job counter updates don't fan out as
   /// `ExportManager.objectWillChange` storms across every observing view (sidebar,
   /// year/month grids, etc.). See `ExportProgressState` for the rationale.
-  @EnvironmentObject private var progressState: ExportProgressState
+  @Environment(ExportProgressState.self) private var progressState
 
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var counter

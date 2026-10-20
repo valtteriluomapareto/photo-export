@@ -118,7 +118,7 @@ import Testing
         let hosted = NSHostingView(
           rootView: pane(surface).frame(width: 1200, height: 800)
             .environmentObject(library).environmentObject(timeline).environmentObject(collections)
-            .environmentObject(manager).environmentObject(manager.progressState)
+            .environmentObject(manager).environment(manager.progressState)
             .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
             .environment(\.bodyInvalidationCounter, counter))
         let owned = NSWindow(

@@ -20,7 +20,6 @@ type|photo-export/Destination/ExportDestinationManager.swift|ExportDestinationMa
 type|photo-export/Export/ExportManager.swift|ExportManager
 type|photo-export/Export/ExportQueueCoordinator.swift|ExportQueueCoordinator
 type|photo-export/Export/ImportCoordinator.swift|ImportCoordinator
-type|photo-export/Models/ExportProgressState.swift|ExportProgressState
 type|photo-export/PhotoLibrary/PhotoLibraryManager.swift|PhotoLibraryManager
 type|photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift|PhotoLibraryPersistentChangeAdapter
 type|photo-export/Records/CollectionExportRecordStore.swift|CollectionExportRecordStore
@@ -30,9 +29,9 @@ type|photo-export/Records/ExportRecordStore.swift|ExportRecordStore
 # ObservableObject, so these stay as they are.
 external-publisher|photo-export/Export/ExportManager.swift|9
 
-total|published|58
-total|environment-object|36
-total|environment-object-property|71
+total|published|50
+total|environment-object|35
+total|environment-object-property|69
 total|state-object|10
 total|observed-object|1
 total|object-will-change|0

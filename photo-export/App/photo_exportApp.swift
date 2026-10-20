@@ -231,7 +231,7 @@ struct PhotoExportApp: App {
         .environmentObject(autoSyncManager)
         .environmentObject(autoSyncScopeStore)
         .environmentObject(autoSyncPhotoChangeAdapter)
-        .environmentObject(exportManager.progressState)
+        .environment(exportManager.progressState)
         .environment(whatsNewState)
         .task {
           // First-touch PhotoKit here, not in App.init. Issue #92: the prior

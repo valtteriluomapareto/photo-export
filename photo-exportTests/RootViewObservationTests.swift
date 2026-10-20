@@ -102,7 +102,7 @@ import Testing
           rootView: pane(surface).frame(width: 1200, height: 800)
             .overlay(alignment: .topLeading) { RecordsProbe(store: timeline, counter: counter) }
             .environmentObject(library).environmentObject(timeline).environmentObject(collections)
-            .environmentObject(manager).environmentObject(manager.progressState)
+            .environmentObject(manager).environment(manager.progressState)
             .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
             .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let owned = NSWindow(

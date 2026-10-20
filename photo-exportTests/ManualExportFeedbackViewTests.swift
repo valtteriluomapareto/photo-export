@@ -79,7 +79,7 @@ import Testing
               selectedAtOpen = defaults.string(forKey: SettingsTab.storageKey)
             }
           )
-          .environmentObject(manager).environmentObject(manager.progressState)
+          .environmentObject(manager).environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let owned = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 800, height: 120),

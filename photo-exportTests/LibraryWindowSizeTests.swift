@@ -57,7 +57,7 @@ struct LibraryWindowSizeTests {
     window.contentView = NSHostingView(
       rootView: LibraryRootView()
         .environmentObject(library).environmentObject(timeline).environmentObject(collections)
-        .environmentObject(manager).environmentObject(manager.progressState)
+        .environmentObject(manager).environment(manager.progressState)
         .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
         .defaultAppStorage(defaults))
     try await withCleanup {
