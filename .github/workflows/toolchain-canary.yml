@@ -20,13 +20,14 @@ permissions:
 
 concurrency:
   group: toolchain-canary-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   canary:
     name: canary (Xcode ${{ matrix.xcode }})
     runs-on: ${{ matrix.runs-on }}
-    # A preview runner label that never matches leaves the job queued; this bounds the run.
+    # Counts from when a runner picks the job up. A preview label with no runner leaves the
+    # job queued (GitHub cancels it after 24 hours); that is a missing runner, not a result.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -56,6 +57,10 @@ jobs:
       - name: Build Debug
         run: bash scripts/ci/build-app.sh Debug
 
+      - name: Check xcresult diagnostics export support
+        continue-on-error: true
+        run: xcrun xcresulttool export diagnostics --help > /dev/null
+
       - name: Run Unit Tests (Debug, with coverage)
         id: unit-tests
         timeout-minutes: 15
@@ -75,7 +80,7 @@ jobs:
         run: bash scripts/ci/build-app.sh Release
 
       - name: Report built Release app
-        run: bash scripts/ci/report-built-app.sh
+        run: bash scripts/ci/report-built-app.sh ${{ matrix.xcode }}
 
       - name: Print build and test failure diagnostics
         if: failure()
@@ -88,6 +93,16 @@ jobs:
             fi
           done
 
+      - name: Collect test process diagnostics
+        if: ${{ failure() && steps.unit-tests.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          python3 -B scripts/ci/collect_test_diagnostics.py \
+            --since test-start.marker \
+            --result-bundle TestResults.xcresult \
+            --output TestDiagnostics
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -98,3 +113,4 @@ jobs:
             debug-build.log
             test.log
             release-build.log
+            TestDiagnostics/

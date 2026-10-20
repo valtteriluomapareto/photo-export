@@ -121,10 +121,11 @@ diagnostics, coverage and regression-gate steps read them.
 
 `toolchain-canary.yml` builds and tests on newer Xcode versions (one lane per version, each
 naming its runner label) weekly, on demand, and on pull requests that change the version file
-or these scripts. `report-built-app.sh` prints the Release app's `DTXcode`, SDK and
-`ITSAppUsesNonExemptEncryption` values. The canary is not part of the merge gate, so a red lane
-reports what a bump would break without blocking work. A lane that stays queued means its
-runner label is unavailable; the job's time limit ends the run.
+or these scripts. `report-built-app.sh <version>` prints the Release app's `DTXcode`, SDK and
+`ITSAppUsesNonExemptEncryption` values, and fails if the plist is missing or `DTXcode` does not
+match the selected version. The canary is not part of the merge gate, so a red lane reports what
+a bump would break without blocking work. A lane that stays queued means no runner has its
+label; GitHub cancels it after 24 hours, and that is not a toolchain result.
 
 ### CI area routing
 

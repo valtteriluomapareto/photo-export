@@ -43,8 +43,10 @@ else
   done
 fi
 
-# DEVELOPER_DIR overrides xcode-select for every tool, so a selection would be silently ignored.
+# DEVELOPER_DIR overrides xcode-select for every tool and TOOLCHAINS swaps the Swift toolchain,
+# so either would silently bypass the selection.
 [[ -z "${DEVELOPER_DIR:-}" ]] || fail "DEVELOPER_DIR is set (${DEVELOPER_DIR}); it would override the selected Xcode"
+[[ -z "${TOOLCHAINS:-}" ]] || fail "TOOLCHAINS is set (${TOOLCHAINS}); it would override the selected Swift toolchain"
 
 app="${apps_dir}/Xcode_${version}.app"
 [[ -d "${app}" ]] || fail "Xcode ${version} is not installed at ${app}; installed apps are listed above"

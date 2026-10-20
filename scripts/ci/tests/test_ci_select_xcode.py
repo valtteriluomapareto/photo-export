@@ -44,7 +44,7 @@ class SelectXcodeTests(unittest.TestCase):
             (bin_dir / name).write_text(body)
             (bin_dir / name).chmod(0o755)
         self.environment = {
-            key: value for key, value in os.environ.items() if key != "DEVELOPER_DIR"}
+            key: value for key, value in os.environ.items() if key not in ("DEVELOPER_DIR", "TOOLCHAINS")}
         self.environment.update(
             PATH=f"{bin_dir}:{os.environ['PATH']}", FIXTURE_ROOT=str(self.root),
             XCODE_APPS_DIR=str(self.apps), XCODE_SELECT_CMD="xcode-select")
@@ -89,12 +89,14 @@ class SelectXcodeTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIsNone(self.selected())
 
-    def test_developer_dir_override_fails_because_it_would_bypass_the_selection(self):
-        result = self.run_select(
-            FAKE_XCODE_VERSION="16.2", DEVELOPER_DIR=str(self.apps / "Xcode_27.1.app/Contents/Developer"))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("DEVELOPER_DIR", result.stdout + result.stderr)
-        self.assertIsNone(self.selected())
+    def test_toolchain_overrides_fail_because_they_would_bypass_the_selection(self):
+        for name, value in [("DEVELOPER_DIR", str(self.apps / "Xcode_27.1.app/Contents/Developer")),
+                            ("TOOLCHAINS", "swift")]:
+            with self.subTest(variable=name):
+                result = self.run_select(FAKE_XCODE_VERSION="16.2", **{name: value})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(name, result.stdout + result.stderr)
+                self.assertIsNone(self.selected())
 
     def test_active_toolchain_that_reports_another_version_fails(self):
         result = self.run_select(FAKE_XCODE_VERSION="16.4")

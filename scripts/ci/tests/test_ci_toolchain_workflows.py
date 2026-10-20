@@ -6,9 +6,17 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = sorted((ROOT / ".github/workflows").glob("*.yml"))
 CANARY = ROOT / ".github/workflows/toolchain-canary.yml"
+SELECT = "scripts/ci/select-xcode.sh"
+TOOL = re.compile(r"\b(xcodebuild|xcrun|swift|plutil)\b")
+# CI scripts that run Xcode tools, found from their contents so a new one is covered too.
+XCODE_SCRIPTS = sorted(
+    path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts/ci").glob("*.sh")
+    if path.name != "select-xcode.sh" and TOOL.search(path.read_text()))
 # Anything that runs Xcode tools must come after the selection step in its job.
-XCODE_USES = re.compile(
-    r"xcodebuild|xcrun|build-app\.sh|run-unit-tests\.sh|archive-appstore\.sh|export-appstore\.sh")
+XCODE_USES = re.compile("|".join([TOOL.pattern, *map(re.escape, XCODE_SCRIPTS)]))
+# The jobs that build with the pinned version; only the canary may name another one.
+PINNED_JOBS = [("ci.yml", "app-validation"), ("release-direct.yml", "build-sign-notarize"),
+               ("release-app-store.yml", "build-sign-upload")]
 
 
 def jobs(source):
@@ -26,6 +34,32 @@ class ToolchainWorkflowTests(unittest.TestCase):
                 with self.subTest(workflow=workflow.name, token=token):
                     self.assertNotIn(token, source)
 
+    def test_ci_scripts_never_override_the_selected_toolchain(self):
+        self.assertIn("scripts/ci/build-app.sh", XCODE_SCRIPTS)
+        self.assertIn("scripts/ci/upload-appstore-connect.sh", XCODE_SCRIPTS)
+        for path in (ROOT / "scripts/ci").glob("*.sh"):
+            if path.name == "select-xcode.sh":
+                continue
+            for token in ["DEVELOPER_DIR", "TOOLCHAINS", "xcode-select -s"]:
+                with self.subTest(script=path.name, token=token):
+                    self.assertNotIn(token, path.read_text())
+
+    def test_pinned_jobs_take_the_version_from_the_file_and_only_the_canary_names_one(self):
+        for workflow in WORKFLOWS:
+            for job, text in jobs(workflow.read_text()).items():
+                calls = re.findall(r"^\s+run: (bash " + re.escape(SELECT) + r".*)$", text, re.M)
+                if not calls:
+                    continue
+                with self.subTest(workflow=workflow.name, job=job):
+                    if workflow == CANARY:
+                        self.assertEqual(calls, [f"bash {SELECT} ${{{{ matrix.xcode }}}}"])
+                    else:
+                        self.assertIn((workflow.name, job), PINNED_JOBS)
+                        self.assertEqual(calls, [f"bash {SELECT}"])
+        for name, job in PINNED_JOBS:
+            with self.subTest(workflow=name, job=job):
+                self.assertIn(job, jobs((ROOT / ".github/workflows" / name).read_text()))
+
     def test_every_job_selects_xcode_before_using_it(self):
         checked = 0
         for workflow in WORKFLOWS:
@@ -35,7 +69,7 @@ class ToolchainWorkflowTests(unittest.TestCase):
                     continue
                 checked += 1
                 with self.subTest(workflow=workflow.name, job=job):
-                    select = text.find("scripts/ci/select-xcode.sh")
+                    select = text.find(SELECT)
                     self.assertNotEqual(select, -1)
                     self.assertLess(select, use.start())
         # ci.yml app-validation, both release jobs and the canary.
@@ -60,6 +94,8 @@ class ToolchainWorkflowTests(unittest.TestCase):
         self.assertIn('TEST_RUNNER_REQUIRE_SCOPE_TESTS: "1"', unit)
         self.assertIn("timeout-minutes: 15", unit)
         self.assertIn("name: TestResults-${{ matrix.xcode }}", source)
+        self.assertIn("bash scripts/ci/report-built-app.sh ${{ matrix.xcode }}", source)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", source)
 
 
 if __name__ == "__main__":
