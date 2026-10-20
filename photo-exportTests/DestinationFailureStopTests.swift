@@ -446,7 +446,9 @@ struct DestinationFailureStopTests {
   enum StopRoute: String, CaseIterable, Sendable { case directory, render, conversion }
 
   /// The folder, render and conversion steps each stop on an unreachable destination and
-  /// on a hard destination failure.
+  /// on a hard destination failure. The render and conversion errnos are injected bare; a
+  /// real AVFoundation failure arrives as -11800 wrapping the errno, which is not unwrapped
+  /// and still becomes edited-unavailable. That is a known limit.
   @Test(arguments: StopRoute.allCases, [true, false])
   func eachProducerRouteStopsTheRun(route: StopRoute, unavailable: Bool) async {
     let f = Fixture(collection: route == .directory)
@@ -539,13 +541,13 @@ struct DestinationFailureStopTests {
     await f.close()
   }
 
-  /// Guard: an unmount during an active export still clears the feedback.
+  /// Guard: an unmount during an active export clears the feedback, including a summary
+  /// that is showing. Starting an export already clears the last summary, and no current
+  /// path sets one while work is active, so the summary is placed by hand; the rule that
+  /// keeps it only while idle is defensive here.
   @Test(.timeLimit(.minutes(1)))
   func unmountDuringAnActiveExportClearsTheFeedback() async throws {
-    let f = Fixture(files: Self.failingCommit(ENOSPC))
-    f.start()
-    await f.manager.waitForQueueDrained()
-    #expect(f.manager.progressState.manualSummary?.failureMessage == Self.fullMessage)
+    let f = Fixture()
     let gate = AsyncCheckpoint()
     f.writer.checkpoint = gate
     f.start()
@@ -554,6 +556,8 @@ struct DestinationFailureStopTests {
     do {
       try #require(await reached(gate))
       physical = f.manager.currentTask
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 1, failedCount: 1, failureMessage: Self.fullMessage)
       f.manager.interruptForDestinationUnavailable()
       #expect(f.manager.progressState.manualSummary == nil)
       await gate.releaseAll()

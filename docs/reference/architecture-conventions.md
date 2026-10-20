@@ -360,7 +360,11 @@ suppresses the hook for that run instead.
 - Dirty work is kept and waits for the next real trigger: a Photos change,
   `destinationBecameAvailable`, Export Now, launch, or a scope or settings change. Freeing
   space or restoring access fires no trigger by itself.
-- An Export Now pressed during the run is exempt and still runs.
+- An Export Now pressed during the run is exempt and still runs. A later trigger during
+  the run does not replace it as the pending reason.
+- A manual export whose summary (`runExport`) reports a stop suppresses the next resume the
+  same way. Toolbar exports publish no summary, so after one of them stops, AutoSync can
+  still try once when its pending work is rescheduled.
 - Another reason that arrived during the run and adds no dirty work, such as a scope
   change, goes back into `pendingTriggerReason`. While idle, a held reason never fires on
   its own: a new trigger replaces it, or a resolving blocker (an import or manual export

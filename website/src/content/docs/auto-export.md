@@ -64,7 +64,7 @@ Some failures are transient — Photos is busy, an iCloud original isn't ready t
 
 Each missing version has its own retry time. For example, an original can finish while an edited version waits for its retry; an already-exported original does not let the edited version retry early. Due retries run while Auto Export is enabled and the destination is ready, without needing a new Photos change. They wait for any current export or import to finish.
 
-If the destination drive or network share can't be reached mid-run, the run stops at the first such failure and those items are tried again by the next Auto Export run; they don't wait for **Retry**. The next run starts on the next trigger, such as a Photos change or the drive reconnecting.
+If the destination drive or network share can't be reached mid-run, the run stops at the first such failure; that item is tried again by the next Auto Export run, and untouched items stay pending. Neither waits for **Retry**. The next run starts on the next trigger, such as a Photos change or the drive reconnecting.
 
 A file that goes missing during an export (for example, a temporary file or a copy source) fails only that item. It is listed under _Other_ and retries on its own with the same backoff.
 

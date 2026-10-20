@@ -1350,9 +1350,9 @@ final class ExportManager: ObservableObject {
 
   /// Drive-unmount equivalent of `cancelAndClear()`. Stops starting new jobs and clears
   /// in-memory pending work, but resolves the active run as transient
-  /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. The AutoSync
-  /// state machine treats `.destinationUnavailable` as "resume when the drive comes
-  /// back" rather than "this run failed."
+  /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. AutoSync keeps
+  /// the run's pending work because the result is not `.completed`; it resumes when the
+  /// destination snapshot reports the drive available again, not from the cancel reason.
   ///
   /// Same cleanup as `cancelAndClear` apart from the cancel reason, with one difference:
   /// when nothing is running, the last manual summary stays. A run that stopped because
@@ -2322,6 +2322,7 @@ final class ExportManager: ObservableObject {
     case .destinationCollision, .assetMissing, .resourceMissing, .photoKitTransient,
       .iCloudTransient, .unknown:
       // Not stop categories; kept so a future stop category still explains itself.
+      assertionFailure("\(category) does not stop an export run")
       return "Export stopped. Check the destination, then start a new export."
     }
   }

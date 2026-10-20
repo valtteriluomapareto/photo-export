@@ -63,7 +63,7 @@ extension AutoSyncFailureCategory {
       cause.domain == NSPOSIXErrorDomain
     else { return outer }
     let classified = category(domain: cause.domain, code: cause.code)
-    logger.info(
+    logger.debug(
       "Classified \(nsError.domain, privacy: .public):\(nsError.code, privacy: .public) by its POSIX cause errno \(cause.code, privacy: .public) as \(classified.rawValue, privacy: .public)"
     )
     return classified
@@ -92,8 +92,9 @@ extension AutoSyncFailureCategory {
       case NSFileWriteFileExistsError:
         return .destinationCollision
       default:
-        // Includes no-such-file (4, 260): a missing file can be on the source side, such
-        // as a staged file or a reuse source, so it does not prove the destination is gone.
+        // Includes no-such-file (4, 260): a missing file can be a staged file or a reuse
+        // source rather than the destination root, so it does not prove the destination is
+        // gone.
         return .unknown
       }
     case NSPOSIXErrorDomain:
