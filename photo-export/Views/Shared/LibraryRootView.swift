@@ -31,14 +31,13 @@ struct LibraryRootView: View {
   @State private var lastTimeline: PersistedSidebarSelection = .empty
   @State private var lastCollections: PersistedSidebarSelection = .empty
 
-  init() {
-    // Honour `--screenshot-surface=<key>` so the capture script can land each
-    // marketing capture on a specific view without UI scripting. In production
-    // launches the resolver returns `nil` and the defaults below match the
-    // pre-launch-arg behaviour (Timeline / current month). The parsing +
-    // mapping lives in `ScreenshotSurfaceResolver` so it's testable without
-    // instantiating SwiftUI views.
-    let surface = ScreenshotSurfaceResolver.resolve()
+  /// `screenshotSurfaceKey` is the launch's `--screenshot-surface=<key>`, so the capture
+  /// script can land each marketing capture on a specific view without UI scripting. In
+  /// production launches it is `nil` and the defaults below apply (Timeline / current
+  /// month). The mapping lives in `ScreenshotSurfaceResolver` so it's testable without
+  /// instantiating SwiftUI views.
+  init(screenshotSurfaceKey: String? = nil) {
+    let surface = ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
     let now = Date()
     let currentYear = Calendar.current.component(.year, from: now)
     let currentMonth = Calendar.current.component(.month, from: now)

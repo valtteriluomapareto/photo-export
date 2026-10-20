@@ -19,9 +19,10 @@ breaks. Outside TestScratch.swift it flags:
 - the no-argument `ExportRecordStore()` and `CollectionExportRecordStore()`, which
   open the real Application Support records;
 - the shipping compositions, `AppComposition.production`, `.screenshot` and `.forLaunch`,
-  and an `AppCore(composition: .member` built from one: they hold the app's own
-  preferences, Application Support folder and PhotoKit. Build a core from a composition
-  with TestScratch roots and fakes instead.
+  also as `AppCore(composition: .production…` or a typed `AppComposition = .production…`
+  binding: they hold the app's own preferences, Application Support folder and PhotoKit.
+  Build a core from a composition with TestScratch roots and fakes instead;
+- `PhotoExportApp(` and `PhotoExportApp.init(`, which compose the real app.
 
 A use that deliberately exercises real-path behavior is allowed when the line where it
 starts, or the line above, carries a `// test-scratch: allow` comment followed by a
@@ -55,7 +56,14 @@ BANNED = [
     (re.compile(r"(?<![\w.])(?:Collection)?ExportRecordStore\s*\(\s*\)"),
      "record store on the real Application Support path; pass a TestScratch directory"),
     (re.compile(r"\bAppComposition\s*\.\s*(?:production|screenshot|forLaunch)\b"), COMPOSITION),
-    (re.compile(r"\bAppCore\s*\(\s*composition\s*:\s*\.\s*\w"), COMPOSITION),
+    (re.compile(
+        r"\bAppCore\s*\(\s*composition\s*:\s*\.\s*(?:production|screenshot|forLaunch)\b"),
+     COMPOSITION),
+    (re.compile(
+        r"\bAppComposition\s*\??\s*=\s*\.\s*(?:production|screenshot|forLaunch)\b"),
+     COMPOSITION),
+    (re.compile(r"\bPhotoExportApp\s*(?:\.\s*init\s*)?\("),
+     "composes the real app (its preferences, Application Support and Photos)"),
 ]
 # The reason must follow the marker, so a bare marker does not silence the guard.
 ALLOW = re.compile(r"\btest-scratch:\s*allow\b\W*\w")

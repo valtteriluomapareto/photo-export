@@ -172,6 +172,33 @@ struct ScreenshotSurfaceResolverTests {
     #expect(result?.selection == .favorites)
   }
 
+  /// The launch arguments are parsed once into a key, which the view resolves when it is
+  /// built. Resolving the key gives the same surface as resolving the arguments.
+  @Test func parsedKeyResolvesLikeTheArguments() {
+    let now = Date(timeIntervalSince1970: 1_780_000_000)
+    let argumentSets: [[String]] = [
+      ["app"],
+      ["app", "--screenshot-surface=collections-favorites"],
+      ["app", "--screenshot-surface=timeline", "--screenshot-surface=collections-favorites"],
+      ["app", "--screenshot-surface=timeline-multi-select"],
+      ["app", "--screenshot-surface=unknown-key"],
+      ["app", "--screenshot-surface="],
+      ["app", "--screenshot-surface"],
+    ]
+    for arguments in argumentSets {
+      let key = ScreenshotSurfaceResolver.surfaceKey(from: arguments)
+      #expect(
+        ScreenshotSurfaceResolver.resolve(key: key, now: now)
+          == ScreenshotSurfaceResolver.resolve(from: arguments, now: now),
+        "\(arguments)")
+    }
+    #expect(ScreenshotSurfaceResolver.surfaceKey(from: ["app"]) == nil)
+    #expect(
+      ScreenshotSurfaceResolver.surfaceKey(from: ["app", "--screenshot-surface=timeline"])
+        == "timeline")
+    #expect(ScreenshotSurfaceResolver.resolve(key: nil) == nil)
+  }
+
   /// `--screenshot-surface` without `=value` (just the flag) doesn't match.
   /// Important because someone might forget the `=` and we don't want a
   /// silent fall-through to a "default" tuple.

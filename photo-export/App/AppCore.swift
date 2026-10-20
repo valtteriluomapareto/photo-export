@@ -321,11 +321,14 @@ extension EnvironmentValues {
   /// `AppComposition.isScreenshotMode` for views: suppresses surfaces that would spoil a
   /// marketing capture.
   @Entry var isScreenshotMode = false
+  /// `AppComposition.screenshotSurfaceKey`: where the library window first lands.
+  @Entry var screenshotSurfaceKey: String?
 }
 
 extension View {
   /// The environment every scene root gets from the core: its shared objects, the
-  /// screenshot-mode flag, and its preferences suite as the default `@AppStorage` store.
+  /// screenshot-mode flag and surface, and its preferences suite as the default
+  /// `@AppStorage` store.
   func photoExportEnvironment(_ core: AppCore) -> some View {
     environmentObject(core.exportDestinationManager)
       .environmentObject(core.photoLibraryManager)
@@ -341,6 +344,7 @@ extension View {
       .environmentObject(core.loginItemController)
       .environmentObject(core.whatsNewState)
       .environment(\.isScreenshotMode, core.composition.isScreenshotMode)
+      .environment(\.screenshotSurfaceKey, core.composition.screenshotSurfaceKey)
       .defaultAppStorage(core.composition.defaults)
   }
 }

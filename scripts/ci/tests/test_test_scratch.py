@@ -84,6 +84,50 @@ class TestScratchGuardTests(unittest.TestCase):
         self.assertIn("CoreTests.swift:6: shipping composition", result.stdout)
         self.assertIn("3 test-scratch problem(s) found.", result.stdout)
 
+    def test_typed_bindings_of_shipping_compositions_fail(self):
+        self.write(
+            "BindingTests.swift",
+            "struct BindingTests {\n"
+            "  func t() {\n"
+            "    let a: AppComposition = .production()\n"
+            "    var b: AppComposition =\n"
+            "      .screenshot(windowSize: nil)\n"
+            "    let c: AppComposition? = .forLaunch(arguments: [])\n"
+            "    let d: AppComposition = makeTestComposition()\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("BindingTests.swift:3: shipping composition", result.stdout)
+        self.assertIn("BindingTests.swift:4: shipping composition", result.stdout)
+        self.assertIn("BindingTests.swift:6: shipping composition", result.stdout)
+        self.assertIn("3 test-scratch problem(s) found.", result.stdout)
+
+    def test_test_side_composition_factories_pass(self):
+        self.write(
+            "FactoryTests.swift",
+            "struct FactoryTests {\n"
+            "  func t() {\n"
+            "    let core = AppCore(composition: .fixture(label: \"x\"))\n"
+            "    let other = AppCore(composition: .productionLike)\n"
+            "    let flag = PhotoExportApp.wasComposed\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_composing_the_app_fails(self):
+        self.write(
+            "AppTests.swift",
+            "struct AppTests {\n"
+            "  func t() {\n"
+            "    let app = PhotoExportApp()\n"
+            "    let other = PhotoExportApp.init()\n"
+            "    let wrapped = PhotoExportApp\n"
+            "      .init()\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("AppTests.swift:3: composes the real app", result.stdout)
+        self.assertIn("AppTests.swift:4: composes the real app", result.stdout)
+        self.assertIn("AppTests.swift:5: composes the real app", result.stdout)
+        self.assertIn("3 test-scratch problem(s) found.", result.stdout)
+
     def test_multi_line_uses_fail_at_their_first_line(self):
         self.write(
             "WrappedTests.swift",

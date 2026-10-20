@@ -11,6 +11,9 @@ import SwiftUI
 /// type holds its objects as `@StateObject`s and lays out the scenes.
 struct PhotoExportApp: App {
   private let core: AppCore
+  // The core's objects, held as `@StateObject`s so `body` re-renders when they publish (the
+  // menu bar label reads `autoSyncManager.state`). Scenes get the same instances through
+  // `photoExportEnvironment(core)`.
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var photoLibraryManager: PhotoLibraryManager
   @StateObject private var exportRecordStore: ExportRecordStore
@@ -18,14 +21,9 @@ struct PhotoExportApp: App {
   @StateObject private var exportManager: ExportManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @StateObject private var autoSyncManager: AutoSyncManager
-  /// `@StateObject` because Settings → Auto Export observes `selection` directly
-  /// for checkbox state. The other AutoSync collaborators stay plain properties
-  /// of `core`: no view subscribes to them.
   @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
   @StateObject private var loginItemController: LoginItemController
   @StateObject private var whatsNewState: WhatsNewState
-  /// `@StateObject` because Settings → Auto Export observes
-  /// `lastSuccessfulReconciliation` for the "Last checked iCloud …" line.
   @StateObject private var autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 

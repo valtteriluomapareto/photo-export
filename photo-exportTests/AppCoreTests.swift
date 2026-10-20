@@ -1,11 +1,14 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import Photo_Export
 
 /// The app's object graph and startup sequence. Every core here is built from a `TestScratch`
 /// root and suite with fake Photos, change-source, writer, file-system, clock and login-item
-/// services; the shipping compositions are only inspected, never built into a core.
+/// services, through `makeCore`, while the app's own preferences domain is watched; the
+/// shipping compositions are only inspected, never built into a core.
 @MainActor
 @Suite(.timeLimit(.minutes(1))) struct AppCoreTests {
   private final class FakeLoginItemService: LoginItemService {
@@ -28,7 +31,13 @@ import Testing
       loginItemService: FakeLoginItemService(),
       wiresAutoSync: false,
       isScreenshotMode: false,
-      screenshotWindowSize: nil)
+      screenshotWindowSize: nil,
+      screenshotSurfaceKey: nil)
+  }
+
+  /// The one place these tests build a core. Call it inside `withAppDomainUntouched`.
+  private func makeCore(_ composition: AppComposition) -> AppCore {
+    AppCore(composition: composition)
   }
 
   private func makeDestinationFolder(_ label: String) throws -> URL {
@@ -39,7 +48,7 @@ import Testing
 
   /// Runs `body`, then requires the app's own preferences domain to be unchanged. A leaked
   /// write is undone so it can't outlive the failing run.
-  private func expectAppDomainUntouched(_ body: () throws -> Void) throws {
+  private func withAppDomainUntouched(_ body: () async throws -> Void) async throws {
     let domain = try #require(Bundle.main.bundleIdentifier)
     // test-scratch: allow snapshots the app's own domain to prove the core never writes it
     let standard = UserDefaults.standard
@@ -59,17 +68,21 @@ import Testing
         }
       }
     }
-    try body()
+    try await body()
   }
 
   // MARK: - Startup
 
-  @Test func startAttachesEachServiceOnceInLaunchOrder() throws {
+  @Test func startAttachesEachServiceOnceInLaunchOrder() async throws {
+    try await withAppDomainUntouched { try startAttachesEachServiceOnceInLaunchOrderBody() }
+  }
+
+  private func startAttachesEachServiceOnceInLaunchOrderBody() throws {
     let source = FakePersistentChangeSource()
     var composition = makeTestComposition(label: "app-core-start")
     composition.persistentChangeSource = source
     composition.wiresAutoSync = true
-    let core = AppCore(composition: composition)
+    let core = makeCore(composition)
     let destination = core.exportDestinationManager
     destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-first"))
     let firstId = try #require(destination.destinationId)
@@ -91,6 +104,11 @@ import Testing
     }
     source.onSubscribe = { probe("AutoSync subscribed") }
     source.onStart = { probe("change source started") }
+    // The core holds the source through its composition; the probes hold the core.
+    defer {
+      source.onSubscribe = nil
+      source.onStart = nil
+    }
 
     AppDiagnostics.beginLaunch()
     #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == nil)
@@ -128,19 +146,85 @@ import Testing
     #expect(!PhotoExportApp.wasComposed, "an AppCore alone must not compose the app")
   }
 
-  @Test func withoutAutoSyncTheChangeSourceIsNeverStarted() {
-    let source = FakePersistentChangeSource()
-    var subscribed = false
-    source.onSubscribe = { subscribed = true }
-    var composition = makeTestComposition(label: "app-core-no-autosync")
-    composition.persistentChangeSource = source
-    let core = AppCore(composition: composition)
+  @Test func withoutAutoSyncTheChangeSourceIsNeverStarted() async throws {
+    try await withAppDomainUntouched {
+      let source = FakePersistentChangeSource()
+      var subscribed = false
+      source.onSubscribe = { subscribed = true }
+      var composition = makeTestComposition(label: "app-core-no-autosync")
+      composition.persistentChangeSource = source
+      let core = makeCore(composition)
 
-    core.start()
+      core.start()
 
-    #expect(!subscribed)
-    #expect(source.startCount == 0)
-    #expect(core.destinationSafetyMonitor.isAttached)
+      #expect(!subscribed)
+      #expect(source.startCount == 0)
+      #expect(core.destinationSafetyMonitor.isAttached)
+    }
+  }
+
+  @Test func withoutAnOverrideAutoSyncWatchesThePhotoKitAdapter() async throws {
+    try await withAppDomainUntouched {
+      var composition = makeTestComposition(label: "app-core-adapter")
+      composition.persistentChangeSource = nil
+      // Never started: starting the PhotoKit adapter would reach the real library.
+      let core = makeCore(composition)
+
+      #expect(core.autoSyncEnvironment.photos === core.autoSyncPhotoChangeAdapter)
+    }
+  }
+
+  // MARK: - Scene environment
+
+  private final class EnvironmentReading {
+    var isScreenshotMode: Bool?
+    var surfaceKey: String??
+    var storedValue: String?
+  }
+
+  private struct EnvironmentProbe: View {
+    static let storageKey = "AppCoreTests.environmentProbe"
+    let reading: EnvironmentReading
+    @Environment(\.isScreenshotMode) private var isScreenshotMode
+    @Environment(\.screenshotSurfaceKey) private var surfaceKey
+    @AppStorage(Self.storageKey) private var storedValue = "default"
+
+    var body: some View {
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = record()
+      Color.clear
+    }
+
+    private func record() {
+      reading.isScreenshotMode = isScreenshotMode
+      reading.surfaceKey = .some(surfaceKey)
+      reading.storedValue = storedValue
+    }
+  }
+
+  @Test func sceneEnvironmentComesFromTheComposition() async throws {
+    try await withAppDomainUntouched {
+      var composition = makeTestComposition(label: "app-core-environment")
+      composition.isScreenshotMode = true
+      composition.screenshotSurfaceKey = "collections-favorites"
+      composition.defaults.set("from the suite", forKey: EnvironmentProbe.storageKey)
+      let core = makeCore(composition)
+      let reading = EnvironmentReading()
+
+      let window = NSWindow(
+        contentRect: NSRect(x: -10000, y: -10000, width: 200, height: 200),
+        styleMask: [.titled], backing: .buffered, defer: false)
+      window.isReleasedWhenClosed = false
+      window.contentView = NSHostingView(
+        rootView: EnvironmentProbe(reading: reading).photoExportEnvironment(core))
+      window.orderFront(nil)
+      defer { window.close() }
+
+      #expect(await eventually("probe rendered") { reading.isScreenshotMode != nil })
+      #expect(reading.isScreenshotMode == true)
+      #expect(reading.surfaceKey == .some("collections-favorites"))
+      #expect(reading.storedValue == "from the suite")
+    }
   }
 
   // MARK: - Compositions
@@ -187,7 +271,7 @@ import Testing
     #expect(production.screenshotWindowSize == nil)
   }
 
-  @Test func screenshotModeDiffersFromProductionOnlyInPhotosAndAutoSync() {
+  @Test func screenshotModeKeepsProductionStorageAndServices() {
     // test-scratch: allow inspects the shipping compositions' values without building a core
     let production = AppComposition.production()
     // test-scratch: allow inspects the shipping compositions' values without building a core
@@ -226,13 +310,32 @@ import Testing
     #expect(widthOnly.screenshotWindowSize == nil)
   }
 
+  @Test func screenshotSurfaceIsReadFromTheLaunchArgumentsInEveryMode() {
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let plain = AppComposition.forLaunch(arguments: ["Photo Export"])
+    #expect(plain.screenshotSurfaceKey == nil)
+    // The surface has always been honoured without `--screenshot-mode` too.
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let surfaceOnly = AppComposition.forLaunch(arguments: [
+      "Photo Export", "--screenshot-surface=collections-favorites",
+    ])
+    #expect(surfaceOnly.screenshotSurfaceKey == "collections-favorites")
+    #expect(!surfaceOnly.isScreenshotMode)
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let screenshot = AppComposition.forLaunch(arguments: [
+      "Photo Export", "--screenshot-mode", "--screenshot-surface=timeline-multi-select",
+      "--screenshot-width=1440", "--screenshot-height=900",
+    ])
+    #expect(screenshot.screenshotSurfaceKey == "timeline-multi-select")
+  }
+
   // MARK: - Isolation
 
-  @Test func testCompositionKeepsAllStateUnderItsRootAndSuite() throws {
-    try expectAppDomainUntouched {
+  @Test func testCompositionKeepsAllStateUnderItsRootAndSuite() async throws {
+    try await withAppDomainUntouched {
       var composition = makeTestComposition(label: "app-core-isolation")
       composition.wiresAutoSync = true
-      let core = AppCore(composition: composition)
+      let core = makeCore(composition)
       core.exportDestinationManager.persistSelectedFolderForTesting(
         try makeDestinationFolder("app-core-isolation-destination"))
       core.start()
@@ -258,15 +361,15 @@ import Testing
     }
   }
 
-  @Test func screenshotModeMarksOnboardingDoneOnlyInItsOwnSuite() throws {
-    try expectAppDomainUntouched {
+  @Test func screenshotModeMarksOnboardingDoneOnlyInItsOwnSuite() async throws {
+    try await withAppDomainUntouched {
       var composition = makeTestComposition(label: "app-core-screenshot")
       composition.isScreenshotMode = true
       composition.wiresAutoSync = false
       let splitViewKey = "NSSplitView Subview Frames main"
       composition.defaults.set(["0, 0, 240, 800"], forKey: splitViewKey)
 
-      let core = AppCore(composition: composition)
+      let core = makeCore(composition)
 
       #expect(composition.defaults.bool(forKey: "hasCompletedOnboarding"))
       #expect(composition.defaults.object(forKey: splitViewKey) == nil)

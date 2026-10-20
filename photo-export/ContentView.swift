@@ -18,6 +18,7 @@ struct ContentView: View {
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(\.screenshotSurfaceKey) private var screenshotSurfaceKey
   /// Read only by the onboarding auto-skip in `onAppear`. Plain references rather than
   /// environment objects, so destination and record publications don't re-run the root body.
   let destinationManager: ExportDestinationManager
@@ -50,7 +51,7 @@ struct ContentView: View {
           hasCompletedOnboarding = true
         }
       } else if photoLibraryManager.isAuthorized {
-        LibraryRootView()
+        LibraryRootView(screenshotSurfaceKey: screenshotSurfaceKey)
       } else {
         AuthorizationView(photoLibraryManager: photoLibraryManager)
       }

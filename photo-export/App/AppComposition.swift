@@ -34,6 +34,10 @@ struct AppComposition {
   /// `--screenshot-width=` / `--screenshot-height=`: the main window's size in screenshot
   /// mode. `nil` leaves the size to the system.
   var screenshotWindowSize: CGSize?
+  /// `--screenshot-surface=<key>`: where the library window first lands, resolved by
+  /// `ScreenshotSurfaceResolver` when the view is built. Read in every mode, as it always
+  /// has been; `nil` lands on the default Timeline month.
+  var screenshotSurfaceKey: String?
 
   /// The shipping app.
   static func production() -> AppComposition {
@@ -49,7 +53,8 @@ struct AppComposition {
       loginItemService: SystemLoginItemService(),
       wiresAutoSync: true,
       isScreenshotMode: false,
-      screenshotWindowSize: nil)
+      screenshotWindowSize: nil,
+      screenshotSurfaceKey: nil)
   }
 
   /// `--screenshot-mode`: the shipping app with a curated synthetic library, so marketing
@@ -66,6 +71,12 @@ struct AppComposition {
 
   /// The composition a launch with `arguments` runs.
   static func forLaunch(arguments: [String]) -> AppComposition {
+    var composition = launchComposition(arguments: arguments)
+    composition.screenshotSurfaceKey = ScreenshotSurfaceResolver.surfaceKey(from: arguments)
+    return composition
+  }
+
+  private static func launchComposition(arguments: [String]) -> AppComposition {
     guard arguments.contains("--screenshot-mode") else { return production() }
     func value(for prefix: String) -> CGFloat? {
       guard
