@@ -27,41 +27,42 @@ enum ReleaseNotesCatalog {
         ReleaseNote.Bullet(
           title: "Preserve backup progress through interruptions",
           body:
-            "Export history is safer when a record write is interrupted or an export "
-            + "is cancelled while a file is being committed. Import Existing Backup "
-            + "preserves existing progress when verification fails and offers clearer "
-            + "recovery when history cannot be read."
+            "Export history is better protected when an export is interrupted or "
+            + "cancelled. Export Month on a paused month resumes the queued export, "
+            + "including other months already queued. Import Existing Backup keeps "
+            + "your progress if checking the backup fails, explains how to recover "
+            + "when history can't be read, and no longer keeps scanning in the "
+            + "background after you cancel it."
         ),
         ReleaseNote.Bullet(
           title: "See accurate results and actionable export issues",
           body:
-            "Progress and detail history follow the current destination and album. "
-            + "Manual exports report their outcome, and export issues include filenames "
-            + "and creation dates when available to help identify affected photos. Storage failures "
-            + "that prevent further writes stop the run and show recovery guidance."
+            "Progress and history follow the destination and album you're viewing. "
+            + "Manual exports report how they went, and export issues name the "
+            + "affected photo and its date when available. If the backup folder stops "
+            + "accepting files, the export stops and explains how to fix it."
         ),
         ReleaseNote.Bullet(
           title: "Keep previews and selections current",
           body:
-            "Thumbnails and the selected full-size preview refresh after Photos edits, "
-            + "while obsolete image requests cannot replace newer content. Grid "
-            + "selections stay consistent as library contents refresh."
+            "Thumbnails and the large preview update after you edit in Photos. Grid "
+            + "and folder selections stay in place, and sidebar counts stay visible, "
+            + "while your library refreshes."
         ),
         ReleaseNote.Bullet(
           title: "Keep Auto Export work safe for retry",
           body:
-            "Photos changes arriving during an export remain pending for a later run. "
-            + "Retry scheduling and saved change state are more resilient to "
-            + "interruptions and persistence failures, with recovery for uncertain "
-            + "Auto Export metadata."
+            "Photos changes that arrive during an export wait for the next run. "
+            + "Turning Auto Export off stops an automatic export in progress; the "
+            + "rest exports the next time Auto Export runs. Retries and saved "
+            + "progress recover better from interruptions."
         ),
         ReleaseNote.Bullet(
           title: "Recover more clearly when a destination is unavailable",
           body:
-            "Missing, read-only and inaccessible backup folders have clearer "
-            + "explanations and recovery actions. Photo Export also checks that "
-            + "delayed work still belongs to the current destination before "
-            + "changing its saved progress."
+            "Missing, read-only and inaccessible backup folders get clearer "
+            + "explanations and recovery actions. Delayed work is checked against "
+            + "the current destination before it changes saved progress."
         ),
       ],
       learnMore: nil
