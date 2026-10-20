@@ -375,7 +375,10 @@ struct VariantExporterTests {
     #expect(h.writer.writeCalls.first?.resource.type == .pairedVideo)
     let final = try #require(h.fileSystem.moveCalls.last?.to)
     #expect(final.lastPathComponent == "IMG_0001.MOV")
-    #expect((try? Data(contentsOf: final)) == Data("fake-content".utf8))
+    let written = try #require(h.writer.writeCalls.first)
+    #expect(
+      (try? Data(contentsOf: final))
+        == FakeAssetResourceWriter.content(for: written.resource, assetId: asset.id))
   }
 
   /// `.editedPairedVideo` prefers `.fullSizePairedVideo` when Photos has rendered an
@@ -406,7 +409,10 @@ struct VariantExporterTests {
     #expect(h.writer.writeCalls.first?.resource.type == .fullSizePairedVideo)
     let final = try #require(h.fileSystem.moveCalls.last?.to)
     #expect(final.lastPathComponent == "IMG_0001.MOV")
-    #expect((try? Data(contentsOf: final)) == Data("fake-content".utf8))
+    let written = try #require(h.writer.writeCalls.first)
+    #expect(
+      (try? Data(contentsOf: final))
+        == FakeAssetResourceWriter.content(for: written.resource, assetId: asset.id))
   }
 
   /// `.editedPairedVideo` falls back to `.pairedVideo` when Photos elides the

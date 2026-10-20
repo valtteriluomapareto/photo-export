@@ -1244,10 +1244,11 @@ struct ExportManagerRunExportTests {
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "live-retry", isLivePhoto: true)
       harness.photoLib.favoritesAssets = [asset]
-      harness.photoLib.resourcesByAssetId[asset.id] = [
+      let resources = [
         TestAssetFactory.makeResource(type: .photo, originalFilename: "LIVE.HEIC"),
         TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "LIVE.MOV"),
       ]
+      harness.photoLib.resourcesByAssetId[asset.id] = resources
       harness.manager.livePhotosPairedExport = true
       harness.manager.autoSyncEligibilityCheck = { _, _, variant, _ in variant == .original }
       let result = await harness.manager.runExport(
@@ -1265,13 +1266,13 @@ struct ExportManagerRunExportTests {
         "Collections/Favorites/", createIfNeeded: false)
       #expect(
         (try? Data(contentsOf: directory.appendingPathComponent("LIVE.HEIC")))
-          == Data("fake-content".utf8))
+          == FakeAssetResourceWriter.content(for: resources[0], assetId: asset.id))
       if manual {
         #expect(variants[.originalPairedVideo]?.status == .done)
         #expect(variants[.originalPairedVideo]?.filename == "LIVE.MOV")
         #expect(
           (try? Data(contentsOf: directory.appendingPathComponent("LIVE.MOV")))
-            == Data("fake-content".utf8))
+            == FakeAssetResourceWriter.content(for: resources[1], assetId: asset.id))
       } else {
         #expect(variants[.originalPairedVideo] == nil)
       }
