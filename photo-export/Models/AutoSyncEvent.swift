@@ -52,6 +52,10 @@ enum AutoSyncEvent: Sendable {
   /// event metadata, not part of the persisted summary or run context format.
   case autoSyncRunCompleted(ExportRunSummary, destinationId: String)
 
+  /// Whether Photo Export can read the Photos library, as last refreshed. Auto Export is
+  /// blocked while it can't; access returning schedules a full-scope catch-up.
+  case photosAuthorizationChanged(Bool)
+
   /// Import Existing Backup started or finished. AutoSync defers while import is
   /// active and re-evaluates afterward.
   case importStateChanged(isImporting: Bool)

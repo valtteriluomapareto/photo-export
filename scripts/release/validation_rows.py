@@ -86,6 +86,8 @@ RULES = [
     ("photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift",
      ("autoexport", "preview")),
     ("photo-export/PhotoLibrary/ReconciliationScheduler.swift", ("autoexport",)),
+    ("photo-export/PhotoLibrary/PhotoLibraryManager+AutoSyncPhotosAuthorization.swift",
+     ("authorization", "autoexport")),
     ("photo-export/PhotoLibrary/CollectionCountCache.swift", ("collections",)),
     ("photo-export/PhotoLibrary/FullImageRequestBridge.swift", ("preview",)),
     ("photo-export/PhotoLibrary/DecodedThumbnailCache.swift", ("preview",)),

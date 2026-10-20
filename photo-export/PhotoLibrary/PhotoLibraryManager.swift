@@ -295,6 +295,10 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
+  /// Re-reads Photos access each time the app becomes active, whichever window is
+  /// showing, or none. Idempotent. Tests pass their own center.
+  func observeAppActivation(notificationCenter: NotificationCenter = .default) {}
+
   /// Re-reads existing permission without prompting. Install fresh-cache barriers
   /// before an authorization subscriber can start work against the newly visible library.
   func refreshAuthorizationStatus() {

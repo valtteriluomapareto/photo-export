@@ -264,6 +264,7 @@ struct PhotoExportApp: App {
               perDestinationTokenStore: autoSyncPerDestinationTokenStore,
               currentRunStore: autoSyncCurrentRunStore,
               clock: autoSyncClock,
+              photosAuthorization: photoLibraryManager,
               userDefaults: .standard
             )
             autoSyncManager.attach(to: environment)

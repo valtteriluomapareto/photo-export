@@ -44,6 +44,9 @@ enum AutoSyncReducer {
     /// `versionSelection`.
     var convertHEICToJPEG: Bool
     var importActive: Bool
+    /// Photos access as last refreshed. Kept out of `DestinationSnapshot`, whose changes
+    /// drive the destination triggers.
+    var photosAuthorized = true
     var exportRunState: ExportRunState
     /// Per-destination accumulated dirty state. Updated by `photosChanged` events
     /// (asset id targeting + cost-cap rollover) and by full-reconciliation completion.
@@ -199,6 +202,9 @@ enum AutoSyncReducer {
 
     case .importStateChanged(let isImporting):
       newState.importActive = isImporting
+
+    case .photosAuthorizationChanged:
+      return (state, [])
 
     case .exportRunStarted(let context, let destinationId):
       captureRunBoundary(context, destinationId: destinationId, in: &newState)
