@@ -329,11 +329,23 @@ struct AutoSyncFailureCategoryClassificationTests {
     }
   }
 
-  /// Guard: destination errors that say nothing about reachability stay unknown.
+  /// A read-only folder and a denied security scope can be reached but not written, the
+  /// same condition as EROFS and EACCES. Each keeps its own bridged signature.
+  @Test func destinationWriteAccessErrorsAreDestinationPermission() {
+    for error in [DestinationError.notWritable, .scopeAccessDenied] {
+      let signal = AutoSyncFailureCategory.classify(error)
+      let bridged = error as NSError
+      #expect(signal.category == .destinationPermission, "\(error)")
+      #expect(signal.errorSignature == "\(bridged.domain):\(bridged.code)", "\(error)")
+    }
+  }
+
+  /// Guard: destination errors that say nothing about reachability or write access stay
+  /// unknown.
   @Test func otherDestinationErrorsStayUnknown() {
     for error in [
-      DestinationError.noSelection, .invalidRelativePath("x"), .pathTooLong,
-      .notDirectory(URL(fileURLWithPath: "/tmp/x")),
+      DestinationError.noSelection, .invalidYear, .invalidMonth, .invalidRelativePath("x"),
+      .pathTooLong, .notDirectory(URL(fileURLWithPath: "/tmp/x")),
     ] {
       #expect(AutoSyncFailureCategory.classify(error).category == .unknown, "\(error)")
     }

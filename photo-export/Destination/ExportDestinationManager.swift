@@ -127,6 +127,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   private var stashedLegacyDestinationId: String?
 
   // MARK: - Errors
+  /// Case order sets each case's bridged `NSError` code, and so the error signatures stored
+  /// in Auto Export retry state. Cases with associated values are numbered first, so adding
+  /// one anywhere renumbers every case without.
   enum ExportDestinationError: LocalizedError, Equatable {
     static func == (lhs: ExportDestinationError, rhs: ExportDestinationError) -> Bool {
       switch (lhs, rhs) {

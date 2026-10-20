@@ -491,6 +491,31 @@ struct DestinationFailureStopTests {
     await f.close()
   }
 
+  enum WriteAccessFailure: String, CaseIterable, Sendable {
+    case notWritable, scopeAccessDenied
+    var error: ExportDestinationManager.ExportDestinationError {
+      switch self {
+      case .notWritable: return .notWritable
+      case .scopeAccessDenied: return .scopeAccessDenied
+      }
+    }
+  }
+
+  /// A read-only folder or a denied security scope fails every write the same way, so the
+  /// destination error stops the run at its first item as a permission failure.
+  @Test(arguments: WriteAccessFailure.allCases)
+  func destinationWriteAccessErrorStopsTheRun(failure: WriteAccessFailure) async {
+    let f = Fixture()
+    let error = failure.error
+    f.destination.urlForRelativeDirectoryError = error
+    let bridged = error as NSError
+    await expectStop(
+      f, category: .destinationPermission, signature: "\(bridged.domain):\(bridged.code)")
+    #expect(f.writer.writeCalls.isEmpty)
+    #expect(f.variants(f.ids[0])[.original]?.status == .failed)
+    await f.close()
+  }
+
   /// A missing file at the commit can come from the source side, so it fails one item and
   /// the run goes on.
   @Test func missingFileAtTheCommitFailsOneItemAndContinues() async {
