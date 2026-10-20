@@ -68,7 +68,10 @@ verified the new copies; importing the old backup does not separate those mixed 
 ### Files already at the destination
 
 Existing files are never overwritten. When a name is taken, the export is written as
-`IMG_0001 (1).JPG`, then `(2)`, and so on. If the file already there has exactly the same
+`IMG_0001 (1).JPG`, then `(2)`, and so on. A name that an exported item still records counts
+as taken even if you deleted its file, so another photo with the same filename does not take
+it. **File → Import Existing Backup…** clears records whose files are gone, and the next
+export writes those items again under their own names. If the file already there has exactly the same
 bytes and no other exported item uses it, for example after the export history was reset or
 the folder was set up as a new destination, Photo Export records that file instead of
 writing another copy, and leaves it as it is. This covers files exported on their own; an edit with its

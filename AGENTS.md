@@ -88,7 +88,7 @@ The main `WindowGroup` and `Settings` scene inject their environments separately
 - `ProductionAssetResourceWriter` — production implementation behind the `AssetResourceWriter` seam
 - `ProductionMediaRenderer` — production implementation behind the `MediaRenderer` seam (edited videos)
 - `FileIOService` — atomic file moves and timestamp handling (conforms to `FileSystemService`)
-- `FinalNamePlanner` — picks a staged file's final name: the first free ` (n)` suffix, or an identical existing file that no record names (see [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Final file commit boundary)
+- `FinalNamePlanner` — picks a staged file's final name: the first ` (n)` suffix with nothing at it that no other record names, or an identical existing file that no record names (see [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) §Final file commit boundary)
 
 **Root routing and views:** `photo-export/ContentView.swift` remains at the source root and defines `ContentView`, `AuthorizationView`, and the timeline sidebar's `YearRow` / `MonthRow`. Feature views live under `photo-export/Views/`. `ContentView` routes between auth/onboarding/library states. `LibraryRootView` hosts the `NavigationSplitView` with a Timeline / Collections segmented selector. `TimelineSidebarView` renders the year/month tree and `CollectionsSidebarView` renders Favorites + user albums and folders; both sidebars support Cmd/Shift-click multi-select and report the normalized selection via `TimelineSelectionBuckets` / `CollectionsSelectionBuckets`. `YearContentView` shows the focused-year summary pane (no asset grid). `MonthContentView` shows thumbnails for a month and `CollectionContentView` shows thumbnails for a Favorites/album scope (both share `MonthViewModel` via the scope-based loader). `ThumbnailView` renders an individual thumbnail. `ExportToolbarView` shows export controls. `RecordStoreAlertHost` is a view modifier that surfaces the corruption-recovery alert for whichever store enters `.failed`. `OnboardingView` handles first-run flow. `AssetDetailView` shows full-size preview. `ImportView` runs the Import Existing Backup flow. `AboutView` is the in-app about box.
 
@@ -132,6 +132,7 @@ The behavioral regression gates are the same in this guide, `CONTRIBUTING.md`, a
 - `FileIOServiceTests.existingFileAtCommitIsNeverReplaced`
 - `IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted`
 - `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss`
+- `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile`
 
 Run these without re-recording unless the new behavior has been explicitly audited. They are listed once in `scripts/ci/regression-gates.txt`, which also pins containing-suite declarations to support method-level gates; those pins are not additional behavioral gates. CI checks that this list names every gate in the file and that every gate ran and passed.
 
