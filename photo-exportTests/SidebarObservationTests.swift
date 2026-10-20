@@ -93,6 +93,7 @@ import Testing
           manager: manager, collections: collections, service: service, counter: counter)
           .environmentObject(library).environmentObject(timeline)
           .environmentObject(collections).environmentObject(manager)
+          .environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 560, height: 500),

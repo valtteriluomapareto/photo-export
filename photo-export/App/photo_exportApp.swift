@@ -21,8 +21,8 @@ struct PhotoExportApp: App {
   /// for checkbox state. The other AutoSync collaborators below stay plain
   /// `let` — no view subscribes to them.
   @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
-  @StateObject private var loginItemController: LoginItemController
-  @StateObject private var whatsNewState: WhatsNewState
+  @State private var loginItemController: LoginItemController
+  @State private var whatsNewState: WhatsNewState
 
   private let autoSyncDestinationAdapter: DestinationSnapshotAdapter
   /// `@StateObject` because Settings → Auto Export observes
@@ -199,8 +199,8 @@ struct PhotoExportApp: App {
     _lifecycleCoordinator = StateObject(wrappedValue: coordinator)
     _autoSyncManager = StateObject(wrappedValue: asm)
     _autoSyncScopeStore = StateObject(wrappedValue: scopeStore)
-    _loginItemController = StateObject(wrappedValue: LoginItemController())
-    _whatsNewState = StateObject(wrappedValue: WhatsNewState(userDefaults: .standard))
+    _loginItemController = State(wrappedValue: LoginItemController())
+    _whatsNewState = State(wrappedValue: WhatsNewState(userDefaults: .standard))
     _destinationSafetyMonitor = StateObject(wrappedValue: safetyMonitor)
     self.autoSyncDestinationAdapter = destinationAdapter
     _autoSyncPhotoChangeAdapter = StateObject(wrappedValue: photoAdapter)
@@ -231,8 +231,8 @@ struct PhotoExportApp: App {
         .environmentObject(autoSyncManager)
         .environmentObject(autoSyncScopeStore)
         .environmentObject(autoSyncPhotoChangeAdapter)
-        .environmentObject(exportManager.progressState)
-        .environmentObject(whatsNewState)
+        .environment(exportManager.progressState)
+        .environment(whatsNewState)
         .task {
           // First-touch PhotoKit here, not in App.init. Issue #92: the prior
           // shape called `PHPhotoLibrary.shared().register(self)` and the
@@ -355,7 +355,7 @@ struct PhotoExportApp: App {
         .environmentObject(exportRecordStore)
         .environmentObject(collectionExportRecordStore)
         .environmentObject(lifecycleCoordinator)
-        .environmentObject(loginItemController)
+        .environment(loginItemController)
         .environmentObject(destinationSafetyMonitor)
         .environmentObject(autoSyncPhotoChangeAdapter)
     }

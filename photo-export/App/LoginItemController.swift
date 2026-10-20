@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import os
 
 /// Wraps `SMAppService.mainApp` so the Settings UI can present "Open Photo
@@ -15,15 +16,16 @@ import os
 ///   - `notRegistered`: not in the user's login-items list
 ///   - `notFound`: app isn't installed where SMAppService can locate it
 ///     (running from Xcode's DerivedData, /private/var/folders, etc.)
+@Observable
 @MainActor
-final class LoginItemController: ObservableObject {
+final class LoginItemController {
   /// Current status. SwiftUI views observe to drive the toggle + the
   /// "Open System Settings…" hint. Refreshed in `refresh()` and after each
   /// register/unregister.
-  @Published private(set) var status: Status = .notRegistered
+  private(set) var status: Status = .notRegistered
 
-  private let log: Logger
-  private let service: any LoginItemService
+  @ObservationIgnored private let log: Logger
+  @ObservationIgnored private let service: any LoginItemService
 
   enum Status: Equatable, Sendable {
     case enabled

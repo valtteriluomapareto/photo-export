@@ -14,7 +14,7 @@ struct LibraryRootView: View {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var whatsNewState: WhatsNewState
+  @Environment(WhatsNewState.self) private var whatsNewState
 
   @State private var section: LibrarySection
 
@@ -150,7 +150,7 @@ struct LibraryRootView: View {
     // explaining new UI surfaces and reassuring the user about file safety.
     // Attached here (not on `ContentView`) so it only renders post-auth /
     // post-onboarding, when the user is in the main library view. The
-    // sheet's @Published `shouldShow` flips to false on dismiss, so the
+    // sheet's observed `shouldShow` flips to false on dismiss, so the
     // binding doesn't re-present.
     .sheet(
       isPresented: Binding(

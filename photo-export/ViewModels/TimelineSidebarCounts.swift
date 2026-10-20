@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Observation
 
 /// Loader for the per-(year, month) total + adjusted asset counts the
 /// timeline sidebar's `YearRow` and `MonthRow` need to compute their progress
@@ -18,8 +19,8 @@ import Foundation
 /// (`PhotoLibraryService.cachedCountAssets(in:)` and
 /// `cachedCountAdjustedAssets(in:)`). The `CollectionCountCache` actor
 /// dedups overlapping calls, so calling `loadCounts(forYears:)` multiple
-/// times is cheap. As each (year, month) pair lands, the `@Published` snapshot
-/// update and dependent `YearRow` / `MonthRow` views re-render
+/// times is cheap. As each (year, month) pair lands, the observed snapshot
+/// updates and dependent `YearRow` / `MonthRow` views re-render
 /// progressively.
 ///
 /// Cost (see `AGENTS.md` perf notes): a typical 10-year library is ~120
@@ -28,26 +29,34 @@ import Foundation
 /// call to `cachedCountAssets` dispatches into `Task.detached` inside
 /// `PhotoLibraryManager`, and the wrapper `await` here simply yields the
 /// runloop while the detached fetch runs.
+@Observable
 @MainActor
-final class TimelineSidebarCounts: ObservableObject {
+final class TimelineSidebarCounts {
   struct MonthCounts: Equatable {
     let total: Int
     let adjusted: Int?
   }
 
-  @Published private(set) var countsByYearMonth: [String: MonthCounts] = [:]
-  /// `$countsByYearMonth` for subscribers outside this type: synchronous, delivered before the
-  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  private let countsBridge = ObservableCombineBridge<[String: MonthCounts]>([:])
+  private(set) var countsByYearMonth: [String: MonthCounts] {
+    get {
+      access(keyPath: \.countsByYearMonth)
+      return countsBridge.value
+    }
+    set { countsBridge.write(newValue) { withMutation(keyPath: \.countsByYearMonth, $0) } }
+  }
+  /// `countsByYearMonth` for Combine subscribers: synchronous, delivered before the value is
+  /// stored, and replaying the current value (pinned by `PublisherParityTests`).
   var countsByYearMonthPublisher: AnyPublisher<[String: MonthCounts], Never> {
-    $countsByYearMonth.eraseToAnyPublisher()
+    countsBridge.publisher
   }
   /// Last error encountered while fetching counts. Surfaces once so a future
   /// view-side banner can mention "couldn't load progress" without us having
   /// to thread Result types throughout the loader.
-  @Published private(set) var lastError: Error?
+  private(set) var lastError: Error?
 
-  private let service: any PhotoLibraryService
-  private var generation = 0
+  @ObservationIgnored private let service: any PhotoLibraryService
+  @ObservationIgnored private var generation = 0
 
   init(service: any PhotoLibraryService) {
     self.service = service
@@ -64,7 +73,7 @@ final class TimelineSidebarCounts: ObservableObject {
   /// `PhotoLibraryService` are `nonisolated async` and dispatch their work to
   /// detached tasks internally, so the actual PhotoKit fetches run on the
   /// global executor in parallel even though the per-month child tasks
-  /// themselves hop back to `@MainActor` to update the published dicts.
+  /// themselves hop back to `@MainActor` to update the observed dicts.
   /// Across years, loading is sequential — that keeps the in-flight count
   /// bounded at 12 fetches at a time even on 30-year libraries.
   func loadCounts(forYears years: [Int], preferredYear: Int? = nil) async {
@@ -115,7 +124,7 @@ final class TimelineSidebarCounts: ObservableObject {
 
   /// Loads one year's twelve months in parallel via a `TaskGroup`. Each
   /// child task hops back to `@MainActor` (`loadMonth(year:month:)` is
-  /// `@MainActor`-isolated) to read `service` and write the published
+  /// `@MainActor`-isolated) to read `service` and write the observed
   /// dicts, but the underlying `cachedCount*` calls dispatch detached
   /// tasks internally — so the actual PhotoKit fetches run concurrently
   /// on the global executor.

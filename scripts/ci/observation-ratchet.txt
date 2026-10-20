@@ -13,8 +13,6 @@
 # Text from "#" to the end of a line is a comment.
 
 type|photo-export/App/AppLifecycleCoordinator.swift|AppLifecycleCoordinator
-type|photo-export/App/LoginItemController.swift|LoginItemController
-type|photo-export/App/WhatsNewState.swift|WhatsNewState
 type|photo-export/AutoSync/AutoSyncManager.swift|AutoSyncManager
 type|photo-export/AutoSync/Stores/UserDefaultsAutoExportScopeStore.swift|UserDefaultsAutoExportScopeStore
 type|photo-export/Destination/DestinationSafetyMonitor.swift|DestinationSafetyMonitor
@@ -22,22 +20,18 @@ type|photo-export/Destination/ExportDestinationManager.swift|ExportDestinationMa
 type|photo-export/Export/ExportManager.swift|ExportManager
 type|photo-export/Export/ExportQueueCoordinator.swift|ExportQueueCoordinator
 type|photo-export/Export/ImportCoordinator.swift|ImportCoordinator
-type|photo-export/Models/ExportProgressState.swift|ExportProgressState
 type|photo-export/PhotoLibrary/PhotoLibraryManager.swift|PhotoLibraryManager
 type|photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift|PhotoLibraryPersistentChangeAdapter
 type|photo-export/Records/CollectionExportRecordStore.swift|CollectionExportRecordStore
 type|photo-export/Records/ExportRecordStore.swift|ExportRecordStore
-type|photo-export/ViewModels/AssetDetailImageLoader.swift|AssetDetailImageLoader
-type|photo-export/ViewModels/MonthViewModel.swift|MonthViewModel
-type|photo-export/ViewModels/TimelineSidebarCounts.swift|TimelineSidebarCounts
 
 # The coordinator -> manager mirror sinks (AutoSync seam); both coordinators stay
 # ObservableObject, so these stay as they are.
 external-publisher|photo-export/Export/ExportManager.swift|9
 
-total|published|63
-total|environment-object|38
-total|environment-object-property|73
-total|state-object|17
-total|observed-object|2
+total|published|46
+total|environment-object|35
+total|environment-object-property|69
+total|state-object|10
+total|observed-object|1
 total|object-will-change|0

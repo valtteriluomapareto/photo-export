@@ -57,7 +57,9 @@ import Testing
       var window: NSWindow?
       var folder: URL { root.appendingPathComponent("Backup") }
 
-      init(selectFolder: Bool = true, onboardingComplete: Bool = true) throws {
+      init(
+        selectFolder: Bool = true, onboardingComplete: Bool = true, whatsNewSeen: Bool = true
+      ) throws {
         defaults = TestScratch.defaults(suiteName: suite)
         defaults.set(onboardingComplete, forKey: "hasCompletedOnboarding")
         destination = ExportDestinationManager(
@@ -78,7 +80,7 @@ import Testing
           assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         whatsNew = WhatsNewState(userDefaults: defaults, currentVersion: "test", catalog: [])
-        whatsNew.markAsSeen()
+        if whatsNewSeen { whatsNew.markAsSeen() }
         if selectFolder {
           try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
           destination.setSelectedFolderForTesting(folder)
@@ -100,8 +102,8 @@ import Testing
           rootView: pane(surface).frame(width: 1200, height: 800)
             .overlay(alignment: .topLeading) { RecordsProbe(store: timeline, counter: counter) }
             .environmentObject(library).environmentObject(timeline).environmentObject(collections)
-            .environmentObject(manager).environmentObject(manager.progressState)
-            .environmentObject(destination).environmentObject(autoSync).environmentObject(whatsNew)
+            .environmentObject(manager).environment(manager.progressState)
+            .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
             .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let owned = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
@@ -146,6 +148,10 @@ import Testing
       func close() async {
         autoSync.setEnabled(false)
         manager.cancelAndClear()
+        if let sheet = window?.attachedSheet {
+          window?.endSheet(sheet)
+          sheet.close()
+        }
         window?.orderOut(nil)
         window?.contentView = nil
         window?.close()
@@ -233,6 +239,23 @@ import Testing
           "Changes since baseline: \(f.changes(since: baseline))")
         f.library.invalidateCache()
         #expect(await observe { f.counter.count(for: "content-root") > bodies })
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    /// The library root presents What's New from `shouldShow`, so dismissing it elsewhere (the
+    /// state shared with another window) must re-run the root and close the sheet.
+    @Test func whatsNewSheetFollowsShouldShow() async throws {
+      let f = try Fixture(whatsNewSeen: false)
+      try await withCleanup {
+        f.show(.library)
+        try await settle(f, key: "library-root")
+        try #require(await observe { f.window?.attachedSheet != nil })
+        let bodies = f.counter.count(for: "library-root")
+        f.whatsNew.markAsSeen()
+        #expect(await observe { f.counter.count(for: "library-root") > bodies })
+        #expect(await observe { f.window?.attachedSheet == nil })
       } cleanup: {
         await f.close()
       }

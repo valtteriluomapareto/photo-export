@@ -1,11 +1,12 @@
 import AppKit
-import Combine
+import Observation
 import os
 
 /// Main-actor preview state owned by the detail view. SwiftUI owns the loading
 /// task; a separate request token also rejects providers that ignore cancellation.
+@Observable
 @MainActor
-final class AssetDetailImageLoader: ObservableObject {
+final class AssetDetailImageLoader {
   struct State {
     var assetId: String?
     var image: NSImage?
@@ -13,9 +14,11 @@ final class AssetDetailImageLoader: ObservableObject {
     var errorMessage: String?
   }
 
-  @Published private(set) var state = State()
-  private var activeRequest: UUID?
-  private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "UI.Detail")
+  private(set) var state = State()
+  @ObservationIgnored private var activeRequest: UUID?
+  /// Static: `@State` builds a throwaway loader on each parent body run.
+  private static let logger = Logger(
+    subsystem: "com.valtteriluoma.photo-export", category: "UI.Detail")
 
   /// SwiftUI may render a new selection before its task starts. Never display
   /// the previous selection's image or error during that interval.
@@ -40,7 +43,7 @@ final class AssetDetailImageLoader: ObservableObject {
     let retainedImage = state.assetId == assetId ? state.image : nil
     state = State(assetId: assetId, image: retainedImage, isLoading: assetId != nil)
     guard let assetId else { return }
-    logger.debug("Preview start id: \(assetId, privacy: .public)")
+    Self.logger.debug("Preview start id: \(assetId, privacy: .public)")
     do {
       let image = try await service.requestFullImage(for: assetId)
       guard activeRequest == request, isCurrent() else { return }
@@ -49,7 +52,7 @@ final class AssetDetailImageLoader: ObservableObject {
         return
       }
       state = State(assetId: assetId, image: image)
-      logger.debug("Preview loaded id: \(assetId, privacy: .public)")
+      Self.logger.debug("Preview loaded id: \(assetId, privacy: .public)")
     } catch {
       guard activeRequest == request, isCurrent() else { return }
       guard !Task.isCancelled, !(error is CancellationError) else {
@@ -61,7 +64,7 @@ final class AssetDetailImageLoader: ObservableObject {
         errorMessage:
           "Failed to load image: \(error.localizedDescription) Select another photo, then return to retry."
       )
-      logger.error(
+      Self.logger.error(
         "Preview failed id: \(assetId, privacy: .public): \(error.localizedDescription, privacy: .public)"
       )
     }

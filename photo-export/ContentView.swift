@@ -243,7 +243,7 @@ struct MonthRow: View {
   /// manager, so the per-job placement mutations don't ripple through every view
   /// holding `ExportManager` as `@EnvironmentObject`. `MonthRow` still observes
   /// `ExportManager` for `versionSelection`, `livePhotosPairedExport` and the queue badge.
-  @EnvironmentObject private var progressState: ExportProgressState
+  @Environment(ExportProgressState.self) private var progressState
 
   let year: Int
   let month: Int
@@ -268,6 +268,8 @@ struct MonthRow: View {
     let inFlight = progressState.currentJobPlacement?.timelineYearMonth
     let isActive = inFlight?.year == year && inFlight?.month == month
     #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("timeline-month-body:\(year)-\(month)")
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([], for: "timeline-month:\(year)-\(month)")
     #endif

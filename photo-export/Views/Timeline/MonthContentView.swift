@@ -29,7 +29,7 @@ struct MonthContentView: View, Equatable {
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
 
-  @StateObject private var viewModel: MonthViewModel
+  @State private var viewModel: MonthViewModel
 
   let year: Int
   let month: Int
@@ -65,8 +65,7 @@ struct MonthContentView: View, Equatable {
     self.onExportMonth = onExportMonth
     self.selectedAssetId = selectedAsset.wrappedValue?.id
     self._selectedAsset = selectedAsset
-    _viewModel = StateObject(
-      wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
+    _viewModel = State(wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
   var body: some View {

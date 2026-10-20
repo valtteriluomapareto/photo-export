@@ -12,7 +12,7 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
-  @EnvironmentObject private var loginItemController: LoginItemController
+  @Environment(LoginItemController.self) private var loginItemController
   @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
   @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
 
@@ -133,6 +133,12 @@ struct AutoExportSettingsView: View {
             Text(loginItemController.status.footerText)
               .font(.caption)
               .foregroundStyle(.secondary)
+              #if DEBUG
+                .background {
+                  RenderedTextRecord(
+                    key: "login-item-footer", text: loginItemController.status.footerText)
+                }
+              #endif
           }
         }
         if loginItemController.status == .requiresApproval {
@@ -506,3 +512,19 @@ private struct LastCatchUpRow: View {
 // Per-view label extensions removed — surface uses
 // `AutoSyncReason.userFacingLabel` / `AutoSyncBlockedReason.userFacingLabel`
 // directly. See `AutoSyncReason.swift`.
+
+#if DEBUG
+  /// Records the text of the view it backs, so a hosted test reads what that view renders
+  /// rather than what the enclosing body computed.
+  private struct RenderedTextRecord: View {
+    let key: String
+    let text: String
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+
+    var body: some View {
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([text], for: key)
+      Color.clear
+    }
+  }
+#endif
