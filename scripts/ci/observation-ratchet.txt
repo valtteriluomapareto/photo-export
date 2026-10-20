@@ -1,11 +1,12 @@
 # Observation ratchet: the remaining ObservableObject-era patterns in photo-export/,
 # read by scripts/ci/check-observation-ratchet.py.
 #
-# Row format: <kind>|<file>|<value>
-#   type                 an ObservableObject conformance still allowed (value: type name)
-#   published            @Published declarations in the file (value: ceiling)
-#   external-publisher   $property projections reached through another object (ceiling)
-#   environment-object   .environmentObject( calls (ceiling)
+# Row format: <kind>|<key>|<value>
+#   type|<file>|<type name>            an ObservableObject conformance still allowed
+#   external-publisher|<file>|<count>  $property projections reached through another object
+#   total|<pattern>|<count>            a repository-wide ceiling: published,
+#                                      environment-object, environment-object-property,
+#                                      state-object, observed-object, object-will-change
 #
 # Counts may only go down. When a change lowers a count or migrates a type, lower or
 # remove its row here in the same change; the guard fails until the file matches.
@@ -30,29 +31,13 @@ type|photo-export/ViewModels/AssetDetailImageLoader.swift|AssetDetailImageLoader
 type|photo-export/ViewModels/MonthViewModel.swift|MonthViewModel
 type|photo-export/ViewModels/TimelineSidebarCounts.swift|TimelineSidebarCounts
 
-published|photo-export/App/AppLifecycleCoordinator.swift|2
-published|photo-export/App/LoginItemController.swift|1
-published|photo-export/App/WhatsNewState.swift|1
-published|photo-export/AutoSync/AutoSyncManager.swift|4
-published|photo-export/AutoSync/Stores/UserDefaultsAutoExportScopeStore.swift|1
-published|photo-export/Destination/DestinationSafetyMonitor.swift|1
-published|photo-export/Destination/ExportDestinationManager.swift|5
-published|photo-export/Export/ExportManager.swift|15
-published|photo-export/Export/ExportQueueCoordinator.swift|5
-published|photo-export/Export/ImportCoordinator.swift|4
-published|photo-export/Models/ExportProgressState.swift|8
-published|photo-export/PhotoLibrary/PhotoLibraryManager.swift|3
-published|photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift|2
-published|photo-export/Records/CollectionExportRecordStore.swift|4
-published|photo-export/Records/ExportRecordStore.swift|4
-published|photo-export/ViewModels/AssetDetailImageLoader.swift|1
-published|photo-export/ViewModels/MonthViewModel.swift|4
-published|photo-export/ViewModels/TimelineSidebarCounts.swift|2
-
 # The coordinator -> manager mirror sinks (AutoSync seam); both coordinators stay
 # ObservableObject, so these stay as they are.
 external-publisher|photo-export/Export/ExportManager.swift|9
 
-environment-object|photo-export/App/photo_exportApp.swift|24
-environment-object|photo-export/Views/Settings/AutoExportSettingsView.swift|6
-environment-object|photo-export/Views/Shared/LibraryRootView.swift|8
+total|published|67
+total|environment-object|38
+total|environment-object-property|73
+total|state-object|17
+total|observed-object|2
+total|object-will-change|0
