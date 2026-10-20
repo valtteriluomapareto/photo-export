@@ -47,6 +47,7 @@ import Testing
         service.authorizationStatus = status
         service.isAuthorized = PhotoLibraryManager.isAuthorizationSufficient(status)
         library = PhotoLibraryManager(overrideService: service)
+        library.observeAppActivation(notificationCenter: notifications)
         let capture = opened
         let content = Host(library: library, notifications: notifications, counter: counter)
           .environment(\.bodyInvalidationCounter, counter)
@@ -92,6 +93,21 @@ import Testing
       #expect(await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
       #expect(f.library.authorizationStatus == status && f.library.isAuthorized)
       #expect(f.library.libraryRevision == revision + 1)
+      #expect(f.service.requestAuthorizationCalls == 0)
+    }
+
+    /// The refresh runs app-wide, not only while the access screen shows, so a revoke made
+    /// while the app was in the background shows the access screen on return.
+    @Test(.timeLimit(.minutes(1)), arguments: [PHAuthorizationStatus.denied, .restricted])
+    func activationShowsTheAccessScreenAfterAccessIsRevoked(status: PHAuthorizationStatus) async throws {
+      let f = Fixture(status: .authorized)
+      defer { f.close() }
+      f.show()
+      try #require(await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
+      f.service.authorizationStatus = status
+      f.activate()
+      #expect(await observe { f.counter.renderedText["authorization-route"] == ["authorization"] })
+      #expect(!f.library.isAuthorized && f.library.authorizationStatus == status)
       #expect(f.service.requestAuthorizationCalls == 0)
     }
 

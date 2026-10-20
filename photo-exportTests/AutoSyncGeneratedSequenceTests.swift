@@ -225,7 +225,8 @@ struct AutoSyncGeneratedSequenceTests {
   /// After an Auto Export run stops on a destination-wide failure while the destination
   /// stays available, nothing schedules until a trigger or a resolving blocker arrives,
   /// whatever arrived during the run and in whichever order idle and the summary land. An
-  /// Export Now pressed during the run is the exception and still runs.
+  /// Export Now pressed during the run, or Photos access returning during it, is the
+  /// exception and still runs.
   @Test(arguments: seeds)
   func destinationStopsWaitForATriggerOrABlockerToResolve(seed: UInt64) {
     var generator = SequenceGenerator(seed: seed)
@@ -269,8 +270,9 @@ struct AutoSyncGeneratedSequenceTests {
           ExportRunState(activeContext: context, isManualActive: false, isAutoSyncActive: true)),
         "running")
       var exportNow = false
+      var accessToggled = false
       for index in 0..<generator.pick(4) {
-        switch generator.pick(5) {
+        switch generator.pick(6) {
         case 0:
           apply(
             .photosChanged(
@@ -289,6 +291,10 @@ struct AutoSyncGeneratedSequenceTests {
         case 3:
           exportNow = true
           apply(.runNowRequested, "mid-run Export Now")
+        case 4:
+          accessToggled = true
+          apply(.photosAuthorizationChanged(false), "mid-run Photos access lost")
+          apply(.photosAuthorizationChanged(true), "mid-run Photos access restored")
         default:
           apply(
             .photosChanged(
@@ -314,6 +320,14 @@ struct AutoSyncGeneratedSequenceTests {
       }
       if exportNow {
         #expect(state.current == .scheduled(reason: .userExportNow, fireAt: now), "\(trace)")
+        continue
+      }
+      // Access returning is a real trigger, so the stop doesn't hold its catch-up.
+      if accessToggled {
+        #expect(scheduled(state), "\(trace)")
+        #expect(
+          state.dirtyStateByDestination["A"]?.scope(.timeline).pendingFullReconciliation == true,
+          "\(trace)")
         continue
       }
       #expect(state.current == .idle, "\(trace)")
@@ -342,12 +356,17 @@ struct AutoSyncGeneratedSequenceTests {
       let hasWork =
         state.pendingTriggerReason != nil
         || state.dirtyStateByDestination["A"]?.isEmpty == false
-      switch generator.pick(4) {
+      switch generator.pick(5) {
       case 0:
         apply(
           .photosChanged(
             PhotoLibraryPersistentChangeEvent(insertedLocalIdentifiers: ["after"], observedAt: now)),
           "Photos change")
+        #expect(scheduled(state), "\(trace)")
+      case 4:
+        apply(.photosAuthorizationChanged(false), "Photos access lost")
+        #expect(state.current == .blocked(.photosAccessMissing), "\(trace)")
+        apply(.photosAuthorizationChanged(true), "Photos access restored")
         #expect(scheduled(state), "\(trace)")
       case 1:
         apply(.runNowRequested, "Export Now")
@@ -375,7 +394,7 @@ struct AutoSyncGeneratedSequenceTests {
   @Test(arguments: seeds)
   func retrySequencesRespectDeadlinesAndBlockersWithoutImmediateLoops(seed: UInt64) async throws {
     var generator = SequenceGenerator(seed: seed)
-    var remaining = ["none", "manual", "import", "disabled", "unselected", "destination"]
+    var remaining = ["none", "manual", "import", "disabled", "unselected", "destination", "photos"]
     while !remaining.isEmpty {
       let blocker = remaining.remove(at: generator.pick(remaining.count))
       var trace = SequenceTrace(seed: seed)
@@ -401,6 +420,8 @@ struct AutoSyncGeneratedSequenceTests {
       case "import": builder.importing.subject.send(true)
       case "disabled": manager.setEnabled(false)
       case "destination": builder.destination.subject.send(.none)
+      // Revoked in the background: only the refresh before the retry's run notices.
+      case "photos": builder.photosAuthorization.live = false
       default: break
       }
       builder.clock.advance(by: delay - 10 - 0.25)
@@ -424,6 +445,10 @@ struct AutoSyncGeneratedSequenceTests {
       case "import": builder.importing.subject.send(false)
       case "disabled": manager.setEnabled(true)
       case "destination": builder.destination.subject.send(destination("A"))
+      case "photos":
+        #expect(manager.state == .blocked(.photosAccessMissing), "\(trace)")
+        builder.photosAuthorization.live = true
+        builder.photosAuthorization.refreshAuthorization()
       default: break
       }
       builder.clock.advance(by: 0)
