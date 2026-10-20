@@ -101,6 +101,8 @@ The app's export pipeline went through a multi-phase architecture refactor in Ma
    - `ImportIdempotencyTests` — pins import idempotency.
    - `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` — pins the already-exported check before retry eligibility.
    - `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` — pins that Auto Export waits for, then runs after, the history check that "Same Folder" starts.
+   - `CollectionBackupImportTests.importAdoptsAlbumHistorySoExportsWriteNothing` — pins that exporting albums, shared albums and Favorites again, manually or from Auto Export, after Import Existing Backup writes nothing for files already there, against a no-import control that does write.
+   - `CollectionBackupImportTests.exportWipeImportRoundTripRestoresPlacements` — pins that an import restores the album placements an export created, by id and folder, and that the second export writes, copies and moves nothing, under unedited originals, Edited mode, Include Originals, a paired Live Photo and flat videos.
    - `FileIOServiceTests.existingFileAtCommitIsNeverReplaced` — pins that the final commit never replaces a file that appears at the final name, on both commit paths.
    - `IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted` — pins that re-exporting after lost history records an identical existing file instead of writing a ` (1)` copy.
    - `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss` — pins that two byte-identical assets keep one file each after lost history, in either order.
