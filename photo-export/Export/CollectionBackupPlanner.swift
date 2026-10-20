@@ -22,6 +22,13 @@ struct ScannedCollectionDirectory: Equatable, Sendable {
   }
 }
 
+/// What `BackupScanner.scanCollectionsFolder` found under `Collections/`.
+struct ScannedCollections: Sendable {
+  var directories: [ScannedCollectionDirectory]
+  /// The destination's volume tells folder names apart by case.
+  var isCaseSensitiveVolume: Bool
+}
+
 /// Decides which album, shared album or Favorites folder in a backup belongs to which current
 /// Photos collection. Pure: `BackupScanner.matchCollectionFolders` supplies the file matches.
 ///
@@ -35,18 +42,19 @@ struct ScannedCollectionDirectory: Equatable, Sendable {
 ///   exported in. A suffixed name that is another album's own title is not a candidate, and
 ///   folders saved placements own are not candidates for anyone else.
 /// - Folders whose names differ only by case (possible on a case-sensitive volume) are not
-///   candidates: which one an export wrote can't be told.
+///   candidates: which one an export wrote can't be told. On a case-sensitive volume a folder
+///   spelled differently from the resolver's spelling is not a candidate either.
 /// - A renamed or moved album's old folder is not a candidate: its name or parent path no
 ///   longer fits, so the next export uses a new folder and the old one is reported.
 ///
 /// A folder is adopted on evidence: at least one matched file and no equal claim from another
-/// album on the folder or from another folder on the album. When the folder is the only one
-/// the album could have used and no other album could have used it (the folder the next export
-/// would write to anyway), one match is enough. Otherwise at least `precisionFloor` of the
-/// folder's files must match. Equal claims with the same evidence in every folder are settled
-/// by the resolver's own order, since either assignment exports nothing. The adopted placement
-/// has the id the resolver gives the album and the resolver's spelling of the path, so the next
-/// export resolves to it.
+/// album on the folder or from another folder on the album. When the folder is where the
+/// resolver puts the album today and no other album or folder with matches competes for it
+/// (the folder the next export writes to anyway), one match is enough. Otherwise at least
+/// `precisionFloor` of the folder's files must match. Equal claims whose folders hold the same
+/// files (same names and known sizes) are settled by the resolver's own order, since either
+/// assignment exports nothing. The adopted placement has the id the resolver gives the album
+/// and the resolver's spelling of the path, so the next export resolves to it.
 enum CollectionBackupPlanner {
   /// Smallest share of a folder's files that must match an album when several albums or
   /// folders compete.
@@ -114,9 +122,9 @@ enum CollectionBackupPlanner {
 
   struct Plan {
     var adoptions: [Adoption] = []
-    /// Folders with files that no current collection was adopted into, sorted. Left out: a
-    /// folder a saved placement owns, and the only folder a current album could have used (the
-    /// album wasn't renamed, moved or deleted). A `videos/` folder is reported as its parent.
+    /// Folders with files that no current collection was adopted into and no saved placement
+    /// owns, sorted: usually albums renamed, moved or deleted in Photos, or an album recreated
+    /// under the same title without the photos. A `videos/` folder is reported as its parent.
     var unrecognizedFolders: [String] = []
   }
 
@@ -126,15 +134,25 @@ enum CollectionBackupPlanner {
     directories: [ScannedCollectionDirectory],
     collections: [PhotoCollectionDescriptor],
     existingPlacements: [ExportPlacement],
+    caseSensitiveVolume: Bool = false,
     resolver: ExportPlacementResolver = ExportPlacementResolver()
   ) -> [Candidate] {
     let index = FolderIndex(directories: directories, resolver: resolver)
     let owned = Set(existingPlacements.compactMap { index.key(forRelativePath: $0.relativePath) })
     var result: [Candidate] = []
+    // On a case-sensitive volume a folder spelled differently from the placement is not the
+    // folder exports use; a case-insensitive volume treats both spellings as one folder.
+    func spelledAsExportsUse(_ directory: ScannedCollectionDirectory, _ path: String) -> Bool {
+      !caseSensitiveVolume
+        || directory.relativePath.precomposedStringWithCanonicalMapping
+          == path.precomposedStringWithCanonicalMapping
+    }
 
     func savedCandidate(_ target: Target, _ saved: ExportPlacement) {
       guard let key = index.key(forRelativePath: saved.relativePath),
-        let directory = index.directory(forKey: key), let files = index.files(in: directory)
+        let directory = index.directory(forKey: key),
+        spelledAsExportsUse(directory, saved.relativePath),
+        let files = index.files(in: directory)
       else { return }
       result.append(
         Candidate(
@@ -203,7 +221,8 @@ enum CollectionBackupPlanner {
         }
         guard let key = index.key(forRelativePath: directory.relativePath), !owned.contains(key),
           let files = index.files(in: directory),
-          let placement = resolver.adoptedPlacement(for: descriptor, leaf: folderLeaf)
+          let placement = resolver.adoptedPlacement(for: descriptor, leaf: folderLeaf),
+          spelledAsExportsUse(directory, placement.relativePath)
         else { continue }
         result.append(
           Candidate(
@@ -262,15 +281,19 @@ enum CollectionBackupPlanner {
       if matched != other.matched { return matched > other.matched }
       return matched * other.considered > other.matched * considered
     }
-    /// What the folder holds for the album: equal evidence means equal files to export.
-    var evidence: Set<String> {
-      Set(
-        score.matched.map {
+    /// What the folder holds for the album: equal evidence means equal files to export. `nil`
+    /// when a matched file's size is unknown, since then the files can't be shown equal.
+    var evidence: Set<String>? {
+      var result = Set<String>()
+      for match in score.matched {
+        guard let size = match.file.fileSize else { return nil }
+        result.insert(
           [
-            $0.asset.id, $0.variant.rawValue, $0.file.filename, $0.file.subfolder ?? "",
-            $0.file.fileSize.map(String.init) ?? "?",
-          ].joined(separator: "\u{0}")
-        })
+            match.asset.id, match.variant.rawValue, match.file.filename,
+            match.file.subfolder ?? "", String(size),
+          ].joined(separator: "\u{0}"))
+      }
+      return result
     }
   }
 
@@ -279,9 +302,11 @@ enum CollectionBackupPlanner {
     existingPlacements: [ExportPlacement],
     resolver: ExportPlacementResolver = ExportPlacementResolver()
   ) -> Plan {
+    // Only folders with matches compete: a leftover folder that matches nothing doesn't make
+    // the album's own folder contested.
     var candidatesPerTarget: [Target: Int] = [:]
     var candidatesPerFolder: [String: Int] = [:]
-    for score in scores {
+    for score in scores where !score.matched.isEmpty {
       candidatesPerTarget[score.candidate.target, default: 0] += 1
       candidatesPerFolder[score.candidate.folderPath, default: 0] += 1
     }
@@ -328,7 +353,6 @@ enum CollectionBackupPlanner {
 
     plan.unrecognizedFolders = unrecognizedFolders(
       directories: directories, adopted: Set(plan.adoptions.map(\.folderPath)),
-      known: Set(scores.map(\.candidate).filter(isUncontested).map(\.folderPath)),
       existingPlacements: existingPlacements, resolver: resolver)
     return plan
   }
@@ -370,13 +394,13 @@ enum CollectionBackupPlanner {
   }
 
   private static func unrecognizedFolders(
-    directories: [ScannedCollectionDirectory], adopted: Set<String>, known: Set<String>,
+    directories: [ScannedCollectionDirectory], adopted: Set<String>,
     existingPlacements: [ExportPlacement], resolver: ExportPlacementResolver
   ) -> [String] {
     let index = FolderIndex(directories: directories, resolver: resolver)
     let ownedKeys = Set(
       existingPlacements.compactMap { index.key(forRelativePath: $0.relativePath) })
-    let accounted = adopted.union(known)
+    let accounted = adopted
     var result = Set<String>()
     for directory in directories where !directory.files.isEmpty {
       let isRoot = directory.root != .favorites && directory.components.isEmpty

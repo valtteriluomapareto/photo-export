@@ -143,12 +143,12 @@ import Testing
       f.manager.importResult = ImportReport(
         matchedCount: 1, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 1,
         collectionFilesScanned: 4, collectionMatchedCount: 3,
-        unrecognizedCollectionFolders: ["Collections/Albums/Old/"])
+        unrecognizedCollectionFolders: ["Collections/Albums/Trips/Old/"])
       #expect(await observe { f.counter.renderedText["import-collection-matched"] == ["3"] })
       #expect(f.counter.renderedText["import-collection-unrecognized"] == ["1"])
       #expect(
         f.counter.renderedText["import-collection-unrecognized-caption"]?.first?.hasPrefix(
-          "\u{201C}Old\u{201D}. Usually albums renamed") == true)
+          "\u{201C}Trips/Old\u{201D}. These are usually albums renamed") == true)
       #expect(f.counter.renderedText["import-collections-skipped"] == nil)
 
       f.counter.reset()

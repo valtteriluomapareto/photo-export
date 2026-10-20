@@ -35,10 +35,12 @@ extension BackupScanner {
   static func scanCollectionsFolder(
     at rootURL: URL,
     directoryReader reader: any BackupDirectoryReading = ProductionBackupDirectoryReader()
-  ) throws -> [ScannedCollectionDirectory] {
+  ) throws -> ScannedCollections {
     try Task.checkCancellation()
     let collectionsURL = rootURL.appendingPathComponent("Collections", isDirectory: true)
-    guard try isCollectionFolder(collectionsURL, reader: reader) else { return [] }
+    guard let collections = try collectionFolderValues(collectionsURL, reader: reader) else {
+      return ScannedCollections(directories: [], isCaseSensitiveVolume: false)
+    }
     var results: [ScannedCollectionDirectory] = []
     for root in ScannedCollectionDirectory.Root.allCases {
       try Task.checkCancellation()
@@ -49,25 +51,36 @@ extension BackupScanner {
     let fileCount = results.reduce(0) { $0 + $1.files.count }
     logger.info(
       "Scanned \(fileCount) files in \(results.count) collection folders in backup folder")
-    return results
+    return ScannedCollections(
+      directories: results,
+      isCaseSensitiveVolume: collections.volumeSupportsCaseSensitiveNames ?? false)
   }
 
   /// `true` for a folder; `false` when it is missing or a symbolic link.
   private static func isCollectionFolder(_ url: URL, reader: any BackupDirectoryReading) throws
     -> Bool
   {
+    try collectionFolderValues(url, reader: reader) != nil
+  }
+
+  /// The folder's values, with whether its volume is case-sensitive; `nil` when it is missing
+  /// or a symbolic link.
+  private static func collectionFolderValues(_ url: URL, reader: any BackupDirectoryReading)
+    throws -> URLResourceValues?
+  {
     let values: URLResourceValues
     do {
-      values = try reader.resourceValues(at: url, keys: [.isDirectoryKey, .isSymbolicLinkKey])
+      values = try reader.resourceValues(
+        at: url, keys: [.isDirectoryKey, .isSymbolicLinkKey, .volumeSupportsCaseSensitiveNamesKey])
     } catch {
-      if isMissingFile(error) { return false }
+      if isMissingFile(error) { return nil }
       throw BackupScanReadError(path: url.path, detail: error.localizedDescription)
     }
-    if values.isSymbolicLink == true { return false }
+    if values.isSymbolicLink == true { return nil }
     guard values.isDirectory == true else {
       throw BackupScanReadError(path: url.path, detail: "Expected a directory")
     }
-    return true
+    return values
   }
 
   private static func walk(
@@ -136,7 +149,7 @@ extension BackupScanner {
   /// albums, which hold one resource per asset, match originals only. `isCurrent` is checked
   /// before each fetch; a superseded caller stops with `CancellationError`.
   static func matchCollectionFolders(
-    _ directories: [ScannedCollectionDirectory],
+    _ scanned: ScannedCollections,
     collections: [PhotoCollectionDescriptor],
     existingPlacements: [ExportPlacement],
     photoLibraryService: any PhotoLibraryService,
@@ -144,8 +157,10 @@ extension BackupScanner {
     isCurrent: @MainActor () -> Bool = { true },
     progress: @MainActor (ImportStage) -> Void
   ) async throws -> CollectionBackupPlanner.Plan {
+    let directories = scanned.directories
     let candidates = CollectionBackupPlanner.candidates(
-      directories: directories, collections: collections, existingPlacements: existingPlacements)
+      directories: directories, collections: collections, existingPlacements: existingPlacements,
+      caseSensitiveVolume: scanned.isCaseSensitiveVolume)
 
     struct Library {
       let fingerprints: [AssetFingerprint]

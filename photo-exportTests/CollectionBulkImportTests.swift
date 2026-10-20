@@ -42,17 +42,15 @@ struct CollectionBulkImportTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let placement = album()
 
-    let summary = store.bulkImportRecords([
-      .init(
-        placement: placement,
-        records: [
-          "a": [.original: done("A.JPG")], "v": [.original: done("V.MOV", subfolder: "videos")],
-        ])
-    ])
+    let batch = CollectionExportRecordStore.ImportBatch(
+      placement: placement,
+      records: [
+        "a": [.original: done("A.JPG")], "v": [.original: done("V.MOV", subfolder: "videos")],
+      ])
+    store.bulkImportRecords([batch])
 
-    #expect(summary.importedVariants == 2)
-    #expect(summary.addedPlacements == 1)
-    #expect(summary.recordedVariants == 2)
+    #expect(store.placements.count == 1)
+    #expect(store.recordedVariantCount(of: [batch]) == 2)
     #expect(store.placements[placement.id]?.relativePath == placement.relativePath)
     #expect(store.exportInfo(assetId: "a", placement: placement)?.variants[.original]?.status == .done)
     #expect(
@@ -84,15 +82,13 @@ struct CollectionBulkImportTests {
     store.markVariantFailed(
       assetId: "b", placement: placement, variant: .original, error: "disk", at: date)
 
-    let summary = store.bulkImportRecords([
-      .init(
-        placement: placement,
-        records: ["a": [.original: done("OTHER.JPG")], "b": [.original: done("B.JPG")]])
-    ])
+    let batch = CollectionExportRecordStore.ImportBatch(
+      placement: placement,
+      records: ["a": [.original: done("OTHER.JPG")], "b": [.original: done("B.JPG")]])
+    store.bulkImportRecords([batch])
 
-    #expect(summary.importedVariants == 1)
-    #expect(summary.alreadyDoneVariants == 1)
-    #expect(summary.addedPlacements == 0)
+    #expect(store.placements.count == 1)
+    #expect(store.recordedVariantCount(of: [batch]) == 2)
     #expect(
       store.exportInfo(assetId: "a", placement: placement)?.variants[.original]?.filename
         == "KEEP.JPG")
@@ -108,23 +104,21 @@ struct CollectionBulkImportTests {
     let saved = album(createdAt: Date(timeIntervalSince1970: 1))
     store.upsertPlacement(saved)
 
-    let summary = store.bulkImportRecords([
+    store.bulkImportRecords([
       .init(placement: album(), records: ["a": [.original: done("A.JPG")]])
     ])
 
-    #expect(summary.addedPlacements == 0)
-    #expect(summary.importedVariants == 1)
+    #expect(store.placements.count == 1)
+    #expect(store.exportInfo(assetId: "a", placement: saved)?.variants[.original]?.status == .done)
     #expect(store.placements[saved.id]?.createdAt == saved.createdAt)
 
     // A saved placement at another folder keeps its folder; files found elsewhere are not
     // recorded under it.
-    let elsewhere = store.bulkImportRecords([
-      .init(
-        placement: album(path: "Collections/Albums/Paris/"),
-        records: ["b": [.original: done("B.JPG")]])
-    ])
-    #expect(elsewhere.importedVariants == 0)
-    #expect(elsewhere.rejectedVariants == 1)
+    let elsewhere = CollectionExportRecordStore.ImportBatch(
+      placement: album(path: "Collections/Albums/Paris/"),
+      records: ["b": [.original: done("B.JPG")]])
+    store.bulkImportRecords([elsewhere])
+    #expect(store.recordedVariantCount(of: [elsewhere]) == 0)
     #expect(store.placements[saved.id]?.relativePath == saved.relativePath)
     #expect(store.exportInfo(assetId: "b", placement: saved) == nil)
   }
@@ -132,12 +126,10 @@ struct CollectionBulkImportTests {
   @Test func rejectsTimelinePlacements() throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-    let summary = store.bulkImportRecords([
+    store.bulkImportRecords([
       .init(
         placement: .timeline(year: 2025, month: 1), records: ["a": [.original: done("A.JPG")]])
     ])
-    #expect(summary.importedVariants == 0)
-    #expect(summary.rejectedVariants == 1)
     #expect(store.placements.isEmpty)
     #expect(store.recordBodies.isEmpty)
   }
@@ -146,11 +138,11 @@ struct CollectionBulkImportTests {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     store.configure(for: nil)
-    let summary = store.bulkImportRecords([
+    store.bulkImportRecords([
       .init(placement: album(), records: ["a": [.original: done("A.JPG")]])
     ])
-    #expect(summary == .init(rejectedVariants: 1))
     #expect(store.placements.isEmpty)
+    #expect(store.recordBodies.isEmpty)
   }
 
   @Test func importSurvivesAReload() throws {
@@ -185,12 +177,10 @@ struct CollectionBulkImportTests {
     store.flushPendingNotifications()
     let counter = store.mutationCounter
 
-    let second = store.bulkImportRecords([batch])
+    store.bulkImportRecords([batch])
     store.flushForTesting()
 
-    #expect(second.importedVariants == 0)
-    #expect(second.alreadyDoneVariants == 1)
-    #expect(second.recordedVariants == 1)
+    #expect(store.recordedVariantCount(of: [batch]) == 1)
     #expect(logBytes(dir) == before)
     store.flushPendingNotifications()
     #expect(store.mutationCounter == counter)

@@ -253,7 +253,9 @@ final class ImportCoordinator: ObservableObject {
         // Album, shared-album and Favorites folders. Albums are matched against the current
         // Photos tree; a tree or album fetch failure fails the import before any change.
         let collectionStore = host.collectionExportRecordStore
-        let collectionFilesScanned = scan.collections.reduce(0) { $0 + $1.files.count }
+        let collectionFilesScanned = scan.collections.directories.reduce(0) {
+          $0 + $1.files.count
+        }
         var collectionPlan = CollectionBackupPlanner.Plan()
         var collectionsSkipped = false
         if collectionFilesScanned > 0 {

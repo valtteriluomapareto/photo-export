@@ -41,7 +41,7 @@ struct CollectionBackupScannerTests {
     try write(root, "Collections/Other/IGNORED.JPG")
     try write(root, "2025/01/TIMELINE.JPG")
 
-    let scanned = try BackupScanner.scanCollectionsFolder(at: root)
+    let scanned = try BackupScanner.scanCollectionsFolder(at: root).directories
     let folders = filesByFolder(scanned)
 
     #expect(folders["Collections/Favorites/"] == ["FAV.JPG"])
@@ -73,10 +73,10 @@ struct CollectionBackupScannerTests {
     let root = makeRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    #expect(try BackupScanner.scanCollectionsFolder(at: root).isEmpty)
+    #expect(try BackupScanner.scanCollectionsFolder(at: root).directories.isEmpty)
 
     try write(root, "Collections/Albums/Paris/P.HEIC")
-    let scanned = try BackupScanner.scanCollectionsFolder(at: root)
+    let scanned = try BackupScanner.scanCollectionsFolder(at: root).directories
     #expect(scanned.allSatisfy { $0.root == .albums })
     #expect(filesByFolder(scanned)["Collections/Albums/Paris/"] == ["P.HEIC"])
   }
@@ -111,11 +111,21 @@ struct CollectionBackupScannerTests {
       at: root.appendingPathComponent("Collections/Shared Albums"),
       withDestinationURL: elsewhere)
 
-    let folders = filesByFolder(try BackupScanner.scanCollectionsFolder(at: root))
+    let folders = filesByFolder(try BackupScanner.scanCollectionsFolder(at: root).directories)
 
     #expect(folders["Collections/Albums/Real/"] == ["R.JPG"])
     #expect(folders["Collections/Albums/Linked/"] == nil)
     #expect(!folders.keys.contains { $0.hasPrefix("Collections/Shared Albums") })
+  }
+
+  @Test func reportsWhetherTheVolumeIsCaseSensitive() throws {
+    let root = makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try write(root, "Collections/Albums/Paris/P.HEIC")
+    let expected = try #require(
+      try root.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+        .volumeSupportsCaseSensitiveNames)
+    #expect(try BackupScanner.scanCollectionsFolder(at: root).isCaseSensitiveVolume == expected)
   }
 
   @Test func decomposedFolderNamesAreReportedAsSpelledOnDisk() throws {
@@ -123,7 +133,7 @@ struct CollectionBackupScannerTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let decomposed = "Cafe\u{301}"
     try write(root, "Collections/Albums/\(decomposed)/C.JPG")
-    let scanned = try BackupScanner.scanCollectionsFolder(at: root)
+    let scanned = try BackupScanner.scanCollectionsFolder(at: root).directories
     let cafe = try #require(scanned.first { !$0.files.isEmpty })
     #expect(cafe.components.count == 1)
     // `String ==` compares canonically, so compare the scalars to see the raw spelling.
@@ -135,7 +145,7 @@ struct CollectionBackupScannerTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let atLimit = Array(repeating: "n", count: BackupScanner.collectionsMaxDepth)
     try write(root, "Collections/Albums/" + atLimit.joined(separator: "/") + "/OK.JPG")
-    let scanned = try BackupScanner.scanCollectionsFolder(at: root)
+    let scanned = try BackupScanner.scanCollectionsFolder(at: root).directories
     #expect(scanned.contains { $0.components.count == atLimit.count && !$0.files.isEmpty })
 
     try write(root, "Collections/Albums/" + (atLimit + ["deeper"]).joined(separator: "/") + "/X.JPG")

@@ -66,9 +66,10 @@ struct CollectionBackupImportTests {
     }
   }
 
-  /// Without the import the same exports, manual and from Auto Export, write the files
-  /// again; with it they write nothing. The control keeps the gate from passing on exports
-  /// that never ran.
+  /// Control first: without the import, an Auto Export Favorites run and a manual export of
+  /// the album write the planted photos again, so the exports below really run. Then, after
+  /// the import, every manual collection export and every Auto Export collection run writes,
+  /// copies and moves nothing.
   @Test func importAdoptsAlbumHistorySoExportsWriteNothing() async throws {
     let control = CollectionImportHarness("CollectionBackupImportControl")
     try plantExportedCollections(in: control)
@@ -209,11 +210,24 @@ struct CollectionBackupImportTests {
     let listing = try F.listing(of: h.root)
     let expectedFiles: Int
     switch roundTrip {
+    // One file per album photo (Paris 1, Rome 2, each Beach 1, Q1 1), Favorites 2, Friends 1.
     case .originals, .flatVideos, .editedPhotos: expectedFiles = 9
+    // Plus an `_orig` for P1 in Paris and in Favorites, and for B1 in Beach_2.
     case .editedWithOriginals: expectedFiles = 12
+    // Plus F1's paired video in Favorites.
     case .livePhotoPaired: expectedFiles = 10
     }
     try #require(listing.count == expectedFiles, "\(listing.keys.sorted())")
+    func exists(_ path: String) -> Bool {
+      FileManager.default.fileExists(atPath: h.root.appendingPathComponent(path).path)
+    }
+    if roundTrip.edits {
+      try #require(exists("Collections/Albums/Trips/Paris/P1.JPG"), "the edit is exported")
+      try #require(!exists("Collections/Albums/Trips/Paris/P1.HEIC"))
+    }
+    if roundTrip == .livePhotoPaired {
+      try #require(exists("Collections/Favorites/F1.MOV"), "the paired video is exported")
+    }
     let writes = h.writer.writeCalls.count
     let copies = h.fileSystem.copyCalls.count
     let moves = h.fileSystem.moveCalls.count

@@ -320,15 +320,21 @@ struct ImportView: View {
     }
   }
 
-  /// Names up to three unlinked folders by their last component, then the explanation.
+  /// Names up to three unlinked folders by their path below `Collections/<root>/`, then the
+  /// explanation.
   private func unlinkedFoldersCaption(_ folders: [String]) -> String {
-    let names = folders.prefix(3).map {
-      "\u{201C}\($0.split(separator: "/").last.map(String.init) ?? $0)\u{201D}"
-    }
+    let names = folders.prefix(3).map { "\u{201C}\(collectionFolderName($0))\u{201D}" }
     let more = folders.count > 3 ? " and \(folders.count - 3) more" : ""
     return names.joined(separator: ", ") + more
-      + ". Usually albums renamed, moved or deleted in Photos since they were exported. "
-      + "Their files are left as they are."
+      + ". These are usually albums renamed, moved or deleted in Photos since they were "
+      + "exported. Their files are left as they are."
+  }
+
+  /// `Collections/Albums/Trips/Paris/` → `Trips/Paris`.
+  private func collectionFolderName(_ path: String) -> String {
+    let components = path.split(separator: "/").map(String.init)
+    let below = components.count > 2 ? components.dropFirst(2) : components[...]
+    return below.joined(separator: "/")
   }
 
   private func pruneSummary(_ report: ImportReport) -> String {

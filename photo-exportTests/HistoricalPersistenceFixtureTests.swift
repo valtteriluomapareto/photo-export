@@ -285,7 +285,7 @@ struct HistoricalPersistenceFixtureTests {
     func done(_ name: String) -> ExportVariantRecord {
       ExportVariantRecord(filename: name, status: .done, exportDate: date, lastError: nil)
     }
-    let summary = store.bulkImportRecords([
+    let batches: [CollectionExportRecordStore.ImportBatch] = [
       .init(
         placement: ExportPlacement(
           kind: .album, id: saved.id, displayName: "Renamed", collectionLocalIdentifier: "x",
@@ -295,11 +295,12 @@ struct HistoricalPersistenceFixtureTests {
           "new": [.original: done("NEW.JPG")],
         ]),
       .init(placement: imported, records: ["new": [.original: done("NEW.JPG")]]),
-    ])
+    ]
+    let placementsBefore = store.placements.count
+    store.bulkImportRecords(batches)
     store.flushForTesting()
-    #expect(summary.importedVariants == 3)
-    #expect(summary.alreadyDoneVariants == 1)
-    #expect(summary.addedPlacements == 1)
+    #expect(store.recordedVariantCount(of: batches) == 4)
+    #expect(store.placements.count == placementsBefore + 1)
 
     let log = try Data(contentsOf: logURL)
     #expect(log.prefix(originalLog.count) == originalLog, "history is appended to, not rewritten")

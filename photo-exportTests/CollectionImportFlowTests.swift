@@ -197,9 +197,9 @@ struct CollectionImportFlowTests {
   }
 
   /// A folder spelled in another case than the album: where the volume ignores case it is the
-  /// album's folder and the reconcile right after the import keeps its records; where case
-  /// matters it is another folder, and the reconcile drops them so the album exports again.
-  @Test func caseVariantFolderIsKeptOnlyWhereTheVolumeIgnoresCase() async throws {
+  /// album's folder and is adopted; where case matters it is not the folder exports use, so it
+  /// is not adopted and is reported.
+  @Test func caseVariantFolderIsAdoptedOnlyWhereTheVolumeIgnoresCase() async throws {
     let h = CollectionImportHarness("CollectionImportCaseVariant")
     h.library.collectionTree = [F.album("trip", "Trip")]
     let asset = h.addAsset("a1", "IMG_1.JPG", date: F.date(1))
@@ -212,12 +212,18 @@ struct CollectionImportFlowTests {
     await h.importBackup()
 
     #expect(h.manager.importError == nil)
-    let placement = try #require(h.collections.placements.values.first)
-    #expect(placement.relativePath == "Collections/Albums/Trip/")
-    let recorded = h.collections.exportInfo(assetId: "a1", placement: placement)?
-      .variants[.original]?.status == .done
-    #expect(recorded == !caseSensitive)
-    if !caseSensitive {
+    #expect(h.manager.importResult?.collectionMatchedCount == (caseSensitive ? 0 : 1))
+    #expect(
+      h.manager.importResult?.unrecognizedCollectionFolders
+        == (caseSensitive ? ["Collections/Albums/trip/"] : []))
+    if caseSensitive {
+      #expect(h.collections.placements.isEmpty)
+    } else {
+      let placement = try #require(h.collections.placements.values.first)
+      #expect(placement.relativePath == "Collections/Albums/Trip/")
+      #expect(
+        h.collections.exportInfo(assetId: "a1", placement: placement)?.variants[.original]?
+          .status == .done, "the reconcile right after the import keeps the record")
       h.manager.startExportAlbum(collectionId: "trip")
       await h.manager.waitForQueueDrained()
       #expect(h.writer.writeCalls.isEmpty)
@@ -226,9 +232,13 @@ struct CollectionImportFlowTests {
   }
 
   /// A destination change during the album step invalidates the import without cancelling its
-  /// task; no further album is read and neither history changes.
+  /// task. The album being fetched is not fingerprinted, no further album is read, and neither
+  /// history changes.
   @Test func destinationTeardownDuringAlbumMatchingStopsAlbumReads() async throws {
     let h = try makeScenario("CollectionImportTeardown")
+    // An asset only in Paris, so its resources are read only if Paris is fingerprinted.
+    let parisOnly = h.addAsset("paris-only", "IMG_0003.JPG", date: F.date(3))
+    h.library.assetsByAlbumLocalId["paris", default: []].append(parisOnly)
     let gate = AsyncCheckpoint()
     h.library.fetchAssetsCheckpointByAlbumId["paris"] = gate
     let before = h.historyBytes()
@@ -241,6 +251,7 @@ struct CollectionImportFlowTests {
     _ = await finished(task)
 
     #expect(h.library.scopeFetchCalls == [.album(collectionId: "paris")])
+    #expect(h.library.resourcesCallCounts["paris-only"] == nil)
     #expect(h.manager.importResult == nil)
     #expect(h.historyBytes() == before)
     await h.cleanup()

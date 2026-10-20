@@ -32,11 +32,12 @@ struct CollectionBackupMatchingTests {
 
   private func match(
     _ directories: [ScannedCollectionDirectory], tree: [PhotoCollectionDescriptor],
-    existing: [ExportPlacement] = []
+    existing: [ExportPlacement] = [], caseSensitiveVolume: Bool = false
   ) async throws -> CollectionBackupPlanner.Plan {
     library.collectionTree = tree
     return try await BackupScanner.matchCollectionFolders(
-      directories, collections: tree, existingPlacements: existing,
+      ScannedCollections(directories: directories, isCaseSensitiveVolume: caseSensitiveVolume),
+      collections: tree, existingPlacements: existing,
       photoLibraryService: library, fingerprintCache: BackupScanner.FingerprintCache(),
       progress: { _ in })
   }
@@ -301,15 +302,52 @@ struct CollectionBackupMatchingTests {
 
   // MARK: - Evidence
 
-  /// The only folder an export would use for the album, with nothing matching: not adopted,
-  /// and not reported as a renamed, moved or deleted album's folder, since the album is there.
+  /// The folder the album exports to, with nothing in it matching — for example an album
+  /// deleted and recreated under the same title: not adopted, and reported.
   @Test func folderWithoutMatchingFilesIsNotAdopted() async throws {
     let tree = [F.album("a1", "Trip")]
     library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
     let result = try await match(
       [F.directory(.albums, ["Trip"], [F.file("UNKNOWN.JPG", date: F.date(7))])], tree: tree)
     #expect(result.adoptions.isEmpty)
-    #expect(result.unrecognizedFolders.isEmpty)
+    #expect(result.unrecognizedFolders == ["Collections/Albums/Trip/"])
+  }
+
+  /// A leftover suffixed folder that matches nothing doesn't make the album's own folder
+  /// contested.
+  @Test func rivalFolderWithoutMatchesDoesNotContestTheAlbumsFolder() async throws {
+    let tree = [F.album("a1", "Trip")]
+    library.assetsByAlbumLocalId["a1"] = [
+      asset("x", "X.JPG", index: 1), asset("y", "Y.JPG", index: 2),
+    ]
+    let others = (3...10).map { F.file("O\($0).JPG", date: F.date(20 + $0)) }
+    let result = try await match(
+      [
+        F.directory(
+          .albums, ["Trip"],
+          [F.file("X.JPG", date: F.date(1)), F.file("Y.JPG", date: F.date(2))] + others),
+        F.directory(.albums, ["Trip_2"], [F.file("GONE.JPG", date: F.date(40))]),
+      ], tree: tree)
+    #expect(adoptedPaths(result) == ["a1": "Collections/Albums/Trip/"])
+    #expect(result.unrecognizedFolders == ["Collections/Albums/Trip_2/"])
+  }
+
+  /// The album would export to its bare name today, so a suffixed folder is not its own: one
+  /// match of four is not enough, and the folder is reported.
+  @Test func suffixedFolderOfALoneAlbumNeedsMostOfItsFilesToMatch() async throws {
+    let tree = [F.album("a2", "Trip")]
+    library.assetsByAlbumLocalId["a2"] = [asset("y", "Y.JPG", index: 2)]
+    let result = try await match(
+      [
+        F.directory(
+          .albums, ["Trip_2"],
+          [
+            F.file("Y.JPG", date: F.date(2)), F.file("O1.JPG", date: F.date(5)),
+            F.file("O2.JPG", date: F.date(6)), F.file("O3.JPG", date: F.date(7)),
+          ])
+      ], tree: tree)
+    #expect(result.adoptions.isEmpty)
+    #expect(result.unrecognizedFolders == ["Collections/Albums/Trip_2/"])
   }
 
   /// Nothing else could claim the folder the album exports to, so one match is enough: an
@@ -330,10 +368,12 @@ struct CollectionBackupMatchingTests {
     #expect(result.unrecognizedFolders.isEmpty)
   }
 
-  /// With colliding albums, a folder must be mostly the album's files.
+  /// When both colliding albums have matches in a folder, it must be mostly one album's files.
   @Test func contestedFolderNeedsMostOfItsFilesToMatch() async throws {
     let tree = [F.album("a1", "Trip"), F.album("a2", "Trip")]
-    library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
+    library.assetsByAlbumLocalId["a1"] = [
+      asset("x", "X.JPG", index: 1), asset("o1", "O1.JPG", index: 5),
+    ]
     library.assetsByAlbumLocalId["a2"] = [asset("y", "Y.JPG", index: 2)]
     let result = try await match(
       [
@@ -361,9 +401,47 @@ struct CollectionBackupMatchingTests {
         F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1), size: 9)]),
         F.directory(.albums, ["Trip_2"], [F.file("X.JPG", date: F.date(1), size: 9)]),
       ], tree: tree)
+    #expect(result.adoptions.count == 2)
     #expect(
       adoptedPaths(result) == ["a1": "Collections/Albums/Trip/", "a2": "Collections/Albums/Trip_2/"])
     #expect(result.unrecognizedFolders.isEmpty)
+  }
+
+  enum TiedSizes: CaseIterable, Sendable {
+    case different, unknown
+    var sizes: (UInt64?, UInt64?) { self == .different ? (9, 10) : (nil, nil) }
+  }
+
+  /// Same names but different sizes (or unknown sizes) are not the same files: abstain.
+  @Test(arguments: TiedSizes.allCases)
+  func tiedClaimsWithDifferentSizesLeaveTheFoldersUnrecognized(_ tied: TiedSizes) async throws {
+    let sizes = tied.sizes
+    let tree = [F.album("a1", "Trip"), F.album("a2", "Trip")]
+    let shared = asset("x", "X.JPG", index: 1)
+    library.assetsByAlbumLocalId["a1"] = [shared]
+    library.assetsByAlbumLocalId["a2"] = [shared]
+    let result = try await match(
+      [
+        F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1), size: sizes.0)]),
+        F.directory(.albums, ["Trip_2"], [F.file("X.JPG", date: F.date(1), size: sizes.1)]),
+      ], tree: tree)
+    #expect(result.adoptions.isEmpty)
+    #expect(
+      result.unrecognizedFolders == ["Collections/Albums/Trip/", "Collections/Albums/Trip_2/"])
+  }
+
+  /// On a case-sensitive volume a folder spelled in another case than the resolver's is not
+  /// the one exports use, so it is not adopted.
+  @Test func caseVariantFolderOnACaseSensitiveVolumeIsNotAdopted() async throws {
+    let tree = [F.album("trip", "trip")]
+    library.assetsByAlbumLocalId["trip"] = [asset("t", "T.JPG", index: 2)]
+    let directories = [F.directory(.albums, ["TRIP"], [F.file("T.JPG", date: F.date(2))])]
+
+    let sensitive = try await match(directories, tree: tree, caseSensitiveVolume: true)
+    #expect(sensitive.adoptions.isEmpty)
+    #expect(sensitive.unrecognizedFolders == ["Collections/Albums/TRIP/"])
+    let insensitive = try await match(directories, tree: tree)
+    #expect(adoptedPaths(insensitive) == ["trip": "Collections/Albums/trip/"])
   }
 
   @Test func tiedClaimsWithDifferentFilesLeaveTheFoldersUnrecognized() async throws {
@@ -403,6 +481,34 @@ struct CollectionBackupMatchingTests {
     _ = try await match(
       [F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))])], tree: tree)
     #expect(library.scopeFetchCalls == [.album(collectionId: "a1")])
+  }
+
+  /// Superseded between two albums (the check before the second album's fetch fails): the
+  /// second album is not read.
+  @Test func supersededMatchReadsNoFurtherAlbum() async throws {
+    let tree = [F.album("a1", "Trip"), F.album("a2", "Paris")]
+    library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
+    library.assetsByAlbumLocalId["a2"] = [asset("y", "Y.JPG", index: 2)]
+    library.collectionTree = tree
+    var checks = 0
+    // Before and after the first album's fetch the caller is current; from then on it is not.
+    let isCurrent: @MainActor () -> Bool = {
+      checks += 1
+      return checks <= 2
+    }
+    await #expect(throws: CancellationError.self) {
+      _ = try await BackupScanner.matchCollectionFolders(
+        ScannedCollections(
+          directories: [
+            F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))]),
+            F.directory(.albums, ["Paris"], [F.file("Y.JPG", date: F.date(2))]),
+          ], isCaseSensitiveVolume: false),
+        collections: tree, existingPlacements: [], photoLibraryService: library,
+        fingerprintCache: BackupScanner.FingerprintCache(), isCurrent: isCurrent,
+        progress: { _ in })
+    }
+    #expect(library.scopeFetchCalls == [.album(collectionId: "a1")])
+    #expect(library.resourcesCallCounts["y"] == nil)
   }
 
   @Test func albumFetchFailureFailsTheMatch() async throws {
