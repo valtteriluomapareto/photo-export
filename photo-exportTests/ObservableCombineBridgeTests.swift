@@ -12,24 +12,26 @@ private protocol BridgedCount: AnyObject {
 }
 
 /// The owner while it is still `ObservableObject`: its own registrar, and `objectWillChange`
-/// sent before the bridge delivers.
+/// sent before the bridge delivers. It has no `@Published` property left, so it relies on the
+/// synthesized `objectWillChange`. A template for the plumbing shape, removed with the last
+/// plumbed owner.
 @MainActor
 private final class PlumbedOwner: ObservableObject, Observable, BridgedCount {
   private let registrar = ObservationRegistrar()
-  private let countStorage = ObservableCombineBridge(0)
+  private let countBridge = ObservableCombineBridge(0)
 
   var count: Int {
     get {
       registrar.access(self, keyPath: \.count)
-      return countStorage.value
+      return countBridge.value
     }
     set {
       objectWillChange.send()
-      countStorage.write(newValue) { registrar.withMutation(of: self, keyPath: \.count, $0) }
+      countBridge.write(newValue) { registrar.withMutation(of: self, keyPath: \.count, $0) }
     }
   }
 
-  var countPublisher: AnyPublisher<Int, Never> { countStorage.publisher }
+  var countPublisher: AnyPublisher<Int, Never> { countBridge.publisher }
 }
 
 /// The owner after the flip: the macro's registrar, no `objectWillChange`.
@@ -37,17 +39,17 @@ private final class PlumbedOwner: ObservableObject, Observable, BridgedCount {
 @MainActor
 private final class FlippedOwner: BridgedCount {
   var label = ""
-  private let countStorage = ObservableCombineBridge(0)
+  private let countBridge = ObservableCombineBridge(0)
 
   var count: Int {
     get {
       access(keyPath: \.count)
-      return countStorage.value
+      return countBridge.value
     }
-    set { countStorage.write(newValue) { withMutation(keyPath: \.count, $0) } }
+    set { countBridge.write(newValue) { withMutation(keyPath: \.count, $0) } }
   }
 
-  var countPublisher: AnyPublisher<Int, Never> { countStorage.publisher }
+  var countPublisher: AnyPublisher<Int, Never> { countBridge.publisher }
 }
 
 /// The bridge contract: the Combine side delivers exactly as `@Published` does, and the
@@ -64,8 +66,10 @@ struct ObservableCombineBridgeTests {
     }
   }
 
-  /// Replay, synchronous delivery before the store, nested subscription and unchanged-write
-  /// delivery, checked by the same helper `PublisherParityTests` uses on every accessor.
+  /// Replay, synchronous delivery before the store, nested subscription, resubscription and
+  /// unchanged-write delivery, checked by the same helper `PublisherParityTests` uses on every
+  /// accessor, then the subscriber edge cases `PublishedParityHelperTests.publishedPasses` pins
+  /// for `@Published`.
   @Test(arguments: Shape.allCases)
   func deliversAsPublished(_ shape: Shape) async {
     let owner = Self.owner(shape)
@@ -76,6 +80,12 @@ struct ObservableCombineBridgeTests {
         owner.count = 2
       },
       unchangedWrite: .before { owner.count = owner.count })
+    assertSubscriberEdgeParity {
+      let owner = Self.owner(shape)
+      return EdgeSubject(
+        publisher: owner.countPublisher, value: { owner.count },
+        first: { owner.count = 1 }, second: { owner.count = 2 })
+    }
   }
 
   /// Observation's willSet runs before subscribers receive the value, as SwiftUI's own
@@ -140,14 +150,34 @@ struct ObservableCombineBridgeTests {
     #expect(events == ["value 0", "will", "value 1", "will", "value 1"])
   }
 
-  /// The bridge delivers in the writer's call stack; nothing is queued for later.
-  @Test func deliveryHappensBeforeTheWriteReturns() {
-    let owner = FlippedOwner()
-    var received: [Int] = []
-    let subscription = owner.countPublisher.sink { received.append($0) }
+  /// An owner with no `@Published` left still has one `objectWillChange`: the synthesized
+  /// publisher is kept, not made fresh on each access, so a view subscribed to it hears every
+  /// later send.
+  @Test func ownerWithoutPublishedKeepsOneObjectWillChange() {
+    let owner = PlumbedOwner()
+    #expect(owner.objectWillChange === owner.objectWillChange)
+    var sends = 0
+    let subscription = owner.objectWillChange.sink { sends += 1 }
     defer { subscription.cancel() }
     owner.count = 1
-    #expect(received == [0, 1])
-    #expect(owner.count == 1)
+    #expect(sends == 1)
   }
+
+  /// `@Published` sends to the synthesized `objectWillChange` only: once an owner declares its
+  /// own, its remaining `@Published` properties stop sending. An owner that still has any must
+  /// keep the synthesized one.
+  @Test func publishedDoesNotSendToAHandDeclaredObjectWillChange() {
+    let owner = HandDeclaredOwner()
+    var sends = 0
+    let subscription = owner.objectWillChange.sink { sends += 1 }
+    defer { subscription.cancel() }
+    owner.value = 1
+    #expect(sends == 0)
+  }
+}
+
+@MainActor
+private final class HandDeclaredOwner: ObservableObject {
+  nonisolated let objectWillChange = ObservableObjectPublisher()
+  @Published var value = 0
 }

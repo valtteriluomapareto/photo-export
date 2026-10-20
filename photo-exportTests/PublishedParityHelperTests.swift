@@ -38,6 +38,39 @@ struct PublishedParityHelperTests {
     }
   }
 
+  /// Separate storage, replayed through `prepend` onto a `PassthroughSubject`: the subscriber
+  /// joins the subject only after the replay, and the subject keeps nothing for it.
+  @MainActor
+  private final class PrependBacked {
+    let subject = PassthroughSubject<Int, Never>()
+    private(set) var stored = 0
+    var value: Int {
+      get { stored }
+      set {
+        subject.send(newValue)
+        stored = newValue
+      }
+    }
+    var publisher: AnyPublisher<Int, Never> {
+      Deferred { [self] in subject.prepend(stored) }.eraseToAnyPublisher()
+    }
+  }
+
+  /// Replays the value it held when the publisher was made.
+  @MainActor
+  private final class EagerReplayBacked {
+    let subject = PassthroughSubject<Int, Never>()
+    private(set) var stored = 0
+    var value: Int {
+      get { stored }
+      set {
+        subject.send(newValue)
+        stored = newValue
+      }
+    }
+    var publisher: AnyPublisher<Int, Never> { subject.prepend(stored).eraseToAnyPublisher() }
+  }
+
   /// Publishes in willSet without replaying the current value to a new subscriber.
   @MainActor
   private final class PassthroughBacked {
@@ -76,6 +109,39 @@ struct PublishedParityHelperTests {
       object, \.value, { $0.$value.eraseToAnyPublisher() },
       change: { object.value = 1 },
       unchangedWrite: .before { object.value = object.value })
+    assertSubscriberEdgeParity {
+      let object = Published1()
+      return EdgeSubject(
+        publisher: object.$value.eraseToAnyPublisher(), value: { object.value },
+        first: { object.value = 1 }, second: { object.value = 2 })
+    }
+  }
+
+  /// The edge cases `@Published` handles that a `prepend` replay does not.
+  @Test func prependReplayFailsWriteDuringReplayAndLimitedDemand() async {
+    let object = PrependBacked()
+    await assertPublishedParity(
+      object, \.value, { $0.publisher },
+      change: { object.value = 1 },
+      unchangedWrite: .before { object.value = object.value })
+    await expectOnly([.writeDuringReplay, .limitedDemand]) {
+      assertSubscriberEdgeParity {
+        let object = PrependBacked()
+        return EdgeSubject(
+          publisher: object.publisher, value: { object.value },
+          first: { object.value = 1 }, second: { object.value = 2 })
+      }
+    }
+  }
+
+  @Test func eagerReplayFailsResubscription() async {
+    let object = EagerReplayBacked()
+    await expectOnly([.resubscribe]) {
+      await assertPublishedParity(
+        { object.publisher }, value: { object.value },
+        change: { object.value = 1 },
+        unchangedWrite: .before { object.value = object.value })
+    }
   }
 
   @Test func subjectValueGetterFailsDeliveryOrderAndNestedReplay() async {
@@ -102,7 +168,7 @@ struct PublishedParityHelperTests {
 
   @Test func asynchronousDeliveryFailsReplayAndSynchrony() async {
     let object = Published1()
-    await expectOnly([.replay, .synchronous, .lastIsStored]) {
+    await expectOnly([.replay, .synchronous, .lastIsStored, .resubscribe]) {
       await assertPublishedParity(
         object, \.value,
         { $0.$value.receive(on: DispatchQueue.main).eraseToAnyPublisher() },
@@ -113,7 +179,7 @@ struct PublishedParityHelperTests {
 
   @Test func missingReplayFailsReplay() async {
     let object = PassthroughBacked()
-    await expectOnly([.replay]) {
+    await expectOnly([.replay, .resubscribe]) {
       await assertPublishedParity(
         object, \.value, { $0.subject.eraseToAnyPublisher() },
         change: { object.value = 1 },

@@ -40,6 +40,14 @@ enum ParityCheck: String, CaseIterable {
     "Nested subscription broke: a subscription made inside a sink must replay the stored (previous) value; replay from the stored value, not CurrentValueSubject.value"
   case nestedLater =
     "Nested subscription broke: a subscription made inside a sink must miss the delivery in flight and receive every later one"
+  case resubscribe =
+    "Resubscription broke: a new subscription to the same publisher instance must replay the current value, not the value when the publisher was made"
+  case writeDuringReplay =
+    "Write during replay broke: a write made while a subscriber receives its replayed value must reach that subscriber"
+  case reentrantWrite =
+    "Re-entrant write broke: a write made inside a sink must be delivered inside the outer delivery, and the outer write's value must end up stored"
+  case limitedDemand =
+    "Limited demand broke: a subscriber without demand must receive the latest value once demand arrives"
 }
 
 /// Pins the delivery semantics a named publisher accessor has today, so a later change to the
@@ -54,6 +62,8 @@ enum ParityCheck: String, CaseIterable {
 ///   in flight and receives every later one.
 /// - **Unchanged writes:** a write that leaves the value as it is is delivered again, or not
 ///   delivered when the accessor removes repeats or the mutation path skips equal writes.
+/// - **Resubscription:** a new subscription to the same publisher instance, made after `change`,
+///   replays the current value.
 ///
 /// `value` reads what the accessor publishes from the object's current state: the property
 /// itself, or for a derived accessor the same combination of properties.
@@ -121,6 +131,12 @@ func assertPublishedParity<Value: Equatable>(
   }
   nestedSubscription?.cancel()
 
+  var resubscribed: [Value] = []
+  source.sink { resubscribed.append($0) }.cancel()
+  check(
+    resubscribed.first == value(), .resubscribe,
+    " (got \(resubscribed), current \(value()))")
+
   if case .after(let write) = unchangedWrite { await checkUnchangedWrite(write) }
 
   for index in received.indices.dropFirst() {
@@ -145,4 +161,94 @@ func assertPublishedParity<Object: AnyObject, Value: Equatable>(
     { publisher(object) }, value: { object[keyPath: keyPath] }, change: change,
     unchangedWrite: unchangedWrite, unchangedWriteDelivery: unchangedWriteDelivery,
     sourceLocation: sourceLocation)
+}
+
+/// A fresh publisher with two synchronous writes, each storing a value different from the one
+/// before it, for `assertSubscriberEdgeParity`.
+struct EdgeSubject<Value> {
+  let publisher: AnyPublisher<Value, Never>
+  let value: @MainActor () -> Value
+  let first: @MainActor () -> Void
+  let second: @MainActor () -> Void
+}
+
+/// Requests one value on subscription and more only when asked.
+private final class DemandRecorder<Value>: Subscriber {
+  private(set) var received: [Value] = []
+  private var subscription: (any Subscription)?
+
+  func receive(subscription: any Subscription) {
+    self.subscription = subscription
+    subscription.request(.max(1))
+  }
+
+  func receive(_ input: Value) -> Subscribers.Demand {
+    received.append(input)
+    return .none
+  }
+
+  func receive(completion: Subscribers.Completion<Never>) {}
+
+  func request(_ demand: Subscribers.Demand) { subscription?.request(demand) }
+  func cancel() { subscription?.cancel() }
+}
+
+/// Pins how a publisher treats subscribers that write back or limit demand, as `@Published`
+/// does. These need synchronous writes, which not every accessor's real mutation path has, so
+/// they are separate from `assertPublishedParity` and run on a fresh subject each:
+///
+/// - **Write during replay:** a sink that writes while it receives its replayed value receives
+///   that write.
+/// - **Re-entrant write:** a sink that writes while it receives a delivery receives the inner
+///   write at once; the outer write stores last, so the stored value is the outer one, not the
+///   last delivered.
+/// - **Limited demand:** a subscriber without outstanding demand receives the latest value, and
+///   only that, once it requests more.
+@MainActor
+func assertSubscriberEdgeParity<Value: Equatable>(
+  _ make: @MainActor () -> EdgeSubject<Value>,
+  sourceLocation: SourceLocation = #_sourceLocation
+) {
+  func check(_ condition: Bool, _ failure: ParityCheck, _ detail: String) {
+    #expect(
+      condition, Comment(rawValue: failure.rawValue + detail), sourceLocation: sourceLocation)
+  }
+
+  let replaying = make()
+  let replayStart = replaying.value()
+  var replayed: [Value] = []
+  replaying.publisher.sink { delivered in
+    replayed.append(delivered)
+    if replayed.count == 1 { replaying.first() }
+  }.cancel()
+  check(
+    replayed == [replayStart, replaying.value()], .writeDuringReplay,
+    " (received \(replayed), stored \(replaying.value()))")
+
+  let reentrant = make()
+  let reentrantStart = reentrant.value()
+  var delivered: [Value] = []
+  let subscription = reentrant.publisher.sink { value in
+    delivered.append(value)
+    if delivered.count == 2 { reentrant.second() }
+  }
+  reentrant.first()
+  subscription.cancel()
+  let stored = reentrant.value()
+  check(
+    delivered.count == 3 && delivered[0] == reentrantStart && delivered[1] == stored
+      && delivered[2] != stored, .reentrantWrite,
+    " (received \(delivered), stored \(stored))")
+
+  let limited = make()
+  let limitedStart = limited.value()
+  let recorder = DemandRecorder<Value>()
+  limited.publisher.subscribe(recorder)
+  limited.first()
+  limited.second()
+  recorder.request(.max(1))
+  recorder.cancel()
+  check(
+    recorder.received == [limitedStart, limited.value()], .limitedDemand,
+    " (received \(recorder.received), stored \(limited.value()))")
 }
