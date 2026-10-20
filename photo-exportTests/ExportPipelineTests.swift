@@ -19,7 +19,8 @@ struct ExportPipelineTests {
   // MARK: - Test setup
 
   private func makeTestHarness(
-    storeRootURL: URL? = nil, userDefaults: UserDefaults? = nil
+    storeRootURL: URL? = nil, userDefaults: UserDefaults? = nil,
+    fileSystem: FakeFileSystem = FakeFileSystem()
   ) -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore
@@ -27,7 +28,6 @@ struct ExportPipelineTests {
     let photoLib = FakePhotoLibraryService()
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
     let tempDir =
       storeRootURL ?? TestScratch.directory("ExportPipelineTest")
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
@@ -233,6 +233,50 @@ struct ExportPipelineTests {
     #expect(variant?.status == .failed)
     #expect(variant?.lastError == "Destination already exists")
     let monthDir = try dest.urlForMonth(year: 2025, month: 6, createIfNeeded: false)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: monthDir.path) == ["IMG_0001.JPG"])
+    #expect(
+      try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001.JPG"))
+        == Data("third-party".utf8))
+    #expect(fileSystem.timestampCalls.isEmpty)
+  }
+
+  /// The exclusive rename itself reports the collision: the file that took the final name
+  /// keeps its bytes and the variant fails with the collision signature.
+  @Test func exclusiveRenameCollisionAtTheFinalNameKeepsTheExistingFile() async throws {
+    let renames = LockedFlags()
+    let commit = FileIOService(
+      renamer: { _, destination, flags in
+        renames.append(flags)
+        try? Data("third-party".utf8).write(to: destination)
+        return EEXIST
+      },
+      capability: { _ in true })
+    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness(
+      fileSystem: FakeFileSystem(real: commit))
+    defer { dest.cleanup() }
+
+    let asset = TestAssetFactory.makeAsset(
+      id: "exclusive-collision",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!)
+    photoLib.yearCounts = [(2025, 1)]
+    photoLib.assetsByYearMonth["2025-6"] = [asset]
+    photoLib.resourcesByAssetId[asset.id] = [
+      TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
+    ]
+
+    let summary = await manager.runExport(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+        selection: .edited))
+
+    #expect(renames.values == [UInt32(RENAME_EXCL)])
+    #expect(summary.failures.map(\.errorSignature) == ["Export:2"])
+    #expect(summary.failures.map(\.category) == [.destinationCollision])
+    let variant = store.exportInfo(assetId: asset.id)?.variants[.original]
+    #expect(variant?.status == .failed)
+    #expect(variant?.lastError == "Destination already exists")
+    let monthDir = try dest.urlForMonth(year: 2025, month: 6, createIfNeeded: false)
+    // The stage is removed; only the file that took the final name remains.
     #expect(try FileManager.default.contentsOfDirectory(atPath: monthDir.path) == ["IMG_0001.JPG"])
     #expect(
       try Data(contentsOf: monthDir.appendingPathComponent("IMG_0001.JPG"))
@@ -533,4 +577,14 @@ struct ExportPipelineTests {
     #expect(rec1?.relPath == "2025/03/")
     #expect(rec2?.relPath == "2025/03/")
   }
+}
+
+/// Rename flags recorded from a `@Sendable` renamer.
+private final class LockedFlags: @unchecked Sendable {
+  private let lock = NSLock()
+  private var _values: [UInt32] = []
+
+  var values: [UInt32] { lock.withLock { _values } }
+
+  func append(_ value: UInt32) { lock.withLock { _values.append(value) } }
 }

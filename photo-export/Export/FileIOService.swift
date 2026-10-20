@@ -113,15 +113,37 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
 
   // MARK: - FileSystemService protocol (instance methods)
 
+  /// Commits a staged file at its final name and never replaces an existing file there.
+  /// A volume that advertises an exclusive rename commits with `renamex_np(RENAME_EXCL)`,
+  /// so the refusal and the move are one step. Elsewhere the existence check precedes
+  /// `FileManager.moveItem`, which also refuses an existing file; a file created between
+  /// the two can still be lost to a non-atomic move on those volumes.
   func moveItemAtomically(from src: URL, to dst: URL) throws {
     let fm = FileManager.default
+    let folder = dst.deletingLastPathComponent()
+    try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+    if supportsExclusiveRename(folder) {
+      try hooks.beforeCommit?(src, dst)
+      let code = renamer(src, dst, UInt32(RENAME_EXCL))
+      switch code {
+      case 0:
+        return
+      case EEXIST:
+        throw Self.destinationExistsError()
+      default:
+        throw NSError(
+          domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: dst.path])
+      }
+    }
     if fm.fileExists(atPath: dst.path) {
       throw Self.destinationExistsError()
     }
-    try fm.createDirectory(
-      at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
     try hooks.beforeCommit?(src, dst)
-    try fm.moveItem(at: src, to: dst)
+    do {
+      try fm.moveItem(at: src, to: dst)
+    } catch let error as CocoaError where error.code == .fileWriteFileExists {
+      throw Self.destinationExistsError()
+    }
   }
 
   func applyTimestamps(creationDate: Date, to url: URL) {
