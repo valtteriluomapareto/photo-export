@@ -29,16 +29,39 @@ struct PhotoLibraryManagerLiveAuthorizationTests {
     return (manager, reads)
   }
 
-  @Test func yearListingThrowsOnALiveDenialAndRefreshesTheCachedFlag() {
+  /// The main-actor entry points can run inside a view body (`fetchCollectionTree` on a
+  /// cache miss), so the refresh is deferred rather than published during the call.
+  @Test func yearListingThrowsOnALiveDenialAndRefreshesTheCachedFlagAfterTheCall() async {
     let (manager, reads) = staleManager()
     var published: [Bool] = []
     let subscription = manager.$isAuthorized.dropFirst().sink { published.append($0) }
 
     #expect(throws: Denied.authorizationDenied) { try manager.availableYearsWithCounts() }
     #expect(reads.count > 0)
+    #expect(published.isEmpty)
+    #expect(manager.isAuthorized)
+
+    await Self.waitUntilDenied(manager)
     #expect(published == [false])
-    #expect(!manager.isAuthorized && manager.authorizationStatus == .denied)
+    #expect(manager.authorizationStatus == .denied)
     withExtendedLifetime(subscription) {}
+  }
+
+  @Test func repeatedMainActorDenialsRefreshOnce() async {
+    let (manager, _) = staleManager()
+    var published: [Bool] = []
+    let subscription = manager.$isAuthorized.dropFirst().sink { published.append($0) }
+
+    #expect(throws: Denied.authorizationDenied) { try manager.availableYearsWithCounts() }
+    #expect(throws: Denied.authorizationDenied) { try manager.availableYearsWithCounts() }
+    await Self.waitUntilDenied(manager)
+    for _ in 0..<5 { await Task.yield() }
+    #expect(published == [false])
+    withExtendedLifetime(subscription) {}
+  }
+
+  private static func waitUntilDenied(_ manager: PhotoLibraryManager) async {
+    for await authorized in manager.$isAuthorized.values where !authorized { return }
   }
 
   @Test func progressiveFetchThrowsOnALiveDenialAndRefreshesTheCachedFlag() async {

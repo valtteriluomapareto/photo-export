@@ -142,10 +142,12 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     await MainActor.run { self.noteLiveDenial() }
   }
 
-  /// The live check at a main-actor scan entry point.
+  /// The live check at a main-actor scan entry point. These can run inside a view body
+  /// (`fetchCollectionTree` on a cache miss), so the refresh waits for the next main-actor
+  /// turn instead of publishing during the view update.
   private func requireLiveAuthorization() throws {
     guard isLiveAuthorizationSufficient() else {
-      noteLiveDenial()
+      Task { @MainActor [weak self] in self?.noteLiveDenial() }
       throw PhotoLibraryError.authorizationDenied
     }
   }
@@ -178,15 +180,17 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     setupDecodedThumbnailCache()
   }
 
-  /// The production PhotoKit paths with a stubbed status reader, for tests of the live
-  /// authorization guards. Such tests call only methods whose guard the stub fails, so
-  /// nothing reaches PhotoKit.
-  init(liveAuthorizationStatus: @escaping @Sendable () -> PHAuthorizationStatus) {
-    self.overrideService = nil
-    self.liveAuthorizationStatus = liveAuthorizationStatus
-    super.init()
-    setupDecodedThumbnailCache()
-  }
+  #if DEBUG
+    /// The production PhotoKit paths with a stubbed status reader, for tests of the live
+    /// authorization guards. A method whose guard the stub passes reads the real library,
+    /// so tests call only methods whose guard the stub fails.
+    init(liveAuthorizationStatus: @escaping @Sendable () -> PHAuthorizationStatus) {
+      self.overrideService = nil
+      self.liveAuthorizationStatus = liveAuthorizationStatus
+      super.init()
+      setupDecodedThumbnailCache()
+    }
+  #endif
 
   /// Composition entry point: `overrideService` (when non-nil) replaces every
   /// `PhotoLibraryService` method on this manager. PhotoKit registration is skipped
