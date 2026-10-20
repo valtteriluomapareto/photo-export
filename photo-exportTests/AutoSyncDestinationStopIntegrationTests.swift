@@ -48,7 +48,7 @@ struct AutoSyncDestinationStopIntegrationTests {
     let storeRoot = TestScratch.directory("AutoSyncDestinationStop")
     let destinationSnapshot = DestinationSnapshot(
       stableId: "share", fingerprint: nil, isAvailable: true, safety: .safe)
-    let destinationId = "share"
+    let destinationId: String
     let timelineStore: ExportRecordStore
     let collectionStore: CollectionExportRecordStore
     let builder = FakeAutoSyncEnvironmentBuilder()
@@ -57,6 +57,10 @@ struct AutoSyncDestinationStopIntegrationTests {
     private(set) var summaries: SummaryProbe?
 
     init(files: FakeFileSystem = FakeFileSystem()) {
+      guard let stableId = destinationSnapshot.stableId else {
+        preconditionFailure("The harness destination has a stable id")
+      }
+      destinationId = stableId
       let assetDate = Date(timeIntervalSince1970: 1_700_000_000)
       let year = Calendar.current.component(.year, from: assetDate)
       let month = Calendar.current.component(.month, from: assetDate)
@@ -235,8 +239,9 @@ struct AutoSyncDestinationStopIntegrationTests {
     #expect(held.nextEligibleAt == nil)
     #expect(h.retryEntry("asset-B") == nil && h.retryEntry("asset-C") == nil)
 
-    // The folder is writable again and a Photos change arrives: the next run exports the
-    // items the stop never reached and leaves the held one for the user.
+    // Once the app sees the folder as writable (today that takes a reselect or relaunch, see
+    // #362) and a Photos change arrives, the next run exports the items the stop never
+    // reached and leaves the held one for the user.
     h.destination.urlForRelativeDirectoryError = nil
     h.pushInserted(["asset-B", "asset-C"])
     guard case .scheduled(.photosChanged, _) = h.autoSync.state else {

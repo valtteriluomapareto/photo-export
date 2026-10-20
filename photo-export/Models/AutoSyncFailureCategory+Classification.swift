@@ -54,7 +54,8 @@ extension AutoSyncFailureCategory {
       switch destinationError {
       case .notAvailable:
         return .destinationUnavailable
-      // The folder can be reached but not written, as with EROFS or EACCES.
+      // Write access is denied: the folder is read-only (`.notWritable`, as with EROFS or
+      // EACCES) or sandbox access was refused (`.scopeAccessDenied`).
       case .notWritable, .scopeAccessDenied:
         return .destinationPermission
       case .failedToCreateFolder(_, let underlying):

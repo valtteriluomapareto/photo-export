@@ -329,8 +329,8 @@ struct AutoSyncFailureCategoryClassificationTests {
     }
   }
 
-  /// A read-only folder and a denied security scope can be reached but not written, the
-  /// same condition as EROFS and EACCES. Each keeps its own bridged signature.
+  /// Write access is denied: the folder is read-only (as with EROFS or EACCES) or sandbox
+  /// access was refused. Each keeps its own bridged signature.
   @Test func destinationWriteAccessErrorsAreDestinationPermission() {
     for error in [DestinationError.notWritable, .scopeAccessDenied] {
       let signal = AutoSyncFailureCategory.classify(error)

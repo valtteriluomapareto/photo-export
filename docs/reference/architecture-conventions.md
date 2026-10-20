@@ -582,17 +582,17 @@ retire the terminal row without resetting coordinator counters or revealing old 
 
 Destination no-space, permission and unavailable failures return their original private
 job-stop signal after one failure record. Unavailable means the destination can't be
-reached: a network errno, `ENXIO` or `ExportDestinationError.notAvailable`, while a folder
-that can be reached but not written (`.notWritable`, `.scopeAccessDenied`) is a permission
-stop. A missing file
-(`ENOENT`, Cocoa 4/260) and `EIO` are `unknown` and fail only their item. A Cocoa error
-that would otherwise be `unknown` is classified by a direct POSIX `NSUnderlyingError`, and a
-folder that couldn't be created by its underlying error; both keep the outer signature. An
-unavailable stop ends `.interrupted` with `cancelReason: .destinationUnavailable`, the same
-summary shape as an unmount; no-space and permission stops end `.failed`. Only these stops
-set `ExportRunSummary.stoppedBy`. The manual message comes from a `switch` on the category.
-An unmount that arrives while nothing is running keeps the last manual summary, so the stop
-message stays; during active work it clears the feedback as before.
+reached: a network errno, `ENXIO` or `ExportDestinationError.notAvailable`, while a
+read-only folder (`.notWritable`) or a denied security scope (`.scopeAccessDenied`) is a
+permission stop. A missing file (`ENOENT`, Cocoa 4/260) and `EIO` are `unknown` and fail
+only their item. A Cocoa error that would otherwise be `unknown` is classified by a direct
+POSIX `NSUnderlyingError`, and a folder that couldn't be created by its underlying error;
+both keep the outer signature. An unavailable stop ends `.interrupted` with
+`cancelReason: .destinationUnavailable`, the same summary shape as an unmount; no-space and
+permission stops end `.failed`. Only these stops set `ExportRunSummary.stoppedBy`. The
+manual message comes from a `switch` on the category. An unmount that arrives while nothing
+is running keeps the last manual summary, so the stop message stays; during active work it
+clears the feedback as before.
 The post-job history flush precedes teardown; a flush failure
 uses the existing persistence recovery message. Renderer/converter wrapping preserves
 these destination errors after checking generation; source-side reuse copy failures
