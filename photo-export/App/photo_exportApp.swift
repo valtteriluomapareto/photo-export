@@ -297,7 +297,7 @@ struct PhotoExportApp: App {
     // Make the window's minimum track its content minimum explicitly rather
     // than relying on `.automatic`'s implicit resolution, which has shifted
     // across macOS releases (issue #125 surfaced on Tahoe 26.5). Each routed
-    // state supplies its own minimum: `LibraryRootView` pins 1100x700, while
+    // state supplies its own minimum: `LibraryRootView.minimumWindowSize`, while
     // the first-run states use `firstRunWindowMinSize()`. The window stays
     // freely resizable larger because every state's `maxWidth/maxHeight` is
     // `.infinity`. Mirrors the Settings scene below.
