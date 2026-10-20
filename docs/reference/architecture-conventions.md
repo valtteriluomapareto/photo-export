@@ -436,13 +436,18 @@ unless a pending reason with an equal or shorter delay (Export Now, a retry, a s
 change) exists, which then runs. A scheduled run cancelled by losing access keeps its reason,
 as it does for an import.
 
-Without access PhotoKit returns empty results, not an error. So the fetches Auto Export runs
-(`fetchAssetsProgressive`, `availableYearsWithCounts`, `fetchCollectionTree`, and the scope
-counts) read the live status through `PhotoLibraryManager.isLiveAuthorizationSufficient()`:
-a revoke inside a scope, after its refresh, fails that scope as unauthorized instead of
-reading as an empty library, and the next refresh blocks. `ExportManager`'s enqueue guards
-still read the service's cached `isAuthorized`; the fetch that follows each guard is the
-live check.
+Without access PhotoKit returns empty results, not an error. So `PhotoLibraryManager` keeps
+one rule for live versus cached reads: scan entry points that could otherwise report an
+empty library as complete read the live status (`fetchAssetsProgressive`,
+`availableYearsWithCounts`, and `fetchCollectionTree` on a cache miss), as do the scope
+counts `countAssets(in:)` and `countAdjustedAssets(in:)`; the UI-only counts (by year or
+month, adjusted counts by year or month) read the cached `isAuthorized`. A revoke inside a
+scope fails it at its next fetch, and a live denial while the cached flag is still set
+refreshes that flag, so the main window switches and Auto Export blocks at once.
+`ExportManager`'s enqueue guards read the service's cached `isAuthorized`; the fetch that
+follows each guard is the live check. A cached collection tree is returned without the live
+check, which keeps the album sidebar during the stale window; every collection scan still
+meets the check in `fetchAssetsProgressive`.
 
 ### AutoSync dirty-state persistence acknowledgement
 

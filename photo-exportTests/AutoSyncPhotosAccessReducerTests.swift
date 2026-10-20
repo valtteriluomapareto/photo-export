@@ -293,14 +293,19 @@ struct AutoSyncPhotosAccessReducerTests {
     case acrossTheStop
     /// Access goes and returns after the run stopped.
     case bothAfterStop
+    /// The stop summary arrives first, then access goes and returns, all while the run is
+    /// still active, then the run goes idle. The stop is already known when access returns,
+    /// so this schedules, like the orders where access returns after the stop. The summary
+    /// always comes first here, whatever `summaryFirst` says.
+    case summaryThenBothDuringRun
   }
 
   /// A destination stop holds dirty work until the next real trigger, because a retry would
   /// hit the same full or unreachable drive, and access returning says nothing about the
   /// drive. Returning during the stopped run is held like any other change made during it;
   /// the saved full reconciliation exports on the next trigger. Returning once the stop is
-  /// known (the reducer is blocked or idle) schedules the catch-up. Either way, whether the
-  /// stop summary arrives before or after the idle state.
+  /// known (the summary has arrived, or the reducer is blocked or idle) schedules the
+  /// catch-up. Either way, whether the stop summary arrives before or after the idle state.
   @Test(arguments: ToggleOrder.allCases, [false, true])
   func accessReturningAroundAStoppedRun(order: ToggleOrder, summaryFirst: Bool) {
     let run = context()
@@ -317,6 +322,11 @@ struct AutoSyncPhotosAccessReducerTests {
     case .bothDuringRun: events = [lost, back] + stop
     case .acrossTheStop: events = [lost] + stop + [back]
     case .bothAfterStop: events = stop + [lost, back]
+    case .summaryThenBothDuringRun:
+      events = [
+        .autoSyncRunCompleted(stopSummary(run), destinationId: destinationId), lost, back,
+        .exportRunStateChanged(.idle),
+      ]
     }
     let state = apply(events, to: running(run))
     if order == .bothDuringRun {

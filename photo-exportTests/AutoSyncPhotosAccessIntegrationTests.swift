@@ -233,9 +233,11 @@ struct AutoSyncPhotosAccessIntegrationTests {
     #expect(f.favorites.pendingAssetIds.contains(f.asset.id))
   }
 
-  /// Access revoked inside a scope, after the refresh before it: the fetch reads the live
-  /// status and reports missing access instead of an empty library, so the scope ends
-  /// `.failed` with its change kept, not `.completed`. The next refresh then blocks.
+  /// Access revoked inside a scope, after the refresh before it: a fetch that reports
+  /// missing access fails the scope `.failed` with its change kept, not `.completed`. The
+  /// next refresh then blocks. The fake reports it here; `PhotoLibraryManager`'s live check
+  /// isn't reached under the override service (`PhotoLibraryManagerLiveAuthorizationTests`
+  /// covers it).
   @Test func revokeDuringAScopesFetchFailsTheScopeAndTheNextRefreshBlocks() async {
     let f = Fixture()
     defer { f.tearDown() }
