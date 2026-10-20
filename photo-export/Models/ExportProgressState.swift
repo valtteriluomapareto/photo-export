@@ -37,10 +37,10 @@ final class ExportProgressState {
   /// whenever no render is active (the default for static-resource writes).
   var renderActivity: RenderActivity?
 
+  private let emptyRunMessageBridge = ObservableCombineBridge<String?>(nil)
   /// Transient toolbar/progress-bar feedback for "you clicked Export but there
   /// was nothing new to do." Cleared on any new `startExport*`, version-selection
   /// change, `cancelAndClear`, or after the timeout managed by `ExportManager`.
-  private let emptyRunMessageBridge = ObservableCombineBridge<String?>(nil)
   var emptyRunMessage: String? {
     get {
       access(keyPath: \.emptyRunMessage)
