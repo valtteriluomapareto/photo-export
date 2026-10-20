@@ -9,7 +9,8 @@ import OSLog
 /// instead when it is a regular file with one link, not empty, the size of the stage, named
 /// by no other record, byte-for-byte equal to the stage, and its folder stores it under a
 /// spelling of the candidate's name. A `.refuse` slot is always planned as a move to its one
-/// name: claims are not checked, and the commit fails if a file is there.
+/// name: claims are not checked here (`resolveSlot` checks them before staging), and the
+/// commit fails if a file is there.
 ///
 /// Reads go through the `FileSystemService` seam and run off the main actor. No digests are
 /// kept: both files are on disk, so a chunked compare that stops at the first difference is

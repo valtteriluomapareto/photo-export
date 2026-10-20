@@ -84,7 +84,8 @@ struct ExportDestinationResolver: Sendable {
     let slot = try resolveSlot(
       variant: variant, descriptor: descriptor, originalFilename: originalFilename,
       resources: resources, destDir: destDir, groupStem: groupStem,
-      pairOriginalWithSuffix: pairOriginalWithSuffix, interruptedFilename: interruptedFilename)
+      pairOriginalWithSuffix: pairOriginalWithSuffix, interruptedFilename: interruptedFilename,
+      isClaimed: { _ in false })
     let url = firstFreeURL(in: slot, isClaimed: { _ in false })
     return (url, slot.chosenStem(forFilename: url.lastPathComponent))
   }
@@ -100,13 +101,16 @@ struct ExportDestinationResolver: Sendable {
   /// `<stem>_orig.<ext>` instead of `<stem>.<ext>`.
   ///
   /// `interruptedFilename` authorizes only the exact paired candidate already verified
-  /// by the exporter against interrupted history and regular-file metadata.
+  /// by the exporter against interrupted history and regular-file metadata. It excuses the
+  /// file there, not a claim on the name.
   ///
-  /// Throws on the paired-original collision case (target already occupied by a prior
-  /// `.original.done` write) so the caller marks the variant `.failed` rather than
-  /// silently splitting the pair across stems. The error domain/code/message string is
-  /// preserved verbatim from the pre-Phase-2 implementation — see the
-  /// `ExportDestinationEscapeProtectionTests` and the paired-pair-collision tests.
+  /// `isClaimed` says whether a record other than this variant's own names a filename.
+  ///
+  /// Throws `Export:5` when a group stem's paired original-side name is taken, so the caller
+  /// marks the variant `.failed` rather than splitting the pair across stems. A file at the
+  /// name is checked first and keeps its message ("Paired original filename already exists
+  /// on disk"), pinned by `EditedModeExportTests`. A name another record claims, with or
+  /// without a file, throws "Paired original filename is recorded by another export".
   func resolveSlot(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -115,7 +119,8 @@ struct ExportDestinationResolver: Sendable {
     destDir: URL,
     groupStem: String?,
     pairOriginalWithSuffix: Bool,
-    interruptedFilename: String? = nil
+    interruptedFilename: String? = nil,
+    isClaimed: (String) -> Bool
   ) throws -> Slot {
     switch variant {
     case .original, .originalPairedVideo:
@@ -135,6 +140,17 @@ struct ExportDestinationResolver: Sendable {
             userInfo: [
               NSLocalizedDescriptionKey:
                 "Paired original filename already exists on disk: \(candidate.lastPathComponent)"
+            ])
+        }
+        // Nothing allocates an inherited stem, so a name another record holds is caught here.
+        if isClaimed(filename) {
+          throw NSError(
+            domain: "Export", code: 5,
+            userInfo: [
+              NSLocalizedDescriptionKey:
+                "Paired original filename is recorded by another export: \(filename). If that "
+                + "file was deleted, run File > Import Existing Backup, or retry the other item "
+                + "in Export Issues."
             ])
         }
         return Slot(directory: destDir, filename: filename, policy: .refuse(stem: stem))

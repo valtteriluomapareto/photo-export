@@ -424,6 +424,56 @@ struct ExportDestinationResolverTests {
     }
   }
 
+  // MARK: - resolveSlot — claimed paired names
+
+  /// A paired original-side name that another record claims fails like an occupied one,
+  /// with its own message. The predicate is asked about the slot's exact name. A name that
+  /// both holds a file and is claimed reports the file. `interruptedFilename` excuses only
+  /// the file, so a claimed interrupted name still fails.
+  @Test func resolveSlot_claimedPairedName_throws() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let claimed = "IMG_0001_orig.HEIC"
+    var asked: [String] = []
+    func slot(stem: String, interrupted: String? = nil) throws -> ExportDestinationResolver.Slot {
+      try resolver.resolveSlot(
+        variant: .original, descriptor: makeAsset(hasAdjustments: true),
+        originalFilename: "IMG_0001.HEIC", resources: [], destDir: dir, groupStem: stem,
+        pairOriginalWithSuffix: true, interruptedFilename: interrupted
+      ) { name in
+        asked.append(name)
+        return name == claimed
+      }
+    }
+    func message(_ body: () throws -> Void) -> String? {
+      do {
+        try body()
+        return nil
+      } catch let error as NSError {
+        #expect(error.domain == "Export")
+        #expect(error.code == 5)
+        return error.localizedDescription
+      }
+    }
+    let claimedMessage =
+      "Paired original filename is recorded by another export: IMG_0001_orig.HEIC. If that file "
+      + "was deleted, run File > Import Existing Backup, or retry the other item in Export Issues."
+
+    #expect(try slot(stem: "IMG_0002").filename == "IMG_0002_orig.HEIC")
+    #expect(asked == ["IMG_0002_orig.HEIC"])
+    #expect(message { _ = try slot(stem: "IMG_0001") } == claimedMessage)
+
+    plantFile(claimed, in: dir)
+    #expect(
+      message { _ = try slot(stem: "IMG_0001") }
+        == "Paired original filename already exists on disk: IMG_0001_orig.HEIC")
+    #expect(message { _ = try slot(stem: "IMG_0001", interrupted: claimed) } == claimedMessage)
+    plantFile("IMG_0003_orig.HEIC", in: dir)
+    #expect(
+      try slot(stem: "IMG_0003", interrupted: "IMG_0003_orig.HEIC").filename
+        == "IMG_0003_orig.HEIC")
+  }
+
   // MARK: - allocatePairedGroupStem — 4-slot variant
 
   /// Default (nil `pairedVideoExt`) keeps the legacy 2-slot behaviour exactly. Pinning
