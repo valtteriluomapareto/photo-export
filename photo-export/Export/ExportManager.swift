@@ -252,14 +252,14 @@ final class ExportManager: ObservableObject {
   }
 
   /// AutoSync retry-eligibility hook. Closure returns `true` when the
-  /// `(assetId, placement, variant)` is eligible to attempt at `now` — i.e.
-  /// no retry entry exists, or `nextEligibleAt <= now`. Plan §"Retry and
-  /// Failure Policy": "Retry evaluation belongs at enqueue time."
+  /// `(assetId, placement, variant)` is eligible to attempt at `now`: no retry
+  /// entry exists, or `RetryEntry.isEligibleForAutoSync(now:)` holds. Retry
+  /// evaluation belongs at enqueue time.
   ///
   /// `nil` means "no AutoSync retry policy installed"; all variants are
   /// eligible. Manual exports use this default — they never gate on the
-  /// AutoSync retry store. Wired by `PhotoExportApp` to read from
-  /// `AutoSyncManager.currentRetryState`.
+  /// AutoSync retry store. Wired by `PhotoExportApp` to forward to
+  /// `AutoSyncManager.isAutoSyncEligible`.
   ///
   /// `@MainActor` annotation on the closure type makes the isolation
   /// explicit at the type level — the production wiring reads from

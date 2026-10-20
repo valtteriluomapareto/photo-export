@@ -238,19 +238,27 @@ private struct FailureRow: View {
   }
 
   private var timeFooter: String {
-    guard let date = entry.failedAt else { return "Failure time unavailable" }
+    entry.timeFooter(autoExportEnabled: autoExportEnabled, now: Date())
+  }
+}
+
+extension ExportIssue {
+  /// The row's footer: when it last failed, then what happens next for its retry.
+  func timeFooter(autoExportEnabled: Bool, now: Date) -> String {
+    guard let date = failedAt else { return "Failure time unavailable" }
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .short
-    let now = Date()
     var result = "Last failed \(formatter.localizedString(for: date, relativeTo: now))"
-    if !entry.isCovered, entry.retry != nil, !autoExportEnabled {
+    if !isCovered, retry != nil, !autoExportEnabled {
       result += " · Auto Export is off"
-    } else if !entry.isCovered, let next = entry.retry?.nextEligibleAt {
+    } else if !isCovered, let next = retry?.nextEligibleAt {
       result +=
         next > now
         ? " · auto-retry \(formatter.localizedString(for: next, relativeTo: now))"
         : " · eligible to retry now"
-    } else if !entry.isCovered, entry.retry != nil {
+    } else if !isCovered, retry?.category == .destinationUnavailable {
+      result += " · retries on the next Auto Export run"
+    } else if !isCovered, retry != nil {
       result += " · needs action"
     }
     return result
