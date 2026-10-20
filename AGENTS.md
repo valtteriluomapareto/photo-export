@@ -191,4 +191,5 @@ Do **not** use Kimi K2.6 (or accept its output unverified) for:
 - New code that touches Photos, the filesystem, or the export destination should go through the `Protocols/` seams so it can be unit-tested with fakes.
 - SwiftLint config (`.swiftlint.yml`): line length 140, several rules disabled (see file). CI runs `--strict`.
 - swift-format config (`.swift-format.json`): 2-space indentation, 100-char line length. Pass `--configuration .swift-format.json` explicitly; this filename is not auto-discovered. CI checks only `photo-export` and uses `--strict` so warnings fail.
+- CI's Debug build treats Swift compiler warnings in the app target as errors. Reproduce it locally with `SWIFT_WARNINGS_AS_ERRORS=1 bash scripts/ci/build-app.sh Debug`.
 - Website uses Prettier (with `prettier-plugin-astro`) and oxlint. Run `npm run format:check` and `npm run lint` from `website/`. Both are enforced in CI.

@@ -1059,10 +1059,10 @@ struct BackupScanner {
   }
 }
 
-/// `AVAsset.duration` is deprecated (macOS 13) in favour of the async `load(.duration)`. The
-/// backup scan reads it synchronously on purpose (see `videoDuration(at:)`), so it goes through
-/// this protocol, which accepts the deprecation without a warning that would fail the
-/// warnings-as-errors build.
+/// Silences the `AVAsset.duration` deprecation (macOS 13) so the warnings-as-errors build passes.
+/// The deprecation is real: `duration` is a blocking load, and `videoDuration(at:)` runs it on a
+/// cooperative-pool thread during `matchFiles`, on the ambiguous-file path. Follow-up #TBD makes
+/// `matchSingleFile`/`narrow` async and uses `try await AVURLAsset(...).load(.duration)`.
 private protocol SynchronousDuration {
   var duration: CMTime { get }
 }

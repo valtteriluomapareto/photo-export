@@ -175,23 +175,37 @@ class ToolchainWorkflowTests(unittest.TestCase):
                             self.assertNotIn("SWIFT_TREAT_WARNINGS_AS_ERRORS", step)
         self.assertEqual(found, expected)
 
-    def test_canary_builds_debug_with_warnings_as_errors_last_even_after_a_failure(self):
-        """The normal builds come first, so a new warning never skips the tests or Release build."""
+    def test_canary_builds_debug_with_warnings_as_errors_last_after_a_good_debug_build(self):
+        """After the normal builds, so a new warning never skips the tests or the Release build."""
         _, job_steps = steps(jobs(CANARY.read_text())["canary"])
         names = [name for name, _ in job_steps]
-        order = ["Build Debug", "Run Unit Tests (Debug, with coverage)", "Build Release",
-                 "Check built Release app", "Build Debug with warnings as errors",
-                 "Print build and test failure diagnostics", "Upload test results"]
-        self.assertEqual([name for name in names if name in order], order)
+        self.assertIn("Build Debug with warnings as errors", names)
         self.assertEqual(names[names.index("Check built Release app") + 1],
                          "Build Debug with warnings as errors")
         step = dict(job_steps)["Build Debug with warnings as errors"]
-        conditions = [line.strip() for line in step.splitlines() if line.strip().startswith("if:")]
-        self.assertEqual(conditions, ["if: ${{ !cancelled() }}"])
-        self.assertNotIn("continue-on-error", step)
-        for name in ["Build Debug", "Build Release"]:
-            with self.subTest(step=name):
-                self.assertNotIn("if:", dict(job_steps)[name])
+        self.assertIn("        if: ${{ !cancelled() && steps.debug-build.outcome == 'success' }}\n",
+                      step)
+        # The id the condition names, or the step would always be skipped.
+        self.assertIn("        id: debug-build\n", dict(job_steps)["Build Debug"])
+
+    def test_failure_diagnostics_and_uploads_include_the_warnings_as_errors_log(self):
+        for workflow in [ROOT / ".github/workflows/ci.yml", CANARY]:
+            _, job_steps = steps(jobs(workflow.read_text())[
+                "canary" if workflow == CANARY else "app-validation"])
+            job_steps = dict(job_steps)
+            for name in ["Print build and test failure diagnostics", "Upload test results"]:
+                with self.subTest(workflow=workflow.name, step=name):
+                    self.assertIn("debug-werror-build.log", job_steps[name])
+
+    def test_no_project_or_xcconfig_build_setting_treats_warnings_as_errors(self):
+        """Only build-app.sh's switch sets it, so the release builds never fail on a warning."""
+        files = [ROOT / "photo-export.xcodeproj/project.pbxproj",
+                 *(path for path in ROOT.rglob("*.xcconfig")
+                   if not {".git", "build", "node_modules"} & set(path.parts))]
+        for path in files:
+            with self.subTest(file=path.relative_to(ROOT).as_posix()):
+                self.assertNotIn("SWIFT_TREAT_WARNINGS_AS_ERRORS", path.read_text())
+        self.assertTrue(files[0].exists())
 
     def test_exclusive_rename_probe_runs_on_the_schedule_and_dispatch_only(self):
         text = jobs(CANARY.read_text())["exclusive-rename-probe"]

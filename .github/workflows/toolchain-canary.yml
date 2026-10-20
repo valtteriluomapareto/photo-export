@@ -58,6 +58,7 @@ jobs:
         run: bash scripts/ci/select-xcode.sh ${{ matrix.xcode }}
 
       - name: Build Debug
+        id: debug-build
         run: bash scripts/ci/build-app.sh Debug
 
       - name: Check xcresult diagnostics export support
@@ -85,10 +86,10 @@ jobs:
       - name: Check built Release app
         run: bash scripts/ci/check-built-app.sh ${{ matrix.xcode }}
 
-      # Last, and even after a failed step, so a new warning on this Xcode fails here without
-      # skipping the tests and the Release build above.
+      # Runs last, even if the tests or the Release build failed, so a new warning on this Xcode
+      # fails here without skipping them. Skipped when the normal Debug build failed.
       - name: Build Debug with warnings as errors
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.debug-build.outcome == 'success' }}
         env:
           SWIFT_WARNINGS_AS_ERRORS: "1"
         run: bash scripts/ci/build-app.sh Debug
@@ -96,7 +97,7 @@ jobs:
       - name: Print build and test failure diagnostics
         if: failure()
         run: |
-          for log in debug-build.log test.log release-build.log; do
+          for log in debug-build.log debug-werror-build.log test.log release-build.log; do
             if [[ -f "$log" ]]; then
               echo "::group::Failure diagnostics: $log"
               grep -nE '✘|↳|recorded an issue|Expectation failed|error:' "$log" || true
@@ -122,6 +123,7 @@ jobs:
           path: |
             TestResults.xcresult
             debug-build.log
+            debug-werror-build.log
             test.log
             release-build.log
             TestDiagnostics/

@@ -189,7 +189,7 @@ jobs:
       - name: Print build and test failure diagnostics
         if: failure()
         run: |
-          for log in debug-build.log test.log release-build.log; do
+          for log in debug-build.log debug-werror-build.log test.log release-build.log; do
             if [[ -f "$log" ]]; then
               echo "::group::Failure diagnostics: $log"
               grep -nE '✘|↳|recorded an issue|Expectation failed|error:' "$log" || true
@@ -215,6 +215,7 @@ jobs:
           path: |
             TestResults.xcresult
             debug-build.log
+            debug-werror-build.log
             test.log
             release-build.log
             TestDiagnostics/
