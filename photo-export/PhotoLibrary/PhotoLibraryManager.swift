@@ -265,6 +265,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     guard overrideService == nil else { return }
     guard !hasStarted else { return }
     hasStarted = true
+    observeAppActivation()
     verifyPhotoLibraryPermissions()
     // Observe library changes to invalidate cache
     PHPhotoLibrary.shared().register(self)
@@ -296,8 +297,23 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   /// Re-reads Photos access each time the app becomes active, whichever window is
-  /// showing, or none. Idempotent. Tests pass their own center.
-  func observeAppActivation(notificationCenter: NotificationCenter = .default) {}
+  /// showing, or none: macOS posts nothing when access changes in System Settings, so the
+  /// main window and Auto Export learn of a grant or revoke on return. Idempotent. `start()`
+  /// calls it; tests pass their own center.
+  func observeAppActivation(notificationCenter: NotificationCenter = .default) {
+    guard appActivationSubscription == nil else { return }
+    appActivationSubscription =
+      notificationCenter
+      .publisher(for: NSApplication.didBecomeActiveNotification)
+      .sink { [weak self] _ in
+        dispatchPrecondition(condition: .onQueue(.main))
+        MainActor.assumeIsolated {
+          self?.refreshAuthorizationStatus()
+        }
+      }
+  }
+
+  private var appActivationSubscription: AnyCancellable?
 
   /// Re-reads existing permission without prompting. Install fresh-cache barriers
   /// before an authorization subscriber can start work against the newly visible library.

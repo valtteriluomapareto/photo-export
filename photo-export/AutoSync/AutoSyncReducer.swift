@@ -76,6 +76,9 @@ enum AutoSyncReducer {
     /// the reschedule when that run goes idle. Cleared once the reducer leaves `.running` or
     /// `.waiting(.manualExportActive)`.
     var resumeSuppressedForStop = false
+    /// Set when Photos access returns, cleared when a run starts. The catch-up it owes is a
+    /// real trigger, so a destination stop doesn't hold it, as with Export Now. Transient.
+    var photosAccessReturnOwed = false
 
     static let initial = State(
       current: .disabled,
@@ -124,6 +127,7 @@ enum AutoSyncReducer {
     switch event {
     case .enabledChanged(let enabled):
       newState.enabled = enabled
+      if !enabled { newState.photosAccessReturnOwed = false }
       // Only treat this as a trigger when the value *actually changes* from disabled
       // to enabled. A republished settings observation that re-emits the current
       // value should not cancel-and-replace any active debounce.
@@ -143,6 +147,7 @@ enum AutoSyncReducer {
         // A reason pending for the old destination, Export Now included, doesn't carry over;
         // the new destination gets its own trigger below.
         newState.pendingTriggerReason = nil
+        newState.photosAccessReturnOwed = false
         newState.consumedRetryEntries.removeAll()
         if let boundary = state.runDirtyBoundary {
           newState.invalidatedRunIds.insert(boundary.context.runId)
@@ -203,8 +208,37 @@ enum AutoSyncReducer {
     case .importStateChanged(let isImporting):
       newState.importActive = isImporting
 
-    case .photosAuthorizationChanged:
-      return (state, [])
+    case .photosAuthorizationChanged(let authorized):
+      guard authorized != state.photosAuthorized else { return (state, []) }
+      newState.photosAuthorized = authorized
+      // Losing access only blocks, through the recompute below. A run already exporting is
+      // never cancelled: its scan reports the missing access and the run ends `.failed`.
+      // Access returning is handled like a failed change fetch: changes made while access
+      // was off aren't reliably reported, so every selected scope gets a full reconciliation.
+      if authorized, state.enabled, let destinationId = state.destination.id,
+        !state.scopeSelection.isEmpty
+      {
+        var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
+        for scope in state.scopeSelection.enabledScopes {
+          var scopeState = dirty.scope(scope)
+          scopeState.pendingFullReconciliation = true
+          scopeState.pendingAssetIds.removeAll()
+          invalidateRunBoundary(scope, destinationId: destinationId, in: &newState)
+          dirty.setScope(scope, scopeState)
+        }
+        dirty.markUpdated(at: now)
+        newState.dirtyStateByDestination[destinationId] = dirty
+        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
+        newState.photosAccessReturnOwed = true
+        // A pending reason that runs at least as soon as a Photos change (Export Now, a
+        // retry, a settings change) runs as itself; the recompute serves it.
+        let pendingRunsAsSoon = state.pendingTriggerReason.map {
+          debounceDelay(for: $0) <= debounceDelay(for: .photosChanged)
+        }
+        if pendingRunsAsSoon != true {
+          triggerReason = .photosChanged
+        }
+      }
 
     case .exportRunStarted(let context, let destinationId):
       captureRunBoundary(context, destinationId: destinationId, in: &newState)
@@ -287,6 +321,7 @@ enum AutoSyncReducer {
                 selection: newState.versionSelection
               )))
           newState.current = .running(reason: reason)
+          newState.photosAccessReturnOwed = false
           // Returning early — `current` is already final; skip the
           // recompute-and-maybe-schedule pass below.
           return (newState, effects)
@@ -499,7 +534,7 @@ enum AutoSyncReducer {
       reason != .photosChanged, reason != .photosChangeFallback
     {
       switch newState.current {
-      case .waiting(.importActive), .waiting(.manualExportActive):
+      case .waiting(.importActive), .waiting(.manualExportActive), .blocked(.photosAccessMissing):
         newState.pendingTriggerReason = reason
       default:
         break
@@ -517,13 +552,14 @@ enum AutoSyncReducer {
     // happens to re-trigger.
     //
     // After a run that stopped on a destination-wide failure, the hook schedules nothing
-    // except an Export Now pressed during the run; see `holdAfterStop`.
+    // except an Export Now pressed during the run or the catch-up Photos access returning
+    // owes; see `holdAfterStop`.
     if case .idle = newState.current,
       previousIsBlockingResumePoint(state.current),
       let destinationId = newState.destination.id
     {
       let hasDirty = newState.dirtyStateByDestination[destinationId]?.isEmpty == false
-      let suppressed = newState.resumeSuppressedForStop
+      let suppressed = newState.resumeSuppressedForStop && !newState.photosAccessReturnOwed
       if let resumeReason = newState.pendingTriggerReason,
         !suppressed || resumeReason == .userExportNow
       {
@@ -544,9 +580,9 @@ enum AutoSyncReducer {
 
     // Production publishes idle before the summary, so the hook above has usually already
     // rescheduled the stopped run. Cancel that exact schedule; an Export Now pressed during
-    // the run keeps its run.
+    // the run, or Photos access returning, keeps its run.
     if cancelsResumeHookSchedule, let hook = newState.resumeHookSchedule,
-      hook.reason != .userExportNow,
+      hook.reason != .userExportNow, !newState.photosAccessReturnOwed,
       newState.current == .scheduled(reason: hook.reason, fireAt: hook.fireAt)
     {
       effects.append(.cancelDebounce(hook.reason))
@@ -717,7 +753,7 @@ enum AutoSyncReducer {
     // `ExportManager.runExport`'s single-active-run precondition. The fan-out's
     // own `await runExport` is already keeping `activeRunContext != nil`; we
     // must not start a second concurrent run.
-    state.enabled && !state.importActive && !state.scopeSelection.isEmpty
+    state.enabled && !state.importActive && state.photosAuthorized && !state.scopeSelection.isEmpty
       && state.destination.id != nil && state.destination.isAvailable
       && state.destination.safety == .safe
       && !state.exportRunState.isManualActive
@@ -745,6 +781,13 @@ enum AutoSyncReducer {
     if state.exportRunState.isManualActive {
       cancelAnyScheduledDebounce(from: previous, into: &effects)
       return .waiting(.manualExportActive)
+    }
+    // After the import and manual-export waits, so their resume rules still apply; before
+    // every other blocker, since none of them can be fixed without access. An Auto Export
+    // run in progress shows blocked too and finishes on its own.
+    if !state.photosAuthorized {
+      cancelAnyScheduledDebounce(from: previous, into: &effects)
+      return .blocked(.photosAccessMissing)
     }
     if state.scopeSelection.isEmpty {
       cancelAnyScheduledDebounce(from: previous, into: &effects)

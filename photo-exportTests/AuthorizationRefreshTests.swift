@@ -13,7 +13,6 @@ import Testing
     @MainActor
     private struct Host: View {
       @ObservedObject var library: PhotoLibraryManager
-      let notifications: NotificationCenter
       let counter: BodyInvalidationCounter
       var body: some View {
         let route = library.isAuthorized ? "authorized" : "authorization"
@@ -22,8 +21,7 @@ import Testing
           if library.isAuthorized {
             Text("Authorized content")
           } else {
-            AuthorizationView(
-              activationNotifications: notifications, photoLibraryManager: library)
+            AuthorizationView(photoLibraryManager: library)
           }
         }
       }
@@ -49,7 +47,7 @@ import Testing
         library = PhotoLibraryManager(overrideService: service)
         library.observeAppActivation(notificationCenter: notifications)
         let capture = opened
-        let content = Host(library: library, notifications: notifications, counter: counter)
+        let content = Host(library: library, counter: counter)
           .environment(\.bodyInvalidationCounter, counter)
           .environment(\.openURL, OpenURLAction { url in
             capture.urls.append(url)
