@@ -13,7 +13,6 @@
 # Text from "#" to the end of a line is a comment.
 
 type|photo-export/App/AppLifecycleCoordinator.swift|AppLifecycleCoordinator
-type|photo-export/App/LoginItemController.swift|LoginItemController
 type|photo-export/AutoSync/AutoSyncManager.swift|AutoSyncManager
 type|photo-export/AutoSync/Stores/UserDefaultsAutoExportScopeStore.swift|UserDefaultsAutoExportScopeStore
 type|photo-export/Destination/DestinationSafetyMonitor.swift|DestinationSafetyMonitor
@@ -34,9 +33,9 @@ type|photo-export/ViewModels/TimelineSidebarCounts.swift|TimelineSidebarCounts
 # ObservableObject, so these stay as they are.
 external-publisher|photo-export/Export/ExportManager.swift|9
 
-total|published|66
-total|environment-object|37
-total|environment-object-property|72
-total|state-object|16
+total|published|65
+total|environment-object|36
+total|environment-object-property|71
+total|state-object|15
 total|observed-object|1
 total|object-will-change|0

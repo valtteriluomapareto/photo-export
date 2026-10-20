@@ -12,14 +12,22 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
-  @EnvironmentObject private var loginItemController: LoginItemController
+  @Environment(LoginItemController.self) private var loginItemController
   @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
   @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
 
   @State private var isShowingMigrationRecoverySheet = false
   @State private var isShowingSafetyConfirm = false
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText(
+        [loginItemController.status.footerText], for: "login-item-footer")
+    #endif
     Form {
       if lifecycleCoordinator.migrationConflict != nil {
         Section {

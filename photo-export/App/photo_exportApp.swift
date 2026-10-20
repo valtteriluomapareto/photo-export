@@ -21,7 +21,7 @@ struct PhotoExportApp: App {
   /// for checkbox state. The other AutoSync collaborators below stay plain
   /// `let` — no view subscribes to them.
   @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
-  @StateObject private var loginItemController: LoginItemController
+  @State private var loginItemController: LoginItemController
   @State private var whatsNewState: WhatsNewState
 
   private let autoSyncDestinationAdapter: DestinationSnapshotAdapter
@@ -199,7 +199,7 @@ struct PhotoExportApp: App {
     _lifecycleCoordinator = StateObject(wrappedValue: coordinator)
     _autoSyncManager = StateObject(wrappedValue: asm)
     _autoSyncScopeStore = StateObject(wrappedValue: scopeStore)
-    _loginItemController = StateObject(wrappedValue: LoginItemController())
+    _loginItemController = State(wrappedValue: LoginItemController())
     _whatsNewState = State(wrappedValue: WhatsNewState(userDefaults: .standard))
     _destinationSafetyMonitor = StateObject(wrappedValue: safetyMonitor)
     self.autoSyncDestinationAdapter = destinationAdapter
@@ -355,7 +355,7 @@ struct PhotoExportApp: App {
         .environmentObject(exportRecordStore)
         .environmentObject(collectionExportRecordStore)
         .environmentObject(lifecycleCoordinator)
-        .environmentObject(loginItemController)
+        .environment(loginItemController)
         .environmentObject(destinationSafetyMonitor)
         .environmentObject(autoSyncPhotoChangeAdapter)
     }
