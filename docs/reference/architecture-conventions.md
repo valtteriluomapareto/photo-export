@@ -169,12 +169,18 @@ commit. Mount a share from a macOS server and one from a NAS (Samba) and record,
 
 The final name of a file written alone is chosen once its bytes are staged. A paired
 original-side slot (`_orig`, or a still or motion file that shares a pre-allocated group
-stem) has one fixed name, and an existing file there fails the variant as above. Every other
+stem) has one fixed name, and an existing file there fails the variant as above. A group stem
+is allocated before staging (`allocatePairedGroupStem`, and `allocateUnusedOrigStem` for an
+edited fallback) where every name of the group is empty and no other asset's record names it;
+the asset's own records in the placement do not count, so a retry keeps its names. Every other
 slot (a single original, an edit on an inherited or fresh stem) is walked in order, natural
 name first, then ` (1)`, ` (2)`… (`FinalNamePlanner`, off the main actor through
 `runDetached`, generation rechecked afterwards):
 
-- **Nothing there** (`lstat` finds no entry): commit the stage there.
+- **Nothing there** (`lstat` finds no entry) and no record other than this variant's own names
+  it (see claims below): commit the stage there. A record whose file was deleted keeps its
+  name until Import Existing Backup drops that record, so a different asset or variant never
+  takes the name and the reconcile can still see the file is gone.
 - **An existing file is adopted** instead of writing a copy when all of these hold: it is a
   regular file (a symbolic link is never followed) with one link, since a second hard link
   would give one file two names that different records could claim; its size is non-zero
@@ -189,11 +195,15 @@ name first, then ` (1)`, ` (2)`… (`FinalNamePlanner`, off the main actor throu
 - **Anything else** (other bytes, another size, empty, a link, a folder, claimed): try the
   next suffix.
 
-The variant is marked in progress under the provisional name (the first free one, as before
-staging) and re-marked under the planned name whenever planning picks another. Planning reads
-claims through main-actor hops while it compares, so before a planned adoption is marked the
+The variant is marked in progress under the provisional name (the first candidate with
+nothing at it that no other record names, as before staging; `firstFreeURL(in:isClaimed:)`),
+so an interrupted export never leaves a second record naming another record's file. It is
+re-marked under the planned name whenever planning picks another. Planning reads claims
+through main-actor hops while it compares, so before a planned adoption is marked the
 exporter asks again synchronously on the main actor; a name claimed by then counts as a
-collision. The commit of an adopted file re-runs `lstat` and requires the same device, inode,
+collision. It asks again before marking a planned move too, with its own log line ("was
+claimed after it was planned"). That check is defensive and untested: claims change only on
+the main actor and exports run one at a time, so nothing can claim the name in between. The commit of an adopted file re-runs `lstat` and requires the same device, inode,
 link count, size and modification time as when its bytes were compared; it then removes the stage, applies no
 timestamps and acknowledges the file under its stored name (`getattrlist`
 `ATTR_CMN_NAME`), which can differ from the resource's name in case or normalization. A
@@ -205,21 +215,40 @@ place across a re-plan.
 
 Claims: each record store keeps, per folder (timeline month or collection placement, plus
 the variant's subfolder), a count of the filenames its variant records name, case-folded
-and in NFC. Every status counts, including in-progress, pending and failed, and so do the
-asset's other variants: an edit on an inherited stem must not adopt the file its own
-original is recorded under. Only the variant being written is excluded. An edited fallback's
-`edited` record names no file, on every completion path. The index is built from the in-memory records on the
-first claim query (about 0.4 s and 50–70 MB for 500k records in an optimized build, so it
-is not paid at load) and maintained in each store's `apply` after that, so log replay,
-import, prune and reset follow it. It is dropped, to be built again on the next query,
-wherever the in-memory records are replaced wholesale (load, retained recovery, the
-corrupt-reset path and the parked-snapshot restore after an unreadable reload).
+and in NFC. A claimed name is taken whether or not a file is at it: it is never adopted for
+another asset or variant, and never written by one. Every status counts, including
+in-progress, pending and failed, and so do the asset's other variants: an edit on an
+inherited stem must not adopt, or write into, the name its own original is recorded under.
+Only the variant being written is excluded, or, for a group stem, all of the asset's own
+variants in the placement. An edited fallback's
+`edited` record names no file, on every completion path. Each store builds its index from
+its in-memory records on its first claim query, synchronously on the main actor: in practice
+at the first provisional mark or group-stem allocation of a session's first export to that
+store (about 0.4 s and 50–70 MB for 500k records in an optimized build, so it is not paid at
+load or by a session that exports nothing; measuring it at that size is #359). Each build logs its record count and elapsed
+milliseconds at debug level ("Built filename claims for … records in … ms"). The index is
+maintained in each store's `apply` after that, so log replay, import, prune and reset follow
+it; a normal commit costs three claim lookups and one main-actor hop. It is dropped, to be
+built again on the next query, wherever the in-memory records are replaced wholesale (load,
+retained recovery, the corrupt-reset path and the parked-snapshot restore after an
+unreadable reload). A timeline placement without a year and month has no claim folder; an
+export of one fails at once (with an `assertionFailure` in debug builds) rather than walking
+every suffix.
 
 Known limits: only the folder the variant is being written to is searched, so an identical
 file left in `videos/` (or outside it) by a layout change is not found. Paired groups and
 `_orig` slots are allocated before staging and are never adopted. Neither is an image whose
 paired video the same job writes next at its stem: adopting the image could find the video's
-name taken and split the pair, so the image takes a free name and the video follows it. Rendered video and
+name taken and split the pair, so the image takes a free name and the video follows it. A
+paired original-side name on an inherited stem is refused only when a file is there, not when
+another record claims it (#360). Claims are keyed by placement id, so two placements whose
+folders are one folder on disk (for example names that differ only by case on a volume that
+ignores case) do not see each other's claims (#360). An edit on a newly allocated stem can
+still land at ` (1)` when the asset's own failed original still names that stem's natural
+name; the next run resolves it. A failed or interrupted record keeps its name reserved until
+it is retried, including one for an asset since deleted from Photos; Import Existing Backup
+drops only completed records whose file is missing. Histories where two records already name
+one file are not repaired. Rendered video and
 HEIC-to-JPEG output usually differ byte for byte from an earlier export, so they get a
 suffix, which is safe. On a network volume that is case- or normalization-sensitive, a file
 whose stored name differs from the resource's only in normalization is not found by
@@ -658,6 +687,7 @@ If you rename, move, add or remove one of these tests, update the list file, thi
 | [`FileIOServiceTests.existingFileAtCommitIsNeverReplaced`](../../photo-exportTests/FileIOServiceTests.swift) | A file that appears at the final name right before the commit call is replaced, or is refused with a signature other than `Export:2`, or the commit stops using `RENAME_EXCL` on a capable volume (the scratch volume, through the production capability check), or an `EEXIST` from that rename falls back to check-then-move | Restore the refusal. The final commit must never replace an existing file, and its collision must keep the `Export:2` signature retry state uses. The check-then-move case only proves that `moveItem`'s own refusal keeps `Export:2`; it cannot prove the window inside `moveItem` is closed. |
 | [`IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted`](../../photo-exportTests/IdenticalFileAdoptionTests.swift) | Re-exporting a month after its history is lost writes `IMG_0001 (1).JPG` beside an identical `IMG_0001.JPG`, records another name, or moves or re-timestamps the existing file | Restore adoption: an unclaimed regular file with the staged size and bytes is recorded under its stored name, with no move and no timestamps (§Final file commit boundary). |
 | `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss` | Two byte-identical assets, re-exported after lost history in either order, end up recorded against one file, or write new ` (n)` copies | Restore the claim rule. A file another record names is never adopted, so each asset's record keeps a file of its own. |
+| `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile` | After an exported file is deleted, another asset with the same filename takes its name, or Import Existing Backup keeps the deleted file's record, or the next export does not write the first asset back at its own name, leaving the folder without exactly two files | Restore the claim rule for empty names. A name another record names is taken even with nothing at it, so the reconcile can see its file is gone and drop the record. |
 
 ## Extension recipes
 

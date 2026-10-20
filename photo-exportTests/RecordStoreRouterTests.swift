@@ -103,6 +103,29 @@ struct RecordStoreRouterTests {
     #expect(h.router.variants(forAssetId: "missing", placement: favorites()).isEmpty)
   }
 
+  /// A timeline placement without a year and month has no claim folder, so every name reads
+  /// as claimed, by either query, rather than free. Exports refuse such a placement before
+  /// asking; that assertion is not tested.
+  @Test func isFilenameClaimed_timelineWithoutYearMonth_failsClosed() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    let malformed = ExportPlacement(
+      kind: .timeline, id: "timeline:unknown", displayName: "Unknown",
+      collectionLocalIdentifier: nil, relativePath: "unknown/", createdAt: Date())
+    #expect(malformed.timelineYearMonth == nil)
+
+    #expect(
+      h.router.isFilenameClaimed(
+        "IMG_0001.JPG", placement: malformed, subfolder: nil, exceptVariant: .original,
+        of: "a1"))
+    #expect(
+      h.router.isFilenameClaimed(
+        "IMG_0001.JPG", placement: malformed, subfolder: nil, exceptAsset: "a1"))
+    #expect(
+      !h.router.isFilenameClaimed(
+        "IMG_0001.JPG", placement: timeline(), subfolder: nil, exceptAsset: "a1"))
+  }
+
   // Timeline year/month plumb-through: a non-2025/7 placement must persist its year and
   // month onto the stored record, not the `(0,0)` fallback the router uses when
   // `timelineYearMonth` returns nil.
