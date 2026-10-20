@@ -44,7 +44,7 @@ To preview the first-run `OnboardingView` from a Debug build, pass `--force-onbo
 The following role map highlights key types under `photo-export/`; it is not an exhaustive file inventory:
 
 - `App/` — app entry point (`AppEntry.swift`, which starts `PhotoExportApp` from `photo_exportApp.swift`, or under hosted tests the empty `TestHostApp`) plus lifecycle/process-level services: `LoginItemController`, `SystemLoginItemService`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
-- `Export/` — the export façade and its collaborators: `ExportManager`, `ExportManager+AutoSyncConformance`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, plus the helper-policy types (`ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`)
+- `Export/` — the export façade and its collaborators: `ExportManager`, `ExportManager+AutoSyncConformance`, `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, plus the helper-policy types (`ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`, `CollectionBackupPlanner`)
 - `Destination/` — destination concerns: `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`
 - `Records/` — record stores (timeline + collection), the shared `JSONLRecordFile` persistence primitive, `RecordStoreRouter` (single placement-kind dispatch), `ExportCompletionPolicy` (single completion/edited-fallback rule), `ReconciliationFileChecker` (detached filesystem probes), and `FinalCommitContext` (transient final-file ownership)
 - `AutoSync/` — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, with `AutoSync/Stores/` for the file-backed persistence (dirty state, per-destination tokens, retry state, run summary, scope, photo change token)
@@ -60,7 +60,7 @@ The Phase-7 folder split (issue #67 item 3) landed in May 2026, replacing the pr
 
 - **Façade**: `ExportManager` (+ `ExportManager+AutoSyncConformance.swift` — that file only carries `extension ExportManager: …Host {}` lines and explanatory docstrings; never add method bodies there). In `Export/`.
 - **Host-driven collaborators of `ExportManager`** (`@MainActor final class`, in `Export/`): `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`. Each holds a narrow `Host` protocol back to the manager for a few UI-state mutations; the cancellation seam routes through the queue coordinator directly (issue #67 item 2).
-- **Pure helpers / policy** (plain `struct` or `enum`, `Sendable` where it crosses tasks): `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver` (in `Export/`); `ExportDestinationResolver` (in `Destination/`); `ResourceSelection`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` (in `Export/`).
+- **Pure helpers / policy** (plain `struct` or `enum`, `Sendable` where it crosses tasks): `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver` (in `Export/`); `ExportDestinationResolver` (in `Destination/`); `ResourceSelection`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`, `CollectionBackupPlanner`, `FileIOService`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` (in `Export/`).
 - **Destination services** (`@MainActor`, in `Destination/`): `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`.
 - **App-level services** (`@MainActor`, in `App/`): `LoginItemController`, `SystemLoginItemService`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`.
 
@@ -76,7 +76,8 @@ The main `WindowGroup` and `Settings` scene inject their environments separately
 
 **Other key code under `Export/` / `Records/` / `AutoSync/` / `PhotoLibrary/`:**
 
-- `BackupScanner` — scans an existing backup folder and matches files to Photos assets (used by Import Existing Backup)
+- `BackupScanner` — scans an existing backup folder and matches files to Photos assets (used by Import Existing Backup); `BackupScanner+Collections.swift` covers the folders under `Collections/`
+- `CollectionBackupPlanner` — decides which `Collections/` folder each current Favorites, album or shared album adopts on import, using `ExportPlacementResolver`'s naming
 - `ExportFilenamePolicy` — pure rules for `_orig` companion filenames
 - `ExportPathPolicy` — pure path-component sanitization for collection folder names
 - `ExportPlacementResolver` — maps a `LibrarySelection` to an `ExportPlacement`, including sibling-collision suffixing for albums
@@ -125,6 +126,8 @@ The behavioral regression gates are the same in this guide, `CONTRIBUTING.md`, a
 - `ImportIdempotencyTests`
 - `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck`
 - `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds`
+- `CollectionBackupImportTests.importAdoptsAlbumHistorySoExportsWriteNothing`
+- `CollectionBackupImportTests.exportWipeImportRoundTripRestoresPlacements`
 
 Run these without re-recording unless the new behavior has been explicitly audited. They are listed once in `scripts/ci/regression-gates.txt`, which also pins containing-suite declarations to support method-level gates; those pins are not additional behavioral gates. CI checks that this list names every gate in the file and that every gate ran and passed.
 

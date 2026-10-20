@@ -2,8 +2,10 @@ import Combine
 import Foundation
 import OSLog
 
-/// Owns the Import Existing Backup flow: scanner invocation, library matching, bulk
-/// record insertion, both-store reconciliation, and the per-stage progress publishing.
+/// Owns the Import Existing Backup flow: scanner invocation (the timeline's `YYYY/MM` folders
+/// and the album, shared-album and Favorites folders under `Collections/`), library matching,
+/// bulk record insertion into both stores, both-store reconciliation, and the per-stage
+/// progress publishing.
 ///
 /// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 5, this
 /// extraction:
@@ -215,13 +217,17 @@ final class ImportCoordinator: ObservableObject {
           }
         }
 
-        // The throwing scanner verifies recognized directories before any import or pruning.
+        // The throwing scanners verify recognized directories before any import or pruning.
         self.importStage = .scanningBackupFolder
         try Task.checkCancellation()
         let reader = self.backupDirectoryReader
-        let scannedFiles = try await runDetached {
-          try BackupScanner.scanBackupFolder(at: rootURL, directoryReader: reader)
+        let scan = try await runDetached {
+          let timeline = try BackupScanner.scanBackupFolder(at: rootURL, directoryReader: reader)
+          let collections = try BackupScanner.scanCollectionsFolder(
+            at: rootURL, directoryReader: reader)
+          return (timeline: timeline, collections: collections)
         }
+        let scannedFiles = scan.timeline
 
         try Task.checkCancellation()
         guard self.isCurrentImport(operationID, generation: importGen) else { return }
@@ -231,16 +237,42 @@ final class ImportCoordinator: ObservableObject {
         // call below is a no-op for an empty matched list.
 
         self.importStage = .readingPhotosLibrary
-        let matchResult = try await BackupScanner.matchFiles(
-          scannedFiles,
-          photoLibraryService: host.photoLibraryService
-        ) { [weak self] stage in
+        let progress: @MainActor (BackupScanner.ImportStage) -> Void = { [weak self] stage in
           guard let self, self.isCurrentImport(operationID, generation: importGen) else { return }
           self.importStage = stage
         }
+        // One fingerprint per asset across the timeline and every album.
+        let fingerprints = BackupScanner.FingerprintCache()
+        let matchResult = try await BackupScanner.matchFiles(
+          scannedFiles, photoLibraryService: host.photoLibraryService,
+          fingerprintCache: fingerprints, progress: progress)
 
         try Task.checkCancellation()
         guard self.isCurrentImport(operationID, generation: importGen) else { return }
+
+        // Album, shared-album and Favorites folders. Albums are matched against the current
+        // Photos tree; a tree or album fetch failure fails the import before any change.
+        let collectionStore = host.collectionExportRecordStore
+        let collectionFilesScanned = scan.collections.reduce(0) { $0 + $1.files.count }
+        var collectionMatch = BackupScanner.CollectionMatchResult()
+        var collectionsSkipped = false
+        if collectionFilesScanned > 0 {
+          if collectionStore.state == .ready {
+            let tree = try host.photoLibraryService.fetchCollectionTree()
+            collectionMatch = try await BackupScanner.matchCollectionFolders(
+              scan.collections, collections: tree,
+              existingPlacements: Array(collectionStore.placements.values),
+              photoLibraryService: host.photoLibraryService, fingerprintCache: fingerprints,
+              progress: progress)
+            try Task.checkCancellation()
+            guard self.isCurrentImport(operationID, generation: importGen) else { return }
+          } else {
+            self.logger.warning(
+              "Album history isn't ready (state=\(String(describing: collectionStore.state), privacy: .public)); importing the timeline only"
+            )
+            collectionsSkipped = true
+          }
+        }
 
         self.importStage = .rebuildingLocalState
 
@@ -279,8 +311,21 @@ final class ImportCoordinator: ObservableObject {
           )
           records.append(record)
         }
+        let collectionBatches = collectionMatch.plan.adoptions.map {
+          $0.importBatch(exportedAt: now)
+        }
 
+        // Commit both histories in one main-actor turn: nothing can change either store or
+        // supersede this import between the checks and the writes.
+        guard self.isCurrentImport(operationID, generation: importGen) else { return }
+        guard host.exportRecordStore.state == .ready else { throw RecordPersistenceUnavailable() }
+        let collectionsReady = collectionStore.state == .ready
+        if !collectionsReady && !collectionBatches.isEmpty { collectionsSkipped = true }
         host.exportRecordStore.bulkImportRecords(records)
+        let collectionImport =
+          collectionsReady
+          ? collectionStore.bulkImportRecords(collectionBatches)
+          : CollectionExportRecordStore.BulkImportSummary()
 
         guard self.isCurrentImport(operationID, generation: importGen) else { return }
 
@@ -321,13 +366,18 @@ final class ImportCoordinator: ObservableObject {
             unmatchedCount: matchResult.unmatched.count,
             totalScanned: scannedFiles.count,
             prunedVariants: totalPrunedVariants,
-            prunedRecords: totalPrunedRecords
+            prunedRecords: totalPrunedRecords,
+            collectionFilesScanned: collectionFilesScanned,
+            collectionMatchedCount: collectionImport.recordedVariants,
+            unrecognizedCollectionFolders: collectionsSkipped
+              ? [] : collectionMatch.plan.unrecognizedFolders,
+            collectionsSkipped: collectionsSkipped
           ))
 
         self.finishOwnedImport(operationID, stage: .done)
 
         self.logger.info(
-          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
+          "Import complete: \(matchResult.matched.count) matched, \(matchResult.ambiguous.count) ambiguous, \(matchResult.unmatched.count) unmatched out of \(scannedFiles.count) scanned; \(collectionImport.recordedVariants) of \(collectionFilesScanned) collection files recorded, \(collectionMatch.plan.unrecognizedFolders.count) unrecognized collection folders\(collectionsSkipped ? " (album history unavailable)" : ""); pruned \(totalPrunedVariants) variants and \(totalPrunedRecords) records"
         )
       } catch is CancellationError {
         guard self.isCurrentImport(operationID, generation: importGen) else { return }

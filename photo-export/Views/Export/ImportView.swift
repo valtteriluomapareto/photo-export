@@ -203,10 +203,11 @@ struct ImportView: View {
     #if DEBUG
       bodyCounter?.recordText(["false"], for: "import-progress")
     #endif
+    let recognized = report.matchedCount + report.collectionMatchedCount
     return VStack(spacing: 16) {
-      Image(systemName: report.matchedCount > 0 ? "checkmark.circle.fill" : "info.circle.fill")
+      Image(systemName: recognized > 0 ? "checkmark.circle.fill" : "info.circle.fill")
         .font(.system(size: 36))
-        .foregroundColor(report.matchedCount > 0 ? .green : .blue)
+        .foregroundColor(recognized > 0 ? .green : .blue)
 
       Text(observed("Import Complete", key: "import-title"))
         .font(.headline)
@@ -214,7 +215,7 @@ struct ImportView: View {
       VStack(alignment: .leading, spacing: 8) {
         reportRow(
           label: "Files scanned",
-          value: "\(report.totalScanned)",
+          value: "\(report.totalScanned + report.collectionFilesScanned)",
           icon: "doc.on.doc"
         )
         reportRow(
@@ -236,6 +237,30 @@ struct ImportView: View {
             icon: "xmark.circle"
           )
         }
+        if report.collectionMatchedCount > 0 || report.collectionFilesScanned > 0 {
+          reportRow(
+            label: "Album and Favorites files matched",
+            value: observed("\(report.collectionMatchedCount)", key: "import-collection-matched"),
+            icon: "rectangle.stack"
+          )
+        }
+        if !report.unrecognizedCollectionFolders.isEmpty {
+          VStack(alignment: .leading, spacing: 2) {
+            reportRow(
+              label: "Album folders with no matching album",
+              value: observed(
+                "\(report.unrecognizedCollectionFolders.count)",
+                key: "import-collection-unrecognized"),
+              icon: "folder.badge.questionmark"
+            )
+            Text(
+              "Albums renamed, moved or deleted in Photos since they were exported. Their files stay in place."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.leading, 28)
+          }
+        }
         if report.prunedRecords > 0 || report.prunedVariants > 0 {
           reportRow(
             label: "Records pruned (file missing)",
@@ -248,12 +273,23 @@ struct ImportView: View {
       .background(Color(.controlBackgroundColor))
       .cornerRadius(8)
 
-      if report.matchedCount > 0 {
+      if recognized > 0 {
         Text(
-          "The app now recognizes \(report.matchedCount) previously exported files. Future exports will skip these assets."
+          "The app now recognizes \(recognized) previously exported files. Future exports will skip these assets."
         )
         .font(.caption)
         .foregroundColor(.secondary)
+        .multilineTextAlignment(.center)
+      }
+
+      if report.collectionsSkipped {
+        Text(
+          observed(
+            "Album and Favorites history wasn\u{2019}t rebuilt because it isn\u{2019}t available. Resolve the export history alert, then import again.",
+            key: "import-collections-skipped")
+        )
+        .font(.caption)
+        .foregroundStyle(.orange)
         .multilineTextAlignment(.center)
       }
 

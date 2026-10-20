@@ -2504,10 +2504,24 @@ struct ImportReport: Equatable {
   /// Records removed entirely after their last variant was pruned. Counts the
   /// timeline and collection stores together.
   let prunedRecords: Int
+  /// Files found in album, shared-album and Favorites folders under `Collections/`.
+  let collectionFilesScanned: Int
+  /// Collection files the album history now records as exported.
+  let collectionMatchedCount: Int
+  /// Folders under `Collections/` with files that no current album, shared album or Favorites
+  /// was matched to, as destination-relative paths.
+  let unrecognizedCollectionFolders: [String]
+  /// The album history wasn't ready, so collection folders were not imported.
+  let collectionsSkipped: Bool
+
+  /// Collection files not recorded as exported.
+  var collectionUnmatchedCount: Int { max(0, collectionFilesScanned - collectionMatchedCount) }
 
   init(
     matchedCount: Int, ambiguousCount: Int, unmatchedCount: Int, totalScanned: Int,
-    prunedVariants: Int = 0, prunedRecords: Int = 0
+    prunedVariants: Int = 0, prunedRecords: Int = 0,
+    collectionFilesScanned: Int = 0, collectionMatchedCount: Int = 0,
+    unrecognizedCollectionFolders: [String] = [], collectionsSkipped: Bool = false
   ) {
     self.matchedCount = matchedCount
     self.ambiguousCount = ambiguousCount
@@ -2515,5 +2529,9 @@ struct ImportReport: Equatable {
     self.totalScanned = totalScanned
     self.prunedVariants = prunedVariants
     self.prunedRecords = prunedRecords
+    self.collectionFilesScanned = collectionFilesScanned
+    self.collectionMatchedCount = collectionMatchedCount
+    self.unrecognizedCollectionFolders = unrecognizedCollectionFolders
+    self.collectionsSkipped = collectionsSkipped
   }
 }
