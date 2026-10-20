@@ -1,0 +1,66 @@
+name: Spike UI tests
+
+# Temporary: checks that XCUITest runs on the hosted runner, unsigned and ad-hoc signed.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ui-spike:
+    if: github.head_ref == 'spike/340-xcuitest'
+    name: ui-spike (${{ matrix.signing }})
+    runs-on: macos-26
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        signing: [unsigned, adhoc]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh
+
+      - name: Runner preflight
+        run: |
+          echo "::group::Runner"
+          sw_vers
+          system_profiler SPDisplaysDataType | grep -E 'Resolution|Display Type|Main Display' || true
+          automationmodetool || true
+          echo "User: $(id -un)  Session: $(launchctl managername 2>/dev/null || true)"
+          echo "::endgroup::"
+
+      - name: Run UI tests
+        run: |
+          set -o pipefail
+          case "${{ matrix.signing }}" in
+            unsigned) signing=(CODE_SIGNING_ALLOWED=NO) ;;
+            adhoc) signing=(CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=) ;;
+          esac
+          echo "Signing: ${signing[*]}"
+          xcodebuild test \
+            -project photo-export.xcodeproj \
+            -scheme photo-export-UITests \
+            -destination 'platform=macOS' \
+            -resultBundlePath UITestResults.xcresult \
+            "${signing[@]}" 2>&1 | tee ui-test.log | tail -150
+
+      - name: Show app sandbox status
+        if: always()
+        run: |
+          app="$(find ~/Library/Developer/Xcode/DerivedData -path '*Debug/Photo Export.app' -maxdepth 6 | head -1)"
+          echo "App: ${app}"
+          [ -n "${app}" ] && codesign -dv --entitlements - "${app}" 2>&1 | head -30 || true
+          ls ~/Library/Containers 2>/dev/null | grep -i photo-export || echo "no photo-export container"
+
+      - name: Upload UI test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: UITestResults-${{ matrix.signing }}
+          path: |
+            UITestResults.xcresult
+            ui-test.log
