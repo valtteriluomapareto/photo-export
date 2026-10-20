@@ -1,0 +1,373 @@
+import Foundation
+
+/// A folder under the destination's `Collections/` tree found by
+/// `BackupScanner.scanCollectionsFolder`. Raw: the planner decides what each folder is, so a
+/// `videos/` folder can be an album's videos subfolder or a nested album called "videos".
+struct ScannedCollectionDirectory: Equatable, Sendable {
+  enum Root: String, CaseIterable, Sendable {
+    case favorites = "Favorites"
+    case albums = "Albums"
+    case sharedAlbums = "Shared Albums"
+  }
+
+  let root: Root
+  /// Folder names below the root folder, spelled as on disk. Empty for the root itself.
+  let components: [String]
+  /// Regular files directly inside this folder, sorted by filename. `subfolder` is `nil`.
+  let files: [BackupScanner.ScannedFile]
+
+  /// Destination-relative path, ending with `/`.
+  var relativePath: String {
+    "Collections/\(root.rawValue)/" + components.map { $0 + "/" }.joined()
+  }
+}
+
+/// Decides which album, shared album or Favorites folder in a backup belongs to which current
+/// Photos collection. Pure: `BackupScanner.matchCollectionFolders` supplies the file matches.
+///
+/// Folder names come from `ExportPlacementResolver`, not from rules of their own. A current
+/// album can only have been exported to its sanitized title under its sanitized parent folders,
+/// or that title with the resolver's sibling-collision suffix (`_2`, `_3`, …). So:
+/// - A saved placement for the album's current identity decides its folder.
+/// - Otherwise the album's candidates are the folders on disk with its name or a suffixed form
+///   of it, compared case-folded and NFC like the resolver's sibling keys. Albums whose names
+///   collide therefore share candidates and are told apart by content, whatever order they were
+///   exported in. A suffixed name that is another album's own title is not a candidate, and
+///   folders saved placements own are not candidates for anyone else.
+/// - A renamed or moved album's old folder is not a candidate: its name or parent path no
+///   longer fits, so the next export uses a new folder and the old one is reported.
+///
+/// A folder is adopted only on evidence: at least one matched file, at least
+/// `precisionFloor` of the folder's files matched, and no equal claim from another album on
+/// the folder or from another folder on the album. The adopted placement has the id the
+/// resolver gives the album and the resolver's spelling of the path, so the next export
+/// resolves to it.
+enum CollectionBackupPlanner {
+  /// Smallest share of a folder's files that must match an album for the folder to be adopted
+  /// by a new placement. Folders saved placements own need only one match.
+  static let precisionFloor = 0.5
+
+  enum Target: Hashable, Sendable {
+    case favorites
+    case album(collectionId: String)
+    case sharedAlbum(collectionId: String)
+
+    var scope: PhotoFetchScope {
+      switch self {
+      case .favorites: .favorites
+      case .album(let id): .album(collectionId: id)
+      case .sharedAlbum(let id): .sharedAlbum(collectionId: id)
+      }
+    }
+
+    fileprivate var sortKey: String {
+      switch self {
+      case .favorites: "0"
+      case .album(let id): "1" + id
+      case .sharedAlbum(let id): "2" + id
+      }
+    }
+  }
+
+  /// One folder an album could have been exported to, with the placement it would adopt.
+  struct Candidate: Equatable {
+    let target: Target
+    /// The folder's on-disk relative path.
+    let folderPath: String
+    let placement: ExportPlacement
+    /// The folder's files, then its `videos/` files with `subfolder == "videos"`.
+    let files: [BackupScanner.ScannedFile]
+    /// The placement is already in the history.
+    let isSaved: Bool
+  }
+
+  /// A candidate's matching evidence.
+  struct Score {
+    let candidate: Candidate
+    let matched: [BackupScanner.MatchedExportFile]
+  }
+
+  struct Adoption {
+    let placement: ExportPlacement
+    let folderPath: String
+    let matched: [BackupScanner.MatchedExportFile]
+
+    /// The records to import: each matched file as a completed variant at its folder. A
+    /// second file for the same asset and variant (an earlier duplicate) is left out.
+    func importBatch(exportedAt: Date) -> CollectionExportRecordStore.ImportBatch {
+      var records: [String: [ExportVariant: ExportVariantRecord]] = [:]
+      for match in matched where records[match.asset.id]?[match.variant] == nil {
+        records[match.asset.id, default: [:]][match.variant] = ExportVariantRecord(
+          filename: match.file.filename, status: .done, exportDate: exportedAt, lastError: nil,
+          subfolder: match.file.subfolder)
+      }
+      return CollectionExportRecordStore.ImportBatch(placement: placement, records: records)
+    }
+  }
+
+  struct Plan {
+    var adoptions: [Adoption] = []
+    /// Folders with files that no current collection was adopted into and no saved placement
+    /// owns, sorted. A `videos/` folder is reported as its parent folder.
+    var unrecognizedFolders: [String] = []
+  }
+
+  // MARK: - Candidates
+
+  static func candidates(
+    directories: [ScannedCollectionDirectory],
+    collections: [PhotoCollectionDescriptor],
+    existingPlacements: [ExportPlacement],
+    resolver: ExportPlacementResolver = ExportPlacementResolver()
+  ) -> [Candidate] {
+    let index = FolderIndex(directories: directories, resolver: resolver)
+    let owned = Set(existingPlacements.compactMap { index.key(forRelativePath: $0.relativePath) })
+    var result: [Candidate] = []
+
+    func savedCandidate(_ target: Target, _ saved: ExportPlacement) {
+      guard let key = index.key(forRelativePath: saved.relativePath),
+        let directory = index.directories[key]
+      else { return }
+      result.append(
+        Candidate(
+          target: target, folderPath: directory.relativePath, placement: saved,
+          files: index.files(in: directory), isSaved: true))
+    }
+
+    // Favorites has one fixed folder.
+    if let saved = resolver.existingCollectionPlacement(
+      for: .favorites, collections: collections, existingPlacements: existingPlacements)
+    {
+      savedCandidate(.favorites, saved)
+    } else if let directory = index.directories[index.key(.favorites, [])] {
+      result.append(
+        Candidate(
+          target: .favorites, folderPath: directory.relativePath, placement: .favorites(),
+          files: index.files(in: directory), isSaved: false))
+    }
+
+    // Shared albums never nest; like the resolver, only top-level ones are their siblings.
+    let albums = resolver.albumsInTree(collections)
+    let sharedAlbums = collections.filter { $0.kind == .sharedAlbum }
+    let entries:
+      [(PhotoCollectionDescriptor, ScannedCollectionDirectory.Root, [PhotoCollectionDescriptor])] =
+        albums.map { ($0, .albums, albums) }
+        + sharedAlbums.map { ($0, .sharedAlbums, sharedAlbums) }
+    for (descriptor, root, siblings) in entries {
+      guard let id = descriptor.localIdentifier, !id.isEmpty else { continue }
+      let target: Target =
+        root == .albums ? .album(collectionId: id) : .sharedAlbum(collectionId: id)
+      let selection: LibrarySelection =
+        root == .albums ? .album(collectionId: id) : .sharedAlbum(collectionId: id)
+      if let saved = resolver.existingCollectionPlacement(
+        for: selection, collections: collections, existingPlacements: existingPlacements)
+      {
+        savedCandidate(target, saved)
+        continue
+      }
+
+      let parent = resolver.sanitizedFolderPath(descriptor.pathComponents)
+      let leaf = ExportPathPolicy.sanitizeComponent(descriptor.title)
+      let leafKey = resolver.siblingLeafKey(leaf)
+      // The resolver never gives a suffixed name that is a sibling's own title.
+      let reserved = Set(
+        siblings
+          .filter {
+            $0.localIdentifier != id && resolver.sanitizedFolderPath($0.pathComponents) == parent
+          }
+          .map { resolver.siblingLeafKey(ExportPathPolicy.sanitizeComponent($0.title)) })
+      let parentKey = index.key(
+        root, descriptor.pathComponents.map(ExportPathPolicy.sanitizeComponent))
+
+      for directory in index.children(ofKey: parentKey) {
+        guard let name = directory.components.last,
+          let suffix = collisionSuffix(of: resolver.siblingLeafKey(name), base: leafKey)
+        else { continue }
+        let folderLeaf = suffix.map { "\(leaf)_\($0)" } ?? leaf
+        if suffix != nil, reserved.contains(resolver.siblingLeafKey(folderLeaf)) { continue }
+        guard let key = index.key(forRelativePath: directory.relativePath), !owned.contains(key),
+          let placement = resolver.adoptedPlacement(for: descriptor, leaf: folderLeaf)
+        else { continue }
+        result.append(
+          Candidate(
+            target: target, folderPath: directory.relativePath, placement: placement,
+            files: index.files(in: directory), isSaved: false))
+      }
+    }
+    return result
+  }
+
+  /// `nil` when `name` isn't `base` or `base_N`; `.some(nil)` for `base`; `.some(N)` for a
+  /// resolver suffix (`N ≥ 2`, no leading zero).
+  private static func collisionSuffix(of name: String, base: String) -> Int?? {
+    if name == base { return .some(nil) }
+    guard name.hasPrefix(base + "_") else { return nil }
+    let digits = name.dropFirst(base.count + 1)
+    guard let first = digits.first, first != "0", digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+      let number = Int(digits), number >= 2
+    else { return nil }
+    return .some(number)
+  }
+
+  /// Files an album could own in a candidate folder: every file in the folder, and the video
+  /// files in its `videos/` subfolder (an export puts nothing else there).
+  static func ownableFileCount(_ files: [BackupScanner.ScannedFile]) -> Int {
+    files.filter {
+      $0.subfolder == nil || BackupScanner.mediaType(for: $0.fileExtension) == .video
+    }.count
+  }
+
+  // MARK: - Assignment
+
+  static func assign(
+    _ scores: [Score], directories: [ScannedCollectionDirectory],
+    existingPlacements: [ExportPlacement],
+    resolver: ExportPlacementResolver = ExportPlacementResolver()
+  ) -> Plan {
+    struct Claim {
+      let score: Score
+      let matched: Int
+      let considered: Int
+      var target: Target { score.candidate.target }
+      var folder: String { score.candidate.folderPath }
+
+      func ranksEqual(_ other: Claim) -> Bool {
+        matched == other.matched && matched * other.considered == other.matched * considered
+      }
+      func ranksAbove(_ other: Claim) -> Bool {
+        if matched != other.matched { return matched > other.matched }
+        return matched * other.considered > other.matched * considered
+      }
+    }
+
+    var claims: [Claim] = scores.compactMap { score in
+      let matched = Set(score.matched.map(\.file.url)).count
+      let considered = max(ownableFileCount(score.candidate.files), matched)
+      guard matched > 0 else { return nil }
+      if !score.candidate.isSaved,
+        Double(matched) < precisionFloor * Double(considered)
+      {
+        return nil
+      }
+      return Claim(score: score, matched: matched, considered: considered)
+    }
+    claims.sort {
+      if !$0.ranksEqual($1) { return $0.ranksAbove($1) }
+      if $0.folder != $1.folder { return $0.folder < $1.folder }
+      return $0.target.sortKey < $1.target.sortKey
+    }
+
+    var plan = Plan()
+    var settledTargets = Set<Target>()
+    var settledFolders = Set<String>()
+    while let top = claims.first {
+      let rivals = claims.filter {
+        $0.ranksEqual(top) && ($0.target == top.target || $0.folder == top.folder)
+      }
+      for claim in rivals {
+        settledTargets.insert(claim.target)
+        settledFolders.insert(claim.folder)
+      }
+      if rivals.count == 1 {
+        plan.adoptions.append(
+          Adoption(
+            placement: top.score.candidate.placement, folderPath: top.folder,
+            matched: top.score.matched))
+      }
+      claims.removeAll { settledTargets.contains($0.target) || settledFolders.contains($0.folder) }
+    }
+
+    plan.unrecognizedFolders = unrecognizedFolders(
+      directories: directories, adopted: Set(plan.adoptions.map(\.folderPath)),
+      existingPlacements: existingPlacements, resolver: resolver)
+    return plan
+  }
+
+  private static func unrecognizedFolders(
+    directories: [ScannedCollectionDirectory], adopted: Set<String>,
+    existingPlacements: [ExportPlacement], resolver: ExportPlacementResolver
+  ) -> [String] {
+    let index = FolderIndex(directories: directories, resolver: resolver)
+    let adoptedKeys = Set(adopted.compactMap { index.key(forRelativePath: $0) })
+    let ownedKeys = Set(
+      existingPlacements.compactMap { index.key(forRelativePath: $0.relativePath) })
+    var result = Set<String>()
+    for directory in directories where !directory.files.isEmpty {
+      let isRoot = directory.root != .favorites && directory.components.isEmpty
+      if isRoot { continue }
+      let key = index.key(directory.root, directory.components)
+      let parentComponents = Array(directory.components.dropLast())
+      let isNamedVideos =
+        directory.components.last.map { resolver.siblingLeafKey($0) == "videos" } ?? false
+      let isVideosFolder =
+        isNamedVideos && (directory.root == .favorites || !parentComponents.isEmpty)
+      let parentKey = index.key(directory.root, parentComponents)
+      if adoptedKeys.contains(key) || ownedKeys.contains(key) { continue }
+      if isVideosFolder {
+        if adoptedKeys.contains(parentKey) || ownedKeys.contains(parentKey) { continue }
+        result.insert(
+          "Collections/\(directory.root.rawValue)/"
+            + parentComponents.map { $0 + "/" }.joined())
+      } else {
+        result.insert(directory.relativePath)
+      }
+    }
+    return result.sorted()
+  }
+}
+
+/// Scanned folders keyed by the resolver's case-folded, NFC sibling keys.
+private struct FolderIndex {
+  let resolver: ExportPlacementResolver
+  private(set) var directories: [String: ScannedCollectionDirectory] = [:]
+  private var childrenByParent: [String: [ScannedCollectionDirectory]] = [:]
+
+  init(directories scanned: [ScannedCollectionDirectory], resolver: ExportPlacementResolver) {
+    self.resolver = resolver
+    for directory in scanned {
+      directories[key(directory.root, directory.components)] = directory
+      if !directory.components.isEmpty {
+        childrenByParent[
+          key(directory.root, Array(directory.components.dropLast())), default: []
+        ].append(directory)
+      }
+    }
+    for (parent, children) in childrenByParent {
+      childrenByParent[parent] = children.sorted { $0.relativePath < $1.relativePath }
+    }
+  }
+
+  func key(_ root: ScannedCollectionDirectory.Root, _ components: [String]) -> String {
+    ([root.rawValue] + components.map(resolver.siblingLeafKey)).joined(separator: "/")
+  }
+
+  /// The key of a placement's folder, or `nil` for a path outside the collection roots.
+  func key(forRelativePath path: String) -> String? {
+    for root in ScannedCollectionDirectory.Root.allCases {
+      let prefix = "Collections/\(root.rawValue)/"
+      guard path.hasPrefix(prefix) else { continue }
+      let components = path.dropFirst(prefix.count).split(separator: "/").map(String.init)
+      return key(root, components)
+    }
+    return nil
+  }
+
+  func children(ofKey key: String) -> [ScannedCollectionDirectory] {
+    childrenByParent[key] ?? []
+  }
+
+  /// A folder's files, then its `videos/` subfolder's files tagged with that subfolder.
+  func files(in directory: ScannedCollectionDirectory) -> [BackupScanner.ScannedFile] {
+    var files = directory.files
+    let videos = directories[key(directory.root, directory.components + ["videos"])]
+    for file in videos?.files ?? [] {
+      files.append(
+        BackupScanner.ScannedFile(
+          url: file.url, year: file.year, month: file.month, filename: file.filename,
+          baseFilename: file.baseFilename, hasCollisionSuffix: file.hasCollisionSuffix,
+          fileExtension: file.fileExtension, modificationDate: file.modificationDate,
+          fileSize: file.fileSize, subfolder: "videos"))
+    }
+    return files
+  }
+}

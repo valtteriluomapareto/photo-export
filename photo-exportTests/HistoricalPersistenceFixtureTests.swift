@@ -266,4 +266,73 @@ struct HistoricalPersistenceFixtureTests {
       b.flushForTesting()
     }
   }
+
+  /// Import Existing Backup's album adoption on top of v1.6.5 collection history: it appends
+  /// only the existing placement and record operations, keeps the saved placement's folder and
+  /// completed variants, and the result reopens.
+  @Test func collectionBulkImportOnHistoricalStoreUsesExistingOperations() throws {
+    let fixture = try Fixture(tag: "v1.6.5")
+    defer { fixture.cleanup() }
+    let logURL = fixture.root.appendingPathComponent("A/collection-records.jsonl")
+    let originalLog = try Data(contentsOf: logURL)
+    let store = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
+    store.configure(for: "A")
+    let saved = try #require(store.placements["fixture-album"])
+    let imported = ExportPlacement(
+      kind: .album, id: "collections:album:aaaaaaaaaaaaaaaa:bbbbbbbb", displayName: "Imported",
+      collectionLocalIdentifier: "imported", relativePath: "Collections/Albums/Imported/",
+      createdAt: date)
+    func done(_ name: String) -> ExportVariantRecord {
+      ExportVariantRecord(filename: name, status: .done, exportDate: date, lastError: nil)
+    }
+    let summary = store.bulkImportRecords([
+      .init(
+        placement: ExportPlacement(
+          kind: .album, id: saved.id, displayName: "Renamed", collectionLocalIdentifier: "x",
+          relativePath: saved.relativePath, createdAt: Date()),
+        records: [
+          "shared": [.original: done("ALBUM.JPG")], "log-only": [.original: done("OTHER.JPG")],
+          "new": [.original: done("NEW.JPG")],
+        ]),
+      .init(placement: imported, records: ["new": [.original: done("NEW.JPG")]]),
+    ])
+    store.flushForTesting()
+    #expect(summary.importedVariants == 3)
+    #expect(summary.alreadyDoneVariants == 1)
+    #expect(summary.addedPlacements == 1)
+
+    let log = try Data(contentsOf: logURL)
+    #expect(log.prefix(originalLog.count) == originalLog, "history is appended to, not rewritten")
+    let appended = log.dropFirst(originalLog.count).split(separator: UInt8(ascii: "\n"))
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let ops = try appended.map {
+      try decoder.decode(CollectionExportRecordStore.LogOp.self, from: Data($0))
+    }
+    #expect(ops.count == 4)
+    for line in appended {
+      let object = try #require(
+        try JSONSerialization.jsonObject(with: Data(line)) as? [String: Any])
+      #expect(["upsertPlacement", "upsertRecord"].contains(object["op"] as? String))
+    }
+
+    let reopened = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
+    reopened.configure(for: "A")
+    #expect(reopened.state == .ready)
+    let album = try #require(reopened.placements["fixture-album"])
+    #expect(album.relativePath == "Collections/Albums/Nested/Album/")
+    #expect(album.displayName == saved.displayName && album.createdAt == date)
+    #expect(reopened.placements[imported.id]?.relativePath == imported.relativePath)
+    #expect(
+      reopened.exportInfo(assetId: "shared", placement: album)?.variants[.original]?.filename
+        == "ALBUM.JPG")
+    #expect(
+      reopened.exportInfo(assetId: "log-only", placement: album)?.variants[.original]?.filename
+        == "LOG.JPG")
+    #expect(reopened.exportInfo(assetId: "new", placement: imported) != nil)
+    #expect(
+      reopened.exportInfo(assetId: "video", placement: album)?.variants[.original]?.subfolder
+        == "videos")
+    reopened.flushForTesting()
+  }
 }

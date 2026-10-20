@@ -5,7 +5,8 @@ import ImageIO
 import Photos
 import os
 
-/// Scans a backup folder in YYYY/MM/ layout and matches files to Photos library assets.
+/// Scans a backup folder in YYYY/MM/ layout and matches files to Photos library assets. The
+/// folders under `Collections/` are scanned and matched in `BackupScanner+Collections.swift`.
 ///
 /// Used by the "Import Existing Backup…" feature to rebuild local export state
 /// from an existing backup folder on a fresh install.
@@ -25,6 +26,7 @@ struct BackupScanner {
   /// the file's actual on-disk location for reconcile and reuse-source.
   struct ScannedFile: Equatable {
     let url: URL
+    /// The `YYYY/MM` folder the file was found in; `0` for files in a collection folder.
     let year: Int
     let month: Int
     let filename: String
@@ -91,7 +93,7 @@ struct BackupScanner {
     case done
   }
 
-  private static let logger = Logger(
+  static let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "BackupScanner")
 
   // MARK: - Collision suffix pattern
@@ -379,9 +381,12 @@ struct BackupScanner {
   static func matchFiles(
     _ scannedFiles: [ScannedFile],
     photoLibraryService: any PhotoLibraryService,
+    fingerprintCache: FingerprintCache? = nil,
     progress: @MainActor (ImportStage) -> Void
   ) async throws -> MatchResult {
     var result = MatchResult()
+    let cache: FingerprintCache
+    if let fingerprintCache { cache = fingerprintCache } else { cache = await FingerprintCache() }
 
     // Group scanned files by year-month for batch fetching
     var filesByYearMonth: [String: [ScannedFile]] = [:]
@@ -411,7 +416,7 @@ struct BackupScanner {
           let assets = (try? await photoLibraryService.fetchAssets(year: y, month: m)) ?? []
           assetsByYearMonth[k] = assets
           // Build fingerprints once — this is the only resource call site
-          fingerprintsByYearMonth[k] = await buildFingerprints(
+          fingerprintsByYearMonth[k] = await cache.fingerprints(
             for: assets, using: photoLibraryService)
         }
       }
@@ -433,66 +438,19 @@ struct BackupScanner {
         assetById[asset.id] = asset
       }
 
-      // Pre-compute the set of group stems that have a `_orig` companion sibling in this
-      // scope. When a natural-stem file's stem appears here, the file is an `.edited`
-      // companion paired with that `_orig` original — even when the file's filename also
-      // matches a known original-resource filename (the include-originals same-extension
-      // case where the original moved out of the way to the `_orig` sibling).
-      // Stems are case-folded so a mixed-case sibling pair (e.g. `IMG_1.heic` next to
-      // `IMG_1_orig.HEIC`) still pairs up — case varies in real exports (issue #127).
-      var stemsWithOrigSibling = Set<String>()
-      for file in files {
-        if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
-          stemsWithOrigSibling.insert(parsed.groupStem.lowercased())
-          stemsWithOrigSibling.insert(parsed.canonicalOriginalStem.lowercased())
-        }
-      }
-
-      // Issue #38: pre-compute the set of `baseFilename`s that appear BOTH at the bare
-      // month path AND inside `videos/` in the same `(year, month)` scope. A mid-life
-      // toggle of `videoLayout` produces this pattern for a standalone video that
-      // already had `.original` on disk under `.flat` and then got `.edited` written
-      // under `.subfolder` — same stem, same extension, different directory, and the
-      // two-`_orig`-companion rule doesn't apply because no `_orig` file exists. Without
-      // this hint the classifier matches both files as `.original` against the same
-      // asset and silently loses the `.edited` variant on import.
-      var filenamesAtBare = Set<String>()
-      var filenamesInVideos = Set<String>()
-      for file in files {
-        if file.subfolder == nil { filenamesAtBare.insert(file.baseFilename) }
-        if file.subfolder == "videos" { filenamesInVideos.insert(file.baseFilename) }
-      }
-      let filenamesWithSubfolderSplit = filenamesAtBare.intersection(filenamesInVideos)
-
-      for file in files {
-        try Task.checkCancellation()
+      let group = try await matchGroup(
+        files, fingerprints: combinedFingerprints, assetById: assetById
+      ) { groupMatched in
         matchedCount += 1
         if matchedCount % 50 == 0 {
-          await progress(.matchingAssets(matched: result.matched.count, total: totalFiles))
+          await progress(
+            .matchingAssets(matched: result.matched.count + groupMatched, total: totalFiles))
           await Task.yield()
         }
-
-        if combinedFingerprints.isEmpty {
-          result.unmatched.append(file)
-          continue
-        }
-
-        let matchOutcome = matchSingleFile(
-          file,
-          fingerprints: combinedFingerprints,
-          assetById: assetById,
-          stemsWithOrigSibling: stemsWithOrigSibling,
-          filenamesWithSubfolderSplit: filenamesWithSubfolderSplit
-        )
-        switch matchOutcome {
-        case .matched(let matched):
-          result.matched.append(matched)
-        case .ambiguous:
-          result.ambiguous.append(file)
-        case .unmatched:
-          result.unmatched.append(file)
-        }
       }
+      result.matched.append(contentsOf: group.matched)
+      result.ambiguous.append(contentsOf: group.ambiguous)
+      result.unmatched.append(contentsOf: group.unmatched)
     }
 
     logger.info(
@@ -516,6 +474,78 @@ struct BackupScanner {
       results.append((year, month + 1))
     }
     return results
+  }
+
+  /// Classifies every file of one group (a month, or one collection folder with its
+  /// `videos/` files) against the group's candidate fingerprints. Sibling hints — `_orig`
+  /// companions and files split between the folder and its `videos/` subfolder — are computed
+  /// within the group. `beforeEachFile` runs before each file with the group's matched count
+  /// so far.
+  static func matchGroup(
+    _ files: [ScannedFile],
+    fingerprints: [AssetFingerprint],
+    assetById: [String: AssetDescriptor],
+    beforeEachFile: (_ groupMatched: Int) async -> Void = { _ in }
+  ) async throws -> MatchResult {
+    var result = MatchResult()
+
+    // Pre-compute the set of group stems that have a `_orig` companion sibling in this
+    // scope. When a natural-stem file's stem appears here, the file is an `.edited`
+    // companion paired with that `_orig` original — even when the file's filename also
+    // matches a known original-resource filename (the include-originals same-extension
+    // case where the original moved out of the way to the `_orig` sibling).
+    // Stems are case-folded so a mixed-case sibling pair (e.g. `IMG_1.heic` next to
+    // `IMG_1_orig.HEIC`) still pairs up — case varies in real exports (issue #127).
+    var stemsWithOrigSibling = Set<String>()
+    for file in files {
+      if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
+        stemsWithOrigSibling.insert(parsed.groupStem.lowercased())
+        stemsWithOrigSibling.insert(parsed.canonicalOriginalStem.lowercased())
+      }
+    }
+
+    // Issue #38: pre-compute the set of `baseFilename`s that appear BOTH at the bare
+    // placement path AND inside `videos/` in the same group. A mid-life toggle of
+    // `videoLayout` produces this pattern for a standalone video that already had
+    // `.original` on disk under `.flat` and then got `.edited` written under `.subfolder` —
+    // same stem, same extension, different directory, and the two-`_orig`-companion rule
+    // doesn't apply because no `_orig` file exists. Without this hint the classifier matches
+    // both files as `.original` against the same asset and silently loses the `.edited`
+    // variant on import.
+    var filenamesAtBare = Set<String>()
+    var filenamesInVideos = Set<String>()
+    for file in files {
+      if file.subfolder == nil { filenamesAtBare.insert(file.baseFilename) }
+      if file.subfolder == "videos" { filenamesInVideos.insert(file.baseFilename) }
+    }
+    let filenamesWithSubfolderSplit = filenamesAtBare.intersection(filenamesInVideos)
+
+    for file in files {
+      try Task.checkCancellation()
+      await beforeEachFile(result.matched.count)
+
+      if fingerprints.isEmpty {
+        result.unmatched.append(file)
+        continue
+      }
+
+      let matchOutcome = matchSingleFile(
+        file,
+        fingerprints: fingerprints,
+        assetById: assetById,
+        stemsWithOrigSibling: stemsWithOrigSibling,
+        filenamesWithSubfolderSplit: filenamesWithSubfolderSplit
+      )
+      switch matchOutcome {
+      case .matched(let matched):
+        result.matched.append(matched)
+      case .ambiguous:
+        result.ambiguous.append(file)
+      case .unmatched:
+        result.unmatched.append(file)
+      }
+    }
+    return result
   }
 
   // MARK: - Hybrid single-file matching
@@ -975,7 +1005,7 @@ struct BackupScanner {
 
   // MARK: - Filesystem helpers
 
-  private static func readDirectory(
+  static func readDirectory(
     _ url: URL, keys: [URLResourceKey], reader: any BackupDirectoryReading
   ) throws -> [URL] {
     do { return try reader.contentsOfDirectory(at: url, keys: keys) } catch {
@@ -983,7 +1013,7 @@ struct BackupScanner {
     }
   }
 
-  private static func readValues(
+  static func readValues(
     _ url: URL, keys: Set<URLResourceKey>, reader: any BackupDirectoryReading
   ) throws -> URLResourceValues {
     do { return try reader.resourceValues(at: url, keys: keys) } catch {
@@ -991,23 +1021,28 @@ struct BackupScanner {
     }
   }
 
-  private static func isDirectory(
+  static func isDirectory(
     _ url: URL, reader: any BackupDirectoryReading, optional: Bool = false
   ) throws -> Bool {
     let values: URLResourceValues
     do { values = try reader.resourceValues(at: url, keys: [.isDirectoryKey]) } catch {
-      let error = error as NSError
-      let missing =
-        error.domain == NSCocoaErrorDomain
-        && (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError)
-      let missingPOSIX = error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT)
-      if optional && (missing || missingPOSIX) { return false }
+      if optional && isMissingFile(error) { return false }
       throw BackupScanReadError(path: url.path, detail: error.localizedDescription)
     }
     guard let directory = values.isDirectory, !optional || directory else {
       throw BackupScanReadError(path: url.path, detail: "Expected a directory")
     }
     return directory
+  }
+
+  /// Whether a lookup failed only because nothing is at the path.
+  static func isMissingFile(_ error: any Error) -> Bool {
+    let error = error as NSError
+    let missing =
+      error.domain == NSCocoaErrorDomain
+      && (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError)
+    let missingPOSIX = error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT)
+    return missing || missingPOSIX
   }
 
   private static func parseYear(_ component: String) -> Int? {

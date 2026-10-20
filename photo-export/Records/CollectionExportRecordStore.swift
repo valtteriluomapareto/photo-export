@@ -531,6 +531,94 @@ final class CollectionExportRecordStore: ObservableObject {
     append(.deleteRecord(placementId: placement.id, assetId: assetId))
   }
 
+  // MARK: - Bulk import
+
+  /// One placement's files found by Import Existing Backup.
+  struct ImportBatch: Equatable {
+    let placement: ExportPlacement
+    /// Asset id → the variants found on disk.
+    let records: [String: [ExportVariant: ExportVariantRecord]]
+  }
+
+  struct BulkImportSummary: Equatable {
+    /// Variants written by this import.
+    var importedVariants = 0
+    /// Variants already `.done`, left as they were.
+    var alreadyDoneVariants = 0
+    /// Variants not imported because the placement or store couldn't take them.
+    var rejectedVariants = 0
+    /// Placements this import added.
+    var addedPlacements = 0
+
+    /// Variants the history now records as exported from this input.
+    var recordedVariants: Int { importedVariants + alreadyDoneVariants }
+  }
+
+  /// Records collection files found by Import Existing Backup, in one synchronous batch.
+  /// - A new placement is written before its records. A saved placement with the same id
+  ///   keeps its metadata and folder; files found at a different folder are not recorded
+  ///   under it.
+  /// - A variant already `.done` is left as it is; any other state is replaced.
+  /// - Nothing is appended when nothing changes, so importing the same backup again writes
+  ///   no bytes.
+  /// - A store that is not `.ready` and `.timeline` placements take nothing.
+  /// Uses the existing `upsertPlacement` and `upsertRecord` operations only.
+  @discardableResult
+  func bulkImportRecords(_ batches: [ImportBatch]) -> BulkImportSummary {
+    var summary = BulkImportSummary()
+    for batch in batches {
+      let variantCount = batch.records.values.reduce(0) { $0 + $1.count }
+      guard state == .ready, accept(batch.placement) else {
+        summary.rejectedVariants += variantCount
+        continue
+      }
+      let placement: ExportPlacement
+      let isNew: Bool
+      if let saved = placements[batch.placement.id] {
+        guard saved.relativePath == batch.placement.relativePath else {
+          logger.warning(
+            "Skipped importing \(variantCount) variants for \(saved.id, privacy: .public): its saved folder differs from the folder they were found in"
+          )
+          summary.rejectedVariants += variantCount
+          continue
+        }
+        placement = saved
+        isNew = false
+      } else {
+        placement = batch.placement
+        isNew = true
+      }
+
+      var changedBodies: [(assetId: String, body: RecordBody)] = []
+      for assetId in batch.records.keys.sorted() {
+        var body = recordBodies[placement.id]?[assetId] ?? RecordBody(variants: [:])
+        var changed = false
+        for (variant, incoming) in batch.records[assetId] ?? [:] {
+          if body.variants[variant.rawValue]?.status == .done {
+            summary.alreadyDoneVariants += 1
+            continue
+          }
+          body.variants[variant.rawValue] = incoming
+          summary.importedVariants += 1
+          changed = true
+        }
+        if changed { changedBodies.append((assetId, body)) }
+      }
+      guard !changedBodies.isEmpty else { continue }
+      if isNew {
+        append(.upsertPlacement(placementId: placement.id, placement: placement))
+        summary.addedPlacements += 1
+      }
+      for (assetId, body) in changedBodies {
+        append(.upsertRecord(placementId: placement.id, assetId: assetId, body: body))
+      }
+    }
+    logger.info(
+      "Bulk imported \(summary.importedVariants) collection variants into \(summary.addedPlacements) new placements (\(summary.alreadyDoneVariants) already done, \(summary.rejectedVariants) not imported)"
+    )
+    return summary
+  }
+
   // MARK: - Reconcile against filesystem
 
   /// Result of `reconcileAgainstFilesystem(at:)`. Same shape as the timeline store's

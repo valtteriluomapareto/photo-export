@@ -160,8 +160,6 @@ struct ExportPlacementResolver {
     let collectionId = descriptor.localIdentifier ?? ""
     let displayPathHash = displayPathHash8(
       pathComponents: descriptor.pathComponents, title: descriptor.title)
-    let candidateId =
-      "collections:album:\(collectionIdHash16(for: collectionId)):\(displayPathHash)"
 
     // Step 1: look for an existing placement that matches this exact triple
     // `(kind=.album, collectionLocalIdentifier, displayPathHash8)`. If found, return it
@@ -183,6 +181,18 @@ struct ExportPlacementResolver {
       collections: collections,
       existingPlacements: existingPlacements
     )
+    return albumPlacement(descriptor: descriptor, leaf: leaf)
+  }
+
+  /// The placement for `descriptor` in the folder named `leaf` under its sanitized parent
+  /// path: the id, display name and path an export would give it with that folder name.
+  private func albumPlacement(descriptor: PhotoCollectionDescriptor, leaf: String)
+    -> ExportPlacement
+  {
+    let collectionId = descriptor.localIdentifier ?? ""
+    let displayPathHash = displayPathHash8(
+      pathComponents: descriptor.pathComponents, title: descriptor.title)
+    let parentPathString = sanitizedFolderPath(descriptor.pathComponents)
     let relativePath: String = {
       var path = "Collections/Albums/"
       if !parentPathString.isEmpty {
@@ -196,12 +206,26 @@ struct ExportPlacementResolver {
     }()
     return ExportPlacement(
       kind: .album,
-      id: candidateId,
+      id: "collections:album:\(collectionIdHash16(for: collectionId)):\(displayPathHash)",
       displayName: displayName,
       collectionLocalIdentifier: collectionId,
       relativePath: relativePath,
       createdAt: now()
     )
+  }
+
+  /// The placement an export would have created for `descriptor` (an album or shared album) in
+  /// the folder named `leaf` — the sanitized title, or it with a sibling-collision suffix —
+  /// under the descriptor's sanitized parent path. Used to adopt an existing folder; `nil` for
+  /// other kinds.
+  func adoptedPlacement(for descriptor: PhotoCollectionDescriptor, leaf: String)
+    -> ExportPlacement?
+  {
+    switch descriptor.kind {
+    case .album: return albumPlacement(descriptor: descriptor, leaf: leaf)
+    case .sharedAlbum: return sharedAlbumPlacement(descriptor: descriptor, leaf: leaf)
+    case .favorites, .folder: return nil
+    }
   }
 
   // MARK: - Shared-album resolution
@@ -221,8 +245,6 @@ struct ExportPlacementResolver {
     let collectionId = descriptor.localIdentifier ?? ""
     let displayPathHash = displayPathHash8(
       pathComponents: descriptor.pathComponents, title: descriptor.title)
-    let candidateId =
-      "collections:shared-album:\(collectionIdHash16(for: collectionId)):\(displayPathHash)"
 
     // Step 1: look for an existing placement that matches the exact triple.
     if let existing = matchingPlacement(
@@ -241,13 +263,21 @@ struct ExportPlacementResolver {
       collections: collections,
       existingPlacements: existingPlacements
     )
-    let relativePath = "Collections/Shared Albums/\(leaf)/"
+    return sharedAlbumPlacement(descriptor: descriptor, leaf: leaf)
+  }
+
+  private func sharedAlbumPlacement(descriptor: PhotoCollectionDescriptor, leaf: String)
+    -> ExportPlacement
+  {
+    let collectionId = descriptor.localIdentifier ?? ""
+    let displayPathHash = displayPathHash8(
+      pathComponents: descriptor.pathComponents, title: descriptor.title)
     return ExportPlacement(
       kind: .sharedAlbum,
-      id: candidateId,
+      id: "collections:shared-album:\(collectionIdHash16(for: collectionId)):\(displayPathHash)",
       displayName: descriptor.title,
       collectionLocalIdentifier: collectionId,
-      relativePath: relativePath,
+      relativePath: "Collections/Shared Albums/\(leaf)/",
       createdAt: now()
     )
   }
@@ -464,7 +494,7 @@ struct ExportPlacementResolver {
 
   /// Conservative comparison for new siblings on common case-insensitive volumes.
   /// Emitted spelling and identity hashing deliberately keep the original case.
-  private func siblingLeafKey(_ sanitizedLeaf: String) -> String {
+  func siblingLeafKey(_ sanitizedLeaf: String) -> String {
     sanitizedLeaf.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
       .precomposedStringWithCanonicalMapping
   }
@@ -510,7 +540,7 @@ struct ExportPlacementResolver {
     return nil
   }
 
-  private func albumsInTree(_ collections: [PhotoCollectionDescriptor])
+  func albumsInTree(_ collections: [PhotoCollectionDescriptor])
     -> [PhotoCollectionDescriptor]
   {
     var result: [PhotoCollectionDescriptor] = []
@@ -523,7 +553,7 @@ struct ExportPlacementResolver {
     return result
   }
 
-  private func sanitizedFolderPath(_ components: [String]) -> String {
+  func sanitizedFolderPath(_ components: [String]) -> String {
     components.map(ExportPathPolicy.sanitizeComponent).joined(separator: "/")
   }
 }
