@@ -21,7 +21,8 @@ private final class EqualWriteModel {
 /// already held, on the toolchain that builds the tests. The `@Observable` macro's behaviour
 /// here has changed between toolchains, and a view that re-renders (or stops re-rendering) on
 /// such writes depends on it, so a toolchain bump that changes it fails here first. The Combine
-/// accessors are unaffected: `PublisherParityTests` pins that they deliver every write.
+/// accessors are unaffected: `PublisherParityTests` pins what each accessor delivers on an
+/// unchanged write.
 @MainActor
 struct ObservationEqualWriteTests {
   @Test func equalEquatableWriteDoesNotNotify() {

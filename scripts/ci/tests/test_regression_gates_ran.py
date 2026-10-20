@@ -151,31 +151,7 @@ class GateResultCheckTests(unittest.TestCase):
             add_case(self.results, "AutoSyncSeamCharacterizationTests", method)
         add_suite(self.results, "AmbiguousSameFolderTests",
                   "sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds")
-        add_suite(self.results, "PublisherParityTests",
-                  "destinationIdentity",
-                  "destinationIsAvailable",
-                  "lifecycleCurrentDestination",
-                  "lifecycleMigrationConflict",
-                  "safetyNeedsConfirmation",
-                  "libraryAuthorizationStatus",
-                  "libraryIsAuthorized",
-                  "managerVersionSelection",
-                  "managerConvertHEICToJPEG",
-                  "managerLivePhotosPairedExport",
-                  "managerImportStage",
-                  "managerIsImportingFlag",
-                  "managerIsImportingHold",
-                  "managerActiveRunContext",
-                  "managerIsEnqueueingAll",
-                  "managerExportRunState",
-                  "progressEmptyRunMessage",
-                  "scopeSelection",
-                  "monthSelectedAssetId",
-                  "sidebarCountsByYearMonth",
-                  "autoSyncLastRunSummary",
-                  "timelineMutationCounter",
-                  "collectionMutationCounter",
-                  "adapterDestinationSnapshot")
+        add_suite(self.results, "PublisherParityTests", "destinationIdentity")
         self.assert_passes(self.run_check(gates=GATE_LIST.read_text()))
 
     def test_real_gate_list_fails_without_the_new_seam_cases(self):

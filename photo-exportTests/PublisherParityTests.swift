@@ -424,8 +424,8 @@ struct PublisherParityTests {
             filename: "PARITY.JPG", exportedAt: Date())
           store.flushPendingNotifications()
         },
-        // A counter: every publication increments it. A flush with nothing pending publishes
-        // nothing.
+        // A counter, so no write stores an equal value. This pins the guard against an empty
+        // flush (nothing pending publishes nothing), not delivery of an equal write.
         unchangedWrite: .after { store.flushPendingNotifications() },
         unchangedWriteDelivery: .isDropped)
     } cleanup: {
@@ -449,8 +449,8 @@ struct PublisherParityTests {
             assetId: "parity", placement: placement, variant: .original, filename: "PARITY.JPG")
           store.flushPendingNotifications()
         },
-        // A counter: every publication increments it. A flush with nothing pending publishes
-        // nothing.
+        // A counter, so no write stores an equal value. This pins the guard against an empty
+        // flush (nothing pending publishes nothing), not delivery of an equal write.
         unchangedWrite: .after { store.flushPendingNotifications() },
         unchangedWriteDelivery: .isDropped)
     } cleanup: {

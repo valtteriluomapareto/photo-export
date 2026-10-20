@@ -180,6 +180,16 @@ class ObservationRatchetGuardTests(unittest.TestCase):
             "struct V: View { var body: some View { Toggle(isOn: $model.flag) {} } }\n")
         self.assertPasses()
 
+    def test_internal_receiver_split_across_lines_is_not_external(self):
+        self.add_view(
+            "final class Owner {\n"
+            "  func f() {\n"
+            "    self\n      .$flag.send(true)\n"
+            "    sink { [weak self] in\n      self?\n        .objectWillChange.send()\n    }\n"
+            "  }\n"
+            "}\n")
+        self.assertPasses()
+
     def test_comments_and_strings_are_ignored(self):
         self.write(
             "Notes.swift",
@@ -199,6 +209,18 @@ class ObservationRatchetGuardTests(unittest.TestCase):
         result = self.run_guard()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("observation-ratchet.txt:10: expected kind|key|value", result.stderr)
+
+    def test_unknown_total_row_fails(self):
+        self.ceiling(CEILING + "total|x|1\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("unknown total 'x'", result.stderr)
+
+    def test_duplicate_total_row_fails(self):
+        self.ceiling(CEILING + "total|published|2\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("duplicate total row for published", result.stderr)
 
     def test_unknown_ceiling_kind_fails(self):
         self.ceiling(CEILING + "published|photo-export/Manager.swift|2\n")

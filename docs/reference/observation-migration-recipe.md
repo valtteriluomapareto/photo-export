@@ -145,10 +145,10 @@ unchanged write emits; a `withObservationTracking` `onChange` fires.
 - **Equal-value writes and the toolchain.** Whether Observation notifies on a write that
   stores an equal value depends on the toolchain. `ObservationEqualWriteTests` records what
   the toolchain that builds the tests does: an equal `Equatable` write and an identical
-  reference write do not notify, and a non-`Equatable` write does (recorded on Xcode 27.1; CI
-  runs it on the toolchain in `.xcode-version`). A toolchain
-  bump that changes this fails there first (the 27.1 canary runs it). The Combine side does not
-  depend on it: the bridge publishes every write, as the parity tests require.
+  reference write do not notify, and a non-`Equatable` write does. Recorded on Xcode 27.1; CI
+  runs it on `.xcode-version` (26.6) and on the 27.1 canary, so a toolchain whose behaviour
+  differs fails it. The Combine side does not depend on it: the bridge publishes every write, as
+  the parity tests require.
 - **Each flip runs:** the build (a missed `@EnvironmentObject` → `@Environment` swap is a
   compile error; a missed injection is not), the type's own tests, `PublisherParityTests`, the
   hosted suites for every view that reads the type (also repeated with
@@ -164,11 +164,6 @@ holds `photo-export/` to [`scripts/ci/observation-ratchet.txt`](../../scripts/ci
 and external `objectWillChange`. A flip lowers or removes its rows in the same change; the
 guard fails until it does, and fails on any new old-pattern use, including one arriving from
 main at a sync. See [`scripts/README.md`](../../scripts/README.md).
-
-When it was introduced it counted 18 `ObservableObject` types. The plan's inventory said 19;
-no 19th conformance exists in `photo-export/` (17 are single-line `class` declarations, and
-`PhotoLibraryPersistentChangeAdapter` wraps its conformance onto the next line). The four
-test-local `ObservableObject` types in `photo-exportTests/` are not counted.
 
 ## Hosted-suite flake baseline
 
