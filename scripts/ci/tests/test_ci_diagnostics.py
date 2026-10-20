@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from test_ci_logs import block, WORKFLOW
+from test_ci_logs import block, ROOT, run_line, WORKFLOW
 
 SCRIPT = Path(__file__).resolve().parents[1] / "collect_test_diagnostics.py"
 spec = importlib.util.spec_from_file_location("test_diagnostics", SCRIPT)
@@ -153,12 +153,17 @@ sys.exit(int(os.environ.get("DIAGNOSTIC_EXPORT_EXIT", "0")))
         upload = source[source.index("      - name: Upload test results"):]
         for path in ["TestResults.xcresult", "debug-build.log", "test.log", "release-build.log", "TestDiagnostics/"]:
             self.assertIn(path, upload)
-        unit_script = block("Run Unit Tests (Debug, with coverage)")
+        unit_step = source[source.index("      - name: Run Unit Tests (Debug, with coverage)"):]
+        unit_step = unit_step[:unit_step.index("      - name:", 10)]
+        self.assertIn("id: unit-tests", unit_step)
+        self.assertEqual(run_line(WORKFLOW, "Run Unit Tests (Debug, with coverage)"),
+                         "bash scripts/ci/run-unit-tests.sh")
+        unit_script = (ROOT / "scripts/ci/run-unit-tests.sh").read_text()
         self.assertLess(unit_script.index("touch test-start.marker"), unit_script.index("xcodebuild"))
         stub = self.bin / "xcodebuild"
         stub.write_text('#!/bin/sh\nmkdir -p TestResults.xcresult\necho "fixture test failure"\nexit 65\n')
         stub.chmod(0o755)
-        unit = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", unit_script],
+        unit = subprocess.run(["bash", str(ROOT / "scripts/ci/run-unit-tests.sh")],
                               cwd=self.root, env=self.environment, capture_output=True, text=True, timeout=10)
         self.assertEqual(unit.returncode, 65)
         self.assertTrue((self.root / "test-start.marker").is_file())

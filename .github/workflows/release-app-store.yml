@@ -23,7 +23,6 @@ env:
   SCHEME: photo-export
   PROJECT: photo-export.xcodeproj
   APP_NAME: "Photo Export"
-  XCODE_PATH: /Applications/Xcode_16.2.app
   APPSTORE_BUNDLE_ID: com.valtteriluoma.photo-export-appstore
 
 jobs:
@@ -98,14 +97,7 @@ jobs:
 
       # ── Xcode selection ───────────────────────────────────────────────
       - name: Select Xcode
-        run: |
-          echo "::group::Xcode selection"
-          echo "Selecting Xcode at ${XCODE_PATH}..."
-          sudo xcode-select -s "${XCODE_PATH}"
-          echo "Active Xcode path: $(xcode-select -p)"
-          xcodebuild -version
-          echo "Swift version: $(swift --version 2>&1 | head -1)"
-          echo "::endgroup::"
+        run: bash scripts/ci/select-xcode.sh
 
       # ── Keychain & certificates ──────────────────────────────────────
       - name: Set up keychain and certificates

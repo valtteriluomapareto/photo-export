@@ -102,6 +102,30 @@ find -E "$CONTAINER/tmp" -mindepth 1 -maxdepth 1 -mmin +60 -regex ".*/([^/]*-)?$
   -exec rm -rf {} +
 ```
 
+### Xcode version and toolchain canary
+
+`.xcode-version` is the one place the CI and release Xcode version is set.
+`select-xcode.sh` selects `/Applications/Xcode_<version>.app` from it (or from its first
+argument) and fails rather than falling back: it rejects a set `DEVELOPER_DIR`, requires
+`xcode-select -p` to be the resolved app and `xcodebuild -version` to report exactly that
+version, and lists the installed Xcodes. `ci.yml`, both release workflows and the canary
+call it before any Xcode tool; `test_ci_toolchain_workflows.py` rejects a hard-coded Xcode
+path, `xcode-select -s`, `XCODE_PATH` or `DEVELOPER_DIR` in any workflow. Changing the file
+or the script changes the shipped toolchain, so `validation_rows.py` requires the full
+release matrix for both.
+
+`build-app.sh <Debug|Release>` and `run-unit-tests.sh` are the build and test commands that
+`app-validation` and the canary share. They write `debug-build.log`, `release-build.log`,
+`test.log`, `test-start.marker` and `TestResults.xcresult` to the current directory, where the
+diagnostics, coverage and regression-gate steps read them.
+
+`toolchain-canary.yml` builds and tests on newer Xcode versions (one lane per version, each
+naming its runner label) weekly, on demand, and on pull requests that change the version file
+or these scripts. `report-built-app.sh` prints the Release app's `DTXcode`, SDK and
+`ITSAppUsesNonExemptEncryption` values. The canary is not part of the merge gate, so a red lane
+reports what a bump would break without blocking work. A lane that stays queued means its
+runner label is unavailable; the job's time limit ends the run.
+
 ### CI area routing
 
 `ci/ci_routing.py` selects validation using complete local Git history, without an API

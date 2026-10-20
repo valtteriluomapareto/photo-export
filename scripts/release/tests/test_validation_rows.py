@@ -109,6 +109,7 @@ class FullMatrixTests(unittest.TestCase):
             "photo-export/PrivacyInfo.xcprivacy",
             "photo-export/Project.xcconfig",
             ".xcode-version",
+            "scripts/ci/select-xcode.sh",
         ]:
             with self.subTest(path=path):
                 self.assertTrue(vr.assess([path], []).full_matrix_reasons)
@@ -116,7 +117,7 @@ class FullMatrixTests(unittest.TestCase):
     def test_release_workflow_toolchain_change_requires_the_full_matrix(self):
         workflow = ".github/workflows/release-direct.yml"
         self.assertTrue(
-            vr.assess([workflow], [], {workflow: ["+  XCODE_PATH: /Applications/Xcode_16.4.app"]})
+            vr.assess([workflow], [], {workflow: ["+        run: bash scripts/ci/select-xcode.sh 16.4"]})
             .full_matrix_reasons)
 
     def test_macos_major_change_requires_the_full_matrix(self):

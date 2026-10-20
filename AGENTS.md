@@ -6,7 +6,7 @@ If your harness loads a tool-specific file (such as `CLAUDE.md`), that file is a
 
 ## Project Overview
 
-macOS SwiftUI app that exports the Apple Photos library to local/external storage in an organized folder hierarchy. Uses system frameworks only (no CocoaPods/SwiftPM dependencies). Targets macOS 15.x with Xcode 16.x.
+macOS SwiftUI app that exports the Apple Photos library to local/external storage in an organized folder hierarchy. Uses system frameworks only (no CocoaPods/SwiftPM dependencies). Targets macOS 15.x; CI and release builds use the Xcode version in `.xcode-version`.
 
 ## Build & Test Commands
 

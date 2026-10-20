@@ -77,15 +77,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select Xcode
-        run: |
-          echo "::group::Xcode selection"
-          echo "Selecting Xcode at /Applications/Xcode_16.2.app"
-          sudo xcode-select -s /Applications/Xcode_16.2.app
-          echo "Active Xcode path: $(xcode-select -p)"
-          xcodebuild -version
-          echo "Available SDKs:"
-          xcodebuild -showsdks 2>/dev/null | grep macosx
-          echo "::endgroup::"
+        run: bash scripts/ci/select-xcode.sh
 
       - name: Install SwiftLint and swift-format
         run: bash scripts/ci/install-swift-tools.sh
@@ -151,19 +143,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Build Debug
-        run: |
-          echo "::group::Debug build"
-          echo "Building Debug configuration (CODE_SIGNING_ALLOWED=NO)..."
-          set -o pipefail
-          xcodebuild \
-            -project photo-export.xcodeproj \
-            -scheme "photo-export" \
-            -configuration Debug \
-            -destination 'platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tee debug-build.log | tail -200
-          echo "Debug build succeeded."
-          echo "::endgroup::"
+        run: bash scripts/ci/build-app.sh Debug
 
       - name: Check xcresult diagnostics export support
         continue-on-error: true
@@ -174,23 +154,7 @@ jobs:
         timeout-minutes: 15
         env:
           TEST_RUNNER_REQUIRE_SCOPE_TESTS: "1"
-        run: |
-          echo "::group::Unit tests"
-          echo "Running unit tests with code coverage enabled..."
-          set -o pipefail
-          # Retain full output; the failure step prints reasons outside this tail.
-          touch test-start.marker
-          xcodebuild \
-            -project photo-export.xcodeproj \
-            -scheme "photo-export" \
-            -destination 'platform=macOS' \
-            -enableCodeCoverage YES \
-            -resultBundlePath TestResults.xcresult \
-            CODE_SIGNING_ALLOWED=NO \
-            test 2>&1 | tee test.log | tail -300
-          echo "Unit tests passed."
-          echo "Result bundle: $(du -sh TestResults.xcresult)"
-          echo "::endgroup::"
+        run: bash scripts/ci/run-unit-tests.sh
 
       - name: Check regression gates ran
         if: success()
@@ -214,19 +178,7 @@ jobs:
           --test-outcome "$TEST_OUTCOME"
 
       - name: Build Release
-        run: |
-          echo "::group::Release build"
-          echo "Building Release configuration (CODE_SIGNING_ALLOWED=NO)..."
-          set -o pipefail
-          xcodebuild \
-            -project photo-export.xcodeproj \
-            -scheme "photo-export" \
-            -configuration Release \
-            -destination 'platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO \
-            build 2>&1 | tee release-build.log | tail -20
-          echo "Release build succeeded."
-          echo "::endgroup::"
+        run: bash scripts/ci/build-app.sh Release
 
       - name: Print build and test failure diagnostics
         if: failure()
