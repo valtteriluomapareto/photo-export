@@ -168,6 +168,19 @@ struct PublishedParityHelperTests {
     }
   }
 
+  /// A buffer delivers a kept value on demand returned from `receive`, which `@Published` does not.
+  @Test func bufferFailsDemandFromReceive() async {
+    await expectOnly([.demandFromReceive]) {
+      assertSubscriberEdgeParity {
+        let object = Published1()
+        return EdgeSubject(
+          publisher: object.$value.buffer(size: 1, prefetch: .byRequest, whenFull: .dropOldest)
+            .eraseToAnyPublisher(),
+          value: { object.value }, first: { object.value = 1 }, second: { object.value = 2 })
+      }
+    }
+  }
+
   @Test func eagerReplayFailsResubscription() async {
     let object = EagerReplayBacked()
     await expectOnly([.resubscribe]) {

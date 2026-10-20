@@ -107,11 +107,14 @@ plain class, not a macro: the owner writes the property by hand around it.
   when it next requests. Demand a subscriber returns from `receive` is recorded without
   delivering the kept value: the next write replaces it, so it never arrives after a newer one.
   Every delivery goes through one path that clears the kept value.
-- **Cancellation is immediate.** A cancelled subscriber receives nothing more, not even the
-  write in flight when another subscriber's sink cancelled it. `@Published` does the same when
-  the cancelling sink is delivered first, but its fan-out order varies between instances; the
-  bridge delivers in subscription order. The bridge drops the subscription, and the
-  subscription drops the subscriber.
+- **Cancellation stops delivery at once, from any thread; the release happens on main.** A
+  cancelled subscriber receives nothing more, not even the write in flight when another
+  subscriber's sink cancelled it, nor a write made on the main actor before a cancel from
+  another thread has reached the main queue (a lock-protected flag). On the main queue the
+  bridge drops the subscription, and the subscription drops the subscriber. `@Published` also
+  skips the write in flight when the cancelling sink is delivered first, but its fan-out order
+  varies between instances; the bridge delivers in subscription order.
+- **Consumers must not depend on fan-out order** between subscribers of one accessor.
 - **Setter order:** `withMutation` (willSet) → deliver → store. A write made inside a sink is
   delivered at once and stored first, so the outer write's value ends up stored, as with
   `@Published` (`assertSubscriberEdgeParity`'s re-entrant check).
@@ -130,9 +133,9 @@ plain class, not a macro: the owner writes the property by hand around it.
   still sends `objectWillChange`, so a view that refreshes through it today still does.
 - **Main actor only.** The bridge is `@MainActor`, like its owners; subscribing or requesting
   demand off the main actor traps. Cancelling off the main actor is allowed, as with
-  `@Published` (an `AnyCancellable` released in a background deinit), and takes effect once it
-  reaches the main queue. Never `.receive(on:)` or a `MainActor` hop in the bridge's delivery
-  or an accessor; AutoSync and the mirrors rely on synchronous delivery.
+  `@Published` (an `AnyCancellable` released in a background deinit). Never `.receive(on:)`
+  or a `MainActor` hop in the bridge's delivery or an accessor; AutoSync and the mirrors rely
+  on synchronous delivery.
 - **Side effects run after the write,** where `didSet` ran: after delivery and store.
 
   ```swift
@@ -259,9 +262,9 @@ The flip still owes:
   that used up the demand arrives once, in order, on the next request; demand returned from
   `receive` does not deliver a kept value, and a newer write replaces it; one unit of demand
   takes the next write only; a subscriber returning one more with each value gets every write.
-  `@Published` passes it
-  (`PublishedParityHelperTests.publishedPasses`), and so does the bridge. It is separate from
-  `assertPublishedParity` because not every accessor's real mutation path is synchronous.
+  `@Published` passes it (`PublishedParityHelperTests.publishedPasses`), and so does the
+  bridge. It is separate from `assertPublishedParity` because not every accessor's real
+  mutation path is synchronous.
 - **Dependency registration.** `ObservationProbe` (`TestHelpers/ObservationProbe.swift`) counts
   `withObservationTracking` notifications synchronously and re-registers after each one, so a
   test can assert straight after a write: for example, a record-store query's `onChange` fires

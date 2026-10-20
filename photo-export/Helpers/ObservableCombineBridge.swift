@@ -1,28 +1,11 @@
 import Combine
 import Foundation
+import os
 
-/// Holds a property that SwiftUI tracks through Observation while Combine subscribers
-/// (AutoSync, the destination adapter) keep `@Published` delivery: synchronous, delivered
-/// before the value is stored, replaying the stored value to a new subscriber, and delivered
-/// again for a write of the value already held.
-///
-/// The owner declares the property by hand, registering the read in the getter and writing
-/// through `write(_:observingMutation:)`; see `docs/reference/observation-migration-recipe.md`
-/// §The bridge for both owner shapes.
-///
-/// Each subscription joins the bridge before it receives its replay, so a write made while a
-/// subscriber receives the replayed value reaches it. Values are delivered only while the
-/// subscriber has demand; otherwise one value is kept per subscriber, the latest write winning,
-/// and delivered when it next requests. Demand a subscriber returns from `receive` is recorded
-/// without delivering the kept value, which waits for the next write or request. All of this is
-/// what `@Published` does. The replay is the stored value, not a `CurrentValueSubject`'s: the
-/// subject changes its value before it delivers, so a subscription made inside a sink would
-/// replay the value in flight. Subscribers receive each write in the order they subscribed, and
-/// a cancelled subscriber receives nothing more, not even the write in flight.
-///
-/// Main-actor bound like its owners: subscribing or requesting off the main actor traps.
-/// Cancelling off the main actor is allowed, as it is for `@Published` (an `AnyCancellable`
-/// released in a background deinit), and takes effect once it reaches the main queue.
+/// Holds a property that SwiftUI tracks through Observation while Combine subscribers keep
+/// exactly what `@Published` delivers: replay, delivery before the store, demand and re-entry.
+/// Main-actor bound; cancelling is allowed from any thread. The rules and their tests are in
+/// `docs/reference/observation-migration-recipe.md` §The bridge.
 @MainActor
 final class ObservableCombineBridge<Value: Equatable> {
   private var stored: Value
@@ -85,6 +68,8 @@ private final class BridgeSubscription<Value: Equatable>: Subscription {
   private var subscriber: AnySubscriber<Value, Never>?
   private var demand = Subscribers.Demand.none
   private var pending: Value?
+  /// Set by `cancel()` on any thread, so delivery stops before the release reaches the main queue.
+  private let cancelled = OSAllocatedUnfairLock(initialState: false)
 
   init<S: Subscriber>(bridge: ObservableCombineBridge<Value>, subscriber: S, replay: Value)
   where S.Input == Value, S.Failure == Never {
@@ -104,6 +89,7 @@ private final class BridgeSubscription<Value: Equatable>: Subscription {
   }
 
   nonisolated func cancel() {
+    cancelled.withLock { $0 = true }
     if Thread.isMainThread {
       MainActor.assumeIsolated { end() }
     } else {
@@ -119,7 +105,9 @@ private final class BridgeSubscription<Value: Equatable>: Subscription {
   /// The only delivery path: hands over the kept value if there is demand for it. Demand that
   /// `receive` returns is only recorded, so a value kept meanwhile waits, as with `@Published`.
   private func drain() {
-    guard let subscriber, demand > 0, let value = pending else { return }
+    guard !cancelled.withLock({ $0 }), let subscriber, demand > 0, let value = pending else {
+      return
+    }
     pending = nil
     demand -= 1
     demand += subscriber.receive(value)

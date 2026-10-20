@@ -233,6 +233,33 @@ struct ObservableCombineBridgeTests {
     owner.count = 1
     #expect(recorder.received == [0])
   }
+
+  /// A cancel from another thread stops delivery at once, before its hop to the main queue
+  /// releases the subscription: a write made on the main actor in between delivers nothing.
+  @Test(arguments: Shape.allCases)
+  func cancelOffTheMainActorStopsDeliveryBeforeTheHop(_ shape: Shape) async {
+    let owner = Self.owner(shape)
+    let recorder = DemandRecorder<Int>(initial: .unlimited)
+    owner.countPublisher.subscribe(recorder)
+    // The main thread stays busy from the cancel to the write, so the hop cannot have run yet.
+    Self.cancelOnAnotherThread(UncheckedBox(recorder.subscription))
+    owner.count = 1
+    #expect(recorder.received == [0])
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      DispatchQueue.main.async { continuation.resume() }
+    }
+  }
+
+  /// Cancels on a thread of its own and blocks the caller until it has: `DispatchQueue.sync`
+  /// onto a global queue may run the block on the calling thread.
+  private static func cancelOnAnotherThread(_ subscription: UncheckedBox<(any Subscription)?>) {
+    let cancelled = DispatchSemaphore(value: 0)
+    Thread {
+      subscription.value?.cancel()
+      cancelled.signal()
+    }.start()
+    cancelled.wait()
+  }
 }
 
 /// Carries a non-`Sendable` value to another thread in a test that orders the access itself.
