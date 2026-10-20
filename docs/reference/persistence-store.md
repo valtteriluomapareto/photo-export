@@ -332,18 +332,21 @@ its optional `videos/` subfolder. It writes only the existing `upsertPlacement` 
   album's old folder is not adopted; the import reports it, and the next export uses a new
   folder.
 - **Evidence.** A new placement needs files in the folder that match the album's assets and
-  no equal claim from another album or folder. When the folder is the only one the album
-  could have used and no other album could have used it, one match is enough; otherwise at
-  least half of the folder's files must match. Equal claims whose folders hold the same files
+  no equal claim from another album or folder. When the folder is where the resolver puts
+  the album today and no other album or folder with matches competes for it, one match is
+  enough; otherwise at least half of the folder's files must match. A folder with no matches
+  is never adopted and is reported, which covers an album deleted and recreated under the
+  same title. Equal claims whose folders hold the same files (same names and known sizes)
   follow the resolver's order; other ties adopt nothing. Files in `videos/` match only
   videos. Shared albums adopt originals only. A same-extension edit exported in Edited mode
   without an `_orig` companion is adopted as the original, as on the timeline, so the edit is
   exported again.
 - **Case.** Folder names compare case-folded, and the stored path is the resolver's spelling.
   On a case-insensitive volume a folder spelled in another case is the same folder and is
-  kept. On a case-sensitive volume it is a different folder from the one exports use: the
-  reconcile right after the import drops its records, and the album exports to the
-  resolver's folder. Two folders whose names differ only by case are not adopted.
+  adopted. On a case-sensitive volume (the scan reads the volume's setting) a folder spelled
+  differently from the resolver's spelling is not the one exports use: it is not adopted and
+  is reported, and the album exports to the resolver's folder. Two folders whose names differ
+  only by case are not adopted.
 - **Placements.** An adopted placement has the id the resolver gives the collection and the
   resolver's spelling of the folder path. It is written before its records in one batch. A
   placement already in the history keeps its metadata and `relativePath`.
