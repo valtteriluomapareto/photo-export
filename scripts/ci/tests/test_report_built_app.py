@@ -48,7 +48,8 @@ class ReportBuiltAppTests(unittest.TestCase):
         self.build(DTXcode="1620")
         result = self.report("16.2")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("ITSAppUsesNonExemptEncryption: absent", result.stdout)
+        self.assertIn("ITSAppUsesNonExemptEncryption: absent\n", result.stdout)
+        self.assertNotIn("Could not extract", result.stdout)
 
     def test_app_built_by_another_xcode_fails(self):
         self.build(DTXcode="1620")

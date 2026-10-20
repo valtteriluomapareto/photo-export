@@ -24,10 +24,19 @@ if [[ ! -f "${plist}" ]]; then
   echo "::error::Release Info.plist not found at ${plist}" >&2
   exit 1
 fi
+# Decide from plutil's status: some macOS versions print the "no value" error to stdout.
+value() {
+  local extracted
+  if extracted="$(plutil -extract "$1" raw -o - "${plist}" 2>/dev/null)"; then
+    printf '%s' "${extracted}"
+  else
+    printf 'absent'
+  fi
+}
 for key in ITSAppUsesNonExemptEncryption DTXcode DTXcodeBuild DTSDKBuild DTSDKName; do
-  echo "${key}: $(plutil -extract "${key}" raw -o - "${plist}" 2>/dev/null || echo absent)"
+  echo "${key}: $(value "${key}")"
 done
-built="$(plutil -extract DTXcode raw -o - "${plist}" 2>/dev/null || echo absent)"
+built="$(value DTXcode)"
 echo "::endgroup::"
 if [[ "${built}" != "${expected}" ]]; then
   echo "::error::Release app was built by DTXcode ${built}, expected ${expected} for Xcode ${version}" >&2
