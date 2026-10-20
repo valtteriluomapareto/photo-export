@@ -125,7 +125,8 @@ version, each naming its runner label) weekly, on demand, and on pull requests t
 or these scripts. One lane runs the next Xcode; another runs on `macos-15`, the oldest macOS the
 app supports, so a build made with the 26 SDK is tested where macOS 15 users run it. Its
 `exclusive-rename-probe` job runs `probe-exclusive-rename.sh` on `macos-26` and `macos-15`,
-weekly and on demand only; it needs no Xcode.
+weekly and on demand only; it needs no Xcode. On pull requests, `test-guards.sh` checks that
+the script and its embedded Python parse and runs its `--folder` mode on a temporary folder.
 
 `check-built-app.sh [--app <path>] [<version>]` prints a built app's `DTXcode`, SDK,
 `LSMinimumSystemVersion` and `ITSAppUsesNonExemptEncryption` values. It fails if the app is

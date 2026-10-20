@@ -53,10 +53,12 @@ echo "python3: $(python3 --version 2>&1)"
 echo "Work folder: ${work}"
 echo "::endgroup::"
 
-# Probe one mounted volume. Prints key=value lines; exits 2 when the existing file's bytes
-# changed, 1 on an unexpected error.
+# Probe one mounted volume: probe <dir> [expect-capable]. Prints key=value lines. Exits 2 when
+# the existing file's bytes changed; 1 when a volume that advertises the bit does not rename a
+# fresh name and refuse an existing one with EEXIST, when "expect-capable" is given and the
+# volume does not advertise the bit, or on an unexpected error.
 probe() {
-  python3 -I - "$1" <<'PY'
+  python3 -I - "$@" <<'PY'
 import ctypes
 import errno
 import os
@@ -88,6 +90,7 @@ libc.getattrlist.argtypes = [ctypes.c_char_p, ctypes.POINTER(AttrList), ctypes.c
 libc.renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
 
 volume = sys.argv[1]
+expect_capable = sys.argv[2:] == ["expect-capable"]
 
 
 def capability():
@@ -122,23 +125,33 @@ def read(path):
         return handle.read()
 
 
-print(f"capability={capability()}")
+capable = capability()
+print(f"capability={capable}")
 fresh_source = os.path.join(volume, "fresh-source.bin")
 write(fresh_source, b"fresh")
-print(f"fresh_rename={exclusive_rename(fresh_source, os.path.join(volume, 'fresh-target.bin'))}")
+fresh = exclusive_rename(fresh_source, os.path.join(volume, "fresh-target.bin"))
+print(f"fresh_rename={fresh}")
 
 source = os.path.join(volume, "stage.bin")
 destination = os.path.join(volume, "existing.bin")
 write(destination, b"existing bytes")
 write(source, b"new bytes")
-print(f"existing_rename={exclusive_rename(source, destination)}")
+existing = exclusive_rename(source, destination)
+print(f"existing_rename={existing}")
 after = read(destination)
 print(f"stage_kept={'yes' if os.path.exists(source) else 'no'}")
-if after == b"existing bytes":
-    print("destination=intact")
-    sys.exit(0)
-print(f"destination=REPLACED ({after!r})")
-sys.exit(2)
+if after != b"existing bytes":
+    print(f"destination=REPLACED ({after!r})")
+    sys.exit(2)
+print("destination=intact")
+problems = []
+if capable == "yes" and (fresh, existing) != ("ok", "EEXIST"):
+    problems.append("the volume advertises the bit but the renames were not ok and EEXIST")
+if expect_capable and capable != "yes":
+    problems.append("this file system is expected to advertise the bit")
+for problem in problems:
+    print(f"unexpected={problem}")
+sys.exit(1 if problems else 0)
 PY
 }
 
@@ -186,6 +199,8 @@ for entry in "${filesystems[@]}"; do
     continue
   fi
   mkdir -p "${mount}"
+  # Listed before attaching, so cleanup detaches it even if attach fails halfway.
+  mounts+=("${mount}")
   if ! hdiutil attach -nobrowse -noautoopen -mountpoint "${mount}" "${image}"; then
     echo "::error::${label}: hdiutil attach failed"
     summary+=("${label}: image could not be attached")
@@ -193,10 +208,13 @@ for entry in "${filesystems[@]}"; do
     echo "::endgroup::"
     continue
   fi
-  mounts+=("${mount}")
   echo "Mounted: $(mount | grep -F " on ${mount} " || echo "(not in the mount table)")"
+  expect=()
+  if [[ "${label}" == "APFS" || "${label}" == "HFS+" ]]; then
+    expect=(expect-capable)
+  fi
   set +e
-  output="$(probe "${mount}" 2>&1)"
+  output="$(probe "${mount}" "${expect[@]+"${expect[@]}"}" 2>&1)"
   status=$?
   set -e
   echo "${output}"
@@ -209,7 +227,7 @@ for entry in "${filesystems[@]}"; do
       failed=1
       ;;
     *)
-      echo "::error::${label}: the probe failed (status ${status})"
+      echo "::error::${label}: unexpected result or probe failure (status ${status})"
       summary+=("${label}: PROBE FAILED: ${line}")
       failed=1
       ;;
@@ -224,7 +242,7 @@ for line in "${summary[@]}"; do
   echo "  ${line}"
 done
 if [[ ${failed} -ne 0 ]]; then
-  echo "::error::At least one volume replaced an existing file or could not be probed."
+  echo "::error::At least one volume replaced an existing file, gave an unexpected result or could not be probed."
   exit 1
 fi
 echo "No volume replaced an existing file."
