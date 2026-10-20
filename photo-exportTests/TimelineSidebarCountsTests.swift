@@ -217,4 +217,19 @@ struct TimelineSidebarCountsTests {
     loader.reset()
     #expect(probe.changeCount == 25)
   }
+
+  /// `countsByYearMonth` is written by hand around its bridge, so a wrong key path would notify
+  /// `lastError`'s readers instead of the counts'.
+  @Test func countsWriteNotifiesOnlyItsOwnReaders() async {
+    let service = FakePhotoLibraryService()
+    service.cachedCountOverride = { scope, adjusted in
+      scope == .timeline(year: 2025, month: 1) && !adjusted ? 1 : 0
+    }
+    let loader = TimelineSidebarCounts(service: service)
+    let counts = ObservationProbe { _ = loader.countsByYearMonth }
+    let lastError = ObservationProbe { _ = loader.lastError }
+    await loader.loadCounts(forYears: [2025])
+    #expect(counts.changeCount > 0)
+    #expect(lastError.changeCount == 0)
+  }
 }

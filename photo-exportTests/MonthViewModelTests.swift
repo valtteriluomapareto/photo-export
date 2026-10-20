@@ -920,4 +920,22 @@ struct MonthViewModelTests {
     model.deactivate()
     #expect(grid.changeCount == 1, "Deactivating an idle grid stores an unchanged isLoading")
   }
+
+  /// `selectedAssetId` is written by hand around its bridge, so a wrong key path would notify
+  /// the grid's readers instead of the selection's.
+  @Test func selectionWriteNotifiesOnlyItsOwnReaders() async {
+    let service = FakePhotoLibraryService()
+    service.assetsByYearMonth["2025-6"] = (0..<2).map { makeAsset(id: "a\($0)") }
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .timeline(year: 2025, month: 6))
+    let selection = ObservationProbe { _ = model.selectedAssetId }
+    let siblings = [
+      ObservationProbe { _ = model.assets },
+      ObservationProbe { _ = model.isLoading },
+      ObservationProbe { _ = model.errorMessage },
+    ]
+    model.select(assetId: "a1")
+    #expect(selection.changeCount == 1)
+    #expect(siblings.map(\.changeCount) == [0, 0, 0])
+  }
 }

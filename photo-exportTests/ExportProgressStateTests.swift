@@ -65,4 +65,23 @@ struct ExportProgressStateTests {
     #expect(bar.changeCount == 1)
     subscription.cancel()
   }
+
+  /// `emptyRunMessage` is written by hand around its bridge, so a wrong key path would notify
+  /// another field's readers instead of its own.
+  @Test func emptyRunMessageWriteNotifiesOnlyItsOwnReaders() {
+    let progress = ExportProgressState()
+    let message = ObservationProbe { _ = progress.emptyRunMessage }
+    let siblings = [
+      ObservationProbe { _ = progress.manualSummary },
+      ObservationProbe { _ = progress.totalJobsEnqueued },
+      ObservationProbe { _ = progress.totalJobsCompleted },
+      ObservationProbe { _ = progress.currentAssetFilename },
+      ObservationProbe { _ = progress.renderActivity },
+      ObservationProbe { _ = progress.queueWarningMessage },
+      ObservationProbe { _ = progress.currentJobPlacement },
+    ]
+    progress.emptyRunMessage = "Nothing new to export."
+    #expect(message.changeCount == 1)
+    #expect(siblings.map(\.changeCount) == Array(repeating: 0, count: siblings.count))
+  }
 }
