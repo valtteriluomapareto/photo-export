@@ -65,8 +65,12 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   var copyError: Error?
   var shouldApplyTimestamps = true
 
-  // Delegate to real filesystem by default
-  private let real = FileIOService()
+  // Delegate to the real filesystem, through an injectable final commit.
+  private let real: FileIOService
+
+  init(real: FileIOService = FileIOService()) {
+    self.real = real
+  }
 
   func moveItemAtomically(from src: URL, to dst: URL) throws {
     lock.lock()

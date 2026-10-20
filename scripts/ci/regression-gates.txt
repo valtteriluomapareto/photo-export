@@ -29,3 +29,6 @@ photo-exportTests/ExportManagerRunExportTests.swift|gate|func ExportManagerRunEx
 
 photo-exportTests/AmbiguousSameFolderTests.swift|pin|struct AmbiguousSameFolderTests
 photo-exportTests/AmbiguousSameFolderTests.swift|gate|func AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds
+
+photo-exportTests/FileIOServiceTests.swift|pin|struct FileIOServiceTests
+photo-exportTests/FileIOServiceTests.swift|gate|func FileIOServiceTests.existingFileAtCommitIsNeverReplaced

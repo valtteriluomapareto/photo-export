@@ -12,6 +12,7 @@ Small development utilities for this project. CI-only steps live under [`ci/`](c
 | --- | --- |
 | [`bump-version.sh`](bump-version.sh) | Prepares `MARKETING_VERSION` and website version changes for a reviewed PR. Never stages, commits or tags; `--no-tag` remains an explicit alias for the default. Required step in [`docs/project/release-process.md`](../docs/project/release-process.md). |
 | [`generate-app-icon.sh`](generate-app-icon.sh) | Generates a complete macOS `AppIcon.appiconset` from a single square master image. Source image lives in [`design/app-icon-master.jpeg`](../design/app-icon-master.jpeg). Run when the icon changes. |
+| [`probe-exclusive-rename.sh`](probe-exclusive-rename.sh) | Creates small APFS, HFS+, ExFAT and FAT32 disk images in a temporary folder and records, for each, whether the volume advertises an exclusive rename and whether `renamex_np(RENAME_EXCL)` keeps an existing file's bytes; fails if any volume replaced them. `--folder <dir>` probes an existing folder's volume (an SMB share) in a hidden subfolder it removes. Runs weekly in the toolchain canary; results are in [architecture-conventions § Final file commit boundary](../docs/reference/architecture-conventions.md#final-file-commit-boundary). |
 | [`release/validation_rows.py`](release/validation_rows.py) | Lists which [pre-release Photos validation](../docs/project/release-validation.md) rows a candidate needs: the rows whose files changed since each row last passed, and whether the full matrix is required. Every app file must map to a row or the core smoke; `scripts/ci/test-guards.sh` runs its tests, including that completeness check. |
 | [`prepare-app-store-screenshot.py`](prepare-app-store-screenshot.py) | Pads a screenshot to a Mac App Store spec size and flattens transparency. Operates on [`design/app-store-screenshot.png`](../design/app-store-screenshot.png). Requires `pip install Pillow`. |
 | [`screenshots/capture.sh`](screenshots/capture.sh) | Builds the app in screenshot mode (curated synthetic library, no personal photos), launches it at a requested window size, and captures the window via `screencapture -l<id>`. Outputs to `screenshots/<WxH>/NN-name.png`. Requires a one-time Screen Recording TCC grant on your terminal — see the script header. See [`docs/project/archive/screenshot-automation-plan.md`](../docs/project/archive/screenshot-automation-plan.md) for design. |
@@ -128,7 +129,10 @@ diagnostics, coverage and regression-gate steps read them.
 `toolchain-canary.yml` builds and tests on other toolchains than `.xcode-version` (one lane per
 version, each naming its runner label) weekly, on demand, and on pull requests that change the version file
 or these scripts. One lane runs the next Xcode; another runs on `macos-15`, the oldest macOS the
-app supports, so a build made with the 26 SDK is tested where macOS 15 users run it.
+app supports, so a build made with the 26 SDK is tested where macOS 15 users run it. Its
+`exclusive-rename-probe` job runs `probe-exclusive-rename.sh` on `macos-26` and `macos-15`,
+weekly and on demand only; it needs no Xcode. On pull requests, `test-guards.sh` checks that
+the script and its embedded Python parse and runs its `--folder` mode on a temporary folder.
 
 `check-built-app.sh [--app <path>] [<version>]` prints a built app's `DTXcode`, SDK,
 `LSMinimumSystemVersion` and `ITSAppUsesNonExemptEncryption` values. It fails if the app is
