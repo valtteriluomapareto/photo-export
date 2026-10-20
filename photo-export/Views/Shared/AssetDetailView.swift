@@ -23,7 +23,7 @@ struct AssetDetailView: View {
     let color: Color
   }
 
-  @StateObject private var imageLoader = AssetDetailImageLoader()
+  @State private var imageLoader = AssetDetailImageLoader()
 
   private struct LoadIdentity: Hashable {
     let assetId: String?

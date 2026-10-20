@@ -1,11 +1,12 @@
 import AppKit
-import Combine
+import Observation
 import os
 
 /// Main-actor preview state owned by the detail view. SwiftUI owns the loading
 /// task; a separate request token also rejects providers that ignore cancellation.
+@Observable
 @MainActor
-final class AssetDetailImageLoader: ObservableObject {
+final class AssetDetailImageLoader {
   struct State {
     var assetId: String?
     var image: NSImage?
@@ -13,9 +14,10 @@ final class AssetDetailImageLoader: ObservableObject {
     var errorMessage: String?
   }
 
-  @Published private(set) var state = State()
-  private var activeRequest: UUID?
-  private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "UI.Detail")
+  private(set) var state = State()
+  @ObservationIgnored private var activeRequest: UUID?
+  @ObservationIgnored private let logger = Logger(
+    subsystem: "com.valtteriluoma.photo-export", category: "UI.Detail")
 
   /// SwiftUI may render a new selection before its task starts. Never display
   /// the previous selection's image or error during that interval.

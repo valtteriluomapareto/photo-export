@@ -25,7 +25,6 @@ type|photo-export/PhotoLibrary/PhotoLibraryManager.swift|PhotoLibraryManager
 type|photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift|PhotoLibraryPersistentChangeAdapter
 type|photo-export/Records/CollectionExportRecordStore.swift|CollectionExportRecordStore
 type|photo-export/Records/ExportRecordStore.swift|ExportRecordStore
-type|photo-export/ViewModels/AssetDetailImageLoader.swift|AssetDetailImageLoader
 type|photo-export/ViewModels/MonthViewModel.swift|MonthViewModel
 type|photo-export/ViewModels/TimelineSidebarCounts.swift|TimelineSidebarCounts
 
@@ -33,9 +32,9 @@ type|photo-export/ViewModels/TimelineSidebarCounts.swift|TimelineSidebarCounts
 # ObservableObject, so these stay as they are.
 external-publisher|photo-export/Export/ExportManager.swift|9
 
-total|published|65
+total|published|64
 total|environment-object|36
 total|environment-object-property|71
-total|state-object|15
+total|state-object|14
 total|observed-object|1
 total|object-will-change|0
