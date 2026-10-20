@@ -47,7 +47,10 @@ process shares the app's identity, so outside that file the guard rejects, acros
 breaks: `UserDefaults(suiteName:` (also via `.init`), `UserDefaults.standard`,
 `UserDefaults()`, `.temporaryDirectory`, `NSTemporaryDirectory(`,
 `.itemReplacementDirectory`, `.applicationSupportDirectory`, `.cachesDirectory` and the
-no-argument `ExportRecordStore()` / `CollectionExportRecordStore()`. Use
+no-argument `ExportRecordStore()` / `CollectionExportRecordStore()`, and the shipping
+compositions (`AppComposition.production`, `.screenshot`, `.forLaunch`, or an
+`AppCore(composition: .member`), which hold the app's own preferences, Application Support
+folder and PhotoKit; build a core from a composition with `TestScratch` roots and fakes. Use
 `TestScratch.defaults(_:)` for a fresh suite, `TestScratch.suiteName(_:)` with
 `TestScratch.defaults(suiteName:)` when two objects share or reopen one suite, and
 `TestScratch.directory(_:)` for folders. A test that must exercise the real path keeps the

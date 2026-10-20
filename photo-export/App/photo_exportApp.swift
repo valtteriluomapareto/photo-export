@@ -35,11 +35,11 @@ struct PhotoExportApp: App {
   init() {
     Self.wasComposed = true
     AppDiagnostics.beginLaunch()
-    // Screenshot mode (`--screenshot-mode` launch arg) swaps the real Photos backing for a
-    // curated synthetic library so marketing screenshots don't leak the maintainer's
-    // personal Photos library. See `docs/project/archive/screenshot-automation-plan.md`.
+    // `--screenshot-mode` swaps the real Photos backing for a curated synthetic library so
+    // marketing screenshots don't leak the maintainer's personal Photos library. See
+    // `docs/project/archive/screenshot-automation-plan.md`.
     let core = AppCore(
-      composition: PhotoLibraryManager.isRunningInScreenshotMode ? .screenshot : .production)
+      composition: .forLaunch(arguments: ProcessInfo.processInfo.arguments))
     self.core = core
     _exportDestinationManager = StateObject(wrappedValue: core.exportDestinationManager)
     _photoLibraryManager = StateObject(wrappedValue: core.photoLibraryManager)
@@ -66,17 +66,7 @@ struct PhotoExportApp: App {
       ContentView(destinationManager: exportDestinationManager, recordStore: exportRecordStore)
         .equatable()
         .recordStoreAlertHost()
-        .environmentObject(exportDestinationManager)
-        .environmentObject(photoLibraryManager)
-        .environmentObject(exportManager)
-        .environmentObject(exportRecordStore)
-        .environmentObject(collectionExportRecordStore)
-        .environmentObject(autoSyncManager)
-        .environmentObject(autoSyncScopeStore)
-        .environmentObject(autoSyncPhotoChangeAdapter)
-        .environmentObject(exportManager.progressState)
-        .environmentObject(whatsNewState)
-        .defaultAppStorage(core.composition.defaults)
+        .photoExportEnvironment(core)
         .task {
           // PhotoKit is first touched here, after the window has rendered, not in App.init
           // (#92). Every window runs this; the core starts once.
@@ -109,7 +99,7 @@ struct PhotoExportApp: App {
           collectionStore: collectionExportRecordStore,
           destinationManager: exportDestinationManager,
           photoChangeAdapter: autoSyncPhotoChangeAdapter,
-          currentRunStore: core.autoSyncCurrentRunStore)
+          currentRunStore: core.autoSyncEnvironment.currentRunStore)
       }
       // Sidebar select-all wired through the standard Edit menu so the shortcut
       // (Cmd+A) is discoverable. The action's behavior changes per section —
@@ -130,28 +120,14 @@ struct PhotoExportApp: App {
 
     MenuBarExtra {
       AutoSyncMenuBarContent()
-        .environmentObject(autoSyncManager)
-        .environmentObject(autoSyncScopeStore)
-        .environmentObject(exportDestinationManager)
-        .defaultAppStorage(core.composition.defaults)
+        .photoExportEnvironment(core)
     } label: {
       AutoSyncMenuBarLabel(state: autoSyncManager.state)
     }
 
     Settings {
       SettingsRootView()
-        .environmentObject(photoLibraryManager)
-        .environmentObject(autoSyncManager)
-        .environmentObject(autoSyncScopeStore)
-        .environmentObject(exportDestinationManager)
-        .environmentObject(exportManager)
-        .environmentObject(exportRecordStore)
-        .environmentObject(collectionExportRecordStore)
-        .environmentObject(lifecycleCoordinator)
-        .environmentObject(loginItemController)
-        .environmentObject(destinationSafetyMonitor)
-        .environmentObject(autoSyncPhotoChangeAdapter)
-        .defaultAppStorage(core.composition.defaults)
+        .photoExportEnvironment(core)
     }
     .windowResizability(.contentMinSize)
   }

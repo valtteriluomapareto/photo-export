@@ -1,45 +1,15 @@
 import AppKit
 import Combine
 import Foundation
+import SwiftUI
 
 /// The app's object graph, built from an `AppComposition`, and its startup sequence.
 ///
-/// `PhotoExportApp.init` builds one eagerly and hands its objects to the scenes; the main
-/// window's `.task` calls `start()`. Building touches no PhotoKit API: the first PhotoKit
+/// `PhotoExportApp.init` builds one eagerly and hands its objects to the scenes through
+/// `photoExportEnvironment(_:)`; the main window's `.task` calls `start()`. Building touches no PhotoKit API: the first PhotoKit
 /// call is in `start()`, after the first window has rendered (#92).
 @MainActor
 final class AppCore {
-  /// One step of `start()`, in the order `startupSteps(wiresAutoSync:)` gives.
-  enum StartupStep: Equatable, Sendable {
-    /// `PhotoLibraryManager.start()`: authorization probe and change observer.
-    case photoLibrary
-    /// `AppLifecycleCoordinator.attach`: configures the record stores for the destination.
-    case destinationLifecycle
-    /// `AutoSyncManager.attach`.
-    case autoSync
-    /// `PhotoLibraryPersistentChangeAdapter.start()`.
-    case photoChangeObservation
-    /// `DestinationSafetyMonitor.attach()`.
-    case destinationSafety
-    /// Sizes the window for capture in screenshot mode; nothing otherwise.
-    case screenshotWindow
-    /// Ends the launch signpost interval.
-    case launchFinished
-  }
-
-  /// The lifecycle coordinator attaches before AutoSync, so the destination snapshot
-  /// adapter sees the initial migration-conflict state on its first emission, and before the
-  /// safety monitor, so the record stores are configured for the current destination before
-  /// the monitor reads their counts.
-  static func startupSteps(wiresAutoSync: Bool) -> [StartupStep] {
-    var steps: [StartupStep] = [.photoLibrary, .destinationLifecycle]
-    if wiresAutoSync {
-      steps += [.autoSync, .photoChangeObservation]
-    }
-    steps += [.destinationSafety, .screenshotWindow, .launchFinished]
-    return steps
-  }
-
   let composition: AppComposition
   let exportDestinationManager: ExportDestinationManager
   let photoLibraryManager: PhotoLibraryManager
@@ -51,26 +21,18 @@ final class AppCore {
   let autoSyncScopeStore: UserDefaultsAutoExportScopeStore
   let loginItemController: LoginItemController
   let whatsNewState: WhatsNewState
-  let autoSyncDestinationAdapter: DestinationSnapshotAdapter
+  /// Observed by Settings and the diagnostic report even when AutoSync watches another
+  /// change source.
   let autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
-  let autoSyncDirtyStateStore: FileBackedAutoSyncDirtyStateStore
-  let autoSyncRetryStateStore: FileBackedAutoSyncRetryStateStore
-  let autoSyncRunSummaryStore: FileBackedAutoSyncRunSummaryStore
-  let autoSyncPerDestinationTokenStore: FileBackedAutoSyncPerDestinationTokenStore
-  let autoSyncCurrentRunStore: FileBackedAutoSyncCurrentRunStore
-  let autoSyncClock: any AutoSyncClock
   let destinationSafetyMonitor: DestinationSafetyMonitor
+  /// What `start()` attaches AutoSync to.
+  let autoSyncEnvironment: AutoSyncEnvironment
 
-  private let startupObserver: (@MainActor (StartupStep) -> Void)?
+  private let persistentChangeSource: any StartablePhotoLibraryChangeProviding
   private var hasStarted = false
 
-  /// `startupObserver` is told each step just before it runs.
-  init(
-    composition: AppComposition,
-    startupObserver: (@MainActor (StartupStep) -> Void)? = nil
-  ) {
+  init(composition: AppComposition) {
     self.composition = composition
-    self.startupObserver = startupObserver
     let defaults = composition.defaults
 
     // Screenshot mode skips bookmark restoration and overrides the displayed folder name, so
@@ -183,6 +145,8 @@ final class AppCore {
       return nextEligibleAt <= now
     }
 
+    let changeSource = composition.persistentChangeSource ?? photoAdapter
+
     exportDestinationManager = edm
     photoLibraryManager = plm
     exportRecordStore = ers
@@ -194,84 +158,60 @@ final class AppCore {
     loginItemController = LoginItemController(service: composition.loginItemService)
     whatsNewState = WhatsNewState(userDefaults: defaults)
     destinationSafetyMonitor = safetyMonitor
-    autoSyncDestinationAdapter = destinationAdapter
     autoSyncPhotoChangeAdapter = photoAdapter
-    autoSyncDirtyStateStore = dirtyStore
-    autoSyncRetryStateStore = retryStore
-    autoSyncRunSummaryStore = runSummaryStore
-    autoSyncPerDestinationTokenStore = perDestinationTokenStore
-    autoSyncCurrentRunStore = currentRunStore
-    autoSyncClock = clock
+    persistentChangeSource = changeSource
+    autoSyncEnvironment = AutoSyncEnvironment(
+      exportRunner: em,
+      destination: destinationAdapter,
+      scopes: scopeStore,
+      photos: changeSource,
+      importing: em,
+      dirtyStateStore: dirtyStore,
+      retryStateStore: retryStore,
+      runSummaryStore: runSummaryStore,
+      perDestinationTokenStore: perDestinationTokenStore,
+      currentRunStore: currentRunStore,
+      clock: clock,
+      userDefaults: defaults)
   }
 
-  /// Runs the startup steps once. Every window's `.task` calls this; later calls do nothing.
+  /// Runs the startup sequence once. Every window's `.task` calls this; later calls do
+  /// nothing, so a second window doesn't register the Photos observer again or repeat the
+  /// startup catch-up. A Photos grant after a deferred start still arrives through the
+  /// change adapter's authorization subscription.
   func start() {
     guard !hasStarted else { return }
     hasStarted = true
-    for step in Self.startupSteps(wiresAutoSync: composition.wiresAutoSync) {
-      startupObserver?(step)
-      run(step)
+    // First PhotoKit touch: here, after the window has rendered, not in App.init. On
+    // macOS 15.7+ the synchronous singleton init has been observed to hang launch (#92). A
+    // no-op under tests and with a Photos service override.
+    photoLibraryManager.start()
+    // Configures the record stores for the current destination and follows its changes.
+    lifecycleCoordinator.attach(
+      initial: DestinationIdentitySnapshot(identity: exportDestinationManager.identity),
+      identityPublisher: exportDestinationManager.$identity.eraseToAnyPublisher()
+    )
+    if composition.wiresAutoSync {
+      // After the lifecycle coordinator, so the destination snapshot adapter sees the
+      // initial migration-conflict state on its first emission. AutoSync subscribes to the
+      // change source before the source starts, so the startup catch-up reaches it. The
+      // PhotoKit adapter touches PhotoKit (`currentChangeToken`, `register(self)`) and can
+      // raise the permission prompt; it waits for Photos authorization.
+      autoSyncManager.attach(to: autoSyncEnvironment)
+      persistentChangeSource.start()
     }
+    // After the lifecycle coordinator, so the record stores are configured for the current
+    // destination before the monitor reads their counts.
+    destinationSafetyMonitor.attach()
+    applyScreenshotWindowSizeIfRequested()
+    AppDiagnostics.endLaunch()
   }
 
-  private func run(_ step: StartupStep) {
-    switch step {
-    case .photoLibrary:
-      // First-touch PhotoKit here, not in App.init: on macOS 15.7+ the synchronous
-      // singleton init has been observed to hang launch (#92). A no-op under tests and
-      // with a Photos service override.
-      photoLibraryManager.start()
-    case .destinationLifecycle:
-      lifecycleCoordinator.attach(
-        initial: DestinationIdentitySnapshot(identity: exportDestinationManager.identity),
-        identityPublisher: exportDestinationManager.$identity.eraseToAnyPublisher()
-      )
-    case .autoSync:
-      autoSyncManager.attach(
-        to: AutoSyncEnvironment(
-          exportRunner: exportManager,
-          destination: autoSyncDestinationAdapter,
-          scopes: autoSyncScopeStore,
-          photos: autoSyncPhotoChangeAdapter,
-          importing: exportManager,
-          dirtyStateStore: autoSyncDirtyStateStore,
-          retryStateStore: autoSyncRetryStateStore,
-          runSummaryStore: autoSyncRunSummaryStore,
-          perDestinationTokenStore: autoSyncPerDestinationTokenStore,
-          currentRunStore: autoSyncCurrentRunStore,
-          clock: autoSyncClock,
-          userDefaults: composition.defaults
-        ))
-    case .photoChangeObservation:
-      // Touches PhotoKit (`currentChangeToken`, `register(self)`) and so can raise the
-      // Photos permission prompt; a no-op until Photos is authorized.
-      autoSyncPhotoChangeAdapter.start()
-    case .destinationSafety:
-      destinationSafetyMonitor.attach()
-    case .screenshotWindow:
-      applyScreenshotWindowSizeIfRequested()
-    case .launchFinished:
-      AppDiagnostics.endLaunch()
-    }
-  }
-
-  /// When `--screenshot-mode` includes width/height arguments, resize the main window so the
-  /// capture script can grab a predictable frame. No-op outside screenshot mode.
+  /// In screenshot mode with a requested size, resize the main window so the capture
+  /// script can grab a predictable frame. No-op outside screenshot mode.
   private func applyScreenshotWindowSizeIfRequested() {
     guard composition.isScreenshotMode else { return }
-    let args = ProcessInfo.processInfo.arguments
-    func value(for prefix: String) -> CGFloat? {
-      guard
-        let arg = args.first(where: { $0.hasPrefix(prefix) }),
-        let raw = arg.split(separator: "=").last.map(String.init),
-        let n = Double(raw)
-      else { return nil }
-      return CGFloat(n)
-    }
-    guard
-      let width = value(for: "--screenshot-width="),
-      let height = value(for: "--screenshot-height=")
-    else {
+    guard let size = composition.screenshotWindowSize else {
       // No requested size: still publish the window id so the capture script can grab
       // whatever window the system gives us.
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -282,12 +222,10 @@ final class AppCore {
     guard let window = NSApplication.shared.windows.first else { return }
     let screenFrame = window.screen?.visibleFrame ?? .zero
     let origin = NSPoint(
-      x: screenFrame.midX - width / 2,
-      y: screenFrame.midY - height / 2
+      x: screenFrame.midX - size.width / 2,
+      y: screenFrame.midY - size.height / 2
     )
-    window.setFrame(
-      NSRect(origin: origin, size: CGSize(width: width, height: height)),
-      display: true, animate: false)
+    window.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
     // After the resize settles, publish the window's CGWindowID to a well-known temp file.
     // The capture script calls `screencapture -l<windowID>`: pixel-exact, no coordinate
     // math, and correct on whichever display the window lives on. This needs only Screen
@@ -376,5 +314,33 @@ final class AppCore {
       collectionStore.configure(for: nil)
       return .migrationFailed(message: message)
     }
+  }
+}
+
+extension EnvironmentValues {
+  /// `AppComposition.isScreenshotMode` for views: suppresses surfaces that would spoil a
+  /// marketing capture.
+  @Entry var isScreenshotMode = false
+}
+
+extension View {
+  /// The environment every scene root gets from the core: its shared objects, the
+  /// screenshot-mode flag, and its preferences suite as the default `@AppStorage` store.
+  func photoExportEnvironment(_ core: AppCore) -> some View {
+    environmentObject(core.exportDestinationManager)
+      .environmentObject(core.photoLibraryManager)
+      .environmentObject(core.exportManager)
+      .environmentObject(core.exportManager.progressState)
+      .environmentObject(core.exportRecordStore)
+      .environmentObject(core.collectionExportRecordStore)
+      .environmentObject(core.lifecycleCoordinator)
+      .environmentObject(core.autoSyncManager)
+      .environmentObject(core.autoSyncScopeStore)
+      .environmentObject(core.autoSyncPhotoChangeAdapter)
+      .environmentObject(core.destinationSafetyMonitor)
+      .environmentObject(core.loginItemController)
+      .environmentObject(core.whatsNewState)
+      .environment(\.isScreenshotMode, core.composition.isScreenshotMode)
+      .defaultAppStorage(core.composition.defaults)
   }
 }

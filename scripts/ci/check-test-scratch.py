@@ -17,7 +17,11 @@ breaks. Outside TestScratch.swift it flags:
 - `.temporaryDirectory`, `NSTemporaryDirectory(`, `.itemReplacementDirectory`,
   `.applicationSupportDirectory` and `.cachesDirectory`; use `TestScratch.directory(_:)`;
 - the no-argument `ExportRecordStore()` and `CollectionExportRecordStore()`, which
-  open the real Application Support records.
+  open the real Application Support records;
+- the shipping compositions, `AppComposition.production`, `.screenshot` and `.forLaunch`,
+  and an `AppCore(composition: .member` built from one: they hold the app's own
+  preferences, Application Support folder and PhotoKit. Build a core from a composition
+  with TestScratch roots and fakes instead.
 
 A use that deliberately exercises real-path behavior is allowed when the line where it
 starts, or the line above, carries a `// test-scratch: allow` comment followed by a
@@ -36,6 +40,8 @@ EXEMPT = {TESTS / "TestHelpers" / "TestScratch.swift"}
 SUITE = "named preferences suite; use TestScratch.defaults or TestScratch.suiteName"
 STANDARD = "the app's own preferences domain; use TestScratch.defaults"
 FOLDER = "real system folder; use TestScratch.directory"
+COMPOSITION = ("shipping composition (real preferences, Application Support and Photos); "
+               "build AppCore from a TestScratch composition")
 BANNED = [
     (re.compile(r"\bUserDefaults\s*(?:\.\s*init\s*)?\(\s*suiteName\s*:"), SUITE),
     (re.compile(r"\bUserDefaults\s*\.\s*standard\b"), STANDARD),
@@ -48,6 +54,8 @@ BANNED = [
      FOLDER),
     (re.compile(r"(?<![\w.])(?:Collection)?ExportRecordStore\s*\(\s*\)"),
      "record store on the real Application Support path; pass a TestScratch directory"),
+    (re.compile(r"\bAppComposition\s*\.\s*(?:production|screenshot|forLaunch)\b"), COMPOSITION),
+    (re.compile(r"\bAppCore\s*\(\s*composition\s*:\s*\.\s*\w"), COMPOSITION),
 ]
 # The reason must follow the marker, so a bare marker does not silence the guard.
 ALLOW = re.compile(r"\btest-scratch:\s*allow\b\W*\w")

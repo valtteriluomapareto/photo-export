@@ -23,6 +23,12 @@ protocol PhotoLibraryChangeProviding: AnyObject {
   var changes: AnyPublisher<PhotoLibraryChangeOutcome, Never> { get }
 }
 
+/// A change source the app starts once at launch, after AutoSync has subscribed to it.
+@MainActor
+protocol StartablePhotoLibraryChangeProviding: PhotoLibraryChangeProviding {
+  func start()
+}
+
 typealias PhotoLibraryChangeOutcome = Result<
   PhotoLibraryPersistentChangeEvent, PhotoLibraryPersistentChangeFetchError
 >

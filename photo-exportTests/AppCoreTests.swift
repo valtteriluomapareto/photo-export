@@ -3,12 +3,11 @@ import Testing
 
 @testable import Photo_Export
 
-/// The app's object graph and startup sequence. Hosted cores here use a `TestScratch`
-/// root and suite, a fake Photos service and AutoSync left unwired: starting the persistent
-/// change adapter would reach PhotoKit, so the AutoSync steps are checked through the
-/// startup plan the core runs.
+/// The app's object graph and startup sequence. Every core here is built from a `TestScratch`
+/// root and suite with fake Photos, change-source, writer, file-system, clock and login-item
+/// services; the shipping compositions are only inspected, never built into a core.
 @MainActor
-@Suite struct AppCoreTests {
+@Suite(.timeLimit(.minutes(1))) struct AppCoreTests {
   private final class FakeLoginItemService: LoginItemService {
     var status: LoginItemController.Status = .notRegistered
     func register() throws {}
@@ -21,49 +20,134 @@ import Testing
       defaults: TestScratch.defaults(label),
       appStateRoot: TestScratch.directory(label),
       photoLibraryServiceOverride: FakePhotoLibraryService(),
+      persistentChangeSource: FakePersistentChangeSource(),
       assetResourceWriter: FakeAssetResourceWriter(),
       phAssetCacheControl: { $0 },
       fileSystem: FakeFileSystem(),
       clock: TestClock(),
       loginItemService: FakeLoginItemService(),
       wiresAutoSync: false,
-      isScreenshotMode: false)
+      isScreenshotMode: false,
+      screenshotWindowSize: nil)
   }
 
-  // MARK: - Startup order
-
-  @Test func startupPlanKeepsTheLaunchOrder() {
-    #expect(
-      AppCore.startupSteps(wiresAutoSync: true) == [
-        .photoLibrary, .destinationLifecycle, .autoSync, .photoChangeObservation,
-        .destinationSafety, .screenshotWindow, .launchFinished,
-      ])
-    #expect(
-      AppCore.startupSteps(wiresAutoSync: false) == [
-        .photoLibrary, .destinationLifecycle, .destinationSafety, .screenshotWindow,
-        .launchFinished,
-      ])
+  private func makeDestinationFolder(_ label: String) throws -> URL {
+    let folder = TestScratch.directory(label)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    return folder
   }
 
-  @Test func startRunsThePlanInOrderOnlyOnce() {
-    var trace: [AppCore.StartupStep] = []
-    let composition = makeTestComposition(label: "app-core-start")
-    let core = AppCore(composition: composition, startupObserver: { trace.append($0) })
-    #expect(trace.isEmpty, "building the core must not start it")
+  /// Runs `body`, then requires the app's own preferences domain to be unchanged. A leaked
+  /// write is undone so it can't outlive the failing run.
+  private func expectAppDomainUntouched(_ body: () throws -> Void) throws {
+    let domain = try #require(Bundle.main.bundleIdentifier)
+    // test-scratch: allow snapshots the app's own domain to prove the core never writes it
+    let standard = UserDefaults.standard
+    let before = standard.persistentDomain(forName: domain)
+    defer {
+      let after = standard.persistentDomain(forName: domain)
+      let unchanged =
+        (before == nil && after == nil)
+        || (before.map { NSDictionary(dictionary: $0) }
+          == after.map { NSDictionary(dictionary: $0) })
+      #expect(unchanged, "the core wrote to the app's own preferences domain")
+      if !unchanged {
+        if let before {
+          standard.setPersistentDomain(before, forName: domain)
+        } else {
+          standard.removePersistentDomain(forName: domain)
+        }
+      }
+    }
+    try body()
+  }
+
+  // MARK: - Startup
+
+  @Test func startAttachesEachServiceOnceInLaunchOrder() throws {
+    let source = FakePersistentChangeSource()
+    var composition = makeTestComposition(label: "app-core-start")
+    composition.persistentChangeSource = source
+    composition.wiresAutoSync = true
+    let core = AppCore(composition: composition)
+    let destination = core.exportDestinationManager
+    destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-first"))
+    let firstId = try #require(destination.destinationId)
+
+    struct Probe: Equatable {
+      let event: String
+      let storesConfigured: Bool
+      let safetyAttached: Bool
+      let launchInProgress: Bool
+    }
+    var probes: [Probe] = []
+    func probe(_ event: String) {
+      probes.append(
+        Probe(
+          event: event,
+          storesConfigured: core.lifecycleCoordinator.lastConfiguredDestinationId == firstId,
+          safetyAttached: core.destinationSafetyMonitor.isAttached,
+          launchInProgress: AppDiagnostics.isLaunchInProgress))
+    }
+    source.onSubscribe = { probe("AutoSync subscribed") }
+    source.onStart = { probe("change source started") }
+
+    AppDiagnostics.beginLaunch()
+    #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == nil)
+    #expect(!core.destinationSafetyMonitor.isAttached)
 
     core.start()
-    #expect(trace == AppCore.startupSteps(wiresAutoSync: false))
 
-    // A second window's `.task` calls `start()` again.
+    // The lifecycle coordinator configures the stores before AutoSync attaches; AutoSync
+    // subscribes before the change source starts; the safety monitor attaches after both.
+    #expect(
+      probes == [
+        Probe(
+          event: "AutoSync subscribed", storesConfigured: true, safetyAttached: false,
+          launchInProgress: true),
+        Probe(
+          event: "change source started", storesConfigured: true, safetyAttached: false,
+          launchInProgress: true),
+      ])
+    #expect(core.destinationSafetyMonitor.isAttached)
+    #expect(!AppDiagnostics.isLaunchInProgress)
+    #expect(
+      FileManager.default.fileExists(
+        atPath: composition.recordsRoot.appendingPathComponent(firstId).path))
+
+    // A second window's `.task` starts the core again: nothing re-attaches or re-starts.
     core.start()
-    #expect(trace == AppCore.startupSteps(wiresAutoSync: false))
+    #expect(probes.count == 2)
+    #expect(source.startCount == 1)
+
+    // The coordinator stays subscribed: a new destination reaches the record stores.
+    destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-second"))
+    let secondId = try #require(destination.destinationId)
+    #expect(secondId != firstId)
+    #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == secondId)
     #expect(!PhotoExportApp.wasComposed, "an AppCore alone must not compose the app")
+  }
+
+  @Test func withoutAutoSyncTheChangeSourceIsNeverStarted() {
+    let source = FakePersistentChangeSource()
+    var subscribed = false
+    source.onSubscribe = { subscribed = true }
+    var composition = makeTestComposition(label: "app-core-no-autosync")
+    composition.persistentChangeSource = source
+    let core = AppCore(composition: composition)
+
+    core.start()
+
+    #expect(!subscribed)
+    #expect(source.startCount == 0)
+    #expect(core.destinationSafetyMonitor.isAttached)
   }
 
   // MARK: - Compositions
 
   @Test func productionUsesTheStandardDefaultsAndTheDefaultRoots() throws {
-    let production = AppComposition.production
+    // test-scratch: allow inspects the shipping composition's values without building a core
+    let production = AppComposition.production()
     // test-scratch: allow compares the production composition with the app's own domain
     #expect(production.defaults === UserDefaults.standard)
 
@@ -91,68 +175,103 @@ import Testing
       ])
 
     #expect(production.photoLibraryServiceOverride == nil)
+    #expect(production.persistentChangeSource == nil)
     #expect(production.assetResourceWriter is ProductionAssetResourceWriter)
     #expect(production.fileSystem is FileIOService)
     #expect(production.clock is SystemAutoSyncClock)
     #expect(production.loginItemService is SystemLoginItemService)
+    let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
+    #expect(production.phAssetCacheControl(library) === library)
     #expect(production.wiresAutoSync)
     #expect(!production.isScreenshotMode)
+    #expect(production.screenshotWindowSize == nil)
   }
 
   @Test func screenshotModeDiffersFromProductionOnlyInPhotosAndAutoSync() {
-    let production = AppComposition.production
-    let screenshot = AppComposition.screenshot
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let production = AppComposition.production()
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let screenshot = AppComposition.screenshot(windowSize: nil)
     #expect(screenshot.defaults === production.defaults)
     #expect(screenshot.appStateRoot == production.appStateRoot)
     #expect(screenshot.photoLibraryServiceOverride is ScreenshotPhotoLibraryService)
+    #expect(screenshot.persistentChangeSource == nil)
     #expect(screenshot.assetResourceWriter is ProductionAssetResourceWriter)
+    #expect(screenshot.fileSystem is FileIOService)
+    #expect(screenshot.clock is SystemAutoSyncClock)
     #expect(screenshot.loginItemService is SystemLoginItemService)
+    let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
+    #expect(screenshot.phAssetCacheControl(library) === library)
     #expect(!screenshot.wiresAutoSync)
     #expect(screenshot.isScreenshotMode)
+  }
+
+  @Test func launchArgumentsSelectTheComposition() {
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let plain = AppComposition.forLaunch(arguments: ["Photo Export"])
+    #expect(!plain.isScreenshotMode && plain.wiresAutoSync)
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let unsized = AppComposition.forLaunch(arguments: ["Photo Export", "--screenshot-mode"])
+    #expect(unsized.isScreenshotMode && !unsized.wiresAutoSync)
+    #expect(unsized.screenshotWindowSize == nil)
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let sized = AppComposition.forLaunch(arguments: [
+      "Photo Export", "--screenshot-mode", "--screenshot-width=1440", "--screenshot-height=900",
+    ])
+    #expect(sized.screenshotWindowSize == CGSize(width: 1440, height: 900))
+    // test-scratch: allow inspects the shipping compositions' values without building a core
+    let widthOnly = AppComposition.forLaunch(arguments: [
+      "--screenshot-mode", "--screenshot-width=1440",
+    ])
+    #expect(widthOnly.screenshotWindowSize == nil)
   }
 
   // MARK: - Isolation
 
   @Test func testCompositionKeepsAllStateUnderItsRootAndSuite() throws {
-    let keys = [
-      "ExportDestinationBookmark", "ExportDestinationStableId", "hasCompletedOnboarding",
-      ExportManager.versionSelectionDefaultsKey, UserDefaultsAutoExportScopeStore.defaultsKey,
-      AutoSyncManager.enabledDefaultsKey, WhatsNewState.lastSeenVersionKey,
-    ]
-    // test-scratch: allow reads the app's own domain to prove the core never writes it
-    let standard = UserDefaults.standard
-    let original = keys.map { standard.object(forKey: $0) }
-    let describe = { (values: [Any?]) in values.map { $0.map { "\($0)" } } }
-    defer {
-      // If the core leaked a write into the app's own domain, put the old values back.
-      for (key, value) in zip(keys, original)
-      where describe([standard.object(forKey: key)]) != describe([value]) {
-        standard.set(value, forKey: key)
+    try expectAppDomainUntouched {
+      var composition = makeTestComposition(label: "app-core-isolation")
+      composition.wiresAutoSync = true
+      let core = AppCore(composition: composition)
+      core.exportDestinationManager.persistSelectedFolderForTesting(
+        try makeDestinationFolder("app-core-isolation-destination"))
+      core.start()
+      core.exportManager.versionSelection = .editedWithOriginals
+      core.whatsNewState.markAsSeen()
+
+      #expect(
+        composition.defaults.string(forKey: ExportManager.versionSelectionDefaultsKey)
+          == ExportVersionSelection.editedWithOriginals.rawValue)
+      #expect(composition.defaults.string(forKey: WhatsNewState.lastSeenVersionKey) != nil)
+      #expect(composition.defaults.data(forKey: "ExportDestinationBookmark") != nil)
+
+      #expect(core.exportRecordStore.storeRootURL == composition.recordsRoot)
+      #expect(core.collectionExportRecordStore.storeRootURL == composition.recordsRoot)
+      for url in [
+        composition.recordsRoot, composition.autoSyncRoot,
+        composition.autoSyncDestinationsRoot, composition.photoChangeTokenFileURL,
+      ] + composition.legacyStateDirectories(for: "legacy-id") {
+        #expect(url.path.hasPrefix(composition.appStateRoot.path + "/"))
       }
+      #expect(FileManager.default.fileExists(atPath: composition.recordsRoot.path))
+      #expect(composition.appStateRoot.path.hasPrefix(TestScratch.root.path + "/"))
     }
+  }
 
-    let composition = makeTestComposition(label: "app-core-isolation")
-    let core = AppCore(composition: composition)
-    core.start()
-    core.exportManager.versionSelection = .editedWithOriginals
-    core.whatsNewState.markAsSeen()
+  @Test func screenshotModeMarksOnboardingDoneOnlyInItsOwnSuite() throws {
+    try expectAppDomainUntouched {
+      var composition = makeTestComposition(label: "app-core-screenshot")
+      composition.isScreenshotMode = true
+      composition.wiresAutoSync = false
+      let splitViewKey = "NSSplitView Subview Frames main"
+      composition.defaults.set(["0, 0, 240, 800"], forKey: splitViewKey)
 
-    #expect(
-      composition.defaults.string(forKey: ExportManager.versionSelectionDefaultsKey)
-        == ExportVersionSelection.editedWithOriginals.rawValue)
-    #expect(composition.defaults.string(forKey: WhatsNewState.lastSeenVersionKey) != nil)
-    #expect(describe(keys.map { standard.object(forKey: $0) }) == describe(original))
+      let core = AppCore(composition: composition)
 
-    #expect(core.exportRecordStore.storeRootURL == composition.recordsRoot)
-    #expect(core.collectionExportRecordStore.storeRootURL == composition.recordsRoot)
-    for url in [
-      composition.recordsRoot, composition.autoSyncRoot, composition.autoSyncDestinationsRoot,
-      composition.photoChangeTokenFileURL,
-    ] + composition.legacyStateDirectories(for: "legacy-id") {
-      #expect(url.path.hasPrefix(composition.appStateRoot.path + "/"))
+      #expect(composition.defaults.bool(forKey: "hasCompletedOnboarding"))
+      #expect(composition.defaults.object(forKey: splitViewKey) == nil)
+      #expect(core.exportDestinationManager.selectedFolderURL?.lastPathComponent == "Backup Folder")
     }
-    #expect(FileManager.default.fileExists(atPath: composition.recordsRoot.path))
-    #expect(composition.appStateRoot.path.hasPrefix(TestScratch.root.path + "/"))
   }
 
   @Test func legacyStateRemovalDeletesOnlyThatIdsDirectories() throws {

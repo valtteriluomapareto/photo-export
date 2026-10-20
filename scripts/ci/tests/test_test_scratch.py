@@ -64,6 +64,26 @@ class TestScratchGuardTests(unittest.TestCase):
         self.assertIn("LeakyTests.swift:7: record store on the real", result.stdout)
         self.assertIn("5 test-scratch problem(s) found.", result.stdout)
 
+    def test_shipping_compositions_fail_unless_allowed(self):
+        self.write(
+            "CoreTests.swift",
+            "struct CoreTests {\n"
+            "  func t() {\n"
+            "    let core = AppCore(composition: .production())\n"
+            "    let shot = AppCore(\n"
+            "      composition: .screenshot(windowSize: nil))\n"
+            "    let launch = AppComposition\n"
+            "      .forLaunch(arguments: [])\n"
+            "    let fixture = AppCore(composition: makeTestComposition())\n"
+            "    // test-scratch: allow inspects the shipping paths only\n"
+            "    let paths = AppComposition.production()\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("CoreTests.swift:3: shipping composition", result.stdout)
+        self.assertIn("CoreTests.swift:4: shipping composition", result.stdout)
+        self.assertIn("CoreTests.swift:6: shipping composition", result.stdout)
+        self.assertIn("3 test-scratch problem(s) found.", result.stdout)
+
     def test_multi_line_uses_fail_at_their_first_line(self):
         self.write(
             "WrappedTests.swift",

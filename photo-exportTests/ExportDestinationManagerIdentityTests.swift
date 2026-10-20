@@ -16,7 +16,7 @@ struct ExportDestinationManagerIdentityTests {
   /// `configureForScreenshotMode` is the marketing-capture hook that puts the
   /// manager into the "destination available + writable" state with a synthetic
   /// URL. Production launches must never reach this method; the only call site
-  /// is in `photo_exportApp.init` under `isRunningInScreenshotMode`. A
+  /// is in `AppCore.init` for a composition with `isScreenshotMode`. A
   /// regression that broke the flag-toggling would silently leak the
   /// maintainer's real folder name into every screenshot.
   @Test func configureForScreenshotModeSetsAvailableWritableState() {

@@ -72,6 +72,7 @@ struct LibraryRootView: View {
 
   /// Mirrors `ContentView`'s onboarding gate. The new home for it after the refactor.
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+  @Environment(\.isScreenshotMode) private var isScreenshotMode
 
   // Import sheet
   @State private var isShowingImportSheet: Bool = false
@@ -157,7 +158,7 @@ struct LibraryRootView: View {
         get: {
           // Suppress the What's New sheet in screenshot mode — it would auto-
           // show on first launch after a version bump and ruin every capture.
-          !PhotoLibraryManager.isRunningInScreenshotMode && whatsNewState.shouldShow
+          !isScreenshotMode && whatsNewState.shouldShow
         },
         set: { newValue in
           if !newValue { whatsNewState.markAsSeen() }

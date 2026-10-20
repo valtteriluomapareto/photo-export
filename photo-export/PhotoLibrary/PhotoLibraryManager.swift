@@ -274,14 +274,6 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
   private var hasStarted = false
 
-  /// True when the app was launched with `--screenshot-mode`. Used by `init` to
-  /// skip PhotoKit registration so the `ScreenshotPhotoLibraryService` subclass can
-  /// serve curated content without the real library bleeding in. Also read by
-  /// `photo_exportApp.swift` to select which class to instantiate.
-  static var isRunningInScreenshotMode: Bool {
-    ProcessInfo.processInfo.arguments.contains("--screenshot-mode")
-  }
-
   /// Verify that Photos usage description is properly set in Info.plist
   private func verifyPhotoLibraryPermissions() {
     let bundleDict = Bundle.main.infoDictionary
