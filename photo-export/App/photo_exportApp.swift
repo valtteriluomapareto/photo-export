@@ -130,6 +130,9 @@ struct PhotoExportApp: App {
       configureRecordStores: configure,
       gcLegacyState: gcLegacy
     )
+    Self.connectAmbiguousSameFolderImport(
+      destinationManager: edm, exportManager: em,
+      hasMigrationConflict: { [weak coordinator] in coordinator?.migrationConflict != nil })
 
     let destinationsRoot = autoSyncRoot.appendingPathComponent(
       "destinations", isDirectory: true)
@@ -437,6 +440,19 @@ struct PhotoExportApp: App {
       appSupport
       .appendingPathComponent(bundleId, isDirectory: true)
       .appendingPathComponent("AutoSync", isDirectory: true)
+  }
+
+  /// "Same Folder" for a pick that couldn't be compared with the previous destination checks
+  /// the export history against the folder (#334). Not while a migration conflict is open: its
+  /// recovery owns the records until resolved.
+  static func connectAmbiguousSameFolderImport(
+    destinationManager: ExportDestinationManager, exportManager: ExportManager,
+    hasMigrationConflict: @escaping @MainActor () -> Bool
+  ) {
+    destinationManager.onAmbiguousSameFolderChosen = { [weak exportManager] in
+      guard !hasMigrationConflict() else { return }
+      exportManager?.startImportForConfirmedSameFolder()
+    }
   }
 
   /// Runs the per-destination directory coordinator (Phase 0 lazy migration) and then

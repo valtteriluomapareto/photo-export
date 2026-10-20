@@ -26,3 +26,6 @@ photo-exportTests/ImportIdempotencyTests.swift|gate|struct ImportIdempotencyTest
 
 photo-exportTests/ExportManagerRunExportTests.swift|pin|struct ExportManagerRunExportTests
 photo-exportTests/ExportManagerRunExportTests.swift|gate|func ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck
+
+photo-exportTests/AmbiguousSameFolderTests.swift|pin|struct AmbiguousSameFolderTests
+photo-exportTests/AmbiguousSameFolderTests.swift|gate|func AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds

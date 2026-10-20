@@ -90,6 +90,24 @@ def add_case(tree, suite_name, method):
     target["children"].append(added)
 
 
+def add_suite(tree, suite_name, *methods):
+    """Add a passing suite beside an existing one, holding one case per method."""
+    template = suite(tree, "ImportIdempotencyTests")
+    parent = next(node for node in nodes(tree) if template in node.get("children", []))
+    added = copy.deepcopy(template)
+    added.update(name=suite_name, nodeIdentifier=suite_name, children=[])
+    if "nodeIdentifierURL" in template:
+        added["nodeIdentifierURL"] = f"test://com.apple.xcode/photo-export/photo-exportTests/{suite_name}"
+    added["children"].append(copy.deepcopy(template["children"][0]))
+    parent["children"].append(added)
+    first, *rest = methods
+    only = added["children"][0]
+    only.update(name=f"{first}()", nodeIdentifier=f"{suite_name}/{first}()",
+                nodeIdentifierURL=f"test://com.apple.xcode/photo-export/photo-exportTests/{suite_name}/{first}()")
+    for method in rest:
+        add_case(tree, suite_name, method)
+
+
 class GateResultCheckTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -131,6 +149,8 @@ class GateResultCheckTests(unittest.TestCase):
     def test_real_gate_list_passes_when_every_gate_ran(self):
         for method in ("autoSyncRunYieldsCanonicalSequence", "manualExportSupersedingAutoSyncYieldsCanonicalSequence"):
             add_case(self.results, "AutoSyncSeamCharacterizationTests", method)
+        add_suite(self.results, "AmbiguousSameFolderTests",
+                  "sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds")
         self.assert_passes(self.run_check(gates=GATE_LIST.read_text()))
 
     def test_real_gate_list_fails_without_the_new_seam_cases(self):

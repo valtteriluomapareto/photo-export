@@ -75,6 +75,8 @@ struct LibraryRootView: View {
 
   // Import sheet
   @State private var isShowingImportSheet: Bool = false
+  /// "Choose Another Folder…" was picked on the Import sheet; open the panel once it has closed.
+  @State private var choosesFolderAfterImportSheet: Bool = false
 
   private var canImport: Bool {
     hasCompletedOnboarding && photoLibraryManager.isAuthorized
@@ -121,9 +123,28 @@ struct LibraryRootView: View {
         selectionSet: selectionSet,
         focusedSelection: focusedSelection)
     }
-    .sheet(isPresented: $isShowingImportSheet) {
-      ImportView()
+    .sheet(
+      isPresented: $isShowingImportSheet,
+      onDismiss: {
+        guard choosesFolderAfterImportSheet else { return }
+        choosesFolderAfterImportSheet = false
+        // Cancelling the panel leaves the decision open, so show the sheet again.
+        if !exportDestinationManager.selectFolderKeepingHistory() {
+          exportManager.requestImportSheet()
+        }
+      },
+      content: {
+        ImportView(onChooseAnotherFolder: {
+          choosesFolderAfterImportSheet = true
+          isShowingImportSheet = false
+        })
         .environmentObject(exportManager)
+      }
+    )
+    // An import the app started itself (checking the history after "Same Folder") shows the
+    // same sheet, so its progress, result or refusal is visible.
+    .onChange(of: exportManager.importSheetRequest) { _, request in
+      if request != nil { isShowingImportSheet = true }
     }
     // First launch on a new app version shows a brief "What's New" sheet
     // explaining new UI surfaces and reassuring the user about file safety.

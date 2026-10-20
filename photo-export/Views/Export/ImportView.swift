@@ -8,6 +8,12 @@ struct ImportView: View {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(\.dismiss) private var dismiss
 
+  /// Called for "Choose Another Folder…" after a "previous backup missing" result. The presenter
+  /// closes the sheet and opens the folder panel once it has closed.
+  var onChooseAnotherFolder: (() -> Void)?
+
+  @State private var newFolderError: String?
+
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
@@ -21,7 +27,9 @@ struct ImportView: View {
 
   var body: some View {
     VStack(spacing: 20) {
-      if let report = exportManager.importResult {
+      if exportManager.previousBackupMissing {
+        previousBackupMissingView
+      } else if let report = exportManager.importResult {
         resultView(report)
       } else if let error = exportManager.importError {
         terminalView(error: error)
@@ -33,6 +41,9 @@ struct ImportView: View {
     }
     .padding(24)
     .frame(width: 420)
+    // The user must decide what to do with a folder that isn't their previous backup; exports
+    // wait until then.
+    .interactiveDismissDisabled(exportManager.previousBackupMissing)
   }
 
   // MARK: - Progress View
@@ -132,6 +143,55 @@ struct ImportView: View {
           .keyboardShortcut(.cancelAction)
         Button("Retry", action: retry)
           .disabled(!canRetryImport)
+      }
+      .buttonStyle(.bordered)
+    }
+  }
+
+  // MARK: - Previous Backup Missing
+
+  /// The user said this is their previous backup folder, but none of the history's files are in
+  /// it. The history was kept; offer the two ways forward.
+  private var previousBackupMissingView: some View {
+    let folderName = exportDestinationManager.selectedFolderURL?.lastPathComponent ?? "this folder"
+    let chooseAnother: () -> Void = { onChooseAnotherFolder?() }
+    let useAsNew = {
+      let outcome = exportDestinationManager.useSelectedFolderAsNewDestination()
+      newFolderError = exportManager.continueAfterUsingFolderAsNew(outcome)
+      if outcome == .newHistory { dismiss() }
+    }
+    #if DEBUG
+      bodyCounter?.recordText(["false"], for: "import-progress")
+      bodyCounter?.recordAction("import-choose-another-folder", action: chooseAnother)
+      bodyCounter?.recordAction("import-use-as-new-folder", action: useAsNew)
+    #endif
+    return VStack(spacing: 16) {
+      Image(systemName: "questionmark.folder")
+        .font(.system(size: 36))
+        .foregroundStyle(.orange)
+      Text(observed("This Folder Doesn\u{2019}t Contain Your Previous Backup", key: "import-title"))
+        .font(.headline)
+        .multilineTextAlignment(.center)
+      Text(
+        observed(
+          "None of the files in your export history were found in \u{201C}\(folderName)\u{201D}, "
+            + "so your history was kept as it was. Choose the folder that has your earlier "
+            + "exports, or use this one as a new backup folder.",
+          key: "import-message")
+      )
+      .multilineTextAlignment(.center)
+      if let newFolderError {
+        Text(observed(newFolderError, key: "import-new-folder-error"))
+          .font(.caption)
+          .foregroundStyle(.orange)
+          .multilineTextAlignment(.center)
+      }
+      HStack(spacing: 12) {
+        Button("Use as New Folder", action: useAsNew)
+        if onChooseAnotherFolder != nil {
+          Button("Choose Another Folder\u{2026}", action: chooseAnother)
+            .keyboardShortcut(.defaultAction)
+        }
       }
       .buttonStyle(.bordered)
     }

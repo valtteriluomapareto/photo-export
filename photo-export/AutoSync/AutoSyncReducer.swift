@@ -439,6 +439,22 @@ enum AutoSyncReducer {
       newState.pendingTriggerReason = nil
     }
 
+    // A scheduled run that an import or a manual run cancels is still owed: keep its reason so
+    // the resume hook schedules it when that work ends. Choosing "Same Folder" for an unclear
+    // pick, for example, publishes the destination (scheduling a run) and starts an import in
+    // the same turn. Photos-change reasons are left to the resume hook's dirty-state check, which
+    // knows whether a manual run already exported that work.
+    if case .scheduled(let reason, _) = state.current, newState.pendingTriggerReason == nil,
+      reason != .photosChanged, reason != .photosChangeFallback
+    {
+      switch newState.current {
+      case .waiting(.importActive), .waiting(.manualExportActive):
+        newState.pendingTriggerReason = reason
+      default:
+        break
+      }
+    }
+
     // Work-preservation hook. If we just landed in `.idle` from a state that paused
     // pending work — `.running` (run finished), `.waiting(.importActive)` (import
     // done), `.waiting(.manualExportActive)` (manual run done) — and there's

@@ -66,6 +66,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// (`resolveAmbiguousSelection(for:)`).
   private let ambiguityResolver: ((URL) -> FolderSelectionDecision)?
 
+  /// Called when the user answers "Same Folder" for a pick that couldn't be compared with the
+  /// previous destination, once the selection is saved and the folder is available. The app runs
+  /// Import Existing Backup from here so the history is checked against the folder. Called
+  /// synchronously after the new identity is published, so the import starts in the same
+  /// main-actor turn and AutoSync waits for it instead of running first.
+  var onAmbiguousSameFolderChosen: (() -> Void)?
+
   /// Persists a security-scoped bookmark for a URL, returning success. Injectable so the
   /// save-failure branch of `applyFolderSelection` (which must NOT drop the prior stable id) is
   /// unit-testable; `nil` uses the production `saveBookmark(for:)`.
@@ -264,6 +271,43 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   func selectFolder() {
+    if let url = runFolderPanel() {
+      processSelectedFolder(url)
+    }
+  }
+
+  /// Re-picks the previous backup after the folder chosen with "Same Folder" held none of the
+  /// export history's files. The pick keeps the history and is checked again: it is never treated
+  /// as a different folder, because the stored bookmark now points at the folder just rejected.
+  /// Returns whether the check started: false when the user cancels the panel, or the pick
+  /// couldn't be saved or isn't available.
+  @discardableResult
+  func selectFolderKeepingHistory() -> Bool {
+    guard let url = runFolderPanel() else { return false }
+    return applySelection(url, decision: .sameDestination, checkHistory: true)
+  }
+
+  /// Outcome of `useSelectedFolderAsNewDestination()`.
+  enum NewDestinationOutcome: Equatable {
+    /// A fresh, empty history now belongs to the folder.
+    case newHistory
+    /// The folder's identity is the one the history already uses, so no new history could start.
+    case sameIdentity
+    /// The bookmark couldn't be saved; nothing changed.
+    case notSaved
+  }
+
+  /// Starts a fresh history for the selected folder, leaving the previous history in place for
+  /// its own folder.
+  func useSelectedFolderAsNewDestination() -> NewDestinationOutcome {
+    guard let url = selectedFolderURL else { return .notSaved }
+    let previous = identity.stableId
+    guard applyFolderSelection(url, decision: .newDestination) else { return .notSaved }
+    guard let current = identity.stableId, current != previous else { return .sameIdentity }
+    return .newHistory
+  }
+
+  private func runFolderPanel() -> URL? {
     let panel = NSOpenPanel()
     panel.title = "Choose Export Folder"
     panel.message = "Select a folder where your photos and videos will be exported."
@@ -272,10 +316,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     panel.allowsMultipleSelection = false
     panel.canCreateDirectories = true
     panel.prompt = "Choose"
-
-    if panel.runModal() == .OK, let url = panel.url {
-      processSelectedFolder(url)
-    }
+    return panel.runModal() == .OK ? panel.url : nil
   }
 
   /// Resolves the same-vs-different-folder decision for an explicitly picked folder, then
@@ -292,23 +333,36 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     case .ambiguous:
       decision = ambiguityResolver?(url) ?? resolveAmbiguousSelection(for: url)
     }
-    applyFolderSelection(url, decision: decision)
+    applySelection(
+      url, decision: decision,
+      checkHistory: evidence == .ambiguous && decision == .sameDestination)
+  }
+
+  /// Applies a pick and, when `checkHistory`, asks the app to check the export history against
+  /// the folder once the selection is saved and the folder is available.
+  /// Returns whether the check was requested.
+  @discardableResult
+  private func applySelection(
+    _ url: URL, decision: FolderSelectionDecision, checkHistory: Bool
+  ) -> Bool {
+    let applied = applyFolderSelection(url, decision: decision)
+    guard checkHistory, applied, identity.stableId != nil else { return false }
+    onAmbiguousSameFolderChosen?()
+    return true
   }
 
   /// The stored bookmark won't resolve, so we can't tell whether the user re-picked the same
-  /// backup folder or a new one. Ask. Defaulting to "same folder" keeps the duplicate-re-export
-  /// (#127) failure mode off the highlighted button; the user can still choose "different".
+  /// backup folder or a new one. Ask; the first button ("Same Folder") is the default.
   private func resolveAmbiguousSelection(for url: URL) -> FolderSelectionDecision {
+    let prompt = AmbiguousFolderPrompt(folderName: url.lastPathComponent)
     let alert = NSAlert()
-    alert.messageText = "Is this the same backup folder as before?"
-    alert.informativeText =
-      "Photo Export couldn't confirm whether \"\(url.lastPathComponent)\" is the destination you "
-      + "used previously. Choosing \"Same folder\" keeps your existing export history so nothing "
-      + "is re-exported. Choose \"Different folder\" only if this is a new backup destination."
+    alert.messageText = prompt.title
+    alert.informativeText = prompt.message
     alert.alertStyle = .warning
-    alert.addButton(withTitle: "Same folder")
-    alert.addButton(withTitle: "Different folder")
-    return alert.runModal() == .alertFirstButtonReturn ? .sameDestination : .newDestination
+    for title in prompt.buttons { alert.addButton(withTitle: title) }
+    let index =
+      alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+    return prompt.decision(forButtonAt: index)
   }
 
   func revealInFinder() {
@@ -520,6 +574,12 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     processSelectedFolder(url)
   }
 
+  /// `selectFolderKeepingHistory()` without the `NSOpenPanel`.
+  @discardableResult
+  func selectFolderKeepingHistoryForTesting(_ url: URL) -> Bool {
+    applySelection(url, decision: .sameDestination, checkHistory: true)
+  }
+
   /// Re-runs validation against the current selection, mirroring what the volume
   /// mount/unmount notifications do. Lets tests simulate a remount — after swapping the
   /// injected `fingerprintProvider`'s result — without posting a real `NSWorkspace`
@@ -534,7 +594,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Applies an explicit folder selection. The `decision` controls stable-id continuity:
   /// `.sameDestination` keeps the persisted stable id and stashed legacy id (re-grant of the
   /// same folder); `.newDestination` forgets both so a fresh id is seeded by `validate`.
-  func applyFolderSelection(_ url: URL, decision: FolderSelectionDecision) {
+  /// Returns false when the bookmark couldn't be saved and nothing changed.
+  @discardableResult
+  func applyFolderSelection(_ url: URL, decision: FolderSelectionDecision) -> Bool {
     logger.info(
       "User selected export folder: \(url.path, privacy: .public) (decision: \(String(describing: decision), privacy: .public))"
     )
@@ -545,7 +607,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // fingerprint and re-key its records.
     guard bookmarkSaver?(url) ?? saveBookmark(for: url) else {
       status = .bookmarkSaveFailed
-      return
+      return false
     }
     switch decision {
     case .newDestination:
@@ -566,6 +628,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
     selectedFolderURL = url
     validate(url: url)
+    return true
   }
 
   /// Derives a stable `destinationId` for a folder URL.

@@ -709,26 +709,7 @@ final class ExportRecordStore: ObservableObject {
     let revision = reconciliationRevision
 
     // Phase 1 (main): snapshot every .done variant's expected on-disk path.
-    struct Probe: Sendable {
-      let assetId: String
-      let variant: ExportVariant
-      let path: String
-    }
-    var probes: [Probe] = []
-    for (assetId, record) in recordsById {
-      for (variant, vr) in record.variants where vr.status == .done {
-        // Issue #38: probe each variant's *own* on-disk location, computed from the
-        // placement-derived `record.relPath` (which the timeline store sets to the
-        // current target layout's effective path on every write) plus the variant's
-        // persisted `subfolder`. Under mid-life toggle, two variants of one asset
-        // can live in different subfolders — using a shared `record.relPath` here
-        // would mis-probe whichever variant didn't match the last write.
-        let placement = ExportPlacement.timeline(year: record.year, month: record.month)
-        let path = try ReconciliationFileChecker.filePath(
-          root: root, placement: placement, filename: vr.filename, subfolder: vr.subfolder)
-        probes.append(Probe(assetId: assetId, variant: variant, path: path))
-      }
-    }
+    let probes = try completedVariantProbes(root: root)
 
     // Phase 2 (off-main): preserve errors until ownership has been checked.
     let probesCopy = probes
@@ -775,6 +756,45 @@ final class ExportRecordStore: ObservableObject {
       "Reconciled timeline: pruned \(prunedVariants) variants, \(prunedRecords) records")
     return ReconcileSummary(
       prunedVariants: prunedVariants, prunedRecords: prunedRecords)
+  }
+
+  private struct CompletedVariantProbe: Sendable {
+    let assetId: String
+    let variant: ExportVariant
+    let path: String
+  }
+
+  private func completedVariantProbes(root: URL) throws -> [CompletedVariantProbe] {
+    var probes: [CompletedVariantProbe] = []
+    for (assetId, record) in recordsById {
+      for (variant, vr) in record.variants where vr.status == .done {
+        // Issue #38: probe each variant's *own* on-disk location, computed from the
+        // placement-derived `record.relPath` (which the timeline store sets to the
+        // current target layout's effective path on every write) plus the variant's
+        // persisted `subfolder`. Under mid-life toggle, two variants of one asset
+        // can live in different subfolders — using a shared `record.relPath` here
+        // would mis-probe whichever variant didn't match the last write.
+        let placement = ExportPlacement.timeline(year: record.year, month: record.month)
+        let path = try ReconciliationFileChecker.filePath(
+          root: root, placement: placement, filename: vr.filename, subfolder: vr.subfolder)
+        probes.append(CompletedVariantProbe(assetId: assetId, variant: variant, path: path))
+      }
+    }
+    return probes
+  }
+
+  /// Whether any completed variant's file is under `root`, or `nil` when there is no completed
+  /// variant to look for (or the store isn't ready). Read-only: stops at the first file found,
+  /// and checks the root before concluding that none are there, so an unreadable folder throws
+  /// instead of reading as empty.
+  func containsCompletedFile(
+    at root: URL, isCurrent: @MainActor () -> Bool = { true }
+  ) async throws -> Bool? {
+    guard isCurrent(), !Task.isCancelled, state == .ready else { return nil }
+    let paths = try completedVariantProbes(root: root).map(\.path)
+    guard !paths.isEmpty else { return nil }
+    let fileChecker = reconciliationFileChecker
+    return try await runDetached { try await fileChecker.containsAnyFile(paths, root: root) }
   }
 
   // MARK: - Bulk import (for backup import)

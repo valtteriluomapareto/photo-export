@@ -22,7 +22,8 @@ protocol AutoExportScopeProviding: AnyObject {
 }
 
 /// AutoSync's view of the import subsystem. Tracks whether `startImport()` is
-/// currently running so the reducer can route to `.waiting(.importActive)`.
+/// currently running, or its "previous backup missing" result is waiting for the
+/// user, so the reducer can route to `.waiting(.importActive)`.
 @MainActor
 protocol AutoSyncImportProviding: AnyObject {
   var isImportingPublisher: AnyPublisher<Bool, Never> { get }

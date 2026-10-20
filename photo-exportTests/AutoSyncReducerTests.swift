@@ -267,6 +267,52 @@ struct AutoSyncReducerTests {
     #expect(next.importActive == false)
   }
 
+  /// A debounce that an import or a manual run cancels still owes its run. Choosing "Same
+  /// Folder" for an unclear pick switches the destination and starts an import in the same
+  /// turn; when the import ends, the destination's run must be scheduled again rather than the
+  /// reducer going idle with nothing pending.
+  @Test(arguments: [false, true])
+  func debounceCancelledByImportOrManualRunIsRescheduledWhenItEnds(manual: Bool) {
+    let state = enabledStateWithSafeDestinationAndScope()
+    let (scheduled, _) = AutoSyncReducer.reduce(
+      .destinationChanged(safeDestination("dest-B")), in: state, now: now)
+    guard case .scheduled(let reason, _) = scheduled.current else {
+      Issue.record(
+        "Expected a scheduled run after the destination change, got \(scheduled.current)")
+      return
+    }
+
+    let manualRun = ExportRunState(
+      activeContext: nil, isManualActive: true, isAutoSyncActive: false)
+    let (held, holdEffects) = AutoSyncReducer.reduce(
+      manual ? .exportRunStateChanged(manualRun) : .importStateChanged(isImporting: true),
+      in: scheduled, now: now)
+    #expect(held.current == .waiting(manual ? .manualExportActive : .importActive))
+    #expect(holdEffects.contains(.cancelDebounce(reason)))
+
+    let later = now.addingTimeInterval(60)
+    let (resumed, resumeEffects) = AutoSyncReducer.reduce(
+      manual ? .exportRunStateChanged(.idle) : .importStateChanged(isImporting: false),
+      in: held, now: later)
+    let fireAt = later.addingTimeInterval(AutoSyncReducer.debounceDelay(for: reason))
+    #expect(resumed.current == .scheduled(reason: reason, fireAt: fireAt))
+    #expect(resumeEffects.contains(.scheduleDebounce(reason, fireAt: fireAt)))
+    #expect(resumed.pendingTriggerReason == nil)
+  }
+
+  /// Photos-change reasons aren't kept: the resume hook's dirty-state check already knows
+  /// whether a manual run exported that work in the meantime.
+  @Test func cancelledPhotosChangeDebounceIsLeftToTheDirtyStateCheck() {
+    var state = enabledStateWithSafeDestinationAndScope()
+    state.current = .scheduled(reason: .photosChanged, fireAt: now.addingTimeInterval(30))
+
+    let (held, _) = AutoSyncReducer.reduce(
+      .importStateChanged(isImporting: true), in: state, now: now)
+
+    #expect(held.current == .waiting(.importActive))
+    #expect(held.pendingTriggerReason == nil)
+  }
+
   // MARK: - versionSelectionChanged
 
   @Test func versionSelectionChangeSchedulesDebounce() {

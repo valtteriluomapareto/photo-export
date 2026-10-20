@@ -168,7 +168,11 @@ final class ExportManager: ObservableObject {
   @Published private(set) var isImporting: Bool = false
   @Published private(set) var importStage: BackupScanner.ImportStage?
   @Published private(set) var importError: String?
+  @Published private(set) var previousBackupMissing: Bool = false
   @Published var importResult: ImportReport?
+  /// Changes each time the app starts an import the user didn't open the Import sheet for, so the
+  /// library window shows the sheet (progress, result, or why it didn't run).
+  @Published private(set) var importSheetRequest: UUID?
 
   // MARK: - Awaitable run lifecycle (auto-sync Phase 0a)
 
@@ -227,7 +231,12 @@ final class ExportManager: ObservableObject {
 
   /// Combine publisher for the import flag.
   var isImportingPublisher: AnyPublisher<Bool, Never> {
-    $isImporting.eraseToAnyPublisher()
+    // A "previous backup missing" result holds AutoSync like a running import until the user
+    // decides, so nothing is exported into the folder they were just told is wrong.
+    $isImporting.combineLatest($previousBackupMissing)
+      .map { $0 || $1 }
+      .removeDuplicates()
+      .eraseToAnyPublisher()
   }
 
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
@@ -602,6 +611,9 @@ final class ExportManager: ObservableObject {
     self.importCoordinator.$importError
       .sink { [weak self] in self?.importError = $0 }
       .store(in: &importCancellables)
+    self.importCoordinator.$previousBackupMissing
+      .sink { [weak self] in self?.previousBackupMissing = $0 }
+      .store(in: &importCancellables)
   }
 
   // MARK: - Lifetime contract
@@ -634,6 +646,11 @@ final class ExportManager: ObservableObject {
   private func canStartExport(in scope: ExportStoreScope, logTag: String) -> Bool {
     guard !isImporting else {
       logger.warning("\(logTag, privacy: .public) ignored: import in progress")
+      return false
+    }
+    guard !previousBackupMissing else {
+      logger.warning(
+        "\(logTag, privacy: .public) ignored: waiting for a decision about the export folder")
       return false
     }
     let ready = scope == .timeline ? canExportTimeline : canExportCollection
@@ -1302,6 +1319,7 @@ final class ExportManager: ObservableObject {
 
   func cancelAndClear() {
     logger.info("Cancelling current export and clearing queue due to destination change")
+    importCoordinator.clearPreviousBackupMissing()
     teardownActiveWork()
     finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
   }
@@ -2414,6 +2432,49 @@ final class ExportManager: ObservableObject {
   /// Starts the "Import Existing Backup…" flow. Forwarder to the `ImportCoordinator`.
   func startImport() {
     importCoordinator.startImport()
+  }
+
+  /// Checks the export history against a folder the user just said is their previous backup:
+  /// runs Import Existing Backup, which keeps the history untouched when none of its files are
+  /// there, and asks the library window to show the Import sheet.
+  func startImportForConfirmedSameFolder() {
+    importCoordinator.startImport(requiringPreviousBackup: true)
+    requestImportSheet()
+  }
+
+  /// Asks the library window to show the Import sheet.
+  func requestImportSheet() {
+    importSheetRequest = UUID()
+  }
+
+  /// Ends the wait after a "previous backup missing" result. Forwarder.
+  func clearPreviousBackupMissing() {
+    importCoordinator.clearPreviousBackupMissing()
+  }
+
+  /// Follows up "Use as New Folder" after a "previous backup missing" result. Returns a message
+  /// to show when nothing changed.
+  /// - `.newHistory`: the wait ends; the fresh history starts empty.
+  /// - `.sameIdentity`: the folder is the one the history was created for, so make the history
+  ///   match what's in it (a plain import, which re-exports what's missing). The import ends the
+  ///   wait itself once it is running, so exports stay held throughout.
+  /// - `.notSaved`: nothing changed and the wait continues.
+  func continueAfterUsingFolderAsNew(
+    _ outcome: ExportDestinationManager.NewDestinationOutcome
+  ) -> String? {
+    switch outcome {
+    case .newHistory:
+      clearPreviousBackupMissing()
+      return nil
+    case .sameIdentity:
+      startImport()
+      return previousBackupMissing
+        ? "Photo Export couldn\u{2019}t read this folder right now. Check that it\u{2019}s connected, then try again."
+        : nil
+    case .notSaved:
+      return
+        "Photo Export couldn\u{2019}t save access to this folder. Choose it again, or choose another folder."
+    }
   }
 
   /// Cancels an in-progress import. Forwarder to the `ImportCoordinator`.
