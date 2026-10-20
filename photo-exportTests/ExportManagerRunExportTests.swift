@@ -888,9 +888,10 @@ struct ExportManagerRunExportTests {
 
   enum MidScanScope: CaseIterable, Sendable { case timeline, albums, sharedAlbums }
 
-  /// Access lost between two items of a bulk scan. The first item's jobs still export, but
-  /// the run ends `.failed`: a `.completed` summary would clear AutoSync's pending work for
-  /// the item the scan never reached.
+  /// Access lost between two items of a bulk scan ends the run `.failed`: a `.completed`
+  /// summary would clear AutoSync's pending work for the item the scan never reached. The
+  /// fake's writes don't check access, so this isolates the scan guard: only the missing
+  /// second item can fail the run.
   @Test(.timeLimit(.minutes(1)), arguments: MidScanScope.allCases)
   func fullScopeLosingPhotosAccessMidScanResolvesFailed(scope: MidScanScope) async throws {
     let harness = makeHarness()
