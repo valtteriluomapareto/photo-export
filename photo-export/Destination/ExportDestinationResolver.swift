@@ -182,9 +182,9 @@ struct ExportDestinationResolver: Sendable {
       policy: .suffix(base: base, ext: ext))
   }
 
-  /// The first candidate of `slot` with nothing at it, following symbolic links as
-  /// `fileExists` does, whose name `isClaimed` says no other record names. A `.refuse`
-  /// slot's only candidate is returned as is.
+  /// The first candidate of `slot` that has nothing at it (following symbolic links, as
+  /// `fileExists` does) and that `isClaimed` says no other record names. A `.refuse` slot's
+  /// only candidate is returned as is.
   func firstFreeURL(in slot: Slot, isClaimed: (String) -> Bool) -> URL {
     guard case .suffix(let base, let ext) = slot.policy else { return slot.naturalURL }
     return uniqueFileURL(in: slot.directory, baseName: base, ext: ext, isClaimed: isClaimed)

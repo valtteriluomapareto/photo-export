@@ -38,7 +38,11 @@ struct FilenameClaims<Folder: Hashable> {
     let ownClaims = own.filter {
       $0.folder == folder && $0.filename.map { FilenameKey.sameName($0, filename) } == true
     }
-    return count(filename, in: folder) - ownClaims.count
+    let remaining = count(filename, in: folder) - ownClaims.count
+    // Every own record adds its claim, so more own claims than claims means the index has
+    // drifted from the records.
+    if remaining < 0 { assertionFailure("\(ownClaims.count) own claims on \(filename)") }
+    return max(0, remaining)
   }
 
   /// An index filled by `add`, with a debug log of how long that took for `recordCount`

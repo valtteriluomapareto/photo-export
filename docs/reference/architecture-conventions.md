@@ -225,7 +225,7 @@ variants in the placement. An edited fallback's
 its in-memory records on its first claim query, synchronously on the main actor: in practice
 at the first provisional mark or group-stem allocation of a session's first export to that
 store (about 0.4 s and 50–70 MB for 500k records in an optimized build, so it is not paid at
-load or by a session that exports nothing). Each build logs its record count and elapsed
+load or by a session that exports nothing; measuring it at that size is #359). Each build logs its record count and elapsed
 milliseconds at debug level ("Built filename claims for … records in … ms"). The index is
 maintained in each store's `apply` after that, so log replay, import, prune and reset follow
 it; a normal commit costs three claim lookups and one main-actor hop. It is dropped, to be
@@ -237,16 +237,18 @@ every suffix.
 
 Known limits: only the folder the variant is being written to is searched, so an identical
 file left in `videos/` (or outside it) by a layout change is not found. Paired groups and
-`_orig` slots are allocated before staging and are never adopted. A paired original-side name
-on an inherited stem is refused only when a file is there, not when another record claims it.
-Claims are keyed by placement id, so two placements whose folders are one folder on disk (for
-example names that differ only by case on a volume that ignores case) do not see each other's
-claims. A failed or interrupted record keeps its name reserved until it is retried, including
-one for an asset since deleted from Photos; Import Existing Backup drops only completed
-records whose file is missing. Histories where two records already name one file are not
-repaired. Neither is an image whose
+`_orig` slots are allocated before staging and are never adopted. Neither is an image whose
 paired video the same job writes next at its stem: adopting the image could find the video's
-name taken and split the pair, so the image takes a free name and the video follows it. Rendered video and
+name taken and split the pair, so the image takes a free name and the video follows it. A
+paired original-side name on an inherited stem is refused only when a file is there, not when
+another record claims it (#360). Claims are keyed by placement id, so two placements whose
+folders are one folder on disk (for example names that differ only by case on a volume that
+ignores case) do not see each other's claims (#360). An edit on a newly allocated stem can
+still land at ` (1)` when the asset's own failed original still names that stem's natural
+name; the next run resolves it. A failed or interrupted record keeps its name reserved until
+it is retried, including one for an asset since deleted from Photos; Import Existing Backup
+drops only completed records whose file is missing. Histories where two records already name
+one file are not repaired. Rendered video and
 HEIC-to-JPEG output usually differ byte for byte from an earlier export, so they get a
 suffix, which is safe. On a network volume that is case- or normalization-sensitive, a file
 whose stored name differs from the resource's only in normalization is not found by

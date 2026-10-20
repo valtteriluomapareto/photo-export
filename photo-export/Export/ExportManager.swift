@@ -1934,7 +1934,8 @@ final class ExportManager: ObservableObject {
       // is edited always has its motion side considered edited too.
       let pairOriginalWithSuffix = required.contains(.edited)
       // A stem chosen for the whole group skips names another asset's records hold, so no
-      // member is later refused a claimed name or pushed alone onto another stem.
+      // member is later written at a name another record claims, or pushed alone onto
+      // another stem.
       let claimedByAnotherAsset = { [recordStoreRouter] (name: String) in
         recordStoreRouter.isFilenameClaimed(
           name, placement: job.placement, subfolder: subfolder, exceptAsset: descriptor.id)

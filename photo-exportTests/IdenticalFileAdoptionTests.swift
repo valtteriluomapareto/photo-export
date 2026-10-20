@@ -85,9 +85,10 @@ struct IdenticalFileAdoptionTests {
     }
 
     /// Every name `assetId`'s `variant` was marked in progress under, in order, read back
-    /// from both record logs of the current history.
+    /// from both record logs of the current history. The log of the store the export wrote,
+    /// the collection store's when `inCollection`, must exist; a missing one fails the test.
     func inProgressNames(
-      of assetId: String, variant: ExportVariant = .original
+      of assetId: String, variant: ExportVariant = .original, inCollection: Bool = false
     ) async throws -> [String] {
       try await timeline.flush()
       try await collections.flush()
@@ -100,11 +101,16 @@ struct IdenticalFileAdoptionTests {
           names.append(name)
         }
       }
-      for line in try Self.lines(of: folder.appendingPathComponent("export-records.jsonl")) {
+      let timelineLog = folder.appendingPathComponent(ExportRecordStore.Constants.logFileName)
+      let collectionLog = folder.appendingPathComponent(
+        CollectionExportRecordStore.Constants.logFileName)
+      try #require(
+        FileManager.default.fileExists(atPath: (inCollection ? collectionLog : timelineLog).path))
+      for line in try Self.lines(of: timelineLog) {
         let mutation = try decoder.decode(ExportRecordMutation.self, from: line)
         if mutation.id == assetId { inProgress(mutation.record?.variants[variant]) }
       }
-      for line in try Self.lines(of: folder.appendingPathComponent("collection-records.jsonl")) {
+      for line in try Self.lines(of: collectionLog) {
         let op = try decoder.decode(CollectionExportRecordStore.LogOp.self, from: line)
         if case .upsertRecord(_, assetId, let body) = op {
           inProgress(body.variants[variant.rawValue])
@@ -955,7 +961,7 @@ struct IdenticalFileAdoptionTests {
       #expect(variants(asset.id)?.filename == "IMG_0001 (1).JPG")
       #expect(variants(other.id)?.filename == "IMG_0001.JPG")
       #expect(try h.contents(of: folder) == ["IMG_0001 (1).JPG"])
-      #expect(try await h.inProgressNames(of: asset.id) == ["IMG_0001 (1).JPG"])
+      #expect(try await h.inProgressNames(of: asset.id, inCollection: true) == ["IMG_0001 (1).JPG"])
     } cleanup: {
       await h.cleanup()
     }
