@@ -140,8 +140,11 @@ or one of its suffixes, when that file has the same bytes and no other record in
 for that placement names it in that folder (see architecture-conventions § Final file commit boundary).
 Its `filename` is then the name as the folder spells it, which can differ from the
 resource's name in case or Unicode normalization. Every record with a `filename`, whatever
-its status, keeps that name from being adopted for another asset or variant. The index
-behind that check is built from the records in memory; nothing new is persisted.
+its status, reserves that name in its folder: no other asset or variant adopts a file there
+or writes one there, even after the file is deleted. Import Existing Backup drops a
+completed record whose file is missing, which frees its name; failed and in-progress
+records keep theirs until they are retried. The index behind that check is built from the
+records in memory; nothing new is persisted.
 
 Shared albums record only `original`. Their placement kind maps to the `singleResource`
 variant policy (`ExportPlacement.Kind.variantPolicy`, not persisted): Photos exposes one

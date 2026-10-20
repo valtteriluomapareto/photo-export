@@ -102,10 +102,10 @@ final class ExportRecordStore: ObservableObject {
       self.subfolder = subfolder ?? ""
     }
   }
-  /// Filenames named by any variant record. Built on the first `isFilenameClaimed` query,
-  /// since building it costs about 0.4 s per 500k records and most launches never ask; kept
-  /// with `monthCounters` after that. Nil until then, and again whenever the records are
-  /// replaced wholesale.
+  /// Filenames named by any variant record. Built on the first `isFilenameClaimed` query, at
+  /// a session's first export, so a launch that exports nothing never pays for it (about
+  /// 0.4 s per 500k records); kept with `monthCounters` after that. Nil until then, and again
+  /// whenever the records are replaced wholesale.
   private var filenameClaims: FilenameClaims<ClaimFolder>?
 
   /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
@@ -520,26 +520,49 @@ final class ExportRecordStore: ObservableObject {
     _ filename: String, year: Int, month: Int, subfolder: String?,
     exceptVariant variant: ExportVariant, of assetId: String
   ) -> Bool {
-    let own = recordsById[assetId].flatMap { record in
-      record.variants[variant].map {
-        (
-          filename: $0.filename,
-          folder: ClaimFolder(year: record.year, month: record.month, subfolder: $0.subfolder)
-        )
-      }
-    }
+    isFilenameClaimed(
+      filename, year: year, month: month, subfolder: subfolder, assetId: assetId,
+      excluding: { $0 == variant })
+  }
+
+  /// Whether another asset's record names `filename` in the folder for `year`/`month` and
+  /// `subfolder`. None of `assetId`'s own variants count.
+  func isFilenameClaimed(
+    _ filename: String, year: Int, month: Int, subfolder: String?,
+    exceptAsset assetId: String
+  ) -> Bool {
+    isFilenameClaimed(
+      filename, year: year, month: month, subfolder: subfolder, assetId: assetId,
+      excluding: { _ in true })
+  }
+
+  private func isFilenameClaimed(
+    _ filename: String, year: Int, month: Int, subfolder: String?, assetId: String,
+    excluding isOwn: (ExportVariant) -> Bool
+  ) -> Bool {
+    let own =
+      (recordsById[assetId].map { record in
+        record.variants.filter { isOwn($0.key) }.values.map {
+          (
+            filename: $0.filename,
+            folder: ClaimFolder(year: record.year, month: record.month, subfolder: $0.subfolder)
+          )
+        }
+      }) ?? []
     let folder = ClaimFolder(year: year, month: month, subfolder: subfolder)
     return currentFilenameClaims().count(filename, in: folder, excluding: own) > 0
   }
 
   private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
     if let filenameClaims { return filenameClaims }
-    var claims = FilenameClaims<ClaimFolder>()
-    for record in recordsById.values {
-      for variant in record.variants.values {
-        claims.add(
-          variant.filename,
-          in: ClaimFolder(year: record.year, month: record.month, subfolder: variant.subfolder))
+    let claims = FilenameClaims<ClaimFolder>.build(recordCount: recordsById.count, logger: logger) {
+      claims in
+      for record in recordsById.values {
+        for variant in record.variants.values {
+          claims.add(
+            variant.filename,
+            in: ClaimFolder(year: record.year, month: record.month, subfolder: variant.subfolder))
+        }
       }
     }
     filenameClaims = claims

@@ -69,8 +69,8 @@ struct ExportDestinationResolver: Sendable {
   static let maxSuffixIndex = 10_000
 
   /// The first free URL of `resolveSlot`'s slot, with the stem it gives later variants. A
-  /// test convenience: exports choose the final name with `FinalNamePlanner` once the bytes
-  /// are staged.
+  /// test convenience that sees no claims: exports choose the final name with
+  /// `FinalNamePlanner` once the bytes are staged.
   func resolveDestination(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -85,7 +85,7 @@ struct ExportDestinationResolver: Sendable {
       variant: variant, descriptor: descriptor, originalFilename: originalFilename,
       resources: resources, destDir: destDir, groupStem: groupStem,
       pairOriginalWithSuffix: pairOriginalWithSuffix, interruptedFilename: interruptedFilename)
-    let url = firstFreeURL(in: slot)
+    let url = firstFreeURL(in: slot, isClaimed: { _ in false })
     return (url, slot.chosenStem(forFilename: url.lastPathComponent))
   }
 
@@ -182,18 +182,20 @@ struct ExportDestinationResolver: Sendable {
       policy: .suffix(base: base, ext: ext))
   }
 
-  /// The first candidate of `slot` with nothing at it, following symbolic links as
-  /// `fileExists` does. A `.refuse` slot's only candidate is returned as is.
-  func firstFreeURL(in slot: Slot) -> URL {
+  /// The first candidate of `slot` that has nothing at it (following symbolic links, as
+  /// `fileExists` does) and that `isClaimed` says no other record names. A `.refuse` slot's
+  /// only candidate is returned as is.
+  func firstFreeURL(in slot: Slot, isClaimed: (String) -> Bool) -> URL {
     guard case .suffix(let base, let ext) = slot.policy else { return slot.naturalURL }
-    return uniqueFileURL(in: slot.directory, baseName: base, ext: ext)
+    return uniqueFileURL(in: slot.directory, baseName: base, ext: ext, isClaimed: isClaimed)
   }
 
   // MARK: - Stem allocation
 
   /// Allocates a stem where every slot the active variant set will write is
-  /// simultaneously free. Bumps the per-pair collision suffix until all slots are
-  /// available so the pair (or paired group) never splits across stems.
+  /// simultaneously free: nothing on disk, and a name `isClaimed` says no other asset's
+  /// record names. Bumps the per-pair collision suffix until all slots are available so the
+  /// pair (or paired group) never splits across stems.
   ///
   /// `pairOriginalWithSuffix` mirrors the call-site flag of the same name on
   /// `resolveDestination` and selects between the two layouts:
@@ -220,8 +222,12 @@ struct ExportDestinationResolver: Sendable {
     editedExt: String?,
     destDir: URL,
     pairOriginalWithSuffix: Bool,
-    pairedVideoExt: String? = nil
+    pairedVideoExt: String? = nil,
+    isClaimed: (String) -> Bool
   ) -> String {
+    func isFree(_ url: URL) -> Bool {
+      !fileSystem.fileExists(atPath: url.path) && !isClaimed(url.lastPathComponent)
+    }
     var stem = baseStem
     var index = 1
     while index < 10_000 {
@@ -240,17 +246,13 @@ struct ExportDestinationResolver: Sendable {
         let origTarget = destDir.appendingPathComponent(
           stem + ExportFilenamePolicy.originalSuffix
         ).appendingPathExtension(imageExt)
-        allFree =
-          !fileSystem.fileExists(atPath: editedTarget.path)
-          && !fileSystem.fileExists(atPath: origTarget.path)
+        allFree = isFree(editedTarget) && isFree(origTarget)
         if allFree, let movExt = pairedVideoExt {
           let editedMov = destDir.appendingPathComponent(stem).appendingPathExtension(movExt)
           let origMov = destDir.appendingPathComponent(
             stem + ExportFilenamePolicy.originalSuffix
           ).appendingPathExtension(movExt)
-          allFree =
-            !fileSystem.fileExists(atPath: editedMov.path)
-            && !fileSystem.fileExists(atPath: origMov.path)
+          allFree = isFree(editedMov) && isFree(origMov)
         }
       } else {
         // Single-image-side layout: only the natural-stem image + the natural-stem
@@ -258,10 +260,10 @@ struct ExportDestinationResolver: Sendable {
         // passed the relevant side as `imageExt`.
         let imageTarget = destDir.appendingPathComponent(stem)
           .appendingPathExtension(imageExt)
-        allFree = !fileSystem.fileExists(atPath: imageTarget.path)
+        allFree = isFree(imageTarget)
         if allFree, let movExt = pairedVideoExt {
           let mov = destDir.appendingPathComponent(stem).appendingPathExtension(movExt)
-          allFree = !fileSystem.fileExists(atPath: mov.path)
+          allFree = isFree(mov)
         }
       }
       if allFree { return stem }
@@ -271,12 +273,13 @@ struct ExportDestinationResolver: Sendable {
     return stem
   }
 
-  /// Finds the smallest `(N)`-suffixed `baseStem` whose `_orig` companion slot is free.
-  /// The edited-fallback only writes the original; the natural-stem edited slot is
-  /// intentionally not checked because we don't know the edited extension here, and a
-  /// future run that succeeds at the edit will allocate its own stem.
+  /// Finds the smallest `(N)`-suffixed `baseStem` whose `_orig` companion slot is free: nothing
+  /// on disk, and a name `isClaimed` says no other asset's record names. The edited-fallback
+  /// only writes the original; the natural-stem edited slot is intentionally not checked
+  /// because we don't know the edited extension here, and a future run that succeeds at the
+  /// edit will allocate its own stem.
   func allocateUnusedOrigStem(
-    baseStem: String, originalExt: String, destDir: URL
+    baseStem: String, originalExt: String, destDir: URL, isClaimed: (String) -> Bool
   ) -> String {
     var stem = baseStem
     var index = 1
@@ -284,7 +287,9 @@ struct ExportDestinationResolver: Sendable {
       let target = destDir.appendingPathComponent(
         stem + ExportFilenamePolicy.originalSuffix
       ).appendingPathExtension(originalExt)
-      if !fileSystem.fileExists(atPath: target.path) { return stem }
+      if !fileSystem.fileExists(atPath: target.path), !isClaimed(target.lastPathComponent) {
+        return stem
+      }
       stem = "\(baseStem) (\(index))"
       index += 1
     }
@@ -293,17 +298,20 @@ struct ExportDestinationResolver: Sendable {
 
   // MARK: - Unique-filename collision suffixing
 
-  /// Returns a URL whose final path component does not already exist in `directory`.
-  /// Appends ` (1)`, ` (2)`, etc. until a free slot is found, capped at 10 000 attempts.
+  /// Returns a URL whose final path component does not already exist in `directory` and
+  /// is not claimed. Appends ` (1)`, ` (2)`, etc. until a free slot is found, capped at
+  /// 10 000 attempts.
   ///
-  /// Production callers go through `resolveDestination` — kept `internal` only as a unit
-  /// test seam for `ExportDestinationResolverTests` (no-conflict, sequential conflicts,
-  /// cap respected). Don't widen this surface; new production paths should compose via
-  /// `resolveDestination` instead.
-  func uniqueFileURL(in directory: URL, baseName: String, ext: String) -> URL {
+  /// Production callers go through `firstFreeURL` — kept `internal` only as a unit test
+  /// seam for `ExportDestinationResolverTests` (no-conflict, sequential conflicts, cap
+  /// respected). Don't widen this surface; new production paths should compose via
+  /// `firstFreeURL` instead.
+  func uniqueFileURL(
+    in directory: URL, baseName: String, ext: String, isClaimed: (String) -> Bool
+  ) -> URL {
     var candidate = directory.appendingPathComponent(baseName).appendingPathExtension(ext)
     var index = 1
-    while fileSystem.fileExists(atPath: candidate.path) {
+    while fileSystem.fileExists(atPath: candidate.path) || isClaimed(candidate.lastPathComponent) {
       let nextName = "\(baseName) (\(index))"
       candidate = directory.appendingPathComponent(nextName).appendingPathExtension(ext)
       index += 1
