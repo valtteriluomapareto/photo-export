@@ -77,6 +77,8 @@ RULES = [
     ("photo-export/Export/ExportManager+AutoSyncConformance.swift", ("autoexport",)),
     ("photo-export/Export/ImportCoordinator.swift", ("import",)),
     ("photo-export/Export/BackupScanner.swift", ("import",)),
+    ("photo-export/Export/BackupScanner+Collections.swift", ("import", "collections")),
+    ("photo-export/Export/CollectionBackupPlanner.swift", ("import", "collections")),
     # Feature folders.
     ("photo-export/AutoSync/**", ("autoexport",)),
     ("photo-export/Destination/**", ("destination",)),
