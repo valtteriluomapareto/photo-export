@@ -745,7 +745,8 @@ struct IdenticalFileAdoptionTests {
   /// An error looking up a candidate while planning fails that variant with the error's own
   /// signature and category, as the same error from the commit would.
   @Test(arguments: [
-    (EIO, AutoSyncFailureCategory.unknown), (ENOTCONN, .unknown), (EACCES, .destinationPermission),
+    (EIO, AutoSyncFailureCategory.unknown), (ENOTCONN, .destinationUnavailable),
+    (EACCES, .destinationPermission),
   ])
   func lookupErrorWhilePlanningKeepsItsClassification(
     code: Int32, category: AutoSyncFailureCategory

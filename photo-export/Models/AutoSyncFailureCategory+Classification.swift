@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Photos
+import os
 
 /// Structured result of categorising an export failure. Carries both the
 /// retry-policy bucket (`category`) and a stable string identity
@@ -28,13 +29,44 @@ extension AutoSyncFailureCategory {
   /// dependent strings (the localized description) are intentionally not
   /// part of the signature — a user switching system languages must not
   /// reset the retry counter.
+  ///
+  /// Two kinds of wrapper are classified by their cause, keeping the outer signature:
+  /// an `ExportDestinationError.failedToCreateFolder` by its underlying error, and a
+  /// Cocoa error that would otherwise be `.unknown` (such as 512 from `createDirectory`)
+  /// by a POSIX `NSUnderlyingError` one level down. The cause's errno is logged.
   static func classify(_ error: Error) -> ExportFailureSignal {
     let nsError = error as NSError
     let signature = "\(nsError.domain):\(nsError.code)"
     let localized = error.localizedDescription
-    let category = self.category(domain: nsError.domain, code: nsError.code)
     return ExportFailureSignal(
-      category: category, errorSignature: signature, localizedDescription: localized)
+      category: category(of: error), errorSignature: signature, localizedDescription: localized)
+  }
+
+  private static let logger = Logger(
+    subsystem: "com.valtteriluoma.photo-export", category: "FailureClassification")
+
+  private static func category(of error: Error) -> AutoSyncFailureCategory {
+    if let destinationError = error as? ExportDestinationManager.ExportDestinationError {
+      switch destinationError {
+      case .notAvailable:
+        return .destinationUnavailable
+      case .failedToCreateFolder(_, let underlying):
+        return category(of: underlying)
+      default:
+        return .unknown
+      }
+    }
+    let nsError = error as NSError
+    let outer = category(domain: nsError.domain, code: nsError.code)
+    guard outer == .unknown, nsError.domain == NSCocoaErrorDomain,
+      let cause = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+      cause.domain == NSPOSIXErrorDomain
+    else { return outer }
+    let classified = category(domain: cause.domain, code: cause.code)
+    logger.info(
+      "Classified \(nsError.domain, privacy: .public):\(nsError.code, privacy: .public) by its POSIX cause errno \(cause.code, privacy: .public) as \(classified.rawValue, privacy: .public)"
+    )
+    return classified
   }
 
   /// Builds a signal from a hard-coded sentinel string (e.g., "Asset not
@@ -59,12 +91,9 @@ extension AutoSyncFailureCategory {
         return .destinationPermission
       case NSFileWriteFileExistsError:
         return .destinationCollision
-      case NSFileNoSuchFileError, NSFileReadNoSuchFileError:
-        // Read-no-such-file at write time generally means the destination
-        // directory vanished — treat as unavailable rather than missing-
-        // asset.
-        return .destinationUnavailable
       default:
+        // Includes no-such-file (4, 260): a missing file can be on the source side, such
+        // as a staged file or a reuse source, so it does not prove the destination is gone.
         return .unknown
       }
     case NSPOSIXErrorDomain:
@@ -72,7 +101,10 @@ extension AutoSyncFailureCategory {
       case EEXIST: return .destinationCollision
       case ENOSPC: return .destinationNoSpace
       case EACCES, EPERM, EROFS: return .destinationPermission
-      case ENOENT, ENXIO: return .destinationUnavailable
+      // The destination can't be reached: a network share dropped or timed out, or the
+      // device is gone. ENOENT and EIO stay unknown; either can come from elsewhere.
+      case ENOTCONN, ETIMEDOUT, ESTALE, EHOSTDOWN, EHOSTUNREACH, ENETDOWN, ENETUNREACH, ENXIO:
+        return .destinationUnavailable
       default: return .unknown
       }
     case "Export":

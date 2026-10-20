@@ -264,11 +264,16 @@ import Testing
   }
 
   /// Other rename failures surface as the POSIX error, so the export failure
-  /// classification sees the same categories as before.
+  /// classification sees the errno's own category. A missing file can come from the
+  /// source side, so ENOENT is not proof that the destination went away.
   @Test(arguments: [
     ErrnoCase(code: ENOSPC, category: .destinationNoSpace, testDescription: "ENOSPC"),
     ErrnoCase(code: EACCES, category: .destinationPermission, testDescription: "EACCES"),
-    ErrnoCase(code: ENOENT, category: .destinationUnavailable, testDescription: "ENOENT"),
+    ErrnoCase(code: ENOENT, category: .unknown, testDescription: "ENOENT"),
+    ErrnoCase(code: ENOTCONN, category: .destinationUnavailable, testDescription: "ENOTCONN"),
+    ErrnoCase(code: ETIMEDOUT, category: .destinationUnavailable, testDescription: "ETIMEDOUT"),
+    ErrnoCase(code: ESTALE, category: .destinationUnavailable, testDescription: "ESTALE"),
+    ErrnoCase(code: EIO, category: .unknown, testDescription: "EIO"),
     ErrnoCase(code: EXDEV, category: .unknown, testDescription: "EXDEV"),
   ])
   func renameErrnoMapsToThePOSIXError(errnoCase: ErrnoCase) throws {

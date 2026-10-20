@@ -5,6 +5,10 @@ import Foundation
 /// backoff, hard categories require explicit user action, and `destinationUnavailable`
 /// only retries on an availability transition.
 enum AutoSyncFailureCategory: String, Codable, Equatable, CaseIterable, Sendable {
+  /// The destination can't be reached: a network errno (ENOTCONN, ETIMEDOUT, ESTALE,
+  /// EHOSTDOWN, EHOSTUNREACH, ENETDOWN, ENETUNREACH), ENXIO, or a destination that is not
+  /// available. A missing file (ENOENT, Cocoa 4/260) and EIO are `.unknown`, because they
+  /// don't prove the destination went away.
   case destinationUnavailable
   case destinationPermission
   case destinationNoSpace
