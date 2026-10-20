@@ -50,8 +50,8 @@ struct FinalCommitAcknowledgementTests {
 
     func isClaimed(_ name: String, excluding assetId: String = "someone-else") -> Bool {
       router.isFilenameClaimed(
-        name, placement: placement, subfolder: nil, excludingAssetId: assetId,
-        variant: .original)
+        name, placement: placement, subfolder: nil, exceptVariant: .original,
+        of: assetId)
     }
 
     func seed(_ assetId: String, filename: String) async throws {

@@ -686,22 +686,20 @@ final class CollectionExportRecordStore: ObservableObject {
     return ScopedExportRecord(placement: placement, assetId: assetId, variants: variantMap)
   }
 
-  /// Whether a record other than `assetId`'s own `variant` names `filename` in the folder
-  /// for `placement` and `subfolder`. The asset's other variants count.
+  /// Whether a record names `filename` in the folder for `placement` and `subfolder`, apart
+  /// from `assetId`'s own `variant`. The asset's other variants count.
   func isFilenameClaimed(
     _ filename: String, placement: ExportPlacement, subfolder: String?,
-    excludingAssetId assetId: String, variant: ExportVariant
+    exceptVariant variant: ExportVariant, of assetId: String
   ) -> Bool {
-    let folder = ClaimFolder(placementId: placement.id, subfolder: subfolder)
-    var count = currentFilenameClaims().count(filename, in: folder)
-    if let own = recordBodies[placement.id]?[assetId]?.variants[variant.rawValue],
-      let ownName = own.filename,
-      ClaimFolder(placementId: placement.id, subfolder: own.subfolder) == folder,
-      FilenameKey.sameName(ownName, filename)
-    {
-      count -= 1
+    let own = recordBodies[placement.id]?[assetId]?.variants[variant.rawValue].map {
+      (
+        filename: $0.filename,
+        folder: ClaimFolder(placementId: placement.id, subfolder: $0.subfolder)
+      )
     }
-    return count > 0
+    let folder = ClaimFolder(placementId: placement.id, subfolder: subfolder)
+    return currentFilenameClaims().count(filename, in: folder, excluding: own) > 0
   }
 
   /// True when every required variant for `asset` under `selection` is `.done`, OR the

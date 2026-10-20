@@ -27,6 +27,18 @@ struct FilenameClaims<Folder: Hashable> {
     counts[folder]?[FilenameKey.key(filename)] ?? 0
   }
 
+  /// `count(filename, in: folder)` without the claim of `own`, one record's filename and
+  /// folder, when that is one of them.
+  func count(
+    _ filename: String, in folder: Folder, excluding own: (filename: String?, folder: Folder)?
+  ) -> Int {
+    let total = count(filename, in: folder)
+    guard let own, own.folder == folder, let ownName = own.filename,
+      FilenameKey.sameName(ownName, filename)
+    else { return total }
+    return total - 1
+  }
+
   mutating func add(_ filename: String?, in folder: Folder) {
     guard let filename, !filename.isEmpty else { return }
     counts[folder, default: [:]][FilenameKey.key(filename), default: 0] += 1

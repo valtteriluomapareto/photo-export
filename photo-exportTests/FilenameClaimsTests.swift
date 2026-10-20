@@ -56,8 +56,8 @@ struct FilenameClaimsTests {
     excluding assetId: String = "someone-else", variant: ExportVariant = .original
   ) -> Bool {
     store.isFilenameClaimed(
-      filename, year: 2025, month: month, subfolder: subfolder, excludingAssetId: assetId,
-      variant: variant)
+      filename, year: 2025, month: month, subfolder: subfolder, exceptVariant: variant,
+      of: assetId)
   }
 
   /// The job's own variant record is not a claim; the asset's other variants are, and only
@@ -187,8 +187,8 @@ struct FilenameClaimsTests {
     variant: ExportVariant = .original
   ) -> Bool {
     store.isFilenameClaimed(
-      filename, placement: placement, subfolder: subfolder, excludingAssetId: assetId,
-      variant: variant)
+      filename, placement: placement, subfolder: subfolder, exceptVariant: variant,
+      of: assetId)
   }
 
   @Test func collectionClaimsFollowEveryMutation() async throws {

@@ -73,18 +73,18 @@ final class RecordStoreRouter {
   /// the variant is written to. Every status counts, as do the asset's other variants.
   func isFilenameClaimed(
     _ filename: String, placement: ExportPlacement, subfolder: String?,
-    excludingAssetId assetId: String, variant: ExportVariant
+    exceptVariant variant: ExportVariant, of assetId: String
   ) -> Bool {
     switch placement.kind {
     case .timeline:
       guard let (year, month) = placement.timelineYearMonth else { return true }
       return timelineStore.isFilenameClaimed(
         filename, year: year, month: month, subfolder: subfolder,
-        excludingAssetId: assetId, variant: variant)
+        exceptVariant: variant, of: assetId)
     case .favorites, .album, .sharedAlbum:
       return collectionStore.isFilenameClaimed(
         filename, placement: placement, subfolder: subfolder,
-        excludingAssetId: assetId, variant: variant)
+        exceptVariant: variant, of: assetId)
     }
   }
 

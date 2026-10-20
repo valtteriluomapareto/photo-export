@@ -91,8 +91,8 @@ are not automatically scavenged. Staging paths never determine final filenames.
 The final move never replaces an existing file. `FileIOService.moveItemAtomically` refuses an
 existing destination with `Export` code 2 ("Destination already exists"), which classifies as a
 destination collision with the `Export:2` error signature (persisted in retry state for Auto
-Export runs). The existing bytes stay. A paired slot's variant fails and the commit task removes
-the stage; any other slot plans its name again (see [Choosing the final name](#choosing-the-final-name)).
+Export runs). The existing bytes stay. A paired slot's variant fails; any other slot plans its name
+again (see [Choosing the final name](#choosing-the-final-name)).
 It creates the destination folder, then asks the folder's volume whether it advertises
 `VOL_CAP_INT_RENAME_EXCL` (`getattrlist` `ATTR_VOL_CAPABILITIES`, asked on every commit):
 
@@ -195,8 +195,8 @@ timestamps and acknowledges the file under its stored name (`getattrlist`
 changed file, or `Export:2` from the exclusive rename, makes the commit report a collision
 without acknowledging anything; the exporter plans again from the natural name, at most
 `VariantExporter.maxCommitAttempts` (3) times, rechecking generation each time, before the
-variant fails with `Export:2`. A paired slot fails at the first collision. The stage is kept
-across a re-plan only while the run is current.
+variant fails with `Export:2`. A paired slot fails at the first collision. The stage stays in
+place across a re-plan.
 
 Claims: each record store keeps, per folder (timeline month or collection placement, plus
 the variant's subfolder), a count of the filenames its variant records name, case-folded
@@ -222,8 +222,10 @@ whose stored name differs from the resource's only in normalization is not found
 existing identical …"); they are not counted in the run summary or shown as Export Issues.
 
 `VariantExporter` checks generation immediately before admitting the final atomic move.
-After admission, a short-lived task owns the physical move or adoption check, timestamps,
-record acknowledgement, and staging cleanup. A successful move or adoption is acknowledged to
+After admission, a short-lived task owns the physical move or adoption check, timestamps and
+record acknowledgement. The export that wrote a stage is its only owner and removes it when it
+returns, once the commit task has finished; stage names are unique, so that removal can never
+touch a replacement job's stage. A successful move or adoption is acknowledged to
 its captured logical destination even if the run becomes stale. The acknowledgement carries the
 committed name (`nil` when nothing was committed), and every completion path in both stores
 records that name: the direct completion, the completion deferred behind a corrupt load, the
@@ -236,8 +238,7 @@ replacing newer metadata. No persisted schema changes or crash-atomicity guarant
 
 Queue teardown remains synchronous and does not discard this task. Replacement jobs await its
 barrier before their initial record flush, history reads, or filename allocation, then recheck
-generation and persistence health. Commit-owned staging cleanup finishes before the barrier is
-released. Ordinary generation checks resume immediately afterwards, before additional variants,
+generation and persistence health. Ordinary generation checks resume immediately afterwards, before additional variants,
 fallback bookkeeping, or UI changes. Security-scoped access remains held by the original export
 until the complete bounded commit finishes.
 

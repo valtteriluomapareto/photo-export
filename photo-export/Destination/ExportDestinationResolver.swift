@@ -68,26 +68,9 @@ struct ExportDestinationResolver: Sendable {
   /// The highest suffix a walk tries, as in `uniqueFileURL`.
   static let maxSuffixIndex = 10_000
 
-  /// Decides the final destination URL and `chosenStem` for the variant being written,
-  /// from the first candidate with nothing at it. Exports go through `resolveSlot` and
-  /// choose the final name once the bytes are staged.
-  ///
-  /// `groupStem` is the pre-allocated stem when both `.original` and `.edited` are being
-  /// written together for this asset. When `nil`, only one variant is being written and
-  /// the file lands at the natural stem with `uniqueFileURL` collision handling.
-  ///
-  /// `pairOriginalWithSuffix` is `true` when this asset's `.original` is paired with an
-  /// `.edited` variant (current run or prior record) and so must be written at
-  /// `<stem>_orig.<ext>` instead of `<stem>.<ext>`.
-  ///
-  /// `interruptedFilename` authorizes only the exact paired candidate already verified
-  /// by the exporter against interrupted history and regular-file metadata.
-  ///
-  /// Throws on the paired-original collision case (target already occupied by a prior
-  /// `.original.done` write) so the caller marks the variant `.failed` rather than
-  /// silently splitting the pair across stems. The error domain/code/message string is
-  /// preserved verbatim from the pre-Phase-2 implementation — see the
-  /// `ExportDestinationEscapeProtectionTests` and the paired-pair-collision tests.
+  /// The first free URL of `resolveSlot`'s slot, with the stem it gives later variants. A
+  /// test convenience: exports choose the final name with `FinalNamePlanner` once the bytes
+  /// are staged.
   func resolveDestination(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -106,8 +89,24 @@ struct ExportDestinationResolver: Sendable {
     return (url, slot.chosenStem(forFilename: url.lastPathComponent))
   }
 
-  /// The slot for the variant being written. Same parameters and paired-original refusal as
-  /// `resolveDestination`.
+  /// Decides the slot (natural name plus collision policy) for the variant being written.
+  ///
+  /// `groupStem` is the pre-allocated stem when both `.original` and `.edited` are being
+  /// written together for this asset. When `nil`, only one variant is being written and
+  /// the file lands at the natural stem, suffixed on collision.
+  ///
+  /// `pairOriginalWithSuffix` is `true` when this asset's `.original` is paired with an
+  /// `.edited` variant (current run or prior record) and so must be written at
+  /// `<stem>_orig.<ext>` instead of `<stem>.<ext>`.
+  ///
+  /// `interruptedFilename` authorizes only the exact paired candidate already verified
+  /// by the exporter against interrupted history and regular-file metadata.
+  ///
+  /// Throws on the paired-original collision case (target already occupied by a prior
+  /// `.original.done` write) so the caller marks the variant `.failed` rather than
+  /// silently splitting the pair across stems. The error domain/code/message string is
+  /// preserved verbatim from the pre-Phase-2 implementation — see the
+  /// `ExportDestinationEscapeProtectionTests` and the paired-pair-collision tests.
   func resolveSlot(
     variant: ExportVariant,
     descriptor: AssetDescriptor,
@@ -308,7 +307,7 @@ struct ExportDestinationResolver: Sendable {
       let nextName = "\(baseName) (\(index))"
       candidate = directory.appendingPathComponent(nextName).appendingPathExtension(ext)
       index += 1
-      if index > 10_000 { break }
+      if index > Self.maxSuffixIndex { break }
     }
     return candidate
   }

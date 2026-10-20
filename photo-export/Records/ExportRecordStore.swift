@@ -514,22 +514,22 @@ final class ExportRecordStore: ObservableObject {
     recordsById[assetId]
   }
 
-  /// Whether a record other than `assetId`'s own `variant` names `filename` in the folder
-  /// for `year`/`month` and `subfolder`. The asset's other variants count.
+  /// Whether a record names `filename` in the folder for `year`/`month` and `subfolder`,
+  /// apart from `assetId`'s own `variant`. The asset's other variants count.
   func isFilenameClaimed(
     _ filename: String, year: Int, month: Int, subfolder: String?,
-    excludingAssetId assetId: String, variant: ExportVariant
+    exceptVariant variant: ExportVariant, of assetId: String
   ) -> Bool {
-    let folder = ClaimFolder(year: year, month: month, subfolder: subfolder)
-    var count = currentFilenameClaims().count(filename, in: folder)
-    if let record = recordsById[assetId], let own = record.variants[variant],
-      let ownName = own.filename,
-      ClaimFolder(year: record.year, month: record.month, subfolder: own.subfolder) == folder,
-      FilenameKey.sameName(ownName, filename)
-    {
-      count -= 1
+    let own = recordsById[assetId].flatMap { record in
+      record.variants[variant].map {
+        (
+          filename: $0.filename,
+          folder: ClaimFolder(year: record.year, month: record.month, subfolder: $0.subfolder)
+        )
+      }
     }
-    return count > 0
+    let folder = ClaimFolder(year: year, month: month, subfolder: subfolder)
+    return currentFilenameClaims().count(filename, in: folder, excluding: own) > 0
   }
 
   private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
