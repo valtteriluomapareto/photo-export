@@ -46,13 +46,10 @@ final class ExportProgressState {
       return emptyRunMessageBridge.value
     }
     set {
-      guard emptyRunMessageBridge.needsNotification(for: newValue) else {
-        return emptyRunMessageBridge.send(newValue)
-      }
-      withMutation(keyPath: \.emptyRunMessage) { emptyRunMessageBridge.send(newValue) }
+      emptyRunMessageBridge.write(newValue) { withMutation(keyPath: \.emptyRunMessage, $0) }
     }
   }
-  @ObservationIgnored private let emptyRunMessageBridge = ObservableCombineBridge<String?>(nil)
+  private let emptyRunMessageBridge = ObservableCombineBridge<String?>(nil)
   /// `emptyRunMessage` for Combine subscribers: synchronous, delivered before the value is
   /// stored, and replaying the current value (pinned by `PublisherParityTests`).
   var emptyRunMessagePublisher: AnyPublisher<String?, Never> {

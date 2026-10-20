@@ -1,56 +1,121 @@
 import Combine
+import Foundation
+import os
 
-/// `@Published` delivery for a property of an `@Observable` type that Combine code subscribes
-/// to through a named accessor.
-///
-/// The owner holds the bridge as an `@ObservationIgnored let` and writes the property by hand:
-///
-/// ```swift
-/// var value: Int {
-///   get {
-///     access(keyPath: \.value)
-///     return bridge.value
-///   }
-///   set {
-///     guard bridge.needsNotification(for: newValue) else { return bridge.send(newValue) }
-///     withMutation(keyPath: \.value) { bridge.send(newValue) }
-///   }
-/// }
-/// var valuePublisher: AnyPublisher<Int, Never> { bridge.publisher }
-/// ```
-///
-/// That keeps `@Published`'s order: Observation's willSet, then the Combine delivery, then the
-/// store, so a sink that reads the property still sees the previous value. Every write is
-/// delivered, including one that stores the value already held, as `@Published` does. An
-/// equal write does not notify Observation, matching what the `@Observable` macro does for a
-/// stored `Equatable` property (`ObservationEqualWriteTests`).
-final class ObservableCombineBridge<Value> {
-  /// The stored value. Kept apart from the subject: a `CurrentValueSubject` updates its value
-  /// before delivering, while a `@Published` sink reads the old one.
-  private(set) var value: Value
-  private let subject = PassthroughSubject<Value, Never>()
+/// Holds a property that SwiftUI tracks through Observation while Combine subscribers keep
+/// exactly what `@Published` delivers: replay, delivery before the store, demand and re-entry.
+/// Main-actor bound; cancelling is allowed from any thread. The rules and their tests are in
+/// `docs/reference/observation-migration-recipe.md` §The bridge.
+@MainActor
+final class ObservableCombineBridge<Value: Equatable> {
+  private var stored: Value
+  private var subscriptions: [BridgeSubscription<Value>] = []
 
   init(_ value: Value) {
-    self.value = value
+    stored = value
   }
 
-  /// Delivers `newValue` synchronously to every subscriber, then stores it.
-  func send(_ newValue: Value) {
-    subject.send(newValue)
-    value = newValue
+  /// The stored value. Read it through the owner's property so the read is tracked.
+  var value: Value { stored }
+
+  /// Replays the stored value on subscription, then delivers every write.
+  var publisher: AnyPublisher<Value, Never> { BridgePublisher(bridge: self).eraseToAnyPublisher() }
+
+  /// Delivers `newValue` and then stores it, inside `observingMutation` (the owner's
+  /// `withMutation`). A write equal to the stored value skips `observingMutation`, as the
+  /// `@Observable` macro skips notifying for it, but is still delivered.
+  func write(_ newValue: Value, observingMutation: (() -> Void) -> Void) {
+    guard newValue != stored else {
+      deliverAndStore(newValue)
+      return
+    }
+    observingMutation { deliverAndStore(newValue) }
   }
 
-  /// Replays the stored value to a new subscriber, then forwards every later `send`. A
-  /// subscription made inside a sink replays the previous value and misses the delivery in
-  /// flight, as with `$property`.
-  var publisher: AnyPublisher<Value, Never> {
-    Deferred { Just(self.value) }.append(subject).eraseToAnyPublisher()
+  private func deliverAndStore(_ newValue: Value) {
+    // A subscription made during this delivery replays the stored value and misses this one.
+    for subscription in subscriptions { subscription.offer(newValue) }
+    stored = newValue
+  }
+
+  fileprivate func attach<S: Subscriber>(_ subscriber: S)
+  where S.Input == Value, S.Failure == Never {
+    let subscription = BridgeSubscription(bridge: self, subscriber: subscriber, replay: stored)
+    subscriptions.append(subscription)
+    subscriber.receive(subscription: subscription)
+  }
+
+  fileprivate func detach(_ subscription: BridgeSubscription<Value>) {
+    subscriptions.removeAll { $0 === subscription }
   }
 }
 
-extension ObservableCombineBridge where Value: Equatable {
-  /// Whether a write of `newValue` changes the value, so the owner wraps it in `withMutation`.
-  func needsNotification(for newValue: Value) -> Bool {
-    newValue != value
+private struct BridgePublisher<Value: Equatable>: Publisher {
+  typealias Output = Value
+  typealias Failure = Never
+
+  let bridge: ObservableCombineBridge<Value>
+
+  func receive<S: Subscriber>(subscriber: S) where S.Input == Value, S.Failure == Never {
+    MainActor.assumeIsolated { bridge.attach(subscriber) }
+  }
+}
+
+/// One subscriber's demand, and the latest value it has not had demand for yet.
+@MainActor
+private final class BridgeSubscription<Value: Equatable>: Subscription {
+  private weak var bridge: ObservableCombineBridge<Value>?
+  private var subscriber: AnySubscriber<Value, Never>?
+  private var demand = Subscribers.Demand.none
+  private var pending: Value?
+  /// Set by `cancel()` on any thread, so delivery stops before the release reaches the main queue.
+  private let cancelled = OSAllocatedUnfairLock(initialState: false)
+
+  init<S: Subscriber>(bridge: ObservableCombineBridge<Value>, subscriber: S, replay: Value)
+  where S.Input == Value, S.Failure == Never {
+    self.bridge = bridge
+    self.subscriber = AnySubscriber(subscriber)
+    pending = replay
+  }
+
+  func offer(_ value: Value) {
+    guard subscriber != nil else { return }
+    pending = value
+    drain()
+  }
+
+  nonisolated func request(_ demand: Subscribers.Demand) {
+    MainActor.assumeIsolated { add(demand) }
+  }
+
+  nonisolated func cancel() {
+    cancelled.withLock { $0 = true }
+    if Thread.isMainThread {
+      MainActor.assumeIsolated { end() }
+    } else {
+      DispatchQueue.main.async { MainActor.assumeIsolated { self.end() } }
+    }
+  }
+
+  private func add(_ more: Subscribers.Demand) {
+    demand += more
+    drain()
+  }
+
+  /// The only delivery path: hands over the kept value if there is demand for it. Demand that
+  /// `receive` returns is only recorded, so a value kept meanwhile waits, as with `@Published`.
+  private func drain() {
+    guard !cancelled.withLock({ $0 }), let subscriber, demand > 0, let value = pending else {
+      return
+    }
+    pending = nil
+    demand -= 1
+    demand += subscriber.receive(value)
+  }
+
+  private func end() {
+    subscriber = nil
+    pending = nil
+    bridge?.detach(self)
   }
 }

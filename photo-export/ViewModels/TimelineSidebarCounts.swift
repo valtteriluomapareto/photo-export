@@ -37,20 +37,13 @@ final class TimelineSidebarCounts {
     let adjusted: Int?
   }
 
-  @ObservationIgnored private let countsBridge = ObservableCombineBridge<
-    [String: MonthCounts]
-  >([:])
+  private let countsBridge = ObservableCombineBridge<[String: MonthCounts]>([:])
   private(set) var countsByYearMonth: [String: MonthCounts] {
     get {
       access(keyPath: \.countsByYearMonth)
       return countsBridge.value
     }
-    set {
-      guard countsBridge.needsNotification(for: newValue) else {
-        return countsBridge.send(newValue)
-      }
-      withMutation(keyPath: \.countsByYearMonth) { countsBridge.send(newValue) }
-    }
+    set { countsBridge.write(newValue) { withMutation(keyPath: \.countsByYearMonth, $0) } }
   }
   /// `countsByYearMonth` for Combine subscribers: synchronous, delivered before the value is
   /// stored, and replaying the current value (pinned by `PublisherParityTests`).

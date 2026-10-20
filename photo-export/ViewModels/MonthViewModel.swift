@@ -16,17 +16,14 @@ final class MonthViewModel {
   var errorMessage: String?
 
   // Selection is tracked via id to avoid retaining assets strongly across updates
-  @ObservationIgnored private let selectedAssetIdBridge = ObservableCombineBridge<String?>(nil)
+  private let selectedAssetIdBridge = ObservableCombineBridge<String?>(nil)
   var selectedAssetId: String? {
     get {
       access(keyPath: \.selectedAssetId)
       return selectedAssetIdBridge.value
     }
     set {
-      guard selectedAssetIdBridge.needsNotification(for: newValue) else {
-        return selectedAssetIdBridge.send(newValue)
-      }
-      withMutation(keyPath: \.selectedAssetId) { selectedAssetIdBridge.send(newValue) }
+      selectedAssetIdBridge.write(newValue) { withMutation(keyPath: \.selectedAssetId, $0) }
     }
   }
   /// `selectedAssetId` for Combine subscribers: synchronous, delivered before the value is
