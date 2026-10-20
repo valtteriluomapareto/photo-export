@@ -99,7 +99,7 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
     // Optional so summaries saved before the field existed still load, and older builds
     // ignore it. A category this build doesn't know is dropped, not fatal to the summary.
     self.stoppedBy =
-      (try? c.decodeIfPresent(AutoSyncFailureCategory.self, forKey: .stoppedBy)) ?? nil
+      try? c.decodeIfPresent(AutoSyncFailureCategory.self, forKey: .stoppedBy)
   }
 
   private enum CodingKeys: String, CodingKey {

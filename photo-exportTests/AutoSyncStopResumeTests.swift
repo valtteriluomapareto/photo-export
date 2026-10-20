@@ -402,4 +402,101 @@ struct AutoSyncStopResumeTests {
     #expect(next.current == .scheduled(reason: .photosChanged, fireAt: now.addingTimeInterval(30)))
     #expect(!effects.contains(.cancelDebounce(.photosChanged)))
   }
+
+  // MARK: - Export Now precedence
+
+  enum RunKind: String, CaseIterable, Sendable { case autoExport, manualExport }
+
+  /// The run in progress, its stop summary, and the event that delivers that summary.
+  private func inProgress(
+    _ kind: RunKind
+  ) -> (state: AutoSyncReducer.State, completion: AutoSyncEvent) {
+    switch kind {
+    case .autoExport:
+      let run = context()
+      return (
+        running(run),
+        .autoSyncRunCompleted(
+          summary(run, stoppedBy: .destinationUnavailable), destinationId: destinationId)
+      )
+    case .manualExport:
+      let (run, state) = manualRun()
+      return (state, .manualFullExportCompleted(summary(run, stoppedBy: .destinationUnavailable)))
+    }
+  }
+
+  private func finish(
+    _ state: AutoSyncReducer.State, with completion: AutoSyncEvent, summaryFirst: Bool
+  ) -> AutoSyncReducer.State {
+    if summaryFirst {
+      return reduce(.exportRunStateChanged(.idle), reduce(completion, state).0).0
+    }
+    return reduce(completion, reduce(.exportRunStateChanged(.idle), state).0).0
+  }
+
+  /// A trigger after Export Now during a run that stops does not swallow Export Now.
+  @Test(arguments: RunKind.allCases, [false, true])
+  func exportNowFollowedByAnotherTriggerStillRunsAfterTheStop(kind: RunKind, summaryFirst: Bool) {
+    let (active, completion) = inProgress(kind)
+    let requested = reduce(.runNowRequested, active).0
+    let changed = reduce(
+      .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: true)), requested
+    ).0
+    #expect(changed.pendingTriggerReason == .userExportNow)
+    let next = finish(changed, with: completion, summaryFirst: summaryFirst)
+    #expect(next.current == .scheduled(reason: .userExportNow, fireAt: now))
+  }
+
+  /// Without a pending Export Now, the latest trigger during the run is the one kept.
+  @Test func latestTriggerDuringAStoppedRunIsKept() {
+    let run = context()
+    let scope = reduce(
+      .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: true)),
+      running(run, dirty: false)
+    ).0
+    let version = reduce(.versionSelectionChanged(.editedWithOriginals), scope).0
+    #expect(version.pendingTriggerReason == .versionSelectionChanged)
+    let next = finish(
+      version,
+      with: .autoSyncRunCompleted(
+        summary(run, stoppedBy: .destinationUnavailable), destinationId: destinationId),
+      summaryFirst: false)
+    #expect(next.current == .idle)
+    #expect(next.pendingTriggerReason == .versionSelectionChanged)
+  }
+
+  /// Pin: outside a run a destination stop can end, a later trigger still replaces a
+  /// pending Export Now. Here an import is running; it serves the replacement when it ends.
+  @Test func laterTriggerReplacesExportNowWhileImporting() {
+    var importing = idle(dirty: false)
+    importing = reduce(.importStateChanged(isImporting: true), importing).0
+    importing = reduce(.runNowRequested, importing).0
+    #expect(importing.current == .waiting(.importActive))
+    #expect(importing.pendingTriggerReason == .userExportNow)
+    let changed = reduce(
+      .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: true)), importing
+    ).0
+    #expect(changed.pendingTriggerReason == .scopeSelectionChanged)
+    let resumed = reduce(.importStateChanged(isImporting: false), changed).0
+    #expect(
+      resumed.current
+        == .scheduled(reason: .scopeSelectionChanged, fireAt: now.addingTimeInterval(2)))
+  }
+
+  /// Export Now pressed for one destination does not carry over to the next: switching
+  /// destinations during the run schedules the new destination's own debounce.
+  @Test func destinationSwitchDropsAPendingExportNow() {
+    let requested = reduce(.runNowRequested, running(context())).0
+    #expect(requested.pendingTriggerReason == .userExportNow)
+    let other = DestinationSnapshot(
+      stableId: "stop-B", fingerprint: nil, isAvailable: true, safety: .safe)
+    let switched = reduce(.destinationChanged(other), requested).0
+    #expect(switched.pendingTriggerReason == .destinationSelected)
+    let next = reduce(.exportRunStateChanged(.idle), switched).0
+    #expect(
+      next.current
+        == .scheduled(
+          reason: .destinationSelected,
+          fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: .destinationSelected))))
+  }
 }

@@ -361,7 +361,8 @@ suppresses the hook for that run instead.
   `destinationBecameAvailable`, Export Now, launch, or a scope or settings change. Freeing
   space or restoring access fires no trigger by itself.
 - An Export Now pressed during the run is exempt and still runs. A later trigger during
-  the run does not replace it as the pending reason.
+  the run does not replace it as the pending reason. Switching destinations drops any
+  pending reason, Export Now included; the new destination gets its own trigger.
 - A manual export whose summary (`runExport`) reports a stop suppresses the next resume the
   same way. Toolbar exports publish no summary, so after one of them stops, AutoSync can
   still try once when its pending work is rescheduled.

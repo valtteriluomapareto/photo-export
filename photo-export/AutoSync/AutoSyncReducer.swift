@@ -137,6 +137,9 @@ enum AutoSyncReducer {
         break
       }
       if destination.id != state.destination.id {
+        // A reason pending for the old destination, Export Now included, doesn't carry over;
+        // the new destination gets its own trigger below.
+        newState.pendingTriggerReason = nil
         newState.consumedRetryEntries.removeAll()
         if let boundary = state.runDirtyBoundary {
           newState.invalidatedRunIds.insert(boundary.context.runId)
@@ -445,12 +448,10 @@ enum AutoSyncReducer {
     // Save the trigger reason for resume *before* recompute decides whether to
     // schedule. If recompute lands the state in idle/scheduled, the trigger fires
     // there and we clear pendingTriggerReason. If it lands blocked/waiting, the
-    // trigger is preserved for resume. While a run that a destination stop can end is in
-    // progress, a later trigger does not replace a pending Export Now: the stop suppresses
-    // every other resume reason, so replacing it would swallow the user's request.
+    // trigger is preserved for resume.
     if let triggerReason,
-      triggerReason == .userExportNow || newState.pendingTriggerReason != .userExportNow
-        || !suppressibleRunInProgress(state.current)
+      !keepsPendingExportNow(
+        pending: newState.pendingTriggerReason, incoming: triggerReason, previous: state.current)
     {
       newState.pendingTriggerReason = triggerReason
     }
@@ -575,6 +576,13 @@ enum AutoSyncReducer {
     } else {
       cancelsHook = true
     }
+  }
+
+  /// During a run a destination stop can end, a later trigger doesn't replace Export Now.
+  private static func keepsPendingExportNow(
+    pending: AutoSyncReason?, incoming: AutoSyncReason, previous: AutoSyncState
+  ) -> Bool {
+    pending == .userExportNow && incoming != .userExportNow && suppressibleRunInProgress(previous)
   }
 
   /// The states a destination stop's summary can arrive in before its run goes idle: an
