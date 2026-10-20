@@ -228,7 +228,11 @@ final class VariantExporter {
       interruptedFilename: interruptedFilename
     )
     // Provisional: the final name is planned against the staged bytes before the commit.
-    let finalURL = destinationResolver.firstFreeURL(in: slot)
+    // Skipping claimed names keeps the in-progress mark off another record's name, so an
+    // interruption cannot leave two records naming it.
+    let finalURL = destinationResolver.firstFreeURL(in: slot) { name in
+      isClaimed(name, job: job, subfolder: subfolder, variant: variant, of: descriptor)
+    }
 
     if finalURL.lastPathComponent == interruptedFilename,
       fileSystem.fileExists(atPath: finalURL.path)
@@ -438,13 +442,24 @@ final class VariantExporter {
       // Claims were read off the main actor while the bytes were compared. Ask again here,
       // where no other record can change before the variant is marked under the name.
       if case .adopt(_, let storedName, _) = commit,
-        recordStoreRouter.isFilenameClaimed(
-          storedName, placement: job.placement, subfolder: subfolder,
-          exceptVariant: variant, of: descriptor.id)
+        isClaimed(storedName, job: job, subfolder: subfolder, variant: variant, of: descriptor)
       {
         collision = FileIOService.destinationExistsError()
         logger.notice(
           "\(storedName, privacy: .public) was claimed while it was compared (attempt \(attempt, privacy: .public)) for id: \(descriptor.id, privacy: .public)"
+        )
+        continue
+      }
+      // Defensive and untested: claims change only on the main actor and exports run one
+      // at a time, so nothing can claim a planned free name before this point.
+      if case .move(_, let url) = commit, case .suffix = slot.policy,
+        isClaimed(
+          url.lastPathComponent, job: job, subfolder: subfolder, variant: variant,
+          of: descriptor)
+      {
+        collision = FileIOService.destinationExistsError()
+        logger.notice(
+          "\(url.lastPathComponent, privacy: .public) was claimed after it was planned (attempt \(attempt, privacy: .public)) for id: \(descriptor.id, privacy: .public)"
         )
         continue
       }
@@ -476,6 +491,16 @@ final class VariantExporter {
       }
     }
     throw collision
+  }
+
+  /// Whether a record other than this variant's own names `name` in its folder.
+  private func isClaimed(
+    _ name: String, job: ExportManager.ExportJob, subfolder: String?, variant: ExportVariant,
+    of descriptor: AssetDescriptor
+  ) -> Bool {
+    recordStoreRouter.isFilenameClaimed(
+      name, placement: job.placement, subfolder: subfolder, exceptVariant: variant,
+      of: descriptor.id)
   }
 
   /// Walks the slot off the main actor. Physical reads finish before this returns, even

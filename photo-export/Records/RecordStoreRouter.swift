@@ -70,7 +70,9 @@ final class RecordStoreRouter {
   }
 
   /// Whether a record other than this asset's own `variant` names `filename` in the folder
-  /// the variant is written to. Every status counts, as do the asset's other variants.
+  /// the variant is written to. Every status counts, as do the asset's other variants. A
+  /// timeline placement without a year and month has no folder, so every name is claimed;
+  /// exports refuse such a placement before asking.
   func isFilenameClaimed(
     _ filename: String, placement: ExportPlacement, subfolder: String?,
     exceptVariant variant: ExportVariant, of assetId: String
@@ -85,6 +87,24 @@ final class RecordStoreRouter {
       return collectionStore.isFilenameClaimed(
         filename, placement: placement, subfolder: subfolder,
         exceptVariant: variant, of: assetId)
+    }
+  }
+
+  /// Whether another asset's record names `filename` in that folder. None of `assetId`'s
+  /// own variants in the placement count, so a group stem chosen for all of them can reuse
+  /// names their failed or interrupted records hold.
+  func isFilenameClaimed(
+    _ filename: String, placement: ExportPlacement, subfolder: String?,
+    exceptAsset assetId: String
+  ) -> Bool {
+    switch placement.kind {
+    case .timeline:
+      guard let (year, month) = placement.timelineYearMonth else { return true }
+      return timelineStore.isFilenameClaimed(
+        filename, year: year, month: month, subfolder: subfolder, exceptAsset: assetId)
+    case .favorites, .album, .sharedAlbum:
+      return collectionStore.isFilenameClaimed(
+        filename, placement: placement, subfolder: subfolder, exceptAsset: assetId)
     }
   }
 

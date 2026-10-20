@@ -51,8 +51,9 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     case assetUnavailable
   }
 
-  /// Shared caching image manager for thumbnails
-  private static let cachingImageManager = PHCachingImageManager()
+  /// Shared caching image manager for thumbnails. `nonisolated` because `onCancel` handlers
+  /// cancel requests from whichever thread cancels; `PHCachingImageManager` is Sendable.
+  private nonisolated static let cachingImageManager = PHCachingImageManager()
   private static var thumbnailPreheatRegistrations = ThumbnailPreheatRegistrations<PHAsset>()
 
   /// Long-lived cache of PHAsset objects keyed by `localIdentifier`. Populated
@@ -459,12 +460,9 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
             return
           }
           let end = min(index + chunk, count)
-          var phAssets: [PHAsset] = []
-          phAssets.reserveCapacity(end - index)
-          for i in index..<end {
-            autoreleasepool {
-              phAssets.append(result.object(at: i))
-            }
+          // A `let` so the main-actor hop below can capture the batch.
+          let phAssets: [PHAsset] = (index..<end).map { i in
+            autoreleasepool { result.object(at: i) }
           }
           // descriptor(from:) is @MainActor (inherits from PLM); fold the
           // cache update + descriptor mapping into one main-actor hop.
@@ -1468,7 +1466,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
 // MARK: - PHPhotoLibraryChangeObserver
 
-extension PhotoLibraryManager: @preconcurrency PHPhotoLibraryChangeObserver {
+extension PhotoLibraryManager: PHPhotoLibraryChangeObserver {
   nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
     Task { @MainActor in
       let changedIDs = self.changedThumbnailAssetIDs(in: changeInstance)

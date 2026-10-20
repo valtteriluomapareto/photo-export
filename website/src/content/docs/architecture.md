@@ -186,7 +186,7 @@ in `AppComposition`, which knows the app-state directory roots.
 - `ResourceSelection` picks the right `PHAssetResource` for a variant and is the shared
   classifier for "original-side" vs "edited-side" resources.
 - `FileIOService` centralizes atomic file moves and timestamp handling.
-- `FinalNamePlanner` picks a staged file's final name: the first free ` (n)` suffix, or an existing file with the same bytes that no record names, which is then recorded instead of copied.
+- `FinalNamePlanner` picks a staged file's final name: the first ` (n)` suffix with nothing at it that no other record names, or an existing file with the same bytes that no record names, which is then recorded instead of copied.
 
 ## Views and View Models
 

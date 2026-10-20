@@ -5,12 +5,13 @@ import Foundation
 /// signals AutoSync needs.
 ///
 /// `stableId == nil` means no destination is selected (or the drive is unmounted / currently
-/// unavailable). `isAvailable` distinguishes "drive mounted and writable" from "drive selected
-/// but currently unreachable". `fingerprint` is carried for the safety gate's
-/// identity-confidence read; it is **not** the keying id — that is `stableId`. The `Equatable`
-/// conformance still includes the (potentially drifting) fingerprint deliberately: a metadata
-/// refresh on the same stable id flows through as a non-equal value, while `stableId` equality is
-/// what prevents a remount from re-keying any per-destination store.
+/// unavailable). `isAvailable` distinguishes "folder can be reached" from "drive selected
+/// but currently unreachable"; a read-only folder is still available. `fingerprint` is
+/// carried for the safety gate's identity-confidence read; it is **not** the keying id — that
+/// is `stableId`. The `Equatable` conformance still includes the (potentially drifting)
+/// fingerprint deliberately: a metadata refresh on the same stable id flows through as a
+/// non-equal value, while `stableId` equality is what prevents a remount from re-keying any
+/// per-destination store.
 struct DestinationSnapshot: Equatable, Sendable {
   /// The stable logical id — the keying id for every per-destination store. Independent of
   /// `fingerprint?.id`, which is advisory after the stable-id work.

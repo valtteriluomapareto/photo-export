@@ -106,6 +106,7 @@ The app's export pipeline went through a multi-phase architecture refactor in Ma
    - `FileIOServiceTests.existingFileAtCommitIsNeverReplaced` — pins that the final commit never replaces a file that appears at the final name, on both commit paths.
    - `IdenticalFileAdoptionTests.lostRecordIdenticalFileIsAdopted` — pins that re-exporting after lost history records an identical existing file instead of writing a ` (1)` copy.
    - `IdenticalFileAdoptionTests.identicalAssetsKeepDistinctFilesAfterRecordLoss` — pins that two byte-identical assets keep one file each after lost history, in either order.
+   - `IdenticalFileAdoptionTests.missingFileReturnsAfterReconcile` — pins that a deleted file's name stays reserved for its record, so Import Existing Backup drops that record and the next export writes the file back at its own name.
 
    The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list misses a gate from it or if a gate is skipped.
 3. New collaborator extracted from `ExportManager`? Use the Host-protocol pattern documented in the conventions file (narrow protocol, IUO init, weak host, synchronous mirror sinks). Do not duplicate `@Published` state on the manager.
