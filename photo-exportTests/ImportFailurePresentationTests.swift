@@ -235,6 +235,28 @@ import Testing
           == f.destination.closedScopeURLs.map(\.path).sorted())
     }
 
+    /// A failure that is already showing when the view is first laid out must render whole. The
+    /// host window then starts taller than the content, so a height that shrinks with truncated
+    /// text keeps resizing the window until AppKit aborts the layout pass.
+    @Test(.timeLimit(.minutes(1)))
+    func failureViewRendersWhenItIsTheFirstLayout() async throws {
+      let f = Fixture()
+      defer { f.close() }
+      f.destination.selectedFolderURL = f.destination.rootURL.appendingPathComponent("missing")
+      f.manager.startImport()
+      await f.manager.waitForImportCompletion()
+      let importError = try #require(f.manager.importError)
+      f.show()
+      guard await shows("Import Failed", in: f) else { return }
+      // Wait for the display cycle that fits the window (shown 600pt tall) to the view, so
+      // teardown can't pre-empt the layout pass this test is about.
+      let fitted = await observe { (f.window?.frame.height ?? 600) < 600 }
+      try #require(fitted)
+      #expect(f.counter.renderedText["import-message"] == [importError])
+      #expect(f.counter.renderedText["import-recovery"]?.first?.isEmpty == false)
+      #expect(f.counter.renderedText["import-progress"] == ["false"])
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func deniedScopeStopsProgressWithoutClosingAnUnopenedScope() async throws {
       let f = Fixture()
