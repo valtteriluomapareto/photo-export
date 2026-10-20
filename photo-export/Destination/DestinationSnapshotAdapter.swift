@@ -7,7 +7,8 @@ import Foundation
 /// 1. `identity` from `ExportDestinationManager` — the stable logical id plus the
 ///    advisory fingerprint, published as one atomic value. A `nil` `stableId` means
 ///    "no destination selected" or the drive is currently unavailable.
-/// 2. `isAvailable` from `ExportDestinationManager` — drive mounted and writable.
+/// 2. `isAvailable` from `ExportDestinationManager` — the folder can be reached. It says
+///    nothing about whether the folder is writable.
 /// 3. `migrationConflict` from `AppLifecycleCoordinator`: non-nil → safety
 ///    becomes `.unsafeMigrationConflict`.
 /// 4. `needsSafetyConfirmation` from `DestinationSafetyMonitor` (Phase 0b):

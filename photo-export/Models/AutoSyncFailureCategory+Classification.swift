@@ -30,6 +30,10 @@ extension AutoSyncFailureCategory {
   /// part of the signature — a user switching system languages must not
   /// reset the retry counter.
   ///
+  /// An `ExportDestinationError` is matched by type: `.notAvailable` is unavailable, and
+  /// `.notWritable` and `.scopeAccessDenied` are permission failures. Every case is listed,
+  /// so a new one has to be classified when it is added.
+  ///
   /// Two kinds of wrapper are classified by their cause, keeping the outer signature:
   /// an `ExportDestinationError.failedToCreateFolder` by its underlying error, and a
   /// Cocoa error that would otherwise be `.unknown` (such as 512 from `createDirectory`)
@@ -50,9 +54,14 @@ extension AutoSyncFailureCategory {
       switch destinationError {
       case .notAvailable:
         return .destinationUnavailable
+      // Write access is denied: the folder is read-only (`.notWritable`, as with EROFS or
+      // EACCES) or sandbox access was refused (`.scopeAccessDenied`).
+      case .notWritable, .scopeAccessDenied:
+        return .destinationPermission
       case .failedToCreateFolder(_, let underlying):
         return category(of: underlying)
-      default:
+      case .noSelection, .invalidYear, .invalidMonth, .pathTooLong, .notDirectory,
+        .invalidRelativePath:
         return .unknown
       }
     }
