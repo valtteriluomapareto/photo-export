@@ -67,7 +67,8 @@ final class MonthViewModel {
     let asset: AssetDescriptor?
   }
 
-  // Emit after committing state, rather than using Observation's willSet notifications.
+  // Emit after committing state, rather than relying on the willSet-timed
+  // `selectedAssetIdPublisher`.
   // The payloadless event is not another owner of selection or asset data.
   @ObservationIgnored private let selectionChanges = PassthroughSubject<Void, Never>()
   var selectionUpdates: AnyPublisher<Void, Never> { selectionChanges.eraseToAnyPublisher() }

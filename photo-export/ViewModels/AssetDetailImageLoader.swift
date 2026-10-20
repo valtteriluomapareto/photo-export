@@ -16,7 +16,8 @@ final class AssetDetailImageLoader {
 
   private(set) var state = State()
   @ObservationIgnored private var activeRequest: UUID?
-  @ObservationIgnored private let logger = Logger(
+  /// Static: `@State` builds a throwaway loader on each parent body run.
+  private static let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "UI.Detail")
 
   /// SwiftUI may render a new selection before its task starts. Never display
@@ -42,7 +43,7 @@ final class AssetDetailImageLoader {
     let retainedImage = state.assetId == assetId ? state.image : nil
     state = State(assetId: assetId, image: retainedImage, isLoading: assetId != nil)
     guard let assetId else { return }
-    logger.debug("Preview start id: \(assetId, privacy: .public)")
+    Self.logger.debug("Preview start id: \(assetId, privacy: .public)")
     do {
       let image = try await service.requestFullImage(for: assetId)
       guard activeRequest == request, isCurrent() else { return }
@@ -51,7 +52,7 @@ final class AssetDetailImageLoader {
         return
       }
       state = State(assetId: assetId, image: image)
-      logger.debug("Preview loaded id: \(assetId, privacy: .public)")
+      Self.logger.debug("Preview loaded id: \(assetId, privacy: .public)")
     } catch {
       guard activeRequest == request, isCurrent() else { return }
       guard !Task.isCancelled, !(error is CancellationError) else {
@@ -63,7 +64,7 @@ final class AssetDetailImageLoader {
         errorMessage:
           "Failed to load image: \(error.localizedDescription) Select another photo, then return to retry."
       )
-      logger.error(
+      Self.logger.error(
         "Preview failed id: \(assetId, privacy: .public): \(error.localizedDescription, privacy: .public)"
       )
     }

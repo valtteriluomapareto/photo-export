@@ -40,6 +40,7 @@ final class ExportProgressState {
   /// Transient toolbar/progress-bar feedback for "you clicked Export but there
   /// was nothing new to do." Cleared on any new `startExport*`, version-selection
   /// change, `cancelAndClear`, or after the timeout managed by `ExportManager`.
+  private let emptyRunMessageBridge = ObservableCombineBridge<String?>(nil)
   var emptyRunMessage: String? {
     get {
       access(keyPath: \.emptyRunMessage)
@@ -49,7 +50,6 @@ final class ExportProgressState {
       emptyRunMessageBridge.write(newValue) { withMutation(keyPath: \.emptyRunMessage, $0) }
     }
   }
-  private let emptyRunMessageBridge = ObservableCombineBridge<String?>(nil)
   /// `emptyRunMessage` for Combine subscribers: synchronous, delivered before the value is
   /// stored, and replaying the current value (pinned by `PublisherParityTests`).
   var emptyRunMessagePublisher: AnyPublisher<String?, Never> {
