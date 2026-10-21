@@ -1802,7 +1802,7 @@ final class ExportManager: ObservableObject {
       if job.placement.kind == .timeline, job.placement.timelineYearMonth == nil {
         assertionFailure("Timeline placement \(job.placement.id) has no year and month")
         throw NSError(
-          domain: "Export", code: 11,
+          domain: "Export", code: ExportErrorCode.invalidTimelinePlacement.rawValue,
           userInfo: [NSLocalizedDescriptionKey: "Timeline placement has no year and month"])
       }
 
@@ -1855,7 +1855,7 @@ final class ExportManager: ObservableObject {
 
       guard let scopedURL = exportDestination.beginScopedAccess() else {
         throw NSError(
-          domain: "Export", code: 1,
+          domain: "Export", code: ExportErrorCode.exportFolderAccessDenied.rawValue,
           userInfo: [
             NSLocalizedDescriptionKey: "Failed to access export folder (security scope)"
           ])

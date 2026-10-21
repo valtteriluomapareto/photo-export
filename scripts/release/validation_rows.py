@@ -108,6 +108,7 @@ RULES = [
     ("photo-export/Models/EditedProducer.swift", ("edited",)),
     ("photo-export/Models/RenderActivity.swift", ("edited",)),
     ("photo-export/Models/ExportVideoLayout.swift", ("edited", "livephoto")),
+    ("photo-export/Models/ExportErrorCode.swift", PIPELINE + ("destination", "autoexport")),
     ("photo-export/Models/AssetDescriptor.swift", ("local", "livephoto", "edited")),
     ("photo-export/Models/AssetDetails.swift", ("preview",)),
     ("photo-export/Models/ExportIssue.swift", ("icloud", "autoexport")),
