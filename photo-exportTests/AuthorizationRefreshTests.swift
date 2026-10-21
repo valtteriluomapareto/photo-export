@@ -16,6 +16,8 @@ import Testing
       let counter: BodyInvalidationCounter
       var body: some View {
         let route = library.isAuthorized ? "authorized" : "authorization"
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.recordText([route], for: "authorization-route")
         Group {
           if library.isAuthorized {

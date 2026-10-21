@@ -13,6 +13,8 @@ import Testing
       @ObservedObject var manager: ExportManager
       let counter: BodyInvalidationCounter
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("queue:\(manager.queueCount)")
         Color.clear.frame(width: 1, height: 1)
       }
@@ -27,6 +29,8 @@ import Testing
       @Binding var selectionSet: Set<LibrarySelection>
       let counter: BodyInvalidationCounter
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record(
           "collections-host:\(manager.queueCount):\(collections.mutationCounter)")
         CollectionsSidebarView(selectionSet: $selectionSet, exportManager: manager)

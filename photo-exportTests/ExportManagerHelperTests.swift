@@ -62,9 +62,6 @@ struct ExportManagerHelperTests {
     #expect(mgr.canExportCollection == false)
   }
 
-  /// An unconfigured timeline store blocks `startExportMonth`. Without the gate,
-  /// the pipeline would write files to disk while every `markVariant*` call silently
-  /// no-ops because the store's `state != .ready`.
   // MARK: - manualExportShouldConfirmSupersede
 
   /// Idle manager → no supersede confirmation needed; actions dispatch directly.

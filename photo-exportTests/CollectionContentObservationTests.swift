@@ -23,6 +23,8 @@ import Testing
       let counter: BodyInvalidationCounter
 
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("parent:\(manager.queueCount)")
         let scope = navigation.selection
         let pane = CollectionContentView(

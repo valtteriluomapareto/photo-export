@@ -656,7 +656,8 @@ struct CollectionExportRecordStoreTests {
   /// `RecordBody { variants: [String: ExportVariantRecord] }`; the optional
   /// `subfolder` field must default to nil for snapshots from prior versions.
   @Test func recordBodyDecodesLegacyVariantsWithoutSubfolder() throws {
-    let legacyJSON = """
+    let legacyJSON = Data(
+      """
       {
         "variants": {
           "original": {
@@ -666,7 +667,7 @@ struct CollectionExportRecordStoreTests {
           }
         }
       }
-      """.data(using: .utf8)!
+      """.utf8)
     let body = try JSONDecoder().decode(
       CollectionExportRecordStore.RecordBody.self, from: legacyJSON)
     let variant = body.variants["original"]

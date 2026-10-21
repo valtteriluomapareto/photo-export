@@ -20,6 +20,8 @@ import Testing
       @ObservedObject var store: ExportRecordStore
       let counter: BodyInvalidationCounter
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("timeline-records:\(store.mutationCounter)")
         Color.clear.frame(width: 1, height: 1)
       }
@@ -34,6 +36,8 @@ import Testing
       @ObservedObject var timeline: ExportRecordStore
       let counter: BodyInvalidationCounter
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("content-host")
         ContentView(destinationManager: destination, recordStore: timeline).equatable()
       }

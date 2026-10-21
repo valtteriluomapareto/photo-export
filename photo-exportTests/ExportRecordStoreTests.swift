@@ -111,7 +111,7 @@ struct ExportRecordStoreTests {
     // Append an invalid line to the destination-specific log
     let logURL = tempDir.appendingPathComponent(destId, isDirectory: true)
       .appendingPathComponent("export-records.jsonl")
-    let invalid = "{ this is not valid json }\n".data(using: .utf8)!
+    let invalid = Data("{ this is not valid json }\n".utf8)
     try invalid.append(to: logURL)
 
     // Reload - invalid line should be skipped, valid records preserved
@@ -587,14 +587,15 @@ struct ExportRecordStoreTests {
   /// treats missing keys as nil for optionals — this test pins that
   /// behaviour against a future custom-decoder regression.
   @Test func variantRecordDecodesLegacySnapshotWithoutSubfolder() throws {
-    let legacyJSON = """
+    let legacyJSON = Data(
+      """
       {
         "filename": "IMG_0001.JPG",
         "status": "done",
         "exportDate": 759456000,
         "lastError": null
       }
-      """.data(using: .utf8)!
+      """.utf8)
     let decoder = JSONDecoder()
     let decoded = try decoder.decode(ExportVariantRecord.self, from: legacyJSON)
     #expect(decoded.filename == "IMG_0001.JPG")

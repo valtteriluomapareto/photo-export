@@ -62,7 +62,8 @@ struct AutoSyncStorePersistenceTests {
   /// migration, this test fails — and the existing user would have lost
   /// the flag silently.
   @Test func dirtyStateDecodesKnownFixture() throws {
-    let fixture = """
+    let fixture = Data(
+      """
       {
         "lastUpdatedAt" : 770000000,
         "scopes" : {
@@ -78,7 +79,7 @@ struct AutoSyncStorePersistenceTests {
           }
         }
       }
-      """.data(using: .utf8)!
+      """.utf8)
 
     let decoded = try JSONDecoder().decode(AutoSyncDirtyState.self, from: fixture)
 
@@ -168,7 +169,8 @@ struct AutoSyncStorePersistenceTests {
   /// and every `RetryEntry` field, so a Codable change fails this test
   /// before existing users lose their retry backoff state.
   @Test func retryStateDecodesKnownFixture() throws {
-    let fixture = """
+    let fixture = Data(
+      """
       {
         "entriesByPlacement" : {
           "timeline" : {
@@ -185,7 +187,7 @@ struct AutoSyncStorePersistenceTests {
           }
         }
       }
-      """.data(using: .utf8)!
+      """.utf8)
 
     let decoded = try JSONDecoder().decode(AutoSyncRetryState.self, from: fixture)
 
@@ -211,7 +213,8 @@ struct AutoSyncStorePersistenceTests {
   /// `AutoSyncRetryScopeKey.init?(rawValue:)` would strand persisted
   /// shared-album retries; this test catches it.
   @Test func retryStateDecodesSharedAlbumScopeKey() throws {
-    let fixture = """
+    let fixture = Data(
+      """
       {
         "entriesByPlacement" : {
           "shared-album:stream-42" : {
@@ -228,7 +231,7 @@ struct AutoSyncStorePersistenceTests {
           }
         }
       }
-      """.data(using: .utf8)!
+      """.utf8)
 
     let decoded = try JSONDecoder().decode(AutoSyncRetryState.self, from: fixture)
 
@@ -435,7 +438,8 @@ struct AutoSyncStorePersistenceTests {
   /// session's silent shutdown from the diagnostic report). The fixture
   /// reads back through the production decoder, asserting all six fields.
   @Test func currentRunJournalDecodesKnownFixture() throws {
-    let fixture = """
+    let fixture = Data(
+      """
       {
         "currentScope" : "albums",
         "currentScopeStartedAt" : 770000300,
@@ -443,7 +447,7 @@ struct AutoSyncStorePersistenceTests {
         "startedAt" : 770000000,
         "trigger" : "appLaunch"
       }
-      """.data(using: .utf8)!
+      """.utf8)
 
     let decoded = try JSONDecoder().decode(AutoSyncRunJournal.self, from: fixture)
 
