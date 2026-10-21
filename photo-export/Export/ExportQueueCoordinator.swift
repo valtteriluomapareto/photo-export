@@ -34,6 +34,9 @@ final class ExportQueueCoordinator: ObservableObject {
     /// run. Distinct from `clearCurrentJobIdentifiers` (which runs between jobs).
     func didDrainQueue()
 
+    /// Reports changed pending or in-flight contents after their synchronous updates.
+    func queueContentsDidChange()
+
     /// Sets the manager's `currentJobPlacement`, `currentJobAssetId`, and resets
     /// `currentJobVariant` to nil before the export Task starts. Placement BEFORE
     /// assetId is the load-bearing ordering rule — any cancellation cleanup that
@@ -122,6 +125,24 @@ final class ExportQueueCoordinator: ObservableObject {
   private(set) var currentTask: Task<Void, Never>?
   private(set) var queuedCountsByPlacementId: [String: Int] = [:]
 
+  private struct QueueFingerprint: Equatable {
+    let pendingJobCount: Int
+    let isProcessing: Bool
+    let currentTask: Task<Void, Never>?
+    let queuedCountsByPlacementId: [String: Int]
+  }
+
+  private var queueFingerprint: QueueFingerprint {
+    QueueFingerprint(
+      pendingJobCount: pendingJobs.count, isProcessing: isProcessing, currentTask: currentTask,
+      queuedCountsByPlacementId: queuedCountsByPlacementId)
+  }
+
+  private func notifyQueueContentsChanged(since previous: QueueFingerprint) {
+    guard queueFingerprint != previous else { return }
+    host?.queueContentsDidChange()
+  }
+
   // MARK: - Dependencies
 
   private let logger = Logger.app(.exportQueueCoordinator)
@@ -155,12 +176,14 @@ final class ExportQueueCoordinator: ObservableObject {
   /// after enqueueing (so a single processing kick can cover multiple enqueues in a
   /// bulk-album run).
   func enqueue(_ jobs: [ExportManager.ExportJob]) {
+    let previous = queueFingerprint
     pendingJobs.append(contentsOf: jobs)
     totalJobsEnqueued += jobs.count
     for job in jobs {
       queuedCountsByPlacementId[job.placement.id, default: 0] += 1
     }
     updateQueueCount()
+    notifyQueueContentsChanged(since: previous)
   }
 
   /// Reads the per-placement queue depth. Existing callers query `(year, month)` via the
@@ -175,11 +198,13 @@ final class ExportQueueCoordinator: ObservableObject {
   /// the per-placement counters, and updates `queueCount`. Used by the `clearPending`
   /// ExportManager API and by the cancellation path.
   func clearPending() -> Int {
+    let previous = queueFingerprint
     let removed = pendingJobs.count
     pendingJobs.removeAll()
     queuedCountsByPlacementId.removeAll()
     totalJobsEnqueued = max(0, totalJobsEnqueued - removed)
     updateQueueCount()
+    notifyQueueContentsChanged(since: previous)
     logger.info("Cleared \(removed) pending export jobs")
     return removed
   }
@@ -193,6 +218,7 @@ final class ExportQueueCoordinator: ObservableObject {
   /// split lets `clearPending` (queue-only drop, no cancellation of in-flight work)
   /// share the queue teardown logic.
   func teardownQueue() {
+    let previous = queueFingerprint
     currentTask?.cancel()
     currentTask = nil
     pendingJobs.removeAll()
@@ -201,14 +227,17 @@ final class ExportQueueCoordinator: ObservableObject {
     isRunning = false
     isPaused = false
     queueCount = 0
+    notifyQueueContentsChanged(since: previous)
   }
 
   /// Resets the published progress counters. ExportManager calls this before a fresh run
   /// starts so the UI doesn't carry counters from the previous run.
   func resetProgressCounters() {
+    let previous = queueFingerprint
     totalJobsEnqueued = 0
     totalJobsCompleted = 0
     queuedCountsByPlacementId.removeAll()
+    notifyQueueContentsChanged(since: previous)
   }
 
   // MARK: - Drain loop
@@ -240,10 +269,12 @@ final class ExportQueueCoordinator: ObservableObject {
   }
 
   private func processNext() {
+    let previous = queueFingerprint
     if isPaused {
       isProcessing = false
       isRunning = false
       updateQueueCount()
+      notifyQueueContentsChanged(since: previous)
       logger.info("Queue paused; not starting next job")
       return
     }
@@ -252,6 +283,7 @@ final class ExportQueueCoordinator: ObservableObject {
       isRunning = false
       host?.clearCurrentJobIdentifiers()
       updateQueueCount()
+      notifyQueueContentsChanged(since: previous)
       logger.info("Export queue drained")
       host?.didDrainQueue()
       return
@@ -274,6 +306,7 @@ final class ExportQueueCoordinator: ObservableObject {
         self.processNext()
       }
     }
+    notifyQueueContentsChanged(since: previous)
   }
 
   // MARK: - Queue depth

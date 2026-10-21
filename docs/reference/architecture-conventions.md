@@ -669,6 +669,14 @@ queueCoordinator.$queueCount
 
 Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
 
+Unpublished queue contents stay owned by the coordinator. It compares the pending-job count,
+processing flag, current task identity and placement counts around queue mutations, then calls
+`Host.queueContentsDidChange()` once when that fingerprint changes. The manager increments
+an Observation-only `queueMutationCounter`; all five queue read-throughs touch it before
+returning the coordinator's values. This adds no `objectWillChange` publication and keeps
+the mirrors above synchronous. A first dequeue changes the contents even while total queue
+depth stays equal, so its readers do not depend on a depth notification.
+
 ### AutoSync dirty-work acknowledgement
 
 `AutoSyncReducer` captures a `RunDirtyBoundary` (run context, stable destination ID, and scopes changed since start). The fan-out sends `exportRunStarted` before each scope's `await runExport`; synchronous `exportRunStateChanged` observations capture manual runs and never reset an existing boundary for the same run ID. Keep the boundary across the idle publication: the completion summary arrives afterward.
