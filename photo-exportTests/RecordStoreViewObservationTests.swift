@@ -236,8 +236,8 @@ import Testing
       }
 
       func attachTile(_ name: String) throws {
-        let bitmap = try #require(bitmap())
-        let data = try #require(bitmap.representation(using: .png, properties: [:]))
+        let captured = try #require(bitmap())
+        let data = try #require(captured.representation(using: .png, properties: [:]))
         Attachment.record(data, named: "month-tile-\(name).png")
       }
 
