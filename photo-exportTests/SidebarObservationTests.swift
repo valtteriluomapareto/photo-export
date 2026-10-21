@@ -73,7 +73,7 @@ import Testing
       let counter = BodyInvalidationCounter()
       let window: NSWindow
 
-      init() {
+      init(includeAlbum: Bool = false) {
         defaults = TestScratch.defaults(suiteName: suite)
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         let assets = ["first", "second"].map {
@@ -82,7 +82,23 @@ import Testing
         service.assetsByYearMonth["2026-9"] = assets
         service.favoritesAssets = assets
         service.yearCounts = [(2026, 2)]
-        library = PhotoLibraryManager(overrideService: service)
+        if includeAlbum {
+          service.collectionTree = [
+            PhotoCollectionDescriptor(
+              id: "album:family", localIdentifier: "family", title: "Family", kind: .album,
+              pathComponents: [], children: [])
+          ]
+          service.assetsByAlbumLocalId["family"] = assets
+        }
+        let cache = service.collectionCountCache
+        let invalidateCounts: (@Sendable () async -> Void)?
+        if includeAlbum {
+          invalidateCounts = { await cache.invalidateAll() }
+        } else {
+          invalidateCounts = nil
+        }
+        library = PhotoLibraryManager(
+          overrideService: service, countInvalidationOverride: invalidateCounts)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)
         timeline.configure(for: "A")
@@ -138,6 +154,60 @@ import Testing
         destination.cleanup()
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
+      }
+    }
+
+    /// Already passes: revoking access clears the years and granting access reloads them.
+    @Test(.timeLimit(.minutes(1)))
+    func timelineSidebarClearsOnRevokeAndReloadsOnGrant() async throws {
+      let f = Fixture()
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+          })
+        await f.quiesce()
+        f.service.authorizationStatus = .denied
+        f.service.isAuthorized = false
+        f.library.refreshAuthorizationStatus()
+        try #require(
+          await observe(in: f.window) { f.counter.renderedText["timeline-sidebar-years"] == [] })
+        f.service.authorizationStatus = .authorized
+        f.service.isAuthorized = true
+        f.library.refreshAuthorizationStatus()
+        #expect(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+          })
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    /// Already passes: Favorites and the recursive album row refresh their cached counts.
+    @Test(.timeLimit(.minutes(1)))
+    func collectionRowCountsReloadAfterALibraryChange() async throws {
+      let f = Fixture(includeAlbum: true)
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["collection-sidebar:favorites"]
+              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+              && f.counter.renderedText["collection-sidebar:album:family"] == ["count:2"]
+          })
+        await f.quiesce()
+        let extra = TestAssetFactory.makeAsset(id: "extra")
+        f.service.favoritesAssets.append(extra)
+        f.service.assetsByAlbumLocalId["family", default: []].append(extra)
+        f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        #expect(
+          await observe(in: f.window) {
+            f.counter.renderedText["collection-sidebar:favorites"]
+              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 3))]
+              && f.counter.renderedText["collection-sidebar:album:family"] == ["count:3"]
+          })
+      } cleanup: {
+        await f.close()
       }
     }
 

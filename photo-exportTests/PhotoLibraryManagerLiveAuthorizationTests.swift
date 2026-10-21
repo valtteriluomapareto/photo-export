@@ -34,7 +34,7 @@ struct PhotoLibraryManagerLiveAuthorizationTests {
   @Test func yearListingThrowsOnALiveDenialAndRefreshesTheCachedFlagAfterTheCall() async {
     let (manager, reads) = staleManager()
     var published: [Bool] = []
-    let subscription = manager.$isAuthorized.dropFirst().sink { published.append($0) }
+    let subscription = manager.isAuthorizedPublisher.dropFirst().sink { published.append($0) }
 
     #expect(throws: Denied.authorizationDenied) { try manager.availableYearsWithCounts() }
     #expect(reads.count > 0)
@@ -50,7 +50,7 @@ struct PhotoLibraryManagerLiveAuthorizationTests {
   @Test func repeatedMainActorDenialsRefreshOnce() async {
     let (manager, _) = staleManager()
     var published: [Bool] = []
-    let subscription = manager.$isAuthorized.dropFirst().sink { published.append($0) }
+    let subscription = manager.isAuthorizedPublisher.dropFirst().sink { published.append($0) }
 
     #expect(throws: Denied.authorizationDenied) { try manager.availableYearsWithCounts() }
     #expect(throws: Denied.authorizationDenied) { try manager.availableYearsWithCounts() }
@@ -61,7 +61,7 @@ struct PhotoLibraryManagerLiveAuthorizationTests {
   }
 
   private static func waitUntilDenied(_ manager: PhotoLibraryManager) async {
-    for await authorized in manager.$isAuthorized.values where !authorized { return }
+    for await authorized in manager.isAuthorizedPublisher.values where !authorized { return }
   }
 
   @Test func progressiveFetchThrowsOnALiveDenialAndRefreshesTheCachedFlag() async {
