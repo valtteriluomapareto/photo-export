@@ -12,7 +12,7 @@ import Foundation
 /// names which of the planned `scopes` was active when the kill happened
 /// (`timeline` / `favorites` / `albums` / `sharedAlbums`). That is sufficient to
 /// route a maintainer at the right code path for the silent-shutdown class of
-/// bug surfaced by issue #112. Finer granularity (per-album, per-asset) would
+/// bug. Finer granularity (per-album, per-asset) would
 /// require threading the journal into `ExportManager.runExport(context:)`,
 /// which is deferred until a future bug actually needs that resolution.
 ///

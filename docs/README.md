@@ -28,13 +28,12 @@ When a change is user-visible, update **both** the root README and the matching 
 
 Current process and open work:
 
-- [`project/implementation-tasks.md`](project/implementation-tasks.md) — open work items (including the deferred architecture follow-ups, [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67), and loose future improvements folded back from archived plans)
+- [GitHub backlog](https://github.com/valtteriluomapareto/photo-export/issues/318#issuecomment-6311950302) — audited open ideas migrated from the implementation checklist; existing issues own work already tracked separately
 - [`project/release-process.md`](project/release-process.md) — how to cut a release (version bump, tag, publish)
 - [`project/release-validation.md`](project/release-validation.md) — real-Photos validation before release tag push: core smoke for every release plus the rows `scripts/release/validation_rows.py` reports
 - [`project/historical-persistence-fixtures.md`](project/historical-persistence-fixtures.md) — immutable released-writer fixtures, provenance, and upgrade compatibility tests
 - [`project/plans/ui-smoothness-plan.md`](project/plans/ui-smoothness-plan.md) — active UI smoothness and SwiftUI Observation modernization roadmap
 - [`project/plans/launch-agent-background-sync-plan.md`](project/plans/launch-agent-background-sync-plan.md) — proposed LaunchAgent for closed-app Auto Export (follow-up to the shipped MVP)
-- [`project/plans/destination-identity-simplification-plan.md`](project/plans/destination-identity-simplification-plan.md) — fix for [issue #127](https://github.com/valtteriluomapareto/photo-export/issues/127) (network-share remounts drift the destination id and trigger duplicate re-export): a stable logical destination id persisted next to the bookmark (Phase 0 hotfix), with the larger slot/scan persistence-model simplification deferred as optional.
 
 ## Maintainer notes — archive
 
@@ -44,11 +43,13 @@ Completed or superseded plans, kept as decision records:
 - [`project/archive/app-store-ci-plan.md`](project/archive/app-store-ci-plan.md) — App Store CI workflow plan
 - [`project/archive/github-actions-publishing-plan.md`](project/archive/github-actions-publishing-plan.md) — direct-distribution release workflow plan
 - [`project/archive/refactoring-plan.md`](project/archive/refactoring-plan.md) — early refactoring plan from when the app was ~2,750 lines (its own internal Phases 1–4; superseded by the 2026 architecture refactor below)
-- [`project/archive/software-architecture-improvement-plan.md`](project/archive/software-architecture-improvement-plan.md) — multi-phase `ExportManager` extraction + folder reorganization (shipped May 2026; living reference is [`docs/reference/architecture-conventions.md`](reference/architecture-conventions.md); deferred follow-ups in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67))
+- [`project/archive/software-architecture-improvement-plan.md`](project/archive/software-architecture-improvement-plan.md) — shipped `ExportManager` extraction and folder reorganization, including later PRs #75/#76; the production Photos service extraction remains in [#77](https://github.com/valtteriluomapareto/photo-export/issues/77)
+- [`project/archive/phase-0-sendable-audit.md`](project/archive/phase-0-sendable-audit.md) — historical strict-concurrency warning inventory for the architecture refactor
 - [`project/archive/support-edited-photos-export-plan.md`](project/archive/support-edited-photos-export-plan.md) — original three-mode edited-photos design (superseded)
 - [`project/archive/edited-photos-p2-followups-plan.md`](project/archive/edited-photos-p2-followups-plan.md) — P2 polish layer on top of the original design (superseded)
 - [`project/archive/edited-photos-modes-redesign-plan.md`](project/archive/edited-photos-modes-redesign-plan.md) — current two-mode redesign (shipped in 1.1.0)
 - [`project/archive/edited-photos-manual-testing-guide.md`](project/archive/edited-photos-manual-testing-guide.md) — manual test script for the edited-photos export modes (sibling of the redesign plan above)
+- [`project/archive/edited-video-export-plan.md`](project/archive/edited-video-export-plan.md) — shipped edited-video rendering design (PR #21)
 - [`project/archive/collections-export-plan.md`](project/archive/collections-export-plan.md) — Favorites and Albums export (shipped; the `enableCollections` build flag was flipped on and then removed)
 - [`project/archive/collections-export-manual-testing-guide.md`](project/archive/collections-export-manual-testing-guide.md) — manual test script for the Collections feature (sibling of the plan above)
 - [`project/archive/screenshot-automation-plan.md`](project/archive/screenshot-automation-plan.md) — automated marketing-screenshot capture via a synthetic Photos library (shipped; entry point is `scripts/screenshots/capture.sh`)
@@ -58,11 +59,13 @@ Completed or superseded plans, kept as decision records:
 - [`project/archive/auto-export-memory-fix-plan.md`](project/archive/auto-export-memory-fix-plan.md) — issue #112 Auto Export memory-watermark fix plan (implemented; kept for rationale and implementation deltas)
 - [`project/archive/observability-improvement-plan.md`](project/archive/observability-improvement-plan.md) — AutoSync run journal feeding the diagnostic report (shipped via PR #114)
 - [`project/archive/videos-subfolder-plan.md`](project/archive/videos-subfolder-plan.md) — issue #38 standalone-video `videos/` subfolder layout (shipped in 1.6.0 via PR #105)
-- [`project/archive/import-existing-backup-plan.md`](project/archive/import-existing-backup-plan.md) — Import Existing Backup design (Phase 1 shipped; Phases 2-3 folded back into `implementation-tasks.md` as loose future-improvement items)
-- [`project/archive/testing-improvement-plan.md`](project/archive/testing-improvement-plan.md) — test coverage roadmap (Steps 1-7 shipped; Steps 8-9 folded back into `implementation-tasks.md` under a new Testing section)
+- [`project/archive/import-existing-backup-plan.md`](project/archive/import-existing-backup-plan.md) — shipped manual import design; sidecar ideas live in the GitHub backlog
+- [`project/archive/destination-identity-simplification-plan.md`](project/archive/destination-identity-simplification-plan.md) — stable destination id fix shipped in 1.6.5 (PR #133); optional slot/dotfile redesign remains deferred
+- [`project/archive/testing-improvement-plan.md`](project/archive/testing-improvement-plan.md) — historical test coverage roadmap; shared fixtures/helpers now exist, with end-to-end UI flows tracked in [#340](https://github.com/valtteriluomapareto/photo-export/issues/340)
 
 ## Reference material
 
+- [`reference/auto-export-behavior.md`](reference/auto-export-behavior.md) — Auto Export dispatch, debounce, dirty-work, retry, safety, persistence and run-presentation contracts.
 - [`reference/architecture-conventions.md`](reference/architecture-conventions.md) — cross-cutting contracts, Host-protocol pattern, canonical `start*` shape, regression-gate tests, and extension recipes for adding new placements/variants/collaborators. Read before touching `ExportManager` or anything AutoSync observes.
 - [`reference/swift-swiftui-best-practices.md`](reference/swift-swiftui-best-practices.md) — Swift/SwiftUI patterns and style notes
 - [`reference/observation-migration-recipe.md`](reference/observation-migration-recipe.md) — how a type moves from `ObservableObject` to `@Observable`: the class and wrapper flips, the Combine bridge rules, the parity and dependency-registration tests, and the observation ratchet ([issue #315](https://github.com/valtteriluomapareto/photo-export/issues/315))

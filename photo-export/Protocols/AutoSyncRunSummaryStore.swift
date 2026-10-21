@@ -1,7 +1,7 @@
 import Foundation
 
-/// Persists the most recent `ExportRunSummary` per destination. Plan
-/// §"Persistence Keys": `AutoSync/destinations/<destinationId>/lastRunSummary.json`.
+/// Persists the most recent `ExportRunSummary` per destination at
+/// `AutoSync/destinations/<destinationId>/lastRunSummary.json`.
 /// Surfaced to the UI via `AutoSyncManager.lastRunSummary` so the Auto Export
 /// status pill can render "last run: 12 exported, 1 failed" copy across app
 /// launches.

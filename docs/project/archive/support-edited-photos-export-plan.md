@@ -1,5 +1,10 @@
 # Support Edited Photo Exports
 
+Status: Superseded by the shipped
+[two-mode redesign](edited-photos-modes-redesign-plan.md). Archived as the original
+three-mode design record; its filenames, UI modes and “current behavior” sections
+describe the pre-redesign app.
+
 Date: 2026-04-24
 Issue: https://github.com/valtteriluomapareto/photo-export/issues/13
 

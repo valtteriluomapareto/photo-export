@@ -11,8 +11,8 @@ import Photos
 import SwiftUI
 
 /// Top-level router for the app's three states: pre-onboarding, onboarding, and the
-/// authorized library view. The Phase 4 refactor moved the bulk of the authorized
-/// layout into `LibraryRootView`; this file is now responsible for routing only.
+/// authorized library view. `LibraryRootView` owns the authorized split-view layout
+/// so this view can keep routing separate from library presentation.
 struct ContentView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter

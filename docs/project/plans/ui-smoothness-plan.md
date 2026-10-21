@@ -1,6 +1,13 @@
 # UI Smoothness and Observation Modernization Plan
 
-Status: active roadmap, revised May 2026.
+Status: Active roadmap. Measurement and smoothness work described in Phases 0–1
+has landed, with later refinements recorded below. The Observation migration is
+tracked in [#315](https://github.com/valtteriluomapareto/photo-export/issues/315)
+and developed on `feature/observable-migration`; branch work is not shipped until
+merged. On current `main`, `MonthViewModel`, `PhotoLibraryManager` and the record
+stores still use `ObservableObject` / `@Published`. Phase 3 remains conditional on
+measurement; the original sequence below is a design roadmap, not a claim that
+every proposed change is still needed.
 
 This plan merges the previous UI smoothness and SwiftUI Observation migration
 plans into one implementation order. The standalone Observation plan is archived
@@ -242,9 +249,13 @@ line reader (~190k syscalls for the file). One `Data(contentsOf:)` +
 read straight off `log show --signpost` instead of a Time Profiler trace.
 
 The "off-main load" framing this section originally proposed was based
-on the wrong bottleneck hypothesis. Off-main scaffolding (`.loading`
-state, async configure, mutation-during-loading assertion, the
-test-site migration) is deferred — no measured need.
+on the wrong bottleneck hypothesis for that small store. A later
+measurement on larger stores
+([#312](https://github.com/valtteriluomapareto/photo-export/issues/312#issuecomment-6275859383))
+found the load linear at about 12 µs per record per store in an optimized
+build (5.8 s at 500k records), dominated by JSON decoding, so the load now
+runs off the main actor behind `.loading` (#312). Each `RecordStore.Configure`
+interval spans a load from its configure call until the store settles.
 
 ### 6. Debounce `libraryRevision` Bursts — not needed today
 

@@ -10,9 +10,8 @@ import Foundation
 ///    when the previous one returned.
 /// 2. **App became active.** Observes `NSApplication.didBecomeActiveNotification`
 ///    and fires `onReconcile` as soon as the user Cmd-tabs back to the app.
-///    Free win for the "I clicked over to check on it" pattern (issue #69): the
-///    relaunch fixes the staleness because launch runs a forced catch-up; this
-///    gives the same fix without the relaunch.
+///    This refreshes changes that arrived while the app was inactive, without
+///    requiring a relaunch to trigger catch-up.
 ///
 /// Extracted so the scheduling and observer logic can be unit-tested against
 /// `TestClock` without involving `PHPhotoLibrary`. The adapter wires its own

@@ -15,7 +15,7 @@ struct DiagnosticReporter {
   let appVersion: String
   let buildNumber: String
   /// Latest iCloud-Photos catch-up summary — surfaced so a reporter hitting
-  /// the issue #92 launch beachball can attach the diagnostic report and the
+  /// the launch beachball can attach the diagnostic report and the
   /// maintainer can see exactly how long the fetch took / how many changes
   /// were processed without needing Console snippets.
   let lastCatchUpSummary: PhotoLibraryPersistentChangeAdapter.CatchUpSummary?
@@ -108,7 +108,7 @@ struct DiagnosticReporter {
     let lastError: String?
     let reason: ExportVariantReason?
     let exportDate: Date?
-    /// When this is a `.failed` `.edited` variant covered by the issue #22
+    /// When this is a `.failed` `.edited` variant covered by the
     /// `_orig` fallback (matching record has `.original` `.done`), this holds
     /// the on-disk filename of that fallback so the report can call it out.
     let fallbackFilename: String?
@@ -243,7 +243,7 @@ struct DiagnosticReporter {
 
   /// Catch-up summary block. Always emitted (with "(none recorded)" when no
   /// summary is available) so a reporter who attaches the diagnostic file
-  /// without running into the issue #92 hang still tells us "the off-main
+  /// without running into the hang still tells us "the off-main
   /// catch-up never ran on this launch."
   private func catchUpSection() -> [String] {
     var lines: [String] = []

@@ -86,13 +86,13 @@ enum ScreenshotSurfaceResolver {
     case "collections-album-paris":
       return Surface(section: .collections, selection: .album(collectionId: "paris"))
     case "collections-shared-album-family-stream":
-      // Issue #48: lands on the synthetic "Family stream" shared album from
+      // Lands on the synthetic "Family stream" shared album from
       // `ScreenshotPhotoLibraryService.tree` so marketing captures showcase the
       // new "Shared Albums" sidebar section and the reduced-fidelity banner.
       return Surface(
         section: .collections, selection: .sharedAlbum(collectionId: "family-stream"))
     case "timeline-multi-select":
-      // Issue #46 multi-select feature: highlights two prior years + a month in
+      // Highlights two prior years + a month in
       // the current year so the sidebar shows three rows selected and the
       // toolbar reads "Export 3 Items". Focus on the current month so the
       // content pane renders MonthContentView's populated grid (the most
@@ -109,7 +109,7 @@ enum ScreenshotSurfaceResolver {
         ]
       )
     case "collections-multi-select":
-      // Issue #46 multi-select feature: Favorites + two albums + a folder, four
+      // Favorites + two albums + a folder, four
       // disparate row kinds highlighted in the sidebar. Focus on the Family
       // album so the content pane renders a populated thumbnail grid; the
       // toolbar's primary action reads "Export 4 Items". `Trips` folder

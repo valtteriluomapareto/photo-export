@@ -76,6 +76,13 @@ Cancelling the import reaches the detached backup scan, which stops before its n
 entry, file entry or `videos/` check.
 Retry preserves timeline-only compatibility when the collection store is unconfigured, but waits
 for recovery if either history store has failed. Scanner matching error propagation is unchanged.
+An import started while either history is `.loading` (right after a destination change) claims
+`isImporting` at once, so exports stay held, then waits for both stores to settle and rechecks
+its UUID, generation and both stores' destination; a destination change abandons it. A timeline
+history that is then not `.ready` ends the import through `finishOwnedImport` with a reason:
+for a "Same Folder" check, the "couldn't check" message its synchronous refusal gives;
+otherwise, that the export history isn't available. A history that is settled but not ready
+still refuses synchronously.
 
 ### Final file commit boundary
 
@@ -240,11 +247,14 @@ load or by a session that exports nothing; measuring it at that size is #359). E
 milliseconds at debug level ("Built filename claims for … records in … ms"). The index is
 maintained in each store's `apply` after that, so log replay, import, prune and reset follow
 it; a normal commit costs three claim lookups and one main-actor hop. It is dropped, to be
-built again on the next query, wherever the in-memory records are replaced wholesale (load,
-retained recovery, the corrupt-reset path and the parked-snapshot restore after an
-unreadable reload). A timeline placement without a year and month has no claim folder; an
-export of one fails at once (with an `assertionFailure` in debug builds) rather than walking
-every suffix.
+built again on the next query, wherever the in-memory records are replaced wholesale (when a
+load finishes, for every outcome, since a query while the store is `.loading` builds it from
+the empty records; retained recovery, the corrupt-reset path and the parked-snapshot restore
+after an unreadable reload). Claim queries do not answer "claimed" while a store loads: the
+resolver walks suffixes while a name is claimed, and only a stale job from the previous
+destination can ask then, and its generation check drops the result. A timeline placement
+without a year and month has no claim folder; an export of one fails at once (with an
+`assertionFailure` in debug builds) rather than walking every suffix.
 
 Known limits: only the folder the variant is being written to is searched, so an identical
 file left in `videos/` (or outside it) by a layout change is not found. Paired groups and
@@ -273,12 +283,29 @@ touch a replacement job's stage. A successful move or adoption is acknowledged t
 its captured logical destination even if the run becomes stale. The acknowledgement carries the
 committed name (`nil` when nothing was committed), and every completion path in both stores
 records that name: the direct completion, the completion deferred behind a corrupt load, the
-write into a parked destination's history, and the restore of a parked snapshot. `RecordStoreRouter` captures that store's existing JSONL owner; each
-store parks its latest snapshot only when switching away, merges the completed variant, and
-retains write failures through the existing non-destructive persistence recovery path. A corrupt
-load keeps its alert and bytes intact; only the known completion delta is deferred until a valid
-load or explicit reset. Collection acknowledgements restore missing placement metadata without
-replacing newer metadata. No persisted schema changes or crash-atomicity guarantee is implied.
+write into a parked destination's history, and the restore of a parked snapshot.
+`RecordStoreRouter` captures that store's existing JSONL owner; each store parks its latest
+snapshot only when switching away, merges the completed variant, and retains write failures
+through the existing non-destructive persistence recovery path. A corrupt load keeps its alert
+and bytes intact; only the known completion delta is deferred until a valid load or explicit
+reset. Collection acknowledgements restore missing placement metadata without replacing newer
+metadata. No persisted schema changes or crash-atomicity guarantee is implied.
+
+A commit acknowledged while its destination is active and `.loading` is held, then lands as if
+it had arrived just after the load:
+
+- When the load finishes, it lands against the state the load ends in: recorded on a ready
+  load (its write is flushed by the store's ordinary append path), deferred until the reset on
+  a corrupt one, added to the restored parked history on an unreadable one.
+- A load replaced by another configure of the same destination keeps it for the newest load;
+  if that configure takes the retained-recovery exit instead, it lands in the retained history.
+- When the store leaves the destination before the load finishes, it is written into that
+  destination's parked history at once, on the IO queue after the discarded read, and flushed
+  before the switch continues. A later load of the destination reads it; a write failure is
+  retained for Retry like any parked commit's.
+- A write failure retained while the destination loads parks only the commit's own snapshot,
+  without copying the empty in-memory records or marking them unsaved; the finished load
+  installs the parked history and goes to `.persistenceFailed`.
 
 Queue teardown remains synchronous and does not discard this task. Replacement jobs await its
 barrier before their initial record flush, history reads, or filename allocation, then recheck
@@ -314,6 +341,8 @@ Rules:
 - Do **not** promote a collaborator to `actor` to "fix" concurrency unless you have a measurement showing main-actor contention. `@MainActor` is the established pattern because `@Published` + SwiftUI binding works there without `await` ceremony.
 - Each `@MainActor final class` collaborator should carry a one-line comment at its top declaring its isolation. (Stops future contributors from silently making it `nonisolated`.)
 - Await detached work through `runDetached(priority:operation:)` (`Helpers/RunDetached.swift`), not `Task.detached { … }.value`. Awaiting `.value` never cancels the detached task, so its own cancellation checks never fire. The helper forwards the caller's cancellation and still waits for the operation to finish.
+- Record-store loads leave the main actor in one pipeline. `beginConfigure(for:)` runs the synchronous prologue (drains, parking, the destination switch, clears, and the nil and retained-recovery exits), publishes `.loading`, and reads the files (`JSONLRecordFile.readFiles`) on the store's serial IO queue at `.userInitiated` with enforced QoS, behind the previous destination's queued writes. `decode` and `prepare` run in a detached `.userInitiated` task, which skips them once a newer configure has started (a lock-protected generation). The result is installed in one main-actor turn after checking the ticket (configure generation and file); a stale result is discarded with a debug log line. Every state change goes through one funnel that resumes `waitUntilSettled()` callers whenever the state leaves `.loading`, including the nil exit, the retained exit and the blocking `configure(for:)`. A load replaced by another `beginConfigure(for:)` keeps the store `.loading`, so its waiters resume when the newest load settles. The drains stay: a configure while a load is still reading waits on the main actor for that read, not for its decode. `configure(for:)` remains the blocking composition of the same steps and publishes no `.loading`.
+- Readers of a loading store see empty records. Auto Export's `runExport` fails fast as for any store that isn't `.ready`; manual export controls are disabled through `ManualExportAvailability` (the Month and Year summaries read "Loading export history…"); `DestinationSafetyMonitor` waits for both stores after its scan and rechecks its generation and the stores' destination; Import Existing Backup waits (§Import outcome ownership). The onboarding auto-skip, `DiagnosticReporter` (0 records) and retry pruning (nothing pruned) may read the empty history; that is harmless.
 
 ### 3. AutoSync seam preservation
 

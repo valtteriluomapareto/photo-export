@@ -7,7 +7,7 @@ import os
 /// Defaults to all scopes off — Auto Export blocks on `.noScopesSelected` until
 /// the user picks at least one in Settings → Auto Export.
 ///
-/// Plan §"Persistence Keys": `AutoSync.scopeSelection` is a global preference,
+/// `AutoSync.scopeSelection` is a global preference,
 /// not per-destination. Settings UI calls `setSelection(_:)` to write; AutoSync
 /// subscribes to `scopeSelectionPublisher` to react.
 @MainActor

@@ -27,7 +27,7 @@ struct DestinationIdentityIntegrationTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner runs this."
-    ))
+    ), .timeLimit(.minutes(2)))
   func remountDriftKeepsEveryKeyOnStableId() async throws {
     let dir = TestScratch.directory("RemountIntegration")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -80,6 +80,15 @@ struct DestinationIdentityIntegrationTests {
       initial: DestinationIdentitySnapshot(identity: manager.identity),
       identityPublisher: manager.identityPublisher)
     safetyMonitor.attach()
+    // The stores load S's history off the main actor; the safety check waits for it.
+    await timelineStore.waitUntilSettled()
+    await collectionStore.waitUntilSettled()
+    #expect(timelineStore.state == .ready)
+    #expect(collectionStore.state == .ready)
+    #expect(
+      await eventually("the safety check of S finishes") {
+        safetyMonitor.completedEvaluationCount == 1
+      })
 
     var snapshots: [DestinationSnapshot] = []
     let cancellable = adapter.destinationSnapshotPublisher.sink { snapshots.append($0) }
@@ -94,6 +103,8 @@ struct DestinationIdentityIntegrationTests {
     #expect(currentFP?.id != stableId)
     manager.revalidateForTesting()
     for _ in 0..<5 { await Task.yield() }
+    await timelineStore.waitUntilSettled()
+    await collectionStore.waitUntilSettled()
 
     // Every key still resolves to S.
     #expect(manager.destinationId == stableId)
@@ -106,6 +117,7 @@ struct DestinationIdentityIntegrationTests {
     // `confirmationPersistsAcrossRemountDrift` covers the keying directly; here we assert the
     // wired monitor stays quiet.)
     #expect(confirmationStore.isConfirmed(destinationId: stableId))
+    #expect(safetyMonitor.completedEvaluationCount == 1)
     #expect(safetyMonitor.needsSafetyConfirmation == false)
   }
 }

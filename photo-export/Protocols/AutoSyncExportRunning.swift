@@ -7,7 +7,8 @@ import Foundation
 ///
 /// The publisher emits the current `ExportRunState` whenever it changes (run starts,
 /// completes, is cancelled, or interrupted). `runExport(context:)` follows the
-/// awaitable contract from Phase 0a — single active run, returns when terminal.
+/// single-active-run contract: it returns when that run is terminal.
+/// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
 @MainActor
 protocol AutoSyncExportRunning: AnyObject {
   /// Stream of `ExportRunState` snapshots. Replays the current state on subscribe so
@@ -18,7 +19,7 @@ protocol AutoSyncExportRunning: AnyObject {
   /// AutoSync needs this to honor the user's selection in background runs.
   var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> { get }
 
-  /// Stream of the user's `Convert HEIC to JPEG` toggle (issue #47). AutoSync
+  /// Stream of the user's `Convert HEIC to JPEG` toggle. AutoSync
   /// re-evaluates eligibility on flip because the toggle widens
   /// `requiredVariants` for HEIC originals.
   var convertHEICToJPEGPublisher: AnyPublisher<Bool, Never> { get }
@@ -41,8 +42,8 @@ protocol AutoSyncExportRunning: AnyObject {
 
   /// Stream of every run that finished through `runExport(context:)`, regardless
   /// of source. AutoSync filters to `.manual` and dispatches
-  /// `manualFullExportCompleted` for the dirty-state-clearing rule in plan
-  /// §"Dirty State". `.autoSync` runs are still routed through the
+  /// `manualFullExportCompleted` to acknowledge compatible dirty work.
+  /// `.autoSync` runs are still routed through the
   /// `runExport`-await return path; this publisher exists specifically to give
   /// the manager a hook into manual-run completion without polling
   /// `exportRunStatePublisher` transitions.

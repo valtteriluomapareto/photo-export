@@ -7,7 +7,7 @@ import SwiftUI
 ///
 /// `PhotoExportApp.init` builds one eagerly and hands its objects to the scenes through
 /// `photoExportEnvironment(_:)`; the main window's `.task` calls `start()`. Building touches no PhotoKit API: the first PhotoKit
-/// call is in `start()`, after the first window has rendered (#92).
+/// call is in `start()`, after the first window has rendered.
 @MainActor
 final class AppCore {
   let composition: AppComposition
@@ -176,7 +176,7 @@ final class AppCore {
     guard !hasStarted else { return }
     hasStarted = true
     // First PhotoKit touch: here, after the window has rendered, not in App.init. On
-    // macOS 15.7+ the synchronous singleton init has been observed to hang launch (#92). A
+    // macOS 15.7+ the synchronous singleton init has been observed to hang launch. A
     // no-op under tests and with a Photos service override.
     photoLibraryManager.start()
     // Configures the record stores for the current destination and follows its changes.
@@ -194,7 +194,7 @@ final class AppCore {
       persistentChangeSource.start()
     }
     // After the lifecycle coordinator, so the record stores are configured for the current
-    // destination before the monitor reads their counts.
+    // destination before the monitor reads their counts; it waits for a store still loading.
     destinationSafetyMonitor.attach()
     applyScreenshotWindowSizeIfRequested()
     AppDiagnostics.endLaunch()
@@ -242,7 +242,7 @@ final class AppCore {
   }
 
   /// "Same Folder" for a pick that couldn't be compared with the previous destination checks
-  /// the export history against the folder (#334). Not while a migration conflict is open: its
+  /// the export history against the folder. Not while a migration conflict is open: its
   /// recovery owns the records until resolved.
   static func connectAmbiguousSameFolderImport(
     destinationManager: ExportDestinationManager, exportManager: ExportManager,
@@ -285,17 +285,19 @@ final class AppCore {
       destinationManager.currentLegacyDestinationId(),
     ].compactMap { $0 }
     let result = coordinator.prepareDirectory(for: newId, legacyIds: legacyIds)
+    // The stores read the new destination's history off the main actor and are `.loading`
+    // until it is in; the directory is prepared before either starts.
     switch result {
     case .success:
-      timelineStore.configure(for: newId)
-      collectionStore.configure(for: newId)
+      timelineStore.beginConfigure(for: newId)
+      collectionStore.beginConfigure(for: newId)
       return .success
     case .failure(.conflict(let conflictNewId, let legacyId)):
       // Both `<newId>/` and `<legacyId>/` exist. Configuring proceeds with `<newId>/` so
       // the user can keep using the app, but the conflict is surfaced on the lifecycle
       // coordinator so future Settings UI / auto-sync can present recovery options.
-      timelineStore.configure(for: newId)
-      collectionStore.configure(for: newId)
+      timelineStore.beginConfigure(for: newId)
+      collectionStore.beginConfigure(for: newId)
       return .migrationConflict(newId: conflictNewId, legacyId: legacyId)
     case .failure(.migrationFailed(let message)):
       // Transient I/O error during the legacy → new rename. `<legacyId>/` still has the

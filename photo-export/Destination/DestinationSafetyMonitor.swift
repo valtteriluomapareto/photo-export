@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import os
 
-/// Phase 0b safety scan. Observes the destination identity and detects the
+/// Observes the destination identity and detects the
 /// "destination has files but no matching records" state. Surfaces it as
 /// `@Published needsSafetyConfirmation`, which `DestinationSnapshotAdapter`
 /// folds into the `DestinationSnapshot.safety` field as
@@ -12,14 +12,11 @@ import os
 /// confirmation survives a network-share remount that drifts the fingerprint — otherwise the
 /// re-keyed lookup would miss and re-prompt on every reconnect.
 ///
-/// Plan §"Destination Safety Model":
-///   "If the destination contains files that the app's record stores have no
-///   matching records for, surface as `unsafeNeedsConfirmation` and require
-///   user confirmation before automatic exports start. ... A user-confirmed
-///   destination stays confirmed across launches via the safety record."
+/// Existing files require confirmation when both record stores are empty, so a new
+/// destination cannot silently start duplicate exports. Confirmations persist across
+/// launches. See docs/reference/auto-export-behavior.md#destination-safety.
 ///
-/// MVP rule: if the destination directory contains *any* user-visible file
-/// (anything except `.DS_Store`) and the per-destination record stores are
+/// If the destination root contains any non-hidden entry and the record stores are
 /// both empty *and* the user hasn't confirmed this destination before, the
 /// monitor flags it. Switching to a previously-confirmed destination, or to
 /// one with matching records, stays `.safe`.
@@ -54,6 +51,9 @@ final class DestinationSafetyMonitor: ObservableObject {
   /// because all writes happen on @MainActor.
   private var evaluationGeneration: Int = 0
   private var observation: AnyCancellable?
+  /// Evaluations that ran to the end, current or superseded. Exists for tests, to wait on
+  /// progress.
+  private(set) var completedEvaluationCount = 0
 
   init(
     identityPublisher: AnyPublisher<DestinationIdentity, Never>,
@@ -115,8 +115,8 @@ final class DestinationSafetyMonitor: ObservableObject {
   var isAttached: Bool { observation != nil }
 
   /// Subscribe to destination changes. Called from `AppCore.start()` after the lifecycle
-  /// coordinator has been attached, so the record stores have been `configure(for:)`d
-  /// before we read their counts.
+  /// coordinator has been attached, so the record stores are configured (or loading) for
+  /// the current destination before we read their counts.
   func attach() {
     guard !isAttached else { return }
     observation =
@@ -149,6 +149,8 @@ final class DestinationSafetyMonitor: ObservableObject {
   private func evaluate(for identity: DestinationIdentity) {
     evaluationGeneration += 1
     let gen = evaluationGeneration
+    var finishesHere = true
+    defer { if finishesHere { completedEvaluationCount += 1 } }
 
     guard let id = identity.stableId else {
       needsSafetyConfirmation = false
@@ -162,27 +164,39 @@ final class DestinationSafetyMonitor: ObservableObject {
 
     // Records present → user has used the app with this destination before;
     // no need to prompt. Lazy-evaluation: timeline store first, fall back to
-    // collection store. Both checks are O(1) on in-memory data.
+    // collection store. Both checks are O(1) on in-memory data. A store that is
+    // still loading reads as empty, so it is judged after the scan instead.
+    let isLoading =
+      !exportRecordStore.state.isSettled || !collectionExportRecordStore.state.isSettled
     let hasTimelineRecords = !exportRecordStore.recordsById.isEmpty
     let hasCollectionRecords = !collectionExportRecordStore.placements.isEmpty
-    if hasTimelineRecords || hasCollectionRecords {
+    if !isLoading, hasTimelineRecords || hasCollectionRecords {
       needsSafetyConfirmation = false
       return
     }
+    let timelineDestination = exportRecordStore.destinationId
+    let collectionDestination = collectionExportRecordStore.destinationId
 
     // Records empty — scan the destination directory. Async because the
     // scoped-access dance crosses an actor hop and the filesystem read
     // touches an external drive.
+    finishesHere = false
     Task { @MainActor [weak self] in
       guard let self else { return }
+      defer { self.completedEvaluationCount += 1 }
       let hasUserFiles = await self.scanDirectory()
-      guard self.evaluationGeneration == gen else {
-        // Stale generation — user already switched destinations.
+      // Judge the loaded history, not the empty one a loading store shows.
+      await self.exportRecordStore.waitUntilSettled()
+      await self.collectionExportRecordStore.waitUntilSettled()
+      guard self.evaluationGeneration == gen,
+        self.exportRecordStore.destinationId == timelineDestination,
+        self.collectionExportRecordStore.destinationId == collectionDestination
+      else {
+        // Stale: the user switched destinations, or the stores moved on while it waited.
         return
       }
-      // Re-check the synchronous gates against the *post-scan* world. The
-      // record stores can finish loading their JSONL during the slow
-      // filesystem scan; if they did, the destination is no longer
+      // Re-check the synchronous gates against the *post-scan* world, with both
+      // stores' history loaded: if it has records, the destination is no longer
       // "records empty" and we must not flag it. Same for confirmation:
       // the user might have confirmed via another path while we waited.
       if self.confirmationStore.isConfirmed(destinationId: id) {

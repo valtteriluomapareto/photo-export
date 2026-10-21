@@ -247,7 +247,7 @@ Both stores follow the same lifecycle on their own files: `export-records.json` 
 `collection-records.jsonl` for the collection store.
 
 1. On first run, the store creates its directory.
-2. On launch, the store loads its snapshot (if present), then applies each log line in order to reconstruct the latest state.
+2. On launch and on every destination change, the store loads its snapshot (if present), then applies each log line in order to reconstruct the latest state. The app does this off the main actor: the files are read on the store's IO queue, after any writes still queued for the previous destination, and decoded in a detached task. The store is `.loading` until the result is installed in one main-actor turn; meanwhile its records read as empty and it accepts no mutations. A load that a newer configure replaced is discarded. The blocking `configure(for:)` runs the same steps on the main actor without publishing `.loading` (tests and the read-failure Retry use it; clearing the destination reads nothing).
 3. On updates, the store:
    - Applies the mutation to in-memory state immediately
    - Appends a JSON line to its log (`export-records.jsonl` or `collection-records.jsonl`)
@@ -310,7 +310,7 @@ adjusted asset whose `original` is `done` and whose `edited` failed with reason
 ## Error Handling
 
 - A missing snapshot or log is normal. An unreadable file is an IO failure, never an empty history.
-- Invalid JSONL lines are skipped and logged, preserving truncated-final-line recovery. A nonempty log without a final LF is remembered at load; the next operation prefixes a separating LF and writes its JSON plus final LF in one Data write. This prevents a recovered complete or partial tail from absorbing the next operation. Partial OS writes remain possible; the next load isolates them again. Successful snapshot/reset clears the pending separator; failed persistence still blocks later appends until snapshot recovery.
+- Invalid JSONL lines are skipped and logged, preserving truncated-final-line recovery. A nonempty log without a final LF is remembered when the load is installed (an unreadable log keeps what the file knew); the next operation prefixes a separating LF and writes its JSON plus final LF in one Data write. This prevents a recovered complete or partial tail from absorbing the next operation. Partial OS writes remain possible; the next load isolates them again. Successful snapshot/reset clears the pending separator; failed persistence still blocks later appends until snapshot recovery.
 - Snapshot decoding failure enters `.failed`. Reset Records explicitly moves the corrupt snapshot aside and starts empty; Quit preserves it.
 - Log read or append/open/write/synchronize failure enters `.persistenceFailed` and blocks new exports through the affected store. The other store remains independent. The recovery alert offers Retry rather than destructive reset.
 - In-memory mutations are provisional until `flush()` successfully acknowledges all preceding queued writes and synchronization. Export jobs await this boundary before work and before completion; import also flushes before reporting success. No extra fsync is performed per UI notification.

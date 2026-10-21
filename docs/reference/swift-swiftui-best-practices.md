@@ -85,7 +85,9 @@ The pipeline is split across several collaborators. The list below pairs each ro
   - Per-variant failure recorded via `RecordStoreRouter.recordVariantFailed`, asset run continues.
   - Edited-variant failure does not roll back a completed original variant (the asymmetry is intentional — see `ExportCompletionPolicy`).
 - **Concurrency**
-  - Sequential drain: `ExportQueueCoordinator` runs one job at a time. Bounded parallelism (2–3 workers) is on the open-tasks list — see [`docs/project/implementation-tasks.md`](../project/implementation-tasks.md) §Performance.
+  - Sequential drain: `ExportQueueCoordinator` runs one job at a time. Bounded
+    parallelism remains an idea in the [GitHub backlog](https://github.com/valtteriluomapareto/photo-export/issues/318#issuecomment-6311950302); it requires a
+    separate plan preserving cancellation and final-file ownership.
   - Per-variant heavy work (resource fetch, render, file I/O) hops off MainActor via `await` on the existing protocol seams (`PhotoLibraryService`, `MediaRenderer`, `AssetResourceWriter`, `FileSystemService`).
 - **Cancellation cooperatively**
   - `ExportManager.generation` is the seam. Every async hop captures `let gen = generation` synchronously, re-checks `isCurrent(gen)` after each `await`. See [`architecture-conventions.md`](architecture-conventions.md) §Cancellation contract.

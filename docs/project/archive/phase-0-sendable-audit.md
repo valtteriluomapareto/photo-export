@@ -2,7 +2,13 @@
 
 Date: 2026-05-15
 Source build: `xcodebuild ... SWIFT_STRICT_CONCURRENCY=complete build` on `main` after the Phase 0 generation-seam + characterization-test commits.
-Status: Informational. No fixes in Phase 0 per the
+Status: Historical audit snapshot, not a current warning inventory. The source
+paths, diagnostics and extraction recommendations below record the 2026-05-15
+build. Current concurrency/toolchain work is tracked in
+[#315](https://github.com/valtteriluomapareto/photo-export/issues/315) and
+[#317](https://github.com/valtteriluomapareto/photo-export/issues/317).
+
+Original audit scope: no fixes in Phase 0 per the
 `software-architecture-improvement-plan.md` Cross-Cutting Contracts &gt; Isolation policy:
 "Phase 0 includes a Swift 6 Sendable audit pass… so strict-concurrency warnings surface
 before extraction starts, not during."

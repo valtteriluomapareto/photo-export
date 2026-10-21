@@ -38,7 +38,7 @@ struct MonthContentView: View, Equatable {
   /// (the user toggles "Include Originals") — the parent's body re-render fan-in is
   /// fine.
   let versionSelection: ExportVersionSelection
-  /// Live Photo paired-export toggle snapshot (issue #49). Same rationale as
+  /// Live Photo paired-export toggle snapshot. Same rationale as
   /// `versionSelection`: passed in by the parent so the month grid doesn't subscribe to
   /// `ExportManager` directly. Drives the asset-complete check on the header summary so
   /// a Live Photo whose paired video is pending isn't reported as complete.
@@ -69,9 +69,13 @@ struct MonthContentView: View, Equatable {
   }
 
   var body: some View {
+    let availability = ManualExportAvailability(
+      destinationCanExport: exportDestinationManager.canExportNow,
+      history: exportRecordStore.state)
     let exportHelp =
-      exportDestinationManager.canExportNow
-      ? "Export unexported assets for this month" : exportDestinationManager.exportUnavailableHelp
+      availability.unavailableHelp(
+        destinationHelp: exportDestinationManager.exportUnavailableHelp)
+      ?? "Export unexported assets for this month"
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([exportHelp], for: "month-export-help")
@@ -95,7 +99,7 @@ struct MonthContentView: View, Equatable {
           onExportMonth()
         }
         .buttonStyle(.bordered)
-        .disabled(!exportDestinationManager.canExportNow)
+        .disabled(!availability.canStart)
         .help(exportHelp)
       }
 
@@ -178,32 +182,39 @@ struct MonthContentView: View, Equatable {
   }
 
   private var exportSummaryView: some View {
+    // Until the history is loaded its in-memory records are empty, so counts would read 0.
+    let isLoadingHistory = exportRecordStore.state == .loading
     let summary = exportRecordStore.monthSummary(
       assets: viewModel.assets, selection: versionSelection,
       livePhotosPaired: livePhotosPaired)
+    let exportedCount = summary.status == .notExported ? 0 : summary.exportedCount
+    let text =
+      isLoadingHistory
+      ? ManualExportAvailability.loadingHistoryText
+      : "\(exportedCount)/\(summary.totalCount) exported"
+    #if DEBUG
+      bodyCounter?.recordText([text], for: "month-summary")
+    #endif
     return HStack(spacing: 8) {
-      switch summary.status {
-      case .complete:
-        // `seal.fill` is Apple vocabulary for verification, not generic task completion;
-        // `circle.fill` is the right glyph and matches the rest of the app.
-        Label(
-          "\(summary.exportedCount)/\(summary.totalCount) exported",
-          systemImage: "checkmark.circle.fill"
-        )
-        .foregroundColor(.green)
-      case .partial:
-        // `arrow.triangle.2.circlepath` reads as "syncing / refreshing"; for a static
-        // partial state use the half-filled circle so the glyph means "in between".
-        Label(
-          "\(summary.exportedCount)/\(summary.totalCount) exported",
-          systemImage: "circle.lefthalf.filled"
-        )
-        .foregroundColor(.orange)
-      case .notExported:
-        Label(
-          "0/\(summary.totalCount) exported", systemImage: "circle"
-        )
-        .foregroundColor(.secondary)
+      if isLoadingHistory {
+        Label(text, systemImage: "clock")
+          .foregroundColor(.secondary)
+      } else {
+        switch summary.status {
+        case .complete:
+          // `seal.fill` is Apple vocabulary for verification, not generic task completion;
+          // `circle.fill` is the right glyph and matches the rest of the app.
+          Label(text, systemImage: "checkmark.circle.fill")
+            .foregroundColor(.green)
+        case .partial:
+          // `arrow.triangle.2.circlepath` reads as "syncing / refreshing"; for a static
+          // partial state use the half-filled circle so the glyph means "in between".
+          Label(text, systemImage: "circle.lefthalf.filled")
+            .foregroundColor(.orange)
+        case .notExported:
+          Label(text, systemImage: "circle")
+            .foregroundColor(.secondary)
+        }
       }
       Spacer()
     }
