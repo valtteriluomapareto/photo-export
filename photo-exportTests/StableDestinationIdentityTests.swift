@@ -553,7 +553,7 @@ struct StableDestinationIdentityTests {
     // configureRecordStores migrates ExportRecords/<oldLegacyId>/ → ExportRecords/<stableId>/.
     let stableId = try #require(manager.destinationId)
     #expect(stableId != oldLegacyId)
-    let result = PhotoExportApp.configureRecordStores(
+    let result = AppCore.configureRecordStores(
       for: stableId, destinationManager: manager,
       timelineStore: timelineStore, collectionStore: collectionStore)
     #expect(result == .success)

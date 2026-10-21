@@ -40,22 +40,30 @@ enum ScreenshotSurfaceResolver {
     }
   }
 
-  /// Reads `--screenshot-surface=<key>` from `arguments` and resolves to a
-  /// `Surface`. `now` is used only by the `.timeline` key to pick the
-  /// current-month selection — injectable so tests don't depend on the wall
-  /// clock.
-  ///
-  /// Returns `nil` when no `--screenshot-surface=` argument is present or the
-  /// key is unknown — both cases let the caller fall back to its production
-  /// default.
-  static func resolve(
-    from arguments: [String] = ProcessInfo.processInfo.arguments,
-    now: Date = Date()
-  ) -> Surface? {
+  /// The key of the first `--screenshot-surface=<key>` in `arguments`, or `nil` when there
+  /// is none. `AppComposition.forLaunch(arguments:)` parses it once at launch.
+  static func surfaceKey(from arguments: [String]) -> String? {
     guard
       let raw = arguments.first(where: { $0.hasPrefix("--screenshot-surface=") })
     else { return nil }
-    let key = String(raw.split(separator: "=", maxSplits: 1).last ?? "")
+    return String(raw.split(separator: "=", maxSplits: 1).last ?? "")
+  }
+
+  /// Test convenience: reads `--screenshot-surface=<key>` from `arguments` and resolves to a
+  /// `Surface`. The app parses the key once in `AppComposition.forLaunch(arguments:)` and
+  /// resolves it with `resolve(key:now:)`.
+  static func resolve(from arguments: [String], now: Date = Date()) -> Surface? {
+    resolve(key: surfaceKey(from: arguments), now: now)
+  }
+
+  /// Resolves a `--screenshot-surface=` key to a `Surface`. `now` is used only by the
+  /// timeline keys to pick the current-month selection — injectable so tests don't depend
+  /// on the wall clock.
+  ///
+  /// Returns `nil` for a `nil` or unknown key — both cases let the caller fall back to its
+  /// production default.
+  static func resolve(key: String?, now: Date = Date()) -> Surface? {
+    guard let key else { return nil }
     switch key {
     case "timeline":
       let cal = Calendar(identifier: .gregorian)

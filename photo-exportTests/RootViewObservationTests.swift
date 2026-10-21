@@ -88,7 +88,7 @@ import Testing
 
       @ViewBuilder private func pane(_ surface: Surface) -> some View {
         switch surface {
-        case .library: LibraryRootView()
+        case .library: LibraryRootView(screenshotSurfaceKey: nil)
         case .content:
           ContentHost(
             manager: manager, destination: destination, timeline: timeline, counter: counter)

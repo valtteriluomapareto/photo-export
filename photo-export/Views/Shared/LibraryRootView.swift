@@ -31,14 +31,13 @@ struct LibraryRootView: View {
   @State private var lastTimeline: PersistedSidebarSelection = .empty
   @State private var lastCollections: PersistedSidebarSelection = .empty
 
-  init() {
-    // Honour `--screenshot-surface=<key>` so the capture script can land each
-    // marketing capture on a specific view without UI scripting. In production
-    // launches the resolver returns `nil` and the defaults below match the
-    // pre-launch-arg behaviour (Timeline / current month). The parsing +
-    // mapping lives in `ScreenshotSurfaceResolver` so it's testable without
-    // instantiating SwiftUI views.
-    let surface = ScreenshotSurfaceResolver.resolve()
+  /// `screenshotSurfaceKey` is the launch's `--screenshot-surface=<key>`, so the capture
+  /// script can land each marketing capture on a specific view without UI scripting. In
+  /// production launches it is `nil` and the defaults below apply (Timeline / current
+  /// month). The mapping lives in `ScreenshotSurfaceResolver` so it's testable without
+  /// instantiating SwiftUI views.
+  init(screenshotSurfaceKey: String?) {
+    let surface = ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
     let now = Date()
     let currentYear = Calendar.current.component(.year, from: now)
     let currentMonth = Calendar.current.component(.month, from: now)
@@ -72,6 +71,7 @@ struct LibraryRootView: View {
 
   /// Mirrors `ContentView`'s onboarding gate. The new home for it after the refactor.
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
+  @Environment(\.isScreenshotMode) private var isScreenshotMode
 
   // Import sheet
   @State private var isShowingImportSheet: Bool = false
@@ -157,7 +157,7 @@ struct LibraryRootView: View {
         get: {
           // Suppress the What's New sheet in screenshot mode — it would auto-
           // show on first launch after a version bump and ruin every capture.
-          !PhotoLibraryManager.isRunningInScreenshotMode && whatsNewState.shouldShow
+          !isScreenshotMode && whatsNewState.shouldShow
         },
         set: { newValue in
           if !newValue { whatsNewState.markAsSeen() }

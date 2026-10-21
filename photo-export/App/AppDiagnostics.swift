@@ -17,6 +17,9 @@ enum AppDiagnostics {
     launchInterval = signposter.beginInterval("AppLaunch")
   }
 
+  /// Between `beginLaunch()` and `endLaunch()`.
+  static var isLaunchInProgress: Bool { launchInterval != nil }
+
   static func endLaunch() {
     if let state = launchInterval {
       signposter.endInterval("AppLaunch", state)

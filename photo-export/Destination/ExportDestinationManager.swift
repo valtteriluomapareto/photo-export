@@ -253,9 +253,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Marketing-screenshot helper: puts the manager into the "destination
   /// available and writable" state with a synthetic URL whose
   /// `lastPathComponent` is the only piece the toolbar's destination indicator
-  /// reads. Never called in production launches —
-  /// `photo_exportApp.init` gates this on
-  /// `PhotoLibraryManager.isRunningInScreenshotMode`. Pair with
+  /// reads. Never called in production launches — `AppCore` calls it only for a
+  /// composition with `isScreenshotMode`. Pair with
   /// `init(skipRestore: true)` so the user's real bookmark doesn't show up
   /// briefly before this override lands.
   ///

@@ -198,24 +198,8 @@ final class CollectionExportRecordStore: ObservableObject {
 
   // MARK: - Init
 
-  init() {
-    self.notificationClock = SystemAutoSyncClock()
-    self.recordLogIO = ProductionJSONLRecordLogIO()
-    self.reconciliationFileChecker = ReconciliationFileChecker()
-    let appSupport = try! fileManager.url(
-      for: .applicationSupportDirectory,
-      in: .userDomainMask,
-      appropriateFor: nil,
-      create: true
-    )
-    let bundleId = Bundle.main.bundleIdentifier ?? "com.valtteriluoma.photo-export"
-    let root = appSupport.appendingPathComponent(bundleId, isDirectory: true)
-    let storeDir = root.appendingPathComponent("ExportRecords", isDirectory: true)
-    self.storeRootURL = storeDir
-    createDirectoryIfNeeded(storeDir)
-  }
-
-  /// Test-only: allow specifying a base directory for the store root.
+  /// `baseDirectoryURL` is the parent of the per-destination folders; the app passes
+  /// `AppComposition.recordsRoot`.
   init(
     baseDirectoryURL: URL,
     reconciliationFileChecker: any ReconciliationFileChecking = ReconciliationFileChecker(),

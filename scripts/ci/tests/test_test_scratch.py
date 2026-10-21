@@ -64,6 +64,97 @@ class TestScratchGuardTests(unittest.TestCase):
         self.assertIn("LeakyTests.swift:7: record store on the real", result.stdout)
         self.assertIn("5 test-scratch problem(s) found.", result.stdout)
 
+    def test_shipping_compositions_fail_unless_allowed(self):
+        self.write(
+            "CoreTests.swift",
+            "struct CoreTests {\n"
+            "  func t() {\n"
+            "    let core = AppCore(composition: .production())\n"
+            "    let shot = AppCore(\n"
+            "      composition: .screenshot(windowSize: nil))\n"
+            "    let launch = AppComposition\n"
+            "      .forLaunch(arguments: [])\n"
+            "    let fixture = AppCore(composition: makeTestComposition())\n"
+            "    // test-scratch: allow inspects the shipping paths only\n"
+            "    let paths = AppComposition.production()\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("CoreTests.swift:3: shipping composition", result.stdout)
+        self.assertIn("CoreTests.swift:5: shipping composition", result.stdout)
+        self.assertIn("CoreTests.swift:6: shipping composition", result.stdout)
+        self.assertIn("3 test-scratch problem(s) found.", result.stdout)
+
+    def test_typed_bindings_of_shipping_compositions_fail(self):
+        self.write(
+            "BindingTests.swift",
+            "struct BindingTests {\n"
+            "  func t() {\n"
+            "    let a: AppComposition = .production()\n"
+            "    var b: AppComposition =\n"
+            "      .screenshot(windowSize: nil)\n"
+            "    let c: AppComposition? = .forLaunch(arguments: [])\n"
+            "    let d: AppComposition = makeTestComposition()\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("BindingTests.swift:3: shipping composition", result.stdout)
+        self.assertIn("BindingTests.swift:4: shipping composition", result.stdout)
+        self.assertIn("BindingTests.swift:6: shipping composition", result.stdout)
+        self.assertIn("3 test-scratch problem(s) found.", result.stdout)
+
+    def test_test_side_composition_factories_pass(self):
+        self.write(
+            "FactoryTests.swift",
+            "struct FactoryTests {\n"
+            "  func t() {\n"
+            "    let core = AppCore(composition: .fixture(label: \"x\"))\n"
+            "    let other = AppCore(composition: .productionLike)\n"
+            "    let flag = PhotoExportApp.wasComposed\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_leading_dot_shipping_compositions_fail_in_any_position(self):
+        self.write(
+            "MemberTests.swift",
+            "struct MemberTests {\n"
+            "  func returned() -> AppComposition {\n"
+            "    return .production()\n  }\n"
+            "  func ternary(_ flag: Bool) -> AppComposition {\n"
+            "    flag ? .screenshot(windowSize: nil) : makeTestComposition()\n  }\n"
+            "  func reassigned() {\n"
+            "    var composition = makeTestComposition()\n"
+            "    composition =\n"
+            "      .forLaunch(arguments: [])\n"
+            "    let all: [AppComposition] = [makeTestComposition(), .production()]\n"
+            "    let liked = AppComposition.productionLike\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("MemberTests.swift:3: shipping composition", result.stdout)
+        self.assertIn("MemberTests.swift:6: shipping composition", result.stdout)
+        self.assertIn("MemberTests.swift:10: shipping composition", result.stdout)
+        self.assertIn("MemberTests.swift:12: shipping composition", result.stdout)
+        self.assertIn("4 test-scratch problem(s) found.", result.stdout)
+
+    def test_composing_the_app_fails(self):
+        self.write(
+            "AppTests.swift",
+            "struct AppTests {\n"
+            "  func t() {\n"
+            "    let app = PhotoExportApp()\n"
+            "    let other = PhotoExportApp.init()\n"
+            "    let wrapped = PhotoExportApp\n"
+            "      .init()\n"
+            "    PhotoExportApp.main()\n"
+            "    let typed: PhotoExportApp = .init()\n"
+            "    let flag = PhotoExportApp.wasComposed\n  }\n}\n")
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("AppTests.swift:3: composes the real app", result.stdout)
+        self.assertIn("AppTests.swift:4: composes the real app", result.stdout)
+        self.assertIn("AppTests.swift:5: composes the real app", result.stdout)
+        self.assertIn("AppTests.swift:7: composes the real app", result.stdout)
+        self.assertIn("AppTests.swift:8: composes the real app", result.stdout)
+        self.assertIn("5 test-scratch problem(s) found.", result.stdout)
+
     def test_multi_line_uses_fail_at_their_first_line(self):
         self.write(
             "WrappedTests.swift",
