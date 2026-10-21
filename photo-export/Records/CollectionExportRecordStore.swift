@@ -140,7 +140,7 @@ final class CollectionExportRecordStore: ObservableObject {
 
   /// A variant's folder: its placement (whose relative path is fixed at creation) plus
   /// the subfolder it was written into.
-  private struct ClaimFolder: Hashable {
+  struct ClaimFolder: Hashable, Sendable {
     let placementId: String
     let subfolder: String
 
@@ -194,7 +194,8 @@ final class CollectionExportRecordStore: ObservableObject {
   private let reconciliationFileChecker: any ReconciliationFileChecking
   let storeRootURL: URL
   private var currentStoreDirURL: URL?
-  private var jsonl: JSONLRecordFile<Snapshot, LogOp>?
+  typealias RecordFile = JSONLRecordFile<Snapshot, LogOp>
+  private var jsonl: RecordFile?
 
   // MARK: - Init
 
@@ -275,7 +276,7 @@ final class CollectionExportRecordStore: ObservableObject {
     let dir = storeRootURL.appendingPathComponent(destinationId, isDirectory: true)
     createDirectoryIfNeeded(dir)
     currentStoreDirURL = dir
-    let file = JSONLRecordFile<Snapshot, LogOp>(
+    let file = RecordFile(
       snapshotURL: dir.appendingPathComponent(Constants.snapshotFileName),
       logURL: dir.appendingPathComponent(Constants.logFileName),
       ioQueue: ioQueue,
@@ -304,47 +305,20 @@ final class CollectionExportRecordStore: ObservableObject {
       changeNotifier.notifyNow()
       return
     }
-    let loaded = file.load()
-    if let error = loaded.ioFailure {
+    switch Self.prepare(file.load(), logger: logger) {
+    case .ioFailure(let error):
       persistenceError = error.localizedDescription
       state = .persistenceFailed
       changeNotifier.notifyNow()
       return
-    }
-    switch loaded.snapshotStatus {
     case .corrupt:
       logger.error(
         "Collection records snapshot at \(dir.appendingPathComponent(Constants.snapshotFileName).path, privacy: .public) failed to decode; store transitioning to .failed."
       )
       state = .failed
-    case .absent, .loaded:
-      if let snapshot = loaded.snapshot {
-        // Defense in depth: the API entry points reject `.timeline` placements via
-        // `accept(_:)`, but a hand-edited or otherwise tampered snapshot file could still
-        // carry one. Drop them before they enter `placements` and drop their records too,
-        // so the disjoint-key-space invariant holds even on a corrupted-on-disk input.
-        var validPlacements: [String: ExportPlacement] = [:]
-        var droppedTimelineIds: Set<String> = []
-        for (placementId, placement) in snapshot.placements {
-          if placement.kind == .timeline {
-            droppedTimelineIds.insert(placementId)
-          } else {
-            validPlacements[placementId] = placement
-          }
-        }
-        if !droppedTimelineIds.isEmpty {
-          logger.error(
-            "Dropped \(droppedTimelineIds.count) .timeline placement(s) from snapshot; collection store does not hold timeline placements."
-          )
-        }
-        placements = validPlacements
-        recordBodies = snapshot.records.filter { !droppedTimelineIds.contains($0.key) }
-        filenameClaims = nil
-      }
-      for op in loaded.ops {
-        apply(op)
-      }
-      recoverInProgressVariants()
+    case .loaded(let prepared):
+      placements = prepared.placements
+      recordBodies = prepared.recordBodies
       state = .ready
     }
     if state == .failed, finalCommitContext?.destinationId == configuredDestinationId {
@@ -352,6 +326,61 @@ final class CollectionExportRecordStore: ObservableObject {
     }
     replayFinalCompletions()
     changeNotifier.notifyNow()
+  }
+
+  /// The placements and records a successful load installs.
+  struct PreparedLoad: Sendable {
+    let placements: [String: ExportPlacement]
+    let recordBodies: [String: [String: RecordBody]]
+  }
+
+  /// How a load ends. A failed read outranks a corrupt snapshot, as in `ExportRecordStore`.
+  enum LoadOutcome: Sendable {
+    case ioFailure(any Error)
+    case corrupt
+    case loaded(PreparedLoad)
+  }
+
+  /// Builds what `configure(for:)` installs from a decoded load: the snapshot without
+  /// `.timeline` placements, the log replayed over it, then interrupted variants recovered.
+  /// Builds no claim index; that waits for the first claim query.
+  nonisolated static func prepare(_ loaded: RecordFile.LoadResult, logger: Logger) -> LoadOutcome {
+    if let error = loaded.ioFailure { return .ioFailure(error) }
+    switch loaded.snapshotStatus {
+    case .corrupt:
+      return .corrupt
+    case .absent, .loaded:
+      var placements: [String: ExportPlacement] = [:]
+      var recordBodies: [String: [String: RecordBody]] = [:]
+      if let snapshot = loaded.snapshot {
+        // Defense in depth: the API entry points reject `.timeline` placements via
+        // `accept(_:)`, but a hand-edited or otherwise tampered snapshot file could still
+        // carry one. Drop them before they enter `placements` and drop their records too,
+        // so the disjoint-key-space invariant holds even on a corrupted-on-disk input.
+        var droppedTimelineIds: Set<String> = []
+        for (placementId, placement) in snapshot.placements {
+          if placement.kind == .timeline {
+            droppedTimelineIds.insert(placementId)
+          } else {
+            placements[placementId] = placement
+          }
+        }
+        if !droppedTimelineIds.isEmpty {
+          logger.error(
+            "Dropped \(droppedTimelineIds.count) .timeline placement(s) from snapshot; collection store does not hold timeline placements."
+          )
+        }
+        recordBodies = snapshot.records.filter { !droppedTimelineIds.contains($0.key) }
+      }
+      var noClaims: FilenameClaims<ClaimFolder>?
+      for op in loaded.ops {
+        apply(
+          op, placements: &placements, recordBodies: &recordBodies, claims: &noClaims,
+          logger: logger)
+      }
+      recoverInProgressVariants(in: &recordBodies)
+      return .loaded(PreparedLoad(placements: placements, recordBodies: recordBodies))
+    }
   }
 
   /// Retry storage access without resetting export history. After an append failure,
@@ -1102,6 +1131,18 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   private func apply(_ op: LogOp) {
+    Self.apply(
+      op, placements: &placements, recordBodies: &recordBodies, claims: &filenameClaims,
+      logger: logger)
+  }
+
+  /// Applies one log operation to `placements` and `recordBodies`, keeping `claims` current
+  /// when there is an index. Shared by mutations and the load's replay.
+  nonisolated static func apply(
+    _ op: LogOp, placements: inout [String: ExportPlacement],
+    recordBodies: inout [String: [String: RecordBody]], claims: inout FilenameClaims<ClaimFolder>?,
+    logger: Logger
+  ) {
     switch op {
     case .upsertPlacement(let placementId, let placement):
       // Defense in depth — same rationale as the snapshot-decode guard. A `.timeline`
@@ -1117,7 +1158,7 @@ final class CollectionExportRecordStore: ObservableObject {
       placements.removeValue(forKey: placementId)
       if let removed = recordBodies.removeValue(forKey: placementId) {
         for body in removed.values {
-          updateClaims(placementId: placementId, body: body, adding: false)
+          updateClaims(&claims, placementId: placementId, body: body, adding: false)
         }
       }
     case .upsertRecord(let placementId, let assetId, let body):
@@ -1135,14 +1176,14 @@ final class CollectionExportRecordStore: ObservableObject {
       }
       var byAsset = recordBodies[placementId] ?? [:]
       if let old = byAsset.updateValue(body, forKey: assetId) {
-        updateClaims(placementId: placementId, body: old, adding: false)
+        updateClaims(&claims, placementId: placementId, body: old, adding: false)
       }
-      updateClaims(placementId: placementId, body: body, adding: true)
+      updateClaims(&claims, placementId: placementId, body: body, adding: true)
       recordBodies[placementId] = byAsset
     case .deleteRecord(let placementId, let assetId):
       var byAsset = recordBodies[placementId] ?? [:]
       if let old = byAsset.removeValue(forKey: assetId) {
-        updateClaims(placementId: placementId, body: old, adding: false)
+        updateClaims(&claims, placementId: placementId, body: old, adding: false)
       }
       if byAsset.isEmpty {
         recordBodies.removeValue(forKey: placementId)
@@ -1152,12 +1193,15 @@ final class CollectionExportRecordStore: ObservableObject {
     }
   }
 
-  private func updateClaims(placementId: String, body: RecordBody, adding: Bool) {
-    guard filenameClaims != nil else { return }
-    Self.update(&filenameClaims!, placementId: placementId, body: body, adding: adding)
+  nonisolated private static func updateClaims(
+    _ claims: inout FilenameClaims<ClaimFolder>?, placementId: String, body: RecordBody,
+    adding: Bool
+  ) {
+    guard claims != nil else { return }
+    update(&claims!, placementId: placementId, body: body, adding: adding)
   }
 
-  private static func update(
+  nonisolated private static func update(
     _ claims: inout FilenameClaims<ClaimFolder>, placementId: String, body: RecordBody,
     adding: Bool
   ) {
@@ -1173,24 +1217,33 @@ final class CollectionExportRecordStore: ObservableObject {
 
   private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
     if let filenameClaims { return filenameClaims }
+    let claims = Self.buildClaims(from: recordBodies, logger: logger)
+    filenameClaims = claims
+    return claims
+  }
+
+  /// The claim index for `recordBodies`: every filename a variant names, in its folder.
+  nonisolated static func buildClaims(
+    from recordBodies: [String: [String: RecordBody]], logger: Logger
+  ) -> FilenameClaims<ClaimFolder> {
     let recordCount = recordBodies.values.reduce(0) { $0 + $1.count }
-    let claims = FilenameClaims<ClaimFolder>.build(recordCount: recordCount, logger: logger) {
+    return FilenameClaims<ClaimFolder>.build(recordCount: recordCount, logger: logger) {
       claims in
       for (placementId, byAsset) in recordBodies {
         for body in byAsset.values {
-          Self.update(&claims, placementId: placementId, body: body, adding: true)
+          update(&claims, placementId: placementId, body: body, adding: true)
         }
       }
     }
-    filenameClaims = claims
-    return claims
   }
 
   /// Converts any variant left as `.inProgress` after load into `.failed` with the
   /// interrupted message. In-memory only — the corrected status flows to disk on the next
   /// mutation that lands for the same `(placement, asset)` pair, mirroring the timeline
   /// store's existing lazy-correction behavior.
-  private func recoverInProgressVariants() {
+  nonisolated static func recoverInProgressVariants(
+    in recordBodies: inout [String: [String: RecordBody]]
+  ) {
     for (placementId, byAsset) in recordBodies {
       var mutatedByAsset = byAsset
       var changedAny = false
