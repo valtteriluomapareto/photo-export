@@ -114,8 +114,8 @@ import Testing
         hosted = nil
         counter.reset()
         io.arm(false)
-        timeline.flushForTesting()
-        collections.flushForTesting()
+        timeline.drainSynchronously()
+        collections.drainSynchronously()
         destination.cleanup()
         defaults.removePersistentDomain(forName: defaultsName)
         try? FileManager.default.removeItem(at: root)
@@ -195,8 +195,8 @@ import Testing
       #expect(
         reopenedCollections.exportInfo(assetId: "history", placement: f.favorites)
           == collectionBefore)
-      reopenedTimeline.flushForTesting()
-      reopenedCollections.flushForTesting()
+      reopenedTimeline.drainSynchronously()
+      reopenedCollections.drainSynchronously()
       guard await shows("Import Failed", in: f) else { return }
       #expect(f.counter.renderedText["import-progress"] == ["false"])
       let importError = try #require(f.manager.importError)

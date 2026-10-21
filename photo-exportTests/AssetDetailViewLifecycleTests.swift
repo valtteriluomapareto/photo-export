@@ -109,8 +109,8 @@ struct AssetDetailViewLifecycleTests {
       window.orderOut(nil)
       window.contentView = nil
       window.close()
-      exportRecordStore.flushForTesting()
-      collectionStore.flushForTesting()
+      exportRecordStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       await firstGate.releaseAll()
       await secondGate.releaseAll()

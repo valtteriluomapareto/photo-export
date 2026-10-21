@@ -104,8 +104,8 @@ import Testing
         window.contentView = nil
         window.close()
         counter.reset()  // Release captured action closures after dismantling the host.
-        timeline.flushForTesting()
-        records.flushForTesting()
+        timeline.drainSynchronously()
+        records.drainSynchronously()
         try? FileManager.default.removeItem(at: root)
         defaults.removePersistentDomain(forName: defaultsName)
         fakeDestination.cleanup()

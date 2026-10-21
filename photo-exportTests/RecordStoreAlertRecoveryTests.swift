@@ -78,8 +78,8 @@ import Testing
         window?.close()
         window = nil
         counter.reset()
-        timeline.flushForTesting()
-        collections.flushForTesting()
+        timeline.drainSynchronously()
+        collections.drainSynchronously()
         destination.cleanup()
         defaults.removePersistentDomain(forName: defaultsName)
         try? FileManager.default.removeItem(at: root)
@@ -159,11 +159,11 @@ import Testing
         f.counter.renderedText["import-title"] == ["Import Complete"]
       }
       #expect(resultShown, "The existing ImportView must actually present its result")
-      f.timeline.flushForTesting()
+      f.timeline.drainSynchronously()
       let reopened = ExportRecordStore(baseDirectoryURL: f.root)
       reopened.configure(for: "A")
       #expect(reopened.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
-      reopened.flushForTesting()
+      reopened.drainSynchronously()
       f.manager.startExportMonth(year: 2026, month: 9)
       await f.manager.waitForQueueDrained()
       #expect(f.writer.writeCalls.isEmpty)

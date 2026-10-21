@@ -192,8 +192,8 @@ import Testing
         window?.close()
         window = nil
         counter.reset()
-        timeline.flushForTesting()
-        records.flushForTesting()
+        timeline.drainSynchronously()
+        records.drainSynchronously()
         defaults.removePersistentDomain(forName: defaultsName)
         fakeDestination.cleanup()
         try? FileManager.default.removeItem(at: root)
@@ -274,7 +274,7 @@ import Testing
             == record.variants)
       }
       #expect(reopened.placement(id: f.old.id)?.relativePath == f.old.relativePath)
-      reopened.flushForTesting()
+      reopened.drainSynchronously()
     }
 
     @Test(.timeLimit(.minutes(3)), arguments: Change.allCases)

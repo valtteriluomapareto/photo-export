@@ -362,7 +362,7 @@ struct BackupScannerVariantTests {
             filename: "IMG_0001.JPG", status: .done, exportDate: now, lastError: nil)
         ])
     ])
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let record = store.exportInfo(assetId: "pair")
     #expect(record?.variants[.original]?.status == .done)

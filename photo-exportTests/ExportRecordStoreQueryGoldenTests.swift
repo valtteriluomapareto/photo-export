@@ -997,7 +997,7 @@ struct ExportRecordStoreQueryGoldenTests {
     storeA.markVariantInProgress(
       assetId: "live", variant: .originalPairedVideo, year: yr, month: mo, relPath: rel,
       filename: nil)
-    storeA.flushForTesting()  // ensure the JSONL log is durable
+    storeA.drainSynchronously()  // ensure the JSONL log is durable
 
     // Construct a fresh store against the same on-disk directory. Triggers
     // configure → snapshot/log load → recoverInProgressVariants → rebuild.
@@ -1239,7 +1239,7 @@ struct ExportRecordStoreQueryGoldenTests {
       filename: "Y.JPG", exportedAt: now)
     #expect(storeA.recordCount(year: 2025, month: 6, variant: .original, status: .done) == 1)
     #expect(storeA.recordCount(year: 2025, month: 6, variant: .edited, status: .done) == 1)
-    storeA.flushForTesting()
+    storeA.drainSynchronously()
 
     // Step 2: corrupt the snapshot on disk and reload — store transitions to .failed.
     // We have to write a file to the snapshot path to force the corrupt path; the
@@ -1318,7 +1318,7 @@ struct ExportRecordStoreQueryGoldenTests {
     first.markVariantFailed(
       assetId: "live", variant: .originalPairedVideo, error: "no motion file",
       reason: .pairedVideoUnavailable, at: now)
-    first.flushForTesting()
+    first.drainSynchronously()
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
     try encoder.encode(first.recordsById).write(
@@ -1342,12 +1342,12 @@ struct ExportRecordStoreQueryGoldenTests {
     second.markVariantInProgress(
       assetId: "live", variant: .editedPairedVideo, year: 2025, month: 7, relPath: "2025/07/",
       filename: "LIVE.MOV")
-    second.flushForTesting()
+    second.drainSynchronously()
 
     // Step 3: reload and compare every counter with one computed from the records.
     let reloaded = ExportRecordStore(baseDirectoryURL: dir)
     reloaded.configure(for: dest)
-    defer { reloaded.flushForTesting() }
+    defer { reloaded.drainSynchronously() }
     #expect(reloaded.state == .ready)
     #expect(
       Set(reloaded.recordsById.keys) == [

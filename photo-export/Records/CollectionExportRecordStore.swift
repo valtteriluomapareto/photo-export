@@ -315,11 +315,11 @@ final class CollectionExportRecordStore: ObservableObject {
     latestLoad.advance(to: loadGeneration)
 
     // Finish the old destination's queued writes before replacing its file owner.
-    jsonl?.flushForTesting()
+    jsonl?.drainSynchronously()
     // A parked final commit can fail while another destination is active. Deliver
     // that owner's failure before consulting pendingRecovery or loading it again.
     if let context = finalCommitContext {
-      if context.file !== jsonl { context.file.flushForTesting() }
+      if context.file !== jsonl { context.file.drainSynchronously() }
       if context.destinationId == configuredDestinationId,
         state == .ready || hasUnsavedChanges, let file = jsonl
       {
@@ -1081,11 +1081,12 @@ final class CollectionExportRecordStore: ObservableObject {
       placementId: placement.id, exportedCount: done, totalCount: total, status: status)
   }
 
-  // MARK: - Testing helpers
+  // MARK: - Synchronous IO drain
 
-  /// Blocks until pending IO is flushed.
-  func flushForTesting() {
-    jsonl?.flushForTesting()
+  /// Blocks the caller until queued IO finishes and delivers any pending failure.
+  /// Must not be called from the IO queue.
+  func drainSynchronously() {
+    jsonl?.drainSynchronously()
   }
 
   /// Captures the existing writer before physical final IO. A successful move is
@@ -1192,7 +1193,7 @@ final class CollectionExportRecordStore: ObservableObject {
         guard landing == .parked else { return }
         // Nobody awaits this commit any more. Finish its write before the store moves on, so a
         // failure is retained for Retry like any parked commit's.
-        context.file.flushForTesting()
+        context.file.drainSynchronously()
         if context.file.hasUnflushedChanges {
           self.retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
         }

@@ -181,8 +181,8 @@ struct HistoricalPersistenceFixtureTests {
           ).isEmpty)
         #expect(a.exportInfo(assetId: "video")?.variants[.original]?.subfolder == "videos")
       }
-      a.flushForTesting()
-      b.flushForTesting()
+      a.drainSynchronously()
+      b.drainSynchronously()
     }
   }
 
@@ -262,8 +262,8 @@ struct HistoricalPersistenceFixtureTests {
       #expect(
         !b.isExported(
           asset: asset, placement: favorites, selection: .edited, livePhotosPaired: false))
-      a.flushForTesting()
-      b.flushForTesting()
+      a.drainSynchronously()
+      b.drainSynchronously()
     }
   }
 
@@ -298,7 +298,7 @@ struct HistoricalPersistenceFixtureTests {
     ]
     let placementsBefore = store.placements.count
     store.bulkImportRecords(batches)
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.recordedVariantCount(of: batches) == 4)
     #expect(store.placements.count == placementsBefore + 1)
 
@@ -334,6 +334,6 @@ struct HistoricalPersistenceFixtureTests {
     #expect(
       reopened.exportInfo(assetId: "video", placement: album)?.variants[.original]?.subfolder
         == "videos")
-    reopened.flushForTesting()
+    reopened.drainSynchronously()
   }
 }

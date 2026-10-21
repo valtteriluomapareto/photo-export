@@ -49,8 +49,8 @@ struct ExportManagerRunExportTests {
       running += manager.currentPreparationTasks + [manager.currentTask].compactMap { $0 }
       // The cancelled work must stop before its store folder is removed.
       for task in running { _ = await finished(task) }
-      store.flushForTesting()
-      collectionStore.flushForTesting()
+      store.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }

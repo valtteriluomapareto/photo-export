@@ -35,7 +35,7 @@ struct ExportManagerPauseResumeTests {
     let storeRoot = h.storeRoot
 
     manager.cancelAndClear()
-    store.flushForTesting()
+    store.drainSynchronously()
     try? FileManager.default.removeItem(at: storeRoot)
     dest.cleanup()
   }

@@ -11,7 +11,7 @@ import os
 ///
 /// The compaction rollback runs via `Task { @MainActor }` inside `ioQueue.async`,
 /// so observing it from a `@MainActor` test requires
-/// (a) `flushForTesting()` to drain the queue and (b) an `await Task.yield()`
+/// (a) `drainSynchronously()` to drain the queue and (b) an `await Task.yield()`
 /// to let the queued main-actor Task run.
 @MainActor
 struct JSONLRecordFileRollbackTests {
@@ -70,13 +70,13 @@ struct JSONLRecordFileRollbackTests {
     return (file, queue)
   }
 
-  /// `flushForTesting` drains `ioQueue` synchronously, but the rollback hops
+  /// `drainSynchronously` drains `ioQueue` synchronously, but the rollback hops
   /// back through `Task { @MainActor }`. Yielding gives that hop a chance to
   /// run on the main actor before the test continues.
   private func drainIOAndRollbacks(_ file: JSONLRecordFile<ConditionalSnapshot, Operation>)
     async
   {
-    file.flushForTesting()
+    file.drainSynchronously()
     await Task.yield()
     await Task.yield()
   }

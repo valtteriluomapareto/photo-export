@@ -257,6 +257,11 @@ Both stores follow the same lifecycle on their own files: `export-records.json` 
      - Truncates the log
 4. On quit, any pending compaction can run; otherwise the log is replayed at next launch.
 
+`drainSynchronously()` on the JSONL writer and both record stores blocks its caller
+until queued IO finishes and delivers any pending persistence failure. It must never
+be called from the writer's IO queue. Finishing the drain does not imply failed writes
+succeeded; the existing persistence state still reports those failures.
+
 ## Crash Safety
 
 - Mutations are fsynced to the log upon append; after a crash, the log is replayed.

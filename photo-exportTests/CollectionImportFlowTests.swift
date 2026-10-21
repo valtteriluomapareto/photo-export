@@ -138,8 +138,8 @@ struct CollectionImportFlowTests {
   private func reloadHeld(
     _ h: CollectionImportHarness, io: HeldReadIO, collection: Bool
   ) throws -> URL {
-    h.timeline.flushForTesting()
-    h.collections.flushForTesting()
+    h.timeline.drainSynchronously()
+    h.collections.drainSynchronously()
     let snapshot = h.snapshotURL(collection: collection)
     io.hold(snapshot)
     if collection {

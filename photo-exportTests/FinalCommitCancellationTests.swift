@@ -166,8 +166,8 @@ struct FinalCommitCancellationTests {
       manager.cancelAndClear()
       running += manager.currentPreparationTasks + [manager.currentTask].compactMap { $0 }
       for task in running { _ = await finished(task) }
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: destination.root)
       try? FileManager.default.removeItem(at: root)
       defaults.removePersistentDomain(forName: defaultsName)
