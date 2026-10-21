@@ -33,10 +33,12 @@ enum AppDiagnostics {
     signposter.emitEvent("SelectionChanged", "kind=\(kind)")
   }
 
-  /// Signposter for record-store load timing. Wraps each
-  /// `configure(for:)` body so the launch + destination-switch costs of
-  /// snapshot decode, JSONL replay, and counter rebuild can be read off
-  /// Instruments / Console.app without a Time Profiler trace.
+  /// Signposter for record-store load timing. Each `Configure` interval
+  /// spans a load from its configure call until it is installed or
+  /// discarded (for `beginConfigure(for:)`, until the store settles), so
+  /// the launch + destination-switch costs of the file read, snapshot
+  /// decode, JSONL replay, and counter rebuild can be read off Instruments /
+  /// Console.app without a Time Profiler trace.
   /// `nonisolated` so `ConfigureSignpost.end()` can dispatch from any
   /// context — `OSSignposter` is `Sendable` and the property is an
   /// immutable `let`.
@@ -45,7 +47,7 @@ enum AppDiagnostics {
     category: "RecordStore")
 
   /// Begin a `Configure` interval for the named store. Returns a handle
-  /// whose `end()` closes the interval — typically called from a `defer`.
+  /// whose `end()` closes the interval, from any thread.
   /// The handle captures the label internally so callers don't repeat it
   /// at both call sites (`"timeline"` or `"collection"`).
   static func beginConfigure(label: String) -> ConfigureSignpost {
@@ -54,7 +56,7 @@ enum AppDiagnostics {
   }
 }
 
-struct ConfigureSignpost {
+struct ConfigureSignpost: Sendable {
   fileprivate let state: OSSignpostIntervalState
   fileprivate let label: String
 

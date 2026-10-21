@@ -166,10 +166,16 @@ final class CollectionExportRecordStore: ObservableObject {
   // Only completion deltas survive a corrupt load; full snapshots must not bypass
   // the corruption alert or its explicit reset/forensic-backup path.
   private var deferredFinalCompletions: [String: [() -> Void]] = [:]
+  // Final commits acknowledged while their destination loaded, landed once it has finished.
+  private var commitsLandedWhileLoading: [String: [() -> Void]] = [:]
   private var configuredDestinationId: String?
   var destinationId: String? { configuredDestinationId }
   // Failed writes must survive destination switches until the user can retry saving.
   private var pendingRecovery: [String: Snapshot] = [:]
+  // Each configure starts a new generation; only the newest load is installed.
+  private var loadGeneration: UInt64 = 0
+  private let latestLoad = RecordStoreLoadGeneration()
+  private var settleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
   @Published private(set) var mutationCounter: Int = 0
 
@@ -216,12 +222,100 @@ final class CollectionExportRecordStore: ObservableObject {
 
   // MARK: - Destination configuration
 
-  /// Points the store at a specific destination id (subdirectory). Passing `nil` clears
-  /// in-memory state and detaches from any on-disk files.
+  /// Points the store at a specific destination id (subdirectory) and loads its history before
+  /// returning. Passing `nil` clears in-memory state and detaches from any on-disk files.
+  /// Publishes no `.loading`; the app's destination changes use `beginConfigure(for:)`.
   func configure(for destinationId: String?) {
-    reconciliationRevision &+= 1
     let signpost = AppDiagnostics.beginConfigure(label: "collection")
     defer { signpost.end() }
+    guard let file = startConfiguring(for: destinationId) else { return }
+    let inputs = file.readInputs
+    let raw = ioQueue.sync { inputs.read() }
+    let decoded = inputs.decode(raw)
+    finishLoad(
+      LoadTicket(generation: loadGeneration, file: file, signpost: nil),
+      separator: decoded.needsLogSeparator, outcome: Self.prepare(decoded, logger: logger))
+  }
+
+  /// Points the store at a specific destination id and loads its history off the main actor.
+  /// The store is `.loading` until the load finishes in one main-actor turn; records read as
+  /// empty and mutations are refused meanwhile. `waitUntilSettled()` waits for the load. The
+  /// file read is queued behind the previous destination's writes on the IO queue; decoding
+  /// and preparing run in a detached task.
+  func beginConfigure(for destinationId: String?) {
+    let signpost = AppDiagnostics.beginConfigure(label: "collection")
+    guard let file = startConfiguring(for: destinationId) else {
+      signpost.end()
+      return
+    }
+    setState(.loading)
+    changeNotifier.notifyNow()
+    let ticket = LoadTicket(generation: loadGeneration, file: file, signpost: signpost)
+    let inputs = file.readInputs
+    let latestLoad = latestLoad
+    let logger = logger
+    ioQueue.async(qos: .userInitiated, flags: .enforceQoS) { [weak self] in
+      let raw = inputs.read()
+      Task.detached(priority: .userInitiated) { [weak self] in
+        var separator: Bool?
+        var outcome: LoadOutcome?
+        if latestLoad.isCurrent(ticket.generation) {
+          let decoded = inputs.decode(raw)
+          separator = decoded.needsLogSeparator
+          outcome = Self.prepare(decoded, logger: logger)
+        }
+        await self?.finishLoad(ticket, separator: separator, outcome: outcome)
+      }
+    }
+  }
+
+  /// Returns once the store is not `.loading`, or as soon as the calling task is cancelled.
+  /// A configure that replaces the load, including one to nil, ends the wait too.
+  func waitUntilSettled() async {
+    while state == .loading, !Task.isCancelled {
+      let id = UUID()
+      await withTaskCancellationHandler {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+          if Task.isCancelled {
+            continuation.resume()
+          } else {
+            settleWaiters[id] = continuation
+          }
+        }
+      } onCancel: {
+        Task { @MainActor [weak self] in self?.settleWaiters.removeValue(forKey: id)?.resume() }
+      }
+    }
+  }
+
+  /// Loads that finished, applied or discarded. Lets tests wait on progress.
+  private(set) var finishedLoadCount = 0
+
+  /// Tasks waiting in `waitUntilSettled()`.
+  var pendingSettleWaiterCount: Int { settleWaiters.count }
+
+  /// What the current destination's load reads with.
+  var readInputs: RecordFile.ReadInputs? { jsonl?.readInputs }
+
+  /// One load: which configure started it and the file it read. Only the newest configure's
+  /// load is installed.
+  private struct LoadTicket: Sendable {
+    let generation: UInt64
+    let file: RecordFile
+    /// Ends when the load finishes; `nil` when the caller's own interval covers it.
+    let signpost: ConfigureSignpost?
+  }
+
+  private static let retainedProgressMessage =
+    "Progress from this destination still needs to be saved."
+
+  /// What every configure does before reading: drain and park the old destination, switch,
+  /// clear the in-memory history, and end there for nil or for history retained after a failed
+  /// write. Returns the new destination's file when its history still has to be read.
+  private func startConfiguring(for destinationId: String?) -> RecordFile? {
+    reconciliationRevision &+= 1
+    loadGeneration &+= 1
+    latestLoad.advance(to: loadGeneration)
 
     // Finish the old destination's queued writes before replacing its file owner.
     jsonl?.flushForTesting()
@@ -252,9 +346,9 @@ final class CollectionExportRecordStore: ObservableObject {
     guard let destinationId else {
       currentStoreDirURL = nil
       jsonl = nil
-      state = .unconfigured
+      setState(.unconfigured)
       changeNotifier.notifyNow()
-      return
+      return nil
     }
 
     let dir = storeRootURL.appendingPathComponent(destinationId, isDirectory: true)
@@ -276,7 +370,7 @@ final class CollectionExportRecordStore: ObservableObject {
       guard self.jsonl === file else { return }
       self.hasUnsavedChanges = true
       self.persistenceError = error.localizedDescription
-      self.state = .persistenceFailed
+      self.setState(.persistenceFailed)
     }
 
     if let retained = pendingRecovery[destinationId] {
@@ -284,52 +378,66 @@ final class CollectionExportRecordStore: ObservableObject {
       recordBodies = retained.records
       filenameClaims = nil
       hasUnsavedChanges = true
-      persistenceError = "Progress from this destination still needs to be saved."
-      state = .persistenceFailed
+      persistenceError = Self.retainedProgressMessage
+      setState(.persistenceFailed)
       changeNotifier.notifyNow()
+      return nil
+    }
+    return file
+  }
+
+  /// Installs a finished load in one main-actor turn, unless a newer configure replaced it.
+  /// `outcome` is nil when the load skipped decoding because it was already replaced.
+  private func finishLoad(_ ticket: LoadTicket, separator: Bool?, outcome: LoadOutcome?) {
+    defer { ticket.signpost?.end() }
+    finishedLoadCount += 1
+    guard ticket.generation == loadGeneration, ticket.file === jsonl, let outcome else {
+      logger.debug("Discarded a collection history load that a newer configure replaced")
       return
     }
-    let outcome = Self.prepare(file.load(), logger: logger)
-    finishedLoadCount += 1
-    switch outcome {
-    case .ioFailure(let error):
-      persistenceError = error.localizedDescription
-      state = .persistenceFailed
-      changeNotifier.notifyNow()
-      return
-    case .corrupt:
-      logger.error(
-        "Collection records snapshot at \(dir.appendingPathComponent(Constants.snapshotFileName).path, privacy: .public) failed to decode; store transitioning to .failed."
-      )
-      state = .failed
-    case .loaded(let prepared):
-      placements = prepared.placements
-      recordBodies = prepared.recordBodies
-      state = .ready
+    ticket.file.adoptLogSeparator(separator)
+    // A claim query during the load built its index from the empty in-memory records.
+    filenameClaims = nil
+    if let id = configuredDestinationId, let retained = pendingRecovery[id] {
+      // A final commit's write failure was parked while the load ran; its history wins.
+      placements = retained.placements
+      recordBodies = retained.records
+      hasUnsavedChanges = true
+      persistenceError = Self.retainedProgressMessage
+      setState(.persistenceFailed)
+    } else {
+      switch outcome {
+      case .ioFailure(let error):
+        persistenceError = error.localizedDescription
+        setState(.persistenceFailed)
+      case .corrupt:
+        logger.error(
+          "Collection records snapshot at \(ticket.file.snapshotURL.path, privacy: .public) failed to decode; store transitioning to .failed."
+        )
+        setState(.failed)
+      case .loaded(let prepared):
+        placements = prepared.placements
+        recordBodies = prepared.recordBodies
+        setState(.ready)
+      }
     }
     if state == .failed, finalCommitContext?.destinationId == configuredDestinationId {
       finalCommitContext?.needsCorruptionRecovery = true
     }
     replayFinalCompletions()
+    replayCommitsLandedWhileLoading()
     changeNotifier.notifyNow()
   }
 
-  /// Starts loading `destinationId`'s history. Not asynchronous yet.
-  func beginConfigure(for destinationId: String?) {
-    configure(for: destinationId)
+  /// Every state change goes through here, so leaving `.loading` by any path resumes the
+  /// tasks in `waitUntilSettled()`.
+  private func setState(_ newState: RecordStoreState) {
+    state = newState
+    guard newState != .loading, !settleWaiters.isEmpty else { return }
+    let waiters = settleWaiters
+    settleWaiters.removeAll()
+    for waiter in waiters.values { waiter.resume() }
   }
-
-  /// Returns once the store is not loading.
-  func waitUntilSettled() async {}
-
-  /// Loads that finished, applied or discarded. Lets tests wait on progress.
-  private(set) var finishedLoadCount = 0
-
-  /// Tasks waiting in `waitUntilSettled()`.
-  var pendingSettleWaiterCount: Int { 0 }
-
-  /// What the current destination's load reads with.
-  var readInputs: RecordFile.ReadInputs? { jsonl?.readInputs }
 
   /// The placements and records a successful load installs.
   struct PreparedLoad: Sendable {
@@ -400,7 +508,7 @@ final class CollectionExportRecordStore: ObservableObject {
       hasUnsavedChanges = false
       if let id = configuredDestinationId { pendingRecovery.removeValue(forKey: id) }
       persistenceError = nil
-      state = .ready
+      setState(.ready)
       replayFinalCompletions()
       changeNotifier.notifyNow()
     } catch {
@@ -433,7 +541,7 @@ final class CollectionExportRecordStore: ObservableObject {
       placements = [:]
       recordBodies = [:]
       filenameClaims = nil
-      state = .ready
+      setState(.ready)
       replayFinalCompletions()
       changeNotifier.notifyNow()
     } catch {
@@ -1012,19 +1120,16 @@ final class CollectionExportRecordStore: ObservableObject {
         return
       }
       if configuredDestinationId == destinationId {
-        if state == .persistenceFailed && !hasUnsavedChanges {
-          // The known pre-switch history is intact in the parked owner, even
-          // when its later reload was unreadable. Retry must retain the new file.
-          placements = context.snapshot.placements
-          recordBodies = context.snapshot.records
-          filenameClaims = nil
-          hasUnsavedChanges = true
-        }
-        applyCompletion(filename)
-        if state == .persistenceFailed {
-          retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
+        if state == .loading {
+          // Land against whatever the load ends in, as if the commit had arrived just after.
+          commitsLandedWhileLoading[destinationId, default: []].append { [weak self] in
+            self?.landOnActiveDestination(
+              filename, context: context, applyCompletion: applyCompletion)
+          }
           return
         }
+        guard landOnActiveDestination(filename, context: context, applyCompletion: applyCompletion)
+        else { return }
       } else {
         let done = ExportVariantRecord(
           filename: filename, status: .done, exportDate: exportedAt, lastError: nil,
@@ -1061,6 +1166,44 @@ final class CollectionExportRecordStore: ObservableObject {
     }
   }
 
+  /// Records an acknowledged final commit in the active destination's history: deferred
+  /// behind a corrupt load, added to the parked history after an unreadable reload, or
+  /// recorded. Returns whether the completion was written and its flush is still owed.
+  @discardableResult
+  private func landOnActiveDestination(
+    _ filename: String, context: FinalCommitContext<Snapshot, LogOp>,
+    applyCompletion: @escaping (String) -> Void
+  ) -> Bool {
+    if state == .failed {
+      deferredFinalCompletions[context.destinationId, default: []].append {
+        applyCompletion(filename)
+      }
+      return false
+    }
+    if state == .persistenceFailed && !hasUnsavedChanges {
+      // The known pre-switch history is intact in the parked owner, even
+      // when its later reload was unreadable. Retry must retain the new file.
+      placements = context.snapshot.placements
+      recordBodies = context.snapshot.records
+      filenameClaims = nil
+      hasUnsavedChanges = true
+    }
+    applyCompletion(filename)
+    if state == .persistenceFailed {
+      retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
+      return false
+    }
+    return true
+  }
+
+  /// Lands the final commits acknowledged while the active destination loaded. A written
+  /// completion's flush follows the store's ordinary append path.
+  private func replayCommitsLandedWhileLoading() {
+    guard let id = configuredDestinationId else { return }
+    let landings = commitsLandedWhileLoading.removeValue(forKey: id) ?? []
+    for land in landings { land() }
+  }
+
   private func replayFinalCompletions() {
     guard state == .ready, let id = configuredDestinationId else { return }
     if finalCommitContext?.destinationId == id {
@@ -1073,18 +1216,22 @@ final class CollectionExportRecordStore: ObservableObject {
   func retainFinalCommitFailure(
     _ error: any Error, context: FinalCommitContext<Snapshot, LogOp>
   ) {
-    if configuredDestinationId == context.destinationId {
+    let isActive = configuredDestinationId == context.destinationId
+    // While the destination loads, its in-memory records are empty and must not replace the
+    // commit's own snapshot; the finished load installs what is parked here.
+    let isLoading = isActive && state == .loading
+    if isActive && !isLoading {
       // Active state is already current; snapshot only on failure, avoiding a full
       // dictionary CoW on every ordinary successful file commit.
       context.snapshot = Snapshot(
         version: Constants.snapshotVersion, placements: placements, records: recordBodies)
     }
     pendingRecovery[context.destinationId] = context.snapshot
-    guard configuredDestinationId == context.destinationId else { return }
+    guard isActive, !isLoading else { return }
     reconciliationRevision &+= 1
     hasUnsavedChanges = true
     persistenceError = error.localizedDescription
-    state = .persistenceFailed
+    setState(.persistenceFailed)
     changeNotifier.notifyNow()
   }
 
