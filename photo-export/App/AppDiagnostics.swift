@@ -49,9 +49,12 @@ enum AppDiagnostics {
   /// Begin a `Configure` interval for the named store. Returns a handle
   /// whose `end()` closes the interval, from any thread.
   /// The handle captures the label internally so callers don't repeat it
-  /// at both call sites (`"timeline"` or `"collection"`).
+  /// at both call sites (`"timeline"` or `"collection"`). Each interval has
+  /// its own signpost id, so the overlapping intervals of both stores and of
+  /// a replaced load pair their begin and end correctly.
   static func beginConfigure(label: String) -> ConfigureSignpost {
-    let state = recordStoreSignposter.beginInterval("Configure", "store=\(label)")
+    let state = recordStoreSignposter.beginInterval(
+      "Configure", id: recordStoreSignposter.makeSignpostID(), "store=\(label)")
     return ConfigureSignpost(state: state, label: label)
   }
 }
