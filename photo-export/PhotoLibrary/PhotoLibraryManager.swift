@@ -6,13 +6,10 @@ import os
 
 /// Manages access to the Photos library, including authorization and asset fetching.
 ///
-/// `final` since issue #67 item 1 — `ScreenshotPhotoLibraryService` no longer inherits;
-/// it's a standalone `PhotoLibraryService` conformance, and this class accepts an
-/// optional `overrideService` at init that every `PhotoLibraryService` method forwards
-/// to when set. The structural fix closes the "new protocol method silently inherits
-/// production behavior" hole that the `ScreenshotPhotoLibraryServiceOverridesTests`
-/// gate only partially caught (it pinned existing overrides but not future-added
-/// methods).
+/// Screenshot and test libraries implement `PhotoLibraryService` independently. This
+/// class forwards service methods to an injected `overrideService` when present.
+/// Independent conformances require every protocol method to be implemented, so a new
+/// requirement cannot silently inherit production PhotoKit behavior in screenshot mode.
 @MainActor
 final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService,
   PHAssetCacheControlling
@@ -25,8 +22,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// current PhotoKit state observe this to trigger a re-fetch — without it, a user who
   /// renames an album or favorites/unfavorites a photo while the app is open would see
   /// stale data until manually re-selecting. The counter doesn't carry payload; its sole
-  /// purpose is to break SwiftUI view-update equality so the dependent `.task(id:)`
-  /// re-runs.
+  /// purpose is to signal that dependent views should refresh. Sidebar count tasks
+  /// restart with the revision; asset grids use `.onChange` to refresh in place.
   @Published var libraryRevision: Int = 0
 
   /// Issue #49: when the user turns on "Export Live Photos as paired image + video",
@@ -97,9 +94,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
   /// Optional injection point that replaces the production PhotoKit implementation on
   /// every `PhotoLibraryService` method. Set at init time and never mutated. The
-  /// screenshot run injects `ScreenshotPhotoLibraryService` here so the curated content
-  /// reaches the UI without `ScreenshotPhotoLibraryService` having to inherit from
-  /// this class (issue #67 item 1). `nil` for the production app launch.
+  /// screenshot run injects `ScreenshotPhotoLibraryService` here so its curated content
+  /// reaches the UI through composition. `nil` for the production app launch.
   ///
   /// `nonisolated(unsafe)` so the `nonisolated` PhotoLibraryService methods
   /// (`countAssets(in:)`, `countAdjustedAssets(in:)`, `cachedCountAssets(in:)`,
@@ -585,10 +581,9 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
   // MARK: - Collection scope counts (Phase 2; uncached)
 
-  /// Number of assets in a fetch scope. Phase 2 keeps these uncached. The implementation
-  /// runs the `PHFetchResult` on a detached task so the call doesn't block the main
-  /// actor. The protocol declares this `nonisolated`; we forward to a
-  /// detached-task implementation here.
+  /// Number of assets in a fetch scope, without caching. The detached fetch keeps
+  /// PhotoKit enumeration off the main actor. Call `cachedCountAssets(in:)` when
+  /// repeated reads should share the collection-count cache.
   nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
     if let s = overrideService { return try await s.countAssets(in: scope) }
     try await requireLiveAuthorizationAsync()
