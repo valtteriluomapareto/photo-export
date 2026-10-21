@@ -116,20 +116,17 @@ extension AutoSyncFailureCategory {
       default: return .unknown
       }
     case "Export":
-      return code == 2 || code == 5 ? .destinationCollision : .unknown
+      switch ExportErrorCode(rawValue: code) {
+      case .destinationAlreadyExists, .pairedOriginalFilenameConflict:
+        return .destinationCollision
+      default:
+        return .unknown
+      }
     case AVFoundationErrorDomain:
       return code == AVError.Code.diskFull.rawValue ? .destinationNoSpace : .unknown
     case NSURLErrorDomain:
-      // PhotoKit's iCloud download path surfaces NSURLError* codes.
-      switch code {
-      case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost,
-        NSURLErrorTimedOut, NSURLErrorDNSLookupFailed,
-        NSURLErrorInternationalRoamingOff, NSURLErrorCallIsActive,
-        NSURLErrorDataNotAllowed:
-        return .iCloudTransient
-      default:
-        return .iCloudTransient
-      }
+      // PhotoKit's iCloud download path forwards URL errors, including unrecognized codes.
+      return .iCloudTransient
     case "CloudPhotoLibraryErrorDomain":
       // Observed iCloud download failure; private neighboring codes remain unknown.
       return code == 1005 ? .iCloudTransient : .unknown

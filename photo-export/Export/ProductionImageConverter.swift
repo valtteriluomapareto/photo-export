@@ -62,7 +62,7 @@ struct ProductionImageConverter: ImageConverter {
   {
     guard let image = CIImage(contentsOf: sourceURL) else {
       throw NSError(
-        domain: "Export", code: 10,
+        domain: "Export", code: ExportErrorCode.imageDecodeFailed.rawValue,
         userInfo: [
           NSLocalizedDescriptionKey: "Could not decode image at \(sourceURL.lastPathComponent)"
         ])

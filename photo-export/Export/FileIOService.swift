@@ -104,14 +104,15 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
   /// Whether `error` is the collision refusal from `destinationExistsError()`.
   static func isDestinationExists(_ error: Error) -> Bool {
     let error = error as NSError
-    return error.domain == "Export" && error.code == 2
+    return error.domain == "Export"
+      && error.code == ExportErrorCode.destinationAlreadyExists.rawValue
   }
 
   /// The collision refusal, `Export` code 2. Also reported when an existing file stops
   /// being the one an export planned to adopt.
   static func destinationExistsError() -> NSError {
     NSError(
-      domain: "Export", code: 2,
+      domain: "Export", code: ExportErrorCode.destinationAlreadyExists.rawValue,
       userInfo: [NSLocalizedDescriptionKey: "Destination already exists"])
   }
 
