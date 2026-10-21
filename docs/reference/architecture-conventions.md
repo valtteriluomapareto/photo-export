@@ -70,6 +70,113 @@ The main data paths are:
    scope settings, import activity and run publications gate that work through
    `AutoSyncEnvironment`; see the [behavior reference](auto-export-behavior.md).
 
+### Object and data-flow diagram
+
+`AppCore` assembles the services below from `AppComposition`. Solid arrows show
+calls or data flow; arrows labeled **media bytes** trace exported photo/video bytes.
+Preview images reach the views separately. Dotted arrows show observation,
+scheduling or safety inputs.
+
+```mermaid
+flowchart TB
+  photos["Apple Photos / PhotoKit"]
+  views["SwiftUI views"]
+  destination["Chosen export destination<br/>media files"]
+
+  subgraph core["AppCore — configured by AppComposition"]
+    library["PhotoLibraryManager"]
+    manager["ExportManager"]
+    queue["ExportQueueCoordinator"]
+    variants["VariantExporter"]
+    producers["Resource writer / renderer / converter"]
+    filesystem["FileSystemService<br/>production: FileIOService"]
+    router["RecordStoreRouter"]
+    records["Timeline + collection record stores<br/>JSONL app state"]
+    changes["PhotoLibraryPersistentChangeAdapter"]
+    autosync["AutoSyncManager<br/>Auto Export in the UI"]
+    safety["Destination identity + safety services"]
+  end
+
+  photos -->|assets and metadata| library
+  library -->|descriptors for planning| manager
+  library -->|thumbnails and previews| views
+  views -->|manual export requests| manager
+  manager -->|planned jobs| queue
+  queue -->|dispatch via ExportManager| variants
+  variants -->|choose producer and provide stage URL| producers
+  photos -->|source media bytes| producers
+  producers -->|stage completion| variants
+  variants -->|request final move or adoption checks| filesystem
+  filesystem -->|committed media bytes| destination
+  manager -->|history queries and outcomes| router
+  variants -->|variant progress and commits| router
+  router -->|route by placement| records
+
+  photos -. persistent changes .-> changes
+  changes -. change events .-> autosync
+  safety -. destination readiness .-> autosync
+  autosync -. schedule through AutoSyncEnvironment .-> manager
+  manager -. run state and completions .-> autosync
+```
+
+The producer node represents the injected `AssetResourceWriter`, `MediaRenderer`
+and `ImageConverter` seams, backed by their production implementations. They write
+directly to the supplied stage URLs and signal completion; `VariantExporter` then
+uses `FileSystemService` for adoption checks or the final move. The production
+implementation is `FileIOService`. History is local app state under
+`AppComposition.appStateRoot`, **outside** the selected media export destination.
+AutoSync uses the same export pipeline as a manual action.
+
+The destination/safety node groups `ExportDestinationManager`,
+`DestinationSafetyMonitor` and `DestinationSnapshotAdapter`; their readiness
+snapshot reaches AutoSync through `AutoSyncEnvironment`. The environment also
+supplies scope settings, import activity and persistent AutoSync stores. Those
+inputs are omitted from the diagram to keep the main path readable; their
+contracts remain in the [Auto Export reference](auto-export-behavior.md).
+
+## Glossary
+
+- **Asset:** one item in Photos. Its `PHAsset.localIdentifier` identifies the item
+  for queries, queue jobs and export records; a filename is not an asset identity.
+- **Placement:** an export target within a destination: a timeline month,
+  Favorites, a user album or a shared album. [`ExportPlacement`](../../photo-export/Models/ExportPlacement.swift)
+  carries its kind, stable placement id and relative folder path. One asset can
+  have separate export history in several placements.
+- **Variant:** one concrete file version for an asset, such as original, edited,
+  or a Live Photo's original/edited paired video. [`ExportVariant`](../../photo-export/Models/ExportVariant.swift)
+  is distinct from the user's version-selection setting, which determines which
+  variants a job requires.
+- **Scope:** the set of Photos items a query or automatic export covers.
+  `PhotoFetchScope` describes a Photos query; `LibrarySelection` describes the UI
+  selection. Both live in [`LibrarySelection.swift`](../../photo-export/Models/LibrarySelection.swift).
+  [`AutoExportLibraryScope`](../../photo-export/Models/AutoExportLibraryScope.swift)
+  configures Timeline, Favorites, all user albums or all shared albums. A scope
+  is not a destination path or a variant.
+- **Seam:** an explicit boundary between components, usually a narrow protocol
+  allowing a test fake. Here the **cancellation seam** is the queue's generation
+  checks, and the **AutoSync seam** is the synchronous state/publication contract
+  AutoSync observes. See [cross-cutting contracts](#cross-cutting-contracts).
+- **Host:** a narrow protocol through which an extracted collaborator calls back
+  to `ExportManager` for required state changes or dependencies. The collaborator
+  keeps a weak host reference; cancellation goes directly through the queue.
+  See [the Host pattern](#extracting-a-new-collaborator-from-exportmanager).
+- **Stable logical destination id:** the persisted identity `ExportDestinationManager`
+  owns for a chosen folder. It keys both export history and per-destination
+  AutoSync state, surviving remount/path drift when the bookmark still resolves
+  to the same folder. See [destination identity](#destination-identity).
+- **Fingerprint:** current volume/path evidence about a destination. It informs
+  safety confidence and may change after a remount; it never keys per-destination
+  stores. It is distinct from the stable logical destination id.
+- **AutoSync / Auto Export:** AutoSync is the internal type/module name; **Auto Export**
+  is the name shown in the app. `AutoSyncManager` schedules work through
+  `ExportManager`, with the reducer and injected environment controlling effects.
+  See [Auto Export behavior](auto-export-behavior.md).
+- **Export history / record stores:** local metadata recording variant outcomes
+  and filenames for each destination and placement. The timeline store is
+  asset-keyed; the collection store is placement-and-asset-keyed. History enables
+  skipping completed work and rebuilding tracking through Import Existing Backup;
+  it is separate from exported media. See [persistence](persistence-store.md).
+
 ## Module responsibilities
 
 The role map names representative owners, not every type. Follow the source
