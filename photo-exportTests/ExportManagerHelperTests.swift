@@ -62,9 +62,6 @@ struct ExportManagerHelperTests {
     #expect(mgr.canExportCollection == false)
   }
 
-  /// An unconfigured timeline store blocks `startExportMonth`. Without the gate,
-  /// the pipeline would write files to disk while every `markVariant*` call silently
-  /// no-ops because the store's `state != .ready`.
   // MARK: - manualExportShouldConfirmSupersede
 
   /// Idle manager → no supersede confirmation needed; actions dispatch directly.
@@ -102,7 +99,8 @@ struct ExportManagerHelperTests {
       collectionExportRecordStore: collection,
       userDefaults: defaults)
 
-    #expect(manager.convertHEICToJPEG == false,
+    #expect(
+      manager.convertHEICToJPEG == false,
       "Toggle must default to false when nothing is persisted")
     #expect(timeline.convertHEICToJPEG == false)
     #expect(collection.convertHEICToJPEG == false)
@@ -110,11 +108,14 @@ struct ExportManagerHelperTests {
     manager.convertHEICToJPEG = true
 
     #expect(manager.convertHEICToJPEG == true)
-    #expect(timeline.convertHEICToJPEG == true,
+    #expect(
+      timeline.convertHEICToJPEG == true,
       "Manager didSet must mirror the toggle into the timeline store")
-    #expect(collection.convertHEICToJPEG == true,
+    #expect(
+      collection.convertHEICToJPEG == true,
       "Manager didSet must mirror the toggle into the collection store")
-    #expect(defaults.bool(forKey: ExportManager.convertHEICToJPEGDefaultsKey) == true,
+    #expect(
+      defaults.bool(forKey: ExportManager.convertHEICToJPEGDefaultsKey) == true,
       "Manager didSet must persist the toggle to UserDefaults")
   }
 
@@ -142,11 +143,14 @@ struct ExportManagerHelperTests {
       collectionExportRecordStore: collection,
       userDefaults: defaults)
 
-    #expect(manager.convertHEICToJPEG == true,
+    #expect(
+      manager.convertHEICToJPEG == true,
       "Manager must read the persisted toggle from UserDefaults at init")
-    #expect(timeline.convertHEICToJPEG == true,
+    #expect(
+      timeline.convertHEICToJPEG == true,
       "Manager init must mirror the persisted toggle into the timeline store")
-    #expect(collection.convertHEICToJPEG == true,
+    #expect(
+      collection.convertHEICToJPEG == true,
       "Manager init must mirror the persisted toggle into the collection store")
   }
 
@@ -163,7 +167,8 @@ struct ExportManagerHelperTests {
 
     // Fresh suite: toggle defaults off, didSet persists to defaults.
     let initial = makeManagerForTogglePersistence(userDefaults: defaults)
-    #expect(initial.livePhotosPairedExport == false,
+    #expect(
+      initial.livePhotosPairedExport == false,
       "Toggle must default to false when nothing is persisted")
     initial.livePhotosPairedExport = true
     #expect(
@@ -172,7 +177,8 @@ struct ExportManagerHelperTests {
 
     // A second manager built against the same suite reads the persisted value at init.
     let reloaded = makeManagerForTogglePersistence(userDefaults: defaults)
-    #expect(reloaded.livePhotosPairedExport == true,
+    #expect(
+      reloaded.livePhotosPairedExport == true,
       "Manager init must read the persisted toggle from UserDefaults")
   }
 
@@ -190,7 +196,8 @@ struct ExportManagerHelperTests {
     let defaults = TestScratch.defaults(suiteName: suiteName)
 
     let initial = makeManagerForTogglePersistence(userDefaults: defaults)
-    #expect(initial.videoLayout == .flat,
+    #expect(
+      initial.videoLayout == .flat,
       "Toggle must default to .flat when nothing is persisted")
     initial.videoLayout = .subfolder
     #expect(
@@ -199,7 +206,8 @@ struct ExportManagerHelperTests {
       "Manager didSet must persist the toggle's rawValue to UserDefaults")
 
     let reloaded = makeManagerForTogglePersistence(userDefaults: defaults)
-    #expect(reloaded.videoLayout == .subfolder,
+    #expect(
+      reloaded.videoLayout == .subfolder,
       "Manager init must read the persisted toggle from UserDefaults")
   }
 

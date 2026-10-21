@@ -38,7 +38,8 @@ struct ExportMonthResumeTests {
         TestAssetFactory.makeAsset(id: id, creationDate: date, hasAdjustments: edited))
       var resources = [TestAssetFactory.makeResource(type: .photo, originalFilename: "\(id).JPG")]
       if edited {
-        resources.append(TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "\(id).JPG"))
+        resources.append(
+          TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "\(id).JPG"))
       }
       library.resourcesByAssetId[id] = resources
     }
@@ -92,7 +93,9 @@ struct ExportMonthResumeTests {
       try #require(firstStarted)
       let first = try f.captureCurrentTask()
       f.manager.queueCoordinator.enqueue([
-        .init(assetLocalIdentifier: "other", placement: .timeline(year: 2025, month: 2), settings: originalSettings)
+        .init(
+          assetLocalIdentifier: "other", placement: .timeline(year: 2025, month: 2),
+          settings: originalSettings)
       ])
       f.manager.pause()
       await f.gate.release()
@@ -178,7 +181,9 @@ struct ExportMonthResumeTests {
       await f.gate.releaseAll()
       await f.manager.waitForQueueDrained()
       #expect(f.library.fetchAssetsCalls.count == scans)
-      #expect(f.writer.writeCalls.map(\.assetId) == (hasMatchingPendingJob ? ["first", "second"] : ["first"]))
+      #expect(
+        f.writer.writeCalls.map(\.assetId)
+          == (hasMatchingPendingJob ? ["first", "second"] : ["first"]))
       #expect(f.fileSystem.moveCalls.count == enqueued)
       #expect(f.manager.totalJobsCompleted == enqueued && f.manager.totalJobsEnqueued == enqueued)
       #expect(!f.manager.isPaused && !f.manager.isRunning)
@@ -201,7 +206,8 @@ struct ExportMonthResumeTests {
       case .failedStore:
         let directory = f.root.appendingPathComponent("broken")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Data("invalid json".utf8).write(to: directory.appendingPathComponent("export-records.json"))
+        try Data("invalid json".utf8).write(
+          to: directory.appendingPathComponent("export-records.json"))
         f.store.configure(for: "broken")
         let failed = f.store.state == .failed
         try #require(failed)
@@ -211,8 +217,11 @@ struct ExportMonthResumeTests {
         try #require(importing)
       }
       f.manager.queueCoordinator.pause()
-      let jobs = [ExportManager.ExportJob(
-        assetLocalIdentifier: "pending", placement: .timeline(year: 2025, month: 1), selection: .edited)]
+      let jobs = [
+        ExportManager.ExportJob(
+          assetLocalIdentifier: "pending", placement: .timeline(year: 2025, month: 1),
+          selection: .edited)
+      ]
       f.manager.queueCoordinator.enqueue(jobs)
       let generation = f.manager.generation
       f.manager.startExportMonth(year: 2025, month: 1)
@@ -230,7 +239,8 @@ struct ExportMonthResumeTests {
   }
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
-  func absentMonthUsesNormalEnqueueAndDoesNotResumeUnrelatedQueue(stalePlacement: Bool) async throws {
+  func absentMonthUsesNormalEnqueueAndDoesNotResumeUnrelatedQueue(stalePlacement: Bool) async throws
+  {
     let f = Fixture()
     do {
       f.add("finished")
@@ -248,12 +258,16 @@ struct ExportMonthResumeTests {
       let parked = !f.manager.isProcessing && f.manager.currentTask != nil && f.manager.isPaused
       try #require(parked)
       f.manager.queueCoordinator.enqueue([
-        .init(assetLocalIdentifier: "other", placement: .timeline(year: 2025, month: 2), selection: .edited)
+        .init(
+          assetLocalIdentifier: "other", placement: .timeline(year: 2025, month: 2),
+          selection: .edited)
       ])
       if stalePlacement {
         // Exercise the host seam with stale UI identifiers but no processing owner.
-        f.manager.setCurrentJob(.init(
-          assetLocalIdentifier: "finished", placement: .timeline(year: 2025, month: 3), selection: .edited))
+        f.manager.setCurrentJob(
+          .init(
+            assetLocalIdentifier: "finished", placement: .timeline(year: 2025, month: 3),
+            selection: .edited))
       }
       f.manager.startExportMonth(year: 2025, month: 3)
       await f.prepared()

@@ -53,7 +53,7 @@ struct PreparedLoadParityTests {
     let directory = copies.prepared.appendingPathComponent(destination)
     let snapshotURL = directory.appendingPathComponent(ExportRecordStore.Constants.snapshotFileName)
     let logURL = directory.appendingPathComponent(ExportRecordStore.Constants.logFileName)
-    let logger = Logger(subsystem: "test", category: "PreparedLoadParity")
+    let logger = Logger(subsystem: TestLogging.subsystem, category: "PreparedLoadParity")
     // The store's own file supplies the decoding, as the store's load does.
     let inputs = ExportRecordStore.RecordFile(
       snapshotURL: snapshotURL, logURL: logURL, ioQueue: DispatchQueue(label: "parity"),
@@ -102,7 +102,7 @@ struct PreparedLoadParityTests {
       CollectionExportRecordStore.Constants.snapshotFileName)
     let logURL = directory.appendingPathComponent(CollectionExportRecordStore.Constants.logFileName)
     let favoritesId = "collections:favorites"
-    let logger = Logger(subsystem: "test", category: "PreparedLoadParity")
+    let logger = Logger(subsystem: TestLogging.subsystem, category: "PreparedLoadParity")
     // The store's own file supplies the decoding, as the store's load does.
     let inputs = CollectionExportRecordStore.RecordFile(
       snapshotURL: snapshotURL, logURL: logURL, ioQueue: DispatchQueue(label: "parity"),

@@ -76,7 +76,10 @@ struct ReuseSourceDestinationErrorTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "shared")
     photoLib.assetsByYearMonth["2025-3"] = [asset]
@@ -127,7 +130,10 @@ struct ReuseSourceDestinationErrorTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "shared")
     photoLib.assetsByYearMonth["2025-4"] = [asset]

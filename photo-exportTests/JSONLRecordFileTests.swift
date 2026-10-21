@@ -16,7 +16,7 @@ struct JSONLRecordFileTests {
     var records: [String: String]
   }
 
-  private struct Op: Codable, Sendable, Equatable {
+  private struct Operation: Codable, Sendable, Equatable {
     enum Kind: String, Codable { case upsert, delete }
     let kind: Kind
     let key: String
@@ -24,16 +24,16 @@ struct JSONLRecordFileTests {
   }
 
   private func makeStore() throws -> (
-    URL, JSONLRecordFile<Snapshot, Op>, DispatchQueue
+    URL, JSONLRecordFile<Snapshot, Operation>, DispatchQueue
   ) {
     let dir = TestScratch.directory("JSONLRecordFile")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let queue = DispatchQueue(label: "JSONLRecordFile-test-\(UUID().uuidString)", qos: .utility)
-    let file = JSONLRecordFile<Snapshot, Op>(
+    let file = JSONLRecordFile<Snapshot, Operation>(
       snapshotURL: dir.appendingPathComponent("snapshot.json"),
       logURL: dir.appendingPathComponent("log.jsonl"),
       ioQueue: queue,
-      logger: Logger(subsystem: "test", category: "JSONLRecordFile")
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile")
     )
     return (dir, file, queue)
   }
@@ -58,8 +58,8 @@ struct JSONLRecordFileTests {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let op1 = Op(kind: .upsert, key: "a", value: "1")
-    let op2 = Op(kind: .upsert, key: "b", value: "2")
+    let op1 = Operation(kind: .upsert, key: "a", value: "1")
+    let op2 = Operation(kind: .upsert, key: "b", value: "2")
     file.append(op1, currentSnapshot: { Snapshot(records: ["a": "1"]) })
     file.append(op2, currentSnapshot: { Snapshot(records: ["a": "1", "b": "2"]) })
     file.flushForTesting()
@@ -76,17 +76,17 @@ struct JSONLRecordFileTests {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let op = Op(kind: .upsert, key: "a", value: "1")
+    let op = Operation(kind: .upsert, key: "a", value: "1")
     file.append(op, currentSnapshot: { Snapshot(records: ["a": "1"]) })
     file.flushForTesting()
 
     // Inject a malformed line into the log.
     let logURL = dir.appendingPathComponent("log.jsonl")
     var logBytes = try Data(contentsOf: logURL)
-    logBytes.append("not-json\n".data(using: .utf8)!)
+    logBytes.append(Data("not-json\n".utf8))
     try logBytes.write(to: logURL)
     // Append another good line after the malformed one.
-    let op2 = Op(kind: .upsert, key: "b", value: "2")
+    let op2 = Operation(kind: .upsert, key: "b", value: "2")
     file.append(op2, currentSnapshot: { Snapshot(records: ["a": "1", "b": "2"]) })
     file.flushForTesting()
 
@@ -101,7 +101,7 @@ struct JSONLRecordFileTests {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let op = Op(kind: .upsert, key: "a", value: "1")
+    let op = Operation(kind: .upsert, key: "a", value: "1")
     file.append(op, currentSnapshot: { emptySnapshot() })
     file.flushForTesting()
 
@@ -139,7 +139,7 @@ struct JSONLRecordFileTests {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    let op = Op(kind: .upsert, key: "a", value: "1")
+    let op = Operation(kind: .upsert, key: "a", value: "1")
     file.append(op, currentSnapshot: { emptySnapshot() })
     try file.writeSnapshot(Snapshot(records: ["a": "1"]))
     file.flushForTesting()
@@ -172,8 +172,8 @@ struct JSONLRecordFileTests {
     // on the last line. The historical line reader returned the
     // unterminated tail as a final line; bulk-read must preserve that
     // behaviour so a crash mid-write doesn't drop the last durable line.
-    let op1Data = try JSONEncoder().encode(Op(kind: .upsert, key: "a", value: "1"))
-    let op2Data = try JSONEncoder().encode(Op(kind: .upsert, key: "b", value: "2"))
+    let op1Data = try JSONEncoder().encode(Operation(kind: .upsert, key: "a", value: "1"))
+    let op2Data = try JSONEncoder().encode(Operation(kind: .upsert, key: "b", value: "2"))
     var bytes = Data()
     bytes.append(op1Data)
     bytes.append(0x0A)
@@ -184,8 +184,8 @@ struct JSONLRecordFileTests {
     let result = file.load()
     #expect(
       result.ops == [
-        Op(kind: .upsert, key: "a", value: "1"),
-        Op(kind: .upsert, key: "b", value: "2"),
+        Operation(kind: .upsert, key: "a", value: "1"),
+        Operation(kind: .upsert, key: "b", value: "2"),
       ])
     #expect(result.malformedLineCount == 0)
   }
@@ -198,8 +198,8 @@ struct JSONLRecordFileTests {
     // lines — they're zero-byte separators, not zero-byte JSON. The bulk
     // reader's `split(separator:omittingEmptySubsequences:)` defaults to
     // dropping empty subsequences; this test pins that contract.
-    let op1Data = try JSONEncoder().encode(Op(kind: .upsert, key: "a", value: "1"))
-    let op2Data = try JSONEncoder().encode(Op(kind: .upsert, key: "b", value: "2"))
+    let op1Data = try JSONEncoder().encode(Operation(kind: .upsert, key: "a", value: "1"))
+    let op2Data = try JSONEncoder().encode(Operation(kind: .upsert, key: "b", value: "2"))
     var bytes = Data()
     bytes.append(op1Data)
     bytes.append(contentsOf: [0x0A, 0x0A, 0x0A])  // three newlines
@@ -211,8 +211,8 @@ struct JSONLRecordFileTests {
     let result = file.load()
     #expect(
       result.ops == [
-        Op(kind: .upsert, key: "a", value: "1"),
-        Op(kind: .upsert, key: "b", value: "2"),
+        Operation(kind: .upsert, key: "a", value: "1"),
+        Operation(kind: .upsert, key: "b", value: "2"),
       ])
     #expect(result.malformedLineCount == 0)
   }
@@ -243,10 +243,10 @@ struct JSONLRecordFileTests {
     defer { try? FileManager.default.removeItem(at: dir) }
 
     // Stuff `compactEveryNMutations` ops through. The last one triggers compaction.
-    let n = JSONLRecordFile<Snapshot, Op>.Constants.compactEveryNMutations
+    let n = JSONLRecordFile<Snapshot, Operation>.Constants.compactEveryNMutations
     var rolling: [String: String] = [:]
     for i in 0..<n {
-      let op = Op(kind: .upsert, key: "k\(i)", value: "v\(i)")
+      let op = Operation(kind: .upsert, key: "k\(i)", value: "v\(i)")
       rolling["k\(i)"] = "v\(i)"
       let captured = rolling
       file.append(op, currentSnapshot: { Snapshot(records: captured) })

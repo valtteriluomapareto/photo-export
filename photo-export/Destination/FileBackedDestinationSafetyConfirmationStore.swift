@@ -17,8 +17,7 @@ final class FileBackedDestinationSafetyConfirmationStore:
   init(
     baseDirectoryURL: URL,
     fileManager: FileManager = .default,
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "DestinationSafety")
+    logger: Logger = Logger.app(.destinationSafety)
   ) {
     self.baseDirectoryURL = baseDirectoryURL
     self.fileManager = fileManager

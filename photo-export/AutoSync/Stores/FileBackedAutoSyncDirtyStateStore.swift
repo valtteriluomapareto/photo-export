@@ -17,8 +17,7 @@ final class FileBackedAutoSyncDirtyStateStore: AutoSyncDirtyStateStore {
     baseDirectoryURL: URL,
     fileManager: FileManager = .default,
     io: any AutoSyncMetadataFileIO = ProductionAutoSyncMetadataFileIO(),
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "AutoSyncDirtyStore")
+    logger: Logger = Logger.app(.autoSyncDirtyStore)
   ) {
     self.baseDirectoryURL = baseDirectoryURL
     self.fileManager = fileManager

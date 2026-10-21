@@ -51,21 +51,21 @@ struct JSONLRecordFileRollbackTests {
     }
   }
 
-  fileprivate struct Op: Codable, Sendable, Equatable {
+  fileprivate struct Operation: Codable, Sendable, Equatable {
     let key: String
     let value: String
   }
 
   private func makeStore(at dir: URL) -> (
-    JSONLRecordFile<ConditionalSnapshot, Op>, DispatchQueue
+    JSONLRecordFile<ConditionalSnapshot, Operation>, DispatchQueue
   ) {
     let queue = DispatchQueue(
       label: "JSONLRecordFile-rollback-\(UUID().uuidString)", qos: .utility)
-    let file = JSONLRecordFile<ConditionalSnapshot, Op>(
+    let file = JSONLRecordFile<ConditionalSnapshot, Operation>(
       snapshotURL: dir.appendingPathComponent("snapshot.json"),
       logURL: dir.appendingPathComponent("log.jsonl"),
       ioQueue: queue,
-      logger: Logger(subsystem: "test", category: "JSONLRecordFile-rollback")
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile-rollback")
     )
     return (file, queue)
   }
@@ -73,7 +73,7 @@ struct JSONLRecordFileRollbackTests {
   /// `flushForTesting` drains `ioQueue` synchronously, but the rollback hops
   /// back through `Task { @MainActor }`. Yielding gives that hop a chance to
   /// run on the main actor before the test continues.
-  private func drainIOAndRollbacks(_ file: JSONLRecordFile<ConditionalSnapshot, Op>)
+  private func drainIOAndRollbacks(_ file: JSONLRecordFile<ConditionalSnapshot, Operation>)
     async
   {
     file.flushForTesting()
@@ -100,13 +100,13 @@ struct JSONLRecordFileRollbackTests {
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let (file, _) = makeStore(at: dir)
-    let n = JSONLRecordFile<ConditionalSnapshot, Op>.Constants.compactEveryNMutations
+    let n = JSONLRecordFile<ConditionalSnapshot, Operation>.Constants.compactEveryNMutations
     let snapshotURL = dir.appendingPathComponent("snapshot.json")
 
     // Drive (n - 1) ops with non-throwing snapshots.
     var rolling: [String: String] = [:]
     for i in 0..<(n - 1) {
-      let op = Op(key: "k\(i)", value: "v\(i)")
+      let op = Operation(key: "k\(i)", value: "v\(i)")
       rolling["k\(i)"] = "v\(i)"
       let frozen = rolling
       file.append(op, currentSnapshot: { ConditionalSnapshot(records: frozen) })
@@ -117,7 +117,7 @@ struct JSONLRecordFileRollbackTests {
     // Threshold-crossing append with a throwing snapshot. The encode fails on
     // ioQueue; rollback dispatches back to MainActor and sets the counter to
     // compactEveryNMutations - 1.
-    let crossing = Op(key: "crossing", value: "v")
+    let crossing = Operation(key: "crossing", value: "v")
     rolling["crossing"] = "v"
     let frozenCrossing = rolling
     file.append(
@@ -139,7 +139,7 @@ struct JSONLRecordFileRollbackTests {
     // One more append with a non-throwing snapshot. If the rollback fired, the
     // counter is at compactEveryNMutations - 1, so this single append re-crosses
     // the threshold and compacts successfully.
-    let retry = Op(key: "retry", value: "v")
+    let retry = Operation(key: "retry", value: "v")
     rolling["retry"] = "v"
     let frozenRetry = rolling
     file.append(retry, currentSnapshot: { ConditionalSnapshot(records: frozenRetry) })
@@ -177,14 +177,14 @@ struct JSONLRecordFileRollbackTests {
 
     let queue = DispatchQueue(
       label: "JSONLRecordFile-logfail-\(UUID().uuidString)", qos: .utility)
-    let file = JSONLRecordFile<ConditionalSnapshot, Op>(
+    let file = JSONLRecordFile<ConditionalSnapshot, Operation>(
       snapshotURL: nonexistentDir.appendingPathComponent("snapshot.json"),
       logURL: nonexistentDir.appendingPathComponent("log.jsonl"),
       ioQueue: queue,
-      logger: Logger(subsystem: "test", category: "JSONLRecordFile-logfail")
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile-logfail")
     )
 
-    let op = Op(key: "k", value: "v")
+    let op = Operation(key: "k", value: "v")
     file.append(op, currentSnapshot: { ConditionalSnapshot() })
     await drainIOAndRollbacks(file)
 
@@ -201,7 +201,7 @@ struct JSONLRecordFileRollbackTests {
     // the missing first operation still exists only in the owner's memory.
     try FileManager.default.createDirectory(
       at: nonexistentDir, withIntermediateDirectories: true)
-    let recovered = Op(key: "ok", value: "v")
+    let recovered = Operation(key: "ok", value: "v")
     file.append(recovered, currentSnapshot: { ConditionalSnapshot() })
     await drainIOAndRollbacks(file)
     #expect(file.load().ops.isEmpty)
@@ -209,7 +209,7 @@ struct JSONLRecordFileRollbackTests {
     // The owner retries by saving its complete retained state. Subsequent appends now
     // proceed, and reopening recovers both the originally failed and later operation.
     try file.writeSnapshot(ConditionalSnapshot(records: ["k": "v", "ok": "v"]))
-    let afterRecovery = Op(key: "later", value: "v")
+    let afterRecovery = Operation(key: "later", value: "v")
     file.append(afterRecovery, currentSnapshot: { ConditionalSnapshot() })
     await drainIOAndRollbacks(file)
 

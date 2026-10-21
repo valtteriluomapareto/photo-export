@@ -4,7 +4,7 @@ import Testing
 
 @testable import Photo_Export
 
-/// Tests for the `ExportPlacementPathPolicy` helper (issue #38). Two pure functions:
+/// Tests for the `ExportMediaPathPolicy` helper (issue #38). Two pure functions:
 ///
 /// - `subfolder(for:layout:)` decides whether an asset's variants go into a `videos/`
 ///   subfolder inside the placement. Keys on the asset's `mediaType`, NOT the variant
@@ -12,14 +12,14 @@ import Testing
 ///   with its still — only standalone-video assets move.
 /// - `relativePath(placement:subfolder:)` is path arithmetic; reused by reuse-source,
 ///   reconcile, and the chokepoint in `ExportManager.runJob`.
-struct ExportPlacementPathPolicyTests {
+struct ExportMediaPathPolicyTests {
 
   // MARK: - subfolder(for:layout:)
 
   @Test func subfolderFlatLayoutAlwaysNil() {
     // Flat layout never produces a subfolder regardless of mediaType.
     for mediaType: PHAssetMediaType in [.image, .video, .audio, .unknown] {
-      #expect(ExportPlacementPathPolicy.subfolder(for: mediaType, layout: .flat) == nil)
+      #expect(ExportMediaPathPolicy.subfolder(for: mediaType, layout: .flat) == nil)
     }
   }
 
@@ -28,22 +28,22 @@ struct ExportPlacementPathPolicyTests {
   /// belongs to an image asset and must NOT move into videos/, or it would split the
   /// still + motion pair across folders and break on-disk Live Photo pairing.
   @Test func subfolderSubfolderLayoutImageReturnsNil() {
-    #expect(ExportPlacementPathPolicy.subfolder(for: .image, layout: .subfolder) == nil)
+    #expect(ExportMediaPathPolicy.subfolder(for: .image, layout: .subfolder) == nil)
   }
 
   @Test func subfolderSubfolderLayoutVideoReturnsVideos() {
-    #expect(ExportPlacementPathPolicy.subfolder(for: .video, layout: .subfolder) == "videos")
+    #expect(ExportMediaPathPolicy.subfolder(for: .video, layout: .subfolder) == "videos")
   }
 
   @Test func subfolderSubfolderLayoutAudioReturnsNil() {
     // Audio assets fall through; the subfolder rule only fires for `mediaType == .video`.
-    #expect(ExportPlacementPathPolicy.subfolder(for: .audio, layout: .subfolder) == nil)
+    #expect(ExportMediaPathPolicy.subfolder(for: .audio, layout: .subfolder) == nil)
   }
 
   @Test func subfolderSubfolderLayoutUnknownReturnsNil() {
     // `.unknown` mediaType falls through to nil. Pins that any future mediaType added
     // by PhotoKit defaults to bare placement until explicitly opted in.
-    #expect(ExportPlacementPathPolicy.subfolder(for: .unknown, layout: .subfolder) == nil)
+    #expect(ExportMediaPathPolicy.subfolder(for: .unknown, layout: .subfolder) == nil)
   }
 
   // MARK: - relativePath(placement:subfolder:)
@@ -56,7 +56,7 @@ struct ExportPlacementPathPolicyTests {
     let sharedAlbum = makeSharedAlbumPlacement()
     for placement in [timeline, favorites, album, sharedAlbum] {
       #expect(
-        ExportPlacementPathPolicy.relativePath(placement: placement, subfolder: nil)
+        ExportMediaPathPolicy.relativePath(placement: placement, subfolder: nil)
           == placement.relativePath)
     }
   }
@@ -65,21 +65,21 @@ struct ExportPlacementPathPolicyTests {
   @Test func relativePathEmptySubfolderTreatedAsNil() {
     let timeline = ExportPlacement.timeline(year: 2026, month: 3)
     #expect(
-      ExportPlacementPathPolicy.relativePath(placement: timeline, subfolder: "")
+      ExportMediaPathPolicy.relativePath(placement: timeline, subfolder: "")
         == timeline.relativePath)
   }
 
   @Test func relativePathVideosSubfolderTimeline() {
     let timeline = ExportPlacement.timeline(year: 2026, month: 3)
     #expect(
-      ExportPlacementPathPolicy.relativePath(placement: timeline, subfolder: "videos")
+      ExportMediaPathPolicy.relativePath(placement: timeline, subfolder: "videos")
         == "2026/03/videos/")
   }
 
   @Test func relativePathVideosSubfolderFavorites() {
     let favorites = ExportPlacement.favorites()
     #expect(
-      ExportPlacementPathPolicy.relativePath(placement: favorites, subfolder: "videos")
+      ExportMediaPathPolicy.relativePath(placement: favorites, subfolder: "videos")
         == "Collections/Favorites/videos/")
   }
 
@@ -87,14 +87,14 @@ struct ExportPlacementPathPolicyTests {
     let album = makeAlbumPlacement()
     let expected = album.relativePath + "videos/"
     #expect(
-      ExportPlacementPathPolicy.relativePath(placement: album, subfolder: "videos") == expected)
+      ExportMediaPathPolicy.relativePath(placement: album, subfolder: "videos") == expected)
   }
 
   @Test func relativePathVideosSubfolderSharedAlbum() {
     let sharedAlbum = makeSharedAlbumPlacement()
     let expected = sharedAlbum.relativePath + "videos/"
     #expect(
-      ExportPlacementPathPolicy.relativePath(placement: sharedAlbum, subfolder: "videos")
+      ExportMediaPathPolicy.relativePath(placement: sharedAlbum, subfolder: "videos")
         == expected)
   }
 

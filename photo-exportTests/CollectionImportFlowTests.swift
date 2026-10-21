@@ -10,7 +10,7 @@ import Testing
 @MainActor
 @Suite(.timeLimit(.minutes(2)))
 struct CollectionImportFlowTests {
-  typealias F = CollectionBackupFixture
+  typealias Fixture = CollectionBackupFixture
 
   /// A timeline file, an album file for the same asset, a second album, and history that an
   /// import would change: a timeline record and an album record whose files are missing.
@@ -18,30 +18,31 @@ struct CollectionImportFlowTests {
     _ label: String, recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
   ) throws -> CollectionImportHarness {
     let h = CollectionImportHarness(label, recordLogIO: recordLogIO)
-    h.library.collectionTree = [F.album("paris", "Paris"), F.album("rome", "Rome")]
-    let both = h.addAsset("both", "IMG_0001.JPG", date: F.date(1))
-    let romeOnly = h.addAsset("rome-1", "IMG_0002.JPG", date: F.date(2))
-    let month = Calendar.current.dateComponents([.year, .month], from: F.date(1))
+    h.library.collectionTree = [Fixture.album("paris", "Paris"), Fixture.album("rome", "Rome")]
+    let both = h.addAsset("both", "IMG_0001.JPG", date: Fixture.date(1))
+    let romeOnly = h.addAsset("rome-1", "IMG_0002.JPG", date: Fixture.date(2))
+    let month = Calendar.current.dateComponents([.year, .month], from: Fixture.date(1))
     h.library.assetsByYearMonth["\(month.year!)-\(month.month!)"] = [both]
     h.library.assetsByAlbumLocalId["paris"] = [both]
     h.library.assetsByAlbumLocalId["rome"] = [romeOnly]
     let monthPath = "\(month.year!)/" + String(format: "%02d", month.month!) + "/"
-    try F.plant(at: h.root, monthPath, "IMG_0001.JPG", date: F.date(1))
-    try F.plant(at: h.root, "Collections/Albums/Paris/", "IMG_0001.JPG", date: F.date(1))
-    try F.plant(at: h.root, "Collections/Albums/Rome/", "IMG_0002.JPG", date: F.date(2))
-    try F.plant(at: h.root, "Collections/Albums/Old Trip/", "OLD.JPG", date: F.date(9))
+    try Fixture.plant(at: h.root, monthPath, "IMG_0001.JPG", date: Fixture.date(1))
+    try Fixture.plant(
+      at: h.root, "Collections/Albums/Paris/", "IMG_0001.JPG", date: Fixture.date(1))
+    try Fixture.plant(at: h.root, "Collections/Albums/Rome/", "IMG_0002.JPG", date: Fixture.date(2))
+    try Fixture.plant(at: h.root, "Collections/Albums/Old Trip/", "OLD.JPG", date: Fixture.date(9))
 
     h.timeline.markVariantExported(
       assetId: "missing", variant: .original, year: 2020, month: 1, relPath: "2020/01/",
-      filename: "MISSING.JPG", exportedAt: F.date(5))
+      filename: "MISSING.JPG", exportedAt: Fixture.date(5))
     let stale = ExportPlacement(
       kind: .album, id: "collections:album:0000000000000000:00000000", displayName: "Gone",
       collectionLocalIdentifier: "gone", relativePath: "Collections/Albums/Gone/",
-      createdAt: F.date(5))
+      createdAt: Fixture.date(5))
     h.collections.upsertPlacement(stale)
     h.collections.markVariantExported(
       assetId: "missing", placement: stale, variant: .original, filename: "MISSING.JPG",
-      exportedAt: F.date(5))
+      exportedAt: Fixture.date(5))
     return h
   }
 
@@ -304,11 +305,11 @@ struct CollectionImportFlowTests {
   /// folders in it are adopted too.
   @Test func sameFolderCheckAdoptsAlbumHistory() async throws {
     let h = try makeScenario("CollectionImportSameFolder")
-    let month = Calendar.current.dateComponents([.year, .month], from: F.date(1))
+    let month = Calendar.current.dateComponents([.year, .month], from: Fixture.date(1))
     let monthPath = "\(month.year!)/" + String(format: "%02d", month.month!) + "/"
     h.timeline.markVariantExported(
       assetId: "both", variant: .original, year: month.year!, month: month.month!,
-      relPath: monthPath, filename: "IMG_0001.JPG", exportedAt: F.date(1))
+      relPath: monthPath, filename: "IMG_0001.JPG", exportedAt: Fixture.date(1))
 
     h.manager.startImportForConfirmedSameFolder()
     await h.manager.waitForImportCompletion()
@@ -326,8 +327,8 @@ struct CollectionImportFlowTests {
     let h = try makeScenario("CollectionImportReexport")
     await h.importBackup()
     try #require(h.manager.importError == nil)
-    let listing = try F.listing(of: h.root)
-    let month = Calendar.current.dateComponents([.year, .month], from: F.date(1))
+    let listing = try Fixture.listing(of: h.root)
+    let month = Calendar.current.dateComponents([.year, .month], from: Fixture.date(1))
 
     h.manager.startExportMonth(year: month.year!, month: month.month!)
     await h.manager.waitForQueueDrained()
@@ -337,22 +338,23 @@ struct CollectionImportFlowTests {
     #expect(h.writer.writeCalls.isEmpty)
     #expect(h.fileSystem.copyCalls.isEmpty)
     #expect(h.fileSystem.moveCalls.isEmpty)
-    #expect(try F.listing(of: h.root) == listing)
+    #expect(try Fixture.listing(of: h.root) == listing)
     await h.cleanup()
   }
 
   /// An album that kept 2 of the 10 photos it was exported with keeps its folder.
   @Test func albumThatLostMostOfItsPhotosKeepsItsFolder() async throws {
     let h = CollectionImportHarness("CollectionImportShrunkAlbum")
-    h.library.collectionTree = [F.album("trip", "Trip")]
+    h.library.collectionTree = [Fixture.album("trip", "Trip")]
     var kept: [AssetDescriptor] = []
     for index in 1...10 {
-      let asset = h.addAsset("a\(index)", "IMG_\(index).JPG", date: F.date(index))
+      let asset = h.addAsset("a\(index)", "IMG_\(index).JPG", date: Fixture.date(index))
       if index <= 2 { kept.append(asset) }
-      try F.plant(at: h.root, "Collections/Albums/Trip/", "IMG_\(index).JPG", date: F.date(index))
+      try Fixture.plant(
+        at: h.root, "Collections/Albums/Trip/", "IMG_\(index).JPG", date: Fixture.date(index))
     }
     h.library.assetsByAlbumLocalId["trip"] = kept
-    let listing = try F.listing(of: h.root)
+    let listing = try Fixture.listing(of: h.root)
 
     await h.importBackup()
     #expect(h.manager.importResult?.collectionMatchedCount == 2)
@@ -362,7 +364,7 @@ struct CollectionImportFlowTests {
 
     #expect(h.writer.writeCalls.isEmpty)
     #expect(h.fileSystem.copyCalls.isEmpty)
-    #expect(try F.listing(of: h.root) == listing)
+    #expect(try Fixture.listing(of: h.root) == listing)
     await h.cleanup()
   }
 
@@ -371,10 +373,10 @@ struct CollectionImportFlowTests {
   /// is not adopted and is reported.
   @Test func caseVariantFolderIsAdoptedOnlyWhereTheVolumeIgnoresCase() async throws {
     let h = CollectionImportHarness("CollectionImportCaseVariant")
-    h.library.collectionTree = [F.album("trip", "Trip")]
-    let asset = h.addAsset("a1", "IMG_1.JPG", date: F.date(1))
+    h.library.collectionTree = [Fixture.album("trip", "Trip")]
+    let asset = h.addAsset("a1", "IMG_1.JPG", date: Fixture.date(1))
     h.library.assetsByAlbumLocalId["trip"] = [asset]
-    try F.plant(at: h.root, "Collections/Albums/trip/", "IMG_1.JPG", date: F.date(1))
+    try Fixture.plant(at: h.root, "Collections/Albums/trip/", "IMG_1.JPG", date: Fixture.date(1))
     let caseSensitive = try #require(
       try h.root.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
         .volumeSupportsCaseSensitiveNames)
@@ -407,7 +409,7 @@ struct CollectionImportFlowTests {
   @Test func destinationTeardownDuringAlbumMatchingStopsAlbumReads() async throws {
     let h = try makeScenario("CollectionImportTeardown")
     // An asset only in Paris, so its resources are read only if Paris is fingerprinted.
-    let parisOnly = h.addAsset("paris-only", "IMG_0003.JPG", date: F.date(3))
+    let parisOnly = h.addAsset("paris-only", "IMG_0003.JPG", date: Fixture.date(3))
     h.library.assetsByAlbumLocalId["paris", default: []].append(parisOnly)
     let gate = AsyncCheckpoint()
     h.library.fetchAssetsCheckpointByAlbumId["paris"] = gate

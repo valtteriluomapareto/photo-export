@@ -16,8 +16,7 @@ final class FileBackedAutoSyncPerDestinationTokenStore: AutoSyncPerDestinationTo
   init(
     baseDirectoryURL: URL,
     fileManager: FileManager = .default,
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "AutoSyncPerDestTokenStore")
+    logger: Logger = Logger.app(.autoSyncPerDestTokenStore)
   ) {
     self.baseDirectoryURL = baseDirectoryURL
     self.fileManager = fileManager

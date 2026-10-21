@@ -13,7 +13,7 @@ import Foundation
 ///   disambiguation; cross-tree case-only collisions are not detected.
 /// - Component length: common filesystems allow 255 bytes per component; album titles longer
 ///   than that are not realistic and are passed through unchanged.
-enum ExportPathPolicy {
+enum CollectionPathComponentPolicy {
   /// Path separators plus Windows/exFAT bans. Each gets replaced with `_`. Control
   /// characters (`0x00…0x1F`, `0x7F`) are also replaced.
   private static let bannedScalars: Set<Unicode.Scalar> = [

@@ -164,7 +164,7 @@ Run the same enforcing style checks as CI from the repository root:
 swiftlint --strict
 # If the sandbox blocks the default cache:
 swiftlint --strict --cache-path build/swiftlint-cache
-swift-format lint --strict --configuration .swift-format.json --recursive photo-export
+bash scripts/ci/check-swift-format.sh
 ```
 
 SwiftLint's thresholds and exclusions are defined in [`.swiftlint.yml`](.swiftlint.yml).
@@ -172,8 +172,9 @@ Its line-length warning threshold is 500 characters and its error threshold is 7
 Strict mode makes warnings fail the check. The formatter uses two-space indentation
 and 100 columns, preserving the style previously applied by its defaults. `.swift-format.json` must be passed explicitly;
 automatic discovery uses a different filename. To apply formatting, run
-`swift-format format --configuration .swift-format.json --recursive --in-place photo-export`
-and review the diff. The formatter check covers app sources only.
+`swift-format format --configuration .swift-format.json --recursive --in-place photo-export photo-exportTests`
+and review the diff. Both linters cover app and unit-test sources; the template
+UI-test target stays outside their scope.
 
 Reproduce CI's Debug compiler-warning check:
 

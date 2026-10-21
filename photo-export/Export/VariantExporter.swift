@@ -52,8 +52,7 @@ final class VariantExporter {
 
   // MARK: - Dependencies
 
-  private let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "VariantExporter")
+  private let logger = Logger.app(.variantExporter)
   private weak var host: Host?
   /// Cancellation seam. A weak reference keeps collaborator lifetimes bounded by
   /// their shared owner, `ExportManager`.
@@ -246,7 +245,7 @@ final class VariantExporter {
       assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
       let destinationRoot = exportDestination.selectedFolderURL
     {
-      let sourceRelPath = ExportPlacementPathPolicy.relativePath(
+      let sourceRelPath = ExportMediaPathPolicy.relativePath(
         placement: reuse.placement, subfolder: reuse.subfolder)
       reuseSource = (
         destinationRoot.appendingPathComponent(sourceRelPath, isDirectory: true)

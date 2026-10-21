@@ -57,7 +57,7 @@ struct ProductionAssetResourceWriter: AssetResourceWriter {
     private static func assetNotFoundError() -> NSError {
       NSError(
         domain: "Export",
-        code: 3,
+        code: ExportErrorCode.assetNotFoundForResourceWrite.rawValue,
         userInfo: [NSLocalizedDescriptionKey: "Asset not found for resource write"]
       )
     }
@@ -65,14 +65,13 @@ struct ProductionAssetResourceWriter: AssetResourceWriter {
     private static func resourceNotFoundError() -> NSError {
       NSError(
         domain: "Export",
-        code: 4,
+        code: ExportErrorCode.matchingResourceNotFound.rawValue,
         userInfo: [NSLocalizedDescriptionKey: "Matching PHAssetResource not found"]
       )
     }
   }
 
-  private static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "ResourceWriter")
+  private static let logger = Logger.app(.resourceWriter)
   private let backend: Backend
 
   init(backend: Backend = .live) {

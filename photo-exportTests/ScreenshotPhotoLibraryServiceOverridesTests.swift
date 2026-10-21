@@ -32,19 +32,23 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
   @Test func fetchAssetsForYearMonthReturnsCuratedData() async throws {
     let svc = ScreenshotPhotoLibraryService()
     let years = try svc.availableYears()
-    #expect(!years.isEmpty,
+    #expect(
+      !years.isEmpty,
       "screenshot mode must surface curated years; an empty list means the override didn't take")
     let firstYear = try #require(years.first)
     let yearAssets = try await svc.fetchAssets(year: firstYear, month: nil, mediaType: nil)
-    #expect(!yearAssets.isEmpty,
-      "fetchAssets(year:month:) must return curated synthetic assets, not an empty production result")
+    #expect(
+      !yearAssets.isEmpty,
+      "fetchAssets(year:month:) must return curated synthetic assets, not an empty production result"
+    )
   }
 
   @Test func availableYearsWithCountsReturnsCuratedData() throws {
     let svc = ScreenshotPhotoLibraryService()
     let counts = try svc.availableYearsWithCounts()
     #expect(!counts.isEmpty)
-    #expect(counts.allSatisfy { $0.count > 0 },
+    #expect(
+      counts.allSatisfy { $0.count > 0 },
       "every screenshot year must surface a non-zero curated count")
   }
 
@@ -76,16 +80,19 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     let kinds = Set(tree.map(\.kind))
     #expect(kinds.contains(.favorites))
     #expect(kinds.contains(.album))
-    #expect(kinds.contains(.folder),
+    #expect(
+      kinds.contains(.folder),
       "tree must include the Trips folder so folder-export surfaces in marketing captures")
-    #expect(kinds.contains(.sharedAlbum),
+    #expect(
+      kinds.contains(.sharedAlbum),
       "tree must include the shared-album entry (issue #48) so the Shared Albums section renders")
   }
 
   @Test func fetchAssetsInFavoritesScopeReturnsCuratedFavorites() async throws {
     let svc = ScreenshotPhotoLibraryService()
     let favs = try await svc.fetchAssets(in: .favorites, mediaType: nil)
-    #expect(!favs.isEmpty,
+    #expect(
+      !favs.isEmpty,
       "favorites scope must surface curated synthetic favorites, not empty production result")
   }
 
@@ -109,8 +116,10 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     let svc = ScreenshotPhotoLibraryService()
     let total = try await svc.countAssets(in: .favorites)
     let adjusted = try await svc.countAdjustedAssets(in: .favorites)
-    #expect(adjusted == max(0, total / 4),
-      "screenshot adjusted count must follow the curated max(0, total / 4) shape; any other value means the production path ran (which would throw `authorizationDenied` in unit tests)")
+    #expect(
+      adjusted == max(0, total / 4),
+      "screenshot adjusted count must follow the curated max(0, total / 4) shape; any other value means the production path ran (which would throw `authorizationDenied` in unit tests)"
+    )
   }
 
   @Test func cachedCountAssetsInScopeReturnsCuratedCount() async throws {
@@ -123,8 +132,10 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     let svc = ScreenshotPhotoLibraryService()
     let total = try await svc.countAssets(in: .favorites)
     let adjusted = try await svc.cachedCountAdjustedAssets(in: .favorites)
-    #expect(adjusted == max(0, total / 4),
-      "cached adjusted count must follow the curated max(0, total / 4) shape; production would throw `authorizationDenied` from `collectionCountCache.count(_:_:)`'s producer")
+    #expect(
+      adjusted == max(0, total / 4),
+      "cached adjusted count must follow the curated max(0, total / 4) shape; production would throw `authorizationDenied` from `collectionCountCache.count(_:_:)`'s producer"
+    )
   }
 
   // MARK: - Asset details
@@ -132,7 +143,8 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
   @Test func fetchAssetDescriptorReturnsCuratedDescriptor() {
     let svc = ScreenshotPhotoLibraryService()
     let descriptor = svc.fetchAssetDescriptor(for: "family-1")
-    #expect(descriptor != nil,
+    #expect(
+      descriptor != nil,
       "screenshot service must surface a curated descriptor for any curated id, not nil")
   }
 
@@ -154,8 +166,10 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
   @Test func loadThumbnailReturnsImage() async {
     let svc = ScreenshotPhotoLibraryService()
     let img = await svc.loadThumbnail(for: "family-1", allowNetwork: false)
-    #expect(img != nil,
-      "screenshot service must return at minimum a placeholder gradient — nil means the override fell through to production")
+    #expect(
+      img != nil,
+      "screenshot service must return at minimum a placeholder gradient — nil means the override fell through to production"
+    )
   }
 
   @Test func loadThumbnailHighQualityReturnsImage() async {
@@ -204,9 +218,11 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
     let screenshotService = ScreenshotPhotoLibraryService()
     let wrapped = PhotoLibraryManager(overrideService: screenshotService)
 
-    #expect(wrapped.isAuthorized == true,
+    #expect(
+      wrapped.isAuthorized == true,
       "wrapped manager mirrors the override's auth state")
-    #expect(wrapped.authorizationStatus == .authorized,
+    #expect(
+      wrapped.authorizationStatus == .authorized,
       "wrapped manager mirrors the override's auth status")
   }
 }

@@ -25,7 +25,9 @@ struct StableDestinationIdentityTests {
     return dir
   }
 
-  private func makeDefaults() -> (UserDefaults, suite: String, bookmarkKey: String, stableKey: String) {
+  private func makeDefaults() -> (
+    UserDefaults, suite: String, bookmarkKey: String, stableKey: String
+  ) {
     let suite = TestScratch.suiteName("StableId")
     return (
       TestScratch.defaults(suiteName: suite), suite,
