@@ -79,9 +79,10 @@ for recovery if either history store has failed. Scanner matching error propagat
 An import started while either history is `.loading` (right after a destination change) claims
 `isImporting` at once, so exports stay held, then waits for both stores to settle and rechecks
 its UUID, generation and both stores' destination; a destination change abandons it. A timeline
-history that is then not `.ready` ends the import through `finishOwnedImport`, with the same
-message the synchronous refusal gives. A history that is settled but not ready still refuses
-synchronously.
+history that is then not `.ready` ends the import through `finishOwnedImport` with a reason:
+for a "Same Folder" check, the "couldn't check" message its synchronous refusal gives;
+otherwise, that the export history isn't available. A history that is settled but not ready
+still refuses synchronously.
 
 ### Final file commit boundary
 

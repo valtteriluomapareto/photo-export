@@ -244,6 +244,62 @@ struct CollectionImportFlowTests {
     }
   }
 
+  enum LoadEnding: CaseIterable, Sendable { case corrupt, unreadable }
+
+  /// A timeline history that ends corrupt or unreadable while an import waits for it ends the
+  /// import without running, and says why: a "Same Folder" check could not check the folder,
+  /// and a plain import found the export history unavailable.
+  @Test(arguments: LoadEnding.allCases, [false, true])
+  func importWaitingForHistoryThatFailsToLoadImportsNothing(
+    ending: LoadEnding, sameFolder: Bool
+  ) async throws {
+    let io = HeldReadIO()
+    let h = try makeScenario("CollectionImportLoadFails", recordLogIO: io)
+    try await withCleanup {
+      let snapshot = try reloadHeld(h, io: io, collection: false)
+      let log = snapshot.deletingLastPathComponent()
+        .appendingPathComponent(ExportRecordStore.Constants.logFileName)
+      let historyBytes = try Data(contentsOf: log)
+      // The read is held, so the load reads the files as changed here.
+      try? FileManager.default.removeItem(at: snapshot)
+      switch ending {
+      case .corrupt:
+        try Data("corrupt snapshot".utf8).write(to: snapshot)
+      case .unreadable:
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: false)
+      }
+
+      #expect(
+        h.manager.importCoordinator.startImport(requiringPreviousBackup: sameFolder) == nil)
+      #expect(h.manager.isImporting)
+      #expect(
+        await eventually("the import waits for the timeline history or ends") {
+          h.timeline.pendingSettleWaiterCount == 1 || !h.manager.isImporting
+        })
+      io.release(snapshot)
+      await h.manager.waitForImportCompletion()
+
+      #expect(h.timeline.state == (ending == .corrupt ? .failed : .persistenceFailed))
+      #expect(!h.manager.isImporting)
+      #expect(!h.manager.previousBackupMissing)
+      #expect(h.manager.importResult == nil)
+      #expect(h.manager.importStage == nil)
+      #expect(h.collections.placements.values.compactMap(\.collectionLocalIdentifier) == ["gone"])
+      #expect(try Data(contentsOf: log) == historyBytes, "the import changed the history")
+      let error = try #require(h.manager.importError)
+      if sameFolder {
+        #expect(error.contains("couldn\u{2019}t check this folder against your export history"))
+        #expect(error.contains("Your export history was kept"))
+        #expect(!error.contains("while an export is running"))
+      } else {
+        #expect(error == ImportCoordinator.historyUnavailableMessage)
+      }
+    } cleanup: {
+      io.releaseAll()
+      await h.cleanup()
+    }
+  }
+
   /// "Same Folder" runs the import against a folder confirmed as the previous backup; album
   /// folders in it are adopted too.
   @Test func sameFolderCheckAdoptsAlbumHistory() async throws {

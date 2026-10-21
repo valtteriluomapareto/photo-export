@@ -122,8 +122,8 @@ final class ImportCoordinator: ObservableObject {
   /// already in flight is a no-op. Other guards (no destination, store not ready,
   /// active export work) log and return the reason. While either history is still loading,
   /// the import starts at once, holding exports, and waits for it; if the timeline history
-  /// then isn't ready, the import ends without running, through the same outcome as other
-  /// failures.
+  /// then isn't ready, the import ends without running and says why, through the same outcome
+  /// as other failures.
   ///
   /// `requiringPreviousBackup` is for a folder the user said is their previous backup: when the
   /// history has completed files and none of them are in the folder, nothing is imported or
@@ -192,7 +192,8 @@ final class ImportCoordinator: ObservableObject {
         self.finishOwnedImport(
           operationID,
           error: requiringPreviousBackup
-            ? Self.previousBackupCheckMessage(for: .historyNotReady) : nil)
+            ? Self.previousBackupCheckMessage(for: .historyNotReady)
+            : Self.historyUnavailableMessage)
         return
       }
 
@@ -428,6 +429,11 @@ final class ImportCoordinator: ObservableObject {
     }
     return true
   }
+
+  /// Why an import that waited for the history ended without running, when the history it
+  /// loaded isn't ready.
+  static let historyUnavailableMessage =
+    "Export history isn\u{2019}t available. Resolve the export history alert, then import again."
 
   /// What a "Same Folder" check that could not run tells the user.
   private static func previousBackupCheckMessage(for refusal: StartRefusal) -> String {
