@@ -5,7 +5,7 @@ import Foundation
 /// value so the wording and the button-to-decision mapping are testable without `NSAlert`.
 ///
 /// "Same Folder" is first and the default: keeping the history is the choice that can't create
-/// duplicate re-exports (#127), and the import that follows it checks the history against the
+/// duplicate re-exports, and the import that follows it checks the history against the
 /// folder.
 struct AmbiguousFolderPrompt: Equatable {
   let folderName: String

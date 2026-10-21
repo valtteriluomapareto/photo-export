@@ -5,11 +5,11 @@ import SwiftUI
 /// blocked-destination states that share the same remedy:
 ///
 /// - `.migrationConflict` — both a current-id and a legacy-id record set exist
-///   for the same destination (Plan §"Safety Invariants"). Rebuilding adopts the
+///   for the same destination. Rebuilding adopts the
 ///   destination's contents as the current-id store, then the legacy state is
 ///   GC'd via the lifecycle coordinator.
-/// - `.orphanedProgress` — the destination has files but *no* matching records
-///   (issue #129). This happens when the per-destination record directory was
+/// - `.orphanedProgress` — the destination has files but *no* matching records.
+///   This happens when the per-destination record directory was
 ///   orphaned (its name derived from security-scoped bookmark bytes that macOS
 ///   later refreshed), so the app silently presented a fresh 0% store and a
 ///   re-export would collide with the existing files as ` (1)` duplicates.
@@ -17,6 +17,7 @@ import SwiftUI
 ///   progress from the drive so subsequent exports skip the already-present
 ///   files instead of duplicating them.
 ///
+/// See docs/reference/auto-export-behavior.md#destination-safety.
 /// Both modes share the rebuild/progress/result machinery; only the explanatory
 /// copy and the post-rebuild resolution differ. Resolution is injected as
 /// `onRebuildComplete` so this view stays decoupled from whichever collaborator

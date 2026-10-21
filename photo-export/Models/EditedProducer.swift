@@ -7,7 +7,7 @@ import Foundation
 enum EditedProducer: Sendable, Equatable {
   case resource(ResourceDescriptor)
   case render(MediaRenderRequest)
-  /// HEIC→JPEG conversion path (issue #47). Materializes the source HEIC/HEIF
+  /// HEIC→JPEG conversion path. Materializes the source HEIC/HEIF
   /// resource to disk, then re-encodes as JPEG. The synthesized JPEG counts as
   /// the asset's `.edited` variant; the original HEIC is preserved only when
   /// the user picks `.editedWithOriginals` (via the existing `.original`

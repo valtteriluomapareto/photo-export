@@ -124,7 +124,7 @@ struct TimelineSelectionBuckets: Equatable {
         continue
       }
     }
-    // Year supersedes any month in the same year. Documented behavior; see plan.
+    // A selected year already covers its months; drop them to avoid duplicate jobs.
     let filteredMonths = monthSet.filter { !yearSet.contains($0.year) }
     return TimelineSelectionBuckets(
       years: yearSet.sorted(by: >),

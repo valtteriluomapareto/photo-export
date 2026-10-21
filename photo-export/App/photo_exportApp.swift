@@ -35,7 +35,7 @@ struct PhotoExportApp: App {
     AppDiagnostics.beginLaunch()
     // `--screenshot-mode` swaps the real Photos backing for a curated synthetic library so
     // marketing screenshots don't leak the maintainer's personal Photos library. See
-    // `docs/project/archive/screenshot-automation-plan.md`.
+    // scripts/README.md for the capture workflow.
     let core = AppCore(
       composition: .forLaunch(arguments: ProcessInfo.processInfo.arguments))
     self.core = core
@@ -66,8 +66,8 @@ struct PhotoExportApp: App {
         .recordStoreAlertHost()
         .photoExportEnvironment(core)
         .task {
-          // PhotoKit is first touched here, after the window has rendered, not in App.init
-          // (#92). Every window runs this; the core starts once.
+          // PhotoKit is first touched here, after the window has rendered, not in App.init.
+          // Every window runs this; the core starts once.
           core.start()
         }
     }
@@ -78,7 +78,7 @@ struct PhotoExportApp: App {
     .defaultSize(width: 1280, height: 800)
     // Make the window's minimum track its content minimum explicitly rather
     // than relying on `.automatic`'s implicit resolution, which has shifted
-    // across macOS releases (issue #125 surfaced on Tahoe 26.5). Each routed
+    // across macOS releases (surfaced on Tahoe 26.5). Each routed
     // state supplies its own minimum: `LibraryRootView` uses its
     // `minimumWindowSize`, sized to fit a 1024x768 display with the title bar
     // and toolbar, while the first-run states use `firstRunWindowMinSize()`.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Seam for the HEIC→JPEG conversion path (issue #47). Reads a source image
+/// Seam for the HEIC→JPEG conversion path. Reads a source image
 /// from disk and writes a JPEG representation to a destination URL.
 ///
 /// Despite the name `convertHEIC`, the production implementation accepts any

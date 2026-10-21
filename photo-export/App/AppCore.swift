@@ -7,7 +7,7 @@ import SwiftUI
 ///
 /// `PhotoExportApp.init` builds one eagerly and hands its objects to the scenes through
 /// `photoExportEnvironment(_:)`; the main window's `.task` calls `start()`. Building touches no PhotoKit API: the first PhotoKit
-/// call is in `start()`, after the first window has rendered (#92).
+/// call is in `start()`, after the first window has rendered.
 @MainActor
 final class AppCore {
   let composition: AppComposition
@@ -176,7 +176,7 @@ final class AppCore {
     guard !hasStarted else { return }
     hasStarted = true
     // First PhotoKit touch: here, after the window has rendered, not in App.init. On
-    // macOS 15.7+ the synchronous singleton init has been observed to hang launch (#92). A
+    // macOS 15.7+ the synchronous singleton init has been observed to hang launch. A
     // no-op under tests and with a Photos service override.
     photoLibraryManager.start()
     // Configures the record stores for the current destination and follows its changes.
@@ -242,7 +242,7 @@ final class AppCore {
   }
 
   /// "Same Folder" for a pick that couldn't be compared with the previous destination checks
-  /// the export history against the folder (#334). Not while a migration conflict is open: its
+  /// the export history against the folder. Not while a migration conflict is open: its
   /// recovery owns the records until resolved.
   static func connectAmbiguousSameFolderImport(
     destinationManager: ExportDestinationManager, exportManager: ExportManager,

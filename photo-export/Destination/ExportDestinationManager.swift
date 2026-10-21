@@ -749,8 +749,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
     // If scoped access can't be acquired (old drive unplugged / stale bookmark / sandbox-denied
     // — the normal re-grant-after-stale flow), the stored URL is not live: its resource-key and
-    // path reads would be unreliable (and could block on kernel I/O, the #92 bail-out `validate`
-    // avoids). Crucially, the canonical-path fallback below would then compare a dead stored
+    // path reads would be unreliable and could block on kernel I/O. Crucially, the canonical-path fallback below would then compare a dead stored
     // path against the fresh pick and, for a network share remounted at a new path, classify the
     // SAME destination as `.differentFromStored` — forking the id and re-exporting. Surface the
     // confirmation instead of guessing.
@@ -764,7 +763,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // same folder (two folders can't share a canonical path), so keep `.sameAsStored`. But
     // differing paths are genuinely ambiguous: it could be a genuinely different folder OR the
     // same destination reached through a different path (the drift-prone signal). Minting a new
-    // id on a path difference would reintroduce the #127 duplicate re-export, so surface the
+    // id on a path difference would reintroduce duplicate re-export, so surface the
     // confirmation instead of guessing `.differentFromStored`.
     let storedPath = storedURL.resolvingSymlinksInPath().standardizedFileURL.path
     let pickedPath = pickedURL.resolvingSymlinksInPath().standardizedFileURL.path

@@ -38,7 +38,7 @@ struct MonthContentView: View, Equatable {
   /// (the user toggles "Include Originals") — the parent's body re-render fan-in is
   /// fine.
   let versionSelection: ExportVersionSelection
-  /// Live Photo paired-export toggle snapshot (issue #49). Same rationale as
+  /// Live Photo paired-export toggle snapshot. Same rationale as
   /// `versionSelection`: passed in by the parent so the month grid doesn't subscribe to
   /// `ExportManager` directly. Drives the asset-complete check on the header summary so
   /// a Live Photo whose paired video is pending isn't reported as complete.

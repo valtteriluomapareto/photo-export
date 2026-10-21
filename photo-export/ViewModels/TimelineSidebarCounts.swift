@@ -4,15 +4,8 @@ import Foundation
 /// timeline sidebar's `YearRow` and `MonthRow` need to compute their progress
 /// badges.
 ///
-/// Issue #20: previously these dicts were populated lazily — total counts
-/// only when a year was expanded (`computeMonthsWithAssets(for:)`), adjusted
-/// counts only when each `MonthRow` rendered (`.task(id:)` on the row). For
-/// collapsed years, both dicts were empty for that year's months, so
-/// `YearRow`'s progress badge could not compute and rendered nothing.
-/// Subsequent updates during a long export went unnoticed unless the user
-/// expanded the year.
-///
-/// This loader fixes that by fanning out async fetches for **every** known
+/// Counts must load even for collapsed years so their progress badges remain
+/// meaningful during export. The loader fans out async fetches for every known
 /// year × month at startup, using the existing cached count APIs
 /// (`PhotoLibraryService.cachedCountAssets(in:)` and
 /// `cachedCountAdjustedAssets(in:)`). The `CollectionCountCache` actor
