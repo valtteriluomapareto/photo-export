@@ -152,12 +152,6 @@ import Testing
     private let permission =
       "Export folder access needs restoring. Reconnect the drive, then choose the same folder if needed."
 
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-    }
-
     @Test func missingFolderIsUnreachableRatherThanNotDirectoryAndCanRecoverIdentity() throws {
       let f = try Fixture()
       defer { f.close() }

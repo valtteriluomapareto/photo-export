@@ -164,12 +164,6 @@ import Testing
       }
     }
 
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-    }
-
     private func settle(_ f: Fixture, key: String) async throws {
       try #require(
         await observe {

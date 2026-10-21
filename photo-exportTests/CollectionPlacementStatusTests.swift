@@ -200,11 +200,6 @@ import Testing
       }
     }
 
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-    }
     private func loaded(_ f: Fixture) async throws {
       let ready = await observe {
         guard f.counter.renderedText["thumbnail-exported:changed-asset"] != nil else {

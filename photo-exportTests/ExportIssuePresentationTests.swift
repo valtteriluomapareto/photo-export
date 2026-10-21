@@ -331,12 +331,6 @@ struct ExportIssuePresentationTests {
     }
   }
 
-  private func observe(
-    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-  ) async -> Bool {
-    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-  }
-
   @Test(.timeLimit(.minutes(1)))
   func actualSettingsRowShowsRecognizableMetadataAndRetryStillWorks() async throws {
     let f = try Fixture(created: created, failedAt: failedAt)

@@ -75,12 +75,6 @@ struct ThumbnailViewLifecycleTests {
 
   /// This is only a bound on SwiftUI render scheduling, not a delay used to
   /// arrange a race. Provider checkpoints control in-flight completion order.
-  private func observe(
-    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-  ) async -> Bool {
-    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-  }
-
   @Test(.timeLimit(.minutes(2)), arguments: [false, true])
   func libraryInvalidationRefreshesMountedSameIDThumbnail(knownChangedID: Bool) async throws {
     let fixture = Fixture()
