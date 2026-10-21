@@ -240,12 +240,10 @@ final class ExportManager: ObservableObject {
   }
 
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
-  /// terminal state. Used by AutoSync to detect manual-run completion (so it
-  /// can clear compatible dirty state per plan §"Dirty State"). Fire-and-forget
-  /// runs initiated via the legacy `startExport*` methods do not flow through
-  /// this publisher — they don't build a context or summary. Phase 4 will
-  /// migrate manual UI actions to `runExport(context:)` so this hook covers
-  /// the complete set of manual completions.
+  /// terminal state. AutoSync uses manual-source summaries to clear compatible
+  /// dirty state. Fire-and-forget manual UI actions do not build a run context
+  /// or summary and therefore do not emit through this publisher. Their terminal
+  /// feedback is published separately through `ExportProgressState.manualSummary`.
   private let completedRunsSubject = PassthroughSubject<ExportRunSummary, Never>()
   var completedRunsPublisher: AnyPublisher<ExportRunSummary, Never> {
     completedRunsSubject.eraseToAnyPublisher()
@@ -1833,7 +1831,7 @@ final class ExportManager: ObservableObject {
       // Look up the existing record for the *current placement* (not cross-placement).
       // Timeline jobs read from the timeline store; collection jobs read from the
       // collection store; the router selects the right one. The reuse-source copy path
-      // (Phase 3.3) consults the *other* store separately to avoid re-fetching from
+      // consults other placements separately to avoid re-fetching from
       // PhotoKit when an asset is already exported elsewhere.
       let existingVariants = recordStoreRouter.variants(
         forAssetId: descriptor.id, placement: job.placement)
@@ -1884,7 +1882,7 @@ final class ExportManager: ObservableObject {
       // variant) deliberately stays at the base so on-disk pairing isn't broken —
       // the rule keys on the asset's mediaType, not the variant kind. Every variant
       // of this asset shares the same `destDir`; the helper preserves the per-asset
-      // invariant the rest of `runJob` relies on (`allocatePairedGroupStem` probes a
+      // invariant `export(job:generation:)` relies on (`allocatePairedGroupStem` probes a
       // single dir, paired-stem inheritance reads one synthesized record).
       let subfolder = ExportPlacementPathPolicy.subfolder(
         for: descriptor.mediaType, layout: job.videoLayout)

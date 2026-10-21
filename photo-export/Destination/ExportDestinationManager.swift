@@ -634,14 +634,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     return true
   }
 
-  /// Derives a stable `destinationId` for a folder URL.
+  /// Derives the seed for a new stable destination id from a folder URL.
   ///
-  /// Delegates to `DestinationFingerprint.compute(for:)`. The id is bug-for-bug compatible with
-  /// the pre-Phase-0 derivation: `SHA-256(volumeUUID || U+0000 || volumeRelativePath)` for
-  /// drives with a volume UUID, falling back to `String(describing: volumeIdentifier)` for
-  /// drives without one (low-confidence identity). Survives bookmark refresh on the same drive
-  /// and rename of the drive, since the path component is taken in the volume's coordinate
-  /// system rather than the absolute mount path.
+  /// Delegates to `DestinationFingerprint.compute(for:)`. With a volume UUID, the digest
+  /// combines that UUID and the relative path within the volume, so a mount-point rename
+  /// does not change it. Without a UUID, it hashes an empty identity key and the canonical
+  /// standardized path. That low-confidence fingerprint can drift across remounts; an
+  /// existing destination keeps its persisted stable id instead of recomputing this seed.
   ///
   /// Returns `nil` when no usable identity component can be read (typically because the drive
   /// is unmounted). Callers treat this as "destination not yet available" and wait for the
@@ -674,7 +673,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// `restoreBookmarkIfAvailable()` — that's the hash of the *original* bookmark bytes, which
   /// is what the upgraded user's existing `ExportRecords/<oldId>/` directory was named under.
   /// Falls back to hashing the current bookmark bytes only when no snapshot exists (e.g. a
-  /// brand-new selection via `setSelectedFolder`, where there is no legacy directory anyway).
+  /// brand-new selection via `applyFolderSelection(_:decision:)`, with no legacy directory).
   func currentLegacyDestinationId() -> String? {
     if let stashed = stashedLegacyDestinationId { return stashed }
     guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else { return nil }

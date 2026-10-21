@@ -1,18 +1,15 @@
 import Foundation
 
-/// Top-level UI section. Phase 4 adds a `[ Timeline | Collections ]` segmented control;
-/// before then the app is timeline-only and `LibrarySection.timeline` is the only value
-/// reachable.
+/// Top-level UI section selected by the Timeline / Collections segmented control.
 enum LibrarySection: String, Codable, Sendable {
   case timeline
   case collections
 }
 
 /// What the user has currently selected in the sidebar. Drives both the asset grid and the
-/// export action label/destination. Distinct from `PhotoFetchScope` because the UI can hold
-/// selections that aren't directly exportable (e.g. a "Favorites" header before any specific
-/// album is picked); keeping them separate avoids implying every selection is an enqueue
-/// trigger.
+/// export action label/destination. Distinct from `PhotoFetchScope` because UI selections
+/// can require more than one query: a folder displays its child collections and exports
+/// each descendant album into that album's placement.
 enum LibrarySelection: Hashable, Sendable {
   /// A whole year on the timeline. Selectable on the year row in `TimelineSidebarView`
   /// so multi-select can mix years and months in one export. A year that's also

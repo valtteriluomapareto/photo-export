@@ -265,7 +265,7 @@ struct LibraryRootView: View {
 
   /// Applies a sidebar selection change: updates `focusedSelection` based on the
   /// diff via `SidebarFocusReducer` and persists the per-section last-state. The
-  /// reducer is pure and unit-tested in `SidebarFocusReducerTests`.
+  /// reducer is pure and unit-tested in `SidebarMultiSelectTests`.
   private func applySelectionChange(
     oldSet: Set<LibrarySelection>, newSet: Set<LibrarySelection>
   ) {
