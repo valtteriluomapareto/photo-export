@@ -28,3 +28,5 @@ TimelineSidebarBadgeRefreshTests
 PhotoLibraryBodyCountTests
 PhotoLibraryManagerObservationTests
 PhotoLibraryViewDependencyTests
+RecordStoreObservationTests
+RecordStoreViewObservationTests
