@@ -241,6 +241,42 @@ import Testing
     }
   }
 
+  #if DEBUG
+    @Test func screenshotCompositionRendersTheCuratedLibrary() async throws {
+      var composition = makeTestComposition(label: "app-core-curated-library")
+      let curated = ScreenshotPhotoLibraryService()
+      composition.photoLibraryServiceOverride = curated
+      composition.isScreenshotMode = true
+      let core = AppCore(composition: composition)
+      let counter = BodyInvalidationCounter()
+      let window = HostedViewHarness.makeWindow(
+        contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
+        styleMask: [.titled, .closable])
+      defer {
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+        core.exportManager.cancelAndClear()
+        core.exportRecordStore.drainSynchronously()
+        core.collectionExportRecordStore.drainSynchronously()
+        try? FileManager.default.removeItem(at: composition.appStateRoot)
+      }
+      window.contentView = NSHostingView(
+        rootView: ContentView(
+          destinationManager: core.exportDestinationManager, recordStore: core.exportRecordStore,
+          timelineHistoryState: .ready
+        ).equatable().photoExportEnvironment(core)
+          .environment(\.bodyInvalidationCounter, counter))
+      window.orderFront(nil)
+      let expectedYears = try curated.availableYearsWithCounts().map { "\($0.year):\($0.count)" }
+      #expect(
+        await observe(in: window) {
+          counter.count(for: "library-root") > 0
+            && counter.renderedText["timeline-sidebar-years"] == expectedYears
+        })
+    }
+  #endif
+
   // MARK: - Compositions
 
   @Test func productionUsesTheStandardDefaultsAndTheDefaultRoots() throws {

@@ -1,4 +1,5 @@
 import AppKit
+import Photos
 import SwiftUI
 import Testing
 
@@ -12,6 +13,18 @@ import Testing
   struct RootViewObservationTests {
     enum Surface { case library, content }
     enum ExistingState: CaseIterable { case destination, records, neither }
+    enum LibraryReadSurface: CaseIterable { case content, timeline, album }
+
+    private struct LibraryProbe: View {
+      @ObservedObject var library: PhotoLibraryManager
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record(
+          "library-probe:\(library.libraryRevision):\(library.authorizationStatus.rawValue)")
+        Color.clear.frame(width: 1, height: 1)
+      }
+    }
 
     /// Renders once per timeline-store publication, so a test can wait for a record change
     /// to reach SwiftUI before checking that a root body did not run for it.
@@ -97,9 +110,11 @@ import Testing
         }
       }
 
-      @ViewBuilder private func pane(_ surface: Surface) -> some View {
+      @ViewBuilder private func pane(_ surface: Surface, screenshotSurfaceKey: String?) -> some View
+      {
         switch surface {
-        case .library: LibraryRootView(screenshotSurfaceKey: nil, timelineHistoryState: .ready)
+        case .library:
+          LibraryRootView(screenshotSurfaceKey: screenshotSurfaceKey, timelineHistoryState: .ready)
         case .content:
           ContentHost(
             manager: manager, destination: destination, timeline: timeline, counter: counter)
@@ -108,13 +123,16 @@ import Testing
 
       func show(_ surface: Surface, screenshotSurfaceKey: String? = nil) {
         let hosted = NSHostingView(
-          rootView: pane(surface).frame(width: 1200, height: 800)
-            .overlay(alignment: .topLeading) { RecordsProbe(store: timeline, counter: counter) }
-            .environmentObject(library).environmentObject(timeline).environmentObject(collections)
-            .environmentObject(manager).environment(manager.progressState)
-            .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
-            .environment(\.bodyInvalidationCounter, counter)
-            .environment(\.screenshotSurfaceKey, screenshotSurfaceKey).defaultAppStorage(defaults))
+          rootView: pane(surface, screenshotSurfaceKey: screenshotSurfaceKey).frame(
+            width: 1200, height: 800
+          )
+          .overlay(alignment: .topLeading) { RecordsProbe(store: timeline, counter: counter) }
+          .overlay(alignment: .topTrailing) { LibraryProbe(library: library, counter: counter) }
+          .environmentObject(library).environmentObject(timeline).environmentObject(collections)
+          .environmentObject(manager).environment(manager.progressState)
+          .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
+          .environment(\.bodyInvalidationCounter, counter)
+          .environment(\.screenshotSurfaceKey, screenshotSurfaceKey).defaultAppStorage(defaults))
         let owned = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
           styleMask: [.titled, .closable])
@@ -348,8 +366,96 @@ import Testing
         #expect(
           f.counter.count(for: "content-root") == bodies,
           "Changes since baseline: \(f.changes(since: baseline))")
-        f.library.invalidateCache()
+        f.service.authorizationStatus = .denied
+        f.service.isAuthorized = false
+        f.library.refreshAuthorizationStatus()
         #expect(await observe { f.counter.count(for: "content-root") > bodies })
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test func contentViewRoutesFollowAuthorization() async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.show(.content)
+        try await settle(f, key: "content-root")
+        let initialLibraryBodies = f.counter.count(for: "library-root")
+        for status in [PHAuthorizationStatus.denied, .restricted] {
+          f.service.authorizationStatus = status
+          f.service.isAuthorized = false
+          f.library.refreshAuthorizationStatus()
+          try #require(
+            await observe(in: f.window) {
+              f.counter.count(for: "authorization-pane:\(status.rawValue)") > 0
+            })
+        }
+        f.service.authorizationStatus = .authorized
+        f.service.isAuthorized = true
+        f.library.refreshAuthorizationStatus()
+        #expect(
+          await observe(in: f.window) {
+            f.counter.count(for: "library-root") > initialLibraryBodies
+          })
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    private func familyAlbum(_ title: String) -> PhotoCollectionDescriptor {
+      PhotoCollectionDescriptor(
+        id: "album:family", localIdentifier: "family", title: title, kind: .album,
+        pathComponents: [], children: [])
+    }
+
+    @Test func libraryRootTitleFollowsAnAlbumRename() async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.service.collectionTree = [familyAlbum("Family")]
+        f.show(.library, screenshotSurfaceKey: "collections-album-family")
+        try #require(await observe(in: f.window) { f.counter.count(for: "title:Family") > 0 })
+        await f.quiesce()
+        f.service.collectionTree = [familyAlbum("Renamed Family")]
+        f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        #expect(await observe(in: f.window) { f.counter.count(for: "title:Renamed Family") > 0 })
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test(arguments: LibraryReadSurface.allCases)
+    func rootsSkipLibraryChangesTheyDoNotRead(surface: LibraryReadSurface) async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.service.collectionTree = [familyAlbum("Family")]
+        let key = surface == .content ? "content-root" : "library-root"
+        let landing = surface == .album ? "collections-album-family" : "timeline"
+        f.show(surface == .content ? .content : .library, screenshotSurfaceKey: landing)
+        try #require(
+          await observe(in: f.window) {
+            f.counter.count(for: key) > 0 && f.counter.count(for: "library-probe:0:3") > 0
+          })
+        if surface == .album {
+          try #require(await observe(in: f.window) { f.counter.count(for: "title:Family") > 0 })
+        } else {
+          try #require(
+            await observe(in: f.window) {
+              f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+            })
+        }
+        await f.quiesce()
+        let before = f.counter.count(for: key)
+        f.library.invalidateCache()
+        try #require(await observe(in: f.window) { f.counter.count(for: "library-probe:1:3") > 0 })
+        await f.quiesce()
+        let delta = f.counter.count(for: key) - before
+        #expect(delta <= 1, "Root body delta: \(delta)")
+        Attachment.record("\(surface): \(delta)", named: "root-body-count.txt")
+        if surface != .album {
+          withKnownIssue("The root still observes every library publication") {
+            #expect(delta == 0)
+          }
+        }
       } cleanup: {
         await f.close()
       }
