@@ -141,12 +141,6 @@ import Testing
       }
     }
 
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-    }
-
     @Test(.timeLimit(.minutes(1)))
     func queuePublicationsAvoidTimelineWorkAndRealSidebarChangesStillRefresh() async throws {
       let f = Fixture()
