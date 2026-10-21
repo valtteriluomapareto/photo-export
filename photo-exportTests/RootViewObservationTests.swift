@@ -217,7 +217,20 @@ import Testing
         await f.quiesce()
         let rootBodies = f.counter.count(for: "content-root")
         let hostBodies = f.counter.count(for: "content-host")
+        try #require(f.timeline.state == .ready)
+        let readyRoute = ContentView(
+          destinationManager: f.destination, recordStore: f.timeline,
+          timelineHistoryState: f.timeline.state)
+        let sameReadyRoute = ContentView(
+          destinationManager: f.destination, recordStore: f.timeline,
+          timelineHistoryState: f.timeline.state)
+        #expect(readyRoute == sameReadyRoute)
         let snapshot = beginHistoryLoad(f, section: .timeline)
+        try #require(f.timeline.state == .loading)
+        let loadingRoute = ContentView(
+          destinationManager: f.destination, recordStore: f.timeline,
+          timelineHistoryState: f.timeline.state)
+        #expect(readyRoute != loadingRoute)
         try #require(await observe { f.counter.count(for: "content-host") > hostBodies })
         await f.quiesce()
         #expect(f.counter.count(for: "content-root") > rootBodies)
