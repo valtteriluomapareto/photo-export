@@ -3,8 +3,7 @@ import Foundation
 /// Why Auto Export is currently blocked or waiting. Distinct from `AutoSyncReason` (which
 /// names the *trigger* that scheduled a run) — these are the conditions that prevent a run
 /// from starting or scheduling.
-///
-/// Mapped 1:1 to the State Model section of the auto-sync plan.
+/// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
 enum AutoSyncBlockedReason: String, Codable, Equatable, CaseIterable, Sendable {
   /// Photos authorization missing (`.notDetermined` or `.denied`). The user must grant
   /// access in System Settings before Auto Export can run.

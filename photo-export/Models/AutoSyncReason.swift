@@ -4,10 +4,10 @@ import Foundation
 /// diagnostics and surfaced in the run summary so logs make it clear which trigger produced
 /// a given run.
 ///
-/// This is the trigger-side enum (what *caused* a run to be scheduled or started). The plan
-/// keeps three vocabularies separate:
+/// This is the trigger-side enum (what caused a run to be scheduled or started).
+/// Three vocabularies stay separate so inputs, triggers and blockers are not conflated:
 /// - `AutoSyncReason` (this type): what caused a debounce or run to start.
-/// - `AutoSyncEvent` (lands with the reducer): inputs the reducer reacts to. Reducer events
+/// - `AutoSyncEvent`: inputs the reducer reacts to. Reducer events
 ///   like `retryTimerFired` and `manualFullExportCompleted` are *not* reasons; they are
 ///   their own events.
 /// - `AutoSyncBlockedReason`: why Auto Export is currently blocked or waiting.
@@ -17,7 +17,7 @@ enum AutoSyncReason: String, Codable, Equatable, Sendable {
   case destinationBecameAvailable
   case scopeSelectionChanged
   case versionSelectionChanged
-  /// User toggled `Convert HEIC to JPEG` (issue #47). Re-triggers AutoSync
+  /// User toggled `Convert HEIC to JPEG`. Re-triggers AutoSync
   /// because the toggle changes which assets count as exported
   /// (HEIC originals widen `requiredVariants` to include `.edited`), so
   /// previously-skipped HEIC assets become eligible mid-run-window.

@@ -1,16 +1,15 @@
 import Foundation
 
-/// Current AutoSync state. Mapped 1:1 to the State Model section of the auto-sync plan.
+/// Current AutoSync state, kept separate from persisted run history.
 ///
 /// State carries the reason inline:
 /// - `waiting` and `blocked` carry an `AutoSyncBlockedReason` (why the run can't proceed).
 /// - `scheduled` carries an `AutoSyncReason` (the trigger that will fire) plus its `fireAt`.
-/// - `running` carries a `runId` (the active `ExportRunContext.runId`) plus the trigger
-///   reason for diagnostics.
+/// - `running` carries the trigger reason for diagnostics; the active run id is
+///   carried separately by `ExportRunState.activeContext`.
 ///
 /// Run history (lastRunSummary, lastFailureSummary, etc.) lives separately on
-/// `AutoSyncManager`, not on the state — the plan distinguishes "current state" from
-/// "persisted summaries" so a `nil`-summary new install isn't conflated with an
+/// `AutoSyncManager`, not on the state, so a `nil`-summary new install isn't conflated with an
 /// `.idle` state.
 enum AutoSyncState: Equatable, Sendable {
   /// User has not enabled Auto Export. The reducer accepts events but emits no effects

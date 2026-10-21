@@ -1,8 +1,8 @@
 import Foundation
 
 /// Per-variant failure surfaced on an `ExportRunSummary`. AutoSync's reducer
-/// reads these to record failures into `AutoSyncRetryState` (Phase 3 Slice B),
-/// and the Export Issues UI (Phase 4) reads them to group failures by category
+/// reads these to record failures into `AutoSyncRetryState`,
+/// and the Export Issues UI reads them to group failures by category
 /// / scope / asset.
 ///
 /// `category` is the retry-policy bucket; `errorSignature` is the stable

@@ -3,10 +3,9 @@ import os
 
 /// Wraps `SMAppService.mainApp` so the Settings UI can present "Open Photo
 /// Export at login" as a single toggle without touching `SMAppService`
-/// directly. Plan §"Phase 4":
-///   "Add the `Open Photo Export at login` setting via `SMAppService.mainApp`
-///   with `.enabled`/`.requiresApproval`/`.notRegistered`/`.notFound` status
-///   reporting and a deep link to System Settings → Login Items."
+/// directly. Status reporting and the System Settings deep link let the user
+/// resolve registration or approval problems without hiding system state.
+/// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
 ///
 /// Status semantics (mirroring `SMAppService.Status`):
 ///   - `enabled`: registered and approved by the user
@@ -83,8 +82,7 @@ final class LoginItemController: ObservableObject {
   /// User flipped the toggle off. The system may keep the entry in Login
   /// Items but disabled — `refresh()` afterward will still show
   /// `.enabled` until the user manually removes via System Settings,
-  /// which is why the plan also calls for "poll status when the Settings
-  /// window becomes key."
+  /// so Settings refreshes status when its window becomes key.
   func unregister() {
     do {
       try service.unregister()
@@ -97,10 +95,8 @@ final class LoginItemController: ObservableObject {
     refresh()
   }
 
-  /// Deep-link to System Settings → Login Items. Plan: "On `unregister()`,
-  /// poll status when the Settings window becomes key; if status remains
-  /// `.enabled`, surface a 'Still showing in Login Items? Open Login
-  /// Items…' hint because System Settings does not notify the app."
+  /// Opens System Settings → Login Items so the user can resolve approval
+  /// or a registration entry that still appears after unregistering.
   func openSystemLoginItems() {
     service.openSystemLoginItems()
   }

@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import os
 
-/// Phase 0b safety scan. Observes the destination identity and detects the
+/// Observes the destination identity and detects the
 /// "destination has files but no matching records" state. Surfaces it as
 /// `@Published needsSafetyConfirmation`, which `DestinationSnapshotAdapter`
 /// folds into the `DestinationSnapshot.safety` field as
@@ -12,14 +12,11 @@ import os
 /// confirmation survives a network-share remount that drifts the fingerprint — otherwise the
 /// re-keyed lookup would miss and re-prompt on every reconnect.
 ///
-/// Plan §"Destination Safety Model":
-///   "If the destination contains files that the app's record stores have no
-///   matching records for, surface as `unsafeNeedsConfirmation` and require
-///   user confirmation before automatic exports start. ... A user-confirmed
-///   destination stays confirmed across launches via the safety record."
+/// Existing files require confirmation when both record stores are empty, so a new
+/// destination cannot silently start duplicate exports. Confirmations persist across
+/// launches. See docs/reference/auto-export-behavior.md#destination-safety.
 ///
-/// MVP rule: if the destination directory contains *any* user-visible file
-/// (anything except `.DS_Store`) and the per-destination record stores are
+/// If the destination root contains any non-hidden entry and the record stores are
 /// both empty *and* the user hasn't confirmed this destination before, the
 /// monitor flags it. Switching to a previously-confirmed destination, or to
 /// one with matching records, stays `.safe`.

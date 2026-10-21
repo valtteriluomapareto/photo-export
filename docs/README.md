@@ -63,6 +63,7 @@ Completed or superseded plans, kept as decision records:
 
 ## Reference material
 
+- [`reference/auto-export-behavior.md`](reference/auto-export-behavior.md) — Auto Export dispatch, debounce, dirty-work, retry, safety, persistence and run-presentation contracts.
 - [`reference/architecture-conventions.md`](reference/architecture-conventions.md) — cross-cutting contracts, Host-protocol pattern, canonical `start*` shape, regression-gate tests, and extension recipes for adding new placements/variants/collaborators. Read before touching `ExportManager` or anything AutoSync observes.
 - [`reference/swift-swiftui-best-practices.md`](reference/swift-swiftui-best-practices.md) — Swift/SwiftUI patterns and style notes
 - [`reference/persistence-store.md`](reference/persistence-store.md) — export record persistence format and behavior
