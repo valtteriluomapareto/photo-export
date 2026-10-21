@@ -51,7 +51,7 @@ When the user invokes the skill **without** a `--model` flag, run with
 
 ### When to override the default
 
-Pick a different model (or use `codex-review` instead) when:
+Do not use Kimi K2.6 or accept its output unverified for these final judgments; use a different model (or `codex-review`) instead:
 
 - **Precise code review where false positives are costly.** Kimi K2.6 may overstate, mix stale docs with current code, or claim things from partial inspection. For pre-merge review of a small focused diff, `codex-review` or a stricter Claude/GPT model is a better fit.
 - **Final testing-gap reports without a verifier.** It will sometimes recommend tests that already exist; only ship its testing report if a human or another model has spot-checked it.
