@@ -2,7 +2,7 @@ import Foundation
 
 /// User-facing choice for where video files land relative to their placement folder.
 ///
-/// `.flat` is the historical (pre-issue-#38) layout — every variant of every asset
+/// In `.flat` layout, every variant of every asset
 /// lands directly in the placement folder. `.subfolder` routes standalone-video
 /// assets (`PHAssetMediaType.video`) into a `videos/` subfolder inside the
 /// placement; image assets, including Live Photos and their paired motion file,

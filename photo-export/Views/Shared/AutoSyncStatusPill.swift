@@ -1,15 +1,9 @@
 import SwiftUI
 
-/// Compact AutoSync status indicator for the main-window toolbar. Plan
-/// §"Phase 4 / Settings UX": "Show concise main-window status: waiting,
-/// scheduled, blocked, running, last run." Slice 1c is just the state pill;
-/// last-run summary and failure-summary link land later.
-///
-/// Always visible — when AutoSync is off, it renders in a subdued style as
-/// "Auto Export off" so the user has a one-click path back to Settings →
-/// Auto Export after disabling. (The pill was hidden in the initial Slice
-/// 1c; manual testing showed the resulting discovery gap.) Clicking the
-/// pill always opens Settings.
+/// Compact main-window Auto Export status. It remains visible when disabled so
+/// the user can reopen Settings to enable it. Clicking the pill opens Settings;
+/// run history is presented separately in Settings.
+/// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
 ///
 /// Visual treatment: status icon + label, no border, no fill. The pill used
 /// to render with a `.quaternary` rounded-rectangle background, which gave it

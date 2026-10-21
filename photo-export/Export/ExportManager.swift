@@ -493,8 +493,7 @@ final class ExportManager: ObservableObject {
   /// Backing store for `versionSelection`. Mirrors the injected-`UserDefaults`
   /// pattern used by `ExportDestinationManager` so tests can hand a per-suite
   /// instance and stop sharing `UserDefaults.standard` across concurrently-running
-  /// `@MainActor` test suites — the cross-suite race that PR #29 papered over
-  /// with `.serialized`.
+  /// `@MainActor` test suites, avoiding preference races without suite serialization.
   private let userDefaults: UserDefaults
 
   init(
