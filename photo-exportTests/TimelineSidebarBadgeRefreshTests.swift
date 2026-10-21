@@ -194,9 +194,10 @@ import Testing
     func monthRowsSkipPerAssetProgressButFollowTheInFlightPlacement() async throws {
       let f = Fixture()
       try await withCleanup {
-        try #require(await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
-        })
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
+          })
         for task in f.counter.tasks { _ = await finished(task) }
         f.window.contentView?.layoutSubtreeIfNeeded()
         let key = "timeline-month-body:2026-9"
