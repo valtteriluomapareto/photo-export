@@ -127,8 +127,8 @@ struct PublisherParityTests {
       change: { monitor.confirmCurrentDestination() },
       // Confirming again stores `false` again.
       unchangedWrite: .after { monitor.confirmCurrentDestination() })
-    timeline.flushForTesting()
-    collections.flushForTesting()
+    timeline.drainSynchronously()
+    collections.drainSynchronously()
   }
 
   // MARK: - PhotoLibraryManager
@@ -504,8 +504,8 @@ struct PublisherParityTests {
         unchangedWrite: .before { manager.revalidateForTesting() },
         unchangedWriteDelivery: .isDropped)
     } cleanup: {
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: folder)
       try? FileManager.default.removeItem(at: root)
     }
