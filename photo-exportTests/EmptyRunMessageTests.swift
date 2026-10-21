@@ -38,7 +38,6 @@ struct EmptyRunMessageTests {
     return (manager, photoLib, dest, store)
   }
 
-
   // MARK: - Empty Export Month
 
   @Test func startExportMonthSetsMessageWhenAllAssetsAreAlreadyDone() async throws {

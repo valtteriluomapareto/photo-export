@@ -10,7 +10,7 @@ import Testing
 @MainActor
 @Suite(.timeLimit(.minutes(2)))
 struct CollectionBackupImportTests {
-  typealias F = CollectionBackupFixture
+  typealias Fixture = CollectionBackupFixture
 
   // MARK: - Exporting again after an import writes nothing
 
@@ -18,14 +18,14 @@ struct CollectionBackupImportTests {
   /// where an export puts them.
   private func plantExportedCollections(in h: CollectionImportHarness) throws {
     h.library.collectionTree = [
-      F.favorites,
-      F.folder("trips", "Trips", children: [F.album("paris", "Paris", in: ["Trips"])]),
-      F.sharedAlbum("family", "Family"),
+      Fixture.favorites,
+      Fixture.folder("trips", "Trips", children: [Fixture.album("paris", "Paris", in: ["Trips"])]),
+      Fixture.sharedAlbum("family", "Family"),
     ]
-    let photo = h.addAsset("photo", "IMG_0001.JPG", date: F.date(1))
-    let video = h.addAsset("video", "IMG_0002.MOV", date: F.date(2), mediaType: .video)
-    let favorite = h.addAsset("favorite", "IMG_0003.JPG", date: F.date(3))
-    let shared = h.addAsset("shared", "IMG_0004.JPG", date: F.date(4))
+    let photo = h.addAsset("photo", "IMG_0001.JPG", date: Fixture.date(1))
+    let video = h.addAsset("video", "IMG_0002.MOV", date: Fixture.date(2), mediaType: .video)
+    let favorite = h.addAsset("favorite", "IMG_0003.JPG", date: Fixture.date(3))
+    let shared = h.addAsset("shared", "IMG_0004.JPG", date: Fixture.date(4))
     h.library.assetsByAlbumLocalId["paris"] = [photo, video]
     h.library.favoritesAssets = [photo, favorite]
     h.library.assetsBySharedAlbumLocalId["family"] = [shared]
@@ -38,7 +38,7 @@ struct CollectionBackupImportTests {
       (.sharedAlbum(collectionId: "family"), shared, "IMG_0004.JPG"),
     ]
     for (selection, asset, name) in placed {
-      try F.plant(
+      try Fixture.plant(
         at: h.root, try h.exportDirectory(for: selection, asset: asset), name,
         date: try #require(asset.creationDate))
     }
@@ -87,7 +87,7 @@ struct CollectionBackupImportTests {
 
     let h = CollectionImportHarness("CollectionBackupImportRepro")
     try plantExportedCollections(in: h)
-    let before = try F.listing(of: h.root)
+    let before = try Fixture.listing(of: h.root)
     try #require(before.count == 5)
 
     await h.importBackup()
@@ -97,7 +97,7 @@ struct CollectionBackupImportTests {
     #expect(h.writer.writeCalls.isEmpty, "\(h.writer.writeCalls.map(\.url.lastPathComponent))")
     #expect(h.fileSystem.copyCalls.isEmpty)
     #expect(h.fileSystem.moveCalls.isEmpty)
-    #expect(try F.listing(of: h.root) == before)
+    #expect(try Fixture.listing(of: h.root) == before)
     #expect(h.manager.importResult?.collectionMatchedCount == 5)
     #expect(h.manager.importResult?.unrecognizedCollectionFolders == [])
     await h.cleanup()
@@ -138,40 +138,40 @@ struct CollectionBackupImportTests {
     h.manager.versionSelection = roundTrip.selection
     h.manager.livePhotosPairedExport = roundTrip == .livePhotoPaired
     h.library.collectionTree = [
-      F.favorites,
-      F.folder(
+      Fixture.favorites,
+      Fixture.folder(
         "trips", "Trips",
         children: [
-          F.album("paris", "Paris", in: ["Trips"]),
-          F.folder(
+          Fixture.album("paris", "Paris", in: ["Trips"]),
+          Fixture.folder(
             "y2024", "2024", in: ["Trips"],
-            children: [F.album("rome", "Rome", in: ["Trips", "2024"])]),
+            children: [Fixture.album("rome", "Rome", in: ["Trips", "2024"])]),
         ]),
-      F.album("beach-b", "Beach"),
-      F.album("beach-a", "Beach"),
-      F.album("plans", "Q1: Plans?"),
-      F.sharedAlbum("friends", "Friends"),
+      Fixture.album("beach-b", "Beach"),
+      Fixture.album("beach-a", "Beach"),
+      Fixture.album("plans", "Q1: Plans?"),
+      Fixture.sharedAlbum("friends", "Friends"),
     ]
     let render = [
       TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG")
     ]
     let assets = [
       h.addAsset(
-        "paris-1", "P1.HEIC", date: F.date(1), hasAdjustments: roundTrip.edits,
+        "paris-1", "P1.HEIC", date: Fixture.date(1), hasAdjustments: roundTrip.edits,
         extraResources: roundTrip.edits ? render : []),
-      h.addAsset("rome-1", "R1.HEIC", date: F.date(2)),
-      h.addAsset("rome-clip", "R2.MOV", date: F.date(3), mediaType: .video),
+      h.addAsset("rome-1", "R1.HEIC", date: Fixture.date(2)),
+      h.addAsset("rome-clip", "R2.MOV", date: Fixture.date(3), mediaType: .video),
       h.addAsset(
-        "beach-1", "B1.JPG", date: F.date(4),
+        "beach-1", "B1.JPG", date: Fixture.date(4),
         hasAdjustments: roundTrip == .editedWithOriginals,
         extraResources: roundTrip == .editedWithOriginals ? render : []),
-      h.addAsset("beach-2", "B2.JPG", date: F.date(5)),
-      h.addAsset("plans-1", "Q1.PNG", date: F.date(6)),
+      h.addAsset("beach-2", "B2.JPG", date: Fixture.date(5)),
+      h.addAsset("plans-1", "Q1.PNG", date: Fixture.date(6)),
       h.addAsset(
-        "fav-1", "F1.HEIC", date: F.date(7), isLivePhoto: roundTrip == .livePhotoPaired,
+        "fav-1", "F1.HEIC", date: Fixture.date(7), isLivePhoto: roundTrip == .livePhotoPaired,
         extraResources: roundTrip == .livePhotoPaired
           ? [TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "F1.MOV")] : []),
-      h.addAsset("friends-1", "S1.JPG", date: F.date(8)),
+      h.addAsset("friends-1", "S1.JPG", date: Fixture.date(8)),
     ]
     let byId = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
     h.library.assetsByAlbumLocalId = [
@@ -207,7 +207,7 @@ struct CollectionBackupImportTests {
     try #require(
       FileManager.default.fileExists(
         atPath: h.root.appendingPathComponent("Collections/Albums/Trips/2024/" + video).path))
-    let listing = try F.listing(of: h.root)
+    let listing = try Fixture.listing(of: h.root)
     let expectedFiles: Int
     switch roundTrip {
     // One file per album photo (Paris 1, Rome 2, each Beach 1, Q1 1), Favorites 2, Friends 1.
@@ -253,7 +253,7 @@ struct CollectionBackupImportTests {
       "\(h.writer.writeCalls.dropFirst(writes).map(\.url.lastPathComponent))")
     #expect(h.fileSystem.copyCalls.count == copies)
     #expect(h.fileSystem.moveCalls.count == moves)
-    #expect(try F.listing(of: h.root) == listing)
+    #expect(try Fixture.listing(of: h.root) == listing)
     await h.cleanup()
   }
 }

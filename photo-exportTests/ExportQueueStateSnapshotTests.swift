@@ -151,15 +151,17 @@ struct ExportQueueStateSnapshotTests {
     let canonical = canonicalize(snaps)
     let expected: [Snapshot] = [
       Snapshot(isRunning: false, isPaused: false, hasPendingJobs: false),  // initial
-      Snapshot(isRunning: true,  isPaused: false, hasPendingJobs: true),   // running
-      Snapshot(isRunning: true,  isPaused: true,  hasPendingJobs: true),   // pause set mid-run
-      Snapshot(isRunning: false, isPaused: true,  hasPendingJobs: true),   // parked
-      Snapshot(isRunning: true,  isPaused: false, hasPendingJobs: true),   // resumed
-      Snapshot(isRunning: false, isPaused: true,  hasPendingJobs: true),   // parked again
+      Snapshot(isRunning: true, isPaused: false, hasPendingJobs: true),  // running
+      Snapshot(isRunning: true, isPaused: true, hasPendingJobs: true),  // pause set mid-run
+      Snapshot(isRunning: false, isPaused: true, hasPendingJobs: true),  // parked
+      Snapshot(isRunning: true, isPaused: false, hasPendingJobs: true),  // resumed
+      Snapshot(isRunning: false, isPaused: true, hasPendingJobs: true),  // parked again
       Snapshot(isRunning: false, isPaused: false, hasPendingJobs: false),  // cancelled idle
     ]
 
-    #expect(canonical == expected, """
+    #expect(
+      canonical == expected,
+      """
       Phase 4b queue-state contract violation. Expected:
       \(expected.map(\.description).joined(separator: "\n      "))
       Got:
@@ -204,7 +206,8 @@ struct ExportQueueStateSnapshotTests {
     // The contract: teardownQueue() mutates the coordinator's @Published synchronously,
     // sinks fire synchronously, manager mirrors are updated before this call returns.
     h.manager.queueCoordinator.teardownQueue()
-    #expect(!h.manager.isRunning,
+    #expect(
+      !h.manager.isRunning,
       "manager.isRunning must reflect coordinator state synchronously after teardownQueue")
     #expect(!h.manager.isPaused)
     #expect(h.manager.queueCount == 0)

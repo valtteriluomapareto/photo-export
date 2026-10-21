@@ -329,7 +329,8 @@ struct AutoSyncRetryLifecycleTests {
       category: .iCloudTransient, errorSignature: "legacy-network",
       at: builder.clock.now(), nextEligibleAt: nil)
     let legacyBytes = try JSONEncoder().encode(retry)
-    #expect(!String(decoding: legacyBytes, as: UTF8.self).contains("nextEligibleAt"))
+    let legacyJSON = try #require(String(bytes: legacyBytes, encoding: .utf8))
+    #expect(!legacyJSON.contains("nextEligibleAt"))
     let decoded = try JSONDecoder().decode(AutoSyncRetryState.self, from: legacyBytes)
     #expect(
       decoded.entry(scope: .timeline, assetId: "legacy", variant: .original)?

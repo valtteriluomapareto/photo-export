@@ -47,7 +47,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `@StateObject` so this is process-lifetime in practice.
   private var livePhotoDetectionCancellables = Set<AnyCancellable>()
 
-  private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Photos")
+  private let logger = Logger.app(.photos)
 
   /// Errors that can occur in the Photo Library Manager
   enum PhotoLibraryError: Error {

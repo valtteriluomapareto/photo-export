@@ -143,14 +143,14 @@ context to diagnose them.
 
 ## 7) Logging & Instrumentation
 
-Use Unified Logging through `os.Logger`, with the app subsystem. This complete
-example uses explicit arguments rather than undeclared application variables:
+Use Unified Logging through `os.Logger` and the shared `Logger.app` helper.
+Inside the app target, use the existing named category for the operation:
 
 ```swift
 import os
 
 func logAssetCount(_ count: Int) {
-  let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Photos")
+  let logger = Logger.app(.photos)
   logger.info("Fetched \(count) assets")
 }
 ```

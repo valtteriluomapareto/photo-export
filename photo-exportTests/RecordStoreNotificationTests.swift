@@ -52,8 +52,11 @@ struct RecordStoreNotificationTests {
     }
 
     func flushNotifications() {
-      if collection { collections.flushPendingNotifications() }
-      else { timeline.flushPendingNotifications() }
+      if collection {
+        collections.flushPendingNotifications()
+      } else {
+        timeline.flushPendingNotifications()
+      }
     }
 
     func close() async {
@@ -177,8 +180,7 @@ struct RecordStoreNotificationTests {
     try Data("invalid snapshot".utf8).write(
       to: f.root.appendingPathComponent("A").appendingPathComponent(name))
     let baseline = f.counter
-    if collection { f.collections.configure(for: "A") }
-    else { f.timeline.configure(for: "A") }
+    if collection { f.collections.configure(for: "A") } else { f.timeline.configure(for: "A") }
     #expect(f.counter == baseline + 1)
     if collection {
       #expect(f.collections.state == .failed)
@@ -220,7 +222,9 @@ struct RecordStoreNotificationTests {
     let suite = TestScratch.suiteName("NotificationExport")
     let photos = FakePhotoLibraryService()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
-    photos.assetsByYearMonth["2026-9"] = [TestAssetFactory.makeAsset(id: "asset", creationDate: date)]
+    photos.assetsByYearMonth["2026-9"] = [
+      TestAssetFactory.makeAsset(id: "asset", creationDate: date)
+    ]
     photos.favoritesAssets = photos.assetsByYearMonth["2026-9"]!
     photos.resourcesByAssetId["asset"] = [.init(type: .photo, originalFilename: "ASSET.JPG")]
     let manager = ExportManager(
@@ -233,8 +237,11 @@ struct RecordStoreNotificationTests {
       f.write("pending")
       manager.cancelAndClear()
     } else {
-      if collection { manager.startExportFavorites() }
-      else { manager.startExportMonth(year: 2026, month: 9) }
+      if collection {
+        manager.startExportFavorites()
+      } else {
+        manager.startExportMonth(year: 2026, month: 9)
+      }
       await manager.waitForQueueDrained()
       #expect(f.record("asset")?.status == .done)
     }
@@ -253,13 +260,17 @@ struct RecordStoreNotificationTests {
   }
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
-  func cancellingHeldExportPublishesAfterRemovingOwnedInProgressRecord(collection: Bool) async throws {
+  func cancellingHeldExportPublishesAfterRemovingOwnedInProgressRecord(collection: Bool)
+    async throws
+  {
     let f = Fixture(collection: collection)
     let destination = FakeExportDestination()
     let suite = TestScratch.suiteName("NotificationHeldExport")
     let photos = FakePhotoLibraryService()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
-    photos.assetsByYearMonth["2026-9"] = [TestAssetFactory.makeAsset(id: "held", creationDate: date)]
+    photos.assetsByYearMonth["2026-9"] = [
+      TestAssetFactory.makeAsset(id: "held", creationDate: date)
+    ]
     photos.favoritesAssets = photos.assetsByYearMonth["2026-9"]!
     photos.resourcesByAssetId["held"] = [.init(type: .photo, originalFilename: "HELD.JPG")]
     let writer = FakeAssetResourceWriter()
@@ -277,8 +288,11 @@ struct RecordStoreNotificationTests {
       notifications += 1
       #expect(f.record("held") == nil)
     }
-    if collection { manager.startExportFavorites() }
-    else { manager.startExportMonth(year: 2026, month: 9) }
+    if collection {
+      manager.startExportFavorites()
+    } else {
+      manager.startExportMonth(year: 2026, month: 9)
+    }
     do {
       try #require(await reached(gate))
       physical = manager.currentTask
@@ -347,7 +361,9 @@ struct RecordStoreNotificationTests {
     let suite = TestScratch.suiteName("NotificationImportReentry")
     let photos = FakePhotoLibraryService()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
-    photos.assetsByYearMonth["2026-9"] = [TestAssetFactory.makeAsset(id: "asset", creationDate: date)]
+    photos.assetsByYearMonth["2026-9"] = [
+      TestAssetFactory.makeAsset(id: "asset", creationDate: date)
+    ]
     photos.resourcesByAssetId["asset"] = [.init(type: .photo, originalFilename: "ASSET.JPG")]
     let directory = try destination.urlForRelativeDirectory("2026/09/", createIfNeeded: true)
     let file = directory.appendingPathComponent("ASSET.JPG")

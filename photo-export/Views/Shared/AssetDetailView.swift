@@ -54,7 +54,7 @@ struct AssetDetailView: View {
           } else if preview.isLoading {
             Rectangle()
               .fill(Color.gray.opacity(0.15))
-              .overlay(ProgressView())
+              .overlay(ProgressView().accessibilityLabel("Loading preview"))
           } else if let errorMessage = preview.errorMessage {
             Rectangle()
               .fill(Color.gray.opacity(0.15))

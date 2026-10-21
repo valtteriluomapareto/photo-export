@@ -63,6 +63,7 @@ struct ThumbnailView: View {
             VStack(spacing: 4) {
               Image(systemName: "exclamationmark.triangle")
                 .foregroundColor(.secondary)
+                .accessibilityHidden(true)
               Button("Retry") { retryToken &+= 1 }
                 .font(.caption2)
                 .buttonStyle(.borderless)
@@ -74,7 +75,7 @@ struct ThumbnailView: View {
         Rectangle()
           .fill(Color.gray.opacity(0.3))
           .frame(width: 100, height: 100)
-          .overlay(ProgressView())
+          .overlay(ProgressView().accessibilityLabel("Loading thumbnail"))
       }
 
       // Decorations: not-yet-exported dot, selection ring, and a media-kind badge for videos.

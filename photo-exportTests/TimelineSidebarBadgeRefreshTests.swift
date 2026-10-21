@@ -24,6 +24,8 @@ import Testing
       @Environment(ExportProgressState.self) private var progress
       @Environment(\.bodyInvalidationCounter) private var counter
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter?.record(
           "progress-probe:\(progress.currentAssetFilename ?? ""):\(progress.totalJobsCompleted)")
         Color.clear.frame(width: 1, height: 1)
@@ -194,9 +196,10 @@ import Testing
     func monthRowsSkipPerAssetProgressButFollowTheInFlightPlacement() async throws {
       let f = Fixture()
       try await withCleanup {
-        try #require(await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
-        })
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
+          })
         for task in f.counter.tasks { _ = await finished(task) }
         f.window.contentView?.layoutSubtreeIfNeeded()
         let key = "timeline-month-body:2026-9"
@@ -224,9 +227,10 @@ import Testing
       let f = Fixture()
       let gate = AsyncCheckpoint()
       try await withCleanup {
-        try #require(await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
-        })
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
+          })
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         let ids = ["queued-a", "queued-b"]
         f.service.assetsByYearMonth["2026-9"] = ids.map {
@@ -244,14 +248,16 @@ import Testing
               assetLocalIdentifier: $0, placement: .timeline(year: 2026, month: 9),
               selection: .edited)
           })
-        #expect(await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["2 left"]
-        })
+        #expect(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["2 left"]
+          })
         f.manager.queueCoordinator.processQueueIfNeeded()
         try #require(await gate.waitForEnter(count: 1))
-        #expect(await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["1 left"]
-        })
+        #expect(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["1 left"]
+          })
       } cleanup: {
         let held = f.manager.currentTask
         f.manager.cancelAndClear()

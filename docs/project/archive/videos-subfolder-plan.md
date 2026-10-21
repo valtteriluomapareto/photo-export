@@ -101,12 +101,12 @@ Default `.flat` keeps call sites that haven't been threaded yet writing the old 
 
 Snapshot semantics: a flip *between* two `startExport*` clicks produces two differently-laid-out runs in the same destination (each snapshot is point-in-time). A flip *during* a single bulk-dispatcher's enqueue loop does not — the snapshot reads once before iterating. This matches `livePhotosPaired`; the "applies to new exports only" caption covers it.
 
-### 4. Helper: `ExportPlacementPathPolicy`
+### 4. Helper: `ExportMediaPathPolicy`
 
-**New file:** `photo-export/Export/ExportPlacementPathPolicy.swift`
+**New file:** `photo-export/Export/ExportMediaPathPolicy.swift`
 
 ```swift
-enum ExportPlacementPathPolicy {
+enum ExportMediaPathPolicy {
   /// The subfolder (relative to the placement) where every variant of an
   /// asset should land, given the asset's media type and the user's layout
   /// setting. Returns `nil` to mean "place directly in the placement folder."
@@ -174,9 +174,9 @@ let relPath = job.placement.relativePath
 `destDir` is computed **once** per asset and threaded into every per-variant call (4 variants under PR #102's Live Photos pairing). Under option 2 the same per-asset model holds — image assets stay at base for all variants; standalone-video assets go to `videos/` for all variants. Replace with:
 
 ```swift
-let subfolder = ExportPlacementPathPolicy.subfolder(
+let subfolder = ExportMediaPathPolicy.subfolder(
   for: descriptor.mediaType, layout: job.videoLayout)
-let effectiveRelPath = ExportPlacementPathPolicy.relativePath(
+let effectiveRelPath = ExportMediaPathPolicy.relativePath(
   placement: job.placement, subfolder: subfolder)
 let destDir = try exportDestination.urlForRelativeDirectory(
   effectiveRelPath, createIfNeeded: true)
@@ -191,7 +191,7 @@ Pass `subfolder` (the `String?`) through `exportSingleVariant` and `runEditedFal
 
 The synthesizer at ~lines 1758–1766 builds a synthetic `ExportRecord` for `inheritedGroupStem`, which probes the destination to recover a paired stem. Under mid-life toggle the asset's variants can carry different stored `subfolder` values. The policy is explicit:
 
-**Use the subfolder for the *current target* layout** — i.e. `subfolder = ExportPlacementPathPolicy.subfolder(for: descriptor.mediaType, layout: job.videoLayout)`. That's the directory the next write will land in, so it's where stem inheritance matters. A stale-stem mismatch with an other-layout file already on disk is acceptable — that file is still self-describing via its own record's `subfolder`, and any future re-export of that variant will use its own stored subfolder for reuse/reconcile.
+**Use the subfolder for the *current target* layout** — i.e. `subfolder = ExportMediaPathPolicy.subfolder(for: descriptor.mediaType, layout: job.videoLayout)`. That's the directory the next write will land in, so it's where stem inheritance matters. A stale-stem mismatch with an other-layout file already on disk is acceptable — that file is still self-describing via its own record's `subfolder`, and any future re-export of that variant will use its own stored subfolder for reuse/reconcile.
 
 Add a regression test: standalone video asset has `.original` record with `subfolder = nil`, toggle now `.subfolder`, run `.edited`. Synthesizer feeds `subfolder = "videos"` to `inheritedGroupStem`; the new file lands in `videos/`; record stores `subfolder = "videos"` on the `.edited` variant; the `.original` record is left untouched at `subfolder = nil`.
 
@@ -214,7 +214,7 @@ Populate `subfolder` from `variantRec.subfolder` in both lookup branches (timeli
 **Edit:** `photo-export/Export/VariantExporter.swift:200-213`
 
 ```swift
-let sourceRelPath = ExportPlacementPathPolicy.relativePath(
+let sourceRelPath = ExportMediaPathPolicy.relativePath(
   placement: reuse.placement, subfolder: reuse.subfolder)
 let sourceURL = destinationRoot
   .appendingPathComponent(sourceRelPath, isDirectory: true)
@@ -227,7 +227,7 @@ No `Host` protocol change. The mid-life-toggle case is correct: a standalone vid
 
 **Edit:** `photo-export/Records/ExportRecordStore.swift` (timeline reconcile) and `photo-export/Records/CollectionExportRecordStore.swift` (collection reconcile at ~lines 408–493)
 
-Where reconcile probes a variant's on-disk file, construct the probe URL via `ExportPlacementPathPolicy.relativePath(placement: <placement>, subfolder: variantRec.subfolder)` instead of using `placement.relativePath` (collection store) or `record.relPath` (timeline store). Each variant's existence check uses that variant's own on-disk location, fixing the shared-`relPath` bug a schema-free design would have caused.
+Where reconcile probes a variant's on-disk file, construct the probe URL via `ExportMediaPathPolicy.relativePath(placement: <placement>, subfolder: variantRec.subfolder)` instead of using `placement.relativePath` (collection store) or `record.relPath` (timeline store). Each variant's existence check uses that variant's own on-disk location, fixing the shared-`relPath` bug a schema-free design would have caused.
 
 ### 9. Settings UI: new `Section("Organization")`
 
@@ -308,7 +308,7 @@ Extend existing test files rather than creating parallels. PR #102 fixtures (`Te
 
 **Precondition — helper extension:** `BackupScannerVariantTests.makeScannedFile(filename:year:month:modDate:)` currently hardcodes `<year>/<month>/<filename>`. Extend it to accept an optional `subdir: String? = nil` so subfolder cases can drop in. This is a real code change to the helper, not just a parameter shuffle.
 
-#### New file: `ExportPlacementPathPolicyTests.swift`
+#### New file: `ExportMediaPathPolicyTests.swift`
 
 - `subfolder(for:layout:)`:
   - `.image` × `.flat` → nil
@@ -382,7 +382,7 @@ These are the assertions that exercise the `runJob` destDir computation, which `
 
 ## Out of scope
 
-- Multi-layout picker (`videos/YYYY/MM`, `YYYY/VIDEOS/MM`, etc.). The enum-shaped `ExportVideoLayout` plus per-variant `subfolder` field accommodate it later by adding cases and widening `ExportPlacementPathPolicy`; no further schema change.
+- Multi-layout picker (`videos/YYYY/MM`, `YYYY/VIDEOS/MM`, etc.). The enum-shaped `ExportVideoLayout` plus per-variant `subfolder` field accommodate it later by adding cases and widening `ExportMediaPathPolicy`; no further schema change.
 - Migrating already-exported videos into the subfolder. By design; matches the HEIC-toggle and Live Photos-toggle precedent.
 - AutoSync publisher / reducer event for `videoLayout`. Not needed because the setting does not widen `requiredVariants`; AutoSync runs honour it transitively via the `ExportJob` snapshot.
 - Collection-side Import Existing Backup. Pre-existing gap; not a regression.
@@ -391,14 +391,14 @@ These are the assertions that exercise the `runJob` destDir computation, which `
 
 - `photo-export/Models/ExportVideoLayout.swift` (new)
 - `photo-export/Models/ExportRecord.swift` (add `subfolder` to `ExportVariantRecord`)
-- `photo-export/Export/ExportPlacementPathPolicy.swift` (new)
+- `photo-export/Export/ExportMediaPathPolicy.swift` (new)
 - `photo-export/Export/ExportManager.swift` (setting, `ExportJob.videoLayout`, single per-asset `destDir` via helper, synthesizer policy, every enqueue site)
 - `photo-export/Export/VariantExporter.swift` (reuse-source uses stored `subfolder`)
 - `photo-export/Export/BackupScanner.swift` (descend into `videos/`)
 - `photo-export/Records/RecordStoreRouter.swift` (`ReuseSource.subfolder`)
 - `photo-export/Records/ExportRecordStore.swift`, `CollectionExportRecordStore.swift` (reconcile per-variant subfolder)
 - `photo-export/Views/Settings/AdvancedSettingsView.swift` (new `Section("Organization")` + banner copy generalization)
-- `photo-exportTests/ExportPlacementPathPolicyTests.swift` (new)
+- `photo-exportTests/ExportMediaPathPolicyTests.swift` (new)
 - `photo-exportTests/LivePhotoVariantTests.swift`, `VariantExporterTests.swift`, `RecordStoreRouterTests.swift`, `ExportDestinationResolverTests.swift`, `BackupScannerVariantTests.swift`, `ExportManagerRunExportTests.swift`, `ExportRecordStoreTests.swift`, `CollectionExportRecordStoreTests.swift` (augment)
 - `photo-exportTests/BackupScannerVariantTests.swift` `makeScannedFile` helper (extend with optional `subdir`)
 - `README.md`, `website/src/content/docs/features.md`, `photo-export/Models/ReleaseNotesCatalog.swift`

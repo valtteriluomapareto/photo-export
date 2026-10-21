@@ -134,7 +134,7 @@ struct ExportDestinationResolver: Sendable {
         let candidate = destDir.appendingPathComponent(filename)
         if fileSystem.fileExists(atPath: candidate.path), filename != interruptedFilename {
           throw NSError(
-            domain: "Export", code: 5,
+            domain: "Export", code: ExportErrorCode.pairedOriginalFilenameConflict.rawValue,
             userInfo: [
               NSLocalizedDescriptionKey:
                 "Paired original filename already exists on disk: \(candidate.lastPathComponent)"
@@ -143,7 +143,7 @@ struct ExportDestinationResolver: Sendable {
         // Nothing allocates an inherited stem, so a name another record holds is caught here.
         if isClaimed(filename) {
           throw NSError(
-            domain: "Export", code: 5,
+            domain: "Export", code: ExportErrorCode.pairedOriginalFilenameConflict.rawValue,
             userInfo: [
               NSLocalizedDescriptionKey:
                 "Paired original filename is recorded for another exported file: \(filename). "

@@ -94,6 +94,7 @@ struct OnboardingView: View {
               HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill")
                   .foregroundColor(.green)
+                  .accessibilityLabel("Export destination selected")
                 Text(url.lastPathComponent)
                   .lineLimit(1)
                   .truncationMode(.middle)

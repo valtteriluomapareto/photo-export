@@ -212,7 +212,8 @@ import Testing
     folder.files.identityOverride = { url, identity in
       guard url == natural, let identity else { return identity }
       return FileItemIdentity(
-        isRegularFile: false, linkCount: identity.linkCount, device: identity.device, inode: identity.inode,
+        isRegularFile: false, linkCount: identity.linkCount, device: identity.device,
+        inode: identity.inode,
         size: identity.size, modificationSeconds: identity.modificationSeconds,
         modificationNanoseconds: identity.modificationNanoseconds)
     }

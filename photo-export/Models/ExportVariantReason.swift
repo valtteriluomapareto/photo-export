@@ -50,7 +50,7 @@ struct ExportVariantReason: RawRepresentable, Codable, Equatable, Sendable {
 /// category/signature (Export:9) while conveying the domain reason without parsing text.
 struct EditedResourceUnavailableError: CustomNSError {
   static let errorDomain = "Export"
-  var errorCode: Int { 9 }
+  var errorCode: Int { ExportErrorCode.editedResourceUnavailable.rawValue }
   var errorUserInfo: [String: Any] {
     [NSLocalizedDescriptionKey: ExportVariantRecovery.editedResourceUnavailableMessage]
   }

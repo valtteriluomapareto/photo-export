@@ -99,6 +99,7 @@ struct ExportToolbarView: ToolbarContent {
         HStack(alignment: .center, spacing: 6) {
           Image(systemName: destinationIconName)
             .foregroundColor(destinationIconColor)
+            .accessibilityHidden(true)
           Text(url.lastPathComponent)
             .lineLimit(1)
             .truncationMode(.middle)
@@ -107,6 +108,7 @@ struct ExportToolbarView: ToolbarContent {
       }
       .buttonStyle(.bordered)
       .help(destinationHelp)
+      .accessibilityLabel(destinationHelp)
     } else {
       Button(
         exportDestinationManager.status == .permissionRequired
@@ -195,6 +197,7 @@ struct ExportToolbarView: ToolbarContent {
             systemImage: exportManager.isPaused ? "play.fill" : "pause.fill")
         }
         .help(exportManager.isPaused ? "Resume export" : "Pause export")
+        .accessibilityLabel(exportManager.isPaused ? "Resume export" : "Pause export")
       }
 
       if exportManager.hasActiveExportWork {
@@ -211,6 +214,11 @@ struct ExportToolbarView: ToolbarContent {
           Label("Cancel", systemImage: "xmark.circle")
         }
         .help(
+          autoSyncManager.isEnabled
+            ? "Cancel and clear queue. Also turns Auto Export off."
+            : "Cancel and clear queue"
+        )
+        .accessibilityLabel(
           autoSyncManager.isEnabled
             ? "Cancel and clear queue. Also turns Auto Export off."
             : "Cancel and clear queue")

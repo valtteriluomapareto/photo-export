@@ -77,14 +77,16 @@ caffeinate -du xcodebuild \
   test
 ```
 
-For one test, append its method name to the suite identifier. For example:
+For one Swift Testing test, append its full method identifier, including parentheses
+and any parameter labels, to the suite identifier. Quote the argument for the shell.
+For example:
 
 ```bash
 caffeinate -du xcodebuild \
   -project photo-export.xcodeproj \
   -scheme "photo-export" \
   -destination 'platform=macOS' \
-  -only-testing:photo-exportTests/ExportRecordStoreTests/testLoadEmptyStore \
+  '-only-testing:photo-exportTests/ExportRecordStoreTests/testLoadEmptyStore()' \
   CODE_SIGNING_ALLOWED=NO \
   test
 ```
@@ -119,24 +121,19 @@ checked patterns and the narrow allow marker for tests that must inspect a real 
 
 ### Static guards
 
-Run the repository checks that CI runs, including self-tests of the guards:
+Run the repository checks that CI runs, including self-tests of the guards.
+Install the pinned Swift tools from [Style checks](#style-checks) first; the runner
+includes the strict app-and-test formatter check:
 
 ```bash
-scripts/ci/test-guards.sh
-python3 -B scripts/ci/check-read-only-photos.py
-python3 -B scripts/ci/check-no-plan-refs.py
-python3 -B scripts/ci/check-version.py
-python3 -B scripts/ci/check-test-waits.py
-python3 -B scripts/ci/check-test-scratch.py
-python3 -B scripts/ci/check-persistence-doc.py
-scripts/ci/check-regression-gates.sh
-scripts/ci/check-fingerprint-id-keying.sh
+scripts/ci/run-guards.sh
 ```
 
-These check source, documentation and tooling without reading your Photos library.
-See the [CI script guide](scripts/README.md#ci-scripts-scriptsci) for each guard's
-scope. Checks of built apps and test results run after the relevant build/test step
-in CI; the commands above cover the static guards.
+The runner names every check, continues after independent failures and returns nonzero
+if any check fails. These checks cover source, documentation and tooling without reading
+your Photos library. See the [CI script guide](scripts/README.md#ci-scripts-scriptsci)
+for each guard's scope. Checks of built apps and test results run after the relevant
+build/test step in CI; the runner covers the static guards.
 
 ### Style checks
 
@@ -164,7 +161,7 @@ Run the same enforcing style checks as CI from the repository root:
 swiftlint --strict
 # If the sandbox blocks the default cache:
 swiftlint --strict --cache-path build/swiftlint-cache
-swift-format lint --strict --configuration .swift-format.json --recursive photo-export
+bash scripts/ci/check-swift-format.sh
 ```
 
 SwiftLint's thresholds and exclusions are defined in [`.swiftlint.yml`](.swiftlint.yml).
@@ -172,8 +169,9 @@ Its line-length warning threshold is 500 characters and its error threshold is 7
 Strict mode makes warnings fail the check. The formatter uses two-space indentation
 and 100 columns, preserving the style previously applied by its defaults. `.swift-format.json` must be passed explicitly;
 automatic discovery uses a different filename. To apply formatting, run
-`swift-format format --configuration .swift-format.json --recursive --in-place photo-export`
-and review the diff. The formatter check covers app sources only.
+`swift-format format --configuration .swift-format.json --recursive --in-place photo-export photo-exportTests`
+and review the diff. Both linters cover app and unit-test sources; the template
+UI-test target stays outside their scope.
 
 Reproduce CI's Debug compiler-warning check:
 

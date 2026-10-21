@@ -148,7 +148,8 @@ struct CollectionBackupScannerTests {
     let scanned = try BackupScanner.scanCollectionsFolder(at: root).directories
     #expect(scanned.contains { $0.components.count == atLimit.count && !$0.files.isEmpty })
 
-    try write(root, "Collections/Albums/" + (atLimit + ["deeper"]).joined(separator: "/") + "/X.JPG")
+    try write(
+      root, "Collections/Albums/" + (atLimit + ["deeper"]).joined(separator: "/") + "/X.JPG")
     #expect(throws: BackupScanReadError.self) {
       _ = try BackupScanner.scanCollectionsFolder(at: root)
     }

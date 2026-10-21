@@ -84,9 +84,9 @@ final class CollectionImportHarness {
     let placement = try ExportPlacementResolver().placement(
       for: selection, collections: library.collectionTree,
       existingPlacements: Array(collections.placements.values))
-    let subfolder = ExportPlacementPathPolicy.subfolder(
+    let subfolder = ExportMediaPathPolicy.subfolder(
       for: asset.mediaType, layout: manager.videoLayout)
-    return ExportPlacementPathPolicy.relativePath(placement: placement, subfolder: subfolder)
+    return ExportMediaPathPolicy.relativePath(placement: placement, subfolder: subfolder)
   }
 
   /// The byte-level record files of the current history.

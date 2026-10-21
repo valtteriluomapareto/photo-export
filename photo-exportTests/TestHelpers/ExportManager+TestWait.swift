@@ -43,7 +43,7 @@ extension ExportManager {
       if Task.isCancelled { break }
       if !preparations.isEmpty {
         for task in preparations {
-          if !(await finished(task)) { break }
+          guard await finished(task) else { break }
         }
         continue
       }

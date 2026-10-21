@@ -194,6 +194,8 @@ struct ExportManagerObservationTests {
       let manager: ExportManager
       let counter: BodyInvalidationCounter
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record(
           "run-state:\(manager.hasActiveExportWork):\(manager.queueCount)")
         Color.clear.frame(width: 1, height: 1)
@@ -206,6 +208,8 @@ struct ExportManagerObservationTests {
       @ObservedObject var manager: ExportManager
       let counter: BodyInvalidationCounter
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("published:\(manager.versionSelection.rawValue)")
         Color.clear.frame(width: 1, height: 1)
       }

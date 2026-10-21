@@ -149,9 +149,10 @@ struct AutoSyncManagerTests {
     for _ in 0..<8 { await Task.yield() }
 
     let scopes = builder.exportRunner.receivedContexts.map(\.scope)
-    #expect(scopes == [
-      .timelineFullLibrary, .favoritesFull, .allAlbumsFull, .allSharedAlbumsFull,
-    ])
+    #expect(
+      scopes == [
+        .timelineFullLibrary, .favoritesFull, .allAlbumsFull, .allSharedAlbumsFull,
+      ])
   }
 
   // MARK: - Photos changes → dirty state persistence
@@ -430,8 +431,9 @@ struct AutoSyncManagerTests {
       failedCount: 0, skippedCount: 0,
       cancelReason: nil, result: .completed
     )
-    builder.exportRunner.subject.send(ExportRunState(
-      activeContext: manualSummary.context, isManualActive: true, isAutoSyncActive: false))
+    builder.exportRunner.subject.send(
+      ExportRunState(
+        activeContext: manualSummary.context, isManualActive: true, isAutoSyncActive: false))
     builder.exportRunner.subject.send(.idle)
     builder.exportRunner.completedRunsSubject.send(manualSummary)
 
@@ -709,7 +711,8 @@ struct AutoSyncManagerTests {
     // initial save has landed (it's a synchronous call inside startRun).
     let destId = safeDestination().id!
     let initial = builder.currentRunStore.load(destinationId: destId)
-    #expect(initial != nil, "Journal must be written synchronously before the fan-out Task is dispatched")
+    #expect(
+      initial != nil, "Journal must be written synchronously before the fan-out Task is dispatched")
     #expect(initial?.trigger == "appLaunch")
     #expect(initial?.scopes == ["timeline", "favorites", "albums"])
     // Note: by the time `clock.advance` returned and the debounce timer

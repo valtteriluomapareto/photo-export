@@ -27,7 +27,8 @@ struct AutoSyncPhotosAccessManagerTests {
 
   private func change(_ id: String, _ builder: FakeAutoSyncEnvironmentBuilder) {
     builder.photos.push(
-      PhotoLibraryPersistentChangeEvent(insertedLocalIdentifiers: [id], observedAt: builder.clock.now()))
+      PhotoLibraryPersistentChangeEvent(
+        insertedLocalIdentifiers: [id], observedAt: builder.clock.now()))
   }
 
   /// Access revoked while the app stayed in the background leaves the cached flag true.
@@ -67,9 +68,10 @@ struct AutoSyncPhotosAccessManagerTests {
     change("pending", builder)
     builder.clock.advance(by: 30)
     let fanOut = try #require(manager.activeRunFanOutTask)
-    try #require(await eventually("timeline scope started") {
-      builder.exportRunner.receivedContexts.count == 1
-    })
+    try #require(
+      await eventually("timeline scope started") {
+        builder.exportRunner.receivedContexts.count == 1
+      })
 
     builder.photosAuthorization.live = false
     builder.exportRunner.resumeHung(with: builder.exportRunner.makeDefaultCompletedSummary())
@@ -77,7 +79,9 @@ struct AutoSyncPhotosAccessManagerTests {
 
     #expect(builder.exportRunner.receivedContexts.map(\.scope) == [.timelineFullLibrary])
     #expect(builder.currentRunStore.load(destinationId: destinationId) == nil)
-    #expect(builder.runSummaryStore.load(destinationId: destinationId)?.context.scope == .timelineFullLibrary)
+    #expect(
+      builder.runSummaryStore.load(destinationId: destinationId)?.context.scope
+        == .timelineFullLibrary)
     let dirty = builder.dirtyStore.load(destinationId: destinationId)
     #expect(dirty.scope(.timeline).isEmpty)
     #expect(dirty.scope(.favorites).pendingAssetIds.contains("pending"))
@@ -94,9 +98,10 @@ struct AutoSyncPhotosAccessManagerTests {
     defer { manager.setEnabled(false) }
     builder.clock.advance(by: 10)
     let fanOut = try #require(manager.activeRunFanOutTask)
-    try #require(await eventually("launch run started") {
-      builder.exportRunner.receivedContexts.count == 1
-    })
+    try #require(
+      await eventually("launch run started") {
+        builder.exportRunner.receivedContexts.count == 1
+      })
 
     builder.photosAuthorization.live = false
     builder.photosAuthorization.refreshAuthorization()

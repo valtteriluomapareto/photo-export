@@ -20,8 +20,7 @@ final class GlobalPhotoChangeTokenStore {
   init(
     fileURL: URL,
     fileManager: FileManager = .default,
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "PhotoChangeToken")
+    logger: Logger = Logger.app(.photoChangeToken)
   ) {
     self.fileURL = fileURL
     self.fileManager = fileManager

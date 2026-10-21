@@ -483,7 +483,7 @@ struct RecordStoreAsyncLoadTests {
     try #require(f.state == .loading)
 
     let queue = DispatchQueue(label: "RecordStoreAsyncLoad.parked")
-    let logger = Logger(subsystem: "test", category: "RecordStoreAsyncLoad")
+    let logger = Logger(subsystem: TestLogging.subsystem, category: "RecordStoreAsyncLoad")
     let done = ExportVariantRecord(
       filename: "PARKED.JPG", status: .done, exportDate: Date(), lastError: nil)
     if collection {
@@ -577,7 +577,7 @@ struct RecordStoreAsyncLoadTests {
     let malformed: Int
     let ops: Int
     let queue = DispatchQueue(label: "RecordStoreAsyncLoad.reload")
-    let logger = Logger(subsystem: "test", category: "RecordStoreAsyncLoad")
+    let logger = Logger(subsystem: TestLogging.subsystem, category: "RecordStoreAsyncLoad")
     if collection {
       let reload = CollectionExportRecordStore.RecordFile(
         snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger

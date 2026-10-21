@@ -39,8 +39,7 @@ protocol VideoExportExecutor: Sendable {
 /// surfaces render activity through an injected callback so the toolbar
 /// can show `(downloading…)` / `(rendering…)` while the user waits.
 struct ProductionMediaRenderer: MediaRenderer {
-  private static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "MediaRenderer")
+  private static let logger = Logger.app(.mediaRenderer)
   private let executor: any VideoExportExecutor
   private let activity: @Sendable (RenderActivity?) -> Void
 
@@ -98,7 +97,7 @@ enum LiveVideoExportDefaults {
     let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
     guard let asset = fetch.firstObject else {
       throw NSError(
-        domain: "Export", code: 6,
+        domain: "Export", code: ExportErrorCode.assetNotFoundForVideoRender.rawValue,
         userInfo: [NSLocalizedDescriptionKey: "Asset not found for video render"])
     }
     return asset
@@ -225,13 +224,13 @@ final class LiveVideoExportExecutor: VideoExportExecutor {
 
   fileprivate static func renderUnavailableError() -> NSError {
     NSError(
-      domain: "Export", code: 7,
+      domain: "Export", code: ExportErrorCode.videoExportSessionUnavailable.rawValue,
       userInfo: [NSLocalizedDescriptionKey: "Photos returned no export session"])
   }
 
   fileprivate static func renderFailedError() -> NSError {
     NSError(
-      domain: "Export", code: 8,
+      domain: "Export", code: ExportErrorCode.videoExportFailed.rawValue,
       userInfo: [NSLocalizedDescriptionKey: "AVAssetExportSession ended in a non-success state"])
   }
 }

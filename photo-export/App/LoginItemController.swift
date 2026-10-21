@@ -53,7 +53,7 @@ final class LoginItemController {
 
   init(
     service: (any LoginItemService)? = nil,
-    log: Logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "LoginItem")
+    log: Logger = Logger.app(.loginItem)
   ) {
     self.log = log
     self.service = service ?? SystemLoginItemService()

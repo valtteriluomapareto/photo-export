@@ -708,7 +708,10 @@ struct IdenticalFileAdoptionTests {
         type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG")
       h.photos.assetsByYearMonth["2025-6"] = [asset]
       h.photos.resourcesByAssetId[asset.id] =
-        [photo, TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV")]
+        [
+          photo,
+          TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+        ]
         + (edited
           ? [
             render,
@@ -1186,7 +1189,8 @@ struct IdenticalFileAdoptionTests {
         asset = TestAssetFactory.makeAsset(
           id: "asset", creationDate: Self.june15, isLivePhoto: true)
         h.photos.resourcesByAssetId[asset.id] = [
-          photo, TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
+          photo,
+          TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "IMG_0001.MOV"),
         ]
         h.manager.versionSelection = .edited
         h.manager.livePhotosPairedExport = true
@@ -1231,7 +1235,9 @@ struct IdenticalFileAdoptionTests {
         TestAssetFactory.makeResource(type: .fullSizePhoto, originalFilename: "FullSizeRender.JPG"),
       ]
       h.manager.versionSelection = .editedWithOriginals
-      for (variant, name) in [(ExportVariant.original, "IMG_0001_orig.HEIC"), (.edited, "IMG_0001.JPG")] {
+      for (variant, name) in [
+        (ExportVariant.original, "IMG_0001_orig.HEIC"), (.edited, "IMG_0001.JPG"),
+      ] {
         h.timeline.markVariantInProgress(
           assetId: asset.id, variant: variant, year: 2025, month: 6, relPath: "2025/06/",
           filename: name)

@@ -380,8 +380,8 @@
           "coveredLines": 8,
           "executableLines": 8,
           "lineCoverage": 1,
-          "name": "ExportPlacementPathPolicy.swift",
-          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportPlacementPathPolicy.swift"
+          "name": "ExportMediaPathPolicy.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportMediaPathPolicy.swift"
         },
         {
           "coveredLines": 0,
@@ -667,8 +667,8 @@
           "coveredLines": 30,
           "executableLines": 30,
           "lineCoverage": 1,
-          "name": "ExportPathPolicy.swift",
-          "path": "/fixture/workspace/photo-export/photo-export/Export/ExportPathPolicy.swift"
+          "name": "CollectionPathComponentPolicy.swift",
+          "path": "/fixture/workspace/photo-export/photo-export/Export/CollectionPathComponentPolicy.swift"
         },
         {
           "coveredLines": 10,
