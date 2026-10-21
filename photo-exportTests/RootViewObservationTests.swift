@@ -115,10 +115,9 @@ import Testing
             .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
             .environment(\.bodyInvalidationCounter, counter)
             .environment(\.screenshotSurfaceKey, screenshotSurfaceKey).defaultAppStorage(defaults))
-        let owned = NSWindow(
+        let owned = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
-          styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        owned.isReleasedWhenClosed = false
+          styleMask: [.titled, .closable])
         owned.contentView = hosted
         window = owned
         owned.orderFront(nil)

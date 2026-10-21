@@ -83,7 +83,11 @@ struct ExportQueueStateSnapshotTests {
     let h = makeHarness()
     defer { cleanupHarness(h) }
 
-    let assets = (1...3).map { TestAssetFactory.makeAsset(id: "snap-\($0)") }
+    let assets = (1...3).map {
+      TestAssetFactory.makeAsset(
+        id: "snap-\($0)",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
+    }
     h.photoLib.assetsByYearMonth["2025-7"] = assets
     for a in assets {
       h.photoLib.resourcesByAssetId[a.id] = [
@@ -159,8 +163,12 @@ struct ExportQueueStateSnapshotTests {
 
     // Force the coordinator into a running state cheaply by enqueueing one job and
     // gating its writer so the run loop is parked.
-    let asset = TestAssetFactory.makeAsset(id: "sink-sync")
-    let queued = TestAssetFactory.makeAsset(id: "sink-sync-queued")
+    let asset = TestAssetFactory.makeAsset(
+      id: "sink-sync",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
+    let queued = TestAssetFactory.makeAsset(
+      id: "sink-sync-queued",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset, queued]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(originalFilename: "X.JPG")

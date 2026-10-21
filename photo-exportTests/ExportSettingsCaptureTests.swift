@@ -277,7 +277,10 @@ struct ExportSettingsCaptureTests {
   @Test func heicConversionRemainsLiveAfterEnqueue() async {
     let f = Fixture()
     defer { f.cleanup() }
-    let asset = TestAssetFactory.makeAsset(id: "heic", originalUTI: "public.heic")
+    let asset = TestAssetFactory.makeAsset(
+      id: "heic",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+      originalUTI: "public.heic")
     f.library.assetsByYearMonth["2025-1"] = [asset]
     f.library.resourcesByAssetId["heic"] = [
       TestAssetFactory.makeResource(originalFilename: "IMAGE.HEIC")

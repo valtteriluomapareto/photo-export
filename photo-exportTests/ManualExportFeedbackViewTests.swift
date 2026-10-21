@@ -39,6 +39,7 @@ import Testing
       let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
       let counter = BodyInvalidationCounter()
       var window: NSWindow?
+      var hosted: NSView?
       var settingsWindow: NSWindow?
       var selectedAtOpen: String?
 
@@ -70,7 +71,10 @@ import Testing
         manager.progressState.totalJobsCompleted = 3
       }
 
-      func show(successDelay: @escaping @Sendable () async throws -> Void = {}) {
+      func show(
+        initialSize: CGSize = CGSize(width: 800, height: 120),
+        successDelay: @escaping @Sendable () async throws -> Void = {}
+      ) {
         let hosted = NSHostingView(
           rootView: ExportProgressBar(
             successDelay: successDelay,
@@ -82,10 +86,11 @@ import Testing
           .environmentObject(manager).environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let owned = NSWindow(
-          contentRect: NSRect(x: -10000, y: -10000, width: 800, height: 120),
+          contentRect: NSRect(origin: CGPoint(x: -10000, y: -10000), size: initialSize),
           styleMask: [.borderless], backing: .buffered, defer: false)
         owned.isReleasedWhenClosed = false
         owned.contentView = hosted
+        self.hosted = hosted
         window = owned
         owned.orderFront(nil)
       }
@@ -115,6 +120,7 @@ import Testing
         photoChangeAdapter.stop()
         window?.contentView = nil
         window?.close()
+        hosted = nil
         settingsWindow?.contentView = nil
         settingsWindow?.close()
         counter.reset()
@@ -129,6 +135,81 @@ import Testing
 
     private func reached(_ gate: AsyncCheckpoint) async -> Bool {
       await gate.waitForEnter(count: 1)
+    }
+
+    private func settledContentSize(in f: Fixture) async throws -> CGSize {
+      let window = try #require(f.window)
+      let hosted = try #require(f.hosted)
+      var previous = CGSize.zero
+      var stablePasses = 0
+      let settled = await observe {
+        hosted.layoutSubtreeIfNeeded()
+        let size = window.contentLayoutRect.size
+        guard size.width > 0, size.height > 0 else { return false }
+        stablePasses = size == previous ? stablePasses + 1 : 0
+        previous = size
+        return stablePasses >= 3
+      }
+      try #require(settled, "The fitted summary window did not settle")
+      #expect(window.contentLayoutRect.height >= hosted.fittingSize.height)
+      return window.contentLayoutRect.size
+    }
+
+    @Test(arguments: [120.0, 600.0])
+    func multilineFailureFitsFirstLayoutAndMountedReplacements(initialHeight: Double) async throws {
+      let f = Fixture()
+      defer { f.close() }
+      let path =
+        "/Volumes/Family Photo Backup/Collections/Albums/"
+        + "Summer trips with family and friends/Coastal walks and mountain holidays/"
+        + "Original photos and edited copies/2026/09/IMG_20260914_123456_original.HEIC"
+      let detail =
+        "The export could not finish writing its history for \(path). "
+        + "The backup drive disconnected before the history could be saved. "
+        + "Reconnect the drive, keep Photo Export open to preserve unsaved progress, "
+        + "and retry saving export history before starting another export."
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 3, failedCount: 1, failureMessage: detail)
+      f.show(initialSize: CGSize(width: 480, height: initialHeight))
+      let rendered = await observe {
+        f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"]
+      }
+      try #require(rendered)
+      let narrow = try await settledContentSize(in: f)
+      #expect(narrow.width == 480)
+      let oldDismiss = try #require(f.counter.renderedActions["progress-dismiss"])
+      let oldIssues = try #require(f.counter.renderedActions["progress-view-issues"])
+
+      let window = try #require(f.window)
+      window.setContentSize(CGSize(width: 800, height: narrow.height))
+      let wide = try await settledContentSize(in: f)
+      #expect(wide.width == 800)
+      #expect(narrow.height > wide.height, "Narrow columns must wrap the full failure detail")
+
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 3, failedCount: 1, failureMessage: nil)
+      let shortened = await observe { window.contentLayoutRect.height < wide.height }
+      try #require(shortened)
+      let short = try await settledContentSize(in: f)
+      oldIssues()
+      oldDismiss()
+      #expect(f.selectedAtOpen == nil)
+      #expect(f.manager.progressState.manualSummary?.isDismissed == false)
+
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 3, failedCount: 1, failureMessage: detail)
+      let expanded = await observe { window.contentLayoutRect.height > short.height }
+      try #require(expanded)
+      let replaced = try await settledContentSize(in: f)
+      #expect(replaced.width == 800)
+      #expect(replaced.height == wide.height)
+      let issues = try #require(f.counter.renderedActions["progress-view-issues"])
+      issues()
+      #expect(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
+      let dismiss = try #require(f.counter.renderedActions["progress-dismiss"])
+      dismiss()
+      let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
+      #expect(hidden)
     }
 
     @Test(arguments: [false, true])

@@ -32,10 +32,10 @@ struct ReuseSourceCopyPathTests {
     )
   }
 
-  private func makeAsset(id: String) -> AssetDescriptor {
+  private func makeAsset(id: String, month: Int) -> AssetDescriptor {
     AssetDescriptor(
       id: id,
-      creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: month, day: 15))!,
       mediaType: .image,
       pixelWidth: 100,
       pixelHeight: 100,
@@ -58,7 +58,7 @@ struct ReuseSourceCopyPathTests {
       dest.cleanup()
     }
 
-    let asset = makeAsset(id: "shared-asset")
+    let asset = makeAsset(id: "shared-asset", month: 2)
     photoLib.assetsByYearMonth["2025-2"] = [asset]
     photoLib.favoritesAssets = [asset]
     photoLib.resourcesByAssetId[asset.id] = [
@@ -101,7 +101,7 @@ struct ReuseSourceCopyPathTests {
       dest.cleanup()
     }
 
-    let asset = makeAsset(id: "asset-1")
+    let asset = makeAsset(id: "asset-1", month: 3)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     photoLib.favoritesAssets = [asset]
     photoLib.resourcesByAssetId[asset.id] = [
@@ -147,7 +147,7 @@ struct ReuseSourceCopyPathTests {
       dest.cleanup()
     }
 
-    let asset = makeAsset(id: "ghost-asset")
+    let asset = makeAsset(id: "ghost-asset", month: 4)
     photoLib.favoritesAssets = [asset]
     photoLib.resourcesByAssetId[asset.id] = [
       ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")
@@ -179,7 +179,7 @@ struct ReuseSourceCopyPathTests {
       dest.cleanup()
     }
 
-    let asset = makeAsset(id: "fresh")
+    let asset = makeAsset(id: "fresh", month: 5)
     photoLib.assetsByYearMonth["2025-5"] = [asset]
     photoLib.resourcesByAssetId[asset.id] = [
       ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")

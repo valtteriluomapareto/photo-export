@@ -60,7 +60,9 @@ struct ExportManagerPauseResumeTests {
     defer { cleanupHarness(h) }
 
     let assets = (1...3).map {
-      TestAssetFactory.makeAsset(id: "pause-\($0)")
+      TestAssetFactory.makeAsset(
+        id: "pause-\($0)",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
     }
     h.photoLib.assetsByYearMonth["2025-7"] = assets
     for asset in assets {
@@ -119,7 +121,9 @@ struct ExportManagerPauseResumeTests {
     let h = makeTestHarness()
     defer { cleanupHarness(h) }
 
-    let asset = TestAssetFactory.makeAsset(id: "single")
+    let asset = TestAssetFactory.makeAsset(
+      id: "single",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!)
     h.photoLib.assetsByYearMonth["2025-1"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(originalFilename: "S.JPG")

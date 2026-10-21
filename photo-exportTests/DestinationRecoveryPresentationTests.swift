@@ -32,6 +32,7 @@ import Testing
       let manager: ExportManager
       let autoSync = AutoSyncManager()
       let whatsNew: WhatsNewState
+      let hosted: HostedViewHarness
       let counter = BodyInvalidationCounter()
       var window: NSWindow?
       var folder: URL { root.appendingPathComponent("Backup") }
@@ -50,18 +51,18 @@ import Testing
           volumeNotificationCenter: NotificationCenter(),
           validationScopeAcquirer: { _ in scope.allowed }, validationScopeReleaser: { _ in })
         library = PhotoLibraryManager(overrideService: service)
-        timeline = ExportRecordStore(baseDirectoryURL: root.appendingPathComponent("Records"))
-        collections = CollectionExportRecordStore(
-          baseDirectoryURL: root.appendingPathComponent("Records"))
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
-        manager = ExportManager(
-          photoLibraryService: service, exportDestination: fakeDestination,
-          exportRecordStore: timeline, collectionExportRecordStore: collections,
-          assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
-          userDefaults: defaults)
+        let export = ExportManagerHarness(
+          label: "DestinationRecoveryPresentation", destinationId: "A",
+          storeRootURL: root.appendingPathComponent("Records"), userDefaults: defaults,
+          photoLib: service, dest: fakeDestination)
+        timeline = export.store
+        collections = export.collectionStore
+        manager = export.manager
         whatsNew = WhatsNewState(userDefaults: defaults, currentVersion: "test", catalog: [])
         whatsNew.markAsSeen()
+        hosted = HostedViewHarness(
+          library: library, export: export, destination: destination, autoSync: autoSync,
+          whatsNew: whatsNew)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         if !restoreFailure {
           destination.setSelectedFolderForTesting(folder)
@@ -116,15 +117,11 @@ import Testing
 
       func show(_ surface: Surface = .root) {
         let hosted = NSHostingView(
-          rootView: pane(surface).frame(width: 1200, height: 800)
-            .environmentObject(library).environmentObject(timeline).environmentObject(collections)
-            .environmentObject(manager).environment(manager.progressState)
-            .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
+          rootView: self.hosted.environment(pane(surface).frame(width: 1200, height: 800))
             .environment(\.bodyInvalidationCounter, counter))
-        let owned = NSWindow(
+        let owned = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
-          styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        owned.isReleasedWhenClosed = false
+          styleMask: [.titled, .closable])
         owned.contentView = hosted
         window = owned
         hosted.layoutSubtreeIfNeeded()

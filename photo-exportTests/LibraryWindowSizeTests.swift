@@ -32,34 +32,31 @@ struct LibraryWindowSizeTests {
     let service = FakePhotoLibraryService()
     service.yearCounts = [(2026, 2)]
     let library = PhotoLibraryManager(overrideService: service)
-    let timeline = ExportRecordStore(baseDirectoryURL: root.appendingPathComponent("Records"))
-    let collections = CollectionExportRecordStore(
-      baseDirectoryURL: root.appendingPathComponent("Records"))
-    timeline.configure(for: "A")
-    collections.configure(for: "A")
     let fakeDestination = FakeExportDestination()
-    let manager = ExportManager(
-      photoLibraryService: service, exportDestination: fakeDestination,
-      exportRecordStore: timeline, collectionExportRecordStore: collections,
-      assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
-      userDefaults: defaults)
+    let export = ExportManagerHarness(
+      label: "LibraryWindowSize", destinationId: "A",
+      storeRootURL: root.appendingPathComponent("Records"), userDefaults: defaults,
+      photoLib: service, dest: fakeDestination)
+    let timeline = export.store
+    let collections = export.collectionStore
+    let manager = export.manager
     let autoSync = AutoSyncManager()
     let whatsNew = WhatsNewState(userDefaults: defaults, currentVersion: "test", catalog: [])
     whatsNew.markAsSeen()
+    let hosted = HostedViewHarness(
+      library: library, export: export, destination: destination, autoSync: autoSync,
+      whatsNew: whatsNew)
 
     // Styled like the app's library window, whose toolbar the hosted view installs.
-    let window = NSWindow(
+    let window = HostedViewHarness.makeWindow(
       contentRect: NSRect(x: -10000, y: -10000, width: 1280, height: 800),
       styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-      backing: .buffered, defer: false)
-    window.isReleasedWhenClosed = false
-    window.toolbarStyle = .unified
+      toolbarStyle: .unified)
     window.contentView = NSHostingView(
-      rootView: LibraryRootView(screenshotSurfaceKey: nil, timelineHistoryState: .ready)
-        .environmentObject(library).environmentObject(timeline).environmentObject(collections)
-        .environmentObject(manager).environment(manager.progressState)
-        .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
-        .defaultAppStorage(defaults))
+      rootView: hosted.environment(
+        LibraryRootView(screenshotSurfaceKey: nil, timelineHistoryState: .ready)
+      )
+      .defaultAppStorage(defaults))
     try await withCleanup {
       window.orderFront(nil)
       window.layoutIfNeeded()

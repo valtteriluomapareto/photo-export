@@ -27,7 +27,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let unedited = TestAssetFactory.makeAsset(id: "plain-asset", hasAdjustments: false)
+    let unedited = TestAssetFactory.makeAsset(
+      id: "plain-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-3"] = [unedited]
     photoLib.resourcesByAssetId["plain-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
@@ -51,7 +54,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "edited-asset", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edited-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId["edited-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -76,7 +82,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "heic-asset", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "heic-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 5, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-5"] = [asset]
     photoLib.resourcesByAssetId["heic-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
@@ -98,7 +107,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
-    let asset = TestAssetFactory.makeAsset(id: "dual-asset", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "dual-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-6"] = [asset]
     photoLib.resourcesByAssetId["dual-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -121,7 +133,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
-    let unedited = TestAssetFactory.makeAsset(id: "plain", hasAdjustments: false)
+    let unedited = TestAssetFactory.makeAsset(
+      id: "plain",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-7"] = [unedited]
     photoLib.resourcesByAssetId["plain"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
@@ -151,7 +166,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "broken-edit", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "broken-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 8, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-8"] = [asset]
     photoLib.resourcesByAssetId["broken-edit"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
@@ -185,8 +203,14 @@ struct EditedModeExportTests {
     let bEdited = TestAssetFactory.makeResource(
       type: .fullSizePhoto, originalFilename: "FullRender.JPG")
 
-    let assetA = TestAssetFactory.makeAsset(id: "asset-a", hasAdjustments: false)
-    let assetB = TestAssetFactory.makeAsset(id: "asset-b", hasAdjustments: true)
+    let assetA = TestAssetFactory.makeAsset(
+      id: "asset-a",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 9, day: 15))!,
+      hasAdjustments: false)
+    let assetB = TestAssetFactory.makeAsset(
+      id: "asset-b",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 9, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-9"] = [assetA, assetB]
     photoLib.resourcesByAssetId["asset-a"] = [aOriginal]
     photoLib.resourcesByAssetId["asset-b"] = [bOriginal, bEdited]
@@ -212,7 +236,10 @@ struct EditedModeExportTests {
 
     // Default mode for asset B first: writes the edit at the natural stem.
     manager.versionSelection = .edited
-    let assetB = TestAssetFactory.makeAsset(id: "b", hasAdjustments: true)
+    let assetB = TestAssetFactory.makeAsset(
+      id: "b",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 11, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-11"] = [assetB]
     photoLib.resourcesByAssetId["b"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -251,7 +278,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "stale-tmp", hasAdjustments: false)
+    let asset = TestAssetFactory.makeAsset(
+      id: "stale-tmp",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 12, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-12"] = [asset]
     photoLib.resourcesByAssetId["stale-tmp"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
@@ -275,7 +305,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
 
     manager.versionSelection = .edited
-    let asset = TestAssetFactory.makeAsset(id: "switch-asset", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "switch-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-1"] = [asset]
     photoLib.resourcesByAssetId["switch-asset"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -306,7 +339,10 @@ struct EditedModeExportTests {
     manager.versionSelection = .edited
 
     // Initial export: asset is unedited.
-    var asset = TestAssetFactory.makeAsset(id: "post-edit", hasAdjustments: false)
+    var asset = TestAssetFactory.makeAsset(
+      id: "post-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-2"] = [asset]
     photoLib.resourcesByAssetId["post-edit"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG"),
@@ -317,7 +353,10 @@ struct EditedModeExportTests {
     #expect(store.exportInfo(assetId: "post-edit")?.variants[.original]?.filename == "IMG_0001.JPG")
 
     // The user later edits the photo in Photos. Re-run default export.
-    asset = TestAssetFactory.makeAsset(id: "post-edit", hasAdjustments: true)
+    asset = TestAssetFactory.makeAsset(
+      id: "post-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-2"] = [asset]
     manager.startExportMonth(year: 2025, month: 2)
     await manager.waitForQueueDrained()
@@ -338,7 +377,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
-    var asset = TestAssetFactory.makeAsset(id: "user-orig", hasAdjustments: false)
+    var asset = TestAssetFactory.makeAsset(
+      id: "user-orig",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!,
+      hasAdjustments: false)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     photoLib.resourcesByAssetId["user-orig"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "vacation_orig.JPG"),
@@ -352,7 +394,10 @@ struct EditedModeExportTests {
 
     // Asset becomes adjusted; re-run default export. The new edit should follow the user's
     // own group stem `vacation_orig`, not collapse to `vacation`.
-    asset = TestAssetFactory.makeAsset(id: "user-orig", hasAdjustments: true)
+    asset = TestAssetFactory.makeAsset(
+      id: "user-orig",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     manager.startExportMonth(year: 2025, month: 3)
     await manager.waitForQueueDrained()
@@ -374,7 +419,10 @@ struct EditedModeExportTests {
       atPath: monthDir.appendingPathComponent("IMG_0001.JPG").path,
       contents: Data("stray".utf8))
 
-    let asset = TestAssetFactory.makeAsset(id: "fresh-pair", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "fresh-pair",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId["fresh-pair"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC"),
@@ -439,7 +487,10 @@ struct EditedModeExportTests {
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
-    let asset = TestAssetFactory.makeAsset(id: "mixed", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "mixed",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 15))!,
+      hasAdjustments: true)
     photoLib.assetsByYearMonth["2025-2"] = [asset]
     photoLib.resourcesByAssetId["mixed"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.JPG")
