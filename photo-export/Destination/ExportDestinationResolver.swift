@@ -6,12 +6,10 @@ import Foundation
 /// prior records, unique-filename collision suffixing, and the natural-vs-`_orig`
 /// disambiguation that defends against user filenames that happen to end with `_orig`.
 ///
-/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 2, the
-/// resolver replaces the inline private methods that lived on `ExportManager`
-/// (`resolveDestination`, `allocatePairedGroupStem`, `allocateUnusedOrigStem`,
-/// `inheritedGroupStem`, `splitFilename`, `uniqueFileURL`). The low-level naming-rule
-/// helper `ExportFilenamePolicy` is unchanged and remains the source of truth for the
-/// `_orig` suffix string and the legacy filename-parsing rules.
+/// Group-stem allocation stays separate from byte production so original/edited
+/// companions can share a collision-free stem. `ExportFilenamePolicy` owns the
+/// `_orig` suffix and legacy parsing rules; `FinalNamePlanner` checks staged bytes
+/// before the final move or adoption.
 ///
 /// `Sendable` because all stored state is `Sendable` (`fileSystem` is the
 /// `Sendable`-bound `FileSystemService` protocol). The resolver carries no other state,

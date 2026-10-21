@@ -2,25 +2,15 @@ import Combine
 import Foundation
 import OSLog
 
-/// Owns the Import Existing Backup flow: scanner invocation (the timeline's `YYYY/MM` folders
-/// and the album, shared-album and Favorites folders under `Collections/`), library matching,
-/// bulk record insertion into both stores, both-store reconciliation, and the per-stage
-/// progress publishing.
+/// Owns Import Existing Backup: timeline and collection scanning, library matching,
+/// record insertion, reconciliation, and stage progress.
 ///
-/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 5, this
-/// extraction:
-/// - Moves the ~190-line `startImport` body (and `cancelImport`) out of `ExportManager`.
-/// - Owns the published mirrors `isImporting`, `importStage` + `importError` directly; ExportManager
-///   sinks them onto its own `@Published` properties so `isImportingPublisher`
-///   subscribers and SwiftUI view bindings keep emitting from the same source.
-/// - Reaches the Phase-0 cancellation seam (`isCurrent` / `throwIfCancelledOrStale` /
-///   `bumpGeneration`) directly through the injected `ExportQueueCoordinator`
-///   reference, not via the host (issue #67 item 2). The host is now scoped to the
-///   writable `importResult` publisher and the dependencies the scanner + reconcile
-///   need.
-///
-/// `importResult` stays on `ExportManager` as a `@Published var` so its writability
-/// contract is preserved; the coordinator updates it via `Host.setImportResult(_:)`.
+/// Synchronous sinks mirror `isImporting`, `importStage`, and `importError` onto
+/// `ExportManager` so AutoSync and views keep a consistent observation surface.
+/// Cancellation uses the injected `ExportQueueCoordinator` directly. The narrow Host
+/// provides store/destination dependencies and writes `importResult`, whose manager
+/// property remains writable by callers.
+/// See docs/reference/architecture-conventions.md#import-outcome-ownership.
 @MainActor
 final class ImportCoordinator: ObservableObject {
 
@@ -28,8 +18,8 @@ final class ImportCoordinator: ObservableObject {
 
   /// Hooks back to ExportManager for state the coordinator does not own: the writable
   /// `importResult` mirror and the destination/store dependencies required by
-  /// scanner + reconcile. The Phase-0 cancellation seam is no longer on this
-  /// protocol — the coordinator reaches it through its injected
+  /// scanner + reconcile. Cancellation is separate from this protocol;
+  /// the coordinator reaches it through its injected
   /// `ExportQueueCoordinator` reference.
   @MainActor
   protocol Host: AnyObject {
@@ -99,10 +89,8 @@ final class ImportCoordinator: ObservableObject {
   private let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "ImportCoordinator")
   private weak var host: Host?
-  /// Cancellation seam (Phase 0). Held as a weak reference because both the queue
-  /// coordinator and this coordinator have the same lifetime owner
-  /// (`ExportManager`); a strong reference would create a retain cycle through
-  /// `Host`.
+  /// Cancellation seam. A weak reference keeps collaborator lifetimes bounded by
+  /// their shared owner, `ExportManager`.
   private weak var queueCoordinator: ExportQueueCoordinator?
 
   private let backupDirectoryReader: any BackupDirectoryReading
@@ -321,7 +309,7 @@ final class ImportCoordinator: ObservableObject {
                 status: .done,
                 exportDate: now,
                 lastError: nil,
-                // Issue #38: preserve the on-disk location captured by the scanner so
+                // Preserve the on-disk location captured by the scanner so
                 // reuse-source and reconcile can find the file. `nil` for the bare
                 // month folder; `"videos"` for files discovered under
                 // `YYYY/MM/videos/`. Without this, importing a backup written under

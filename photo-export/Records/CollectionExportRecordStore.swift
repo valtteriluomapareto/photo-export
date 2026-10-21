@@ -64,9 +64,9 @@ final class CollectionExportRecordStore: ObservableObject {
     }
   }
 
-  /// One log line. The plan calls for four ops:
+  /// One log line, representing one of four operations:
   /// `upsertPlacement`, `deletePlacement`, `upsertRecord`, `deleteRecord`.
-  /// Encoded with a discriminator field `op` to match the plan's JSON example exactly.
+  /// The `op` discriminator keeps replay dispatch explicit and stable.
   enum LogOp: Codable, Sendable, Equatable {
     case upsertPlacement(placementId: String, placement: ExportPlacement)
     case deletePlacement(placementId: String)
@@ -133,7 +133,7 @@ final class CollectionExportRecordStore: ObservableObject {
 
   /// Top-level placement metadata, keyed by placement id. Stale entries from deleted albums
   /// remain here intentionally — they are load-bearing for collision detection and rename
-  /// history. Cleanup of deleted-album placements is out of scope for this plan.
+  /// history. Deleted-album placements retain their export history.
   private(set) var placements: [String: ExportPlacement] = [:]
   /// Per-placement record bodies, keyed by `[placementId][assetId]`.
   private(set) var recordBodies: [String: [String: RecordBody]] = [:]
@@ -183,7 +183,7 @@ final class CollectionExportRecordStore: ObservableObject {
   /// (init + didSet on the published property). Read by
   /// `isExported(asset:placement:selection:)` so collection-grid view callers
   /// see the right answers without threading the toggle through every
-  /// `@EnvironmentObject` site. Issue #47.
+  /// `@EnvironmentObject` site.
   ///
   /// `@Published` (rather than plain stored) so `@EnvironmentObject` views
   /// re-render when the toggle flips. See `ExportRecordStore`'s sibling
@@ -622,7 +622,7 @@ final class CollectionExportRecordStore: ObservableObject {
         placementId: record.placement.id, assetId: record.assetId, body: body))
   }
 
-  /// `subfolder` (issue #38) is the path component inside the placement folder where
+  /// `subfolder` is the path component inside the placement folder where
   /// the file will land (e.g. `"videos"`). `nil` means the bare placement path. The
   /// value is persisted on the per-variant record so reuse-source and reconcile can
   /// recover each file's true on-disk location regardless of the current setting.
@@ -821,10 +821,10 @@ final class CollectionExportRecordStore: ObservableObject {
     reconciliationRevision &+= 1
     let revision = reconciliationRevision
 
-    // Phase 1 (main): invalid placement metadata cannot prove a file missing.
+    // Snapshot on main: invalid placement metadata cannot prove a file missing.
     let probes = try completedVariantProbes(root: root)
 
-    // Phase 2 (off-main): preserve errors until ownership has been checked.
+    // Probe off-main: preserve errors until ownership has been checked.
     let probesCopy = probes
     let fileChecker = reconciliationFileChecker
     // Cancellation stops new probes; a probe in flight finishes first.
@@ -852,7 +852,7 @@ final class CollectionExportRecordStore: ObservableObject {
 
     let toPrune = try outcome.get()
 
-    // Phase 3 (main): apply the whole verified batch synchronously.
+    // Commit on main: apply the whole verified batch synchronously.
     var prunedVariants = 0
     var prunedRecords = 0
     for (placementId, assetId, variantKey) in toPrune {
@@ -889,7 +889,7 @@ final class CollectionExportRecordStore: ObservableObject {
       }
       for (assetId, body) in byAsset {
         for (variantKey, vr) in body.variants where vr.status == .done {
-          // Issue #38: per-variant subfolder. A standalone-video asset's variants
+          // per-variant subfolder. A standalone-video asset's variants
           // may live in `<placement>/videos/`, while image-asset variants live at
           // the bare placement path. Probe each variant against its own stored
           // subfolder.
@@ -968,11 +968,11 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   /// True when every required variant for `asset` under `selection` is `.done`, OR the
-  /// asset is covered by the issue #22 edited-fallback case (see
+  /// asset is covered by the edited-fallback case (see
   /// `ExportCompletionPolicy.satisfiesEditedFallback`). Collection placements derive the
   /// `VariantPolicy` from `placement.kind` so shared-album single-resource clamping
   /// applies correctly.
-  /// `livePhotosPaired` (issue #49) is REQUIRED — no default. Every UI call site that
+  /// `livePhotosPaired` is REQUIRED — no default. Every UI call site that
   /// surfaces "is this asset exported?" must consider whether the user has opted into
   /// paired-video accounting. Tests pass `livePhotosPaired: false` explicitly when the
   /// scenario doesn't involve Live Photos; the small extra boilerplate catches the
