@@ -1,6 +1,16 @@
 # Testing Improvement Plan
 
-Status: Steps 1-7 shipped. Steps 8 (UI tests + CI) and 9 (fixtures/helpers) were never started and have been folded back into [`implementation-tasks.md`](../implementation-tasks.md) under a new Testing section — re-spec before picking up. The "~167 tests in 18 suites" baseline below is the count at the time of Step 7's completion and was not maintained afterward; treat it as historical. Kept as a decision record for the protocol-seam strategy and the gap analysis it produced.
+Status: Steps 1–7 shipped; archived as a decision record. End-to-end UI tests
+(Step 8) remain tracked in [#340](https://github.com/valtteriluomapareto/photo-export/issues/340).
+Step 9 has substantial implementation: `TestHelpers/` contains `TestScratch`,
+`TestAssetFactory`, `BulkLibraryFixture` and shared fakes/waits; released-writer
+fixtures live in `test-fixtures/persistence/` (see
+[fixture provenance](../historical-persistence-fixtures.md)). Remaining fixture
+and helper ideas are recorded in the [migrated backlog](https://github.com/valtteriluomapareto/photo-export/issues/318#issuecomment-6311950302), with current
+harness follow-ups in [#302](https://github.com/valtteriluomapareto/photo-export/issues/302).
+
+The coverage table, “~167 tests in 18 suites” baseline, suggested execution order
+and Steps 8–9 below are historical, not the current test inventory or checklist.
 
 Current state: **~167 tests in 18 suites.** Protocol seams are in place (Step 2 done). Export pipeline, record store recovery, backup-scanner matching, edited-mode export, and ExportDestinationManager validation/persistence all have coverage. Remaining gaps are MonthViewModel async loading, full ExportDestinationManager integration (volume unmount, security-scope pairing), and UI tests.
 

@@ -1,6 +1,12 @@
 # Import Existing Backup Plan
 
-Status: Phase 1 (manual legacy import MVP) shipped. Phases 2 (sidecar writer/reader) and 3 (UX polish) were never started and have been folded back into [`implementation-tasks.md`](../implementation-tasks.md) as loose future-improvement items — re-spec before picking up. Kept as a decision record for the matching algorithm, the sidecar schema notes, and the "do not depend on `PHCloudIdentifier`" rationale.
+Status: Manual import shipped; archived as a decision record for the matching
+algorithm, sidecar proposal and “do not depend on `PHCloudIdentifier`” rationale.
+Import now also rebuilds Favorites, album and shared-album history (PR #342,
+[#106](https://github.com/valtteriluomapareto/photo-export/issues/106)). Sidecar
+writer/reader and sidecar-discovery ideas remain deferred in the
+[migrated backlog](https://github.com/valtteriluomapareto/photo-export/issues/318#issuecomment-6311950302); re-spec them before implementation. The phases and
+UX proposals below describe the original design, not an active checklist.
 
 ## Summary
 
