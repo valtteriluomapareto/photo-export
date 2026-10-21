@@ -30,26 +30,13 @@ struct ReuseSourceDestinationErrorTests {
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ReuseSourceDestErr")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("ReuseDestErr")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
+    let harness = ExportManagerHarness(
+      label: "ReuseSourceDestErr",
+      userDefaults: TestScratch.defaults("ReuseDestErr"))
+    return (
+      harness.manager, harness.photoLib, harness.dest, harness.writer, harness.fileSystem,
+      harness.store, harness.collectionStore, harness.storeRoot
     )
-    return (manager, photoLib, dest, writer, fileSystem, timelineStore, collectionStore, storeRoot)
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {
