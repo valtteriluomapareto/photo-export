@@ -7,7 +7,7 @@ import Foundation
 /// Without intra-loop drops, `ExportManager.runBulkEnqueueLoop`'s timeline
 /// or 282-album sweep accumulates every touched PHAsset and PhotoKit's
 /// lazy working set behind them; large libraries cross the sandboxed-app
-/// high watermark and get killed by `EXC_RESOURCE` (issue #112).
+/// high watermark and get killed by `EXC_RESOURCE`.
 @MainActor
 protocol PHAssetCacheControlling: AnyObject {
   /// Drops the PHAsset-by-id cache. Distinct from

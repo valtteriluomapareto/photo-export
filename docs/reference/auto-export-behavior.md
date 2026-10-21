@@ -48,6 +48,14 @@ From [Photo Library Changes](../project/archive/auto-sync-background-sync-plan.m
 
 > Treat deleted asset IDs as non-export work for MVP. Do not delete exported files or records automatically.
 
+The same archived section requires:
+
+> Distinguish three failure modes from `fetchPersistentChanges(since:)` and route each explicitly: token-expired, token-invalid, and details-unavailable.
+
+The [change adapter](../../photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift)
+rebases its global cursor after a failure; the reducer schedules bounded full reconciliation.
+This preserves failure identity without treating destination snapshots as replay cursors.
+
 From [Dirty State](../project/archive/auto-sync-background-sync-plan.md#dirty-state):
 
 > Persist per-destination dirty state so accumulated work survives interruption, restart, and disable/enable cycles.
