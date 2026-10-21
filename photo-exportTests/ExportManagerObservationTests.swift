@@ -32,6 +32,16 @@ struct ExportManagerObservationTests {
         userDefaults: TestScratch.defaults("ExportManagerObservation"))
     }
 
+    func queueReadThroughProbes() -> [ObservationProbe] {
+      [
+        ObservationProbe { _ = self.manager.queuedCount(year: 2001, month: 1) },
+        ObservationProbe { _ = self.manager.queuedCountsByPlacementId },
+        ObservationProbe { _ = self.manager.pendingJobs },
+        ObservationProbe { _ = self.manager.currentTask },
+        ObservationProbe { _ = self.manager.isProcessing },
+      ]
+    }
+
     func enqueueOne() {
       manager.queueCoordinator.enqueue([
         .init(
@@ -65,6 +75,48 @@ struct ExportManagerObservationTests {
       #expect(queueCount.changeCount == 1)
       #expect(context.changeCount == 0)
       #expect(enqueueing.changeCount == 0)
+    } cleanup: {
+      await f.close()
+    }
+  }
+
+  /// Without a dependency on queue contents, every probe remains at zero.
+  @Test func queueReadThroughsRegisterDependencies() async {
+    let f = Fixture()
+    await withCleanup {
+      let probes = f.queueReadThroughProbes()
+      f.enqueueOne()
+      #expect(probes.map(\.changeCount) == [1, 1, 1, 1, 1])
+      f.manager.queueCoordinator.enqueue([])
+      #expect(probes.map(\.changeCount) == [1, 1, 1, 1, 1])
+      f.manager.queueCoordinator.processQueueIfNeeded()
+      #expect(probes.map(\.changeCount) == [2, 2, 2, 2, 2])
+      f.manager.cancelAndClear()
+      #expect(probes.map(\.changeCount) == [3, 3, 3, 3, 3])
+    } cleanup: {
+      await f.close()
+    }
+  }
+
+  /// Unrelated writes are silent even without queue dependencies; the final enqueue
+  /// proves the probes are active once those dependencies are registered.
+  @Test func queueReadThroughsStaySilentWithoutQueueChanges() async {
+    let f = Fixture()
+    await withCleanup {
+      let probes = f.queueReadThroughProbes()
+      f.manager.cancelAndClear()
+      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
+      f.manager.clearPending()
+      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
+      f.manager.queueCoordinator.pause()
+      #expect(f.manager.isPaused)
+      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
+      f.manager.versionSelection = .editedWithOriginals
+      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
+      f.manager.progressState.currentAssetFilename = "UNRELATED.HEIC"
+      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0])
+      f.enqueueOne()
+      #expect(probes.map(\.changeCount) == [1, 1, 1, 1, 1])
     } cleanup: {
       await f.close()
     }
@@ -199,6 +251,79 @@ struct ExportManagerObservationTests {
         let _ = counter.record(
           "run-state:\(manager.hasActiveExportWork):\(manager.queueCount)")
         Color.clear.frame(width: 1, height: 1)
+      }
+    }
+
+    /// A plain holder can refresh only through the month query's Observation dependency.
+    @MainActor
+    private struct MonthQueueReader: View {
+      let manager: ExportManager
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        let text = "queued:\(manager.queuedCount(year: 2001, month: 1))"
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record(text)
+        Text(text)
+      }
+    }
+
+    /// The publication barrier stays live independently of the plain reader's dependencies.
+    @MainActor
+    private struct QueuePublicationProbe: View {
+      @ObservedObject var manager: ExportManager
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("queue-publication:\(manager.queueCount)")
+        Color.clear.frame(width: 1, height: 1)
+      }
+    }
+
+    @Test func viewHoldingThePlainManagerFollowsMonthQueueCounts() async throws {
+      let f = Fixture()
+      let counter = BodyInvalidationCounter()
+      let window = HostedViewHarness.makeWindow(
+        contentRect: NSRect(x: -10_000, y: -10_000, width: 100, height: 40),
+        styleMask: [.borderless])
+      window.contentView = NSHostingView(
+        rootView: HStack {
+          MonthQueueReader(manager: f.manager, counter: counter)
+          QueuePublicationProbe(manager: f.manager, counter: counter)
+        })
+      window.orderFront(nil)
+      try await withCleanup {
+        try #require(
+          await observe(in: window) {
+            counter.count(for: "queued:0") > 0
+              && counter.count(for: "queue-publication:0") > 0
+          })
+        window.contentView?.layoutSubtreeIfNeeded()
+        let readerZero = counter.count(for: "queued:0")
+        let publicationZero = counter.count(for: "queue-publication:0")
+
+        f.manager.queueCoordinator.enqueue(
+          (0..<2).map { index in
+            .init(
+              assetLocalIdentifier: "queued-\(index)",
+              placement: .timeline(year: 2001, month: 1), selection: .edited)
+          })
+        try #require(
+          await observe(in: window) { counter.count(for: "queue-publication:2") > 0 })
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(counter.count(for: "queued:2") > 0)
+
+        f.manager.clearPending()
+        try #require(
+          await observe(in: window) {
+            counter.count(for: "queue-publication:0") > publicationZero
+          })
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(counter.count(for: "queued:0") > readerZero)
+      } cleanup: {
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+        await f.close()
       }
     }
 
