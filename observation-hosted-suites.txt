@@ -25,3 +25,6 @@ RootViewObservationTests
 SidebarObservationTests
 ThumbnailViewLifecycleTests
 TimelineSidebarBadgeRefreshTests
+PhotoLibraryBodyCountTests
+PhotoLibraryManagerObservationTests
+PhotoLibraryViewDependencyTests
