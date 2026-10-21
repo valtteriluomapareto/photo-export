@@ -49,17 +49,18 @@ struct BackupScannerMatchingTests {
       let (baseStem, hadSuffix) = BackupScanner.stripCollisionSuffix(from: stem)
       let baseFilename = ext.isEmpty ? baseStem : baseStem + "." + ext
 
-      scannedFiles.append(BackupScanner.ScannedFile(
-        url: fileURL,
-        year: file.year,
-        month: file.month,
-        filename: file.filename,
-        baseFilename: baseFilename,
-        hasCollisionSuffix: hadSuffix,
-        fileExtension: ext.lowercased(),
-        modificationDate: file.modDate,
-        fileSize: file.fileSize
-      ))
+      scannedFiles.append(
+        BackupScanner.ScannedFile(
+          url: fileURL,
+          year: file.year,
+          month: file.month,
+          filename: file.filename,
+          baseFilename: baseFilename,
+          hasCollisionSuffix: hadSuffix,
+          fileExtension: ext.lowercased(),
+          modificationDate: file.modDate,
+          fileSize: file.fileSize
+        ))
     }
     return (scannedFiles, rootDir)
   }
@@ -155,7 +156,8 @@ struct BackupScannerMatchingTests {
 
     let service = makeService(
       assets: [("2025-6", [asset])],
-      resources: ["name-match": [TestAssetFactory.makeResource(originalFilename: "UNIQUE_NAME.JPG")]
+      resources: [
+        "name-match": [TestAssetFactory.makeResource(originalFilename: "UNIQUE_NAME.JPG")]
       ]
     )
 
@@ -320,10 +322,11 @@ struct BackupScannerMatchingTests {
 
     var files: [(year: Int, month: Int, filename: String, modDate: Date?, fileSize: UInt64?)] = []
     for i in 1...60 {
-      files.append((
-        year: 2025, month: 1, filename: "IMG_\(i).JPG",
-        modDate: refDate.addingTimeInterval(Double(i)), fileSize: 1024
-      ))
+      files.append(
+        (
+          year: 2025, month: 1, filename: "IMG_\(i).JPG",
+          modDate: refDate.addingTimeInterval(Double(i)), fileSize: 1024
+        ))
     }
     let (scannedFiles, rootDir) = try makeScannedFiles(files)
     defer { try? FileManager.default.removeItem(at: rootDir) }

@@ -163,7 +163,8 @@ struct AutoSyncPhotosAccessReducerTests {
     case .noDestination: .destinationChanged(.none)
     case .disconnected:
       .destinationChanged(
-        DestinationSnapshot(stableId: "access-A", fingerprint: nil, isAvailable: false, safety: .safe))
+        DestinationSnapshot(
+          stableId: "access-A", fingerprint: nil, isAvailable: false, safety: .safe))
     case .unsafe:
       .destinationChanged(
         DestinationSnapshot(
@@ -236,12 +237,16 @@ struct AutoSyncPhotosAccessReducerTests {
     switch pending {
     case .userExportNow?: state = reduce(.runNowRequested, state).0
     case .scopeSelectionChanged?:
-      state = reduce(
-        .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: true)), state
-      ).0
+      state =
+        reduce(
+          .scopeSelectionChanged(AutoExportScopeSelection(timeline: true, favorites: true)), state
+        ).0
     case .retryBackoff?:
       state = apply(
-        [.retryStateChanged(destinationId: destinationId, retryState: retryDue()), .retryTimerFired],
+        [
+          .retryStateChanged(destinationId: destinationId, retryState: retryDue()),
+          .retryTimerFired,
+        ],
         to: state)
     case .photosChangeFallback?: state = reduce(.photosChangeFetchFailed(.tokenExpired), state).0
     default: break
@@ -255,11 +260,14 @@ struct AutoSyncPhotosAccessReducerTests {
     #expect(
       restored.current
         == .scheduled(
-          reason: reason, fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: reason))))
+          reason: reason, fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: reason))
+        ))
     #expect(restored.pendingTriggerReason == nil)
     #expect(fullReconciliationSaved(effects))
     for scope in restored.scopeSelection.enabledScopes {
-      #expect(restored.dirtyStateByDestination[destinationId]?.scope(scope).pendingFullReconciliation == true)
+      #expect(
+        restored.dirtyStateByDestination[destinationId]?.scope(scope).pendingFullReconciliation
+          == true)
     }
   }
 
@@ -313,10 +321,14 @@ struct AutoSyncPhotosAccessReducerTests {
     let back = AutoSyncEvent.photosAuthorizationChanged(true)
     let stop: [AutoSyncEvent] =
       summaryFirst
-      ? [.autoSyncRunCompleted(stopSummary(run), destinationId: destinationId),
-        .exportRunStateChanged(.idle)]
-      : [.exportRunStateChanged(.idle),
-        .autoSyncRunCompleted(stopSummary(run), destinationId: destinationId)]
+      ? [
+        .autoSyncRunCompleted(stopSummary(run), destinationId: destinationId),
+        .exportRunStateChanged(.idle),
+      ]
+      : [
+        .exportRunStateChanged(.idle),
+        .autoSyncRunCompleted(stopSummary(run), destinationId: destinationId),
+      ]
     let events: [AutoSyncEvent]
     switch order {
     case .bothDuringRun: events = [lost, back] + stop
@@ -339,6 +351,8 @@ struct AutoSyncPhotosAccessReducerTests {
             reason: .photosChanged,
             fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: .photosChanged))))
     }
-    #expect(state.dirtyStateByDestination[destinationId]?.scope(.timeline).pendingFullReconciliation == true)
+    #expect(
+      state.dirtyStateByDestination[destinationId]?.scope(.timeline).pendingFullReconciliation
+        == true)
   }
 }

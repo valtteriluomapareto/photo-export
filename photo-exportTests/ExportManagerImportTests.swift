@@ -87,7 +87,10 @@ struct ExportManagerImportTests {
   /// checks scattered throughout the import task body.
   @Test func cancelImportDuringRunClearsStateAndBumpsGeneration() async throws {
     let (manager, _, dest, _, storeRoot) = makeTestHarness()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     // First call flips isImporting=true synchronously.
     manager.startImport()
@@ -116,7 +119,10 @@ struct ExportManagerImportTests {
   /// hit the `guard !isImporting` early return.
   @Test func startImportWhenAlreadyImportingIsNoOp() async throws {
     let (manager, _, dest, _, storeRoot) = makeTestHarness()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     manager.startImport()
     #expect(manager.isImporting, "first call must flip isImporting synchronously")
@@ -144,7 +150,10 @@ struct ExportManagerImportTests {
 
   @Test func startImportWhenStoreNotReadyIsNoOp() throws {
     let (manager, _, dest, store, storeRoot) = makeTestHarness()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
     store.configure(for: nil)  // → state == .unconfigured
     #expect(store.state == .unconfigured)
 
@@ -160,7 +169,10 @@ struct ExportManagerImportTests {
   /// must still flip `isImporting` back to false.
   @Test func startImportWithEmptyBackupFolderProducesEmptyReport() async throws {
     let (manager, _, dest, _, storeRoot) = makeTestHarness()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     manager.startImport()
     await manager.waitForImportCompletion()
@@ -178,7 +190,10 @@ struct ExportManagerImportTests {
   /// Verifies the scanner → matcher → bulk-import wiring end-to-end.
   @Test func startImportWithMatchableFilePersistsAndReports() async throws {
     let (manager, photoLib, dest, store, storeRoot) = makeTestHarness()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     // The matcher confirms candidates by comparing the asset's `creationDate`
     // against the file's `modificationDate`. Use a deterministic date in 2025-06
@@ -232,7 +247,10 @@ struct ExportManagerImportTests {
   /// or reconcile lookup.
   @Test func startImportPreservesSubfolderForVideoFilesInVideosSubdirectory() async throws {
     let (manager, photoLib, dest, store, storeRoot) = makeTestHarness()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     var components = DateComponents()
     components.year = 2025
@@ -269,7 +287,8 @@ struct ExportManagerImportTests {
     // a file that is already on disk.
     let record = store.exportInfo(assetId: "video-subfolder")
     #expect(record?.variants[.original]?.status == .done)
-    #expect(record?.variants[.original]?.subfolder == "videos",
+    #expect(
+      record?.variants[.original]?.subfolder == "videos",
       "ImportCoordinator must copy ScannedFile.subfolder onto the rebuilt variant record")
     #expect(record?.variants[.original]?.filename == "IMG_VIDEO.MOV")
   }
@@ -278,7 +297,10 @@ struct ExportManagerImportTests {
   /// `unmatchedCount: 1` and no `bulkImport` writes.
   @Test func startImportUnmatchedFilesReportedNotPersisted() async throws {
     let (manager, photoLib, dest, store, storeRoot) = makeTestHarness()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     try plantBackupFile(in: dest, year: 2025, month: 7, filename: "IMG_GHOST.JPG")
     // Library has assets for that month, but none with a fingerprint that matches

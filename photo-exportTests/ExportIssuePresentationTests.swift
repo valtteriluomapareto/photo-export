@@ -7,7 +7,8 @@ import Testing
 @MainActor
 @Suite(.timeLimit(.minutes(2)), .serialized)
 struct ExportIssuePresentationTests {
-  private let created = Date(timeIntervalSince1970: 1_710_244_800)  // March 2024, distinct from failure.
+  // March 2024, distinct from failure.
+  private let created = Date(timeIntervalSince1970: 1_710_244_800)
   private let failedAt = Date(timeIntervalSince1970: 1_800_000_000)
 
   private func failure(_ filename: String?) -> ExportVariantRecord {

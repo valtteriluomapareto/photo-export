@@ -262,7 +262,8 @@ struct AutoSyncSeamCharacterizationTests {
         TestAssetFactory.makeResource(originalFilename: "AUTO.HEIC")
       ]
       let monthAsset = TestAssetFactory.makeAsset(
-        id: "manual", creationDate: Calendar.current.date(
+        id: "manual",
+        creationDate: Calendar.current.date(
           from: DateComponents(year: 2025, month: 7, day: 15))!)
       harness.photoLib.assetsByYearMonth["2025-7"] = [monthAsset]
       harness.photoLib.resourcesByAssetId["manual"] = [

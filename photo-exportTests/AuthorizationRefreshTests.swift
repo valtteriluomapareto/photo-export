@@ -16,6 +16,8 @@ import Testing
       let counter: BodyInvalidationCounter
       var body: some View {
         let route = library.isAuthorized ? "authorized" : "authorization"
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.recordText([route], for: "authorization-route")
         Group {
           if library.isAuthorized {
@@ -49,10 +51,12 @@ import Testing
         let capture = opened
         let content = Host(library: library, counter: counter)
           .environment(\.bodyInvalidationCounter, counter)
-          .environment(\.openURL, OpenURLAction { url in
-            capture.urls.append(url)
-            return .handled
-          })
+          .environment(
+            \.openURL,
+            OpenURLAction { url in
+              capture.urls.append(url)
+              return .handled
+            })
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 500),
           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -79,11 +83,13 @@ import Testing
     }
 
     @Test(.timeLimit(.minutes(1)), arguments: [PHAuthorizationStatus.authorized, .limited])
-    func activationLeavesDeniedPaneAfterAccessIsGranted(status: PHAuthorizationStatus) async throws {
+    func activationLeavesDeniedPaneAfterAccessIsGranted(status: PHAuthorizationStatus) async throws
+    {
       let f = Fixture()
       defer { f.close() }
       f.show()
-      try #require(await observe { f.counter.count(for: "authorization-initial-check-complete") > 0 })
+      try #require(
+        await observe { f.counter.count(for: "authorization-initial-check-complete") > 0 })
       let revision = f.library.libraryRevision
       // Status is authoritative even if a service's separate convenience flag is stale.
       f.service.authorizationStatus = status
@@ -97,11 +103,14 @@ import Testing
     /// The refresh runs app-wide, not only while the access screen shows, so a revoke made
     /// while the app was in the background shows the access screen on return.
     @Test(.timeLimit(.minutes(1)), arguments: [PHAuthorizationStatus.denied, .restricted])
-    func activationShowsTheAccessScreenAfterAccessIsRevoked(status: PHAuthorizationStatus) async throws {
+    func activationShowsTheAccessScreenAfterAccessIsRevoked(status: PHAuthorizationStatus)
+      async throws
+    {
       let f = Fixture(status: .authorized)
       defer { f.close() }
       f.show()
-      try #require(await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
+      try #require(
+        await observe { f.counter.renderedText["authorization-route"] == ["authorized"] })
       f.service.authorizationStatus = status
       f.activate()
       #expect(await observe { f.counter.renderedText["authorization-route"] == ["authorization"] })
@@ -110,11 +119,14 @@ import Testing
     }
 
     @Test(arguments: [PHAuthorizationStatus.denied, .restricted])
-    func repeatedDeniedActivationsDoNotRequestAccessOrInvalidate(status: PHAuthorizationStatus) async throws {
+    func repeatedDeniedActivationsDoNotRequestAccessOrInvalidate(status: PHAuthorizationStatus)
+      async throws
+    {
       let f = Fixture(status: status)
       defer { f.close() }
       f.show()
-      try #require(await observe { f.counter.count(for: "authorization-initial-check-complete") > 0 })
+      try #require(
+        await observe { f.counter.count(for: "authorization-initial-check-complete") > 0 })
       let revision = f.library.libraryRevision
       f.activate()
       f.activate()
@@ -146,12 +158,14 @@ import Testing
       let f = Fixture()
       defer { f.close() }
       f.show()
-      try #require(await observe { f.counter.renderedActions["authorization-open-settings"] != nil })
+      try #require(
+        await observe { f.counter.renderedActions["authorization-open-settings"] != nil })
       let action = try #require(f.counter.renderedActions["authorization-open-settings"])
       action()
-      #expect(f.opened.urls.map(\.absoluteString) == [
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos"
-      ])
+      #expect(
+        f.opened.urls.map(\.absoluteString) == [
+          "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos"
+        ])
     }
 
     @Test(.timeLimit(.minutes(1)))

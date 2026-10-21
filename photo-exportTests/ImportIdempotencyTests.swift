@@ -135,7 +135,10 @@ struct ImportIdempotencyTests {
   /// ghost file); this test pins the contract directly.
   @Test func importStageSequenceMatchesContract() async throws {
     let (manager, photoLib, dest, _, storeRoot, _) = makeTestHarness()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let stageDate = date(year: 2025, month: 6, day: 15)
     try plantBackupFile(
@@ -171,7 +174,8 @@ struct ImportIdempotencyTests {
       .reconcilingDiskState,
       .done,
     ]
-    #expect(canonical == expected,
+    #expect(
+      canonical == expected,
       """
       Import stage-sequence contract violation. Expected: \(expected) Got: \(canonical)
       """)
@@ -241,7 +245,8 @@ struct ImportIdempotencyTests {
     #expect(firstReport?.totalScanned == 3)
 
     let firstSnapshot = snapshot(store)
-    #expect(firstSnapshot.count == 2,
+    #expect(
+      firstSnapshot.count == 2,
       "first import must land exactly 2 records (one per matched file)")
     store.flushForTesting()
     collections.flushForTesting()
@@ -259,16 +264,19 @@ struct ImportIdempotencyTests {
     manager.startImport()
     await manager.waitForImportCompletion()
     let secondReport = manager.importResult
-    #expect(secondReport?.matchedCount == 2,
+    #expect(
+      secondReport?.matchedCount == 2,
       "matched count must be identical across re-imports")
-    #expect(secondReport?.unmatchedCount == 1,
+    #expect(
+      secondReport?.unmatchedCount == 1,
       "unmatched count must be identical across re-imports")
     #expect(secondReport?.totalScanned == 3)
 
     let secondSnapshot = snapshot(store)
 
     // The deterministic record shape must be identical across the two imports.
-    #expect(firstSnapshot == secondSnapshot,
+    #expect(
+      firstSnapshot == secondSnapshot,
       """
       Bulk-import idempotency violated.
       First:  \(firstSnapshot)
@@ -312,7 +320,8 @@ struct ImportIdempotencyTests {
     ]
     photoLib.collectionTree = [
       CollectionBackupFixture.folder(
-        "trips", "Trips", children: [CollectionBackupFixture.album("paris", "Paris", in: ["Trips"])]),
+        "trips", "Trips", children: [CollectionBackupFixture.album("paris", "Paris", in: ["Trips"])]
+      ),
       CollectionBackupFixture.sharedAlbum("family", "Family"),
     ]
     photoLib.assetsByYearMonth["2025-6"] = [photo]
@@ -350,7 +359,8 @@ struct ImportIdempotencyTests {
     collections.flushForTesting()
 
     #expect(second == first)
-    #expect(collections.placements.mapValues(\.relativePath) == firstPlacements.mapValues(\.relativePath))
+    #expect(
+      collections.placements.mapValues(\.relativePath) == firstPlacements.mapValues(\.relativePath))
     #expect(collections.placements.mapValues(\.createdAt) == firstPlacements.mapValues(\.createdAt))
     #expect(collections.recordBodies == firstRecords)
     let secondTimelineFiles = try persistedBytes(

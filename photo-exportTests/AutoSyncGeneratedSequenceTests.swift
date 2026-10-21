@@ -275,7 +275,8 @@ struct AutoSyncGeneratedSequenceTests {
         #expect(
           state.current
             == .scheduled(
-              reason: reason, fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: reason))),
+              reason: reason,
+              fireAt: now.addingTimeInterval(AutoSyncReducer.debounceDelay(for: reason))),
           "\(trace)")
       }
       for index in 0..<generator.pick(4) {

@@ -22,7 +22,8 @@ import Testing
     #expect(open(name).string(forKey: "key") == "value")
     // Nothing in the preferences folder (the user's, or the container's when sandboxed).
     let preferences = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Preferences")
-    let leaked = (try? FileManager.default.contentsOfDirectory(atPath: preferences))?
+    let leaked =
+      (try? FileManager.default.contentsOfDirectory(atPath: preferences))?
       .filter { $0.contains((name as NSString).lastPathComponent) } ?? []
     #expect(leaked.isEmpty)
   }
