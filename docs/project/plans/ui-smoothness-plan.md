@@ -242,9 +242,13 @@ line reader (~190k syscalls for the file). One `Data(contentsOf:)` +
 read straight off `log show --signpost` instead of a Time Profiler trace.
 
 The "off-main load" framing this section originally proposed was based
-on the wrong bottleneck hypothesis. Off-main scaffolding (`.loading`
-state, async configure, mutation-during-loading assertion, the
-test-site migration) is deferred — no measured need.
+on the wrong bottleneck hypothesis for that small store. A later
+measurement on larger stores
+([#312](https://github.com/valtteriluomapareto/photo-export/issues/312#issuecomment-6275859383))
+found the load linear at about 12 µs per record per store in an optimized
+build (5.8 s at 500k records), dominated by JSON decoding, so the load now
+runs off the main actor behind `.loading` (#312). Each `RecordStore.Configure`
+interval spans a load from its configure call until the store settles.
 
 ### 6. Debounce `libraryRevision` Bursts — not needed today
 
