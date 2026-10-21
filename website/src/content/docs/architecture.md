@@ -7,14 +7,14 @@ Photo Export follows a small **SwiftUI + Managers** architecture. Views stay rel
 
 ## App entry point
 
-[`App/photo_exportApp.swift`](https://github.com/valtteriluomapareto/photo-export/blob/main/photo-export/App/photo_exportApp.swift) creates the shared app state and injects it into the view tree with `@EnvironmentObject`.
+[`App/AppCore.swift`](https://github.com/valtteriluomapareto/photo-export/blob/main/photo-export/App/AppCore.swift) creates the shared app state from an `AppComposition` (preferences, the app-state folder and the Photos, file-system, clock and login-item services) and runs the startup sequence. [`App/photo_exportApp.swift`](https://github.com/valtteriluomapareto/photo-export/blob/main/photo-export/App/photo_exportApp.swift) builds the production core and injects its objects into the view tree with `@EnvironmentObject`.
 
 ## Folder layout
 
 Long-lived stateful services and pure helpers are split by feature area under `photo-export/`:
 
-- `App/` — entry point + lifecycle services: `photo_exportApp`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
-- `Export/` — façade + collaborators: `ExportManager` (+ `ExportManager+AutoSyncConformance`), `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, and the helper-policy types: `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`
+- `App/` — entry point + lifecycle services: `photo_exportApp`, `AppCore`, `AppComposition`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`
+- `Export/` — façade + collaborators: `ExportManager` (+ `ExportManager+AutoSyncConformance`), `ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`, and the helper-policy types: `ExportJobPlanner`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer`, `FileIOService`, `FinalNamePlanner`, `ExportRecordsDirectoryCoordinator`, `BackupScanner`
 - `Destination/` — `ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`
 - `Records/` — `ExportRecordStore`, `CollectionExportRecordStore`, `JSONLRecordFile`, `RecordStoreRouter` (single placement-kind dispatch), `ExportCompletionPolicy` (single edited-fallback/required-variant rule)
 - `AutoSync/` — `AutoSyncManager`, `AutoSyncReducer`, `AutoSyncEnvironment`, with `AutoSync/Stores/` for file-backed persistence (dirty state, per-destination tokens, retry state, run summary, scope, global photo-change token)
@@ -174,7 +174,7 @@ and surfaces it as `@Published needsSafetyConfirmation`, which
 Owns destination-change handling and the migration-conflict detection
 that surfaces as `.unsafeMigrationConflict`. `gcLegacyState` closure-based
 dependency keeps filesystem layout decisions out of the coordinator and
-in `PhotoExportApp` where the record-store directory roots are known.
+in `AppComposition`, which knows the app-state directory roots.
 
 ## Supporting Services
 
@@ -186,6 +186,7 @@ in `PhotoExportApp` where the record-store directory roots are known.
 - `ResourceSelection` picks the right `PHAssetResource` for a variant and is the shared
   classifier for "original-side" vs "edited-side" resources.
 - `FileIOService` centralizes atomic file moves and timestamp handling.
+- `FinalNamePlanner` picks a staged file's final name: the first ` (n)` suffix with nothing at it that no other record names, or an existing file with the same bytes that no record names, which is then recorded instead of copied.
 
 ## Views and View Models
 

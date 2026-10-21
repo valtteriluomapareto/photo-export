@@ -138,6 +138,23 @@ final class CollectionExportRecordStore: ObservableObject {
   /// Per-placement record bodies, keyed by `[placementId][assetId]`.
   private(set) var recordBodies: [String: [String: RecordBody]] = [:]
 
+  /// A variant's folder: its placement (whose relative path is fixed at creation) plus
+  /// the subfolder it was written into.
+  private struct ClaimFolder: Hashable {
+    let placementId: String
+    let subfolder: String
+
+    init(placementId: String, subfolder: String?) {
+      self.placementId = placementId
+      self.subfolder = subfolder ?? ""
+    }
+  }
+  /// Filenames named by any variant record. Built on the first `isFilenameClaimed` query, at
+  /// a session's first collection export, and maintained in `apply` after that; nil until
+  /// then, and again whenever `recordBodies` is replaced wholesale. See
+  /// `ExportRecordStore.filenameClaims` for why it is built lazily.
+  private var filenameClaims: FilenameClaims<ClaimFolder>?
+
   /// Per-store load state. See `RecordStoreState` for semantics.
   @Published private(set) var state: RecordStoreState = .unconfigured
   @Published private(set) var persistenceError: String?
@@ -184,24 +201,8 @@ final class CollectionExportRecordStore: ObservableObject {
 
   // MARK: - Init
 
-  init() {
-    self.notificationClock = SystemAutoSyncClock()
-    self.recordLogIO = ProductionJSONLRecordLogIO()
-    self.reconciliationFileChecker = ReconciliationFileChecker()
-    let appSupport = try! fileManager.url(
-      for: .applicationSupportDirectory,
-      in: .userDomainMask,
-      appropriateFor: nil,
-      create: true
-    )
-    let bundleId = Bundle.main.bundleIdentifier ?? "com.valtteriluoma.photo-export"
-    let root = appSupport.appendingPathComponent(bundleId, isDirectory: true)
-    let storeDir = root.appendingPathComponent("ExportRecords", isDirectory: true)
-    self.storeRootURL = storeDir
-    createDirectoryIfNeeded(storeDir)
-  }
-
-  /// Test-only: allow specifying a base directory for the store root.
+  /// `baseDirectoryURL` is the parent of the per-destination folders; the app passes
+  /// `AppComposition.recordsRoot`.
   init(
     baseDirectoryURL: URL,
     reconciliationFileChecker: any ReconciliationFileChecking = ReconciliationFileChecker(),
@@ -248,6 +249,7 @@ final class CollectionExportRecordStore: ObservableObject {
 
     placements = [:]
     recordBodies = [:]
+    filenameClaims = nil
 
     guard let destinationId else {
       currentStoreDirURL = nil
@@ -282,6 +284,7 @@ final class CollectionExportRecordStore: ObservableObject {
     if let retained = pendingRecovery[destinationId] {
       placements = retained.placements
       recordBodies = retained.records
+      filenameClaims = nil
       hasUnsavedChanges = true
       persistenceError = "Progress from this destination still needs to be saved."
       state = .persistenceFailed
@@ -323,6 +326,7 @@ final class CollectionExportRecordStore: ObservableObject {
         }
         placements = validPlacements
         recordBodies = snapshot.records.filter { !droppedTimelineIds.contains($0.key) }
+        filenameClaims = nil
       }
       for op in loaded.ops {
         apply(op)
@@ -383,6 +387,7 @@ final class CollectionExportRecordStore: ObservableObject {
       try jsonl.resetToEmpty(emptySnapshot: Snapshot.empty)
       placements = [:]
       recordBodies = [:]
+      filenameClaims = nil
       state = .ready
       replayFinalCompletions()
       changeNotifier.notifyNow()
@@ -761,6 +766,43 @@ final class CollectionExportRecordStore: ObservableObject {
     return ScopedExportRecord(placement: placement, assetId: assetId, variants: variantMap)
   }
 
+  /// Whether a record names `filename` in the folder for `placement` and `subfolder`, apart
+  /// from `assetId`'s own `variant`. The asset's other variants count.
+  func isFilenameClaimed(
+    _ filename: String, placement: ExportPlacement, subfolder: String?,
+    exceptVariant variant: ExportVariant, of assetId: String
+  ) -> Bool {
+    isFilenameClaimed(
+      filename, placement: placement, subfolder: subfolder, assetId: assetId,
+      excluding: { $0 == variant.rawValue })
+  }
+
+  /// Whether another asset's record names `filename` in the folder for `placement` and
+  /// `subfolder`. None of `assetId`'s own variants in the placement count.
+  func isFilenameClaimed(
+    _ filename: String, placement: ExportPlacement, subfolder: String?,
+    exceptAsset assetId: String
+  ) -> Bool {
+    isFilenameClaimed(
+      filename, placement: placement, subfolder: subfolder, assetId: assetId,
+      excluding: { _ in true })
+  }
+
+  private func isFilenameClaimed(
+    _ filename: String, placement: ExportPlacement, subfolder: String?, assetId: String,
+    excluding isOwn: (String) -> Bool
+  ) -> Bool {
+    let variants = recordBodies[placement.id]?[assetId]?.variants ?? [:]
+    let own = variants.filter { isOwn($0.key) }.values.map {
+      (
+        filename: $0.filename,
+        folder: ClaimFolder(placementId: placement.id, subfolder: $0.subfolder)
+      )
+    }
+    let folder = ClaimFolder(placementId: placement.id, subfolder: subfolder)
+    return currentFilenameClaims().count(filename, in: folder, excluding: own) > 0
+  }
+
   /// True when every required variant for `asset` under `selection` is `.done`, OR the
   /// asset is covered by the issue #22 edited-fallback case (see
   /// `ExportCompletionPolicy.satisfiesEditedFallback`). Collection placements derive the
@@ -884,11 +926,13 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   /// Captures the existing writer before physical final IO. A successful move is
-  /// acknowledged even after cancellation; failure retains history for Retry.
+  /// acknowledged even after cancellation; failure retains history for Retry. The
+  /// acknowledgement carries the name the file was committed or adopted under, or `nil`
+  /// when nothing was committed.
   func captureFinalCommit(
     assetId: String, variant: ExportVariant, placement: ExportPlacement,
-    filename: String, subfolder: String?, acceptsEditedFallback: Bool
-  ) throws -> (_ committed: Bool) async -> Void {
+    subfolder: String?, acceptsEditedFallback: Bool
+  ) throws -> (_ finalFilename: String?) async -> Void {
     guard state == .ready, let destinationId = configuredDestinationId, let file = jsonl else {
       throw RecordPersistenceUnavailable()
     }
@@ -898,7 +942,7 @@ final class CollectionExportRecordStore: ObservableObject {
       snapshot: Snapshot(
         version: Constants.snapshotVersion, placements: [:], records: [:]))
     finalCommitContext = context
-    let applyCompletion = { [weak self] in
+    let applyCompletion = { [weak self] (filename: String) in
       guard let self else { return }
       if self.placements[placement.id] == nil { self.upsertPlacement(placement) }
       let date = Date()
@@ -912,14 +956,14 @@ final class CollectionExportRecordStore: ObservableObject {
           reason: .editedUnavailableOriginalBackedUp, at: date)
       }
     }
-    return { [self] committed in
+    return { [self] finalFilename in
       defer { if finalCommitContext === context { finalCommitContext = nil } }
-      guard committed else { return }
+      guard let filename = finalFilename else { return }
       let exportedAt = Date()
       if context.needsCorruptionRecovery
         || (configuredDestinationId == destinationId && state == .failed)
       {
-        deferredFinalCompletions[destinationId, default: []].append(applyCompletion)
+        deferredFinalCompletions[destinationId, default: []].append { applyCompletion(filename) }
         return
       }
       if configuredDestinationId == destinationId {
@@ -928,9 +972,10 @@ final class CollectionExportRecordStore: ObservableObject {
           // when its later reload was unreadable. Retry must retain the new file.
           placements = context.snapshot.placements
           recordBodies = context.snapshot.records
+          filenameClaims = nil
           hasUnsavedChanges = true
         }
-        applyCompletion()
+        applyCompletion(filename)
         if state == .persistenceFailed {
           retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
           return
@@ -948,7 +993,10 @@ final class CollectionExportRecordStore: ObservableObject {
         var body = context.snapshot.records[placement.id]?[assetId] ?? RecordBody(variants: [:])
         body.variants[variant.rawValue] = done
         if acceptsEditedFallback {
-          var edited = body.variants[ExportVariant.edited.rawValue] ?? done
+          // As `markVariantFailed` does: a new edited record names no file.
+          var edited =
+            body.variants[ExportVariant.edited.rawValue]
+            ?? ExportVariantRecord(filename: nil, status: .pending, exportDate: nil, lastError: nil)
           edited.status = .failed
           edited.exportDate = exportedAt
           edited.lastError = ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
@@ -1054,7 +1102,11 @@ final class CollectionExportRecordStore: ObservableObject {
       placements[placementId] = placement
     case .deletePlacement(let placementId):
       placements.removeValue(forKey: placementId)
-      recordBodies.removeValue(forKey: placementId)
+      if let removed = recordBodies.removeValue(forKey: placementId) {
+        for body in removed.values {
+          updateClaims(placementId: placementId, body: body, adding: false)
+        }
+      }
     case .upsertRecord(let placementId, let assetId, let body):
       // Reject orphan records: the on-disk format requires every record to reference an
       // existing placement. If a log truncation or partial write loses the upsertPlacement
@@ -1069,17 +1121,56 @@ final class CollectionExportRecordStore: ObservableObject {
         return
       }
       var byAsset = recordBodies[placementId] ?? [:]
-      byAsset[assetId] = body
+      if let old = byAsset.updateValue(body, forKey: assetId) {
+        updateClaims(placementId: placementId, body: old, adding: false)
+      }
+      updateClaims(placementId: placementId, body: body, adding: true)
       recordBodies[placementId] = byAsset
     case .deleteRecord(let placementId, let assetId):
       var byAsset = recordBodies[placementId] ?? [:]
-      byAsset.removeValue(forKey: assetId)
+      if let old = byAsset.removeValue(forKey: assetId) {
+        updateClaims(placementId: placementId, body: old, adding: false)
+      }
       if byAsset.isEmpty {
         recordBodies.removeValue(forKey: placementId)
       } else {
         recordBodies[placementId] = byAsset
       }
     }
+  }
+
+  private func updateClaims(placementId: String, body: RecordBody, adding: Bool) {
+    guard filenameClaims != nil else { return }
+    Self.update(&filenameClaims!, placementId: placementId, body: body, adding: adding)
+  }
+
+  private static func update(
+    _ claims: inout FilenameClaims<ClaimFolder>, placementId: String, body: RecordBody,
+    adding: Bool
+  ) {
+    for variant in body.variants.values {
+      let folder = ClaimFolder(placementId: placementId, subfolder: variant.subfolder)
+      if adding {
+        claims.add(variant.filename, in: folder)
+      } else {
+        claims.remove(variant.filename, in: folder)
+      }
+    }
+  }
+
+  private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
+    if let filenameClaims { return filenameClaims }
+    let recordCount = recordBodies.values.reduce(0) { $0 + $1.count }
+    let claims = FilenameClaims<ClaimFolder>.build(recordCount: recordCount, logger: logger) {
+      claims in
+      for (placementId, byAsset) in recordBodies {
+        for body in byAsset.values {
+          Self.update(&claims, placementId: placementId, body: body, adding: true)
+        }
+      }
+    }
+    filenameClaims = claims
+    return claims
   }
 
   /// Converts any variant left as `.inProgress` after load into `.failed` with the

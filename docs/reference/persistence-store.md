@@ -135,6 +135,17 @@ asset are written together (an edit with its `_orig` companion, or a still with 
 video), the exporter picks one stem at which every file's name is free, so the group
 shares one stem and its collision suffix rather than being split across stems.
 
+A file written alone can instead be recorded against an existing file at its natural name
+or one of its suffixes, when that file has the same bytes and no other record in the store
+for that placement names it in that folder (see architecture-conventions § Final file commit boundary).
+Its `filename` is then the name as the folder spells it, which can differ from the
+resource's name in case or Unicode normalization. Every record with a `filename`, whatever
+its status, reserves that name in its folder: no other asset or variant adopts a file there
+or writes one there, even after the file is deleted. Import Existing Backup drops a
+completed record whose file is missing, which frees its name; failed and in-progress
+records keep theirs until they are retried. The index behind that check is built from the
+records in memory; nothing new is persisted.
+
 Shared albums record only `original`. Their placement kind maps to the `singleResource`
 variant policy (`ExportPlacement.Kind.variantPolicy`, not persisted): Photos exposes one
 downscaled resource per shared-album asset, so there is no `edited` variant, no `_orig`
@@ -390,6 +401,17 @@ deadlines based on the latest failure time. It cannot reconstruct exact attempts
 inaccessible or corrupt history. Unknown scope and variant keys survive valid recovery.
 Failed removals remain published until persistence succeeds; pending in-memory history
 does not survive quitting before a successful save.
+
+`lastRunSummary.json` holds the last Auto Export run's `ExportRunSummary`. Its optional
+`stoppedBy` field names the destination-wide failure category (`destinationUnavailable`,
+`destinationNoSpace` or `destinationPermission`) when the run stopped itself on one, and is
+absent otherwise. A summary saved before the field existed decodes with no stop category,
+and older builds ignore the key.
+
+A saved `retryState.json` entry in the `destinationUnavailable` category with no
+`nextEligibleAt`, including one an older build recorded for a missing file (`ENOENT`), is
+eligible for the next Auto Export run. If that attempt fails with `ENOENT` again, the entry
+is replaced by an `unknown` one at attempt 1 with the normal backoff.
 
 ## Migrations
 

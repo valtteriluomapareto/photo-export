@@ -25,6 +25,12 @@ enum AutoSyncReducer {
     var changedScopes: Set<AutoExportLibraryScope> = []
   }
 
+  /// The debounce the resume hook scheduled, exactly as scheduled.
+  struct ResumeHookSchedule: Equatable, Sendable {
+    let reason: AutoSyncReason
+    let fireAt: Date
+  }
+
   struct State: Equatable, Sendable {
     var current: AutoSyncState
     var enabled: Bool
@@ -38,6 +44,9 @@ enum AutoSyncReducer {
     /// `versionSelection`.
     var convertHEICToJPEG: Bool
     var importActive: Bool
+    /// Photos access as last refreshed. Kept out of `DestinationSnapshot`, whose changes
+    /// drive the destination triggers.
+    var photosAuthorized = true
     var exportRunState: ExportRunState
     /// Per-destination accumulated dirty state. Updated by `photosChanged` events
     /// (asset id targeting + cost-cap rollover) and by full-reconciliation completion.
@@ -59,6 +68,14 @@ enum AutoSyncReducer {
     var retryStateByDestination: [String: AutoSyncRetryState] = [:]
     var consumedRetryEntries: [RetryPosition: RetryEntry] = [:]
     var retryTimerFireAt: Date?
+    /// Set while the current schedule is the one the resume hook made when a run went
+    /// idle. A summary saying that run stopped on a destination-wide failure cancels it
+    /// only while it is still the current schedule; any other schedule clears it.
+    var resumeHookSchedule: ResumeHookSchedule?
+    /// A stop summary arrived while its run still looked active, so the resume hook skips
+    /// the reschedule when that run goes idle. Cleared once the reducer leaves `.running` or
+    /// `.waiting(.manualExportActive)`.
+    var resumeSuppressedForStop = false
 
     static let initial = State(
       current: .disabled,
@@ -100,6 +117,9 @@ enum AutoSyncReducer {
     // observation events like `exportRunStateChanged`) do not — the reducer should
     // return to `.idle` cleanly without re-scheduling another run.
     var triggerReason: AutoSyncReason?
+    // The completed run stopped on a destination-wide failure after the hook had already
+    // rescheduled it.
+    var cancelsResumeHookSchedule = false
 
     switch event {
     case .enabledChanged(let enabled):
@@ -120,6 +140,9 @@ enum AutoSyncReducer {
         break
       }
       if destination.id != state.destination.id {
+        // A reason pending for the old destination, Export Now included, doesn't carry over;
+        // the new destination gets its own trigger below.
+        newState.pendingTriggerReason = nil
         newState.consumedRetryEntries.removeAll()
         if let boundary = state.runDirtyBoundary {
           newState.invalidatedRunIds.insert(boundary.context.runId)
@@ -180,6 +203,37 @@ enum AutoSyncReducer {
     case .importStateChanged(let isImporting):
       newState.importActive = isImporting
 
+    case .photosAuthorizationChanged(let authorized):
+      guard authorized != state.photosAuthorized else { return (state, []) }
+      newState.photosAuthorized = authorized
+      // Losing access only blocks, through the recompute below. A run already exporting is
+      // never cancelled: its scan reports the missing access and the run ends `.failed`.
+      // Access returning is handled like a failed change fetch: changes made while access
+      // was off aren't reliably reported, so every selected scope gets a full reconciliation.
+      if authorized, state.enabled, let destinationId = state.destination.id,
+        !state.scopeSelection.isEmpty
+      {
+        var dirty = state.dirtyStateByDestination[destinationId] ?? .empty
+        for scope in state.scopeSelection.enabledScopes {
+          var scopeState = dirty.scope(scope)
+          scopeState.pendingFullReconciliation = true
+          scopeState.pendingAssetIds.removeAll()
+          invalidateRunBoundary(scope, destinationId: destinationId, in: &newState)
+          dirty.setScope(scope, scopeState)
+        }
+        dirty.markUpdated(at: now)
+        newState.dirtyStateByDestination[destinationId] = dirty
+        effects.append(.persistDirtyState(dirty, destinationId: destinationId))
+        // A pending reason that runs at least as soon as a Photos change (Export Now, a
+        // retry, a settings change) runs as itself; the recompute serves it.
+        let pendingRunsAsSoon = state.pendingTriggerReason.map {
+          debounceDelay(for: $0) <= debounceDelay(for: .photosChanged)
+        }
+        if pendingRunsAsSoon != true {
+          triggerReason = .photosChanged
+        }
+      }
+
     case .exportRunStarted(let context, let destinationId):
       captureRunBoundary(context, destinationId: destinationId, in: &newState)
       // A bookkeeping signal, not an idle/active transition or a new trigger.
@@ -238,6 +292,8 @@ enum AutoSyncReducer {
       }
       effects.append(.pruneDoneRetryEntries(destinationId: destinationId))
       acknowledgeRun(summary, in: &newState, now: now, effects: &effects)
+      noteDestinationStop(
+        summary, previous: state.current, in: &newState, cancelsHook: &cancelsResumeHookSchedule)
 
     case .debounceFired(let reason):
       // Honor the timer only if the state still expects this reason. A debounce
@@ -392,6 +448,10 @@ enum AutoSyncReducer {
         boundary.destinationId == newState.destination.id
       {
         effects.append(.pruneDoneRetryEntries(destinationId: boundary.destinationId))
+        // A manual stop would cost one Auto Export attempt 30 seconds later otherwise.
+        noteDestinationStop(
+          summary, previous: state.current, in: &newState,
+          cancelsHook: &cancelsResumeHookSchedule)
       }
       acknowledgeRun(summary, in: &newState, now: now, effects: &effects)
 
@@ -423,15 +483,34 @@ enum AutoSyncReducer {
     // schedule. If recompute lands the state in idle/scheduled, the trigger fires
     // there and we clear pendingTriggerReason. If it lands blocked/waiting, the
     // trigger is preserved for resume.
-    if let triggerReason {
+    if let triggerReason,
+      !keepsPendingExportNow(
+        pending: newState.pendingTriggerReason, incoming: triggerReason, previous: state.current)
+    {
       newState.pendingTriggerReason = triggerReason
     }
 
+    // Invariant: a pending reason sits at `.idle` only when `holdAfterStop` left it there
+    // after a destination stop; everywhere else reaching `.idle` consumes or never had one.
+    // The rule itself is general: at `.idle`, only an event that carries its own trigger
+    // (which replaces the pending reason) recomputes with one. Bookkeeping events never
+    // serve it; a blocker that comes and goes does, through its own transition.
+    let servedTrigger: AutoSyncReason?
+    if case .idle = state.current, triggerReason == nil {
+      servedTrigger = nil
+    } else {
+      servedTrigger = newState.pendingTriggerReason
+    }
     let nextCurrent = recomputeCurrent(
       from: newState, previous: state.current,
-      triggerReason: newState.pendingTriggerReason, now: now,
+      triggerReason: servedTrigger, now: now,
       effects: &effects)
     newState.current = nextCurrent
+    // A new schedule is not the hook's, even when it lands on the same reason and instant;
+    // the equality check at the end of reduce cannot tell those apart.
+    if effects.contains(where: { if case .scheduleDebounce = $0 { true } else { false } }) {
+      newState.resumeHookSchedule = nil
+    }
 
     // If the recompute scheduled a debounce, the trigger has been "consumed" — drop
     // pendingTriggerReason. Same for direct .running transitions.
@@ -448,7 +527,7 @@ enum AutoSyncReducer {
       reason != .photosChanged, reason != .photosChangeFallback
     {
       switch newState.current {
-      case .waiting(.importActive), .waiting(.manualExportActive):
+      case .waiting(.importActive), .waiting(.manualExportActive), .blocked(.photosAccessMissing):
         newState.pendingTriggerReason = reason
       default:
         break
@@ -464,25 +543,103 @@ enum AutoSyncReducer {
     // photos changes / scope changes / app-launch enables during long exports /
     // imports / manual runs would be silently abandoned until an unrelated event
     // happens to re-trigger.
+    //
+    // After a run that stopped on a destination-wide failure, the hook schedules nothing
+    // except an Export Now pressed during the run; see `holdAfterStop`.
     if case .idle = newState.current,
       previousIsBlockingResumePoint(state.current),
       let destinationId = newState.destination.id
     {
       let hasDirty = newState.dirtyStateByDestination[destinationId]?.isEmpty == false
-      if let resumeReason = newState.pendingTriggerReason {
+      let suppressed = newState.resumeSuppressedForStop
+      if let resumeReason = newState.pendingTriggerReason,
+        !suppressed || resumeReason == .userExportNow
+      {
         let fireAt = now.addingTimeInterval(debounceDelay(for: resumeReason))
         effects.append(.scheduleDebounce(resumeReason, fireAt: fireAt))
         newState.current = .scheduled(reason: resumeReason, fireAt: fireAt)
         newState.pendingTriggerReason = nil
-      } else if hasDirty {
+        newState.resumeHookSchedule = ResumeHookSchedule(reason: resumeReason, fireAt: fireAt)
+      } else if let resumeReason = newState.pendingTriggerReason {
+        newState.pendingTriggerReason = holdAfterStop(resumeReason)
+      } else if hasDirty, !suppressed {
         let fireAt = now.addingTimeInterval(debounceDelay(for: .photosChanged))
         effects.append(.scheduleDebounce(.photosChanged, fireAt: fireAt))
         newState.current = .scheduled(reason: .photosChanged, fireAt: fireAt)
+        newState.resumeHookSchedule = ResumeHookSchedule(reason: .photosChanged, fireAt: fireAt)
       }
+    }
+
+    // Production publishes idle before the summary, so the hook above has usually already
+    // rescheduled the stopped run. Cancel that exact schedule; an Export Now pressed during
+    // the run keeps its run.
+    if cancelsResumeHookSchedule, let hook = newState.resumeHookSchedule,
+      hook.reason != .userExportNow,
+      newState.current == .scheduled(reason: hook.reason, fireAt: hook.fireAt)
+    {
+      effects.append(.cancelDebounce(hook.reason))
+      newState.current = .idle
+      newState.pendingTriggerReason = holdAfterStop(hook.reason)
+    }
+
+    if !suppressibleRunInProgress(newState.current) {
+      newState.resumeSuppressedForStop = false
+    }
+    if let hook = newState.resumeHookSchedule,
+      newState.current != .scheduled(reason: hook.reason, fireAt: hook.fireAt)
+    {
+      newState.resumeHookSchedule = nil
     }
 
     reconcileRetryTimer(in: &newState, previous: state, effects: &effects)
     return (newState, effects)
+  }
+
+  /// A run that stopped because the destination is unreachable, full or denied while it
+  /// still looks available would stop the same way again, so its dirty work waits for the
+  /// next real trigger instead of a resume 30 seconds later. If the run still looks active,
+  /// the coming resume is suppressed; otherwise the hook already rescheduled it, and that
+  /// exact schedule is cancelled.
+  private static func noteDestinationStop(
+    _ summary: ExportRunSummary, previous: AutoSyncState, in state: inout State,
+    cancelsHook: inout Bool
+  ) {
+    guard summary.stoppedBy != nil, state.destination.isAvailable else { return }
+    if suppressibleRunInProgress(previous) {
+      state.resumeSuppressedForStop = true
+    } else {
+      cancelsHook = true
+    }
+  }
+
+  /// During a run a destination stop can end, a later trigger doesn't replace Export Now.
+  private static func keepsPendingExportNow(
+    pending: AutoSyncReason?, incoming: AutoSyncReason, previous: AutoSyncState
+  ) -> Bool {
+    pending == .userExportNow && incoming != .userExportNow && suppressibleRunInProgress(previous)
+  }
+
+  /// The states a destination stop's summary can arrive in before its run goes idle: an
+  /// Auto Export run, or a manual export that AutoSync waits for.
+  private static func suppressibleRunInProgress(_ current: AutoSyncState) -> Bool {
+    switch current {
+    case .running, .waiting(.manualExportActive): return true
+    default: return false
+    }
+  }
+
+  /// What a trigger that arrived during a stopped run leaves pending. Photos-change work is
+  /// already in the dirty state, which the next trigger exports. Other reasons add no dirty
+  /// work, so they stay pending: the next trigger replaces them, or a resolving blocker
+  /// serves them, but they never start a run on their own while idle.
+  private static func holdAfterStop(_ reason: AutoSyncReason) -> AutoSyncReason? {
+    switch reason {
+    case .photosChanged, .photosChangeFallback:
+      return nil
+    case .appLaunch, .destinationSelected, .destinationBecameAvailable, .scopeSelectionChanged,
+      .versionSelectionChanged, .convertHEICToJPEGChanged, .userExportNow, .retryBackoff:
+      return reason
+    }
   }
 
   private static func captureRunBoundary(
@@ -588,7 +745,7 @@ enum AutoSyncReducer {
     // `ExportManager.runExport`'s single-active-run precondition. The fan-out's
     // own `await runExport` is already keeping `activeRunContext != nil`; we
     // must not start a second concurrent run.
-    state.enabled && !state.importActive && !state.scopeSelection.isEmpty
+    state.enabled && !state.importActive && state.photosAuthorized && !state.scopeSelection.isEmpty
       && state.destination.id != nil && state.destination.isAvailable
       && state.destination.safety == .safe
       && !state.exportRunState.isManualActive
@@ -616,6 +773,13 @@ enum AutoSyncReducer {
     if state.exportRunState.isManualActive {
       cancelAnyScheduledDebounce(from: previous, into: &effects)
       return .waiting(.manualExportActive)
+    }
+    // After the import and manual-export waits, so their resume rules still apply; before
+    // every other blocker, since none of them can be fixed without access. An Auto Export
+    // run in progress shows blocked too and finishes on its own.
+    if !state.photosAuthorized {
+      cancelAnyScheduledDebounce(from: previous, into: &effects)
+      return .blocked(.photosAccessMissing)
     }
     if state.scopeSelection.isEmpty {
       cancelAnyScheduledDebounce(from: previous, into: &effects)

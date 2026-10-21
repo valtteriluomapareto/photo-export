@@ -74,7 +74,7 @@ final class DestinationSafetyMonitor: ObservableObject {
 
   /// Convenience initializer that wires the production scan against
   /// `ExportDestinationManager.beginScopedAccess()` /
-  /// `FileManager.contentsOfDirectory`. `PhotoExportApp` calls this; tests
+  /// `FileManager.contentsOfDirectory`. `AppCore` calls this; tests
   /// use the designated initializer with a stubbed `scanDirectory`.
   convenience init(
     destinationManager: ExportDestinationManager,
@@ -111,12 +111,14 @@ final class DestinationSafetyMonitor: ObservableObject {
     )
   }
 
-  /// Subscribe to destination changes. Call once from `PhotoExportApp.body`'s
-  /// `.task` after the lifecycle coordinator has been attached, so the
-  /// record stores have been `configure(for:)`d before we read their
-  /// counts.
+  /// Whether `attach()` has subscribed to destination changes.
+  var isAttached: Bool { observation != nil }
+
+  /// Subscribe to destination changes. Called from `AppCore.start()` after the lifecycle
+  /// coordinator has been attached, so the record stores have been `configure(for:)`d
+  /// before we read their counts.
   func attach() {
-    guard observation == nil else { return }
+    guard !isAttached else { return }
     observation =
       identityPublisher
       .removeDuplicates(by: { $0.stableId == $1.stableId })

@@ -79,7 +79,7 @@ struct ExportDestinationResolverTests {
   @Test func uniqueFileURL_noConflict() throws {
     let (dir, resolver) = try Self.makeResolver()
     defer { Self.cleanup(dir) }
-    let url = resolver.uniqueFileURL(in: dir, baseName: "photo", ext: "jpg")
+    let url = resolver.uniqueFileURL(in: dir, baseName: "photo", ext: "jpg", isClaimed: { _ in false })
     #expect(url.lastPathComponent == "photo.jpg")
   }
 
@@ -88,7 +88,7 @@ struct ExportDestinationResolverTests {
     defer { Self.cleanup(dir) }
     plantFile("photo.jpg", in: dir)
     plantFile("photo (1).jpg", in: dir)
-    let url = resolver.uniqueFileURL(in: dir, baseName: "photo", ext: "jpg")
+    let url = resolver.uniqueFileURL(in: dir, baseName: "photo", ext: "jpg", isClaimed: { _ in false })
     #expect(url.lastPathComponent == "photo (2).jpg")
   }
 
@@ -99,7 +99,7 @@ struct ExportDestinationResolverTests {
     for i in 1...5 {
       plantFile("IMG (\(i)).heic", in: dir)
     }
-    let url = resolver.uniqueFileURL(in: dir, baseName: "IMG", ext: "heic")
+    let url = resolver.uniqueFileURL(in: dir, baseName: "IMG", ext: "heic", isClaimed: { _ in false })
     #expect(url.lastPathComponent == "IMG (6).heic")
   }
 
@@ -113,12 +113,17 @@ struct ExportDestinationResolverTests {
       func moveItemAtomically(from src: URL, to dst: URL) throws {}
       func applyTimestamps(creationDate: Date, to url: URL) {}
       func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws {}
+      func itemIdentity(at url: URL) throws -> FileItemIdentity? { nil }
+      func storedName(at url: URL) throws -> String { url.lastPathComponent }
+      func openForReading(at url: URL, bypassingCache: Bool) throws -> any FileReadHandle {
+        throw CocoaError(.fileReadUnknown)
+      }
       func removeItem(at url: URL) throws {}
       func copyItem(from src: URL, to dst: URL) throws {}
     }
     let resolver = ExportDestinationResolver(fileSystem: AlwaysExists())
     let dir = URL(fileURLWithPath: "/tmp/cap-test")
-    let url = resolver.uniqueFileURL(in: dir, baseName: "X", ext: "JPG")
+    let url = resolver.uniqueFileURL(in: dir, baseName: "X", ext: "JPG", isClaimed: { _ in false })
     // Body increments index until 10 001 and breaks; the last candidate it constructed
     // before the break is "X (10000).JPG".
     #expect(url.lastPathComponent == "X (10000).JPG")
@@ -131,7 +136,7 @@ struct ExportDestinationResolverTests {
     defer { Self.cleanup(dir) }
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "HEIC", editedExt: "HEIC",
-      destDir: dir, pairOriginalWithSuffix: true)
+      destDir: dir, pairOriginalWithSuffix: true, isClaimed: { _ in false })
     #expect(stem == "IMG_0001")
   }
 
@@ -141,7 +146,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001.HEIC", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "HEIC", editedExt: "HEIC",
-      destDir: dir, pairOriginalWithSuffix: true)
+      destDir: dir, pairOriginalWithSuffix: true, isClaimed: { _ in false })
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -151,7 +156,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001_orig.HEIC", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "HEIC", editedExt: "HEIC",
-      destDir: dir, pairOriginalWithSuffix: true)
+      destDir: dir, pairOriginalWithSuffix: true, isClaimed: { _ in false })
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -164,7 +169,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001 (1)_orig.HEIC", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "HEIC", editedExt: "HEIC",
-      destDir: dir, pairOriginalWithSuffix: true)
+      destDir: dir, pairOriginalWithSuffix: true, isClaimed: { _ in false })
     #expect(stem == "IMG_0001 (2)")
   }
 
@@ -174,7 +179,7 @@ struct ExportDestinationResolverTests {
     let (dir, resolver) = try Self.makeResolver()
     defer { Self.cleanup(dir) }
     let stem = resolver.allocateUnusedOrigStem(
-      baseStem: "vacation", originalExt: "JPG", destDir: dir)
+      baseStem: "vacation", originalExt: "JPG", destDir: dir, isClaimed: { _ in false })
     #expect(stem == "vacation")
   }
 
@@ -183,7 +188,7 @@ struct ExportDestinationResolverTests {
     defer { Self.cleanup(dir) }
     plantFile("vacation_orig.JPG", in: dir)
     let stem = resolver.allocateUnusedOrigStem(
-      baseStem: "vacation", originalExt: "JPG", destDir: dir)
+      baseStem: "vacation", originalExt: "JPG", destDir: dir, isClaimed: { _ in false })
     #expect(stem == "vacation (1)")
   }
 
@@ -419,6 +424,56 @@ struct ExportDestinationResolverTests {
     }
   }
 
+  // MARK: - resolveSlot — claimed paired names
+
+  /// A paired original-side name that another record claims fails like an occupied one,
+  /// with its own message. The predicate is asked about the slot's exact name. A name that
+  /// both holds a file and is claimed reports the file. `interruptedFilename` excuses only
+  /// the file, so a claimed interrupted name still fails.
+  @Test func resolveSlot_claimedPairedName_throws() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let claimed = "IMG_0001_orig.HEIC"
+    var asked: [String] = []
+    func slot(stem: String, interrupted: String? = nil) throws -> ExportDestinationResolver.Slot {
+      try resolver.resolveSlot(
+        variant: .original, descriptor: makeAsset(hasAdjustments: true),
+        originalFilename: "IMG_0001.HEIC", resources: [], destDir: dir, groupStem: stem,
+        pairOriginalWithSuffix: true, interruptedFilename: interrupted
+      ) { name in
+        asked.append(name)
+        return name == claimed
+      }
+    }
+    func message(_ body: () throws -> Void) -> String? {
+      do {
+        try body()
+        return nil
+      } catch let error as NSError {
+        #expect(error.domain == "Export")
+        #expect(error.code == 5)
+        return error.localizedDescription
+      }
+    }
+    let claimedMessage =
+      "Paired original filename is recorded for another exported file: IMG_0001_orig.HEIC. "
+      + "If you deleted that file, run File > Import Existing Backup."
+
+    #expect(try slot(stem: "IMG_0002").filename == "IMG_0002_orig.HEIC")
+    #expect(asked == ["IMG_0002_orig.HEIC"])
+    #expect(message { _ = try slot(stem: "IMG_0001") } == claimedMessage)
+
+    plantFile(claimed, in: dir)
+    #expect(
+      message { _ = try slot(stem: "IMG_0001") }
+        == "Paired original filename already exists on disk: IMG_0001_orig.HEIC")
+    #expect(message { _ = try slot(stem: "IMG_0001", interrupted: claimed) } == claimedMessage)
+    plantFile("IMG_0003_orig.HEIC", in: dir)
+    #expect(
+      try slot(stem: "IMG_0003", interrupted: "IMG_0003_orig.HEIC").filename
+        == "IMG_0003_orig.HEIC")
+  }
+
   // MARK: - allocatePairedGroupStem — 4-slot variant
 
   /// Default (nil `pairedVideoExt`) keeps the legacy 2-slot behaviour exactly. Pinning
@@ -432,7 +487,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001.MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "HEIC", editedExt: "HEIC",
-      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: nil)
+      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: nil, isClaimed: { _ in false })
     #expect(stem == "IMG_0001")
   }
 
@@ -444,7 +499,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001.MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "HEIC", editedExt: "HEIC",
-      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -456,7 +511,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001_orig.MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "HEIC", editedExt: "HEIC",
-      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -470,7 +525,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001 (1).MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "HEIC", editedExt: "HEIC",
-      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: true, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_0001 (2)")
   }
 
@@ -482,7 +537,7 @@ struct ExportDestinationResolverTests {
     defer { Self.cleanup(dir) }
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_7399", imageExt: "heic", editedExt: nil,
-      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_7399")
   }
 
@@ -498,7 +553,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_7399.MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_7399", imageExt: "heic", editedExt: nil,
-      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_7399 (1)")
   }
 
@@ -510,7 +565,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_7399.heic", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_7399", imageExt: "heic", editedExt: nil,
-      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_7399 (1)")
   }
 
@@ -524,7 +579,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001_orig.MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "heic", editedExt: nil,
-      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_0001")
   }
 
@@ -540,7 +595,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001 (1).MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "HEIC", editedExt: nil,
-      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_0001 (2)")
   }
 
@@ -557,7 +612,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001.MOV", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "JPG", editedExt: nil,
-      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -570,7 +625,7 @@ struct ExportDestinationResolverTests {
     plantFile("IMG_0001.JPG", in: dir)
     let stem = resolver.allocatePairedGroupStem(
       baseStem: "IMG_0001", imageExt: "JPG", editedExt: nil,
-      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV")
+      destDir: dir, pairOriginalWithSuffix: false, pairedVideoExt: "MOV", isClaimed: { _ in false })
     #expect(stem == "IMG_0001 (1)")
   }
 
@@ -601,5 +656,53 @@ struct ExportDestinationResolverTests {
       originalFilename: "IMG_0001.MOV", resources: [],
       destDir: dir, groupStem: "IMG_0001", pairOriginalWithSuffix: true)
     #expect(url.lastPathComponent == "IMG_0001_orig.MOV")
+  }
+
+  // MARK: - Claimed names
+
+  /// A name another record claims is skipped like an occupied one, and a `.refuse` slot's
+  /// one name is returned whatever claims it.
+  @Test func firstFreeURL_skipsClaimedNames() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    plantFile("IMG (1).JPG", in: dir)
+    let suffix = ExportDestinationResolver.Slot(
+      directory: dir, filename: "IMG.JPG", policy: .suffix(base: "IMG", ext: "JPG"))
+    let claimed: Set = ["IMG.JPG", "IMG (2).JPG"]
+    #expect(
+      resolver.firstFreeURL(in: suffix) { claimed.contains($0) }.lastPathComponent
+        == "IMG (3).JPG")
+    let refuse = ExportDestinationResolver.Slot(
+      directory: dir, filename: "IMG_orig.JPG", policy: .refuse(stem: "IMG"))
+    #expect(resolver.firstFreeURL(in: refuse) { _ in true } == refuse.naturalURL)
+  }
+
+  /// Each slot of a group counts as taken when its name is claimed, so the whole group moves
+  /// to the next stem: the edit, its `_orig` companion and both motion files, and the image
+  /// and motion file of a single-side Live Photo.
+  @Test(arguments: [
+    (true, "IMG_0001.JPG"), (true, "IMG_0001_orig.HEIC"), (true, "IMG_0001.MOV"),
+    (true, "IMG_0001_orig.MOV"), (false, "IMG_0001.HEIC"), (false, "IMG_0001.MOV"),
+  ])
+  func allocatePairedGroupStem_skipsAStemWithAClaimedSlot(
+    pairOriginalWithSuffix: Bool, claimed: String
+  ) throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    let stem = resolver.allocatePairedGroupStem(
+      baseStem: "IMG_0001", imageExt: "HEIC", editedExt: "JPG", destDir: dir,
+      pairOriginalWithSuffix: pairOriginalWithSuffix, pairedVideoExt: "MOV",
+      isClaimed: { $0 == claimed })
+    #expect(stem == "IMG_0001 (1)")
+  }
+
+  @Test func allocateUnusedOrigStem_skipsAClaimedCompanion() throws {
+    let (dir, resolver) = try Self.makeResolver()
+    defer { Self.cleanup(dir) }
+    plantFile("vacation (1)_orig.JPG", in: dir)
+    let stem = resolver.allocateUnusedOrigStem(
+      baseStem: "vacation", originalExt: "JPG", destDir: dir,
+      isClaimed: { $0 == "vacation_orig.JPG" })
+    #expect(stem == "vacation (2)")
   }
 }

@@ -220,12 +220,17 @@ struct AutoSyncRetryLifecycleTests {
     #expect(builder.exportRunner.receivedContexts.isEmpty)
   }
 
-  @Test(.timeLimit(.minutes(1)))
-  func hardFailureHasNoAutomaticRetryLoop() async throws {
+  /// Guard: neither a hard failure nor an unreachable destination arms a retry timer.
+  @Test(
+    .timeLimit(.minutes(1)),
+    arguments: [
+      AutoSyncFailureCategory.destinationPermission, .destinationUnavailable,
+    ])
+  func hardFailureHasNoAutomaticRetryLoop(category: AutoSyncFailureCategory) async throws {
     let manager = AutoSyncManager()
     let builder = FakeAutoSyncEnvironmentBuilder()
     try builder.retryStore.save(
-      retryState(at: builder.clock.now(), category: .destinationPermission),
+      retryState(at: builder.clock.now(), category: category),
       destinationId: "retry-A")
     attach(manager, builder)
     #expect(builder.clock.pendingCount == 1)  // App-launch, no retry timer.
@@ -455,4 +460,103 @@ struct AutoSyncRetryLifecycleTests {
     }
   }
 
+  // MARK: - Auto Export eligibility
+
+  /// `ExportManager`'s eligibility check forwards here; it reads the current destination's
+  /// retry state, so the wiring is exercised without the app.
+  @Test func eligibilityReadsTheCurrentDestinationsRetryState() throws {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let now = builder.clock.now()
+    let album = ExportPlacement(
+      kind: .album, id: "album:1", displayName: "Trip", collectionLocalIdentifier: "1",
+      relativePath: "Collections/Albums/Trip/", createdAt: now)
+    var retry = AutoSyncRetryState.empty
+    func record(
+      _ assetId: String, _ category: AutoSyncFailureCategory, deadline: Date?,
+      scope: AutoSyncRetryScopeKey = .timeline
+    ) {
+      retry.recordFailure(
+        scope: scope, assetId: assetId, variant: .original, category: category,
+        errorSignature: "sig", at: now.addingTimeInterval(-60), nextEligibleAt: deadline)
+    }
+    record("unreachable", .destinationUnavailable, deadline: nil)
+    record("denied", .destinationPermission, deadline: nil)
+    record("backing-off", .iCloudTransient, deadline: now.addingTimeInterval(30))
+    record("due", .iCloudTransient, deadline: now)
+    record(
+      "album-denied", .destinationPermission, deadline: nil,
+      scope: AutoSyncManager.retryScopeKey(for: album))
+    try builder.retryStore.save(retry, destinationId: "retry-A")
+    attach(manager, builder)
+    defer { manager.setEnabled(false) }
+
+    let timeline = ExportPlacement.timeline(year: 2026, month: 9)
+    func eligible(_ assetId: String, _ placement: ExportPlacement = timeline) -> Bool {
+      manager.isAutoSyncEligible(
+        assetId: assetId, placement: placement, variant: .original, now: now)
+    }
+    #expect(eligible("unreachable"))
+    #expect(!eligible("denied"))
+    #expect(!eligible("backing-off"))
+    #expect(eligible("due"))
+    #expect(eligible("never-failed"))
+    #expect(!eligible("album-denied", album))
+    #expect(eligible("album-denied"), "A failure in an album does not hold the timeline")
+    #expect(
+      manager.isAutoSyncEligible(
+        assetId: "denied", placement: timeline, variant: .edited, now: now))
+  }
+
+  /// A legacy ENOENT entry stored as Destination Unavailable is retried by the next run.
+  /// Failing again with ENOENT, it becomes an unknown failure on its own backoff.
+  @Test(.timeLimit(.minutes(1)))
+  func legacyUnavailableEntryRetriesAndAMissingFileStartsBackoff() async throws {
+    let manager = AutoSyncManager()
+    let builder = FakeAutoSyncEnvironmentBuilder()
+    let start = builder.clock.now()
+    var legacy = AutoSyncRetryState.empty
+    for _ in 0..<3 {
+      legacy.recordFailure(
+        scope: .timeline, assetId: "asset", variant: .original,
+        category: .destinationUnavailable, errorSignature: "NSPOSIXErrorDomain:\(ENOENT)",
+        at: start.addingTimeInterval(-600), nextEligibleAt: nil)
+    }
+    try builder.retryStore.save(legacy, destinationId: "retry-A")
+    attach(manager, builder)
+    defer { manager.setEnabled(false) }
+    let placement = ExportPlacement.timeline(year: 2026, month: 9)
+    #expect(
+      manager.isAutoSyncEligible(
+        assetId: "asset", placement: placement, variant: .original, now: start))
+
+    let failedAt = start.addingTimeInterval(10)
+    let signal = AutoSyncFailureCategory.classify(
+      NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT)))
+    builder.exportRunner.nextRunSummary = ExportRunSummary(
+      context: ExportRunContext(
+        source: .autoSync, visibility: .background, scope: .timelineFullLibrary,
+        selection: .edited),
+      endedAt: failedAt, enqueuedCount: 1, completedCount: 1, failedCount: 1, skippedCount: 0,
+      cancelReason: nil, result: .failed,
+      failures: [
+        ExportRunFailureDetail(
+          assetId: "asset", placement: placement, variant: .original,
+          category: signal.category, errorSignature: signal.errorSignature,
+          localizedDescription: signal.localizedDescription, failedAt: failedAt)
+      ])
+    builder.clock.advance(by: 10)
+    let task = try #require(manager.activeRunFanOutTask)
+    await task.value
+
+    let entry = try #require(
+      builder.retryStore.load(destinationId: "retry-A").entry(
+        scope: .timeline, assetId: "asset", variant: .original))
+    #expect(entry.category == .unknown)
+    #expect(entry.attemptCount == 1)
+    #expect(entry.nextEligibleAt == failedAt.addingTimeInterval(30))
+    #expect(
+      !manager.isAutoSyncEligible(
+        assetId: "asset", placement: placement, variant: .original, now: failedAt))
+  }
 }

@@ -58,7 +58,7 @@ struct DestinationIdentityIntegrationTests {
       interruptForDestinationUnavailable: {},
       configureRecordStores: { newId in
         configureCalls.append(newId)
-        return PhotoExportApp.configureRecordStores(
+        return AppCore.configureRecordStores(
           for: newId, destinationManager: manager,
           timelineStore: timelineStore, collectionStore: collectionStore)
       })

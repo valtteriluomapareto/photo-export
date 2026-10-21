@@ -43,6 +43,8 @@ import Testing
       let defaults: UserDefaults
       let favorites = ExportPlacement.favorites()
       var window: NSWindow?
+      var hosted: NSView?
+      static let hostHeight: CGFloat = 600
 
       init(fault: History? = nil) {
         defaults = TestScratch.defaults(suiteName: defaultsName)
@@ -94,11 +96,12 @@ import Testing
             .environmentObject(manager).environmentObject(timeline).environmentObject(collections)
             .environmentObject(destinationManager).environment(\.bodyInvalidationCounter, counter))
         let hostWindow = NSWindow(
-          contentRect: NSRect(x: -10000, y: -10000, width: 460, height: 600),
+          contentRect: NSRect(x: -10000, y: -10000, width: 460, height: Self.hostHeight),
           styleMask: [.borderless], backing: .buffered, defer: false)
         hostWindow.isReleasedWhenClosed = false
         hostWindow.contentView = hosted
         window = hostWindow
+        self.hosted = hosted
         hostWindow.orderFront(nil)
       }
 
@@ -108,6 +111,7 @@ import Testing
         window?.contentView = nil
         window?.close()
         window = nil
+        hosted = nil
         counter.reset()
         io.arm(false)
         timeline.flushForTesting()
@@ -233,6 +237,30 @@ import Testing
       #expect(
         f.destination.openedScopeURLs.map(\.path).sorted()
           == f.destination.closedScopeURLs.map(\.path).sorted())
+    }
+
+    /// A failure already showing at the first layout must render whole.
+    @Test(.timeLimit(.minutes(1)))
+    func failureViewRendersWhenItIsTheFirstLayout() async throws {
+      let f = Fixture()
+      defer { f.close() }
+      f.destination.selectedFolderURL = f.destination.rootURL.appendingPathComponent("missing")
+      f.manager.startImport()
+      await f.manager.waitForImportCompletion()
+      let importError = try #require(f.manager.importError)
+      f.show()
+      guard await shows("Import Failed", in: f) else { return }
+      let window = try #require(f.window)
+      let hosted = try #require(f.hosted)
+      // Wait for the display cycle that fits the window to the view, so teardown can't pre-empt
+      // the layout pass this test is about.
+      let fitted = await observe { window.frame.height < Fixture.hostHeight }
+      try #require(fitted)
+      #expect(window.contentLayoutRect.height >= hosted.fittingSize.height)
+      #expect(f.counter.renderedText["import-message"] == [importError])
+      #expect(f.counter.renderedText["import-recovery"]?.first?.isEmpty == false)
+      #expect(f.counter.renderedText["import-progress"] == ["false"])
+      #expect(f.counter.renderedActions["import-close"] != nil)
     }
 
     @Test(.timeLimit(.minutes(1)))

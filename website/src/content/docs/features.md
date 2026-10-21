@@ -65,6 +65,21 @@ empty destination folder** and export the affected albums there. That destinatio
 with fresh tracking and separate album folders. Keep the old mixed backup until you have
 verified the new copies; importing the old backup does not separate those mixed folders.
 
+### Files already at the destination
+
+Existing files are never overwritten. When a name is taken, the export is written as
+`IMG_0001 (1).JPG`, then `(2)`, and so on. A name that an exported item still records counts
+as taken even if you deleted its file, so another photo with the same filename does not take
+it. **File → Import Existing Backup…** clears records whose files are gone, and the next
+export writes those items again under their own names. If the file already there has exactly the same
+bytes and no other exported item uses it, for example after the export history was reset or
+the folder was set up as a new destination, Photo Export records that file instead of
+writing another copy, and leaves it as it is. This covers files exported on their own; an edit with its
+`_orig` companion and a Live Photo with its paired video still get new copies. An `_orig`
+companion or paired video added later fails, and appears in Export Issues, while another
+exported file still records its name; if you deleted that file, Import Existing Backup clears
+the record.
+
 ### Format options (Settings → Advanced)
 
 Two settings under **Settings → Advanced** (Cmd+,) shape what lands on disk. A Settings
