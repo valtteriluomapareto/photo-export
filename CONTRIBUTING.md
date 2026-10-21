@@ -3,6 +3,17 @@
 Photo Export is a small macOS project. Prefer focused pull requests, clear reasoning, and
 documentation that stays accurate after the change lands.
 
+## Start here
+
+Read these in order for a first contribution:
+
+1. Follow [Local Setup](#local-setup), then [run one test](#running-tests-locally).
+2. Read the [architecture diagram and glossary](docs/reference/architecture-conventions.md#object-and-data-flow-diagram)
+   to understand the main objects and domain terms. The same reference owns the role map and
+   contracts; read the contracts relevant to your change.
+3. Use the [documentation guide](docs/README.md) to find the page your change should update.
+4. Follow the [pull request workflow](#pull-requests) before implementing your issue.
+
 ## Before You Start
 
 - Search existing issues and pull requests before starting similar work.
@@ -35,10 +46,18 @@ xcodebuild \
   build
 ```
 
+### Running tests locally
+
+Run these commands from the repository root. Prefix hosted test runs with
+`caffeinate -du`: display sleep can stall hosted SwiftUI tests, even when the Mac
+is still running ([#266](https://github.com/valtteriluomapareto/photo-export/issues/266)).
+The assertions last for the command's execution; `-d` prevents display sleep and
+`-u` declares user activity.
+
 Run all unit and hosted SwiftUI tests:
 
 ```bash
-xcodebuild \
+caffeinate -du xcodebuild \
   -project photo-export.xcodeproj \
   -scheme "photo-export" \
   -destination 'platform=macOS' \
@@ -46,10 +65,10 @@ xcodebuild \
   test
 ```
 
-Run one test class (append `/methodName` to select a single test):
+Run one test suite:
 
 ```bash
-xcodebuild \
+caffeinate -du xcodebuild \
   -project photo-export.xcodeproj \
   -scheme "photo-export" \
   -destination 'platform=macOS' \
@@ -58,9 +77,68 @@ xcodebuild \
   test
 ```
 
+For one test, append its method name to the suite identifier. For example:
+
+```bash
+caffeinate -du xcodebuild \
+  -project photo-export.xcodeproj \
+  -scheme "photo-export" \
+  -destination 'platform=macOS' \
+  -only-testing:photo-exportTests/ExportRecordStoreTests/testLoadEmptyStore \
+  CODE_SIGNING_ALLOWED=NO \
+  test
+```
+
 The shared scheme runs `photo-exportTests`, including its hosted SwiftUI tests.
 The `photo-exportUITests` target contains Xcode templates and is excluded from the
 shared scheme's build and test entries.
+
+Hosted tests share the app's process identity. `AppEntry` starts the empty
+`TestHostApp` so tests construct their own services without restoring a real
+bookmark, starting Photos observation or loading the app's history. Use
+[`AppCoreTests.makeTestComposition`](photo-exportTests/AppCoreTests.swift) as an
+example when testing the complete object graph: it supplies fakes and isolated
+preferences and state roots to `AppComposition`.
+
+Keep every test's preferences and files inside
+[`TestScratch`](photo-exportTests/TestHelpers/TestScratch.swift):
+
+- `TestScratch.defaults("label")` creates a fresh preferences suite. Never use
+  `UserDefaults.standard`, `UserDefaults()` or the app's preferences in ordinary tests.
+- To share or reopen preferences, get a name from `TestScratch.suiteName("label")`
+  and pass it to `TestScratch.defaults(suiteName:)` for each instance.
+- `TestScratch.directory("label")` returns a unique URL under the run root; it
+  does **not** create the directory. Create it when your test needs an existing folder,
+  and pass scratch roots explicitly to record stores and compositions.
+
+Each process owns a root under `$TMPDIR/photo-export-tests/`, removed on normal
+exit; a later run sweeps roots whose processes have died. Avoid shipping
+`AppComposition` factories and system storage paths. The
+[test-scratch guard guide](scripts/README.md#ci-scripts-scriptsci) explains the
+checked patterns and the narrow allow marker for tests that must inspect a real path.
+
+### Static guards
+
+Run the repository checks that CI runs, including self-tests of the guards:
+
+```bash
+scripts/ci/test-guards.sh
+python3 -B scripts/ci/check-read-only-photos.py
+python3 -B scripts/ci/check-no-plan-refs.py
+python3 -B scripts/ci/check-version.py
+python3 -B scripts/ci/check-test-waits.py
+python3 -B scripts/ci/check-test-scratch.py
+python3 -B scripts/ci/check-persistence-doc.py
+scripts/ci/check-regression-gates.sh
+scripts/ci/check-fingerprint-id-keying.sh
+```
+
+These check source, documentation and tooling without reading your Photos library.
+See the [CI script guide](scripts/README.md#ci-scripts-scriptsci) for each guard's
+scope. Checks of built apps and test results run after the relevant build/test step
+in CI; the commands above cover the static guards.
+
+### Style checks
 
 CI pins **SwiftLint 0.65.1** and **swift-format 603.0.0** with SHA256-verified downloads. Use those
 versions for matching strict diagnostics. On macOS15+ arm64 with Command Line Tools installed, the

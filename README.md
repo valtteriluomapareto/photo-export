@@ -130,7 +130,7 @@ Marketing screenshots are captured with `scripts/screenshots/capture.sh`, which 
 
 ## Contributing
 
-Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for local setup and testing expectations.
+Contributions are welcome. Start with [`CONTRIBUTING.md` → Start here](CONTRIBUTING.md#start-here) for the reading order, local setup and testing guide.
 
 For maintainers and contributors, additional internal references live in:
 
