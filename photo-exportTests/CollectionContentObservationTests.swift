@@ -126,16 +126,6 @@ import Testing
       }
     }
 
-    private func observe(
-      in window: NSWindow, _ condition: () -> Bool,
-      sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed hosted condition", sourceLocation: sourceLocation) {
-        window.contentView?.layoutSubtreeIfNeeded()
-        return condition()
-      }
-    }
-
     /// Unrelated queue publications must not re-render the pane, through either its inputs (the
     /// `CollectionContentView.==` conformance) or its observations. SwiftUI currently applies the
     /// view's Equatable conformance even without `.equatable()`, so removing the parent's

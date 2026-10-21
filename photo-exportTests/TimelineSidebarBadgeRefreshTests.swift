@@ -105,16 +105,6 @@ import Testing
       }
     }
 
-    private func observe(
-      in window: NSWindow, _ condition: () -> Bool,
-      sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed hosted condition", sourceLocation: sourceLocation) {
-        window.contentView?.layoutSubtreeIfNeeded()
-        return condition()
-      }
-    }
-
     @Test(.timeLimit(.minutes(1)))
     func heldRefreshRetainsRenderedBadgesAndExportProgressStillUpdates() async throws {
       let f = Fixture()
