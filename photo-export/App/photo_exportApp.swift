@@ -12,11 +12,11 @@ import SwiftUI
 /// scenes.
 struct PhotoExportApp: App {
   private let core: AppCore
-  // The core's `ObservableObject`s, held as `@StateObject`s. Its `@Observable` objects
-  // (`LoginItemController`, `WhatsNewState`, `ExportProgressState`) need no wrapper: the core
-  // keeps them alive and nothing here reads them. Only `autoSyncManager` is read in `body`, for
-  // the menu bar label; the other wrappers are dropped in the fixture-mode slice. Scenes get
-  // the same instances through `photoExportEnvironment(core)`.
+  // The core's `ObservableObject`s, held as `@StateObject`s. The `@Observable` objects need no
+  // wrapper: the core owns `LoginItemController` and `WhatsNewState`, `ExportManager` owns
+  // `ExportProgressState`, and nothing here reads them. Only `autoSyncManager` is read in
+  // `body`, for the menu bar label; the others only keep their instances alive alongside the
+  // core. Scenes get the same instances through `photoExportEnvironment(core)`.
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var photoLibraryManager: PhotoLibraryManager
   @StateObject private var exportRecordStore: ExportRecordStore

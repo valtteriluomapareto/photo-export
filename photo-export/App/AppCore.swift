@@ -323,7 +323,7 @@ extension View {
   /// screenshot-mode flag and surface, and its preferences suite as the default
   /// `@AppStorage` store.
   func photoExportEnvironment(_ core: AppCore) -> some View {
-    environmentObject(core.exportDestinationManager)
+    self.environmentObject(core.exportDestinationManager)
       .environmentObject(core.photoLibraryManager)
       .environmentObject(core.exportManager)
       .environment(core.exportManager.progressState)

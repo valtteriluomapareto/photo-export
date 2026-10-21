@@ -84,7 +84,12 @@ Settings and the menu-bar extra all get their environment from `photoExportEnvir
 `photo-export/App/AppCore.swift`, and sheets in `LibraryRootView` and `AutoExportSettingsView`
 re-inject some objects. Flip every injection site of the type at once, and have
 `AppCoreTests.sceneEnvironmentComesFromTheComposition` read the type through
-`photoExportEnvironment(_:)` and check it is the core's instance.
+`photoExportEnvironment(_:)` and check it is the core's instance. That test covers only what
+the helper injects: every scene root must call `photoExportEnvironment(core)`, and a sheet
+that re-injects the type needs its own hosted test.
+
+When `AppCore` (or an object it owns) owns the instance, `PhotoExportApp` drops its
+`@StateObject` instead of flipping it to `@State`; the core keeps the object alive.
 
 ## Types with Combine subscribers: the bridge
 
