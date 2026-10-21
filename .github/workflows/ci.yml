@@ -98,6 +98,14 @@ jobs:
           ./scripts/ci/test-guards.sh
           python3 scripts/ci/check-read-only-photos.py
 
+      - name: Check current source-comment reasons
+        run: |
+          echo "::group::Source-comment reference guard"
+          echo "Rejecting development phase/plan/item labels in app comments."
+          python3 -B scripts/ci/check-no-plan-refs.py
+          echo "Source-comment reference guard passed."
+          echo "::endgroup::"
+
       - name: Check test waits
         run: |
           echo "::group::Test-wait guard"

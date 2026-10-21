@@ -289,3 +289,19 @@ Marketing source files live in [`design/`](../design/), not in the repo root:
 
 - `app-icon-master.jpeg` — square master image for the app icon
 - `app-store-screenshot.png` — current Mac App Store hero screenshot
+
+## Source-comment reference guard
+
+Run `python3 -B scripts/ci/check-no-plan-refs.py` from the repository root. App Swift
+comments must describe current reasons, with links to maintained references when needed,
+rather than development labels such as `Phase 3`, `pre-Phase-0a`, `Plan §` or `item 5`.
+The guard checks line and nested block comments, including references split across adjacent
+doc-comment lines, and ignores string literals and explicit extended regex literals
+(`#/.../#`, including extra hashes). Bare slash regex literals are outside this narrow
+lexer's supported syntax. It shares `swift_source.py` boundaries
+with the other lexical guards; interpolation inside strings is masked, not parsed as code.
+Missing/empty source trees and malformed input fail explicitly.
+
+`test_no_plan_refs.py` exercises the real CLI on disposable sources; `test-guards.sh`
+discovers those fixtures with the other guard tests. CI also runs the guard explicitly
+with a verbose result group.

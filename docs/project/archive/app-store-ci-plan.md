@@ -1,8 +1,15 @@
 # App Store CI Plan
 
+Status: Implemented and in use; archived as the App Store CI design record.
+The workflow and signing/upload scripts have shipped. For example, the
+[2026-10-20 App Store workflow run](https://github.com/valtteriluomapareto/photo-export/actions/runs/39415355552)
+passed. Follow the [release process](../release-process.md) for current commands
+and validation; the unverified-workflow note and submission details below are the
+historical 2026-03-31 snapshot.
+
 Written against the repository state on 2026-03-31.
 
-## Current State
+## Historical state
 
 The first App Store build has been submitted manually:
 

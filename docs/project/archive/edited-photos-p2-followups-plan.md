@@ -8,7 +8,10 @@ PR: https://github.com/valtteriluomapareto/photo-export/pull/14
 > **Status:** Implemented. All five P2 items shipped on the
 > `issue-13-support-exporting-edited-photos` branch in commits following
 > the design pass; see **Implementation status** below for file:line
-> pointers and the post-implementation Codex review notes.
+> pointers and the post-implementation Codex review notes. The mode-specific
+> design was later superseded by the
+> [two-mode redesign](edited-photos-modes-redesign-plan.md); this is a historical
+> implementation record.
 
 ## Implementation status
 
