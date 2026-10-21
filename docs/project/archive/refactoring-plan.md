@@ -1,8 +1,13 @@
 # Refactoring Plan
 
+Status: Completed (Phases 1–4); archived as an early refactoring decision record.
+The counts, file layout and assessment below are historical. Use the
+[architecture conventions](../../reference/architecture-conventions.md) for
+current contracts.
+
 ## Context
 
-This plan was written when the app was ~2,750 lines across 15 Swift source files. The app has since grown to ~4,100 lines across 25 files.
+This plan was written when the app was ~2,750 lines across 15 Swift source files. A later revision recorded ~4,100 lines across 25 files; neither count describes the current app.
 
 The project uses **Swift Testing** (not XCTest). There is currently no `.xctestplan` file — the scheme uses the `<Testables>` model directly.
 
