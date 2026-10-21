@@ -596,10 +596,11 @@ struct ExportRecordStoreQueryGoldenTests {
   /// `recordsById` after every step. If the counter diff implementation drifts from the
   /// linear scan it replaced, this test fires.
   ///
-  /// This covers the path that `apply(_:recordCounters: true)` exercises in production
-  /// — every mutation routes through `apply` via `append`. The golden-state tests above
-  /// verify end-state correctness on hand-checked fixtures; this test verifies that the
-  /// counter map stays consistent through arbitrary mutation sequences.
+  /// This covers the live mutation path: every mutation routes through `apply(_:)` via
+  /// `append`, which adjusts the counters by the record it replaced and the one it stored.
+  /// The golden-state tests above verify end-state correctness on hand-checked fixtures;
+  /// this test verifies that the counter map stays consistent through arbitrary mutation
+  /// sequences.
   @Test func incrementalCountersStayConsistentUnderChurn() throws {
     let (dir, store) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -945,14 +946,13 @@ struct ExportRecordStoreQueryGoldenTests {
 
   /// Covers the **log-only reload path**: store A's mutations live in the JSONL log
   /// (compaction triggers at 1000 mutations and we only plant ~10), so when store B
-  /// configures, `loaded.snapshot` is `nil` and the `recordsById = snapshot` branch is
-  /// skipped — the entire state is reconstructed by replaying log ops via
-  /// `apply(_:recordCounters: false)`, then `recoverInProgressVariants()` rewrites
-  /// in-progress variants to failed in-place, then `rebuildCountersFromRecords()`
-  /// materializes the counter map in one O(N) pass.
+  /// configures, `loaded.snapshot` is `nil` and `prepare` starts from no records — the
+  /// entire state is reconstructed by replaying log ops through `applyMutation` without
+  /// counting, then `recoverInProgressVariants(in:)` rewrites in-progress variants to
+  /// failed, then `prepare` materializes the counter map in one O(N) pass.
   ///
   /// The companion test `configureReloadFromSnapshotPlusLogReproducesCounters` covers
-  /// the snapshot-load path (`recordsById = snapshot` branch); together they exercise
+  /// the snapshot-load path (`prepare` starts from the snapshot); together they exercise
   /// every load shape `configure(for:)` can take.
   @Test func configureReloadFromLogOnlyReproducesCounters() throws {
     let (dir, storeA) = try makeStore()
@@ -1078,13 +1078,13 @@ struct ExportRecordStoreQueryGoldenTests {
   /// (compaction triggers at 1000 mutations). We hand-craft a snapshot file containing
   /// records across two `(year, month)` cells, with `.inProgress` variants in BOTH
   /// cells, plus a small log overlay. After `configure(for:)`:
-  /// - `loaded.snapshot != nil` so the `recordsById = snapshot` branch runs.
+  /// - `loaded.snapshot != nil` so `prepare` starts from the snapshot's records.
   /// - Log replay overlays one additional record.
-  /// - `recoverInProgressVariants()` rewrites the in-progress variants to failed
+  /// - `recoverInProgressVariants(in:)` rewrites the in-progress variants to failed
   ///   across both cells (a regression that truncates recovery to a single cell would
   ///   fire here).
-  /// - `rebuildCountersFromRecords()` populates `monthCounters` from the final
-  ///   `recordsById`. The resulting counts must match a recompute exactly.
+  /// - `prepare` counts `monthCounters` from the final records. The resulting counts
+  ///   must match a recompute exactly.
   @Test func configureReloadFromSnapshotPlusLogReproducesCounters() throws {
     let dir = TestScratch.directory("ExportRecordStoreSnapshotReload")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -1412,5 +1412,10 @@ struct ExportRecordStoreQueryGoldenTests {
       }.count
       #expect(reloaded.yearExportedCount(year: year) == expected)
     }
+    // The checks above only read the probed cells; a counter in any other month is stray.
+    let recordMonths = reloaded.recordsById.values.map {
+      ExportRecordStore.MonthKey(year: $0.year, month: $0.month)
+    }
+    #expect(Set(reloaded.monthCounters.keys) == Set(recordMonths))
   }
 }

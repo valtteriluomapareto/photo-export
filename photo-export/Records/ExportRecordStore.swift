@@ -45,7 +45,7 @@ final class ExportRecordStore: ObservableObject {
     let year: Int
     let month: Int
   }
-  struct MonthCounters: Equatable, Sendable {
+  struct MonthCounters: Sendable {
     /// Per-variant, per-status occurrence count.
     var variantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
     /// Records where both `.original` and `.edited` variants are `.done`.

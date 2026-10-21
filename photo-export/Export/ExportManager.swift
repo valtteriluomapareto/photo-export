@@ -2220,8 +2220,8 @@ final class ExportManager: ObservableObject {
       // `.inProgress` is still in the store. Without this transition, the
       // record lies about work in flight for the rest of the session — the
       // diagnostic report shows a phantom "in-progress" row, the sidebar
-      // counters skew, and the next launch's `recoverInProgressVariants()`
-      // finally rewrites it to `.failed`. Record the failure here so the
+      // counters skew, and only the next launch's record load finally
+      // rewrites it to `.failed`. Record the failure here so the
       // store reflects what actually happened. The asset is still re-queued
       // on the next run because `.original` is now `.failed` (not `.done`).
       let failure = recordVariantFailed(

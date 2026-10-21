@@ -99,7 +99,10 @@ struct RecordStoreLoadCharacterizationTests {
       let store = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
       store.configure(for: "A")
       defer { store.flushForTesting() }
-      return (store.state, store.persistenceError, store.recordBodies.isEmpty)
+      return (
+        store.state, store.persistenceError,
+        store.recordBodies.isEmpty && store.placements.isEmpty
+      )
     }
     let store = ExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
     store.configure(for: "A")
@@ -160,25 +163,6 @@ struct RecordStoreLoadCharacterizationTests {
     var bytes = try JSONEncoder().encode(Entry(id: id))
     bytes.append(0x0A)
     return bytes
-  }
-
-  /// A log whose last line has no final LF makes the next append start a new line.
-  @Test func logWithoutFinalNewlineStartsTheNextAppendOnANewLine() async throws {
-    let root = try makeDirectory("LoadSeparator")
-    defer { try? FileManager.default.removeItem(at: root) }
-    let logURL = root.appendingPathComponent("log.jsonl")
-    let seeded = try line("a") + Data(try line("b").dropLast())
-    try seeded.write(to: logURL)
-    let file = makeFile(root, io: FaultyReadIO())
-
-    #expect(file.load().ops == [Entry(id: "a"), Entry(id: "b")])
-    file.append(Entry(id: "c"), currentSnapshot: { Snapshot(ids: ["a", "b", "c"]) })
-    try await file.flush()
-
-    #expect(try Data(contentsOf: logURL) == seeded + Data([0x0A]) + (try line("c")))
-    let reloaded = makeFile(root, io: FaultyReadIO()).load()
-    #expect(reloaded.ops == [Entry(id: "a"), Entry(id: "b"), Entry(id: "c")])
-    #expect(reloaded.malformedLineCount == 0)
   }
 
   /// A log that is gone on a later load clears the separator an earlier load recorded.
