@@ -69,6 +69,17 @@ automatic discovery uses a different filename. To apply formatting, run
 `swift-format format --configuration .swift-format.json --recursive --in-place photo-export`
 and review the diff. The formatter check covers app sources only.
 
+Run all static CI guards and their fixture tests locally:
+
+```bash
+scripts/ci/run-guards.sh
+```
+
+The runner names every check, continues after independent failures, and returns nonzero
+if any check fails. See [the guard guide](scripts/README.md#ci-scripts-scriptsci)
+for the inventory. Builds, Swift linters, result-bundle audits and release checks use
+their separate commands.
+
 Docs website setup:
 
 ```bash

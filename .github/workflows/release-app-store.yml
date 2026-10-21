@@ -124,6 +124,14 @@ jobs:
           BUILD_NUMBER: ${{ steps.ctx.outputs.build_number }}
         run: bash scripts/ci/archive-appstore.sh
 
+      - name: Upload archive log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-appstore-archive-log
+          path: ${{ runner.temp }}/photo-export-appstore-archive.log
+          if-no-files-found: warn
+
       # Built by the pinned Xcode, with the compliance key, before it is packaged and uploaded.
       - name: Check archived app
         run: bash scripts/ci/check-built-app.sh --app "${ARCHIVE_PATH}/Products/Applications/${APP_NAME}.app"
