@@ -34,6 +34,13 @@ struct OnboardingView: View {
       history: exportRecordStore.state)
   }
 
+  /// Why Start Export is disabled while the picked folder's history loads; empty otherwise.
+  private var startExportHelp: String {
+    guard exportAll, exportAvailability == .loadingHistory else { return "" }
+    return exportAvailability.unavailableHelp(
+      destinationHelp: exportDestinationManager.exportUnavailableHelp) ?? ""
+  }
+
   private var content: some View {
     VStack(spacing: 24) {
       Spacer(minLength: 0)
@@ -156,7 +163,9 @@ struct OnboardingView: View {
         // export.
         .disabled(
           exportDestinationManager.selectedFolderURL == nil
-            || (exportAll && exportAvailability == .loadingHistory))
+            || (exportAll && exportAvailability == .loadingHistory)
+        )
+        .help(startExportHelp)
       }
 
       Spacer(minLength: 0)

@@ -327,6 +327,9 @@ struct ImportView: View {
         }
         .buttonStyle(.borderedProminent)
         .disabled(!timelineExportAvailability.canStart)
+        .help(
+          timelineExportAvailability.unavailableHelp(
+            destinationHelp: exportDestinationManager.exportUnavailableHelp) ?? "")
       }
     }
   }
