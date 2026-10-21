@@ -180,7 +180,11 @@ import Testing
       service.authorizationStatus = .denied
       service.isAuthorized = false
       let scope = PhotoFetchScope.timeline(year: 2026, month: 9)
-      service.assetsByYearMonth["2026-9"] = [TestAssetFactory.makeAsset(id: "old")]
+      service.assetsByYearMonth["2026-9"] = [
+        TestAssetFactory.makeAsset(
+          id: "old",
+          creationDate: Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!)
+      ]
       #expect(try await service.cachedCountAssets(in: scope) == 1)
       let gate = AsyncCheckpoint()
       var waits = 0
@@ -197,7 +201,11 @@ import Testing
         revisionAtAuthorization = manager.libraryRevision
         query = Task { try await manager.cachedCountAssets(in: scope) }
       }
-      service.assetsByYearMonth["2026-9"]?.append(TestAssetFactory.makeAsset(id: "new"))
+      service.assetsByYearMonth["2026-9"]?.append(
+        TestAssetFactory.makeAsset(
+          id: "new",
+          creationDate: Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!)
+      )
       service.authorizationStatus = .authorized
       manager.refreshAuthorizationStatus()
       var failure: Error?
@@ -208,7 +216,11 @@ import Testing
         let read = try #require(query)
         #expect(try await read.value == 2)
         let revision = manager.libraryRevision
-        service.assetsByYearMonth["2026-9"]?.append(TestAssetFactory.makeAsset(id: "later"))
+        service.assetsByYearMonth["2026-9"]?.append(
+          TestAssetFactory.makeAsset(
+            id: "later",
+            creationDate: Calendar.current.date(
+              from: DateComponents(year: 2026, month: 9, day: 15))!))
         manager.refreshAuthorizationStatus()
         #expect(manager.libraryRevision == revision)
         #expect(try await manager.cachedCountAssets(in: scope) == 2)

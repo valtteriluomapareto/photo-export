@@ -97,7 +97,9 @@ struct InterruptedPairRecoveryTests {
         assetResourceWriter: writer, fileSystem: files,
         userDefaults: TestScratch.defaults(suiteName: defaultsName))
       let asset = TestAssetFactory.makeAsset(
-        id: "asset", hasAdjustments: companion, isLivePhoto: !companion)
+        id: "asset",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+        hasAdjustments: companion, isLivePhoto: !companion)
       photos.assetsByYearMonth["2025-1"] = [asset]
       photos.resourcesByAssetId[asset.id] = [
         .init(type: .photo, originalFilename: "FILE.JPG", fileSize: companion ? 12 : nil),

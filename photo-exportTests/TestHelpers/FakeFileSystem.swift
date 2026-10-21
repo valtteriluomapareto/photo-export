@@ -88,9 +88,16 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   }
 
   // Error injection
-  var moveError: Error?
-  var copyError: Error?
-  var shouldApplyTimestamps = true
+  var moveError: Error? {
+    get { lock.withLock { _moveError } }
+    set { lock.withLock { _moveError = newValue } }
+  }
+  private var _moveError: Error?
+  var copyError: Error? {
+    get { lock.withLock { _copyError } }
+    set { lock.withLock { _copyError = newValue } }
+  }
+  private var _copyError: Error?
 
   // Delegate to the real filesystem, through an injectable final commit.
   private let real: FileIOService
@@ -115,9 +122,7 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
     _timestampCalls.append((date: creationDate, url: url))
     lock.unlock()
 
-    if shouldApplyTimestamps {
-      real.applyTimestamps(creationDate: creationDate, to: url)
-    }
+    real.applyTimestamps(creationDate: creationDate, to: url)
     afterTimestampsHook?(url)
   }
 
