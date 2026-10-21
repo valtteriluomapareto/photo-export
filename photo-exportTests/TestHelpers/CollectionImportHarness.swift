@@ -18,10 +18,14 @@ final class CollectionImportHarness {
   let manager: ExportManager
   private(set) var destinationId = "dest"
 
-  init(_ label: String, videoLayout: ExportVideoLayout = .subfolder) {
+  init(
+    _ label: String, videoLayout: ExportVideoLayout = .subfolder,
+    recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
+  ) {
     storeRoot = TestScratch.directory(label)
-    timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
-    collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    timeline = ExportRecordStore(baseDirectoryURL: storeRoot, recordLogIO: recordLogIO)
+    collections = CollectionExportRecordStore(
+      baseDirectoryURL: storeRoot, recordLogIO: recordLogIO)
     timeline.configure(for: destinationId)
     collections.configure(for: destinationId)
     manager = ExportManager(
@@ -33,6 +37,14 @@ final class CollectionImportHarness {
   }
 
   var root: URL { destination.rootURL }
+
+  /// The snapshot file of the current history in the timeline or the collection store.
+  func snapshotURL(collection: Bool) -> URL {
+    storeRoot.appendingPathComponent(destinationId, isDirectory: true).appendingPathComponent(
+      collection
+        ? CollectionExportRecordStore.Constants.snapshotFileName
+        : ExportRecordStore.Constants.snapshotFileName)
+  }
 
   /// Starts both stores on an empty history for the same folder, as after a reinstall.
   func wipeHistory() {

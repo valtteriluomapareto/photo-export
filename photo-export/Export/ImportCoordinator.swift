@@ -2,25 +2,15 @@ import Combine
 import Foundation
 import OSLog
 
-/// Owns the Import Existing Backup flow: scanner invocation (the timeline's `YYYY/MM` folders
-/// and the album, shared-album and Favorites folders under `Collections/`), library matching,
-/// bulk record insertion into both stores, both-store reconciliation, and the per-stage
-/// progress publishing.
+/// Owns Import Existing Backup: timeline and collection scanning, library matching,
+/// record insertion, reconciliation, and stage progress.
 ///
-/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 5, this
-/// extraction:
-/// - Moves the ~190-line `startImport` body (and `cancelImport`) out of `ExportManager`.
-/// - Owns the published mirrors `isImporting`, `importStage` + `importError` directly; ExportManager
-///   sinks them onto its own `@Published` properties so `isImportingPublisher`
-///   subscribers and SwiftUI view bindings keep emitting from the same source.
-/// - Reaches the Phase-0 cancellation seam (`isCurrent` / `throwIfCancelledOrStale` /
-///   `bumpGeneration`) directly through the injected `ExportQueueCoordinator`
-///   reference, not via the host (issue #67 item 2). The host is now scoped to the
-///   writable `importResult` publisher and the dependencies the scanner + reconcile
-///   need.
-///
-/// `importResult` stays on `ExportManager` as a `@Published var` so its writability
-/// contract is preserved; the coordinator updates it via `Host.setImportResult(_:)`.
+/// Synchronous sinks mirror `isImporting`, `importStage`, and `importError` onto
+/// `ExportManager` so AutoSync and views keep a consistent observation surface.
+/// Cancellation uses the injected `ExportQueueCoordinator` directly. The narrow Host
+/// provides store/destination dependencies and writes `importResult`, whose manager
+/// property remains writable by callers.
+/// See docs/reference/architecture-conventions.md#import-outcome-ownership.
 @MainActor
 final class ImportCoordinator: ObservableObject {
 
@@ -28,8 +18,8 @@ final class ImportCoordinator: ObservableObject {
 
   /// Hooks back to ExportManager for state the coordinator does not own: the writable
   /// `importResult` mirror and the destination/store dependencies required by
-  /// scanner + reconcile. The Phase-0 cancellation seam is no longer on this
-  /// protocol — the coordinator reaches it through its injected
+  /// scanner + reconcile. Cancellation is separate from this protocol;
+  /// the coordinator reaches it through its injected
   /// `ExportQueueCoordinator` reference.
   @MainActor
   protocol Host: AnyObject {
@@ -99,10 +89,8 @@ final class ImportCoordinator: ObservableObject {
   private let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "ImportCoordinator")
   private weak var host: Host?
-  /// Cancellation seam (Phase 0). Held as a weak reference because both the queue
-  /// coordinator and this coordinator have the same lifetime owner
-  /// (`ExportManager`); a strong reference would create a retain cycle through
-  /// `Host`.
+  /// Cancellation seam. A weak reference keeps collaborator lifetimes bounded by
+  /// their shared owner, `ExportManager`.
   private weak var queueCoordinator: ExportQueueCoordinator?
 
   private let backupDirectoryReader: any BackupDirectoryReading
@@ -120,7 +108,10 @@ final class ImportCoordinator: ObservableObject {
 
   /// Starts the Import Existing Backup flow. Idempotent: re-entry while an import is
   /// already in flight is a no-op. Other guards (no destination, store not ready,
-  /// active export work) log and return the reason.
+  /// active export work) log and return the reason. While either history is still loading,
+  /// the import starts at once, holding exports, and waits for it; if the timeline history
+  /// then isn't ready, the import ends without running and says why, through the same outcome
+  /// as other failures.
   ///
   /// `requiringPreviousBackup` is for a folder the user said is their previous backup: when the
   /// history has completed files and none of them are in the folder, nothing is imported or
@@ -137,15 +128,8 @@ final class ImportCoordinator: ObservableObject {
     } else if host.exportDestination.selectedFolderURL == nil {
       logger.warning("Cannot import: no destination selected")
       refusal = .noDestination
-    } else if host.exportRecordStore.state != .ready {
-      // Gate the import on a `.ready` timeline store. Otherwise the scanner would happily
-      // run, the bulkImportRecords call would silently drop every record (its `.ready`
-      // guard short-circuits on `.unconfigured`/`.failed`), and the user would see a
-      // success report with the matched counts despite nothing being persisted. This is
-      // the same hazard `canExportTimeline` guards on the export-start side.
-      logger.error(
-        "Cannot import: timeline record store state=\(String(describing: host.exportRecordStore.state), privacy: .public) (need .ready)"
-      )
+    } else if host.exportRecordStore.state.isSettled, !isTimelineHistoryReady(host) {
+      // A history that is still loading is waited for below; any other state refuses now.
       refusal = .historyNotReady
     } else {
       refusal = nil
@@ -155,14 +139,14 @@ final class ImportCoordinator: ObservableObject {
         previousBackupMissing = false
         importStage = nil
         host.setImportResult(nil)
-        importError =
-          refusal == .exportActive
-          ? "Photo Export couldn\u{2019}t check this folder against your export history while an export is running. Your export history was kept. Choose File \u{2192} Import Existing Backup\u{2026} when the export finishes."
-          : "Photo Export couldn\u{2019}t check this folder against your export history. Your export history was kept."
+        importError = Self.previousBackupCheckMessage(for: refusal)
       }
       return refusal
     }
     guard let rootURL = host.exportDestination.selectedFolderURL else { return .noDestination }
+    // A destination change while the import waits for the history abandons it.
+    let timelineDestination = host.exportRecordStore.destinationId
+    let collectionDestination = host.collectionExportRecordStore.destinationId
 
     let importGen = queueCoordinator?.generation ?? 0
     let operationID = UUID()
@@ -180,6 +164,26 @@ final class ImportCoordinator: ObservableObject {
       // invalidation before Task entry. A replacement UUID remains untouched.
       defer { self.finishOwnedImport(operationID) }
       guard self.isCurrentImport(operationID, generation: importGen) else { return }
+
+      // Right after a destination change its history is still loading. The import holds
+      // exports while it waits, then checks it still owns the same destination.
+      await host.exportRecordStore.waitUntilSettled()
+      await host.collectionExportRecordStore.waitUntilSettled()
+      guard self.isCurrentImport(operationID, generation: importGen) else { return }
+      guard host.exportRecordStore.destinationId == timelineDestination,
+        host.collectionExportRecordStore.destinationId == collectionDestination
+      else {
+        self.logger.info("Import abandoned: the destination changed while its history loaded")
+        return
+      }
+      guard self.isTimelineHistoryReady(host) else {
+        self.finishOwnedImport(
+          operationID,
+          error: requiringPreviousBackup
+            ? Self.previousBackupCheckMessage(for: .historyNotReady)
+            : Self.historyUnavailableMessage)
+        return
+      }
 
       do {
         guard let scopedURL = host.exportDestination.beginScopedAccess() else {
@@ -305,7 +309,7 @@ final class ImportCoordinator: ObservableObject {
                 status: .done,
                 exportDate: now,
                 lastError: nil,
-                // Issue #38: preserve the on-disk location captured by the scanner so
+                // Preserve the on-disk location captured by the scanner so
                 // reuse-source and reconcile can find the file. `nil` for the bare
                 // month folder; `"videos"` for files discovered under
                 // `YYYY/MM/videos/`. Without this, importing a backup written under
@@ -396,6 +400,34 @@ final class ImportCoordinator: ObservableObject {
       }
     }
     return nil
+  }
+
+  /// Imports need a `.ready` timeline store. Otherwise the scanner would happily run, the
+  /// bulkImportRecords call would silently drop every record (its `.ready` guard
+  /// short-circuits on `.unconfigured`/`.failed`), and the user would see a success report with
+  /// the matched counts despite nothing being persisted. This is the same hazard
+  /// `canExportTimeline` guards on the export-start side.
+  private func isTimelineHistoryReady(_ host: Host) -> Bool {
+    let state = host.exportRecordStore.state
+    guard state == .ready else {
+      logger.error(
+        "Cannot import: timeline record store state=\(String(describing: state), privacy: .public) (need .ready)"
+      )
+      return false
+    }
+    return true
+  }
+
+  /// Why an import that waited for the history ended without running, when the history it
+  /// loaded isn't ready.
+  static let historyUnavailableMessage =
+    "Export history isn\u{2019}t available. Resolve the export history alert, then import again."
+
+  /// What a "Same Folder" check that could not run tells the user.
+  private static func previousBackupCheckMessage(for refusal: StartRefusal) -> String {
+    refusal == .exportActive
+      ? "Photo Export couldn\u{2019}t check this folder against your export history while an export is running. Your export history was kept. Choose File \u{2192} Import Existing Backup\u{2026} when the export finishes."
+      : "Photo Export couldn\u{2019}t check this folder against your export history. Your export history was kept."
   }
 
   /// Ends the wait after a "previous backup missing" result: the user chose what to do, or the

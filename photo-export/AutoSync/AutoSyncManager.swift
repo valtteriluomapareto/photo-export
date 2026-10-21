@@ -6,8 +6,7 @@ import os
 /// effect runner, Combine subscriptions to the environment's publishers, and
 /// `@Published` state surfaces for UI consumption.
 ///
-/// Plan §"AutoSyncManager Shape" — at most one manager per app, lifecycle-owned by
-/// `PhotoExportApp` as a `@StateObject`. `attach(to:)` is idempotent so repeated
+/// The app's `AppCore` owns one manager. `attach(to:)` is idempotent so repeated
 /// calls (multi-window scene recreation, test resets) don't re-bootstrap.
 @MainActor
 final class AutoSyncManager: ObservableObject {
@@ -16,7 +15,7 @@ final class AutoSyncManager: ObservableObject {
   @Published private(set) var state: AutoSyncState = .disabled
 
   /// Most recently completed run's summary. `nil` until the first run finishes.
-  /// Persisted per-destination in subsequent slices.
+  /// Persisted per destination and reloaded when the selected destination changes.
   @Published private(set) var lastRunSummary: ExportRunSummary?
   /// `$lastRunSummary` for subscribers outside this type: synchronous, delivered before the
   /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
@@ -31,7 +30,7 @@ final class AutoSyncManager: ObservableObject {
   @Published private(set) var isEnabled: Bool = false
 
   /// Per-destination retry state for the *currently selected* destination.
-  /// Surfaced for the Export Issues UI (Phase 4) and refreshed after every
+  /// Surfaced for the Export Issues UI and refreshed after every
   /// `.recordRetryFailures` effect plus on destination change. Empty for a
   /// brand-new destination or when no destination is selected.
   @Published private(set) var currentRetryState: AutoSyncRetryState = .empty
@@ -69,9 +68,9 @@ final class AutoSyncManager: ObservableObject {
   private var isAttached = false
   /// Serializes event dispatch — events produced by an effect (e.g. an export run
   /// completing while we're in the middle of a `photosChanged` reduce) must be
-  /// queued behind the in-flight event, not interleaved. Plan §"State Reducer":
-  /// "Events produced by an effect ... are queued and processed after the current
-  /// event's effects complete." All `dispatch` callers must be on @MainActor;
+  /// queued behind the in-flight event, not interleaved. See
+  /// docs/reference/auto-export-behavior.md#event-dispatch.
+  /// All `dispatch` callers must be on @MainActor;
   /// effect handlers must not perform synchronous re-entry that escapes
   /// MainActor.
   private var dispatching = false
@@ -156,7 +155,7 @@ final class AutoSyncManager: ObservableObject {
       }
       .store(in: &subscriptions)
 
-    // Issue #47: the HEIC→JPEG toggle changes which assets count as
+    // The HEIC→JPEG toggle changes which assets count as
     // exported, so AutoSync re-evaluates at the same 2s debounce as
     // `versionSelection`. Without this subscription, AutoSync would sit
     // idle until the next photos-change or app-launch trigger after a
@@ -171,7 +170,7 @@ final class AutoSyncManager: ObservableObject {
       }
       .store(in: &subscriptions)
 
-    // Manual-run completion hook for plan §"Dirty State" clear rule. AutoSync-
+    // Manual-run completion hook for acknowledging compatible dirty work. AutoSync-
     // sourced summaries are routed through the `runExport`-await return path
     // inside `startRun`; filtering here to `.manual` avoids dispatching
     // `manualFullExportCompleted` for our own runs.
@@ -330,9 +329,9 @@ final class AutoSyncManager: ObservableObject {
 
   /// User clicked Retry on a failure in the Issues tab. Clears the retry
   /// entry (so it isn't filtered out at enqueue time) and then dispatches
-  /// `runNow` to start an immediate run that picks it up. Plan §"Retry and
-  /// Failure Policy": "Export Issues 'Retry Failed' or a normal manual
-  /// export after disabling Auto Export can override backoff."
+  /// `runNow` to start an immediate run that picks it up. Clearing the entry
+  /// explicitly overrides its previous backoff or hard blocker.
+  /// See docs/reference/auto-export-behavior.md#retry-and-failure-policy.
   ///
   /// The asset will appear in the next run's enqueue because the record
   /// store still has it as `.failed` for that variant — `isExported`
@@ -791,11 +790,9 @@ final class AutoSyncManager: ObservableObject {
     return scopes.enabledScopes.map(\.fullRunScope)
   }
 
-  /// Maps an `ExportPlacement` to the retry-state scope key. Plan §"Retry
-  /// and Failure Policy": "Timeline can use a timeline scope key; collection
-  /// exports need placement awareness so a failure in one album does not
-  /// suppress a different album or Favorites." `internal` (default) so
-  /// `PhotoExportApp` can construct the eligibility-check closure that
+  /// Maps an `ExportPlacement` to a retry bucket so a failure in one album
+  /// does not suppress a different album or Favorites. Internal so
+  /// `AppCore` can construct the eligibility-check closure that
   /// reads `currentRetryState` for `ExportManager`.
   nonisolated static func retryScopeKey(for placement: ExportPlacement) -> AutoSyncRetryScopeKey {
     switch placement.kind {

@@ -4,6 +4,7 @@ struct OnboardingView: View {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
+  let historyState: RecordStoreState
   let onSkip: () -> Void
 
   @State private var exportAll = true
@@ -25,6 +26,37 @@ struct OnboardingView: View {
     }
     .firstRunWindowMinSize()
     .background(Color(.windowBackgroundColor))
+  }
+
+  #if DEBUG
+    /// Reads the rendered button's enabled environment and the live option binding.
+    private struct ExportControlProbe: View {
+      @Environment(\.isEnabled) private var isEnabled
+      @Environment(\.bodyInvalidationCounter) private var counter
+      let help: String
+      let includesOriginals: Bool
+      let toggleOriginals: () -> Void
+
+      var body: some View {
+        counter?.recordText(
+          [String(isEnabled), help, String(includesOriginals)], for: "onboarding-export-control")
+        counter?.recordAction("onboarding-toggle-originals", action: toggleOriginals)
+        return Color.clear.frame(width: 0, height: 0)
+      }
+    }
+  #endif
+
+  private var exportAvailability: ManualExportAvailability {
+    ManualExportAvailability(
+      destinationCanExport: exportDestinationManager.canExportNow,
+      history: historyState)
+  }
+
+  /// Why Start Export is disabled while the picked folder's history loads; empty otherwise.
+  private var startExportHelp: String {
+    guard exportAll, exportAvailability == .loadingHistory else { return "" }
+    return exportAvailability.unavailableHelp(
+      destinationHelp: exportDestinationManager.exportUnavailableHelp) ?? ""
   }
 
   private var content: some View {
@@ -139,13 +171,26 @@ struct OnboardingView: View {
           // selection the user made here, not the persisted default.
           exportManager.versionSelection = includeOriginals ? .editedWithOriginals : .edited
           exportManager.convertHEICToJPEG = convertHEICToJPEG
-          if exportAll && exportDestinationManager.canExportNow {
+          if exportAll && exportAvailability.canStart {
             exportManager.startExportAll()
           }
           onSkip()
         }
         .buttonStyle(.borderedProminent)
-        .disabled(exportDestinationManager.selectedFolderURL == nil)
+        #if DEBUG
+          .background {
+            ExportControlProbe(
+              help: startExportHelp, includesOriginals: includeOriginals,
+              toggleOriginals: { includeOriginals.toggle() })
+          }
+        #endif
+        // A folder picked here has its history read first; starting meanwhile would drop the
+        // export.
+        .disabled(
+          exportDestinationManager.selectedFolderURL == nil
+            || (exportAll && exportAvailability == .loadingHistory)
+        )
+        .help(startExportHelp)
       }
 
       Spacer(minLength: 0)

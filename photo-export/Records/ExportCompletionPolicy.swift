@@ -2,14 +2,9 @@ import Foundation
 
 /// Pure rules for "is this asset complete?" and "should the edited-fallback recovery run?"
 ///
-/// Centralizes decisions that were historically duplicated as private static helpers in
-/// `ExportRecordStore` and `CollectionExportRecordStore` (the literal "Collection-store
-/// mirror" labelled there) plus the `shouldRunEditedFallback` run-time decision that lived
-/// on `ExportManager`. Per
-/// `docs/project/archive/software-architecture-improvement-plan.md` Phase 1, this policy is
-/// the single source: both record stores delegate; `ExportManager` calls it. The policy
-/// holds no state and depends on no store; callers extract the variant dictionary first
-/// and pass it in.
+/// Both record stores and `ExportManager` use these rules so completion and fallback
+/// agree across placements. This type holds no state and depends on no store;
+/// callers extract the variant dictionary and pass it in.
 ///
 /// `requiredVariants(for:selection:policy:)` already lives as a free function in
 /// `ExportVariant.swift` and is not duplicated, so it is not re-exposed here.
@@ -36,7 +31,7 @@ enum ExportCompletionPolicy {
   /// `CollectionExportRecordStore.isExported(asset:placement:selection:)`. The stores keep
   /// their public methods as thin wrappers that extract the variant dictionary.
   ///
-  /// `convertHEICToJPEG` (issue #47) is forwarded to `requiredVariants` so a HEIC-original
+  /// `convertHEICToJPEG` is forwarded to `requiredVariants` so a HEIC-original
   /// asset under the toggle reads as "requires `.edited`" — completion checks against the
   /// synthesized JPEG record rather than the untouched HEIC `.original`. Default `false`
   /// preserves call-site behavior for tests and pre-toggle wrappers.
@@ -92,7 +87,7 @@ enum ExportCompletionPolicy {
   /// `editedResourceUnavailable` reason sentinel (which the variant write path emits when
   /// Photos refuses the edited resource).
   ///
-  /// Was `private func shouldRunEditedFallback(...)` on `ExportManager` before Phase 1.
+  /// Keep recovery eligibility aligned with the completion rule above.
   /// The original signature took `descriptor` + `job` and looked up `variants` internally;
   /// the policy form is one level lower and pure — the caller supplies the variants and
   /// the required set.

@@ -11,18 +11,20 @@ import Photos
 import SwiftUI
 
 /// Top-level router for the app's three states: pre-onboarding, onboarding, and the
-/// authorized library view. The Phase 4 refactor moved the bulk of the authorized
-/// layout into `LibraryRootView`; this file is now responsible for routing only.
+/// authorized library view. `LibraryRootView` owns the authorized split-view layout
+/// so this view can keep routing separate from library presentation.
 struct ContentView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @Environment(\.screenshotSurfaceKey) private var screenshotSurfaceKey
-  /// Read only by the onboarding auto-skip in `onAppear`. Plain references rather than
-  /// environment objects, so destination and record publications don't re-run the root body.
+  /// Action-only references for onboarding auto-skip in `onAppear`, with no body subscriptions.
+  /// History readiness arrives separately as a render-time value from the app owner.
   let destinationManager: ExportDestinationManager
   let recordStore: ExportRecordStore
+  /// Render-time readiness supplied by the observing app owner, independently of the action-only refs.
+  let timelineHistoryState: RecordStoreState
 
   // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -47,11 +49,12 @@ struct ContentView: View {
     #endif
     Group {
       if Self.forceOnboarding || (photoLibraryManager.isAuthorized && !hasCompletedOnboarding) {
-        OnboardingView {
+        OnboardingView(historyState: timelineHistoryState) {
           hasCompletedOnboarding = true
         }
       } else if photoLibraryManager.isAuthorized {
-        LibraryRootView(screenshotSurfaceKey: screenshotSurfaceKey)
+        LibraryRootView(
+          screenshotSurfaceKey: screenshotSurfaceKey, timelineHistoryState: timelineHistoryState)
       } else {
         AuthorizationView(photoLibraryManager: photoLibraryManager)
       }
@@ -77,9 +80,10 @@ extension ContentView: Equatable {
   /// Compares the injected references by identity, for `.equatable()` at the call site.
   /// The `@AppStorage` property otherwise makes SwiftUI re-run this body every time
   /// `App.body` rebuilds the view. The view's own `@AppStorage` and `@EnvironmentObject`
-  /// changes still re-run it.
+  /// changes still re-run it. History-readiness value changes also reach the active child.
   static func == (lhs: ContentView, rhs: ContentView) -> Bool {
     lhs.destinationManager === rhs.destinationManager && lhs.recordStore === rhs.recordStore
+      && lhs.timelineHistoryState == rhs.timelineHistoryState
   }
 }
 

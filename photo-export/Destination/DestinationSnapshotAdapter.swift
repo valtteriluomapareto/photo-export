@@ -11,7 +11,7 @@ import Foundation
 ///    nothing about whether the folder is writable.
 /// 3. `migrationConflict` from `AppLifecycleCoordinator`: non-nil → safety
 ///    becomes `.unsafeMigrationConflict`.
-/// 4. `needsSafetyConfirmation` from `DestinationSafetyMonitor` (Phase 0b):
+/// 4. `needsSafetyConfirmation` from `DestinationSafetyMonitor`:
 ///    true → safety becomes `.unsafeNeedsConfirmation`. Migration conflict
 ///    takes precedence — both being true is rare (a fresh destination with
 ///    legacy records is itself a rare collision) but if it ever happens the
@@ -19,7 +19,7 @@ import Foundation
 ///
 /// `Publishers.CombineLatest4` waits for all four sources to publish before
 /// emitting; each is an `@Published` that fires an initial value, so the first
-/// emission lands on the next runloop tick after subscribe.
+/// emission is synchronous during subscription once all four initial values arrive.
 @MainActor
 final class DestinationSnapshotAdapter: AutoSyncDestinationProviding {
   private let destinationManager: ExportDestinationManager

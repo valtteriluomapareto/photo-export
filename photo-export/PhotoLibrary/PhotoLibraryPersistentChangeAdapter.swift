@@ -8,7 +8,7 @@ import os
 /// `PHPhotoLibrary.fetchPersistentChanges(since:)` into the
 /// `Result`-typed publisher AutoSync consumes.
 ///
-/// **Lifecycle.** Owned by `PhotoExportApp` for the app's lifetime. `start()`
+/// **Lifecycle.** Owned by `AppCore` for the app's lifetime. `start()`
 /// registers as a PhotoKit observer and runs an immediate catch-up fetch — any
 /// changes that landed while the app was quit are observed before the first user
 /// interaction. `stop()` unregisters; tests call it on tear-down.
@@ -20,21 +20,22 @@ import os
 /// `lastDurablyRecordedToken` is a separate concept tracked by the reducer's
 /// `advancePersistentChangeToken` effect after dirty IDs are durably written.
 ///
-/// **Error mapping.** Plan §"Photo Library Changes" requires that the three
-/// fetch failure modes (token-expired, token-invalid, details-unavailable) are
-/// surfaced individually. We map `PHPhotosError.persistentChangeTokenExpired`
+/// **Error mapping.** The three fetch failure modes (token-expired,
+/// token-invalid, details-unavailable) are surfaced individually so recovery
+/// diagnostics preserve the cause. We map `PHPhotosError.persistentChangeTokenExpired`
 /// and `.persistentChangeDetailsUnavailable` directly; any other PhotoKit error
 /// becomes `.tokenInvalid` so logs distinguish "OS recycled the token" from "we
 /// got something we didn't expect." After any failure we rebase to
 /// `currentChangeToken` so the same error can't loop forever; the reducer
 /// schedules a `photosChangeFallback` debounce in response.
+/// See docs/reference/auto-export-behavior.md#dirty-state-and-library-changes.
 @MainActor
 final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibraryChangeProviding,
   PHPhotoLibraryChangeObserver, ObservableObject
 {
   /// Default cadence for the safety-net reconcile timer. macOS's
   /// `photoLibraryDidChange` callback can be silent for tens of minutes when
-  /// Photos.app isn't running and iCloud syncs in the background (issue #69);
+  /// Photos.app isn't running and iCloud syncs in the background;
   /// fifteen minutes is short enough that a user who Cmd-tabs away for a
   /// coffee comes back to a fresh state, long enough that the periodic
   /// `fetchPersistentChanges` call is a rounding error on energy use.
@@ -45,8 +46,8 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
   /// Optional explicit injection (tests). Production callers leave it `nil`
   /// so the singleton is resolved lazily inside `library` — that defers the
   /// first `PHPhotoLibrary.shared()` evaluation out of `init` and into the
-  /// `.task` block where `start()` runs. Issue #92: the synchronous singleton
-  /// init was hanging launch on macOS 15.7+ when triggered from `App.init`.
+  /// `.task` block where `start()` runs. Resolving the synchronous singleton
+  /// during `App.init` can stall launch before a window appears.
   private let explicitLibrary: PHPhotoLibrary?
   private lazy var library: PHPhotoLibrary = explicitLibrary ?? PHPhotoLibrary.shared()
   private let tokenStore: GlobalPhotoChangeTokenStore
@@ -98,13 +99,13 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
   /// persistent diagnostic channel is `os.Logger`. Settings → Auto Export and
   /// the Save Diagnostic Report exporter both consume this so a reporter can
   /// share "the fetch took N seconds and processed M changes" without copying
-  /// raw Console snippets. Issue #92.
+  /// raw Console snippets.
   @Published private(set) var lastCatchUpSummary: CatchUpSummary?
 
   /// `OSSignposter` for Instruments time-profile traces of catch-up. Begin/end
   /// intervals around `fetchPersistentChanges` itself and the per-change
   /// enumeration loop so a reporter who can attach Instruments can pinpoint
-  /// which phase a stall is happening in. Issue #92.
+  /// which phase a stall is happening in.
   private static let signposter = OSSignposter(
     subsystem: "com.valtteriluoma.photo-export",
     category: "PhotoLibraryChanges.CatchUp")
@@ -123,8 +124,8 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
   /// next launch. `nil` is acceptable in tests where the fake never observes
   /// auth state; production wires `PhotoLibraryManager.authorizationStatusPublisher`.
   ///
-  /// `clock` and `reconcileInterval` drive the periodic safety-net reconcile
-  /// (issue #69). `onPotentialLibraryChange` is invoked after any reconcile
+  /// `clock` and `reconcileInterval` drive the periodic safety-net reconcile.
+  /// `onPotentialLibraryChange` is invoked after any reconcile
   /// that turned up actual changes so the UI side can wake alongside AutoSync;
   /// production wires it to `PhotoLibraryManager.invalidateCache()`.
   init(
@@ -157,8 +158,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
   /// and reacts to *both* transitions: insufficient → sufficient registers
   /// and arms the safety-net reconcile; sufficient → insufficient tears down
   /// the scheduler and unregisters from PhotoKit so the 15-minute timer
-  /// doesn't keep calling `fetchPersistentChanges` on a now-revoked library
-  /// (issue #69 follow-up).
+  /// doesn't keep calling `fetchPersistentChanges` on a now-revoked library.
   func start() {
     if PhotoLibraryManager.isAuthorizationSufficient(authorizationStatus) {
       registerAndCatchUp()
@@ -228,14 +228,14 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
 
   /// Why `fetchAndEmit` is called. Distinguishes the *normal* PhotoKit observer
   /// path (which already triggers `PhotoLibraryManager.photoLibraryDidChange` →
-  /// `invalidateCache()` independently) from the *safety-net* paths added for
-  /// issue #69 (startup catch-up, 15-min timer, become-active). On the observer
+  /// `invalidateCache()` independently) from the safety-net paths
+  /// (startup catch-up, 15-min timer, become-active). On the observer
   /// path the UI side has already been woken; firing
   /// `onPotentialLibraryChange` again would double-invalidate the manager's
   /// caches and bump `libraryRevision` twice per real event.
   ///
   /// `Sendable` so the trigger can cross the main-actor → `Task.detached` →
-  /// main-actor boundary used by the off-main catch-up dispatch (issue #92).
+  /// main-actor boundary used by the off-main catch-up dispatch.
   /// `internal` rather than `private` so a unit test can exercise
   /// `coalescePending(_:incoming:)` against every case.
   enum ReconcileTrigger: Sendable {
@@ -263,7 +263,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
   /// `lastCatchUpSummary`, the Settings → Auto Export status row, and the Save
   /// Diagnostic Report exporter so reporters can share concrete numbers
   /// ("the fetch took N seconds and processed M changes") without copying raw
-  /// Console snippets. Issue #92.
+  /// Console snippets.
   struct CatchUpSummary: Sendable, Equatable {
     let startedAt: Date
     let finishedAt: Date
@@ -297,12 +297,8 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
   /// token store, `lastSuccessfulReconciliation`, `lastCatchUpSummary`, and
   /// emits on `subject`.
   ///
-  /// Issue #92: prior to this shape the entire fetch+enumerate path ran
-  /// synchronously on the main actor (since the whole class is `@MainActor`),
-  /// so a large change backlog or an unhealthy `photolibraryd` could beachball
-  /// the UI for the full duration of the XPC round-trips. The reporter's
-  /// sample showed >2,000 main-thread samples in `mach_msg2_trap` waiting on
-  /// photolibraryd inside this exact code path.
+  /// Fetching and enumerating changes off-main keeps a large backlog or an
+  /// unhealthy `photolibraryd` from blocking the UI during XPC round-trips.
   ///
   /// `trigger` controls whether the UI bridge fires on success-with-changes
   /// — see `ReconcileTrigger`. On the `.observer` path the manager has
@@ -465,7 +461,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
 
   /// Nonisolated catch-up worker. Runs `fetchPersistentChanges(since:)` and
   /// the per-change enumeration off the main actor so a slow PhotoKit / a
-  /// large change backlog can't beachball the UI (issue #92).
+  /// large change backlog can't beachball the UI.
   ///
   /// Logging is intentionally generous: emits a checkpoint at fetch start,
   /// fetch return (with elapsed ms), every 100 enumerated changes (with

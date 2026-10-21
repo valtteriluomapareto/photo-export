@@ -45,7 +45,7 @@ struct ExportRunSummary: Equatable, Codable, Sendable {
   /// Per-variant failure detail. Empty for clean runs; populated for runs
   /// that hit at least one failure. AutoSync's reducer reads this to
   /// record failures into `AutoSyncRetryState`; the Export Issues UI
-  /// (Phase 4) reads it to group failures for the user. Note that
+  /// reads it to group failures for the user. Note that
   /// `failedCount` is the count of *additions* to this list during the run
   /// — they should agree, but `failures` carries the structured detail.
   let failures: [ExportRunFailureDetail]

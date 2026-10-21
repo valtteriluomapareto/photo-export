@@ -2,13 +2,20 @@
 
 Date: 2026-05-15
 Revised: 2026-05-15 (added Cross-Cutting Contracts, Phase 0, and folded in multi-reviewer feedback: tightened Phase 0 spec, rescoped RecordStoreRouter, swapped Phase 2/3, split Phases 2/4/7)
-Archived: 2026-05-17. Status: shipped. Phases 0–5 done; Phases 6 and 7 delivered in partial scope (composition-refactor + remaining folder moves deferred to follow-ups tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67)).
+Archived: 2026-05-17. Status: shipped. PRs #75/#76 subsequently delivered the
+composition/inheritance cleanup, generation ownership transfer, remaining folder
+moves, bulk-loop helpers and gate guard tracked in
+[issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67).
+The production `PhotoLibraryService` peer extraction remains deferred in
+[issue #77](https://github.com/valtteriluomapareto/photo-export/issues/77).
+The phase table and deferred-follow-up list below preserve the original archive
+snapshot; they are not the current backlog.
 
 > **Reader note**: this plan is preserved as a decision record. The **living** reference for the contracts and patterns this plan established is [`docs/reference/architecture-conventions.md`](../../reference/architecture-conventions.md) — read that file when developing new features. This plan is useful for understanding *why* the contracts have the shape they do.
 
 ## Progress
 
-Snapshot as of 2026-05-15. Update this table each time a phase lands.
+Historical snapshot as of 2026-05-15, preserved without further phase updates.
 
 | Phase | State | Landed | Notes |
 |---|---|---|---|

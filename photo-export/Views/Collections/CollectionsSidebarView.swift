@@ -507,6 +507,12 @@ private struct FolderRow: View {
   /// `CollectionsSidebarView` so it can reach the live `selectionSet` + tree.
   let runMultiExport: () -> Void
 
+  private var exportAvailability: ManualExportAvailability {
+    ManualExportAvailability(
+      destinationCanExport: exportDestinationManager.canExportNow,
+      history: collectionExportRecordStore.state)
+  }
+
   var body: some View {
     HStack(spacing: 8) {
       if depth > 0 {
@@ -528,11 +534,7 @@ private struct FolderRow: View {
         Button("Export \(multiSelectionCount) Items") {
           runMultiExport()
         }
-        .disabled(
-          !exportDestinationManager.canExportNow
-            || exportManager.hasActiveExportWork
-            || !exportManager.canExportCollection
-        )
+        .disabled(!exportAvailability.canStart || exportManager.hasActiveExportWork)
       } else {
         Button("Export Folder") {
           if let id = descriptor.localIdentifier {
@@ -542,9 +544,8 @@ private struct FolderRow: View {
         .disabled(
           descriptor.localIdentifier == nil
             || albumCount == 0
-            || !exportDestinationManager.canExportNow
+            || !exportAvailability.canStart
             || exportManager.hasActiveExportWork
-            || !exportManager.canExportCollection
         )
       }
     }

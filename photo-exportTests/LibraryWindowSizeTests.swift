@@ -55,7 +55,7 @@ struct LibraryWindowSizeTests {
     window.isReleasedWhenClosed = false
     window.toolbarStyle = .unified
     window.contentView = NSHostingView(
-      rootView: LibraryRootView(screenshotSurfaceKey: nil)
+      rootView: LibraryRootView(screenshotSurfaceKey: nil, timelineHistoryState: .ready)
         .environmentObject(library).environmentObject(timeline).environmentObject(collections)
         .environmentObject(manager).environment(manager.progressState)
         .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)

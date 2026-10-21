@@ -1,14 +1,13 @@
 import SwiftUI
 
-/// Sidebar for the Timeline section: years → months tree. Extracted from `ContentView`
-/// during the Phase 4 refactor so the same content area can host either a Timeline
-/// sidebar or a Collections sidebar without duplicating the surrounding split view.
+/// Timeline years/months sidebar, hosted beside the content pane by `LibraryRootView`.
+/// Keeping the sidebar separate lets Timeline and Collections share the split view.
 ///
 /// Per-(year, month) total + adjusted counts are owned by `TimelineSidebarCounts`,
 /// which fans out async fetches for every year on appear so that **collapsed years'
-/// progress badges populate too** (issue #20). Selection is bridged out through
-/// `selection: Binding<LibrarySelection?>` so the content view receives a unified
-/// selection regardless of which section is active.
+/// progress badges populate too**. Selection is bridged out through
+/// `selectionSet: Binding<Set<LibrarySelection>>` so the root can preserve multi-selection
+/// independently of the item that drives the content pane.
 struct TimelineSidebarView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter

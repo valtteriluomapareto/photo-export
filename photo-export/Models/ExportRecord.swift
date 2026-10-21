@@ -11,7 +11,7 @@ enum ExportStatus: String, Codable, Equatable {
 /// `variants` dictionary for each variant the pipeline has touched for the
 /// asset.
 ///
-/// `subfolder` (issue #38, added 2026-05-21) records the path component
+/// `subfolder` records the path component
 /// inside the placement folder where the file actually landed. `nil` means
 /// "bare placement path" — what every record written before this field
 /// existed decodes to. Today's writer sets it to `"videos"` for variants
@@ -99,7 +99,7 @@ enum ExportVariantRecovery {
   /// asset is covered.
   static let editedResourceUnavailableMessage = "Edited resource unavailable"
 
-  /// Terminal state for issue #22: the edited resource was unavailable
+  /// Terminal state when the edited resource was unavailable
   /// AND the `_orig` fallback successfully wrote the original. The asset
   /// is considered covered under `.edited` selection — `isExported`
   /// returns true and the queue stops re-attempting the edit.

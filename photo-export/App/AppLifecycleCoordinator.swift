@@ -3,7 +3,7 @@ import Foundation
 import os
 
 /// Result of running the per-destination directory coordinator and configuring the record
-/// stores. Surfaces the migration-conflict case so the UI (when wired up) can present a
+/// stores. Surfaces the migration-conflict case so the UI can present a
 /// recoverable blocked state instead of silently adopting `<newId>/` and orphaning
 /// `<legacyId>/`.
 enum ConfigureRecordStoresResult: Equatable, Sendable {
@@ -13,8 +13,7 @@ enum ConfigureRecordStoresResult: Equatable, Sendable {
 }
 
 /// Snapshot of a migration-conflict situation. Both `<newId>/` and `<legacyId>/` exist on
-/// disk; the auto-sync plan calls for blocking automatic export and exposing recovery
-/// options in Settings until the user resolves it.
+/// disk; automatic export stays blocked until the user resolves it through Settings.
 struct MigrationConflictState: Equatable, Sendable {
   let newId: String
   let legacyId: String
@@ -73,10 +72,10 @@ final class AppLifecycleCoordinator: ObservableObject {
   /// `clearMigrationConflictAfterReconcile` once the user has chosen to drop
   /// the legacy records and the destination's current-id records have been
   /// rebuilt (e.g., via Import Existing Backup). Closure-based to keep the
-  /// coordinator decoupled from the on-disk layout — `PhotoExportApp` wires
+  /// coordinator decoupled from the on-disk layout — `AppCore` wires
   /// it to delete `<ExportRecords>/<legacyId>/` plus
-  /// `<AutoSync>/destinations/<legacyId>/`. Per the plan's Safety
-  /// Invariants, only app-internal directories are touched here — no
+  /// `<AutoSync>/destinations/<legacyId>/`. Only app-internal directories are
+  /// touched here, preserving
   /// user-visible files on the destination drive.
   private let gcLegacyState: (String) -> Void
   private let log: Logger

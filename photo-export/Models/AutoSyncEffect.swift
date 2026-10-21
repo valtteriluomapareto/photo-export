@@ -5,11 +5,12 @@ import Foundation
 /// translates them into real timers, run starts, persistence writes, and token
 /// advances; tests assert the effect list directly without executing it.
 ///
-/// Plan §"State Reducer" defines the dispatch contract: effects are returned as a list
+/// To prevent synchronous re-entry, effects are returned as a list
 /// per `reduce` call and dispatched after the reducer returns; events produced by an
 /// effect (e.g. `exportRunStateChanged` from `startRun`) are queued and processed after
 /// the current event's effects complete. Timer cancellation is itself an effect
 /// (`cancelDebounce`, `cancelRetryTimer`), not a reducer side effect.
+/// See docs/reference/auto-export-behavior.md#event-dispatch.
 ///
 /// **Effect-list ordering is load-bearing.** The runner must process effects in the
 /// order returned. The reducer relies on this for at least one durability invariant:

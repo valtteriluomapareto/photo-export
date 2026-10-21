@@ -1,11 +1,9 @@
 import Combine
 import Foundation
 
-/// Bundle of dependencies `AutoSyncManager` needs to function. Plan §"AutoSyncManager
-/// Shape": "Tests should exercise the auto-sync policy with fake protocols, not real
-/// PhotoKit or filesystem work." Each field is a protocol the manager consumes; the
-/// production wiring builds an environment from real managers, the test harness
-/// builds one from fakes.
+/// Dependencies for `AutoSyncManager`, injected so policy tests can use fakes
+/// without real PhotoKit or filesystem work. Production wiring supplies the services.
+/// See docs/reference/auto-export-behavior.md#event-dispatch.
 @MainActor
 struct AutoSyncEnvironment {
   let exportRunner: any AutoSyncExportRunning

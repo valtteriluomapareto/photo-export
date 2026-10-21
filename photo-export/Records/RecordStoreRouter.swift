@@ -225,7 +225,7 @@ final class RecordStoreRouter {
   /// PhotoKit. On APFS, `FileManager.copyItem` performs copy-on-write so the duplicate
   /// uses no extra bytes; on non-APFS it's a real copy.
   ///
-  /// `subfolder` (issue #38) carries the subfolder (relative to the placement) that the
+  /// `subfolder` carries the subfolder (relative to the placement) that the
   /// *source* variant was written into — `nil` for records written under the historical
   /// flat layout, `"videos"` for standalone-video variants written with the subfolder
   /// layout. Read per-variant from the source record so a mid-life toggle flip can't
@@ -242,8 +242,7 @@ final class RecordStoreRouter {
   /// collection placements sorted by id (for deterministic test behavior). Returns nil if
   /// nothing reusable exists.
   ///
-  /// Per `docs/project/archive/collections-export-plan.md` §"Reuse-Source Copy Path", any
-  /// prior `.done` write is acceptable as a source — there's no preference for timeline
+  /// Any prior `.done` write is acceptable as a source — there's no preference for timeline
   /// over collection beyond the deterministic search order.
   ///
   /// The returned `ReuseSource.subfolder` is read off the matched variant record (NOT

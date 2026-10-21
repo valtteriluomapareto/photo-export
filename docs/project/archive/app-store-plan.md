@@ -1,5 +1,12 @@
 # App Store Plan
 
+Status: Launch completed; archived as the pre-launch decision record. The
+README and website link to the live Mac App Store listing (commit `0c0b96c`), and
+the App Store release workflow is in use. Follow the
+[release process](../release-process.md) for current distribution steps. The
+review status, pending work and launch checklist below are the historical
+2026-03-31 snapshot, not the current App Store Connect state.
+
 Written against the repository state on 2026-03-31.
 
 App Store Connect status on 2026-03-31: the first submission has been uploaded manually and is waiting for App Review.
@@ -10,7 +17,7 @@ This document is now a high-level status summary for the Mac App Store launch.
 
 Detailed CI workflow planning lives in `app-store-ci-plan.md`.
 
-## Current Status
+## Historical status
 
 - GitHub Releases remains the direct distribution channel.
 - The Mac App Store channel now exists as a separate app with bundle ID `com.valtteriluoma.photo-export-appstore`.

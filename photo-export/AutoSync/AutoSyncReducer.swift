@@ -1,6 +1,6 @@
 import Foundation
 
-/// Pure reducer for the AutoSync state machine. Plan §"State Reducer" — single
+/// Pure reducer for the AutoSync state machine: single
 /// event-in / state+effects-out signature, no I/O, no timers, no actor isolation.
 /// Tests pass `now: Date` directly; the runner reads `clock.now()` before calling
 /// `reduce`.
@@ -37,7 +37,7 @@ enum AutoSyncReducer {
     var destination: DestinationSnapshot
     var scopeSelection: AutoExportScopeSelection
     var versionSelection: ExportVersionSelection
-    /// Issue #47: when on, AutoSync widens `requiredVariants` for HEIC
+    /// When on, AutoSync widens `requiredVariants` for HEIC
     /// originals (HEIC counts as adjusted-equivalent), so the eligibility
     /// pass re-emits previously-skipped HEIC assets. Toggle changes
     /// re-trigger the reducer at the same 2s debounce as
@@ -91,13 +91,13 @@ enum AutoSyncReducer {
     )
   }
 
-  /// Per-scope cost cap for targeted asset-id accumulation. Plan §"Photo Library
-  /// Changes" / §"Trigger and Debounce Rules": "Use a tunable implementation constant
-  /// backed by measurement, and prefer a cost model once enough data exists." MVP value
-  /// is conservative; tuned by measurement post-launch.
+  /// Bounds per-scope pending asset-id accumulation so bursts of library changes
+  /// cannot grow dirty state without limit. Over-cap work becomes full reconciliation.
+  /// See docs/reference/auto-export-behavior.md#dirty-state-and-library-changes.
   static let targetedAssetCostCap = 500
 
-  /// Single entry point. Plan §"State Reducer" dispatch contract:
+  /// Single entry point; serialization keeps re-entrant observations ordered:
+  /// See docs/reference/auto-export-behavior.md#event-dispatch.
   /// - Invoked synchronously, once per event, with no mutation in flight.
   /// - Effects are returned as a list and dispatched by the runner *after* `reduce`
   ///   returns. Events produced by an effect (e.g. `exportRunStateChanged` from a
@@ -284,7 +284,7 @@ enum AutoSyncReducer {
       effects.append(.persistRunSummary(summary, destinationId: destinationId))
       if !summary.failures.isEmpty {
         // Route per-variant failures into AutoSyncRetryState so the Issues UI
-        // and (Slice C) the enqueue-time eligibility check can see them.
+        // and the enqueue-time eligibility check can see them.
         // The effect runner records the failure with its category-specific
         // backoff deadline, then feeds the updated retry state back here.
         effects.append(
@@ -325,10 +325,9 @@ enum AutoSyncReducer {
 
     case .photosChanged(let event):
       // Accumulate dirty state per selected scope for the *current* destination.
-      // Plan §"Photo Library Changes": "Photos changes while destination is
-      // unavailable accumulate per-destination and export after reconnect" — so we
-      // accumulate even if the destination is currently offline (just don't start a
-      // run; the debounce-fired handler gates that on environmentAllowsRun).
+      // A snapshot with a known id can retain work while offline. Production clears
+      // the active id on disconnect, then schedules full-scope reconciliation on
+      // reconnect; events without an id cannot be assigned to a destination.
       // Disabled / no-destination / no-scopes selected → ignore the event entirely.
       if state.enabled, let destinationId = state.destination.id,
         !state.scopeSelection.isEmpty
@@ -342,8 +341,8 @@ enum AutoSyncReducer {
         // placement-reconciliation flag on every enabled album-shaped scope.
         let albumsRelevantCollectionChange =
           (albumsActive || sharedAlbumsActive) && event.collectionChangesPresent
-        // Plan §"Photo Library Changes": "Treat deleted asset IDs as non-export work
-        // for MVP." A deleted-only event (no inserts/updates) — and one whose
+        // Deleted assets require no export or destination cleanup.
+        // A deleted-only event (no inserts/updates) — and one whose
         // collection-only signal isn't relevant to a selected scope — produces no
         // export work, so skip dirty mutation, persistence, and the debounce. Token
         // acknowledgement is still emitted below; the manager withholds it
@@ -385,7 +384,7 @@ enum AutoSyncReducer {
       }
 
     case .photosChangeFetchFailed(let failure):
-      // Plan §"Photo Library Changes": all three failure modes (tokenExpired,
+      // All three failure modes (tokenExpired,
       // tokenInvalid, detailsUnavailable) schedule one bounded full reconciliation. The
       // 2-minute photosChangeFallback debounce gives the system a quiet window
       // before the recovery run.
@@ -408,7 +407,7 @@ enum AutoSyncReducer {
         newState.dirtyStateByDestination[destinationId] = dirty
         effects.append(.persistDirtyState(dirty, destinationId: destinationId))
         triggerReason = .photosChangeFallback
-        // failure is informational — subsequent slices that wire diagnostics may
+        // failure is informational — diagnostic consumers can
         // log/route by category. Avoid `unused` warning with explicit suppression.
         _ = failure
       }
@@ -434,8 +433,7 @@ enum AutoSyncReducer {
       }
 
     case .manualFullExportCompleted(let summary):
-      // Plan §"Dirty State": "A manual full export for the same destination /
-      // selection / scope clears compatible dirty flags." Compatibility is
+      // A manual full export acknowledges compatible dirty work. Compatibility is
       // strict — only `.completed` runs from `.manual` source over a full
       // scope (timelineFullLibrary / favoritesFull / allAlbumsFull) clear
       // anything, and the run's `selection` must match the current
@@ -461,9 +459,8 @@ enum AutoSyncReducer {
       // so the recompute pass below will land in `.scheduled(.userExportNow,
       // fireAt: now)` and the runner fires the timer on the next tick.
       // Honors safety + scope + destination + import gates via recompute;
-      // the bypass-disabled behavior the plan specifies for the menu-bar
-      // Export Now is deferred — for Slice 1 the UI only surfaces this
-      // button when `state != .disabled`.
+      // disabled mode and retry eligibility still apply. The UI uses
+      // `AutoSyncState.canRunNow` to expose the action only when appropriate.
       triggerReason = .userExportNow
 
     case .destinationDirtyStateLoaded(let destinationId, let dirty):
@@ -710,12 +707,6 @@ enum AutoSyncReducer {
 
   // MARK: - Internals
 
-  /// Whether the environment currently allows starting a run — gating equivalent of
-  /// the `idle` state precondition. Includes the single-active-run gate: a manual
-  /// export already in flight blocks AutoSync from starting a parallel run (plan
-  /// §"Run Ownership Model": "If auto-sync wants to run while any manual export or
-  /// import is active, AutoSyncManager marks itself dirty and re-evaluates after
-  /// manual work drains.").
   /// Maps a completed run's scope to the `AutoExportLibraryScope` set it
   /// reconciled. Single-scope full runs map to one scope; the legacy
   /// `.autoExport(scopes)` umbrella covers all enabled scopes; targeted-asset
@@ -738,7 +729,7 @@ enum AutoSyncReducer {
   }
 
   private static func environmentAllowsRun(state: State) -> Bool {
-    // `!isAutoSyncActive` closes a race exposed by issue-#69-era manual testing:
+    // `!isAutoSyncActive` prevents a second run during a multi-scope fan-out:
     // a debounce that fires while a multi-scope AutoSync fan-out is mid-flight
     // (e.g. scope #1 finished, scope #2's `runExport` is suspended) would
     // otherwise emit a fresh `.startRun` and trip
@@ -911,8 +902,9 @@ enum AutoSyncReducer {
     }
   }
 
-  /// Plan §"Trigger and Debounce Rules". Single source of truth for per-reason
-  /// debounce delays; tests pin specific values, the runner reads them via
+  /// Debounce delays coalesce bursts while keeping explicit actions immediate.
+  /// See docs/reference/auto-export-behavior.md#triggers-and-debounce.
+  /// Tests pin specific values; the runner reads them via
   /// `scheduleDebounce` effects.
   static func debounceDelay(for reason: AutoSyncReason) -> TimeInterval {
     switch reason {
@@ -927,7 +919,7 @@ enum AutoSyncReducer {
     case .photosChangeFallback:
       return 120
     case .userExportNow:
-      // Plan: "manual Export Now: no debounce after guard checks." Modeled as 0.
+      // Explicit Export Now has no debounce after guard checks.
       return 0
     case .retryBackoff:
       return 0

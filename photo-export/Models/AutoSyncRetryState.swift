@@ -4,7 +4,7 @@ import Foundation
 /// one bucket; Favorites failures share one bucket; each album has its own bucket keyed
 /// by placement id; shared albums get their own typed case so the rendered UI label and
 /// any future per-kind retry tuning can branch cleanly without inspecting the embedded
-/// placement-id prefix. The plan requires this segmentation so a failure in one album
+/// placement-id prefix. This segmentation ensures a failure in one album
 /// does not suppress retries for the same asset in another album, in Favorites, in
 /// Timeline, or in a shared album.
 enum AutoSyncRetryScopeKey: Equatable, Hashable, Sendable {
@@ -78,10 +78,9 @@ struct RetryEntry: Codable, Equatable, Sendable {
 }
 
 /// Per-destination retry state. The nested dictionary is `[scopeKey: [assetId: [variant: entry]]]`
-/// so retries are scoped to scope/placement + assetId + variant, matching the plan's
-/// "retry counts are scoped to scope/placement + assetId + variant + category + errorSignature"
-/// rule. (`category` and `errorSignature` live on the entry; the dictionary key triple
-/// names the *position* a failure occupies.)
+/// so retries are scoped to scope/placement + assetId + variant. `category` and
+/// `errorSignature` live on the entry; changing either resets the attempt sequence.
+/// See docs/reference/auto-export-behavior.md#retry-and-failure-policy.
 struct AutoSyncRetryState: Codable, Equatable, Sendable {
   /// Outer key: `AutoSyncRetryScopeKey.rawValue`.
   /// Middle key: `assetId` (PhotoKit local identifier).
@@ -151,7 +150,7 @@ struct AutoSyncRetryState: Codable, Equatable, Sendable {
   /// Records a failure for a (scope, asset, variant) tuple. If an existing entry has the
   /// same `errorSignature` the attempt count increments; if the signature differs the
   /// entry is reset to attempt 1 (a materially different error is not a continuation of
-  /// the previous failure, per plan §"Retry and Failure Policy").
+  /// the previous failure). A changed category also starts a new attempt sequence.
   mutating func recordFailure(
     scope: AutoSyncRetryScopeKey,
     assetId: String,
@@ -167,7 +166,7 @@ struct AutoSyncRetryState: Codable, Equatable, Sendable {
 
     let attemptCount: Int
     let firstFailedAt: Date
-    // Plan §"Retry and Failure Policy": retry counts are scoped to scope/placement +
+    // Retry counts are scoped to scope/placement +
     // assetId + variant + category + errorSignature. A change in *either* category or
     // signature means the previous backoff sequence does not apply — reset to attempt 1.
     if let existing, existing.errorSignature == errorSignature, existing.category == category {

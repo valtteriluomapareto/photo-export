@@ -1,14 +1,9 @@
 import SwiftUI
 
-/// Menu shown when the user clicks the AutoSync menu bar item. Plan §"Phase 4":
-/// "Add an `NSStatusItem` (menu bar item) **in MVP** with: Enable/Disable Auto
-/// Export, Export Now, current status, Open Issues, Open Settings. Required
-/// because launch-at-login starts the app without showing the main window."
-///
-/// Uses SwiftUI `MenuBarExtra`'s default menu rendering — native, keyboard-
-/// navigable, free hit-testing. Custom-window MenuBarExtra (`.window` style)
-/// would let us match the Settings tab's layout, but the basic menu is the
-/// right MVP surface.
+/// Auto Export status and actions in the menu bar, accessible while the main window
+/// is closed. SwiftUI `MenuBarExtra` supplies native menu rendering, keyboard
+/// navigation and hit testing. Quitting the app stops Auto Export.
+/// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
 struct AutoSyncMenuBarContent: View {
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager

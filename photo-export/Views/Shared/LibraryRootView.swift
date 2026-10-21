@@ -16,6 +16,8 @@ struct LibraryRootView: View {
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @Environment(WhatsNewState.self) private var whatsNewState
 
+  let timelineHistoryState: RecordStoreState
+
   @State private var section: LibrarySection
 
   /// Active multi-select for the current section. Bound into each sidebar via
@@ -36,7 +38,8 @@ struct LibraryRootView: View {
   /// production launches it is `nil` and the defaults below apply (Timeline / current
   /// month). The mapping lives in `ScreenshotSurfaceResolver` so it's testable without
   /// instantiating SwiftUI views.
-  init(screenshotSurfaceKey: String?) {
+  init(screenshotSurfaceKey: String?, timelineHistoryState: RecordStoreState) {
+    self.timelineHistoryState = timelineHistoryState
     let surface = ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
     let now = Date()
     let currentYear = Calendar.current.component(.year, from: now)
@@ -121,7 +124,9 @@ struct LibraryRootView: View {
       ExportToolbarView(
         section: section,
         selectionSet: selectionSet,
-        focusedSelection: focusedSelection)
+        focusedSelection: focusedSelection,
+        historyState: section == .timeline
+          ? timelineHistoryState : collectionExportRecordStore.state)
     }
     .sheet(
       isPresented: $isShowingImportSheet,
@@ -265,7 +270,7 @@ struct LibraryRootView: View {
 
   /// Applies a sidebar selection change: updates `focusedSelection` based on the
   /// diff via `SidebarFocusReducer` and persists the per-section last-state. The
-  /// reducer is pure and unit-tested in `SidebarFocusReducerTests`.
+  /// reducer is pure and unit-tested in `SidebarMultiSelectTests`.
   private func applySelectionChange(
     oldSet: Set<LibrarySelection>, newSet: Set<LibrarySelection>
   ) {

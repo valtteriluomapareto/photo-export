@@ -60,9 +60,9 @@ enum ResourceSelection {
   /// Unified byte-source selector. Returns the `EditedProducer` for any variant — the
   /// same enum shape (`.resource | .render | .none`) the edited-image path already used.
   /// Live Photo paired-video variants reuse the `.resource` case (PhotoKit serves the
-  /// motion file as a static `PHAssetResource`, never via the render pipeline). Issue
-  /// #49's guidance: extend the enum-shaped dispatch rather than scattering booleans
-  /// through `ExportManager` — this is the seam.
+  /// motion file as a static `PHAssetResource`, never via the render pipeline).
+  /// Extend this enum-shaped dispatch rather than scattering booleans through
+  /// `ExportManager` so byte-source selection stays in one place.
   ///
   /// - `.original` → original-side image resource (HEIC, JPG, alternatePhoto fallback).
   /// - `.edited` → `selectEditedProducer` (which may return `.render` for adjusted videos).
@@ -113,7 +113,7 @@ enum ResourceSelection {
   /// - `.render` — the asset is video and has adjustments but no static
   ///   edited resource. Bytes must be produced via `MediaRenderer` because
   ///   PhotoKit does not pre-render edited videos as static resources.
-  /// - `.convertHEIC` — the HEIC→JPEG conversion toggle is on (issue #47)
+  /// - `.convertHEIC` — the HEIC→JPEG conversion toggle is on
   ///   and the asset has a HEIC/HEIF byte source. Bytes are synthesized
   ///   locally via `ImageConverter`.
   /// - `.none` — no edited-side bytes are available for this asset.
@@ -134,7 +134,7 @@ enum ResourceSelection {
     switch mediaType {
     case .image:
       let editedResource = resources.first(where: { $0.type == .fullSizePhoto })
-      // HEIC→JPEG synthesis path (issue #47). Three sub-cases for an image:
+      // HEIC→JPEG synthesis path. Three sub-cases for an image:
       //
       //   1. Edited resource exists AND it's HEIC → convert the edit. Happens
       //      when Photos served HEIC for an adjusted asset (rare; most edits

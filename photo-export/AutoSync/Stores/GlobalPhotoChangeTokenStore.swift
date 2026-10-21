@@ -2,11 +2,11 @@ import Foundation
 import Photos
 import os
 
-/// File-backed store for the global Photos persistent-change token. Plan
-/// §"Persistence Keys": `AutoSync/photo-library-change-token.data` — a single
+/// File-backed store for the global Photos persistent-change token:
+/// `AutoSync/photo-library-change-token.data` — a single
 /// file under App Support carrying the most recent `PHPersistentChangeToken` the
-/// observer has seen. Per-destination snapshots are tracked separately by the
-/// reducer's dirty state.
+/// observer has seen. Per-destination advisory snapshots are stored separately.
+/// See docs/reference/auto-export-behavior.md#persistence-and-token-authority.
 ///
 /// The token is `NSSecureCoding`-archived. A failed decode (corrupt file,
 /// schema-incompatible token from a future macOS release) returns nil so the

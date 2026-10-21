@@ -1,21 +1,13 @@
 import Foundation
 
-/// Coalescing per-key cache for asset counts. Replaces Phase 2's uncached fetch with a
-/// dedup'd per-key store: concurrent callers for the same key share one in-flight task,
+/// Coalescing per-key cache for asset counts. Concurrent callers for the same key
+/// share one in-flight task,
 /// and on `invalidateAll()` (driven by `PHPhotoLibraryChangeObserver`) every running
 /// task is cancelled rather than stranded.
 ///
 /// The cache is keyed by an opaque string. `PhotoLibraryManager` uses
-/// `keyForCount(scope:)` / `keyForAdjustedCount(scope:)` so the same scope produces the
-/// same key.
-///
-/// Per `docs/project/archive/collections-export-plan.md` §"PhotoLibraryService → off-main
-/// counting": "A `CollectionCountCache` actor owns per-placement-id `Task<Int, Error>?`
-/// handles. It exposes `count(for: placementId, fetch: () async throws -> Int) async -> Int`,
-/// replacing any in-flight task for the same id (cancelling the prior). Cache
-/// invalidation (`invalidateAll()`) cancels every in-flight task rather than stranding
-/// them. Invalidation is called from the existing `PHPhotoLibraryChangeObserver`
-/// callback."
+/// `cacheKey(for:adjusted:)` so the same scope/count kind produces the same key.
+/// Actor isolation keeps the value and in-flight task maps consistent across callers.
 actor CollectionCountCache {
   private struct InFlight {
     let token: UUID
