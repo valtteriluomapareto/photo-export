@@ -26,11 +26,10 @@ import Testing
       }
     }
 
-    /// Renders once per timeline-store publication, so a test can wait for a record change
-    /// to reach SwiftUI before checking that a root body did not run for it.
+    /// Renders each timeline revision independently before a root-body silence check.
     @MainActor
     private struct RecordsProbe: View {
-      @ObservedObject var store: ExportRecordStore
+      let store: ExportRecordStore
       let counter: BodyInvalidationCounter
       var body: some View {
         // A declaration keeps the probe out of ViewBuilder's view expressions.
@@ -50,22 +49,21 @@ import Testing
       }
     }
 
-    /// Rebuilds `ContentView` whenever the manager, destination or record store publishes,
-    /// as `App.body` does in production.
+    /// Rebuilds the production window root for coarse manager, destination and record changes
+    /// to stress the equatable router independently of its own dependencies.
     @MainActor
     private struct ContentHost: View {
       @ObservedObject var manager: ExportManager
       @ObservedObject var destination: ExportDestinationManager
-      @ObservedObject var timeline: ExportRecordStore
+      let timeline: ExportRecordStore
       let counter: BodyInvalidationCounter
       var body: some View {
         // A declaration keeps the probe out of ViewBuilder's view expressions.
         // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("content-host")
-        ContentView(
-          destinationManager: destination, recordStore: timeline,
-          timelineHistoryState: timeline.state
-        ).equatable()
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = timeline.mutationCounter
+        MainWindowRoot(destinationManager: destination, recordStore: timeline)
       }
     }
 
@@ -87,7 +85,7 @@ import Testing
       let counter = BodyInvalidationCounter()
       var window: NSWindow?
       var folder: URL { root.appendingPathComponent("Backup") }
-      var windowRootBodyKey: String { "content-host" }
+      var windowRootBodyKey: String { "main-window-root" }
 
       init(
         selectFolder: Bool = true, onboardingComplete: Bool = true, whatsNewSeen: Bool = true
@@ -126,9 +124,11 @@ import Testing
         switch surface {
         case .library:
           LibraryRootView(screenshotSurfaceKey: screenshotSurfaceKey, timelineHistoryState: .ready)
-        case .content, .mainWindow:
+        case .content:
           ContentHost(
             manager: manager, destination: destination, timeline: timeline, counter: counter)
+        case .mainWindow:
+          MainWindowRoot(destinationManager: destination, recordStore: timeline)
         }
       }
 
@@ -142,7 +142,7 @@ import Testing
           .overlay(alignment: .bottomLeading) {
             CollectionRecordsProbe(store: collections, counter: counter)
           }
-          .environmentObject(library).environmentObject(timeline).environmentObject(collections)
+          .environmentObject(library).environment(timeline).environmentObject(collections)
           .environmentObject(manager).environment(manager.progressState)
           .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
           .environment(\.bodyInvalidationCounter, counter)

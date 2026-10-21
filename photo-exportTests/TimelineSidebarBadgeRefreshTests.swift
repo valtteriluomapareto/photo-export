@@ -72,7 +72,7 @@ import Testing
           assetResourceWriter: writer, fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         let content = Host(service: service)
-          .environmentObject(library).environmentObject(store).environmentObject(manager)
+          .environmentObject(library).environment(store).environmentObject(manager)
           .environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window = NSWindow(

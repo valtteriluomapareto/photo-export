@@ -89,7 +89,7 @@ import Testing
       window.contentView = NSHostingView(
         rootView: Host(pane: pane, service: service)
           .environmentObject(PhotoLibraryManager(overrideService: service))
-          .environmentObject(timeline)
+          .environment(timeline)
           .environmentObject(collections)
           .environmentObject(manager)
           .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))

@@ -5,7 +5,7 @@ import SwiftUI
 /// only a corrupt snapshot offers Reset Records. Timeline takes presentation priority.
 @MainActor
 struct RecordStoreAlertHost: ViewModifier {
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @Environment(ExportRecordStore.self) private var exportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager

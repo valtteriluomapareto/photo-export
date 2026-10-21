@@ -65,7 +65,7 @@ import Testing
         }
         let hosting = NSHostingView(
           rootView: Host(navigation: navigation, library: library, collections: collections)
-            .environmentObject(library).environmentObject(timeline).environmentObject(collections)
+            .environmentObject(library).environment(timeline).environmentObject(collections)
             .environment(\.bodyInvalidationCounter, counter))
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 500, height: 600),
