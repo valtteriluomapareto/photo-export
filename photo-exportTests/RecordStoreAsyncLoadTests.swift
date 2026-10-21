@@ -41,7 +41,7 @@ struct RecordStoreAsyncLoadTests {
       collection ? collections.mutationCounter : timeline.mutationCounter
     }
     var statePublisher: AnyPublisher<RecordStoreState, Never> {
-      collection ? collections.$state.eraseToAnyPublisher() : timeline.$state.eraseToAnyPublisher()
+      collection ? collections.statePublisher : timeline.statePublisher
     }
 
     func configure(_ id: String?) {
