@@ -48,7 +48,8 @@ final class DestinationSafetyMonitor: ObservableObject {
   /// because all writes happen on @MainActor.
   private var evaluationGeneration: Int = 0
   private var observation: AnyCancellable?
-  /// Evaluations that ran to the end, current or superseded. Lets tests wait on progress.
+  /// Evaluations that ran to the end, current or superseded. Exists for tests, to wait on
+  /// progress.
   private(set) var completedEvaluationCount = 0
 
   init(

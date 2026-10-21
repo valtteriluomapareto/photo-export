@@ -231,7 +231,8 @@ final class ExportRecordStore: ObservableObject {
   }
 
   /// Returns once the store is not `.loading`, or as soon as the calling task is cancelled.
-  /// A configure that replaces the load, including one to nil, ends the wait too.
+  /// A blocking configure, or one to nil, ends the wait at once. An asynchronous configure that
+  /// replaces the load keeps the store `.loading`, so the wait ends when the newest load settles.
   func waitUntilSettled() async {
     while state == .loading, !Task.isCancelled {
       let id = UUID()
@@ -249,14 +250,11 @@ final class ExportRecordStore: ObservableObject {
     }
   }
 
-  /// Loads that finished, applied or discarded. Lets tests wait on progress.
+  /// Loads that finished, applied or discarded. Exists for tests, to wait on progress.
   private(set) var finishedLoadCount = 0
 
-  /// Tasks waiting in `waitUntilSettled()`.
+  /// Tasks waiting in `waitUntilSettled()`. Exists for tests, to wait on progress.
   var pendingSettleWaiterCount: Int { settleWaiters.count }
-
-  /// What the current destination's load reads with.
-  var readInputs: RecordFile.ReadInputs? { jsonl?.readInputs }
 
   /// One load: which configure started it and the file it read. Only the newest configure's
   /// load is installed.
@@ -1239,6 +1237,8 @@ final class ExportRecordStore: ObservableObject {
     for completion in completions { completion() }
   }
 
+  /// Parks the commit's history for Retry after its write failed. Internal rather than private
+  /// only so its direct test can reach it.
   func retainFinalCommitFailure(
     _ error: any Error, context: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>
   ) {
