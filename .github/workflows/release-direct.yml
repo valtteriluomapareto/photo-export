@@ -175,7 +175,7 @@ jobs:
           echo "  ARCHS=arm64 x86_64 (universal)"
           echo "  CODE_SIGN_STYLE=Manual"
           echo "  CODE_SIGN_IDENTITY=Developer ID Application"
-          echo "  DEVELOPMENT_TEAM=${APPLE_TEAM_ID}"
+          echo "  DEVELOPMENT_TEAM=[REDACTED]"
           echo "  KEYCHAIN_PATH=${KEYCHAIN_PATH}"
           echo "  CURRENT_PROJECT_VERSION=${BUILD_NUMBER}"
 
@@ -192,7 +192,8 @@ jobs:
             DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
             "OTHER_CODE_SIGN_FLAGS=--keychain ${KEYCHAIN_PATH}" \
             CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
-            2>&1 | tail -30
+            2>&1 | python3 scripts/ci/sanitize-release-log.py \
+              | tee "${RUNNER_TEMP}/photo-export-direct-archive.log" | tail -30
 
           echo ""
           echo "Archive created at: ${ARCHIVE_PATH}"
@@ -201,6 +202,14 @@ jobs:
 
           echo "ARCHIVE_PATH=${ARCHIVE_PATH}" >> "$GITHUB_ENV"
           echo "::endgroup::"
+
+      - name: Upload archive log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-direct-archive-log
+          path: ${{ runner.temp }}/photo-export-direct-archive.log
+          if-no-files-found: warn
 
       # ── Export ─────────────────────────────────────────────────────────
       - name: Export archive

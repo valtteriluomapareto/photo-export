@@ -15,7 +15,7 @@ import Photos
 /// of layout. The reusable filename allocator (`ExportDestinationResolver.
 /// allocatePairedGroupStem`) is unaffected because image and paired-video
 /// slots for the same asset always share one `destDir` under this rule.
-enum ExportPlacementPathPolicy {
+enum ExportMediaPathPolicy {
   /// The subfolder (relative to the placement) where every variant of an
   /// asset should land. Returns `nil` to mean "place directly in the
   /// placement folder."

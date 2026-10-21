@@ -86,8 +86,7 @@ final class ImportCoordinator: ObservableObject {
 
   // MARK: - Dependencies
 
-  private let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "ImportCoordinator")
+  private let logger = Logger.app(.importCoordinator)
   private weak var host: Host?
   /// Cancellation seam. A weak reference keeps collaborator lifetimes bounded by
   /// their shared owner, `ExportManager`.

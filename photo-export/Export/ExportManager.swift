@@ -376,7 +376,7 @@ final class ExportManager: ObservableObject, Observable {
   }
 
   // MARK: - Dependencies
-  private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Export")
+  private let logger = Logger.app(.exportOperations)
   let photoLibraryService: any PhotoLibraryService
   /// Seam for dropping `PhotoLibraryManager`'s long-lived PHAsset cache
   /// between bulk-export iterations. See `PHAssetCacheControlling` for the
@@ -1875,7 +1875,7 @@ final class ExportManager: ObservableObject, Observable {
       if job.placement.kind == .timeline, job.placement.timelineYearMonth == nil {
         assertionFailure("Timeline placement \(job.placement.id) has no year and month")
         throw NSError(
-          domain: "Export", code: 11,
+          domain: "Export", code: ExportErrorCode.invalidTimelinePlacement.rawValue,
           userInfo: [NSLocalizedDescriptionKey: "Timeline placement has no year and month"])
       }
 
@@ -1928,7 +1928,7 @@ final class ExportManager: ObservableObject, Observable {
 
       guard let scopedURL = exportDestination.beginScopedAccess() else {
         throw NSError(
-          domain: "Export", code: 1,
+          domain: "Export", code: ExportErrorCode.exportFolderAccessDenied.rawValue,
           userInfo: [
             NSLocalizedDescriptionKey: "Failed to access export folder (security scope)"
           ])
@@ -1950,9 +1950,9 @@ final class ExportManager: ObservableObject, Observable {
       // of this asset shares the same `destDir`; the helper preserves the per-asset
       // invariant `export(job:generation:)` relies on (`allocatePairedGroupStem` probes a
       // single dir, paired-stem inheritance reads one synthesized record).
-      let subfolder = ExportPlacementPathPolicy.subfolder(
+      let subfolder = ExportMediaPathPolicy.subfolder(
         for: descriptor.mediaType, layout: job.videoLayout)
-      let effectiveRelPath = ExportPlacementPathPolicy.relativePath(
+      let effectiveRelPath = ExportMediaPathPolicy.relativePath(
         placement: job.placement, subfolder: subfolder)
       let destDir = try exportDestination.urlForRelativeDirectory(
         effectiveRelPath, createIfNeeded: true)

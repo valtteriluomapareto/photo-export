@@ -282,7 +282,7 @@ the user." Edge cases the policy does not handle (reserved Windows device names,
 extreme length) are accepted as out-of-scope: they are vanishingly rare in personal Photos libraries, and the cost
 of building reliable detection outweighs the user-visible value.
 
-All album and folder names go through `ExportPathPolicy.sanitizeComponent(_:)` before becoming a path component.
+All album and folder names go through `CollectionPathComponentPolicy.sanitizeComponent(_:)` before becoming a path component.
 
 ### Per-component rules
 
@@ -336,7 +336,7 @@ lexicographically by `collectionLocalIdentifier` and the bare path goes to the f
 
 ### Test cases
 
-`ExportPathPolicyTests` covers at least:
+`CollectionPathComponentPolicyTests` covers at least:
 
 1. ASCII passthrough.
 2. Forward slash → `_`.
@@ -401,7 +401,7 @@ struct PhotoCollectionDescriptor: Identifiable, Hashable, Sendable {
 - Album descriptors carry `PHAssetCollection.localIdentifier`.
 - Folder descriptors carry `PHCollectionList.localIdentifier` only for tree identity; folders are not directly
   exportable.
-- `pathComponents` is the unsanitized display hierarchy. Sanitization happens in `ExportPathPolicy`, not here.
+- `pathComponents` is the unsanitized display hierarchy. Sanitization happens in `CollectionPathComponentPolicy`, not here.
 
 ### PhotoLibraryService
 
@@ -547,7 +547,7 @@ struct ExportPlacementResolver {
 ```
 
 Pure with respect to `(selection, collections, existingPlacements)`. The only code that maps selections to
-placements. Uses `ExportPathPolicy` to compute `relativePath` for new placements.
+placements. Uses `CollectionPathComponentPolicy` to compute `relativePath` for new placements.
 
 Behavior:
 
@@ -1329,7 +1329,7 @@ disturbing the timeline store's on-disk format.
 
 - Add `LibrarySelection`, `PhotoFetchScope`, `ExportPlacement`, `ExportRecordKey`, `ScopedExportRecord`,
   `CollectionPlacementScope`.
-- Add `ExportPathPolicy` and `ExportPlacementResolver` (timeline-only resolver paths in this phase; collection
+- Add `CollectionPathComponentPolicy` and `ExportPlacementResolver` (timeline-only resolver paths in this phase; collection
   paths defined but unreachable until Phase 2).
 - Extract the JSONL+snapshot machinery from `ExportRecordStore` into `JSONLRecordFile<Snapshot, LogOp>`. Both the
   existing timeline store and the new collection store compose it. No on-disk format change for timeline.
@@ -1375,7 +1375,7 @@ disturbing the timeline store's on-disk format.
   the timeline store's existing behavior (no eager persistence; lazy correction on next mutation/compaction).
 - Update `FakeExportDestination` and add `FakeCollectionExportRecordStore`. Existing timeline tests need only
   trivial changes (the wrapper APIs preserve their signatures).
-- Add `JSONLRecordFileTests`, `CollectionExportRecordStoreTests`, `ExportPathPolicyTests`. Recovery coverage:
+- Add `JSONLRecordFileTests`, `CollectionExportRecordStoreTests`, `CollectionPathComponentPolicyTests`. Recovery coverage:
   corrupt-snapshot → file remains until `resetToEmpty()`; Quit-and-relaunch → still `.failed`.
 - Add `enum AppFlags { static var enableCollections = false }` in `photo-export/AppFlags.swift`. Phase 4 flips it
   to `true`. Removed in a follow-up cleanup once the feature stabilizes.
@@ -1481,7 +1481,7 @@ Exit criteria:
 
 ### Unit Tests
 
-Path policy (`ExportPathPolicyTests`) — the cases listed in *Path Policy → Test cases*.
+Path policy (`CollectionPathComponentPolicyTests`) — the cases listed in *Path Policy → Test cases*.
 
 Placement resolver:
 

@@ -32,7 +32,7 @@ echo "  Archive path:         ${ARCHIVE_PATH}"
 echo "  Architectures:        arm64 x86_64 (universal)"
 echo "  Code sign style:      Manual"
 echo "  Code sign identity:   Apple Distribution"
-echo "  Development team:     ${APPLE_TEAM_ID}"
+echo "  Development team:     [REDACTED]"
 echo "  Bundle identifier:    ${APPSTORE_BUNDLE_ID}"
 echo "  Provisioning profile: ${PROFILE_UUID}${PROFILE_NAME:+ (${PROFILE_NAME})}"
 echo "  Build number:         ${BUILD_NUMBER}"
@@ -44,7 +44,10 @@ ls -la "${PROFILES_DIR}/"
 
 echo ""
 echo "Relevant build settings:"
-xcodebuild -project "${PROJECT}" -scheme "${SCHEME}" -showBuildSettings | grep -E 'CODE_SIGN|DEVELOPMENT_TEAM|PRODUCT_BUNDLE_IDENTIFIER|PROVISIONING_PROFILE' || true
+{
+  xcodebuild -project "${PROJECT}" -scheme "${SCHEME}" -showBuildSettings \
+    | grep -E 'CODE_SIGN|DEVELOPMENT_TEAM|PRODUCT_BUNDLE_IDENTIFIER|PROVISIONING_PROFILE' || true
+} 2>&1 | python3 scripts/ci/sanitize-release-log.py
 
 echo ""
 set -o pipefail
@@ -62,7 +65,8 @@ xcodebuild archive \
   PRODUCT_BUNDLE_IDENTIFIER="${APPSTORE_BUNDLE_ID}" \
   "PROVISIONING_PROFILE_SPECIFIER=${PROFILE_NAME}" \
   CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
-  2>&1 | tail -30
+  2>&1 | python3 scripts/ci/sanitize-release-log.py \
+    | tee "${RUNNER_TEMP}/photo-export-appstore-archive.log" | tail -30
 
 echo ""
 echo "Archive created at: ${ARCHIVE_PATH}"

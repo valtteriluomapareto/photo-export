@@ -10,7 +10,7 @@ protocol ExportDestination: AnyObject {
 
   /// Resolves a relative directory path under the export root, optionally creating it.
   ///
-  /// The relative path is sanitized at construction time (`ExportPathPolicy` for collection
+  /// The relative path is sanitized at construction time (`CollectionPathComponentPolicy` for collection
   /// placements; year/month formatting for timeline). This method enforces the
   /// destination-side invariant that no relative path may escape the export root after
   /// canonicalization. Rejected inputs:

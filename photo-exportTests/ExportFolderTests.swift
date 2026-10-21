@@ -547,7 +547,9 @@ struct ExportFolderTests {
 
   /// All albums under a folder already fully exported → the user-visible message
   /// distinguishes "this folder is done" from "this folder is empty".
-  @Test(.timeLimit(.minutes(1))) func allDescendantsAlreadyExportedSetsAlreadyDoneMessage() async throws {
+  @Test(.timeLimit(.minutes(1))) func allDescendantsAlreadyExportedSetsAlreadyDoneMessage()
+    async throws
+  {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -653,7 +655,9 @@ struct ExportFolderTests {
     #expect(h.manager.totalJobsEnqueued == 0)
   }
 
-  @Test(.timeLimit(.minutes(1))) func startExportAlbumsWhenAllAlreadyDoneSetsAlreadyDoneMessage() async throws {
+  @Test(.timeLimit(.minutes(1))) func startExportAlbumsWhenAllAlreadyDoneSetsAlreadyDoneMessage()
+    async throws
+  {
     let h = makeHarness()
     defer { h.cleanup() }
 

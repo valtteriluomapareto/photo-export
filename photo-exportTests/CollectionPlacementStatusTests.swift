@@ -156,7 +156,8 @@ import Testing
           rootView:
             Host(
               service: service, manager: manager, selection: selectionOverride ?? selection,
-              folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane)
+              folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane
+            )
             .environmentObject(library).environmentObject(timeline).environmentObject(records)
             .environmentObject(manager)
             .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
@@ -514,7 +515,8 @@ import Testing
         try #require(loaded)
 
         let service = f.service
-        let stale = try await Fixture.liveCount(service, .album(collectionId: "stable"), adjusted: false)
+        let stale = try await Fixture.liveCount(
+          service, .album(collectionId: "stable"), adjusted: false)
         service.assetsByAlbumLocalId["stable"]?.append(TestAssetFactory.makeAsset(id: "added"))
         var stableFetches = 0
         service.cachedCountOverride = { scope, adjusted in

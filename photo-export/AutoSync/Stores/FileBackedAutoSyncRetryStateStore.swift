@@ -14,8 +14,7 @@ final class FileBackedAutoSyncRetryStateStore: AutoSyncRetryStateStore {
     baseDirectoryURL: URL,
     fileManager: FileManager = .default,
     io: any AutoSyncMetadataFileIO = ProductionAutoSyncMetadataFileIO(),
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "AutoSyncRetryStore")
+    logger: Logger = Logger.app(.autoSyncRetryStore)
   ) {
     self.baseDirectoryURL = baseDirectoryURL
     self.fileManager = fileManager

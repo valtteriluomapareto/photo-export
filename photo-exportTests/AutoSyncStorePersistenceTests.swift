@@ -62,7 +62,8 @@ struct AutoSyncStorePersistenceTests {
   /// migration, this test fails — and the existing user would have lost
   /// the flag silently.
   @Test func dirtyStateDecodesKnownFixture() throws {
-    let fixture = """
+    let fixture = Data(
+      """
       {
         "lastUpdatedAt" : 770000000,
         "scopes" : {
@@ -78,7 +79,7 @@ struct AutoSyncStorePersistenceTests {
           }
         }
       }
-      """.data(using: .utf8)!
+      """.utf8)
 
     let decoded = try JSONDecoder().decode(AutoSyncDirtyState.self, from: fixture)
 
@@ -107,12 +108,14 @@ struct AutoSyncStorePersistenceTests {
       try store.save(state, destinationId: "dest-1")
 
       #expect(try store.load(destinationId: "dest-1") == state)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("dirtyState.json")
       #expect(
         FileManager.default.fileExists(atPath: expectedURL.path),
-        "dirtyState.json must live at <base>/<destId>/dirtyState.json — rename here orphans existing users' state")
+        "dirtyState.json must live at <base>/<destId>/dirtyState.json — rename here orphans existing users' state"
+      )
     }
   }
 
@@ -152,7 +155,8 @@ struct AutoSyncStorePersistenceTests {
       if let l = lastUpdatedRange, let s = scopesRange {
         #expect(
           l.lowerBound < s.lowerBound,
-          "encoder must keep .sortedKeys — `lastUpdatedAt` must appear before `scopes` alphabetically")
+          "encoder must keep .sortedKeys — `lastUpdatedAt` must appear before `scopes` alphabetically"
+        )
       }
     }
   }
@@ -165,7 +169,8 @@ struct AutoSyncStorePersistenceTests {
   /// and every `RetryEntry` field, so a Codable change fails this test
   /// before existing users lose their retry backoff state.
   @Test func retryStateDecodesKnownFixture() throws {
-    let fixture = """
+    let fixture = Data(
+      """
       {
         "entriesByPlacement" : {
           "timeline" : {
@@ -182,7 +187,7 @@ struct AutoSyncStorePersistenceTests {
           }
         }
       }
-      """.data(using: .utf8)!
+      """.utf8)
 
     let decoded = try JSONDecoder().decode(AutoSyncRetryState.self, from: fixture)
 
@@ -208,7 +213,8 @@ struct AutoSyncStorePersistenceTests {
   /// `AutoSyncRetryScopeKey.init?(rawValue:)` would strand persisted
   /// shared-album retries; this test catches it.
   @Test func retryStateDecodesSharedAlbumScopeKey() throws {
-    let fixture = """
+    let fixture = Data(
+      """
       {
         "entriesByPlacement" : {
           "shared-album:stream-42" : {
@@ -225,7 +231,7 @@ struct AutoSyncStorePersistenceTests {
           }
         }
       }
-      """.data(using: .utf8)!
+      """.utf8)
 
     let decoded = try JSONDecoder().decode(AutoSyncRetryState.self, from: fixture)
 
@@ -235,7 +241,8 @@ struct AutoSyncStorePersistenceTests {
     let key = AutoSyncRetryScopeKey(rawValue: "shared-album:stream-42")
     #expect(key == .sharedAlbum(placementId: "stream-42"))
     #expect(
-      decoded.entry(scope: .sharedAlbum(placementId: "stream-42"),
+      decoded.entry(
+        scope: .sharedAlbum(placementId: "stream-42"),
         assetId: "asset-1", variant: .original) != nil,
       "shared-album entries must round-trip through entry() lookup")
   }
@@ -274,7 +281,8 @@ struct AutoSyncStorePersistenceTests {
       try store.save(state, destinationId: "dest-1")
 
       #expect(try store.load(destinationId: "dest-1") == state)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("retryState.json")
       #expect(
@@ -318,7 +326,8 @@ struct AutoSyncStorePersistenceTests {
       try store.save(summary, destinationId: "dest-1")
 
       #expect(store.load(destinationId: "dest-1") == summary)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("lastRunSummary.json")
       #expect(
@@ -429,7 +438,8 @@ struct AutoSyncStorePersistenceTests {
   /// session's silent shutdown from the diagnostic report). The fixture
   /// reads back through the production decoder, asserting all six fields.
   @Test func currentRunJournalDecodesKnownFixture() throws {
-    let fixture = """
+    let fixture = Data(
+      """
       {
         "currentScope" : "albums",
         "currentScopeStartedAt" : 770000300,
@@ -437,7 +447,7 @@ struct AutoSyncStorePersistenceTests {
         "startedAt" : 770000000,
         "trigger" : "appLaunch"
       }
-      """.data(using: .utf8)!
+      """.utf8)
 
     let decoded = try JSONDecoder().decode(AutoSyncRunJournal.self, from: fixture)
 
@@ -464,7 +474,8 @@ struct AutoSyncStorePersistenceTests {
       try store.save(journal, destinationId: "dest-1")
 
       #expect(store.load(destinationId: "dest-1") == journal)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("currentRun.json")
       #expect(
@@ -505,12 +516,14 @@ struct AutoSyncStorePersistenceTests {
 
       try store.clear(destinationId: "dest-1")
       #expect(store.load(destinationId: "dest-1") == nil)
-      let url = dir
+      let url =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("currentRun.json")
       #expect(
         !FileManager.default.fileExists(atPath: url.path),
-        "clear must remove the file on disk — leaving it would falsely report previous-session abnormal exit on next launch")
+        "clear must remove the file on disk — leaving it would falsely report previous-session abnormal exit on next launch"
+      )
     }
   }
 
@@ -545,7 +558,8 @@ struct AutoSyncStorePersistenceTests {
         currentScopeStartedAt: Date(timeIntervalSinceReferenceDate: 770000001))
       try store.save(journal, destinationId: "dest-1")
 
-      let url = dir
+      let url =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("currentRun.json")
       let raw = try String(contentsOf: url, encoding: .utf8)
@@ -594,7 +608,8 @@ struct AutoSyncStorePersistenceTests {
 
       // Both calls must target `<base>/<destId>/` — not the base
       // directory itself, not the file's full path.
-      let expectedParent = dir
+      let expectedParent =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .standardizedFileURL
       let standardized = recorder.fsyncedPaths.map { $0.standardizedFileURL }
@@ -651,12 +666,14 @@ struct AutoSyncStorePersistenceTests {
       try store.save(blob, destinationId: "dest-1")
 
       #expect(store.load(destinationId: "dest-1") == blob)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("lastDurablyRecordedToken.data")
       #expect(
         FileManager.default.fileExists(atPath: expectedURL.path),
-        "lastDurablyRecordedToken.data must live at the documented path — rename orphans existing users' tokens")
+        "lastDurablyRecordedToken.data must live at the documented path — rename orphans existing users' tokens"
+      )
     }
   }
 
@@ -688,7 +705,8 @@ struct AutoSyncStorePersistenceTests {
 
       #expect(
         store.load() == nil,
-        "load() must return nil on decode failure rather than throw — protects launch when on-disk token is corrupt")
+        "load() must return nil on decode failure rather than throw — protects launch when on-disk token is corrupt"
+      )
     }
   }
 

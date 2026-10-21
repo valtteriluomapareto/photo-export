@@ -165,8 +165,10 @@ struct ExportPipelineTests {
 
     // Verify no .tmp files left behind (defer cleanup should have run)
     let monthDir = try dest.urlForMonth(year: 2025, month: 4, createIfNeeded: false)
-    let leftoverTmp = try? FileManager.default.contentsOfDirectory(at: monthDir, includingPropertiesForKeys: nil)
-      .filter { $0.pathExtension == "tmp" }
+    let leftoverTmp = try? FileManager.default.contentsOfDirectory(
+      at: monthDir, includingPropertiesForKeys: nil
+    )
+    .filter { $0.pathExtension == "tmp" }
     #expect(leftoverTmp?.isEmpty != false)
   }
 
@@ -194,8 +196,10 @@ struct ExportPipelineTests {
 
     // Verify the .tmp file was cleaned up by the defer block
     let monthDir = try dest.urlForMonth(year: 2025, month: 5, createIfNeeded: false)
-    let leftoverTmp = try? FileManager.default.contentsOfDirectory(at: monthDir, includingPropertiesForKeys: nil)
-      .filter { $0.pathExtension == "tmp" }
+    let leftoverTmp = try? FileManager.default.contentsOfDirectory(
+      at: monthDir, includingPropertiesForKeys: nil
+    )
+    .filter { $0.pathExtension == "tmp" }
     #expect(leftoverTmp?.isEmpty != false)
   }
 

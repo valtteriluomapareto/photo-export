@@ -73,7 +73,10 @@ struct ReuseSourceAlbumPathTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "shared-asset")
     photoLib.assetsByYearMonth["2025-3"] = [asset]
@@ -123,7 +126,10 @@ struct ReuseSourceAlbumPathTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "shared-asset")
     photoLib.assetsByAlbumLocalId["album-A-id"] = [asset]
@@ -165,7 +171,8 @@ struct ReuseSourceAlbumPathTests {
 
     #expect(writer.writeCalls.count == writeCallsBefore, "PhotoKit writer must not run")
     #expect(fileSystem.copyCalls.count == 1)
-    #expect(fileSystem.copyCalls.first?.from.path.contains("AlbumA") == true,
+    #expect(
+      fileSystem.copyCalls.first?.from.path.contains("AlbumA") == true,
       "copy source must be album A's file")
 
     // Verify album B's file landed.
@@ -182,7 +189,10 @@ struct ReuseSourceAlbumPathTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "shared")
     photoLib.assetsByAlbumLocalId["album-new"] = [asset]
@@ -226,10 +236,12 @@ struct ReuseSourceAlbumPathTests {
     manager.startExportAlbum(collectionId: "album-new")
     await manager.waitForQueueDrained()
 
-    #expect(writer.writeCalls.isEmpty, "PhotoKit writer must not run when timeline reuse is available")
+    #expect(
+      writer.writeCalls.isEmpty, "PhotoKit writer must not run when timeline reuse is available")
     #expect(fileSystem.copyCalls.count == 1)
     let copySource = fileSystem.copyCalls.first?.from.path ?? ""
-    #expect(copySource.contains("/2025/04/"),
+    #expect(
+      copySource.contains("/2025/04/"),
       "reuse source must be the timeline file, not OldAlbum (\(copySource))")
   }
 
@@ -240,7 +252,10 @@ struct ReuseSourceAlbumPathTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "shared")
     photoLib.assetsByAlbumLocalId["album-new"] = [asset]
@@ -287,7 +302,8 @@ struct ReuseSourceAlbumPathTests {
     #expect(writer.writeCalls.isEmpty)
     #expect(fileSystem.copyCalls.count == 1)
     let copySource = fileSystem.copyCalls.first?.from.path ?? ""
-    #expect(copySource.contains("/Alpha/"),
+    #expect(
+      copySource.contains("/Alpha/"),
       "lex-sorted tiebreaker must pick Alpha, got: \(copySource)")
   }
 
@@ -298,7 +314,10 @@ struct ReuseSourceAlbumPathTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "self-asset")
     photoLib.assetsByAlbumLocalId["solo-album"] = [asset]
@@ -332,7 +351,8 @@ struct ReuseSourceAlbumPathTests {
     #expect(writer.writeCalls.count == 1)
     // No copyItem with from == to.
     for copyCall in fileSystem.copyCalls {
-      #expect(copyCall.from.path != copyCall.to.path,
+      #expect(
+        copyCall.from.path != copyCall.to.path,
         "self-copy is forbidden — would corrupt the file")
     }
   }

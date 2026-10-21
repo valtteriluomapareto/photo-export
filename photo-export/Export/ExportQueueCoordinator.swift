@@ -72,7 +72,7 @@ final class ExportQueueCoordinator: ObservableObject {
   /// entry point opened it. Mirrors the pattern at
   /// `PhotoLibraryPersistentChangeAdapter.signposter`.
   private static let signposter = OSSignposter(
-    subsystem: "com.valtteriluoma.photo-export",
+    subsystem: Logger.appSubsystem,
     category: "Export.Run")
   private var runInterval: OSSignpostIntervalState?
 
@@ -124,8 +124,7 @@ final class ExportQueueCoordinator: ObservableObject {
 
   // MARK: - Dependencies
 
-  private let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "ExportQueueCoordinator")
+  private let logger = Logger.app(.exportQueueCoordinator)
   private weak var host: Host?
 
   init(host: Host) {

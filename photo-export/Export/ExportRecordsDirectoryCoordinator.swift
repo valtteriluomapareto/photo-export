@@ -32,8 +32,7 @@ struct ExportRecordsDirectoryCoordinator {
   init(
     storeRootURL: URL,
     fileManager: FileManager = .default,
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "ExportRecordsDirectory")
+    logger: Logger = Logger.app(.exportRecordsDirectory)
   ) {
     self.storeRootURL = storeRootURL
     self.fileManager = fileManager

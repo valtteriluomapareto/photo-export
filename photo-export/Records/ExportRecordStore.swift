@@ -23,8 +23,7 @@ final class ExportRecordStore: ObservableObject {
     static let compactEveryNMutations = 1000
   }
 
-  private let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "ExportRecords")
+  private let logger = Logger.app(.exportRecords)
   private let ioQueue = DispatchQueue(
     label: "com.valtteriluoma.photo-export.records-io", qos: .utility)
 

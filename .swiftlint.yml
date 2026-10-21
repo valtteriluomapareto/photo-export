@@ -3,6 +3,7 @@
 
 included:
   - photo-export
+  - photo-exportTests
 excluded:
   - build
   - photo-export.xcodeproj

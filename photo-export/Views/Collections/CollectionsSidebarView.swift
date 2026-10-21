@@ -447,6 +447,7 @@ private struct CollectionRow: View {
       switch state {
       case .complete:
         Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
+          .accessibilityLabel("Fully exported")
       case .partial(let exported, let total):
         Text("\(exported)/\(total)").foregroundColor(.orange).font(.caption)
       case .notStarted(let total):
@@ -567,6 +568,7 @@ private struct FolderRow: View {
       switch state {
       case .complete:
         Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
+          .accessibilityLabel("Fully exported")
       case .partial(let exported, let total):
         Text("\(exported)/\(total)").foregroundColor(.orange).font(.caption)
       case .notStarted(let total):

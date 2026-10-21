@@ -17,8 +17,7 @@ final class AssetDetailImageLoader {
   private(set) var state = State()
   @ObservationIgnored private var activeRequest: UUID?
   /// Static: `@State` builds a throwaway loader on each parent body run.
-  private static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "UI.Detail")
+  private static let logger = Logger.app(.detailPreview)
 
   /// SwiftUI may render a new selection before its task starts. Never display
   /// the previous selection's image or error during that interval.

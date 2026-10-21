@@ -13,7 +13,7 @@ struct AutoSyncMenuBarContent: View {
   var body: some View {
     // Read-only status line at the top so the user can see what's happening
     // at a glance before deciding to act.
-    Text(statusLabel)
+    Text(autoSyncManager.state.menuBarStatusLabel)
 
     Divider()
 
@@ -48,17 +48,6 @@ struct AutoSyncMenuBarContent: View {
     .keyboardShortcut("q", modifiers: [.command])
   }
 
-  private var statusLabel: String {
-    switch autoSyncManager.state {
-    case .disabled: return "Auto Export is off"
-    case .idle: return "Auto Export: up to date"
-    case .scheduled(let reason, _): return "Auto Export: scheduled (\(reason.userFacingLabel))"
-    case .running: return "Auto Export: running\u{2026}"
-    case .waiting(let reason): return "Auto Export: waiting (\(reason.userFacingLabel))"
-    case .blocked(let reason): return "Auto Export: blocked (\(reason.userFacingLabel))"
-    }
-  }
-
   /// Menu bar is the click-and-forget surface. Disable Export Now whenever
   /// the click won't result in a visible run within a few seconds — the
   /// user has no inline feedback from a menu item that silently queued for
@@ -79,6 +68,8 @@ struct AutoSyncMenuBarLabel: View {
 
   var body: some View {
     Image(systemName: iconName)
+      .accessibilityLabel(state.menuBarStatusLabel)
+      .help(state.menuBarStatusLabel)
   }
 
   private var iconName: String {
@@ -96,6 +87,16 @@ struct AutoSyncMenuBarLabel: View {
   }
 }
 
-// Per-view label extensions removed — surface uses
-// `AutoSyncReason.userFacingLabel` / `AutoSyncBlockedReason.userFacingLabel`
-// directly. See `AutoSyncReason.swift`.
+// Share wording between the menu status text and its icon-only menu bar item.
+private extension AutoSyncState {
+  var menuBarStatusLabel: String {
+    switch self {
+    case .disabled: return "Auto Export is off"
+    case .idle: return "Auto Export: up to date"
+    case .scheduled(let reason, _): return "Auto Export: scheduled (\(reason.userFacingLabel))"
+    case .running: return "Auto Export: running\u{2026}"
+    case .waiting(let reason): return "Auto Export: waiting (\(reason.userFacingLabel))"
+    case .blocked(let reason): return "Auto Export: blocked (\(reason.userFacingLabel))"
+    }
+  }
+}

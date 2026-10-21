@@ -10,7 +10,7 @@ Small development utilities for this project. CI-only steps live under [`ci/`](c
 
 | Script | Purpose |
 | --- | --- |
-| [`bump-version.sh`](bump-version.sh) | Prepares `MARKETING_VERSION` and website version changes for a reviewed PR. Never stages, commits or tags; `--no-tag` remains an explicit alias for the default. Required step in [`docs/project/release-process.md`](../docs/project/release-process.md). |
+| [`bump-version.sh`](bump-version.sh) | Prepares `MARKETING_VERSION` and website version changes for a reviewed PR. Never stages, commits or tags. Required step in [`docs/project/release-process.md`](../docs/project/release-process.md). |
 | [`generate-app-icon.sh`](generate-app-icon.sh) | Generates a complete macOS `AppIcon.appiconset` from a single square master image. Source image lives in [`design/app-icon-master.jpeg`](../design/app-icon-master.jpeg). Run when the icon changes. |
 | [`probe-exclusive-rename.sh`](probe-exclusive-rename.sh) | Creates small APFS, HFS+, ExFAT and FAT32 disk images in a temporary folder and records, for each, whether the volume advertises an exclusive rename and whether `renamex_np(RENAME_EXCL)` keeps an existing file's bytes; fails if any volume replaced them. `--folder <dir>` probes an existing folder's volume (an SMB share) in a hidden subfolder it removes. Runs weekly in the toolchain canary; results are in [architecture-conventions § Final file commit boundary](../docs/reference/architecture-conventions.md#final-file-commit-boundary). |
 | [`release/validation_rows.py`](release/validation_rows.py) | Lists which [pre-release Photos validation](../docs/project/release-validation.md) rows a candidate needs: the rows whose files changed since each row last passed, and whether the full matrix is required. Every app file must map to a row or the core smoke; `scripts/ci/test-guards.sh` runs its tests, including that completeness check. |
@@ -26,14 +26,27 @@ These are wrappers around `xcodebuild` / signing / App Store Connect that the re
 The structural guards also run locally without signing credentials:
 
 ```bash
-scripts/ci/test-guards.sh
-python3 scripts/ci/check-read-only-photos.py
-python3 scripts/ci/check-version.py
-python3 scripts/ci/check-test-waits.py
-python3 scripts/ci/check-test-scratch.py
-python3 scripts/ci/check-persistence-doc.py
-python3 scripts/ci/check-observation-ratchet.py
+scripts/ci/run-guards.sh
 ```
+
+[`run-guards.sh`](ci/run-guards.sh) runs guard fixture self-tests, read-only Photos,
+source-comment plan references, test waits, test scratch state, persistence value sets,
+project versions, regression-gate symbols/documentation, destination-identity keying
+and strict app-and-test formatting (using the pinned Swift tools described below).
+It names each check, continues after independent failures and reports all failed checks
+before returning nonzero. CI keeps invoking these guards individually. SwiftLint,
+Xcode selection, built-app checks, result-bundle gate audits and release credential checks
+use their own commands and prerequisites.
+
+The release archive steps retain complete sanitized output in dedicated
+`photo-export-direct-archive.log` and `photo-export-appstore-archive.log` files under
+`RUNNER_TEMP`, uploaded as `release-direct-archive-log` and
+`release-appstore-archive-log` even when archiving fails. The combined archive stdout/stderr
+passes through [`sanitize-release-log.py`](ci/sanitize-release-log.py) before `tee` or the
+30-line console tail. It redacts known inherited release credentials, including the
+keychain password exported by setup; multiline values and chunk boundaries are handled.
+Sanitization failures stop the archive step without a raw-output fallback. Artifacts
+include only the explicit log file, excluding setup output and credential files.
 
 `check-test-waits.py` rejects wall-clock `< deadline` waits in `photo-exportTests/`
 (outside the allow-listed anti-hang backstops in `TestHelpers/`) and requires every
@@ -280,12 +293,14 @@ The version validator checks every `MARKETING_VERSION` assignment line in `proje
 
 The release-safety fixtures also run through `test-guards.sh`. They extract the actual workflow context, version-check, duplicate-check and publication steps, then execute only those selected steps in disposable directories. A restricted command path stubs `gh release` and the App Store upload helper; no signing, credentials or network access is used. The event/ref/input matrix covers safe manual tag builds, explicit publication, beta versions, version mismatch and existing releases. Unexpected selected-step structure or expressions fail the test. Build-only workflow semantics are documented in [Release Process](../docs/project/release-process.md#dry-run).
 
-The formatter fixtures execute the actual CI format-check block against disposable
-Swift files. They verify warnings fail before the success message, explicit config
-overrides conflicting auto-discovery, and test sources stay outside the app-source
-scope. Only absence of the optional local `swift-format` tool skips these fixtures;
-configuration and formatter failures are errors. CI installs/verifies the formatter
-before running the guard suite. See the [matching local commands](../CONTRIBUTING.md#local-setup).
+The formatter fixtures execute the actual CI format-check block and copied
+`ci/check-swift-format.sh` helper against disposable app and unit-test sources. They
+verify a warning in either tree fails before the success message and that explicit
+configuration overrides conflicting auto-discovery for both trees. SwiftLint's
+real-config fixtures likewise require app and test violations to fail, while keeping
+the template UI-test target out of scope. Absence of either optional local tool
+skips only its corresponding fixtures; configuration and tool failures are errors.
+CI installs and verifies both tools before running the guard suite. See the [matching local commands](../CONTRIBUTING.md#local-setup).
 
 | Script | Used by workflow |
 | --- | --- |

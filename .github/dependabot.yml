@@ -9,6 +9,11 @@ updates:
     directory: /website
     schedule:
       interval: weekly
+    # TypeScript 7 fails npm ci: @astrojs/check currently accepts only TypeScript 5 or 6.
+    ignore:
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
     groups:
       website-routine:
         patterns:
