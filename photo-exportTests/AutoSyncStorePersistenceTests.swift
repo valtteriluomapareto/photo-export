@@ -32,9 +32,9 @@ import Testing
 ///      location after `save`. Catches a refactor that renames the file and
 ///      silently orphans existing users' state.
 ///
-/// Two `Data`-blob stores have no fixture (`PHPersistentChangeToken`'s
-/// NSKeyedArchiver shape is Apple-owned), so they get path-pin + missing-file
-/// + corrupt-blob coverage only.
+/// Released-writer files, including opaque per-destination token Data, are
+/// covered by HistoricalAuxiliaryStoreFixtureTests. Valid global-token archives
+/// need a real isolated Photos library; this suite covers missing/corrupt input.
 @MainActor
 struct AutoSyncStorePersistenceTests {
 

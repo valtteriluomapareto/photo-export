@@ -24,7 +24,11 @@ struct HistoricalPersistenceFixtureTests {
     let toolchain: String
     let target: String
     let hostRuntime: String
+    struct AuxiliaryGeneration: Decodable {
+      let files: [String: String]
+    }
     let releases: [String: Release]
+    let auxiliaryGenerations: [String: AuxiliaryGeneration]
   }
 
   private static func digest(_ bytes: Data) -> String {
@@ -94,8 +98,11 @@ struct HistoricalPersistenceFixtureTests {
           (try? root.appendingPathComponent($0).resourceValues(forKeys: [.isRegularFileKey])
             .isRegularFile) == true
         })
-      #expect(files == Set(release.files.keys))
-      for (path, expected) in release.files {
+      let allFiles = release.files.merging(manifest.auxiliaryGenerations[tag]?.files ?? [:]) {
+        old, _ in old
+      }
+      #expect(files == Set(allFiles.keys))
+      for (path, expected) in allFiles {
         #expect(Self.digest(try Data(contentsOf: root.appendingPathComponent(path))) == expected)
       }
     }

@@ -45,6 +45,12 @@ compacted snapshot — implemented by the shared `JSONLRecordFile` component.
   - `collection-records.jsonl` — append-only log of placement and record mutations
   - `collection-records.json` — compacted snapshot containing `placements` (placement metadata keyed by placement id) and `records` (record bodies nested by `[placementId][assetId]`)
 
+Released-writer compatibility fixtures cover record snapshots/logs and the Auto Export
+dirty, retry, summary, per-destination token, current-run, safety and scope stores, plus
+the stable destination id. See [historical persistence fixtures](../project/historical-persistence-fixtures.md)
+for first-release provenance, isolated defaults transport and the explicit global
+PhotoKit-token coverage limitation.
+
 ## Record-store value sets
 
 This table is the one list of the enum-like strings the two record stores write. The
