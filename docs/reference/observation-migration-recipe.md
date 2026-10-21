@@ -218,7 +218,7 @@ final class ExportManager {
 delivery; an equal write delivered without an Observation notification; and, while plumbed,
 `objectWillChange` before every delivery.
 
-### `ExportManager`: the run-state bridge
+### `ExportManager`: the contract bridges
 
 The four inputs of `exportRunStatePublisher` (`activeRunContext`, `isRunning`, `queueCount`,
 `isEnqueueingAll`) are bridged in the plumbing shape above. `ExportManagerObservationTests`
@@ -243,11 +243,24 @@ unchanged.
 Views use `ManualExportAvailability` over store state, so those two helpers need no separate
 view dependency.
 
+The settings (`versionSelection`, `convertHEICToJPEG`, `livePhotosPairedExport`) and import
+contract (`isImporting`, `previousBackupMissing`, `importStage`) also use the same bridges.
+Settings preserve their persistence and store-mirror side effects after delivery; initialization
+seeds the bridges from defaults without those effects and explicitly synchronizes the HEIC
+flag into both stores. The import hold combines activity and the missing-backup decision with
+OR and duplicate suppression, so rechecking a missing backup never releases Auto Export early.
+`ImportHoldSequenceTests` pins those hold and flag sequences.
+
+The measured Published baseline already registered changing writes to these properties under
+both Xcode 26.6 and 27.1. Repeating an equal value also notified Observation. The bridges keep
+the changing-value and sibling-isolation behavior while suppressing equal-value notifications;
+Combine subscribers still receive every write. Measure a property's actual baseline before
+classifying a dependency test as failing before its migration.
+
 The flip still owes:
 
-- bridges for the other contract accessors (`versionSelection`, `convertHEICToJPEG`,
-  `livePhotosPairedExport`, `isImporting`, `previousBackupMissing`, `importStage`), and for a
-  coordinator's mirrored properties if `ExportQueueCoordinator` or `ImportCoordinator` flips;
+- bridges for a coordinator's mirrored properties if `ExportQueueCoordinator` or
+  `ImportCoordinator` flips;
 - `@ObservationIgnored` on the collaborators, IUOs, caches and tasks;
 - the wrapper and injection flips.
 

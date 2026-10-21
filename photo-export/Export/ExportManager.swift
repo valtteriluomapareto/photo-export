@@ -93,8 +93,10 @@ final class ExportManager: ObservableObject, Observable {
 
   /// Which variants the pipeline writes for each asset. Persisted to `UserDefaults` so the
   /// choice survives restart and stays globally consistent regardless of destination.
-  @Published var versionSelection: ExportVersionSelection {
-    didSet {
+  var versionSelection: ExportVersionSelection {
+    get { bridgedRead(versionSelectionBridge, \.versionSelection) }
+    set {
+      bridgedWrite(versionSelectionBridge, \.versionSelection, newValue)
       userDefaults.set(
         versionSelection.rawValue, forKey: Self.versionSelectionDefaultsKey)
       // The "already exported" copy is scoped to the previous selection — under a new
@@ -102,6 +104,7 @@ final class ExportManager: ObservableObject, Observable {
       clearEmptyRunMessage()
     }
   }
+  private let versionSelectionBridge: ObservableCombineBridge<ExportVersionSelection>
 
   /// When on, the export pipeline writes JPEG `.edited` variants for
   /// HEIC/HEIF assets by re-encoding via `ImageConverter`. Off by default —
@@ -111,11 +114,13 @@ final class ExportManager: ObservableObject, Observable {
   /// When flipped on, already-exported HEIC assets become "incomplete" under
   /// `requiredVariants` (which now requires `.edited` for HEIC) and will
   /// re-enqueue on the next manual or auto-export action. The record stores
-  /// observe `_convertHEICToJPEG` via their own published state so view-side
+  /// mirror `convertHEICToJPEG` in their own observable state so view-side
   /// `isExported` queries stay accurate without callers having to thread the
   /// flag.
-  @Published var convertHEICToJPEG: Bool {
-    didSet {
+  var convertHEICToJPEG: Bool {
+    get { bridgedRead(convertHEICToJPEGBridge, \.convertHEICToJPEG) }
+    set {
+      bridgedWrite(convertHEICToJPEGBridge, \.convertHEICToJPEG, newValue)
       userDefaults.set(convertHEICToJPEG, forKey: Self.convertHEICToJPEGDefaultsKey)
       exportRecordStore.convertHEICToJPEG = convertHEICToJPEG
       collectionExportRecordStore.convertHEICToJPEG = convertHEICToJPEG
@@ -124,12 +129,13 @@ final class ExportManager: ObservableObject, Observable {
       clearEmptyRunMessage()
     }
   }
+  private let convertHEICToJPEGBridge: ObservableCombineBridge<Bool>
 
   static let convertHEICToJPEGDefaultsKey = "exportConvertHEICToJPEG"
 
   /// Toolbar/onboarding-friendly view of `versionSelection`. Off ↔ `.edited`, on ↔
   /// `.editedWithOriginals`. Mutations route back through `versionSelection` so
-  /// `@Published` observation and `UserDefaults` persistence flow through one source.
+  /// Observation and `UserDefaults` persistence flow through one source.
   var includeOriginals: Bool {
     get { versionSelection == .editedWithOriginals }
     set { versionSelection = newValue ? .editedWithOriginals : .edited }
@@ -143,14 +149,17 @@ final class ExportManager: ObservableObject, Observable {
   /// choice survives restart and stays globally consistent regardless of destination.
   /// Snapshotted onto each `ExportJob` at enqueue time (alongside `selection`) so a
   /// mid-run toggle change does not corrupt in-flight work or strand orphans.
-  @Published var livePhotosPairedExport: Bool {
-    didSet {
+  var livePhotosPairedExport: Bool {
+    get { bridgedRead(livePhotosPairedExportBridge, \.livePhotosPairedExport) }
+    set {
+      bridgedWrite(livePhotosPairedExportBridge, \.livePhotosPairedExport, newValue)
       userDefaults.set(livePhotosPairedExport, forKey: Self.livePhotosPairedExportDefaultsKey)
       // The "already exported" copy is scoped to the previous setting — under a new
       // setting the user may have new work, so the message would be misleading.
       clearEmptyRunMessage()
     }
   }
+  private let livePhotosPairedExportBridge: ObservableCombineBridge<Bool>
 
   /// when `.subfolder`, standalone-video assets land in a `videos/` subfolder
   /// inside the placement (`2026/03/videos/IMG_0002.MOV`) instead of the bare placement
@@ -169,17 +178,29 @@ final class ExportManager: ObservableObject, Observable {
   @Published var videoLayout: ExportVideoLayout {
     didSet {
       userDefaults.set(videoLayout.rawValue, forKey: Self.videoLayoutDefaultsKey)
-      // Same rationale as `livePhotosPairedExport.didSet`: a layout change can make
+      // Same rationale as the `livePhotosPairedExport` setter: a layout change can make
       // "already exported" misleading for a future re-export attempt on the same scope.
       clearEmptyRunMessage()
     }
   }
 
   // MARK: - Published State (Import)
-  @Published private(set) var isImporting: Bool = false
-  @Published private(set) var importStage: BackupScanner.ImportStage?
+  private(set) var isImporting: Bool {
+    get { bridgedRead(isImportingBridge, \.isImporting) }
+    set { bridgedWrite(isImportingBridge, \.isImporting, newValue) }
+  }
+  private let isImportingBridge = ObservableCombineBridge<Bool>(false)
+  private(set) var importStage: BackupScanner.ImportStage? {
+    get { bridgedRead(importStageBridge, \.importStage) }
+    set { bridgedWrite(importStageBridge, \.importStage, newValue) }
+  }
+  private let importStageBridge = ObservableCombineBridge<BackupScanner.ImportStage?>(nil)
   @Published private(set) var importError: String?
-  @Published private(set) var previousBackupMissing: Bool = false
+  private(set) var previousBackupMissing: Bool {
+    get { bridgedRead(previousBackupMissingBridge, \.previousBackupMissing) }
+    set { bridgedWrite(previousBackupMissingBridge, \.previousBackupMissing, newValue) }
+  }
+  private let previousBackupMissingBridge = ObservableCombineBridge<Bool>(false)
   @Published var importResult: ImportReport?
   /// Changes each time the app starts an import the user didn't open the Import sheet for, so the
   /// library window shows the sheet (progress, result, or why it didn't run).
@@ -229,7 +250,7 @@ final class ExportManager: ObservableObject, Observable {
   /// changes (Include Originals toggle). Without this, the reducer would default
   /// to `.edited` regardless of the user's actual setting.
   var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> {
-    $versionSelection.eraseToAnyPublisher()
+    versionSelectionBridge.publisher
   }
 
   /// Combine publisher for `convertHEICToJPEG`. AutoSync subscribes
@@ -237,21 +258,21 @@ final class ExportManager: ObservableObject, Observable {
   /// previously skipped as "already exported" become eligible once
   /// `requiredVariants` widens to include `.edited`.
   var convertHEICToJPEGPublisher: AnyPublisher<Bool, Never> {
-    $convertHEICToJPEG.eraseToAnyPublisher()
+    convertHEICToJPEGBridge.publisher
   }
 
   /// Combine publisher for `livePhotosPairedExport`. `PhotoLibraryManager`
   /// subscribes via `bindLivePhotoDetectionFallback(to:)` so the resource-enumeration
   /// fallback runs only when the user has the toggle on.
   var livePhotosPairedExportPublisher: AnyPublisher<Bool, Never> {
-    $livePhotosPairedExport.eraseToAnyPublisher()
+    livePhotosPairedExportBridge.publisher
   }
 
   /// Combine publisher for the import flag.
   var isImportingPublisher: AnyPublisher<Bool, Never> {
     // A "previous backup missing" result holds AutoSync like a running import until the user
     // decides, so nothing is exported into the folder they were just told is wrong.
-    $isImporting.combineLatest($previousBackupMissing)
+    isImportingBridge.publisher.combineLatest(previousBackupMissingBridge.publisher)
       .map { $0 || $1 }
       .removeDuplicates()
       .eraseToAnyPublisher()
@@ -264,12 +285,12 @@ final class ExportManager: ObservableObject, Observable {
   /// `$isImporting` alone. `isImportingPublisher` is AutoSync's hold, which also covers a
   /// missing previous backup and drops repeats.
   var isImportingFlagOnlyPublisher: AnyPublisher<Bool, Never> {
-    $isImporting.eraseToAnyPublisher()
+    isImportingBridge.publisher
   }
 
   /// `$importStage`.
   var importStagePublisher: AnyPublisher<BackupScanner.ImportStage?, Never> {
-    $importStage.eraseToAnyPublisher()
+    importStageBridge.publisher
   }
 
   /// `activeRunContext`, from its bridge.
@@ -605,19 +626,19 @@ final class ExportManager: ObservableObject, Observable {
     } else {
       self.mediaRenderer = ProductionMediaRenderer { _ in }
     }
+    let versionSelection: ExportVersionSelection
     if let raw = userDefaults.string(forKey: Self.versionSelectionDefaultsKey),
       let saved = ExportVersionSelection(rawValue: raw)
     {
-      self.versionSelection = saved
+      versionSelection = saved
     } else {
-      self.versionSelection = .edited
+      versionSelection = .edited
     }
-    // `bool(forKey:)` returns `false` for an unset key — the off-by-default
-    // contract is implicit. Initial values flow into both record stores via
-    // the manual sync below (didSet is suppressed during init). All stored
-    // properties must be assigned before any `self.` access, so the Live
-    // Photo paired-video toggle is set first.
-    self.livePhotosPairedExport = userDefaults.bool(forKey: Self.livePhotosPairedExportDefaultsKey)
+    self.versionSelectionBridge = ObservableCombineBridge(versionSelection)
+    // Seed the persisted settings without running their setter side effects. The explicit
+    // store synchronization below also handles unset boolean defaults, which read as false.
+    let livePhotosPairedExport = userDefaults.bool(forKey: Self.livePhotosPairedExportDefaultsKey)
+    self.livePhotosPairedExportBridge = ObservableCombineBridge(livePhotosPairedExport)
     if let raw = userDefaults.string(forKey: Self.videoLayoutDefaultsKey),
       let saved = ExportVideoLayout(rawValue: raw)
     {
@@ -625,9 +646,10 @@ final class ExportManager: ObservableObject, Observable {
     } else {
       self.videoLayout = .flat
     }
-    self.convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
-    self.exportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
-    self.collectionExportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
+    let convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
+    self.convertHEICToJPEGBridge = ObservableCombineBridge(convertHEICToJPEG)
+    self.exportRecordStore.convertHEICToJPEG = convertHEICToJPEG
+    self.collectionExportRecordStore.convertHEICToJPEG = convertHEICToJPEG
     // `self` is fully initialised now — rebind the default renderer with
     // a callback that routes render activity back to `renderActivity`.
     if mediaRenderer == nil {
