@@ -57,29 +57,10 @@ struct ExportManagerRunExportTests {
   }
 
   private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ExportManagerRunExport")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("ExportManagerRunExport")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
+    let h = ExportManagerHarness(label: "ExportManagerRunExport")
     return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      store: store, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+      manager: h.manager, photoLib: h.photoLib, dest: h.dest, writer: h.writer,
+      store: h.store, collectionStore: h.collectionStore, storeRoot: h.storeRoot)
   }
 
   private func makeContext(scope: ExportRunScope) -> ExportRunContext {

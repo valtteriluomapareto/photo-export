@@ -25,32 +25,13 @@ struct ExportManagerVideoRenderTests {
   }
 
   private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
     let renderer = FakeMediaRenderer()
-    let fileSystem = FakeFileSystem()
-    let tempDir = TestScratch.directory("VideoRenderTest")
-    let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collections.configure(for: "test")
-
-    let defaults = TestScratch.defaults("VideoRender")
-
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      mediaRenderer: renderer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
+    let h = ExportManagerHarness(
+      label: "VideoRenderTest", userDefaults: TestScratch.defaults("VideoRender"),
+      mediaRenderer: renderer)
     return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      renderer: renderer, fileSystem: fileSystem, store: store)
+      manager: h.manager, photoLib: h.photoLib, dest: h.dest, writer: h.writer,
+      renderer: renderer, fileSystem: h.fileSystem, store: h.store)
   }
 
   private func adjustedVideo(
