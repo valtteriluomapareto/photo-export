@@ -574,11 +574,9 @@ struct ExportManagerRunExportTests {
   /// An Auto Export run that starts while the timeline history is still loading fails at once
   /// with nothing enqueued; a run after the load finishes exports.
   @Test func runExportFailsFastWhileLoading() async throws {
-    let io = HeldReadIO()
     let storeRoot = TestScratch.directory("ExportManagerRunExportLoading")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot, recordLogIO: io)
-    let collectionStore = CollectionExportRecordStore(
-      baseDirectoryURL: storeRoot, recordLogIO: io)
+    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
+    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     collectionStore.configure(for: "test")
     let photoLib = FakePhotoLibraryService()
     let dest = FakeExportDestination()
@@ -594,12 +592,13 @@ struct ExportManagerRunExportTests {
       seedAssets(
         [TestAssetFactory.makeAsset(id: "loading-asset", creationDate: makeDate(2025, 1, 1))],
         for: .timeline, in: harness)
-      let snapshot = storeRoot.appendingPathComponent("test")
-        .appendingPathComponent(ExportRecordStore.Constants.snapshotFileName)
-      io.hold(snapshot)
       store.beginConfigure(for: "test")
       try #require(store.state == .loading)
 
+      // A load is installed on the main actor, which `runExport` keeps until it has decided,
+      // so the run starts while the history loads. No read is held: a run that waited for IO
+      // would fail the checks below instead of hanging the test until its time limit, which
+      // makes Xcode restart the test process.
       let summary = await manager.runExport(context: makeContext(scope: .timelineFullLibrary))
       #expect(summary.result == .failed)
       #expect(summary.enqueuedCount == 0)
@@ -607,14 +606,12 @@ struct ExportManagerRunExportTests {
       #expect(!manager.hasActiveExportWork)
       #expect(writer.writeCalls.isEmpty)
 
-      io.release(snapshot)
       await store.waitUntilSettled()
       #expect(store.state == .ready)
       let retry = await manager.runExport(context: makeContext(scope: .timelineFullLibrary))
       #expect(retry.result == .completed)
       #expect(writer.writeCalls.count == 1)
     } cleanup: {
-      io.releaseAll()
       await harness.cleanup()
     }
   }

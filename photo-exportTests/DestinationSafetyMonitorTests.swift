@@ -281,9 +281,10 @@ struct DestinationSafetyMonitorTests {
   }
 
   /// A destination whose history is still loading when its scan finds files is judged on the
-  /// loaded history, so an existing backup is not flagged and Auto Export is not blocked.
-  @Test(.timeLimit(.minutes(2)))
-  func existingHistoryNotFlaggedWhileLoading() async throws {
+  /// loaded history: an existing backup is not flagged, so Auto Export is not blocked, and a
+  /// destination whose loaded history is empty is still flagged.
+  @Test(.timeLimit(.minutes(2)), arguments: [true, false])
+  func historyLoadingDuringTheScanIsJudgedOnceLoaded(hasHistory: Bool) async throws {
     let storeRoot = TestScratch.directory("SafetyMonitor-loading")
     let io = HeldReadIO()
     let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot, recordLogIO: io)
@@ -296,12 +297,14 @@ struct DestinationSafetyMonitorTests {
       try? FileManager.default.removeItem(at: storeRoot)
     }
     let fp = fingerprint(id: "dest-loading")
-    recordStore.configure(for: fp.id)
-    recordStore.markVariantExported(
-      assetId: "asset-1", variant: .original, year: 2025, month: 1,
-      relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
-    try await recordStore.flush()
-    recordStore.configure(for: nil)
+    if hasHistory {
+      recordStore.configure(for: fp.id)
+      recordStore.markVariantExported(
+        assetId: "asset-1", variant: .original, year: 2025, month: 1,
+        relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+      try await recordStore.flush()
+      recordStore.configure(for: nil)
+    }
 
     // The destination is picked: its history starts loading, held at the snapshot read, and
     // the monitor evaluates it once.
@@ -337,7 +340,8 @@ struct DestinationSafetyMonitorTests {
     #expect(await eventually("the evaluation finishes") { monitor.completedEvaluationCount == 1 })
 
     #expect(recordStore.state == .ready)
-    #expect(monitor.needsSafetyConfirmation == false)
+    #expect(recordStore.recordsById.isEmpty == !hasHistory)
+    #expect(monitor.needsSafetyConfirmation == !hasHistory)
   }
 
   @MainActor

@@ -516,7 +516,8 @@ struct StableDestinationIdentityTests {
   @Test(
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
-      "Local macOS scope quirk; runs on the CI macOS runner."))
+      "Local macOS scope quirk; runs on the CI macOS runner."),
+    .timeLimit(.minutes(2)))
   func failedRestoreKeepsLegacyHashSoSameFolderReselectMigrates() async throws {
     let dir = try makeTempDir()
     let recordsRoot = TestScratch.directory("StableId-Records")

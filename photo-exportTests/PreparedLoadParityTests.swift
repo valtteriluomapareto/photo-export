@@ -7,6 +7,7 @@ import os
 /// Runs the load's read, decode and prepare steps off the main actor over the historical
 /// fixtures, and checks they produce what `configure(for:)` installs from a second copy.
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct PreparedLoadParityTests {
   private static let fixtureRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent()

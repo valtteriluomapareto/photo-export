@@ -274,12 +274,15 @@ struct RecordStoreAsyncLoadTests {
     case .clearedAsync:
       f.io.release(snapshotA)
       f.begin(nil)
+      #expect(f.waiters == 0)
     case .clearedBlocking:
       f.io.release(snapshotA)
       f.configure(nil)
+      #expect(f.waiters == 0)
     case .otherDestinationBlocking:
       f.io.release(snapshotA)
       f.configure("B")
+      #expect(f.waiters == 0)
     case .otherDestinationAsync:
       f.io.release(snapshotA)
       f.begin("B")
@@ -380,14 +383,16 @@ struct RecordStoreAsyncLoadTests {
       try FileManager.default.removeItem(at: log)
       try FileManager.default.createDirectory(at: log, withIntermediateDirectories: false)
     }
-    f.io.hold(snapshot)
     f.begin("A")
     try #require(f.state == .loading)
 
+    // A load is installed on the main actor, which the acknowledgement keeps until it returns,
+    // so the commit arrives while the destination loads. No read is held: an acknowledgement
+    // that waited for IO would fail the checks below instead of hanging the test until its
+    // time limit, which makes Xcode restart the test process.
     await acknowledge(Self.committed)
     #expect(f.filename() == nil)
-    #expect(f.state == .loading)
-    f.io.release(snapshot)
+    #expect(f.state == .loading, "the acknowledgement let the load finish first")
     await f.settle()
 
     switch ending {
@@ -639,7 +644,8 @@ struct RecordStoreAsyncLoadTests {
   // MARK: - Queue order
 
   /// An append that is still queued when the destination is switched away and back is part of
-  /// the history the next load reads.
+  /// the history the next load reads. A smoke check of IO-queue ordering: the serial queue alone
+  /// orders the read after the append, so removing the configure's drain does not fail it.
   @Test(arguments: [false, true])
   func asyncLoadReadsAfterQueuedAppends(collection: Bool) async throws {
     let f = Fixture(collection: collection)

@@ -157,54 +157,60 @@ struct CollectionImportFlowTests {
   @Test func importWaitsForLoadingAlbumHistoryAndAdoptsAlbums() async throws {
     let io = HeldReadIO()
     let h = try makeScenario("CollectionImportAlbumsLoading", recordLogIO: io)
-    let snapshot = try reloadHeld(h, io: io, collection: true)
+    try await withCleanup {
+      let snapshot = try reloadHeld(h, io: io, collection: true)
 
-    #expect(h.manager.importCoordinator.startImport() == nil)
-    #expect(h.manager.isImporting)
-    // Keep the history held until the import waits for it, or has run without it.
-    #expect(
-      await eventually("the import waits for the album history or ends") {
-        h.collections.pendingSettleWaiterCount == 1 || !h.manager.isImporting
-      })
-    io.release(snapshot)
-    await h.manager.waitForImportCompletion()
+      #expect(h.manager.importCoordinator.startImport() == nil)
+      #expect(h.manager.isImporting)
+      // Keep the history held until the import waits for it, or has run without it.
+      #expect(
+        await eventually("the import waits for the album history or ends") {
+          h.collections.pendingSettleWaiterCount == 1 || !h.manager.isImporting
+        })
+      io.release(snapshot)
+      await h.manager.waitForImportCompletion()
 
-    #expect(h.manager.importError == nil)
-    let report = try #require(h.manager.importResult)
-    #expect(!report.collectionsSkipped)
-    #expect(report.collectionMatchedCount == 2)
-    let paris = try #require(
-      h.collections.placements.values.first { $0.collectionLocalIdentifier == "paris" })
-    #expect(
-      h.collections.exportInfo(assetId: "both", placement: paris)?.variants[.original]?.status
-        == .done)
-    io.releaseAll()
-    await h.cleanup()
+      #expect(h.manager.importError == nil)
+      let report = try #require(h.manager.importResult)
+      #expect(!report.collectionsSkipped)
+      #expect(report.collectionMatchedCount == 2)
+      let paris = try #require(
+        h.collections.placements.values.first { $0.collectionLocalIdentifier == "paris" })
+      #expect(
+        h.collections.exportInfo(assetId: "both", placement: paris)?.variants[.original]?.status
+          == .done)
+    } cleanup: {
+      io.releaseAll()
+      await h.cleanup()
+    }
   }
 
   /// An import started while the timeline history loads waits for it instead of refusing.
   @Test func importWaitsForLoadingTimelineHistory() async throws {
     let io = HeldReadIO()
     let h = try makeScenario("CollectionImportTimelineLoading", recordLogIO: io)
-    let snapshot = try reloadHeld(h, io: io, collection: false)
+    try await withCleanup {
+      let snapshot = try reloadHeld(h, io: io, collection: false)
 
-    #expect(h.manager.importCoordinator.startImport() == nil)
-    #expect(h.manager.isImporting)
-    // Keep the history held until the import waits for it, or has run without it.
-    #expect(
-      await eventually("the import waits for the timeline history or ends") {
-        h.timeline.pendingSettleWaiterCount == 1 || !h.manager.isImporting
-      })
-    io.release(snapshot)
-    await h.manager.waitForImportCompletion()
+      #expect(h.manager.importCoordinator.startImport() == nil)
+      #expect(h.manager.isImporting)
+      // Keep the history held until the import waits for it, or has run without it.
+      #expect(
+        await eventually("the import waits for the timeline history or ends") {
+          h.timeline.pendingSettleWaiterCount == 1 || !h.manager.isImporting
+        })
+      io.release(snapshot)
+      await h.manager.waitForImportCompletion()
 
-    #expect(h.manager.importError == nil)
-    let report = try #require(h.manager.importResult)
-    #expect(report.matchedCount == 1)
-    #expect(h.timeline.exportInfo(assetId: "both")?.variants[.original]?.status == .done)
-    #expect(h.timeline.exportInfo(assetId: "missing") == nil)
-    io.releaseAll()
-    await h.cleanup()
+      #expect(h.manager.importError == nil)
+      let report = try #require(h.manager.importResult)
+      #expect(report.matchedCount == 1)
+      #expect(h.timeline.exportInfo(assetId: "both")?.variants[.original]?.status == .done)
+      #expect(h.timeline.exportInfo(assetId: "missing") == nil)
+    } cleanup: {
+      io.releaseAll()
+      await h.cleanup()
+    }
   }
 
   /// A destination change while the import waits for the history abandons the import: nothing
@@ -212,27 +218,30 @@ struct CollectionImportFlowTests {
   @Test func destinationChangeWhileWaitingForHistoryAbandonsImport() async throws {
     let io = HeldReadIO()
     let h = try makeScenario("CollectionImportLoadingSwitch", recordLogIO: io)
-    let snapshot = try reloadHeld(h, io: io, collection: false)
+    try await withCleanup {
+      let snapshot = try reloadHeld(h, io: io, collection: false)
 
-    #expect(h.manager.importCoordinator.startImport() == nil)
-    #expect(h.manager.isImporting)
-    #expect(
-      await eventually("the import waits for the timeline history or ends") {
-        h.timeline.pendingSettleWaiterCount == 1 || !h.manager.isImporting
-      })
-    // The held read blocks the IO queue the switch drains, so release it in the same turn.
-    io.release(snapshot)
-    h.timeline.configure(for: "other")
-    h.collections.configure(for: "other")
-    await h.manager.waitForImportCompletion()
+      #expect(h.manager.importCoordinator.startImport() == nil)
+      #expect(h.manager.isImporting)
+      #expect(
+        await eventually("the import waits for the timeline history or ends") {
+          h.timeline.pendingSettleWaiterCount == 1 || !h.manager.isImporting
+        })
+      // The held read blocks the IO queue the switch drains, so release it in the same turn.
+      io.release(snapshot)
+      h.timeline.configure(for: "other")
+      h.collections.configure(for: "other")
+      await h.manager.waitForImportCompletion()
 
-    #expect(!h.manager.isImporting)
-    #expect(h.manager.importResult == nil)
-    #expect(h.manager.importError == nil)
-    #expect(h.timeline.exportInfo(assetId: "both") == nil)
-    #expect(h.collections.placements.isEmpty)
-    io.releaseAll()
-    await h.cleanup()
+      #expect(!h.manager.isImporting)
+      #expect(h.manager.importResult == nil)
+      #expect(h.manager.importError == nil)
+      #expect(h.timeline.exportInfo(assetId: "both") == nil)
+      #expect(h.collections.placements.isEmpty)
+    } cleanup: {
+      io.releaseAll()
+      await h.cleanup()
+    }
   }
 
   /// "Same Folder" runs the import against a folder confirmed as the previous backup; album
