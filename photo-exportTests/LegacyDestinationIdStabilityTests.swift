@@ -28,7 +28,8 @@ struct LegacyDestinationIdStabilityTests {
     let id = ExportDestinationManager.legacyDestinationId(from: Data())
     #expect(
       id == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "SHA-256 hash of empty input must remain stable; any change orphans pre-migration directories")
+      "SHA-256 hash of empty input must remain stable; any change orphans pre-migration directories"
+    )
   }
 
   /// "abc" — the canonical SHA-256 test vector. If this fails, the hash
@@ -73,6 +74,7 @@ struct LegacyDestinationIdStabilityTests {
     // SHA-256 of the single byte 0x05.
     #expect(
       id == "e77b9a9ae9e30b0dbdb6f510a264ef9de781501d7b6b92ae89eb059c5ab743db",
-      "single-byte hash drifted — likely a hex format-string regression dropping the zero-pad on bytes < 0x10")
+      "single-byte hash drifted — likely a hex format-string regression dropping the zero-pad on bytes < 0x10"
+    )
   }
 }

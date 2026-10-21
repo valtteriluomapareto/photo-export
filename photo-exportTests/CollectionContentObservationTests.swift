@@ -23,6 +23,8 @@ import Testing
       let counter: BodyInvalidationCounter
 
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("parent:\(manager.queueCount)")
         let scope = navigation.selection
         let pane = CollectionContentView(
@@ -147,7 +149,9 @@ import Testing
         f.counter.count(for: "summary:0/10000") > 0 && f.service.startCachingCalls.count == 1
       }
       let diagnostics = f.readinessDescription
-      try #require(loaded, "Must measure a loaded collection with an actual matching placement: \(diagnostics)")
+      try #require(
+        loaded, "Must measure a loaded collection with an actual matching placement: \(diagnostics)"
+      )
       await f.renderBarrier()
       let scans = f.counter.count(for: "summaryScan")
       let bodies = f.counter.count(for: "collectionBody")
@@ -208,7 +212,9 @@ import Testing
       try #require(initial)
       let selectedBefore = f.counter.count(for: "selected:live")
       f.navigation.asset = live
-      let rebound = await observe(in: f.window) { f.counter.count(for: "selected:live") > selectedBefore }
+      let rebound = await observe(in: f.window) {
+        f.counter.count(for: "selected:live") > selectedBefore
+      }
       try #require(rebound, "A live binding change must update the pane's selected-thumbnail input")
       #expect(f.navigation.asset == live)
 
@@ -222,7 +228,9 @@ import Testing
       f.records.markVariantExported(
         assetId: adjusted.id, placement: f.favorite, variant: .original,
         filename: "ORIGINAL.HEIC", exportedAt: Date())
-      let status = await observe(in: f.window) { f.counter.count(for: "summary:2/3") > beforeStatus }
+      let status = await observe(in: f.window) {
+        f.counter.count(for: "summary:2/3") > beforeStatus
+      }
       try #require(status)
       f.service.favoritesAssets.append(TestAssetFactory.makeAsset(id: "new-member"))
       f.library.libraryRevision += 1
@@ -253,7 +261,9 @@ import Testing
       try #require(sharedRendered)
       let bannersBefore = f.counter.count(for: "banner:false")
       f.manager.versionSelection = .edited
-      let bannerRemoved = await observe(in: f.window) { f.counter.count(for: "banner:false") > bannersBefore }
+      let bannerRemoved = await observe(in: f.window) {
+        f.counter.count(for: "banner:false") > bannersBefore
+      }
       #expect(bannerRemoved)
     }
 
@@ -279,11 +289,15 @@ import Testing
       try #require(ready)
       let disabledBefore = f.counter.count(for: "canExport:false")
       f.records.configure(for: nil)
-      let disabled = await observe(in: f.window) { f.counter.count(for: "canExport:false") > disabledBefore }
+      let disabled = await observe(in: f.window) {
+        f.counter.count(for: "canExport:false") > disabledBefore
+      }
       try #require(disabled)
       let enabledBefore = f.counter.count(for: "canExport:true")
       f.records.configure(for: "test")
-      let reenabled = await observe(in: f.window) { f.counter.count(for: "canExport:true") > enabledBefore }
+      let reenabled = await observe(in: f.window) {
+        f.counter.count(for: "canExport:true") > enabledBefore
+      }
       try #require(reenabled)
       let action = try #require(f.counter.renderedActions["collectionExport"])
       action()

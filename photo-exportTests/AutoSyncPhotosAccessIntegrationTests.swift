@@ -245,7 +245,9 @@ struct AutoSyncPhotosAccessIntegrationTests {
     f.pushChange()
     f.photoLibrary.progressiveStreamOverride = { [weak f] _ in
       f?.setAccess(false)
-      return AsyncThrowingStream { $0.finish(throwing: PhotoLibraryManager.PhotoLibraryError.authorizationDenied) }
+      return AsyncThrowingStream {
+        $0.finish(throwing: PhotoLibraryManager.PhotoLibraryError.authorizationDenied)
+      }
     }
     f.builder.clock.advance(by: 30)
     guard case .running = f.autoSync.state else {

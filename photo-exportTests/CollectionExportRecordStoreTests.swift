@@ -542,7 +542,8 @@ struct CollectionExportRecordStoreTests {
     let brokenFiles = contents.filter { $0.contains(".broken-") }
     #expect(brokenFiles.count == 1)
     let newSnapshot = try Data(contentsOf: snapshotURL)
-    let decoded = try JSONDecoder().decode(CollectionExportRecordStore.Snapshot.self, from: newSnapshot)
+    let decoded = try JSONDecoder().decode(
+      CollectionExportRecordStore.Snapshot.self, from: newSnapshot)
     #expect(decoded.placements.isEmpty)
     #expect(decoded.records.isEmpty)
   }
@@ -655,7 +656,8 @@ struct CollectionExportRecordStoreTests {
   /// `RecordBody { variants: [String: ExportVariantRecord] }`; the optional
   /// `subfolder` field must default to nil for snapshots from prior versions.
   @Test func recordBodyDecodesLegacyVariantsWithoutSubfolder() throws {
-    let legacyJSON = """
+    let legacyJSON = Data(
+      """
       {
         "variants": {
           "original": {
@@ -665,7 +667,7 @@ struct CollectionExportRecordStoreTests {
           }
         }
       }
-      """.data(using: .utf8)!
+      """.utf8)
     let body = try JSONDecoder().decode(
       CollectionExportRecordStore.RecordBody.self, from: legacyJSON)
     let variant = body.variants["original"]

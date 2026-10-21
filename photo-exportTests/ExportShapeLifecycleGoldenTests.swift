@@ -113,7 +113,8 @@ struct ExportShapeLifecycleGoldenTests {
       destDir: dir, groupStem: stem, pairOriginalWithSuffix: true)
     #expect(
       editedURL.lastPathComponent == "IMG_0001.HEIC",
-      "paired-edited must land at the natural stem; a different name leaves the user with orphaned `_orig.JPG`")
+      "paired-edited must land at the natural stem; a different name leaves the user with orphaned `_orig.JPG`"
+    )
     #expect(editedStem == "IMG_0001")
   }
 
@@ -156,7 +157,8 @@ struct ExportShapeLifecycleGoldenTests {
       destDir: dir, groupStem: inherited, pairOriginalWithSuffix: false)
     #expect(
       newEditedURL.lastPathComponent == "IMG_0001 (1).HEIC",
-      "re-edit must bump to ` (1)` suffix; changing this shape (e.g. `-1`, `_v2`) creates duplicates for every existing user")
+      "re-edit must bump to ` (1)` suffix; changing this shape (e.g. `-1`, `_v2`) creates duplicates for every existing user"
+    )
     #expect(newEditedStem == "IMG_0001 (1)")
   }
 
@@ -190,7 +192,8 @@ struct ExportShapeLifecycleGoldenTests {
       from: record, descriptor: asset, resources: resources)
     #expect(
       inherited == "vacation_orig",
-      "user-named `_orig` filename must be preserved as the group stem; stripping it orphans the existing `vacation_orig.JPG`")
+      "user-named `_orig` filename must be preserved as the group stem; stripping it orphans the existing `vacation_orig.JPG`"
+    )
 
     // User later applies a Photos edit. Resolve the edited variant against
     // the inherited stem.
@@ -200,7 +203,8 @@ struct ExportShapeLifecycleGoldenTests {
       destDir: dir, groupStem: inherited, pairOriginalWithSuffix: false)
     #expect(
       editedURL.lastPathComponent == "vacation_orig (1).JPG",
-      "edited variant must land at `<userOrigStem> (1).<ext>`; landing at `vacation.<ext>` orphans `vacation_orig.JPG`")
+      "edited variant must land at `<userOrigStem> (1).<ext>`; landing at `vacation.<ext>` orphans `vacation_orig.JPG`"
+    )
   }
 
   // MARK: - Scenario D — app-companion `_orig` stripped
@@ -246,7 +250,8 @@ struct ExportShapeLifecycleGoldenTests {
       destDir: dir, groupStem: inherited, pairOriginalWithSuffix: false)
     #expect(
       editedURL.lastPathComponent == "vacation.HEIC",
-      "edited variant must pair with the existing `_orig` companion at the natural stem; any other shape splits the pair across stems")
+      "edited variant must pair with the existing `_orig` companion at the natural stem; any other shape splits the pair across stems"
+    )
   }
 
   // MARK: - Scenario E — single-original fresh export, no pairing
@@ -294,7 +299,8 @@ struct ExportShapeLifecycleGoldenTests {
       destDir: dir, groupStem: nil, pairOriginalWithSuffix: false)
     #expect(
       url.lastPathComponent == "IMG_0002 (1).JPG",
-      "collision must bump to ` (1)` suffix; any other shape (`-1`, `_v2`) creates duplicates on every existing user's next run")
+      "collision must bump to ` (1)` suffix; any other shape (`-1`, `_v2`) creates duplicates on every existing user's next run"
+    )
     #expect(stem == "IMG_0002 (1)")
   }
 }

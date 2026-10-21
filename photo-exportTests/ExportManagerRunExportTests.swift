@@ -564,7 +564,8 @@ struct ExportManagerRunExportTests {
       )
       #expect(
         !summary.failures.isEmpty,
-        "summary.failures must contain the per-variant failure detail; got \(summary.failures.count)")
+        "summary.failures must contain the per-variant failure detail; got \(summary.failures.count)"
+      )
       #expect(summary.failures.first?.assetId == "no-resource")
     } cleanup: {
       await harness.cleanup()
@@ -1684,7 +1685,8 @@ struct ExportManagerRunExportTests {
   /// materialises) AND the per-variant `subfolder` field on the persisted record
   /// (which reuse-source and reconcile consult). A regression that mis-routed
   /// either side would fail this test.
-  @Test(.timeLimit(.minutes(2))) func videoLayoutSubfolderRoutesStandaloneVideosOnlyLivePhotosStayPaired() async {
+  @Test(.timeLimit(.minutes(2)))
+  func videoLayoutSubfolderRoutesStandaloneVideosOnlyLivePhotosStayPaired() async {
     let harness = makeHarness()
     await withCleanup {
       // Three assets in the same month so a single export run exercises all three:
@@ -1749,7 +1751,9 @@ struct ExportManagerRunExportTests {
   /// (the `videoLayout` toggle does not widen `requiredVariants`), so the second
   /// run skips it — no relocation, no second file in `videos/`, the record's
   /// `subfolder == nil` from the first write is left intact.
-  @Test(.timeLimit(.minutes(2))) func videoLayoutFlipAfterFlatExportDoesNotRelocateOrDoubleWrite() async {
+  @Test(.timeLimit(.minutes(2))) func videoLayoutFlipAfterFlatExportDoesNotRelocateOrDoubleWrite()
+    async
+  {
     let harness = makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(
@@ -1812,7 +1816,8 @@ struct ExportManagerRunExportTests {
   /// Without per-variant `subfolder`, the shared `ExportRecord.relPath` would
   /// be overwritten to `2026/03/videos/` on the `.edited` write, mis-locating
   /// the `.original` variant on the next reconcile and silently pruning it.
-  @Test(.timeLimit(.minutes(2))) func videoLayoutMidLifeSynthesizerWritesEditedToSubfolderKeepsOriginalAtBase() async {
+  @Test(.timeLimit(.minutes(2)))
+  func videoLayoutMidLifeSynthesizerWritesEditedToSubfolderKeepsOriginalAtBase() async {
     let harness = makeHarness()
     await withCleanup {
       // Adjusted standalone video. Two resources: the original `.video` plus a
