@@ -240,10 +240,14 @@ struct PhotoLibraryCountInvalidationTests {
     let service = FakePhotoLibraryService()
     let scope = PhotoFetchScope.timeline(year: 2025, month: 1)
     let old = AssetDescriptor(
-      id: "old", creationDate: Date(), mediaType: .image, pixelWidth: 1,
+      id: "old",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+      mediaType: .image, pixelWidth: 1,
       pixelHeight: 1, duration: 0, hasAdjustments: false)
     let edited = AssetDescriptor(
-      id: "new", creationDate: Date(), mediaType: .image, pixelWidth: 1,
+      id: "new",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+      mediaType: .image, pixelWidth: 1,
       pixelHeight: 1, duration: 0, hasAdjustments: true)
     service.assetsByYearMonth["2025-1"] = [old]
     #expect(try await service.cachedCountAssets(in: scope) == 1)

@@ -70,7 +70,10 @@ struct EditedFallbackTests {
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "edit-gone", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edit-gone",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["edit-gone"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_8000.HEIC")
@@ -101,7 +104,10 @@ struct EditedFallbackTests {
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "unedited", hasAdjustments: false)
+    let asset = TestAssetFactory.makeAsset(
+      id: "unedited",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: false)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["unedited"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_PLAIN.JPG")
@@ -125,7 +131,10 @@ struct EditedFallbackTests {
     defer { h.cleanup() }
     h.manager.versionSelection = .editedWithOriginals
 
-    let asset = TestAssetFactory.makeAsset(id: "edit-gone", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edit-gone",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["edit-gone"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_X.HEIC")
@@ -153,7 +162,10 @@ struct EditedFallbackTests {
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "edit-gone", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edit-gone",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["edit-gone"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_X.HEIC")
@@ -196,7 +208,10 @@ struct EditedFallbackTests {
     h.manager.versionSelection = .edited
     h.manager.livePhotosPairedExport = true
 
-    let asset = TestAssetFactory.makeAsset(id: "live-no-pv", isLivePhoto: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "live-no-pv",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      isLivePhoto: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     // Live Photo subtype says yes, but the resource enumeration omits `.pairedVideo`.
     // The variant exporter sees `producer.originalFilename == nil` for the paired
@@ -503,7 +518,9 @@ struct EditedFallbackTests {
 
     // Step 1: asset's Photos-side original filename literally ends in `_orig`.
     let assetUnedited = TestAssetFactory.makeAsset(
-      id: "natural-orig", hasAdjustments: false)
+      id: "natural-orig",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: false)
     h.photoLib.assetsByYearMonth["2025-7"] = [assetUnedited]
     h.photoLib.resourcesByAssetId["natural-orig"] = [
       TestAssetFactory.makeResource(
@@ -519,7 +536,9 @@ struct EditedFallbackTests {
 
     // Step 2/3: same asset id, now adjusted, edited resource unavailable.
     let assetAdjusted = TestAssetFactory.makeAsset(
-      id: "natural-orig", hasAdjustments: true)
+      id: "natural-orig",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [assetAdjusted]
 
     h.manager.startExportMonth(year: 2025, month: 7)
@@ -559,7 +578,8 @@ struct EditedFallbackTests {
     h.manager.versionSelection = .edited
 
     let asset = AssetDescriptor(
-      id: "broken-video", creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      id: "broken-video",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
       mediaType: .video, pixelWidth: 1920, pixelHeight: 1080,
       duration: 30, hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
@@ -597,8 +617,14 @@ struct EditedFallbackTests {
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let assetA = TestAssetFactory.makeAsset(id: "share-A", hasAdjustments: true)
-    let assetB = TestAssetFactory.makeAsset(id: "share-B", hasAdjustments: true)
+    let assetA = TestAssetFactory.makeAsset(
+      id: "share-A",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
+    let assetB = TestAssetFactory.makeAsset(
+      id: "share-B",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [assetA, assetB]
     h.photoLib.resourcesByAssetId["share-A"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "DUP.HEIC")
@@ -628,7 +654,10 @@ struct EditedFallbackTests {
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
-    let asset = TestAssetFactory.makeAsset(id: "edit-gone", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "edit-gone",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId["edit-gone"] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_X.HEIC")
@@ -656,7 +685,10 @@ extension EditedFallbackTests {
     let h = makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
-    let asset = TestAssetFactory.makeAsset(id: "ordinary-error", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "ordinary-error",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG.HEIC"),
@@ -678,7 +710,10 @@ extension EditedFallbackTests {
     let h = makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
-    let asset = TestAssetFactory.makeAsset(id: "fallback-fails", hasAdjustments: true)
+    let asset = TestAssetFactory.makeAsset(
+      id: "fallback-fails",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!,
+      hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG.HEIC")

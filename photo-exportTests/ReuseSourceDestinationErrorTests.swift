@@ -52,10 +52,10 @@ struct ReuseSourceDestinationErrorTests {
     return (manager, photoLib, dest, writer, fileSystem, timelineStore, collectionStore, storeRoot)
   }
 
-  private func makeAsset(id: String) -> AssetDescriptor {
+  private func makeAsset(id: String, month: Int) -> AssetDescriptor {
     AssetDescriptor(
       id: id,
-      creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: month, day: 15))!,
       mediaType: .image,
       pixelWidth: 100,
       pixelHeight: 100,
@@ -81,7 +81,7 @@ struct ReuseSourceDestinationErrorTests {
       dest.cleanup()
     }
 
-    let asset = makeAsset(id: "shared")
+    let asset = makeAsset(id: "shared", month: 3)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     photoLib.resourcesByAssetId[asset.id] = [
       ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")
@@ -135,7 +135,7 @@ struct ReuseSourceDestinationErrorTests {
       dest.cleanup()
     }
 
-    let asset = makeAsset(id: "shared")
+    let asset = makeAsset(id: "shared", month: 4)
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId[asset.id] = [
       ResourceDescriptor(type: .photo, originalFilename: "IMG.HEIC")

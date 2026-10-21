@@ -34,10 +34,12 @@ struct MonthViewModelTests {
 
   // MARK: - Fixtures
 
-  private func makeAsset(id: String, hasAdjustments: Bool = false) -> AssetDescriptor {
+  private func makeAsset(id: String, month: Int = 6, hasAdjustments: Bool = false)
+    -> AssetDescriptor
+  {
     AssetDescriptor(
       id: id,
-      creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: month, day: 15))!,
       mediaType: .image,
       pixelWidth: 100,
       pixelHeight: 100,
@@ -173,7 +175,7 @@ struct MonthViewModelTests {
   /// PHAssets in the cache across scope changes.
   @Test func switchingScopeStopsPriorCacheBeforeStartingNew() async throws {
     let svc = FakePhotoLibraryService()
-    let scope1Assets = [makeAsset(id: "s1-a"), makeAsset(id: "s1-b")]
+    let scope1Assets = [makeAsset(id: "s1-a", month: 3), makeAsset(id: "s1-b", month: 3)]
     let scope2Assets = [makeAsset(id: "s2-a")]
     svc.assetsByYearMonth["2025-3"] = scope1Assets
     svc.favoritesAssets = scope2Assets
@@ -218,7 +220,7 @@ struct MonthViewModelTests {
 
   @Test func nilScopeClearsAllState() async throws {
     let svc = FakePhotoLibraryService()
-    let assets = [makeAsset(id: "a"), makeAsset(id: "b")]
+    let assets = [makeAsset(id: "a", month: 2), makeAsset(id: "b", month: 2)]
     svc.assetsByYearMonth["2025-2"] = assets
 
     let vm = MonthViewModel(photoLibraryService: svc)
@@ -512,8 +514,8 @@ struct MonthViewModelTests {
   /// their `PHCachingImageManager` preheat is stopped.
   @Test func refreshPrunesRemovedAssets() async throws {
     let svc = FakePhotoLibraryService()
-    let keep = makeAsset(id: "keep")
-    let drop = makeAsset(id: "drop")
+    let keep = makeAsset(id: "keep", month: 7)
+    let drop = makeAsset(id: "drop", month: 7)
     svc.assetsByYearMonth["2025-7"] = [keep, drop]
 
     let vm = MonthViewModel(photoLibraryService: svc)
@@ -532,7 +534,7 @@ struct MonthViewModelTests {
   /// already displaying.
   @Test func refreshNilScopeIsNoOp() async throws {
     let svc = FakePhotoLibraryService()
-    let assets = [makeAsset(id: "x")]
+    let assets = [makeAsset(id: "x", month: 1)]
     svc.assetsByYearMonth["2025-1"] = assets
 
     let vm = MonthViewModel(photoLibraryService: svc)
@@ -550,7 +552,7 @@ struct MonthViewModelTests {
   /// without it the stale May fetch would clobber June's freshly-loaded assets.
   @Test func refreshBailsWhenScopeChangedMidFetch() async throws {
     let svc = FakePhotoLibraryService()
-    let may = [makeAsset(id: "may-1"), makeAsset(id: "may-2")]
+    let may = [makeAsset(id: "may-1", month: 5), makeAsset(id: "may-2", month: 5)]
     let june = [makeAsset(id: "june-1")]
     svc.assetsByYearMonth["2025-5"] = may
     svc.assetsByYearMonth["2025-6"] = june
@@ -624,10 +626,16 @@ struct MonthViewModelTests {
   @Test(arguments: [false, true])
   func refreshReconcilesRemovedSelection(empty: Bool) async {
     let service = FakePhotoLibraryService()
-    let a = TestAssetFactory.makeAsset(id: "A")
-    let b = TestAssetFactory.makeAsset(id: "B")
-    let c = TestAssetFactory.makeAsset(id: "C")
-    service.favoritesAssets = [a, b, c]
+    let a = TestAssetFactory.makeAsset(
+      id: "A",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 2)))
+    let b = TestAssetFactory.makeAsset(
+      id: "B",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 3)))
+    let c = TestAssetFactory.makeAsset(
+      id: "C",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 1)))
+    service.favoritesAssets = [c, a, b]
     let model = MonthViewModel(photoLibraryService: service)
     await model.loadAssets(for: .favorites)
     model.select(assetId: b.id)
@@ -870,7 +878,7 @@ struct MonthViewModelTests {
 
   @Test func legacyWrapperIsEquivalentToScopeBasedLoader() async throws {
     let svc = FakePhotoLibraryService()
-    let asset = makeAsset(id: "wrapper")
+    let asset = makeAsset(id: "wrapper", month: 8)
     svc.assetsByYearMonth["2025-8"] = [asset]
 
     let vm = MonthViewModel(photoLibraryService: svc)

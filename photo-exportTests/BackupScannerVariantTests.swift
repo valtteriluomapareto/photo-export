@@ -61,7 +61,7 @@ struct BackupScannerVariantTests {
   // MARK: - Exact original match
 
   @Test func classifiesOriginalFileAsOriginalVariant() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "orig-asset", creationDate: modDate, hasAdjustments: false)
     let svc = service(
@@ -85,7 +85,7 @@ struct BackupScannerVariantTests {
   // MARK: - Cross-extension default-mode classifier
 
   @Test func classifiesEditedJpegAgainstHeicOriginal() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "heic-asset", creationDate: modDate, hasAdjustments: true)
     let svc = service(
@@ -113,7 +113,7 @@ struct BackupScannerVariantTests {
   @Test func classifiesSameExtensionEditAsOriginalWhenStemAndExtMatchOriginalResource()
     async throws
   {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "jpg-asset", creationDate: modDate, hasAdjustments: true)
     let svc = service(
@@ -140,7 +140,7 @@ struct BackupScannerVariantTests {
   // MARK: - `_orig` companion classifies as `.original`
 
   @Test func origCompanionClassifiesAsOriginal() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "pair-asset", creationDate: modDate, hasAdjustments: true)
     let svc = service(
@@ -166,7 +166,7 @@ struct BackupScannerVariantTests {
   // MARK: - User filename `vacation_orig.JPG` falls through to step 2
 
   @Test func userOrigFilenameWithoutAdjustedSiblingClassifiesAsOriginal() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     // Asset is unedited; its actual original filename is `vacation_orig.JPG`. No asset with
     // stem `vacation` and adjustments exists, so step 1 fails to match and the file falls
     // through to step 2 (exact original).
@@ -197,7 +197,7 @@ struct BackupScannerVariantTests {
     // `IMG_0001 (1).JPG` (the edit, at the asset's native stem) and
     // `IMG_0001 (1)_orig.JPG` (the original companion). The natural-stem file pairs with
     // the `_orig` sibling, so it must classify as `.edited`, not `.original`.
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "native-suffix", creationDate: modDate, hasAdjustments: true)
     let svc = service(
@@ -234,7 +234,7 @@ struct BackupScannerVariantTests {
     // Asset is JPEG → JPEG-edited, exported with include-originals: destination contains
     // `IMG_0001.JPG` (edit) + `IMG_0001_orig.JPG` (original). The pair-aware classifier
     // uses the `_orig` sibling signal to label the natural-stem file as `.edited`.
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "jpg-pair", creationDate: modDate, hasAdjustments: true)
     let svc = service(
@@ -267,8 +267,8 @@ struct BackupScannerVariantTests {
   // MARK: - Two adjusted assets share a stem; date narrows to one
 
   @Test func origCompanionDisambiguatesByDateWhenMultipleCandidates() async throws {
-    let modDateA = Date(timeIntervalSinceReferenceDate: 800_000_000)
-    let modDateB = Date(timeIntervalSinceReferenceDate: 900_000_000)
+    let modDateA = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
+    let modDateB = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 16))!
     let assetA = TestAssetFactory.makeAsset(
       id: "asset-a", creationDate: modDateA, hasAdjustments: true)
     let assetB = TestAssetFactory.makeAsset(
@@ -305,7 +305,7 @@ struct BackupScannerVariantTests {
     // Two adjusted assets share both an original Photos filename and a creation date.
     // Step 1 collects both; `narrow` cannot pick one by date (identical), so the file
     // is ambiguous rather than a coin-flip classification.
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     // Distinct dimensions so dimension-based discriminator can't accidentally match either.
     let assetA = TestAssetFactory.makeAsset(
       id: "asset-a", creationDate: modDate, pixelWidth: 100, pixelHeight: 100,
@@ -378,7 +378,7 @@ struct BackupScannerVariantTests {
   /// video. Without the Live Photo-aware classifier the scanner would dump the file
   /// into `.unmatched` and the next export would write a duplicate.
   @Test func classifiesUneditedLivePhotoMovAsOriginalPairedVideo() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "live-asset", creationDate: modDate, hasAdjustments: false, isLivePhoto: true)
     let svc = service(
@@ -404,7 +404,7 @@ struct BackupScannerVariantTests {
   /// `<stem>.HEIC` + `<stem>.mov` are on disk. The `_orig.mov` sibling promotes the
   /// natural-stem `.mov` to `.editedPairedVideo`.
   @Test func classifiesEditedLivePhotoNaturalMovAsEditedPairedVideo() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "live-asset", creationDate: modDate, hasAdjustments: true, isLivePhoto: true)
     let svc = service(
@@ -446,7 +446,7 @@ struct BackupScannerVariantTests {
   /// without the rendered `.mov` companion present (e.g. partial backup, or Live Photo
   /// edit that elided the `.fullSizePairedVideo` resource).
   @Test func classifiesLivePhotoOrigMovAsOriginalPairedVideo() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "live-asset", creationDate: modDate, hasAdjustments: true, isLivePhoto: true)
     let svc = service(
@@ -480,7 +480,7 @@ struct BackupScannerVariantTests {
   /// re-export Live Photos and trip the destination resolver's Code 5 ("Paired
   /// original filename already exists on disk") on the existing `.mov`.
   @Test func scannerClassifiesPairedVideoEvenWhenAssetIsLivePhotoFlagIsFalse() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     // The asset descriptor's `isLivePhoto` is *false* — the scenario where the user
     // has the Settings toggle off and `detectLivePhoto` short-circuits before the
     // resource fallback. PhotoKit still returns the `.pairedVideo` resource when
@@ -511,7 +511,7 @@ struct BackupScannerVariantTests {
   /// fingerprint, so a non-Live-Photo video doesn't fall through into a misclassified
   /// `.originalPairedVideo`. Regression guard for the disambiguation.
   @Test func classifiesFullVideoMovAsOriginalNotPairedVideo() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "video-asset", creationDate: modDate, mediaType: .video,
       hasAdjustments: false, isLivePhoto: false)
@@ -581,7 +581,7 @@ struct BackupScannerVariantTests {
   /// file in `videos/` is the `.edited` variant; the bare-path file is
   /// `.original`. Both come out matched, each carrying its own `subfolder`.
   @Test func classifierDisambiguatesMidLifeMixedLayoutStandaloneVideo() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "video-mid-life", creationDate: modDate, mediaType: .video,
       hasAdjustments: true)
@@ -622,7 +622,7 @@ struct BackupScannerVariantTests {
   /// behaviour so a future "same-directory" tightening doesn't silently re-export
   /// the motion as an unmatched duplicate.
   @Test func classifierPairsLivePhotoAcrossSubfolderSplit() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "live-split", creationDate: modDate, hasAdjustments: false,
       isLivePhoto: true)
@@ -663,7 +663,7 @@ struct BackupScannerVariantTests {
   /// and Import Existing Backup couldn't recover it — leaving the asset to be re-exported into
   /// a ` (1)` duplicate.
   @Test func matchesOriginalDespiteExtensionCaseMismatch() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "case-orig", creationDate: modDate, hasAdjustments: false)
     let svc = service(
@@ -693,7 +693,7 @@ struct BackupScannerVariantTests {
   /// the `_orig` companion as `.original` — despite the original resource's extension case
   /// differing from the on-disk edited file.
   @Test func matchesEditedAndOrigPairDespiteCaseMismatch() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "case-pair", creationDate: modDate, hasAdjustments: true)
     let svc = service(
@@ -725,7 +725,7 @@ struct BackupScannerVariantTests {
   /// Step 3 (collision-stripped match) must also fold case: a backup that uniquified to
   /// `IMG_1961 (1).heic` (lowercase) still matches PhotoKit's `IMG_1961.HEIC`.
   @Test func matchesCollisionSuffixedOriginalDespiteCaseMismatch() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "case-collision", creationDate: modDate, hasAdjustments: false)
     let svc = service(
@@ -753,7 +753,7 @@ struct BackupScannerVariantTests {
   /// resource stem PhotoKit reports as `IMG_ABC`. This is the only path that exercises the
   /// `originalResourceStemsLowercased` fold.
   @Test func classifiesCrossExtensionEditedDespiteStemCaseMismatch() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "xext-case", creationDate: modDate, hasAdjustments: true)
     let svc = service(
@@ -779,7 +779,7 @@ struct BackupScannerVariantTests {
 
   /// Step 5b (Live Photo paired video) must fold the `.mov`/`.MOV` filename comparison.
   @Test func matchesPairedVideoDespiteMovCaseMismatch() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let asset = TestAssetFactory.makeAsset(
       id: "live-case", creationDate: modDate, hasAdjustments: false, isLivePhoto: true)
     let svc = service(
@@ -807,7 +807,7 @@ struct BackupScannerVariantTests {
   /// assets. A lowercase `img_a.heic` must resolve only to the `IMG_A.HEIC` asset, never
   /// become ambiguous against `IMG_B.HEIC`.
   @Test func caseFoldDoesNotOverMatchDistinctAssets() async throws {
-    let modDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let modDate = Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!
     let assetA = TestAssetFactory.makeAsset(id: "asset-A", creationDate: modDate)
     let assetB = TestAssetFactory.makeAsset(id: "asset-B", creationDate: modDate)
     let svc = service(

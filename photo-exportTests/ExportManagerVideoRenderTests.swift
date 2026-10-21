@@ -55,10 +55,13 @@ struct ExportManagerVideoRenderTests {
 
   private func adjustedVideo(
     id: String = "edited-video",
-    filename: String = "IMG_1234.MOV"
+    filename: String = "IMG_1234.MOV",
+    month: Int
   ) -> (asset: AssetDescriptor, resources: [ResourceDescriptor]) {
     let asset = TestAssetFactory.makeAsset(
-      id: id, mediaType: .video, hasAdjustments: true)
+      id: id,
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: month, day: 15))!,
+      mediaType: .video, hasAdjustments: true)
     let resources = [TestAssetFactory.makeResource(type: .video, originalFilename: filename)]
     return (asset, resources)
   }
@@ -70,7 +73,7 @@ struct ExportManagerVideoRenderTests {
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
-    let (asset, resources) = adjustedVideo()
+    let (asset, resources) = adjustedVideo(month: 3)
     h.photoLib.assetsByYearMonth["2025-3"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -95,7 +98,9 @@ struct ExportManagerVideoRenderTests {
     h.manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(
-      id: "rare-edit", mediaType: .video, hasAdjustments: true)
+      id: "rare-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!,
+      mediaType: .video, hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-4"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_5555.MOV"),
@@ -123,7 +128,7 @@ struct ExportManagerVideoRenderTests {
       domain: "MediaRenderer", code: 42,
       userInfo: [NSLocalizedDescriptionKey: "AVFoundation oh no"])
 
-    let (asset, resources) = adjustedVideo(id: "render-fail")
+    let (asset, resources) = adjustedVideo(id: "render-fail", month: 5)
     h.photoLib.assetsByYearMonth["2025-5"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -154,7 +159,9 @@ struct ExportManagerVideoRenderTests {
     h.manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(
-      id: "no-resources", mediaType: .video, hasAdjustments: true)
+      id: "no-resources",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!,
+      mediaType: .video, hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-6"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = []  // no .video, no .fullSizeVideo
 
@@ -177,7 +184,7 @@ struct ExportManagerVideoRenderTests {
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .editedWithOriginals
 
-    let (asset, resources) = adjustedVideo(id: "pair", filename: "IMG_9000.MOV")
+    let (asset, resources) = adjustedVideo(id: "pair", filename: "IMG_9000.MOV", month: 7)
     h.photoLib.assetsByYearMonth["2025-7"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -210,7 +217,7 @@ struct ExportManagerVideoRenderTests {
     h.renderer.arm(latch: latch)
     h.renderer.arm(enteredSignal: entered)
 
-    let (asset, resources) = adjustedVideo(id: "cancel-me")
+    let (asset, resources) = adjustedVideo(id: "cancel-me", month: 8)
     h.photoLib.assetsByYearMonth["2025-8"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -253,7 +260,7 @@ struct ExportManagerVideoRenderTests {
     h.renderer.arm(enteredSignal: entered)
 
     let (asset, resources) = adjustedVideo(
-      id: "cancel-tmp", filename: "IMG_7777.MOV")
+      id: "cancel-tmp", filename: "IMG_7777.MOV", month: 11)
     h.photoLib.assetsByYearMonth["2025-11"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -291,7 +298,7 @@ struct ExportManagerVideoRenderTests {
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
-    let (asset, resources) = adjustedVideo(id: "stale", filename: "IMG_3210.MOV")
+    let (asset, resources) = adjustedVideo(id: "stale", filename: "IMG_3210.MOV", month: 9)
     h.photoLib.assetsByYearMonth["2025-9"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -319,7 +326,7 @@ struct ExportManagerVideoRenderTests {
       domain: "FS", code: 1,
       userInfo: [NSLocalizedDescriptionKey: "disk full"])
 
-    let (asset, resources) = adjustedVideo(id: "move-fail", filename: "IMG_4321.MOV")
+    let (asset, resources) = adjustedVideo(id: "move-fail", filename: "IMG_4321.MOV", month: 10)
     h.photoLib.assetsByYearMonth["2025-10"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -342,7 +349,9 @@ struct ExportManagerVideoRenderTests {
 
     // First export: unedited video → writer path lands at IMG_7777.MOV
     var asset = TestAssetFactory.makeAsset(
-      id: "re-edit", mediaType: .video, hasAdjustments: false)
+      id: "re-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 11, day: 15))!,
+      mediaType: .video, hasAdjustments: false)
     h.photoLib.assetsByYearMonth["2025-11"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_7777.MOV")
@@ -352,7 +361,9 @@ struct ExportManagerVideoRenderTests {
 
     // User edits in Photos. hasAdjustments flips to true.
     asset = TestAssetFactory.makeAsset(
-      id: "re-edit", mediaType: .video, hasAdjustments: true)
+      id: "re-edit",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 11, day: 15))!,
+      mediaType: .video, hasAdjustments: true)
     h.photoLib.assetsByYearMonth["2025-11"] = [asset]
     h.manager.startExportMonth(year: 2025, month: 11)
     await h.manager.waitForQueueDrained()
@@ -371,7 +382,9 @@ struct ExportManagerVideoRenderTests {
     h.manager.versionSelection = .edited
 
     let asset = TestAssetFactory.makeAsset(
-      id: "plain-video", mediaType: .video, hasAdjustments: false)
+      id: "plain-video",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 12, day: 15))!,
+      mediaType: .video, hasAdjustments: false)
     h.photoLib.assetsByYearMonth["2025-12"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = [
       TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_0042.MOV")
@@ -392,7 +405,7 @@ struct ExportManagerVideoRenderTests {
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
-    let (asset, resources) = adjustedVideo(id: "activity-clear")
+    let (asset, resources) = adjustedVideo(id: "activity-clear", month: 1)
     h.photoLib.assetsByYearMonth["2025-1"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 
@@ -413,7 +426,7 @@ struct ExportManagerVideoRenderTests {
       FileManager.default.createFile(atPath: url.path, contents: Data())
     }
 
-    let (asset, resources) = adjustedVideo(id: "zero-byte")
+    let (asset, resources) = adjustedVideo(id: "zero-byte", month: 2)
     h.photoLib.assetsByYearMonth["2025-2"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] = resources
 

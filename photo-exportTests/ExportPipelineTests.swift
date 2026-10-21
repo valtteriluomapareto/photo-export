@@ -58,7 +58,9 @@ struct ExportPipelineTests {
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
-      id: "asset-1", creationDate: Date(), mediaType: .image)
+      id: "asset-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!,
+      mediaType: .image)
     let resource = TestAssetFactory.makeResource(
       type: .photo, originalFilename: "IMG_0001.JPG")
 
@@ -103,7 +105,9 @@ struct ExportPipelineTests {
     // the export job runs — e.g. the user deleted it from Photos in between.
     // fetchAssets (used during enqueue) still returns the asset, but
     // fetchAssetDescriptor (called when the export job runs) returns nil.
-    let asset = TestAssetFactory.makeAsset(id: "vanishing-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "vanishing-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-1"] = [asset]
     photoLib.resourcesByAssetId["vanishing-asset"] = [resource]
@@ -127,7 +131,9 @@ struct ExportPipelineTests {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "no-resource-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "no-resource-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     photoLib.resourcesByAssetId["no-resource-asset"] = []  // No resources
 
@@ -146,7 +152,9 @@ struct ExportPipelineTests {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "write-fail-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "write-fail-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId["write-fail-asset"] = [resource]
@@ -178,7 +186,9 @@ struct ExportPipelineTests {
     let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "move-fail-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "move-fail-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 5, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-5"] = [asset]
     photoLib.resourcesByAssetId["move-fail-asset"] = [resource]
@@ -411,8 +421,12 @@ struct ExportPipelineTests {
     let (manager, photoLib, dest, _, _, _) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset1 = TestAssetFactory.makeAsset(id: "pause-1")
-    let asset2 = TestAssetFactory.makeAsset(id: "pause-2")
+    let asset1 = TestAssetFactory.makeAsset(
+      id: "pause-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
+    let asset2 = TestAssetFactory.makeAsset(
+      id: "pause-2",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
     photoLib.assetsByYearMonth["2025-7"] = [asset1, asset2]
     photoLib.resourcesByAssetId["pause-1"] = [
       TestAssetFactory.makeResource(originalFilename: "IMG_1.JPG")
@@ -442,8 +456,12 @@ struct ExportPipelineTests {
     defer { dest.cleanup() }
 
     // Enqueue assets across two months
-    let asset1 = TestAssetFactory.makeAsset(id: "jan-1")
-    let asset2 = TestAssetFactory.makeAsset(id: "feb-1")
+    let asset1 = TestAssetFactory.makeAsset(
+      id: "jan-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!)
+    let asset2 = TestAssetFactory.makeAsset(
+      id: "feb-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 15))!)
     photoLib.assetsByYearMonth["2025-1"] = [asset1]
     photoLib.assetsByYearMonth["2025-2"] = [asset2]
     photoLib.resourcesByAssetId["jan-1"] = [
@@ -469,7 +487,9 @@ struct ExportPipelineTests {
     let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "already-done")
+    let asset = TestAssetFactory.makeAsset(
+      id: "already-done",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 8, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-8"] = [asset]
     photoLib.resourcesByAssetId["already-done"] = [resource]
@@ -513,7 +533,9 @@ struct ExportPipelineTests {
         photoLib.resourcesByAssetId[id] = [
           TestAssetFactory.makeResource(originalFilename: "IMG_\(index).JPG")
         ]
-        return TestAssetFactory.makeAsset(id: id)
+        return TestAssetFactory.makeAsset(
+          id: id,
+          creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 9, day: 15))!)
       }
       manager.startExportMonth(year: 2025, month: 9)
       try #require(await gate.waitForEnter(count: 1))
@@ -582,7 +604,10 @@ struct ExportPipelineTests {
         photoLib.resourcesByAssetId[id] = [
           TestAssetFactory.makeResource(originalFilename: "OLD_\(index).JPG")
         ]
-        return TestAssetFactory.makeAsset(id: id)
+        return TestAssetFactory.makeAsset(
+          id: id,
+          creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 10, day: 15))!
+        )
       }
       writer.checkpoint = oldGate
       manager.startExportMonth(year: 2025, month: 10)
@@ -593,7 +618,12 @@ struct ExportPipelineTests {
       try #require(store.exportInfo(assetId: "gen-1")?.variants[.original]?.status == .inProgress)
       manager.cancelAndClear()
 
-      photoLib.assetsByYearMonth["2025-11"] = [TestAssetFactory.makeAsset(id: "new-gen-1")]
+      photoLib.assetsByYearMonth["2025-11"] = [
+        TestAssetFactory.makeAsset(
+          id: "new-gen-1",
+          creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 11, day: 15))!
+        )
+      ]
       photoLib.resourcesByAssetId["new-gen-1"] = [
         TestAssetFactory.makeResource(originalFilename: "NEW.JPG")
       ]
@@ -635,7 +665,9 @@ struct ExportPipelineTests {
     let (manager, photoLib, dest, _, _, _) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "scope-test")
+    let asset = TestAssetFactory.makeAsset(
+      id: "scope-test",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 12, day: 15))!)
     let resource = TestAssetFactory.makeResource()
     photoLib.assetsByYearMonth["2025-12"] = [asset]
     photoLib.resourcesByAssetId["scope-test"] = [resource]
@@ -654,7 +686,9 @@ struct ExportPipelineTests {
     let (manager, photoLib, dest, writer, _, _) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "priority-test")
+    let asset = TestAssetFactory.makeAsset(
+      id: "priority-test",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!)
     // Provide multiple resource types — photo should be preferred
     photoLib.assetsByYearMonth["2025-1"] = [asset]
     photoLib.resourcesByAssetId["priority-test"] = [
@@ -678,8 +712,12 @@ struct ExportPipelineTests {
     let (manager, photoLib, dest, _, _, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset1 = TestAssetFactory.makeAsset(id: "multi-1")
-    let asset2 = TestAssetFactory.makeAsset(id: "multi-2")
+    let asset1 = TestAssetFactory.makeAsset(
+      id: "multi-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!)
+    let asset2 = TestAssetFactory.makeAsset(
+      id: "multi-2",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!)
     photoLib.assetsByYearMonth["2025-3"] = [asset1, asset2]
     photoLib.resourcesByAssetId["multi-1"] = [
       TestAssetFactory.makeResource(originalFilename: "IMG_001.JPG")

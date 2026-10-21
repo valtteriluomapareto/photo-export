@@ -57,7 +57,7 @@ struct ReuseSourceAlbumPathTests {
   private func makeAsset(id: String) -> AssetDescriptor {
     AssetDescriptor(
       id: id,
-      creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!,
       mediaType: .image,
       pixelWidth: 100,
       pixelHeight: 100,

@@ -13,12 +13,14 @@ struct PhotoLibraryServiceCollectionsTests {
 
   // MARK: - Fixtures
 
-  private func makeAsset(id: String, mediaType: PHAssetMediaType = .image, adjusted: Bool = false)
+  private func makeAsset(
+    id: String, month: Int = 2, mediaType: PHAssetMediaType = .image, adjusted: Bool = false
+  )
     -> AssetDescriptor
   {
     AssetDescriptor(
       id: id,
-      creationDate: Date(timeIntervalSince1970: 1_700_000_000),
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: month, day: 15))!,
       mediaType: mediaType,
       pixelWidth: 100,
       pixelHeight: 100,
@@ -39,7 +41,7 @@ struct PhotoLibraryServiceCollectionsTests {
   @Test func fetchAssetsByFavoritesScopeReturnsFavorites() async throws {
     let svc = FakePhotoLibraryService()
     svc.favoritesAssets = [makeAsset(id: "fav-1"), makeAsset(id: "fav-2")]
-    svc.assetsByYearMonth["2025-1"] = [makeAsset(id: "tl-1")]
+    svc.assetsByYearMonth["2025-1"] = [makeAsset(id: "tl-1", month: 1)]
     let assets = try await svc.fetchAssets(in: .favorites, mediaType: nil)
     #expect(assets.map(\.id) == ["fav-1", "fav-2"])
   }
@@ -78,7 +80,7 @@ struct PhotoLibraryServiceCollectionsTests {
   @Test func countAssetsByYearAcrossMonths() async throws {
     let svc = FakePhotoLibraryService()
     svc.assetsByYearMonth["2025-2"] = [makeAsset(id: "a"), makeAsset(id: "b")]
-    svc.assetsByYearMonth["2025-7"] = [makeAsset(id: "c")]
+    svc.assetsByYearMonth["2025-7"] = [makeAsset(id: "c", month: 7)]
     let count = try await svc.countAssets(in: .timeline(year: 2025, month: nil))
     #expect(count == 3)
   }

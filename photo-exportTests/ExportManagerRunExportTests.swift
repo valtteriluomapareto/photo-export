@@ -1611,7 +1611,7 @@ struct ExportManagerRunExportTests {
   @Test func interruptForDestinationUnavailableResolvesAsInterrupted() async throws {
     let harness = makeHarness()
     await withCleanup {
-      let asset = TestAssetFactory.makeAsset(id: "interrupt-1")
+      let asset = TestAssetFactory.makeAsset(id: "interrupt-1", creationDate: makeDate(2025, 7, 15))
       harness.photoLib.assetsByYearMonth["2025-7"] = [asset]
       harness.photoLib.yearCounts = [(year: 2025, count: 1)]
       harness.photoLib.resourcesByAssetId[asset.id] = [
@@ -1691,11 +1691,11 @@ struct ExportManagerRunExportTests {
     await withCleanup {
       // Three assets in the same month so a single export run exercises all three:
       let photo = TestAssetFactory.makeAsset(
-        id: "photo-1", mediaType: .image, isLivePhoto: false)
+        id: "photo-1", creationDate: makeDate(2026, 3, 15), mediaType: .image, isLivePhoto: false)
       let standaloneVideo = TestAssetFactory.makeAsset(
-        id: "video-1", mediaType: .video, isLivePhoto: false)
+        id: "video-1", creationDate: makeDate(2026, 3, 15), mediaType: .video, isLivePhoto: false)
       let livePhoto = TestAssetFactory.makeAsset(
-        id: "live-1", mediaType: .image, isLivePhoto: true)
+        id: "live-1", creationDate: makeDate(2026, 3, 15), mediaType: .image, isLivePhoto: true)
 
       harness.photoLib.assetsByYearMonth["2026-3"] = [photo, standaloneVideo, livePhoto]
       harness.photoLib.resourcesByAssetId["photo-1"] = [
@@ -1757,7 +1757,7 @@ struct ExportManagerRunExportTests {
     let harness = makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(
-        id: "vid-flip", mediaType: .video, isLivePhoto: false)
+        id: "vid-flip", creationDate: makeDate(2026, 3, 15), mediaType: .video, isLivePhoto: false)
       harness.photoLib.assetsByYearMonth["2026-3"] = [asset]
       harness.photoLib.resourcesByAssetId["vid-flip"] = [
         TestAssetFactory.makeResource(type: .video, originalFilename: "IMG_FLIP.MOV")
@@ -1826,7 +1826,8 @@ struct ExportManagerRunExportTests {
       // `.fullSizeVideo`, the producer takes the `.render` branch which the
       // fake writer doesn't service.
       let asset = TestAssetFactory.makeAsset(
-        id: "video-mid-life", mediaType: .video, hasAdjustments: true,
+        id: "video-mid-life", creationDate: makeDate(2026, 3, 15), mediaType: .video,
+        hasAdjustments: true,
         isLivePhoto: false)
       harness.photoLib.assetsByYearMonth["2026-3"] = [asset]
       harness.photoLib.resourcesByAssetId["video-mid-life"] = [
@@ -1895,9 +1896,8 @@ struct ExportManagerRunExportTests {
       let september = TestAssetFactory.makeAsset(
         id: "asset-sept", creationDate: makeDate(2025, 9, 30))
 
-      // `fetchAssets(year:month:nil)` in the fake concatenates every month bucket for
-      // the year, so seeding one asset per month bucket gives `enqueueYear` the full
-      // year set in one call.
+      // The fake filters creation dates across all buckets, so these descriptors
+      // give `enqueueYear` the full year set in one call.
       harness.photoLib.assetsByYearMonth["2025-3"] = [march]
       harness.photoLib.assetsByYearMonth["2025-6"] = [june]
       harness.photoLib.assetsByYearMonth["2025-9"] = [september]

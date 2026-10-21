@@ -335,7 +335,9 @@ struct AutoSyncSeamCharacterizationTests {
       // One asset in 2026-03; the dispatcher iterates [2026] and calls
       // enqueueYear → photoLibraryService.fetchAssets(year: 2026, month: nil),
       // which the fake routes through `fetchAssetsCheckpointByYear[2026]`.
-      let asset = TestAssetFactory.makeAsset(id: "a1")
+      let asset = TestAssetFactory.makeAsset(
+        id: "a1",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2026, month: 3, day: 15))!)
       harness.photoLib.assetsByYearMonth["2026-3"] = [asset]
       harness.photoLib.resourcesByAssetId["a1"] = [
         TestAssetFactory.makeResource(originalFilename: "a1.HEIC")
