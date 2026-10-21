@@ -25,26 +25,12 @@ struct ImportIdempotencyTests {
     ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore, URL,
     CollectionExportRecordStore
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ImportIdempotency")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collections.configure(for: "test")
-    let defaults = TestScratch.defaults("ImportIdempotency")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
+    let harness = ExportManagerHarness(
+      label: "ImportIdempotency")
+    return (
+      harness.manager, harness.photoLib, harness.dest, harness.store, harness.storeRoot,
+      harness.collectionStore
     )
-    return (manager, photoLib, dest, store, storeRoot, collections)
   }
 
   /// The on-disk record files for one store: the append log (which a rewrite would grow)

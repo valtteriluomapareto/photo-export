@@ -23,26 +23,9 @@ struct ExportManagerImportTests {
   private func makeTestHarness() -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore, URL
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ExportManagerImport")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collections.configure(for: "test")
-    let defaults = TestScratch.defaults("ExportManagerImport")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return (manager, photoLib, dest, store, storeRoot)
+    let h = ExportManagerHarness(
+      label: "ExportManagerImport", userDefaults: TestScratch.defaults("ExportManagerImport"))
+    return (h.manager, h.photoLib, h.dest, h.store, h.storeRoot)
   }
 
   /// Plants a real file at `<dest.rootURL>/YYYY/MM/<filename>` with given content

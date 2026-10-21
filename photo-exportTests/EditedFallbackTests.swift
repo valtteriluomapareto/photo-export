@@ -36,31 +36,14 @@ struct EditedFallbackTests {
   }
 
   private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
     let renderer = FakeMediaRenderer()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("EditedFallback")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("EditedFallback")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      mediaRenderer: renderer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
+    let h = ExportManagerHarness(
+      label: "EditedFallback", userDefaults: TestScratch.defaults("EditedFallback"),
+      mediaRenderer: renderer)
     return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      renderer: renderer, store: store, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+      manager: h.manager, photoLib: h.photoLib, dest: h.dest, writer: h.writer,
+      renderer: renderer, store: h.store, collectionStore: h.collectionStore,
+      storeRoot: h.storeRoot)
   }
 
   // MARK: - Pipeline behaviour

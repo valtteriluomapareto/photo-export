@@ -14,28 +14,9 @@ struct EmptyRunMessageTests {
   private func makeTestHarness() -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let tempDir = TestScratch.directory("EmptyRunTest")
-    let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collections.configure(for: "test")
-
-    let defaults = TestScratch.defaults("EmptyRun")
-
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return (manager, photoLib, dest, store)
+    let h = ExportManagerHarness(
+      label: "EmptyRunTest", userDefaults: TestScratch.defaults("EmptyRun"))
+    return (h.manager, h.photoLib, h.dest, h.store)
   }
 
   // MARK: - Empty Export Month
