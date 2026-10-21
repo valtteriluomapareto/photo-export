@@ -229,17 +229,25 @@ idle teardown rewrites every input with its current value: Observation stays sil
 `objectWillChange` fires once per write, as with `@Published`, and before the bridged
 delivery.
 
+The five queue read-throughs (`pendingJobs`, `currentTask`, `queuedCountsByPlacementId`,
+`isProcessing` and `queuedCount(year:month:)`) touch `queueMutationCounter`. The coordinator
+reports a changed contents fingerprint through its Host after synchronous queue mutations;
+the manager bumps that counter without an extra `objectWillChange` publication. The first
+dequeue keeps `queueCount` equal, and its bridge's equality guard skips Observation
+notification independently of the toolchain. The contents counter still notifies those
+readers. After `isPaused` and `importError` become macro-tracked, whether their equal
+writes notify depends on the toolchain; neither needs a notification when its value stays
+unchanged.
+
+`canExportTimeline` and `canExportCollection` are admission reads used outside view bodies.
+Views use `ManualExportAvailability` over store state, so those two helpers need no separate
+view dependency.
+
 The flip still owes:
 
 - bridges for the other contract accessors (`versionSelection`, `convertHEICToJPEG`,
   `livePhotosPairedExport`, `isImporting`, `previousBackupMissing`, `importStage`), and for a
   coordinator's mirrored properties if `ExportQueueCoordinator` or `ImportCoordinator` flips;
-- a mirror or a dependency for every read-through property that stops refreshing once
-  `objectWillChange` is gone: `pendingJobs`, `currentTask`, `queuedCountsByPlacementId`,
-  `isProcessing` and `queuedCount(year:month:)` read the coordinator's unpublished state, and
-  `canExportTimeline` / `canExportCollection` read the record stores' `state`, which refreshes
-  views today only because they also observe the stores (until the stores flip, or a
-  dependency test covers them);
 - `@ObservationIgnored` on the collaborators, IUOs, caches and tasks;
 - the wrapper and injection flips.
 

@@ -492,10 +492,36 @@ final class ExportManager: ObservableObject, Observable {
   // test reads (`manager.pendingJobs`, `manager.currentTask`,
   // `manager.queuedCountsByPlacementId`) and the "fresh-start condition" check in the
   // `start*` methods (`!isProcessing`) don't have to thread through `queueCoordinator`.
-  var pendingJobs: [ExportJob] { queueCoordinator.pendingJobs }
-  var currentTask: Task<Void, Never>? { queueCoordinator.currentTask }
-  var queuedCountsByPlacementId: [String: Int] { queueCoordinator.queuedCountsByPlacementId }
-  var isProcessing: Bool { queueCoordinator.isProcessing }
+  var pendingJobs: [ExportJob] {
+    _ = queueMutationCounter
+    return queueCoordinator.pendingJobs
+  }
+  var currentTask: Task<Void, Never>? {
+    _ = queueMutationCounter
+    return queueCoordinator.currentTask
+  }
+  var queuedCountsByPlacementId: [String: Int] {
+    _ = queueMutationCounter
+    return queueCoordinator.queuedCountsByPlacementId
+  }
+  var isProcessing: Bool {
+    _ = queueMutationCounter
+    return queueCoordinator.isProcessing
+  }
+
+  /// Tracks the coordinator's unpublished values without extra manager publications.
+  private(set) var queueMutationCounter: Int {
+    get {
+      observationRegistrar.access(self, keyPath: \.queueMutationCounter)
+      return queueMutationCounterStorage
+    }
+    set {
+      observationRegistrar.withMutation(of: self, keyPath: \.queueMutationCounter) {
+        queueMutationCounterStorage = newValue
+      }
+    }
+  }
+  private var queueMutationCounterStorage = 0
 
   private(set) var currentJobAssetId: String?
   private(set) var currentJobVariant: ExportVariant?
@@ -1788,6 +1814,7 @@ final class ExportManager: ObservableObject, Observable {
   /// placement id and looking it up in the placement-keyed dict. Existing call sites use
   /// `(year, month)` and stay unchanged.
   func queuedCount(year: Int, month: Int) -> Int {
+    _ = queueMutationCounter
     let placementId = ExportPlacement.timeline(year: year, month: month).id
     return queueCoordinator.queuedCount(placementId: placementId)
   }
@@ -2325,6 +2352,10 @@ final class ExportManager: ObservableObject, Observable {
   // MARK: - ExportQueueCoordinator.Host conformance
 
   // `isEnqueueingAll` supplies the coordinator's preparation guard.
+
+  func queueContentsDidChange() {
+    queueMutationCounter &+= 1
+  }
 
   /// Internal observation seam for deterministic tests of final-commit admission.
   var finalCommitWaitObserver: (() -> Void)?
