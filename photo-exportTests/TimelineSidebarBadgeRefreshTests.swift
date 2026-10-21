@@ -24,6 +24,8 @@ import Testing
       @Environment(ExportProgressState.self) private var progress
       @Environment(\.bodyInvalidationCounter) private var counter
       var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter?.record(
           "progress-probe:\(progress.currentAssetFilename ?? ""):\(progress.totalJobsCompleted)")
         Color.clear.frame(width: 1, height: 1)
