@@ -215,7 +215,7 @@ struct ExportPipelineTests {
     #expect(
       fileSystem.moveCalls.map(\.to.lastPathComponent) == ["IMG_0001.JPG", "IMG_0001 (1).JPG"])
     // The history log shows the variant re-marked under the new name before it committed.
-    store.flushForTesting()
+    store.drainSynchronously()
     let log = try String(
       contentsOf: storeRoot.appendingPathComponent("test")
         .appendingPathComponent(ExportRecordStore.Constants.logFileName),
@@ -483,7 +483,7 @@ struct ExportPipelineTests {
       manager.cancelAndClear()
       await gate.releaseAll()
       for task in tasks { await task.value }
-      store.flushForTesting()
+      store.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
       dest.cleanup()
     }
@@ -552,7 +552,7 @@ struct ExportPipelineTests {
       await oldGate.releaseAll()
       await newGate.releaseAll()
       for task in tasks { await task.value }
-      store.flushForTesting()
+      store.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
       dest.cleanup()
     }

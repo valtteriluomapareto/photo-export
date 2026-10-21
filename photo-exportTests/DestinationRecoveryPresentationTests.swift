@@ -136,8 +136,8 @@ import Testing
         window?.close()
         window = nil
         counter.reset()
-        timeline.flushForTesting()
-        collections.flushForTesting()
+        timeline.drainSynchronously()
+        collections.drainSynchronously()
         fakeDestination.cleanup()
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)

@@ -65,8 +65,8 @@ struct AutoSyncSeamCharacterizationTests {
       await checkpoint.releaseAll()
     }
     manager.cancelAndClear()
-    store.flushForTesting()
-    collectionStore.flushForTesting()
+    store.drainSynchronously()
+    collectionStore.drainSynchronously()
     try? FileManager.default.removeItem(at: storeRoot)
     dest.cleanup()
   }

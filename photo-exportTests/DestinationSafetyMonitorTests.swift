@@ -142,7 +142,7 @@ struct DestinationSafetyMonitorTests {
     harness.recordStore.markVariantExported(
       assetId: "asset-1", variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
-    harness.recordStore.flushForTesting()
+    harness.recordStore.drainSynchronously()
 
     harness.monitor.attach()
     harness.send(fp)
@@ -292,8 +292,8 @@ struct DestinationSafetyMonitorTests {
     let scan = AsyncCheckpoint()
     defer {
       io.releaseAll()
-      recordStore.flushForTesting()
-      collectionStore.flushForTesting()
+      recordStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
     }
     let fp = fingerprint(id: "dest-loading")

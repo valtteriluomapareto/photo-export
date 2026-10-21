@@ -206,7 +206,7 @@ struct BackupScannerTests {
         ]),
     ]
     store.bulkImportRecords(records)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     #expect(store.isExported(assetId: "asset-1"))
     #expect(store.isExported(assetId: "asset-2"))
@@ -224,7 +224,7 @@ struct BackupScannerTests {
     store.markExported(
       assetId: "asset-1", year: 2024, month: 3, relPath: "2024/03/",
       filename: "original.jpg", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Import tries to overwrite
     let records = [
@@ -236,7 +236,7 @@ struct BackupScannerTests {
         ])
     ]
     store.bulkImportRecords(records)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Original should be preserved
     #expect(
@@ -252,7 +252,7 @@ struct BackupScannerTests {
 
     // Pre-existing failed record
     store.markFailed(assetId: "asset-1", error: "network", at: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let records = [
       ExportRecord(
@@ -263,7 +263,7 @@ struct BackupScannerTests {
         ])
     ]
     store.bulkImportRecords(records)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Should be overwritten since the previous status was .failed
     #expect(

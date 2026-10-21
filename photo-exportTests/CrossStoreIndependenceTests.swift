@@ -21,27 +21,14 @@ struct CrossStoreIndependenceTests {
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("CrossStoreInd")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults(
-      suiteName: suiteName ?? TestScratch.suiteName("CrossStore"))
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
+    let harness = ExportManagerHarness(
+      label: "CrossStoreInd",
+      userDefaults: TestScratch.defaults(
+        suiteName: suiteName ?? TestScratch.suiteName("CrossStore")))
+    return (
+      harness.manager, harness.photoLib, harness.dest, harness.writer, harness.fileSystem,
+      harness.store, harness.collectionStore, harness.storeRoot
     )
-    return (manager, photoLib, dest, writer, fileSystem, timelineStore, collectionStore, storeRoot)
   }
 
   private func makeAsset(id: String, year: Int = 2025, month: Int = 4) -> AssetDescriptor {
@@ -151,8 +138,8 @@ struct CrossStoreIndependenceTests {
       manager.cancelAndClear()
       await gate.releaseAll()
       for task in tasks { await task.value }
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -226,8 +213,8 @@ struct CrossStoreIndependenceTests {
       manager.cancelAndClear()
       await gate.releaseAll()
       for task in tasks { await task.value }
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
