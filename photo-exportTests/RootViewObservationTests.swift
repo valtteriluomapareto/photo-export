@@ -11,7 +11,7 @@ import Testing
   @MainActor
   @Suite(.timeLimit(.minutes(2)), .serialized)
   struct RootViewObservationTests {
-    enum Surface { case library, content }
+    enum Surface { case library, content, mainWindow }
     enum ExistingState: CaseIterable { case destination, records, neither }
     enum LibraryReadSurface: CaseIterable { case content, timeline, album }
 
@@ -87,6 +87,7 @@ import Testing
       let counter = BodyInvalidationCounter()
       var window: NSWindow?
       var folder: URL { root.appendingPathComponent("Backup") }
+      var windowRootBodyKey: String { "content-host" }
 
       init(
         selectFolder: Bool = true, onboardingComplete: Bool = true, whatsNewSeen: Bool = true
@@ -125,7 +126,7 @@ import Testing
         switch surface {
         case .library:
           LibraryRootView(screenshotSurfaceKey: screenshotSurfaceKey, timelineHistoryState: .ready)
-        case .content:
+        case .content, .mainWindow:
           ContentHost(
             manager: manager, destination: destination, timeline: timeline, counter: counter)
         }
@@ -230,6 +231,47 @@ import Testing
         f.collections.beginConfigure(for: "Loading")
       }
       return snapshot
+    }
+
+    /// Readiness already refreshes the current host; unrelated records still rebuild it.
+    @Test func mainWindowRootFollowsTimelineReadinessOnly() async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.show(.mainWindow)
+        let control = "toolbar-export-control"
+        try #require(
+          await observe(in: f.window) {
+            f.counter.count(for: f.windowRootBodyKey) > 0
+              && f.counter.renderedText[control]?.first == "true"
+          })
+        await f.quiesce()
+        let readyBodies = f.counter.count(for: f.windowRootBodyKey)
+        let snapshot = beginHistoryLoad(f, section: .timeline)
+        let loadingKey = "timeline-records:\(f.timeline.mutationCounter)"
+        try #require(await observe(in: f.window) { f.counter.count(for: loadingKey) > 0 })
+        await f.quiesce()
+        #expect(f.counter.count(for: f.windowRootBodyKey) > readyBodies)
+        #expect(f.counter.renderedText[control]?.first == "false")
+        #expect(f.counter.renderedText[control]?[1].contains("Loading export history") == true)
+        let loadingBodies = f.counter.count(for: f.windowRootBodyKey)
+        f.io.release(snapshot)
+        await f.timeline.waitUntilSettled()
+        let settledKey = "timeline-records:\(f.timeline.mutationCounter)"
+        try #require(await observe(in: f.window) { f.counter.count(for: settledKey) > 0 })
+        await f.quiesce()
+        #expect(f.counter.count(for: f.windowRootBodyKey) > loadingBodies)
+        #expect(f.counter.renderedText[control]?.first == "true")
+        #expect(f.counter.renderedText[control]?[1].contains("Loading export history") == false)
+        let bodies = f.counter.count(for: f.windowRootBodyKey)
+        try await f.changeUnrelatedRecord()
+        let delta = f.counter.count(for: f.windowRootBodyKey) - bodies
+        Attachment.record(
+          "ready=\(readyBodies) loading=\(loadingBodies) settled=\(bodies) unrelated=\(delta)",
+          named: "main-window-root-bodies.txt")
+        #expect(delta == 0)
+      } cleanup: {
+        await f.close()
+      }
     }
 
     @Test func contentRouteRendersForHistoryReadinessOnly() async throws {
