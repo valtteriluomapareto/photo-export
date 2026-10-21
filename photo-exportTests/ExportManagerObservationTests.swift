@@ -92,7 +92,7 @@ struct ExportManagerObservationTests {
     }
   }
 
-  /// Own notifications are missing before bridging; sibling silence already passes.
+  /// Changing writes already notify only themselves; repeating a value must stay silent.
   @Test(arguments: Setting.allCases)
   func settingsBridgesNotifyOnlyTheirOwnProperty(setting: Setting) async {
     let f = Fixture()
@@ -109,14 +109,15 @@ struct ExportManagerObservationTests {
     }
   }
 
-  /// Synchronous import writes need their own dependencies without touching other bridges.
+  /// Import transitions already notify their own probes; equal missing-flag writes must stay silent.
   @Test func importBridgesNotifyTheirOwnProperties() async {
     let f = Fixture()
     await withCleanup {
       let probes = f.bridgedProbes()
       f.manager.startImport()
       f.manager.cancelImport()
-      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0, 0, 0, 2, 2, 0])
+      #expect(probes.prefix(9).map(\.changeCount) == [0, 0, 0, 0, 0, 0, 0, 2, 2])
+      #expect(probes[9].changeCount == 0)
     } cleanup: {
       await f.close()
     }

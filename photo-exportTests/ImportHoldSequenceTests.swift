@@ -136,7 +136,7 @@ struct ImportHoldSequenceTests {
     }
   }
 
-  /// Delivery already passes; the missing flag's own Observation dependency is absent.
+  /// Delivery and missing-flag isolation already hold before replacing the Published storage.
   @Test func missingBackupFlagNotifiesOnlyItself() async throws {
     let h = ExportManagerHarness(label: "ImportHoldDependency")
     let trace = Trace(h.manager)
