@@ -11,13 +11,25 @@ import Photos
 /// no one is subscribed are dropped — pushing events before subscribers attach is the
 /// caller's responsibility.
 @MainActor
-final class FakePersistentChangeSource: PhotoLibraryChangeProviding {
+final class FakePersistentChangeSource: StartablePhotoLibraryChangeProviding {
   var authorizationStatus: PHAuthorizationStatus = .authorized
 
   private let subject = PassthroughSubject<PhotoLibraryChangeOutcome, Never>()
 
+  /// Called as each subscriber attaches to `changes`.
+  var onSubscribe: (() -> Void)?
+  /// Called from `start()`.
+  var onStart: (() -> Void)?
+  private(set) var startCount = 0
+
   var changes: AnyPublisher<PhotoLibraryChangeOutcome, Never> {
-    subject.eraseToAnyPublisher()
+    subject.handleEvents(receiveSubscription: { [weak self] _ in self?.onSubscribe?() })
+      .eraseToAnyPublisher()
+  }
+
+  func start() {
+    startCount += 1
+    onStart?()
   }
 
   /// Pushes a successful event into the stream.

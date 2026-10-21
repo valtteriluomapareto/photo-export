@@ -30,7 +30,7 @@ type|photo-export/Records/ExportRecordStore.swift|ExportRecordStore
 external-publisher|photo-export/Export/ExportManager.swift|9
 
 total|published|46
-total|environment-object|35
+total|environment-object|24
 total|environment-object-property|69
 total|state-object|10
 total|observed-object|1

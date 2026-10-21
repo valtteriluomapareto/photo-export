@@ -29,7 +29,7 @@ import os
 /// `currentChangeToken` so the same error can't loop forever; the reducer
 /// schedules a `photosChangeFallback` debounce in response.
 @MainActor
-final class PhotoLibraryPersistentChangeAdapter: NSObject, PhotoLibraryChangeProviding,
+final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibraryChangeProviding,
   PHPhotoLibraryChangeObserver, ObservableObject
 {
   /// Default cadence for the safety-net reconcile timer. macOS's

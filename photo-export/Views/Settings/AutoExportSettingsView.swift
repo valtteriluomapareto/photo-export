@@ -242,6 +242,9 @@ struct AutoExportSettingsView: View {
       return "Select an export destination first."
     case .blocked(.destinationUnsafe):
       return "The destination has unresolved issues. Open the destination indicator to review."
+    case .blocked(.photosAccessMissing):
+      return
+        "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
     case .blocked:
       return "Auto Export is blocked. Resolve the issue above to run now."
     case .running:

@@ -103,6 +103,29 @@ struct RecordStoreRouterTests {
     #expect(h.router.variants(forAssetId: "missing", placement: favorites()).isEmpty)
   }
 
+  /// A timeline placement without a year and month has no claim folder, so every name reads
+  /// as claimed, by either query, rather than free. Exports refuse such a placement before
+  /// asking; that assertion is not tested.
+  @Test func isFilenameClaimed_timelineWithoutYearMonth_failsClosed() {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    let malformed = ExportPlacement(
+      kind: .timeline, id: "timeline:unknown", displayName: "Unknown",
+      collectionLocalIdentifier: nil, relativePath: "unknown/", createdAt: Date())
+    #expect(malformed.timelineYearMonth == nil)
+
+    #expect(
+      h.router.isFilenameClaimed(
+        "IMG_0001.JPG", placement: malformed, subfolder: nil, exceptVariant: .original,
+        of: "a1"))
+    #expect(
+      h.router.isFilenameClaimed(
+        "IMG_0001.JPG", placement: malformed, subfolder: nil, exceptAsset: "a1"))
+    #expect(
+      !h.router.isFilenameClaimed(
+        "IMG_0001.JPG", placement: timeline(), subfolder: nil, exceptAsset: "a1"))
+  }
+
   // Timeline year/month plumb-through: a non-2025/7 placement must persist its year and
   // month onto the stored record, not the `(0,0)` fallback the router uses when
   // `timelineYearMonth` returns nil.
@@ -112,8 +135,8 @@ struct RecordStoreRouterTests {
     let placement = timeline(year: 2019, month: 12)
     let commit = try h.router.captureFinalCommit(
       assetId: "a", placement: placement, variant: .original,
-      relPath: "2019/12/", filename: "X.HEIC", subfolder: "videos", acceptsEditedFallback: false)
-    await commit(true)
+      relPath: "2019/12/", subfolder: "videos", acceptsEditedFallback: false)
+    await commit("X.HEIC")
 
     for reload in [false, true] {
       if reload { h.timeline.configure(for: "test") }
@@ -135,8 +158,8 @@ struct RecordStoreRouterTests {
       if placement.kind != .timeline { h.collection.upsertPlacement(placement) }
       let commit = try h.router.captureFinalCommit(
         assetId: "asset", placement: placement, variant: .original,
-        relPath: "2025/07/", filename: "saved.jpg", subfolder: nil, acceptsEditedFallback: false)
-      await commit(true)
+        relPath: "2025/07/", subfolder: nil, acceptsEditedFallback: false)
+      await commit("saved.jpg")
     }
     try await h.timeline.flush()
     try await h.collection.flush()
@@ -183,9 +206,9 @@ struct RecordStoreRouterTests {
     h.collection.upsertPlacement(alb)
     let commit = try h.router.captureFinalCommit(
       assetId: "a1", placement: alb, variant: .edited,
-      relPath: alb.relativePath, filename: "v.HEIC", subfolder: "videos",
+      relPath: alb.relativePath, subfolder: "videos",
       acceptsEditedFallback: false)
-    await commit(true)
+    await commit("v.HEIC")
 
     for reload in [false, true] {
       if reload { h.collection.configure(for: "test") }
@@ -233,8 +256,8 @@ struct RecordStoreRouterTests {
     // Timeline path: .done is NOT removed (only .inProgress is).
     let commit = try h.router.captureFinalCommit(
       assetId: "done", placement: timeline(), variant: .original,
-      relPath: "2025/07/", filename: "D.HEIC", subfolder: nil, acceptsEditedFallback: false)
-    await commit(true)
+      relPath: "2025/07/", subfolder: nil, acceptsEditedFallback: false)
+    await commit("D.HEIC")
     h.router.removeInProgressVariant(
       assetId: "done", placement: timeline(), variant: .original)
     #expect(h.timeline.exportInfo(assetId: "done")?.variants[.original]?.status == .done)
@@ -255,8 +278,8 @@ struct RecordStoreRouterTests {
 
     let commit = try h.router.captureFinalCommit(
       assetId: "kept", placement: alb, variant: .original,
-      relPath: alb.relativePath, filename: "K.HEIC", subfolder: nil, acceptsEditedFallback: false)
-    await commit(true)
+      relPath: alb.relativePath, subfolder: nil, acceptsEditedFallback: false)
+    await commit("K.HEIC")
     h.router.removeInProgressVariant(
       assetId: "kept", placement: alb, variant: .original)
     #expect(

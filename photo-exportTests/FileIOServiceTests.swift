@@ -264,11 +264,16 @@ import Testing
   }
 
   /// Other rename failures surface as the POSIX error, so the export failure
-  /// classification sees the same categories as before.
+  /// classification sees the errno's own category. A missing file can come from the
+  /// source side, so ENOENT is not proof that the destination went away.
   @Test(arguments: [
     ErrnoCase(code: ENOSPC, category: .destinationNoSpace, testDescription: "ENOSPC"),
     ErrnoCase(code: EACCES, category: .destinationPermission, testDescription: "EACCES"),
-    ErrnoCase(code: ENOENT, category: .destinationUnavailable, testDescription: "ENOENT"),
+    ErrnoCase(code: ENOENT, category: .unknown, testDescription: "ENOENT"),
+    ErrnoCase(code: ENOTCONN, category: .destinationUnavailable, testDescription: "ENOTCONN"),
+    ErrnoCase(code: ETIMEDOUT, category: .destinationUnavailable, testDescription: "ETIMEDOUT"),
+    ErrnoCase(code: ESTALE, category: .destinationUnavailable, testDescription: "ESTALE"),
+    ErrnoCase(code: EIO, category: .unknown, testDescription: "EIO"),
     ErrnoCase(code: EXDEV, category: .unknown, testDescription: "EXDEV"),
   ])
   func renameErrnoMapsToThePOSIXError(errnoCase: ErrnoCase) throws {
@@ -416,6 +421,79 @@ import Testing
       #expect(
         try Data(contentsOf: folder.appendingPathComponent(existing)) == Data("existing".utf8))
       #expect(try Data(contentsOf: source) == Data("new".utf8))
+    }
+  }
+
+  // MARK: - Inspecting an existing file
+
+  @Test func itemIdentityDoesNotFollowLinks() throws {
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let service = FileIOService()
+    let file = root.appendingPathComponent("IMG_0001.JPG")
+    try Data("0123456789".utf8).write(to: file)
+    let link = root.appendingPathComponent("link.JPG")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+
+    let identity = try #require(try service.itemIdentity(at: file))
+    #expect(identity.isRegularFile)
+    #expect(identity.size == 10)
+    #expect(try service.itemIdentity(at: link)?.isRegularFile == false)
+    #expect(try service.itemIdentity(at: root.appendingPathComponent("missing.JPG")) == nil)
+    #expect(try service.itemIdentity(at: file.appendingPathComponent("below-a-file")) == nil)
+
+    // A replacement with the same size is a different identity.
+    try FileManager.default.removeItem(at: file)
+    try Data("9876543210".utf8).write(to: file)
+    #expect(try service.itemIdentity(at: file) != identity)
+  }
+
+  /// The name comes from the folder, not from the spelling used to look the file up.
+  @Test func storedNameIsTheFolderSpelling() throws {
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try writeExactName(Self.nfdName, in: root, contents: "stored")
+    let service = FileIOService()
+    let lookedUp = root.appendingPathComponent(Self.nfcName.lowercased())
+    guard FileManager.default.fileExists(atPath: lookedUp.path) else {
+      // A case- or normalization-sensitive scratch volume has no other spelling to resolve.
+      #expect(try service.storedName(at: root.appendingPathComponent(Self.nfdName)) == Self.nfdName)
+      return
+    }
+    let stored = try service.storedName(at: lookedUp)
+    #expect(Array(stored.unicodeScalars) == Array(Self.nfdName.unicodeScalars))
+  }
+
+  @Test func readHandleReadsRangesAndRefusesLinks() async throws {
+    let root = try makeRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let service = FileIOService()
+    let file = root.appendingPathComponent("IMG_0001.JPG")
+    try Data("0123456789".utf8).write(to: file)
+    let link = root.appendingPathComponent("link.JPG")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+
+    for bypassingCache in [false, true] {
+      let handle = try service.openForReading(at: file, bypassingCache: bypassingCache)
+      #expect(try await handle.read(offset: 3, length: 4) == Data("3456".utf8))
+      #expect(try await handle.read(offset: 8, length: 4) == Data("89".utf8))
+      #expect(try await handle.read(offset: 12, length: 4).isEmpty)
+      handle.close()
+      handle.close()
+      do {
+        _ = try await handle.read(offset: 0, length: 4)
+        Issue.record("Reading a closed handle must fail")
+      } catch {
+        #expect((error as NSError).domain == NSPOSIXErrorDomain)
+        #expect((error as NSError).code == Int(EBADF))
+      }
+    }
+    do {
+      _ = try service.openForReading(at: link, bypassingCache: false)
+      Issue.record("Opening through a symbolic link must fail")
+    } catch {
+      #expect((error as NSError).domain == NSPOSIXErrorDomain)
+      #expect((error as NSError).code == Int(ELOOP))
     }
   }
 }

@@ -73,7 +73,7 @@ final class FakeAutoSyncExportRunner: AutoSyncExportRunning {
         enqueuedCount: summary.enqueuedCount, completedCount: summary.completedCount,
         failedCount: summary.failedCount, skippedCount: summary.skippedCount,
         cancelReason: summary.cancelReason, result: summary.result,
-        failures: summary.failures)
+        failures: summary.failures, stoppedBy: summary.stoppedBy)
     }
     return ExportRunSummary(
       context: context,
@@ -149,6 +149,30 @@ final class FakeAutoSyncImportProvider: AutoSyncImportProviding {
   }
 }
 
+/// `AutoSyncPhotosAuthorizationProviding` test double. `live` is what the system would
+/// report now; the published value is the cached flag the app last read.
+/// `refreshAuthorization()` copies live into cached and publishes it, synchronously.
+@MainActor
+final class FakePhotosAuthorizationProvider: AutoSyncPhotosAuthorizationProviding {
+  var live: Bool
+  private let subject: CurrentValueSubject<Bool, Never>
+
+  init(authorized: Bool = true) {
+    live = authorized
+    subject = CurrentValueSubject(authorized)
+  }
+
+  var cached: Bool { subject.value }
+
+  var isAuthorizedPublisher: AnyPublisher<Bool, Never> {
+    subject.eraseToAnyPublisher()
+  }
+
+  func refreshAuthorization() {
+    subject.send(live)
+  }
+}
+
 /// `PHAssetCacheControlling` test double. Counts invocations so tests can
 /// assert `ExportManager.runBulkEnqueueLoop` drops the PHAsset cache between
 /// bulk-export iterations (issue #112). Sibling pattern to
@@ -178,6 +202,7 @@ struct FakeAutoSyncEnvironmentBuilder {
   let perDestinationTokenStore = InMemoryAutoSyncPerDestinationTokenStore()
   let currentRunStore = InMemoryAutoSyncCurrentRunStore()
   let clock = TestClock()
+  let photosAuthorization = FakePhotosAuthorizationProvider()
   let userDefaults = TestScratch.defaults("AutoSyncManager")
 
   var environment: AutoSyncEnvironment {
@@ -193,6 +218,7 @@ struct FakeAutoSyncEnvironmentBuilder {
       perDestinationTokenStore: perDestinationTokenStore,
       currentRunStore: currentRunStore,
       clock: clock,
+      photosAuthorization: photosAuthorization,
       userDefaults: userDefaults
     )
   }

@@ -66,6 +66,15 @@ struct RetryEntry: Codable, Equatable, Sendable {
   let firstFailedAt: Date
   let lastFailedAt: Date
   let nextEligibleAt: Date?
+
+  /// Whether an Auto Export run may attempt this variant at `now`. A deadline decides when
+  /// there is one. Without one, only an unreachable destination is eligible: Auto Export
+  /// runs only while the destination is available, so the next run is the retry. Every
+  /// other category without a deadline needs the user to act first.
+  func isEligibleForAutoSync(now: Date) -> Bool {
+    guard let nextEligibleAt else { return category == .destinationUnavailable }
+    return nextEligibleAt <= now
+  }
 }
 
 /// Per-destination retry state. The nested dictionary is `[scopeKey: [assetId: [variant: entry]]]`

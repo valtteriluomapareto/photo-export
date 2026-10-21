@@ -828,6 +828,136 @@ struct ExportManagerRunExportTests {
     }
   }
 
+  /// Without Photos access a full-scope run ends `.failed` and writes nothing, so AutoSync
+  /// keeps the scope's pending work instead of acknowledging a scan that never happened.
+  /// The listing calls throw `authorizationDenied` as production does, which already ends
+  /// timeline and album runs `.failed`. Favorites lists nothing first, so its unauthorized
+  /// scan is the case this pins. Missing access is a run-level condition, so no per-asset
+  /// failure is recorded.
+  @Test(
+    .timeLimit(.minutes(1)),
+    arguments: FullScope.allCases, [ExportRunSource.manual, .autoSync])
+  func fullScopeWithoutPhotosAccessResolvesFailed(
+    scope: FullScope, source: ExportRunSource
+  ) async throws {
+    let harness = makeHarness()
+    try await withCleanup {
+      let asset = TestAssetFactory.makeAsset(
+        id: "no-access-\(scope)", creationDate: makeDate(2025, 1, 1))
+      seedAssets([asset], for: scope, in: harness)
+      harness.photoLib.isAuthorized = false
+      let denied = PhotoLibraryManager.PhotoLibraryError.authorizationDenied
+      harness.photoLib.availableYearsError = denied
+      harness.photoLib.collectionTreeError = denied
+      var completions: [ExportRunSummary] = []
+      let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+      defer { subscription.cancel() }
+      let context = ExportRunContext(
+        source: source, visibility: source == .manual ? .userVisible : .background,
+        scope: scope.runScope, selection: .edited)
+
+      let summary = await harness.manager.runExport(context: context)
+      for task in harness.manager.currentPreparationTasks {
+        let done = await finished(task)
+        try #require(done)
+      }
+
+      #expect(summary.context == context)
+      #expect(summary.result == .failed)
+      #expect(summary.enqueuedCount == 0)
+      #expect(summary.completedCount == 0)
+      #expect(summary.failedCount == 0)
+      #expect(summary.failures.isEmpty)
+      #expect(harness.writer.writeCalls.isEmpty)
+      #expect(completions == [summary])
+      #expect(harness.manager.activeRunContext == nil)
+      // Favorites stops at the access guard. The other scopes stop earlier, when listing
+      // their years or albums throws, and keep the bulk scan message.
+      let manualMessage =
+        scope == .favorites
+        ? "Photos access is required to scan this selection."
+        : "Some requested photos could not be scanned. Try exporting again."
+      #expect(
+        harness.manager.progressState.manualSummary?.failureMessage
+          == (source == .manual ? manualMessage : nil))
+    } cleanup: {
+      await harness.cleanup()
+    }
+  }
+
+  enum MidScanScope: CaseIterable, Sendable { case timeline, albums, sharedAlbums }
+
+  /// Access lost between two items of a bulk scan ends the run `.failed`: a `.completed`
+  /// summary would clear AutoSync's pending work for the item the scan never reached. The
+  /// fake's writes don't check access, so this isolates the scan guard: only the missing
+  /// second item can fail the run.
+  @Test(.timeLimit(.minutes(1)), arguments: MidScanScope.allCases)
+  func fullScopeLosingPhotosAccessMidScanResolvesFailed(scope: MidScanScope) async throws {
+    let harness = makeHarness()
+    let firstFetch = AsyncCheckpoint()
+    try await withCleanup {
+      let assets = (1...2).map {
+        TestAssetFactory.makeAsset(
+          id: "mid-scan-\(scope)-\($0)", creationDate: makeDate(2023 + $0, 1, 1))
+      }
+      let runScope: ExportRunScope
+      switch scope {
+      case .timeline:
+        runScope = .timelineFullLibrary
+        harness.photoLib.yearCounts = [(2024, 1), (2025, 1)]
+        harness.photoLib.assetsByYearMonth["2024-1"] = [assets[0]]
+        harness.photoLib.assetsByYearMonth["2025-1"] = [assets[1]]
+        harness.photoLib.fetchAssetsCheckpointByYear[2024] = firstFetch
+      case .albums, .sharedAlbums:
+        let shared = scope == .sharedAlbums
+        runScope = shared ? .allSharedAlbumsFull : .allAlbumsFull
+        harness.photoLib.collectionTree = (1...2).map {
+          PhotoCollectionDescriptor(
+            id: "\(shared ? "shared-album" : "album"):album-\($0)",
+            localIdentifier: "album-\($0)", title: "Album \($0)",
+            kind: shared ? .sharedAlbum : .album, pathComponents: [], children: [])
+        }
+        for (index, asset) in assets.enumerated() {
+          if shared {
+            harness.photoLib.assetsBySharedAlbumLocalId["album-\(index + 1)"] = [asset]
+          } else {
+            harness.photoLib.assetsByAlbumLocalId["album-\(index + 1)"] = [asset]
+          }
+        }
+        harness.photoLib.fetchAssetsCheckpointByAlbumId["album-1"] = firstFetch
+      }
+      for asset in assets {
+        harness.photoLib.resourcesByAssetId[asset.id] = [
+          TestAssetFactory.makeResource(originalFilename: "\(asset.id).JPG")
+        ]
+      }
+      var completions: [ExportRunSummary] = []
+      let subscription = harness.manager.completedRunsPublisher.sink { completions.append($0) }
+      defer { subscription.cancel() }
+      let context = makeContext(scope: runScope)
+
+      let run = Task { await harness.manager.runExport(context: context) }
+      let entered = await firstFetch.waitForEnter(count: 1)
+      try #require(entered)
+      harness.photoLib.isAuthorized = false
+      await firstFetch.release()
+      let summary = await run.value
+
+      #expect(summary.context == context)
+      #expect(summary.result == .failed)
+      #expect(summary.enqueuedCount == 1)
+      #expect(summary.completedCount == 1)
+      #expect(summary.failedCount == 0)
+      #expect(summary.failures.isEmpty)
+      #expect(harness.writer.writeCalls.map(\.assetId) == [assets[0].id])
+      #expect(completions == [summary])
+      #expect(harness.manager.activeRunContext == nil)
+    } cleanup: {
+      await firstFetch.releaseAll()
+      await harness.cleanup()
+    }
+  }
+
   /// A legacy fire-and-forget export has no `activeRunContext`, but it still
   /// occupies the queue and must cause `runExport` to fail fast.
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
@@ -948,7 +1078,7 @@ struct ExportManagerRunExportTests {
   ///
   /// Reproduction: seed two albums; the second throws on `fetchAssets`. The
   /// first album's jobs queue, then the second throws, the catch block elects
-  /// to drain the partial queue, and `partialBulkScan` flips the natural
+  /// to drain the partial queue, and `incompleteScan` flips the natural
   /// `.completed` to `.failed` in `finalizeActiveRun`.
   @Test func allAlbumsFullPartialEnqueueResolvesFailed() async {
     let harness = makeHarness()
@@ -1028,7 +1158,7 @@ struct ExportManagerRunExportTests {
 
   /// Same regression guard as the user-album test above, but exercising the
   /// `.allSharedAlbumsFull` code path. The two scopes share `enqueueBulkAlbumExport`
-  /// and `finalizeActiveRun`'s `partialBulkScan` check, so a single shared
+  /// and `finalizeActiveRun`'s `incompleteScan` check, so a single shared
   /// regression would affect both — but the AutoSync wiring (clearing
   /// `.sharedAlbums` dirty state on completed runs) lives on its own branch in
   /// `AutoSyncReducer.coveredScopes`, and pinning both gives the bug two red
@@ -1243,10 +1373,11 @@ struct ExportManagerRunExportTests {
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "live-retry", isLivePhoto: true)
       harness.photoLib.favoritesAssets = [asset]
-      harness.photoLib.resourcesByAssetId[asset.id] = [
+      let resources = [
         TestAssetFactory.makeResource(type: .photo, originalFilename: "LIVE.HEIC"),
         TestAssetFactory.makeResource(type: .pairedVideo, originalFilename: "LIVE.MOV"),
       ]
+      harness.photoLib.resourcesByAssetId[asset.id] = resources
       harness.manager.livePhotosPairedExport = true
       harness.manager.autoSyncEligibilityCheck = { _, _, variant, _ in variant == .original }
       let result = await harness.manager.runExport(
@@ -1264,13 +1395,13 @@ struct ExportManagerRunExportTests {
         "Collections/Favorites/", createIfNeeded: false)
       #expect(
         (try? Data(contentsOf: directory.appendingPathComponent("LIVE.HEIC")))
-          == Data("fake-content".utf8))
+          == FakeAssetResourceWriter.content(for: resources[0], assetId: asset.id))
       if manual {
         #expect(variants[.originalPairedVideo]?.status == .done)
         #expect(variants[.originalPairedVideo]?.filename == "LIVE.MOV")
         #expect(
           (try? Data(contentsOf: directory.appendingPathComponent("LIVE.MOV")))
-            == Data("fake-content".utf8))
+            == FakeAssetResourceWriter.content(for: resources[1], assetId: asset.id))
       } else {
         #expect(variants[.originalPairedVideo] == nil)
       }
@@ -1361,6 +1492,7 @@ struct ExportManagerRunExportTests {
           retryStateStore: builder.retryStore, runSummaryStore: builder.runSummaryStore,
           perDestinationTokenStore: builder.perDestinationTokenStore,
           currentRunStore: builder.currentRunStore, clock: builder.clock,
+          photosAuthorization: builder.photosAuthorization,
           userDefaults: builder.userDefaults))
 
       // Normal UI entry point has no awaitable run context or completion summary.
@@ -1455,6 +1587,7 @@ struct ExportManagerRunExportTests {
 
       #expect(summary.result == .interrupted)
       #expect(summary.cancelReason == .destinationUnavailable)
+      #expect(summary.stoppedBy == nil)
       #expect(harness.manager.activeRunContext == nil)
     } cleanup: {
       await harness.cleanup()

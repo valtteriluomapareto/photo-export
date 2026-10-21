@@ -254,8 +254,44 @@ struct AutoSyncRetryStateTests {
     let retryable = AutoSyncFailureCategory.allCases.filter(\.isAutomaticallyRetryable)
     #expect(Set(retryable) == [.photoKitTransient, .iCloudTransient, .unknown])
 
-    // destinationUnavailable is retried only on availability transition (state-driven)
+    // destinationUnavailable never gets a timer; its nil-deadline entry stays eligible, so
+    // the next Auto Export run, which needs a reachable destination, tries it again.
     #expect(AutoSyncFailureCategory.destinationUnavailable.isAutomaticallyRetryable == false)
+  }
+
+  // MARK: - Auto Export eligibility
+
+  /// A deadline decides eligibility. With no deadline only an unreachable destination is
+  /// eligible: Auto Export runs only while the destination is available, so waiting for
+  /// manual Retry would hold the item for nothing. Every other nil deadline needs action.
+  @Test(arguments: AutoSyncFailureCategory.allCases)
+  func autoSyncEligibilityByCategoryAndDeadline(category: AutoSyncFailureCategory) {
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    func entry(_ deadline: Date?) -> RetryEntry {
+      RetryEntry(
+        category: category, errorSignature: "sig", attemptCount: 1,
+        firstFailedAt: now.addingTimeInterval(-60), lastFailedAt: now.addingTimeInterval(-60),
+        nextEligibleAt: deadline)
+    }
+    #expect(entry(nil).isEligibleForAutoSync(now: now) == (category == .destinationUnavailable))
+    #expect(entry(now).isEligibleForAutoSync(now: now))
+    #expect(entry(now.addingTimeInterval(-1)).isEligibleForAutoSync(now: now))
+    #expect(!entry(now.addingTimeInterval(1)).isEligibleForAutoSync(now: now))
+  }
+
+  /// Entries saved before this rule, such as an old ENOENT stored as Destination
+  /// Unavailable with no deadline, become eligible once decoded.
+  @Test func savedUnavailableEntryWithoutADeadlineIsEligible() throws {
+    let json = Data(
+      """
+      {"entriesByPlacement":{"timeline":{"asset":{"original":{
+        "category":"destinationUnavailable","errorSignature":"NSPOSIXErrorDomain:2",
+        "attemptCount":3,"firstFailedAt":0,"lastFailedAt":60}}}}}
+      """.utf8)
+    let state = try JSONDecoder().decode(AutoSyncRetryState.self, from: json)
+    let entry = try #require(state.entry(scope: .timeline, assetId: "asset", variant: .original))
+    #expect(entry.nextEligibleAt == nil)
+    #expect(entry.isEligibleForAutoSync(now: Date(timeIntervalSinceReferenceDate: 120)))
   }
 
   // MARK: - Codable

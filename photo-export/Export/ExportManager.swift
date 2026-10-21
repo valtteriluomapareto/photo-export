@@ -296,14 +296,14 @@ final class ExportManager: ObservableObject, Observable {
   }
 
   /// AutoSync retry-eligibility hook. Closure returns `true` when the
-  /// `(assetId, placement, variant)` is eligible to attempt at `now` — i.e.
-  /// no retry entry exists, or `nextEligibleAt <= now`. Plan §"Retry and
-  /// Failure Policy": "Retry evaluation belongs at enqueue time."
+  /// `(assetId, placement, variant)` is eligible to attempt at `now`: no retry
+  /// entry exists, or `RetryEntry.isEligibleForAutoSync(now:)` holds. Retry
+  /// evaluation belongs at enqueue time.
   ///
   /// `nil` means "no AutoSync retry policy installed"; all variants are
   /// eligible. Manual exports use this default — they never gate on the
-  /// AutoSync retry store. Wired by `PhotoExportApp` to read from
-  /// `AutoSyncManager.currentRetryState`.
+  /// AutoSync retry store. Wired by `PhotoExportApp` to forward to
+  /// `AutoSyncManager.isAutoSyncEligible`.
   ///
   /// `@MainActor` annotation on the closure type makes the isolation
   /// explicit at the type level — the production wiring reads from
@@ -333,15 +333,16 @@ final class ExportManager: ObservableObject, Observable {
     /// with a retry reason in the run summary." Reported on the summary;
     /// the per-variant detail is reconstructable from `AutoSyncRetryState`.
     var skippedCount: Int = 0
-    /// Set when a bulk-album enqueue (`enqueueBulkAlbumExport`) threw partway
-    /// through and the catch block elected to drain the partial queue instead
-    /// of cancelling. Without this, the natural queue-drain finalize would
-    /// resolve the run as `.completed` — and `AutoSyncReducer.coveredScopes`
-    /// would then clear the scope's dirty flag, hiding the albums that the
-    /// enqueue loop never reached from the next reconciliation pass. The flag
-    /// flips `finalizeActiveRun`'s `.completed` to `.failed` so the dirty
-    /// state survives and the next change-event-driven debounce retries.
-    var partialBulkScan: Bool = false
+    /// Set when the run's scan did not cover its whole scope: a bulk enqueue
+    /// threw partway through and the catch block elected to drain the partial
+    /// queue, or a scan returned `.unauthorized` because Photos access is
+    /// missing. Without this, the natural queue-drain finalize would resolve
+    /// the run as `.completed` — and `AutoSyncReducer.coveredScopes` would then
+    /// clear the scope's dirty flag, hiding the items the scan never reached
+    /// from the next reconciliation pass. The flag flips `finalizeActiveRun`'s
+    /// `.completed` to `.failed` so the dirty state survives and the next
+    /// change-event-driven debounce retries.
+    var incompleteScan: Bool = false
   }
   private var activeRunBookkeeping: ActiveRunBookkeeping?
 
@@ -1064,8 +1065,10 @@ final class ExportManager: ObservableObject, Observable {
   /// duplicating: the `Task { [weak self] in }` wrapper, the
   /// `isEnqueueingAll = false` teardown for the owning generation, the success
   /// finalize (empty/done message + `processQueueIfNeeded()`), and the
-  /// partial-failure recovery on throw (queue warning + `partialBulkScan` +
-  /// drain if any jobs already queued; otherwise finalize as failed).
+  /// partial-failure recovery on throw (queue warning + `incompleteScan` +
+  /// drain if any jobs already queued; otherwise finalize as failed). An
+  /// unauthorized item does not throw; its scan sets `incompleteScan` itself,
+  /// so the drain after a `.completed(totals)` body still resolves `.failed`.
   ///
   /// Callers supply just (a) the bulk-loop body that does the enqueue work
   /// and returns `BulkExportOutcome`, (b) the empty/done message factory used
@@ -1111,12 +1114,12 @@ final class ExportManager: ObservableObject, Observable {
         self.noteManualPreparationFailure(
           "Some requested photos could not be scanned. Try exporting again.")
         // Partial-failure recovery: if any jobs already landed in the queue,
-        // drain them and surface a warning + flag the run as `partialBulkScan`
+        // drain them and surface a warning + flag the run as `incompleteScan`
         // so AutoSync's dirty-flag bookkeeping survives the partial scan.
         // Otherwise finalize the active run (if any) as failed.
         if !self.pendingJobs.isEmpty {
           self.setQueueWarningMessage(partialScanWarning())
-          self.activeRunBookkeeping?.partialBulkScan = true
+          self.activeRunBookkeeping?.incompleteScan = true
           self.processQueueIfNeeded()
         } else {
           self.finalizeActiveRun(result: .failed, cancelReason: nil)
@@ -1339,10 +1342,7 @@ final class ExportManager: ObservableObject, Observable {
     generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else {
-      noteManualPreparationFailure("Photos access is required to scan this selection.")
-      return .unauthorized
-    }
+    guard photoLibraryService.isAuthorized else { return unauthorizedScan() }
 
     // Resolve the placement. For `.album` and `.sharedAlbum`, the resolver needs the
     // collection tree to find the descriptor and any colliding siblings; for
@@ -1423,19 +1423,26 @@ final class ExportManager: ObservableObject, Observable {
 
   /// Drive-unmount equivalent of `cancelAndClear()`. Stops starting new jobs and clears
   /// in-memory pending work, but resolves the active run as transient
-  /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. The AutoSync
-  /// state machine treats `.destinationUnavailable` as "resume when the drive comes
-  /// back" rather than "this run failed."
+  /// (`cancelReason: .destinationUnavailable`) rather than user-cancelled. AutoSync keeps
+  /// the run's pending work because the result is not `.completed`; it resumes when the
+  /// destination snapshot reports the drive available again, not from the cancel reason.
   ///
-  /// MVP scope: identical cleanup to `cancelAndClear` minus the cancel-reason change.
-  /// Phase 0b adds advisory-lock release; persistence of accumulated dirty state lands
-  /// when AutoSyncManager wires up. An in-flight `PHAssetResourceManager.writeData` may
-  /// still complete or fail because there is no cancellation plumbing for that path —
-  /// the in-flight write will surface as a transient failure on the next
-  /// reconciliation.
+  /// Same cleanup as `cancelAndClear` apart from the cancel reason, with one difference:
+  /// when nothing is running, the last manual summary stays. A run that stopped because
+  /// the destination couldn't be reached is often followed by the unmount notification,
+  /// and that must not erase the explanation. During active work the feedback is cleared
+  /// as before. The summary has no `stoppedBy`: this path is the unmount, not a failure
+  /// the export stopped on. An in-flight `PHAssetResourceManager.writeData` may still
+  /// complete or fail because there is no cancellation plumbing for that path — the
+  /// in-flight write will surface as a transient failure on the next reconciliation.
   func interruptForDestinationUnavailable() {
     logger.info("Interrupting current export — destination unavailable")
+    let isIdle =
+      activeRunContext == nil && !hasActiveExportWork && currentPreparationTasks.isEmpty
+      && manualRunFeedback == nil
+    let keptSummary = isIdle ? progressState.manualSummary : nil
     teardownActiveWork()
+    progressState.manualSummary = keptSummary
     finalizeActiveRun(result: .interrupted, cancelReason: .destinationUnavailable)
   }
 
@@ -1539,6 +1546,15 @@ final class ExportManager: ObservableObject, Observable {
 
   // MARK: - Queue Handling
 
+  /// Shared by the enqueue scans when Photos access is missing. The scan covers nothing,
+  /// so the active run, if any, is marked incomplete: its drain resolves `.failed`
+  /// and AutoSync keeps the scope's pending work for the next run.
+  private func unauthorizedScan() -> EnqueueOutcome {
+    noteManualPreparationFailure("Photos access is required to scan this selection.")
+    activeRunBookkeeping?.incompleteScan = true
+    return .unauthorized
+  }
+
   /// Scans the month and returns the enqueue outcome. Callers use the outcome to decide
   /// whether to surface the "already exported" toolbar message.
   @discardableResult
@@ -1549,10 +1565,7 @@ final class ExportManager: ObservableObject, Observable {
     year: Int, month: Int, settings: ExportSettingsSnapshot, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else {
-      noteManualPreparationFailure("Photos access is required to scan this selection.")
-      return .unauthorized
-    }
+    guard photoLibraryService.isAuthorized else { return unauthorizedScan() }
     let placement = ExportPlacement.timeline(year: year, month: month)
     var skippedCount = 0
     let newJobs = try await planAssetsProgressively(
@@ -1582,10 +1595,7 @@ final class ExportManager: ObservableObject, Observable {
     year: Int, settings: ExportSettingsSnapshot, generation gen: Int
   ) async throws -> EnqueueOutcome {
     try throwIfCancelledOrStale(gen)
-    guard photoLibraryService.isAuthorized else {
-      noteManualPreparationFailure("Photos access is required to scan this selection.")
-      return .unauthorized
-    }
+    guard photoLibraryService.isAuthorized else { return unauthorizedScan() }
     var skippedCount = 0
     let newJobs = try await planAssetsProgressively(
       in: .timeline(year: year, month: nil), generation: gen
@@ -1714,7 +1724,8 @@ final class ExportManager: ObservableObject, Observable {
   private func finalizeActiveRun(
     result: ExportRunResult,
     cancelReason: ExportCancelReason?,
-    jobTotals: (enqueued: Int, completed: Int)? = nil
+    jobTotals: (enqueued: Int, completed: Int)? = nil,
+    stoppedBy: AutoSyncFailureCategory? = nil
   ) {
     flushRecordNotifications()
     guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
@@ -1725,15 +1736,16 @@ final class ExportManager: ObservableObject, Observable {
     //   1. Any variants failed during this run — callers (AutoSync's retry path,
     //      Export Issues UI) need to distinguish a clean run from one that needs
     //      retry-store inspection.
-    //   2. The bulk-enqueue catch block elected to drain a partial queue — the
-    //      unreached albums in the batch never got a chance to enqueue, so a
+    //   2. The scan did not cover its whole scope — the bulk-enqueue catch block
+    //      elected to drain a partial queue, or a scan found Photos access
+    //      missing. The unreached items never got a chance to enqueue, so a
     //      `.completed` summary would over-report what the run actually covered
-    //      and `AutoSyncReducer` would clear dirty state for albums that weren't
+    //      and `AutoSyncReducer` would clear dirty state for items that weren't
     //      reconciled.
     // Explicit cancel/interrupt paths keep their incoming result untouched.
     let effectiveResult: ExportRunResult
     if result == .completed
-      && (bookkeeping.failedCount > 0 || bookkeeping.partialBulkScan)
+      && (bookkeeping.failedCount > 0 || bookkeeping.incompleteScan)
     {
       effectiveResult = .failed
     } else {
@@ -1750,7 +1762,8 @@ final class ExportManager: ObservableObject, Observable {
       skippedCount: bookkeeping.skippedCount,
       cancelReason: cancelReason,
       result: effectiveResult,
-      failures: bookkeeping.failures
+      failures: bookkeeping.failures,
+      stoppedBy: stoppedBy
     )
     activeRunContext = nil
     activeRunBookkeeping = nil
@@ -1866,6 +1879,14 @@ final class ExportManager: ObservableObject, Observable {
     var intendedVariant: ExportVariant = .original
     do {
       try throwIfCancelledOrStale(gen)
+      // Claims are kept per month, so without one every name would read as claimed and
+      // each walk would try all 10,000 suffixes before failing.
+      if job.placement.kind == .timeline, job.placement.timelineYearMonth == nil {
+        assertionFailure("Timeline placement \(job.placement.id) has no year and month")
+        throw NSError(
+          domain: "Export", code: 11,
+          userInfo: [NSLocalizedDescriptionKey: "Timeline placement has no year and month"])
+      }
 
       guard let descriptor = photoLibraryService.fetchAssetDescriptor(for: job.assetLocalIdentifier)
       else {
@@ -1985,6 +2006,13 @@ final class ExportManager: ObservableObject, Observable {
       // bare stem. The image-side `.edited` flag is sufficient: a Live Photo whose still side
       // is edited always has its motion side considered edited too.
       let pairOriginalWithSuffix = required.contains(.edited)
+      // A stem chosen for the whole group skips names another asset's records hold, so no
+      // member is later written at a name another record claims, or pushed alone onto
+      // another stem.
+      let claimedByAnotherAsset = { [recordStoreRouter] (name: String) in
+        recordStoreRouter.isFilenameClaimed(
+          name, placement: job.placement, subfolder: subfolder, exceptAsset: descriptor.id)
+      }
 
       var groupStem = ExportDestinationResolver.inheritedGroupStem(
         from: existingRecord, descriptor: descriptor, resources: resources)
@@ -2045,7 +2073,8 @@ final class ExportManager: ObservableObject, Observable {
               editedExt: editedExt,
               destDir: destDir,
               pairOriginalWithSuffix: true,
-              pairedVideoExt: pairedVideoExt)
+              pairedVideoExt: pairedVideoExt,
+              isClaimed: claimedByAnotherAsset)
           }
         } else if editedLivePhotoOnly {
           // 2-slot edited-only path: the only image side written is the edited variant.
@@ -2062,7 +2091,8 @@ final class ExportManager: ObservableObject, Observable {
               editedExt: nil,
               destDir: destDir,
               pairOriginalWithSuffix: false,
-              pairedVideoExt: pairedVideoExt)
+              pairedVideoExt: pairedVideoExt,
+              isClaimed: claimedByAnotherAsset)
           }
         } else {
           // 2-slot unedited path: the only image side written is the original.
@@ -2072,7 +2102,8 @@ final class ExportManager: ObservableObject, Observable {
             editedExt: nil,
             destDir: destDir,
             pairOriginalWithSuffix: false,
-            pairedVideoExt: pairedVideoExt)
+            pairedVideoExt: pairedVideoExt,
+            isClaimed: claimedByAnotherAsset)
         }
       }
 
@@ -2096,7 +2127,8 @@ final class ExportManager: ObservableObject, Observable {
             pairOriginalWithSuffix: pairOriginalWithSuffix,
             generation: gen,
             inFlight: &inFlight,
-            subfolder: subfolder
+            subfolder: subfolder,
+            mayAdoptExisting: !Self.pairedVideoFollows(variant, in: orderedVariants)
           )
           try throwIfCancelledOrStale(gen)
           if let nextGroupStem { groupStem = nextGroupStem }
@@ -2165,6 +2197,15 @@ final class ExportManager: ObservableObject, Observable {
   // through `self.destinationResolver` or the static helpers
   // `ExportDestinationResolver.splitFilename` / `ExportDestinationResolver.inheritedGroupStem`.
 
+  /// Whether `variant` is an image whose paired video this job writes after it, at its stem.
+  static func pairedVideoFollows(_ variant: ExportVariant, in variants: [ExportVariant]) -> Bool {
+    switch variant {
+    case .original: return variants.contains(.originalPairedVideo)
+    case .edited: return variants.contains(.editedPairedVideo)
+    case .originalPairedVideo, .editedPairedVideo: return false
+    }
+  }
+
   // MARK: - Edited-unavailable fallback (issue #22)
 
   /// The decision logic for running this fallback now lives in
@@ -2206,7 +2247,11 @@ final class ExportManager: ObservableObject, Observable {
     let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
     let originalExt = (originalRes.originalFilename as NSString).pathExtension
     let stem = destinationResolver.allocateUnusedOrigStem(
-      baseStem: baseStem, originalExt: originalExt, destDir: destDir)
+      baseStem: baseStem, originalExt: originalExt, destDir: destDir
+    ) { [recordStoreRouter] name in
+      recordStoreRouter.isFilenameClaimed(
+        name, placement: job.placement, subfolder: subfolder, exceptAsset: descriptor.id)
+    }
     do {
       try throwIfCancelledOrStale(gen)
       _ = try await variantExporter.exportSingleVariant(
@@ -2344,10 +2389,7 @@ final class ExportManager: ObservableObject, Observable {
   }
 
   private func stopForDestinationFailure(_ failure: ExportFailureSignal) {
-    let message =
-      failure.category == .destinationNoSpace
-      ? "Export stopped: the destination is full. Free up space, then start a new export."
-      : "Export stopped: write access to the destination was denied. Restore access, then start a new export."
+    let message = Self.destinationStopMessage(for: failure.category)
     // This job will not receive the coordinator's normal completion increment.
     let totals = (enqueued: totalJobsEnqueued, completed: totalJobsCompleted + 1)
     let stopped = manualRunFeedback.map {
@@ -2357,7 +2399,31 @@ final class ExportManager: ObservableObject, Observable {
     }
     teardownActiveWork()
     progressState.manualSummary = stopped
-    finalizeActiveRun(result: .failed, cancelReason: nil, jobTotals: totals)
+    // An unreachable destination is transient, like an unmount; the other stops need the
+    // user to fix the destination.
+    let unreachable = failure.category == .destinationUnavailable
+    finalizeActiveRun(
+      result: unreachable ? .interrupted : .failed,
+      cancelReason: unreachable ? .destinationUnavailable : nil, jobTotals: totals,
+      stoppedBy: failure.category)
+  }
+
+  static func destinationStopMessage(for category: AutoSyncFailureCategory) -> String {
+    switch category {
+    case .destinationNoSpace:
+      return "Export stopped: the destination is full. Free up space, then start a new export."
+    case .destinationPermission:
+      return
+        "Export stopped: write access to the destination was denied. Restore access, then start a new export."
+    case .destinationUnavailable:
+      return
+        "Export stopped: the destination can't be reached. Check that the drive or network share is connected and the folder still exists, then start a new export."
+    case .destinationCollision, .assetMissing, .resourceMissing, .photoKitTransient,
+      .iCloudTransient, .unknown:
+      // Not stop categories; kept so a future stop category still explains itself.
+      assertionFailure("\(category) does not stop an export run")
+      return "Export stopped. Check the destination, then start a new export."
+    }
   }
 
   /// Called by the coordinator's drain loop on the "queue empty after a job ran" edge.

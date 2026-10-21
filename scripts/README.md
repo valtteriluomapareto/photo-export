@@ -49,7 +49,13 @@ process shares the app's identity, so outside that file the guard rejects, acros
 breaks: `UserDefaults(suiteName:` (also via `.init`), `UserDefaults.standard`,
 `UserDefaults()`, `.temporaryDirectory`, `NSTemporaryDirectory(`,
 `.itemReplacementDirectory`, `.applicationSupportDirectory`, `.cachesDirectory` and the
-no-argument `ExportRecordStore()` / `CollectionExportRecordStore()`. Use
+no-argument `ExportRecordStore()` / `CollectionExportRecordStore()`, and the shipping
+compositions (`AppComposition.production`, `.screenshot`, `.forLaunch`, qualified or
+called through a leading dot anywhere, such as `.production(` or
+`.screenshot(windowSize:`), which hold the app's own preferences, Application Support
+folder and PhotoKit, and `PhotoExportApp(`, `PhotoExportApp.init(`, `PhotoExportApp.main`
+or a typed `: PhotoExportApp = .init`, which compose the real app. Build a core from a
+composition with `TestScratch` roots and fakes. Use
 `TestScratch.defaults(_:)` for a fresh suite, `TestScratch.suiteName(_:)` with
 `TestScratch.defaults(suiteName:)` when two objects share or reopen one suite, and
 `TestScratch.directory(_:)` for folders. A test that must exercise the real path keeps the
@@ -135,6 +141,11 @@ release matrix for both.
 `app-validation` and the canary share. They write `debug-build.log`, `release-build.log`,
 `test.log`, `test-start.marker` and `TestResults.xcresult` to the current directory, where the
 diagnostics, coverage and regression-gate steps read them.
+
+`SWIFT_WARNINGS_AS_ERRORS=1` makes `build-app.sh` fail on any Swift warning in the app target
+(the test target is not compiled there) and log to `debug-werror-build.log`. `app-validation`
+turns it on for its Debug build on the Xcode named in `.xcode-version`; the canary runs it as a
+last step; releases never set it. Locally: `SWIFT_WARNINGS_AS_ERRORS=1 bash scripts/ci/build-app.sh Debug`.
 
 `toolchain-canary.yml` builds and tests on other toolchains than `.xcode-version` (one lane per
 version, each naming its runner label) weekly, on demand, and on pull requests that change the version file

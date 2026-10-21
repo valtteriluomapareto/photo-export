@@ -102,7 +102,15 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     )
   }
 
-  private static func destinationExistsError() -> NSError {
+  /// Whether `error` is the collision refusal from `destinationExistsError()`.
+  static func isDestinationExists(_ error: Error) -> Bool {
+    let error = error as NSError
+    return error.domain == "Export" && error.code == 2
+  }
+
+  /// The collision refusal, `Export` code 2. Also reported when an existing file stops
+  /// being the one an export planned to adopt.
+  static func destinationExistsError() -> NSError {
     NSError(
       domain: "Export", code: 2,
       userInfo: [NSLocalizedDescriptionKey: "Destination already exists"])
@@ -198,6 +206,132 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
     guard attributes[.type] as? FileAttributeType == .typeRegular else { return nil }
     return (attributes[.size] as? NSNumber)?.int64Value
+  }
+
+  func itemIdentity(at url: URL) throws -> FileItemIdentity? {
+    var info = stat()
+    let status = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+      guard let path else {
+        errno = EINVAL
+        return -1
+      }
+      return lstat(path, &info)
+    }
+    guard status == 0 else {
+      let code = errno
+      if code == ENOENT || code == ENOTDIR { return nil }
+      throw Self.posixError(code, url)
+    }
+    return FileItemIdentity(
+      isRegularFile: info.st_mode & S_IFMT == S_IFREG, linkCount: Int(info.st_nlink),
+      device: Int64(info.st_dev),
+      inode: UInt64(info.st_ino), size: Int64(info.st_size),
+      modificationSeconds: Int(info.st_mtimespec.tv_sec),
+      modificationNanoseconds: Int(info.st_mtimespec.tv_nsec))
+  }
+
+  /// Reads `ATTR_CMN_NAME`, which reports the name the folder stores rather than the
+  /// spelling used to look the entry up. A symbolic link is not followed.
+  func storedName(at url: URL) throws -> String {
+    var request = attrlist()
+    request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+    request.commonattr = attrgroup_t(ATTR_CMN_NAME)
+    let referenceOffset = MemoryLayout<UInt32>.size
+    var reply = [UInt8](
+      repeating: 0, count: referenceOffset + MemoryLayout<attrreference_t>.size + Int(MAXPATHLEN))
+    let status = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+      guard let path else {
+        errno = EINVAL
+        return -1
+      }
+      return reply.withUnsafeMutableBytes {
+        getattrlist(path, &request, $0.baseAddress, $0.count, UInt32(FSOPT_NOFOLLOW))
+      }
+    }
+    guard status == 0 else { throw Self.posixError(errno, url) }
+    return try reply.withUnsafeBytes { raw in
+      let reference = raw.loadUnaligned(fromByteOffset: referenceOffset, as: attrreference_t.self)
+      let start = referenceOffset + Int(reference.attr_dataoffset)
+      // The length counts the terminating NUL.
+      let length = Int(reference.attr_length) - 1
+      guard start >= referenceOffset, length > 0, start + length <= raw.count,
+        let name = String(bytes: raw[start..<(start + length)], encoding: .utf8)
+      else {
+        throw Self.posixError(EIO, url)
+      }
+      return name
+    }
+  }
+
+  func openForReading(at url: URL, bypassingCache: Bool) throws -> any FileReadHandle {
+    let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+      guard let path else {
+        errno = EINVAL
+        return -1
+      }
+      return open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    }
+    guard descriptor >= 0 else { throw Self.posixError(errno, url) }
+    // Advisory: a volume that ignores it still reads correctly.
+    if bypassingCache { _ = fcntl(descriptor, F_NOCACHE, 1) }
+    return DescriptorReadHandle(descriptor: descriptor, url: url)
+  }
+
+  /// Reads with `pread` on a utility worker. The descriptor closes once.
+  private final class DescriptorReadHandle: FileReadHandle, @unchecked Sendable {
+    private let descriptor: Int32
+    private let url: URL
+    private let isClosed = OSAllocatedUnfairLock(initialState: false)
+
+    init(descriptor: Int32, url: URL) {
+      self.descriptor = descriptor
+      self.url = url
+    }
+
+    deinit { close() }
+
+    func read(offset: Int64, length: Int) async throws -> Data {
+      try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue.global(qos: .utility).async { [self] in
+          continuation.resume(with: Result { try readNow(offset: offset, length: length) })
+        }
+      }
+    }
+
+    func close() {
+      let wasOpen = isClosed.withLock { closed in
+        defer { closed = true }
+        return !closed
+      }
+      if wasOpen { Darwin.close(descriptor) }
+    }
+
+    private func readNow(offset: Int64, length: Int) throws -> Data {
+      // A closed descriptor number may already belong to another open file.
+      guard !isClosed.withLock({ $0 }) else { throw FileIOService.posixError(EBADF, url) }
+      var data = Data(count: length)
+      var filled = 0
+      try data.withUnsafeMutableBytes { buffer in
+        // A network volume may return fewer bytes than asked for before the end of the file.
+        while filled < length {
+          let count = pread(
+            descriptor, buffer.baseAddress! + filled, length - filled,
+            off_t(offset) + off_t(filled))
+          if count < 0 {
+            if errno == EINTR { continue }
+            throw FileIOService.posixError(errno, url)
+          }
+          if count == 0 { break }
+          filled += count
+        }
+      }
+      data.count = filled
+      return data
+    }
+  }
+
+  private static func posixError(_ code: Int32, _ url: URL) -> NSError {
+    NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [NSFilePathErrorKey: url.path])
   }
 
   func removeItem(at url: URL) throws {

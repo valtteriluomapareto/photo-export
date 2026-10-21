@@ -12,6 +12,8 @@ final class InMemoryAutoSyncCurrentRunStore: AutoSyncCurrentRunStore {
 
   var nextSaveError: Error?
   var nextClearError: Error?
+  /// Successful saves, so tests can assert that no run wrote a journal.
+  private(set) var saveCount = 0
 
   init(initial: [String: AutoSyncRunJournal] = [:]) {
     self.storage = initial
@@ -27,6 +29,7 @@ final class InMemoryAutoSyncCurrentRunStore: AutoSyncCurrentRunStore {
       throw error
     }
     storage[destinationId] = journal
+    saveCount += 1
   }
 
   func clear(destinationId: String) throws {

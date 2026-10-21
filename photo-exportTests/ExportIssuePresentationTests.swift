@@ -220,10 +220,11 @@ struct ExportIssuePresentationTests {
       f.library.invalidateCache()
     }
     f.window.orderFront(nil)
-    try #require(await observe {
-      f.counter.count(for: "issue-metadata:\(f.destinationId):1") == 1
-        && f.counter.renderedText["issue-row:asset"]?.first?.contains("2031") == true
-    })
+    try #require(
+      await observe {
+        f.counter.count(for: "issue-metadata:\(f.destinationId):1") == 1
+          && f.counter.renderedText["issue-row:asset"]?.first?.contains("2031") == true
+      })
     #expect(f.counter.count(for: "issue-metadata:\(f.destinationId):0") == 0)
   }
 
@@ -359,5 +360,41 @@ struct ExportIssuePresentationTests {
     #expect(
       f.autoSync.currentRetryState.entry(scope: .timeline, assetId: "asset", variant: .edited)
         == nil)
+  }
+
+  // MARK: - Retry footer
+
+  private func issue(
+    _ category: AutoSyncFailureCategory?, deadline: Date? = nil,
+    reason: ExportVariantReason? = nil
+  ) -> ExportIssue {
+    ExportIssue(
+      id: .init(source: .timeline, assetId: "asset", variantRaw: "original"),
+      destinationId: "dest", scopeLabel: "Timeline 2026-10", scopeKey: .timeline,
+      message: "Socket is not connected", reason: reason, failedAt: failedAt,
+      retry: category.map {
+        RetryEntry(
+          category: $0, errorSignature: "sig", attemptCount: 1, firstFailedAt: failedAt,
+          lastFailedAt: failedAt, nextEligibleAt: deadline)
+      })
+  }
+
+  /// An unreachable destination's item has no timer: it is tried again by the next Auto
+  /// Export run. "Auto Export is off" takes precedence, and other nil deadlines still need
+  /// action.
+  @Test func retryFooterSaysWhatHappensNext() {
+    let now = failedAt.addingTimeInterval(120)
+    func suffix(_ issue: ExportIssue, enabled: Bool = true) -> String {
+      let footer = issue.timeFooter(autoExportEnabled: enabled, now: now)
+      guard let range = footer.range(of: " · ") else { return "" }
+      return String(footer[range.lowerBound...])
+    }
+    #expect(suffix(issue(.destinationUnavailable)) == " · retries on the next Auto Export run")
+    #expect(suffix(issue(.destinationUnavailable), enabled: false) == " · Auto Export is off")
+    #expect(suffix(issue(.destinationPermission)) == " · needs action")
+    #expect(
+      suffix(issue(.unknown, deadline: now.addingTimeInterval(-1))) == " · eligible to retry now")
+    #expect(suffix(issue(nil)) == "")
+    #expect(suffix(issue(.destinationUnavailable, reason: .pairedVideoUnavailable)) == "")
   }
 }
