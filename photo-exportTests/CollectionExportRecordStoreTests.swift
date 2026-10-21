@@ -542,7 +542,8 @@ struct CollectionExportRecordStoreTests {
     let brokenFiles = contents.filter { $0.contains(".broken-") }
     #expect(brokenFiles.count == 1)
     let newSnapshot = try Data(contentsOf: snapshotURL)
-    let decoded = try JSONDecoder().decode(CollectionExportRecordStore.Snapshot.self, from: newSnapshot)
+    let decoded = try JSONDecoder().decode(
+      CollectionExportRecordStore.Snapshot.self, from: newSnapshot)
     #expect(decoded.placements.isEmpty)
     #expect(decoded.records.isEmpty)
   }

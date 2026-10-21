@@ -178,7 +178,8 @@ struct DiagnosticReporterTests {
     #expect(report.contains("Planned scopes: timeline, favorites, albums, sharedAlbums"))
     #expect(report.contains("Current scope:  albums (since"))
     #expect(
-      report.contains("Status:         in-flight on launch (previous session did not finish cleanly)"),
+      report.contains(
+        "Status:         in-flight on launch (previous session did not finish cleanly)"),
       "Status line is what tells the maintainer this is an abnormal-exit signal, not just a status snapshot"
     )
   }

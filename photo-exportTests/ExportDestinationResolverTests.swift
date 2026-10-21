@@ -14,7 +14,9 @@ struct ExportDestinationResolverTests {
   // MARK: - Fixtures
 
   /// Creates a temp dir for the test and a resolver wired to the real filesystem service.
-  private static func makeResolver(prefix: String = "DestResolver") throws -> (URL, ExportDestinationResolver) {
+  private static func makeResolver(prefix: String = "DestResolver") throws -> (
+    URL, ExportDestinationResolver
+  ) {
     let dir = TestScratch.directory(prefix)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let resolver = ExportDestinationResolver(fileSystem: FileIOService())
@@ -26,7 +28,8 @@ struct ExportDestinationResolverTests {
   }
 
   private func plantFile(_ name: String, in dir: URL) {
-    FileManager.default.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data("x".utf8))
+    FileManager.default.createFile(
+      atPath: dir.appendingPathComponent(name).path, contents: Data("x".utf8))
   }
 
   private func makeAsset(hasAdjustments: Bool = false, isLivePhoto: Bool = false)
@@ -79,7 +82,8 @@ struct ExportDestinationResolverTests {
   @Test func uniqueFileURL_noConflict() throws {
     let (dir, resolver) = try Self.makeResolver()
     defer { Self.cleanup(dir) }
-    let url = resolver.uniqueFileURL(in: dir, baseName: "photo", ext: "jpg", isClaimed: { _ in false })
+    let url = resolver.uniqueFileURL(
+      in: dir, baseName: "photo", ext: "jpg", isClaimed: { _ in false })
     #expect(url.lastPathComponent == "photo.jpg")
   }
 
@@ -88,7 +92,8 @@ struct ExportDestinationResolverTests {
     defer { Self.cleanup(dir) }
     plantFile("photo.jpg", in: dir)
     plantFile("photo (1).jpg", in: dir)
-    let url = resolver.uniqueFileURL(in: dir, baseName: "photo", ext: "jpg", isClaimed: { _ in false })
+    let url = resolver.uniqueFileURL(
+      in: dir, baseName: "photo", ext: "jpg", isClaimed: { _ in false })
     #expect(url.lastPathComponent == "photo (2).jpg")
   }
 
@@ -99,7 +104,8 @@ struct ExportDestinationResolverTests {
     for i in 1...5 {
       plantFile("IMG (\(i)).heic", in: dir)
     }
-    let url = resolver.uniqueFileURL(in: dir, baseName: "IMG", ext: "heic", isClaimed: { _ in false })
+    let url = resolver.uniqueFileURL(
+      in: dir, baseName: "IMG", ext: "heic", isClaimed: { _ in false })
     #expect(url.lastPathComponent == "IMG (6).heic")
   }
 
@@ -319,7 +325,8 @@ struct ExportDestinationResolverTests {
       // Sentinel preserved across the refactor.
       #expect(error.domain == "Export")
       #expect(error.code == 5)
-      #expect(error.localizedDescription.contains("Paired original filename already exists on disk"))
+      #expect(
+        error.localizedDescription.contains("Paired original filename already exists on disk"))
     }
   }
 

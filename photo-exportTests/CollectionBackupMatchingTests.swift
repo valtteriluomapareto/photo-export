@@ -94,7 +94,9 @@ struct CollectionBackupMatchingTests {
         F.directory(.albums, ["Trip_2"], [F.file("Y.JPG", date: F.date(2))]),
       ], tree: tree)
     #expect(
-      adoptedPaths(result) == ["a1": "Collections/Albums/Trip/", "a2": "Collections/Albums/Trip_2/"])
+      adoptedPaths(result) == [
+        "a1": "Collections/Albums/Trip/", "a2": "Collections/Albums/Trip_2/",
+      ])
   }
 
   /// The second album was exported first, so it holds the bare folder even though the resolver
@@ -109,7 +111,9 @@ struct CollectionBackupMatchingTests {
         F.directory(.albums, ["Trip_2"], [F.file("X.JPG", date: F.date(1))]),
       ], tree: tree)
     #expect(
-      adoptedPaths(result) == ["a1": "Collections/Albums/Trip_2/", "a2": "Collections/Albums/Trip/"])
+      adoptedPaths(result) == [
+        "a1": "Collections/Albums/Trip_2/", "a2": "Collections/Albums/Trip/",
+      ])
     #expect(result.unrecognizedFolders.isEmpty)
   }
 
@@ -132,7 +136,9 @@ struct CollectionBackupMatchingTests {
     let tree = [F.album("a1", "Trip"), F.album("a2", "Trip_2"), F.album("a3", "Trip")]
     library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1)]
     library.assetsByAlbumLocalId["a2"] = [asset("y", "Y.JPG", index: 2)]
-    library.assetsByAlbumLocalId["a3"] = [asset("z", "Z.JPG", index: 3), asset("y", "Y.JPG", index: 2)]
+    library.assetsByAlbumLocalId["a3"] = [
+      asset("z", "Z.JPG", index: 3), asset("y", "Y.JPG", index: 2),
+    ]
     let result = try await match(
       [
         F.directory(.albums, ["Trip"], [F.file("X.JPG", date: F.date(1))]),
@@ -174,7 +180,9 @@ struct CollectionBackupMatchingTests {
       kind: .album, id: saved.id, displayName: saved.displayName,
       collectionLocalIdentifier: "a2", relativePath: "Collections/Albums/Trip/",
       createdAt: Date(timeIntervalSince1970: 1))
-    library.assetsByAlbumLocalId["a1"] = [asset("x", "X.JPG", index: 1), asset("y", "Y.JPG", index: 2)]
+    library.assetsByAlbumLocalId["a1"] = [
+      asset("x", "X.JPG", index: 1), asset("y", "Y.JPG", index: 2),
+    ]
     library.assetsByAlbumLocalId["a2"] = [asset("y", "Y.JPG", index: 2)]
     let result = try await match(
       [
@@ -186,7 +194,8 @@ struct CollectionBackupMatchingTests {
     let byAlbum = Dictionary(
       uniqueKeysWithValues: result.adoptions.map { ($0.placement.collectionLocalIdentifier!, $0) })
     #expect(byAlbum["a2"]?.placement.relativePath == "Collections/Albums/Trip/")
-    #expect(byAlbum["a2"]?.placement.createdAt == savedAtBare.createdAt, "the saved placement is kept")
+    #expect(
+      byAlbum["a2"]?.placement.createdAt == savedAtBare.createdAt, "the saved placement is kept")
     #expect(byAlbum["a1"]?.placement.relativePath == "Collections/Albums/Trip_2/")
   }
 
@@ -403,7 +412,9 @@ struct CollectionBackupMatchingTests {
       ], tree: tree)
     #expect(result.adoptions.count == 2)
     #expect(
-      adoptedPaths(result) == ["a1": "Collections/Albums/Trip/", "a2": "Collections/Albums/Trip_2/"])
+      adoptedPaths(result) == [
+        "a1": "Collections/Albums/Trip/", "a2": "Collections/Albums/Trip_2/",
+      ])
     #expect(result.unrecognizedFolders.isEmpty)
   }
 

@@ -107,12 +107,14 @@ struct AutoSyncStorePersistenceTests {
       try store.save(state, destinationId: "dest-1")
 
       #expect(try store.load(destinationId: "dest-1") == state)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("dirtyState.json")
       #expect(
         FileManager.default.fileExists(atPath: expectedURL.path),
-        "dirtyState.json must live at <base>/<destId>/dirtyState.json — rename here orphans existing users' state")
+        "dirtyState.json must live at <base>/<destId>/dirtyState.json — rename here orphans existing users' state"
+      )
     }
   }
 
@@ -152,7 +154,8 @@ struct AutoSyncStorePersistenceTests {
       if let l = lastUpdatedRange, let s = scopesRange {
         #expect(
           l.lowerBound < s.lowerBound,
-          "encoder must keep .sortedKeys — `lastUpdatedAt` must appear before `scopes` alphabetically")
+          "encoder must keep .sortedKeys — `lastUpdatedAt` must appear before `scopes` alphabetically"
+        )
       }
     }
   }
@@ -235,7 +238,8 @@ struct AutoSyncStorePersistenceTests {
     let key = AutoSyncRetryScopeKey(rawValue: "shared-album:stream-42")
     #expect(key == .sharedAlbum(placementId: "stream-42"))
     #expect(
-      decoded.entry(scope: .sharedAlbum(placementId: "stream-42"),
+      decoded.entry(
+        scope: .sharedAlbum(placementId: "stream-42"),
         assetId: "asset-1", variant: .original) != nil,
       "shared-album entries must round-trip through entry() lookup")
   }
@@ -274,7 +278,8 @@ struct AutoSyncStorePersistenceTests {
       try store.save(state, destinationId: "dest-1")
 
       #expect(try store.load(destinationId: "dest-1") == state)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("retryState.json")
       #expect(
@@ -318,7 +323,8 @@ struct AutoSyncStorePersistenceTests {
       try store.save(summary, destinationId: "dest-1")
 
       #expect(store.load(destinationId: "dest-1") == summary)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("lastRunSummary.json")
       #expect(
@@ -464,7 +470,8 @@ struct AutoSyncStorePersistenceTests {
       try store.save(journal, destinationId: "dest-1")
 
       #expect(store.load(destinationId: "dest-1") == journal)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("currentRun.json")
       #expect(
@@ -505,12 +512,14 @@ struct AutoSyncStorePersistenceTests {
 
       try store.clear(destinationId: "dest-1")
       #expect(store.load(destinationId: "dest-1") == nil)
-      let url = dir
+      let url =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("currentRun.json")
       #expect(
         !FileManager.default.fileExists(atPath: url.path),
-        "clear must remove the file on disk — leaving it would falsely report previous-session abnormal exit on next launch")
+        "clear must remove the file on disk — leaving it would falsely report previous-session abnormal exit on next launch"
+      )
     }
   }
 
@@ -545,7 +554,8 @@ struct AutoSyncStorePersistenceTests {
         currentScopeStartedAt: Date(timeIntervalSinceReferenceDate: 770000001))
       try store.save(journal, destinationId: "dest-1")
 
-      let url = dir
+      let url =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("currentRun.json")
       let raw = try String(contentsOf: url, encoding: .utf8)
@@ -594,7 +604,8 @@ struct AutoSyncStorePersistenceTests {
 
       // Both calls must target `<base>/<destId>/` — not the base
       // directory itself, not the file's full path.
-      let expectedParent = dir
+      let expectedParent =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .standardizedFileURL
       let standardized = recorder.fsyncedPaths.map { $0.standardizedFileURL }
@@ -651,12 +662,14 @@ struct AutoSyncStorePersistenceTests {
       try store.save(blob, destinationId: "dest-1")
 
       #expect(store.load(destinationId: "dest-1") == blob)
-      let expectedURL = dir
+      let expectedURL =
+        dir
         .appendingPathComponent("dest-1", isDirectory: true)
         .appendingPathComponent("lastDurablyRecordedToken.data")
       #expect(
         FileManager.default.fileExists(atPath: expectedURL.path),
-        "lastDurablyRecordedToken.data must live at the documented path — rename orphans existing users' tokens")
+        "lastDurablyRecordedToken.data must live at the documented path — rename orphans existing users' tokens"
+      )
     }
   }
 
@@ -688,7 +701,8 @@ struct AutoSyncStorePersistenceTests {
 
       #expect(
         store.load() == nil,
-        "load() must return nil on decode failure rather than throw — protects launch when on-disk token is corrupt")
+        "load() must return nil on decode failure rather than throw — protects launch when on-disk token is corrupt"
+      )
     }
   }
 

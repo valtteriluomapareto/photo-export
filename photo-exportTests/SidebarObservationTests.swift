@@ -44,7 +44,8 @@ import Testing
       var body: some View {
         HStack {
           TimelineSidebarView(
-            selectionSet: $timelineSelection, photoLibraryService: service).frame(width: 260)
+            selectionSet: $timelineSelection, photoLibraryService: service
+          ).frame(width: 260)
           CollectionsHost(
             manager: manager, collections: collections, selectionSet: $collectionSelection,
             counter: counter
@@ -90,10 +91,11 @@ import Testing
           assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         let content = Host(
-          manager: manager, collections: collections, service: service, counter: counter)
-          .environmentObject(library).environmentObject(timeline)
-          .environmentObject(collections).environmentObject(manager)
-          .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
+          manager: manager, collections: collections, service: service, counter: counter
+        )
+        .environmentObject(library).environmentObject(timeline)
+        .environmentObject(collections).environmentObject(manager)
+        .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 560, height: 500),
           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -145,11 +147,12 @@ import Testing
       let f = Fixture()
       var failure: Error?
       do {
-        try #require(await observe {
-          f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
-            && f.counter.renderedText["collection-sidebar:favorites"]
-              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
-        })
+        try #require(
+          await observe {
+            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+              && f.counter.renderedText["collection-sidebar:favorites"]
+                == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+          })
         await f.quiesce()
         let timelineBodies = f.counter.count(for: "timeline-sidebar-body")
         let baseline = f.counter.snapshot()
@@ -159,7 +162,8 @@ import Testing
           let before = f.counter.count(for: key)
           f.manager.queueCoordinator.enqueue([
             .init(
-              assetLocalIdentifier: "unrelated-\(index)", placement: .timeline(year: 2026, month: 9),
+              assetLocalIdentifier: "unrelated-\(index)",
+              placement: .timeline(year: 2026, month: 9),
               selection: .edited)
           ])
           try #require(await observe { f.counter.count(for: key) > before })
@@ -172,15 +176,17 @@ import Testing
           assetId: "first", placement: .favorites(), variant: .original,
           filename: "FIRST.JPG", exportedAt: Date())
         f.collections.flushPendingNotifications()
-        #expect(await observe {
-          f.counter.renderedText["collection-sidebar:favorites"]
-            == [String(describing: CollectionSidebarBadge.State.partial(exported: 1, total: 2))]
-        })
+        #expect(
+          await observe {
+            f.counter.renderedText["collection-sidebar:favorites"]
+              == [String(describing: CollectionSidebarBadge.State.partial(exported: 1, total: 2))]
+          })
         f.service.yearCounts = [(2027, 3), (2026, 2)]
         f.library.invalidateCache()
-        #expect(await observe {
-          f.counter.renderedText["timeline-sidebar-years"] == ["2027:3", "2026:2"]
-        })
+        #expect(
+          await observe {
+            f.counter.renderedText["timeline-sidebar-years"] == ["2027:3", "2026:2"]
+          })
       } catch { failure = error }
       await f.close()
       if let failure { throw failure }
@@ -190,10 +196,11 @@ import Testing
     func queueAndRecordPublicationsSkipTheCollectionsSidebarBody() async throws {
       let f = Fixture()
       try await withCleanup {
-        try #require(await observe {
-          f.counter.renderedText["collection-sidebar:favorites"]
-            == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
-        })
+        try #require(
+          await observe {
+            f.counter.renderedText["collection-sidebar:favorites"]
+              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+          })
         let album = ExportPlacement(
           kind: .album, id: "unrelated-album", displayName: "Unrelated",
           collectionLocalIdentifier: "unrelated-album", relativePath: "Collections/Unrelated/",

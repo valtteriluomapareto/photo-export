@@ -183,7 +183,9 @@ struct ExportAllAlbumsTests {
   /// Top-level albums and albums nested under folders both reach the queue.
   /// Favorites assets are present in the canned data but are NOT enqueued
   /// because the batch is albums-only.
-  @Test(.timeLimit(.minutes(1))) func enqueuesEveryAlbumIncludingNestedAndExcludesFavorites() async throws {
+  @Test(.timeLimit(.minutes(1))) func enqueuesEveryAlbumIncludingNestedAndExcludesFavorites()
+    async throws
+  {
     let h = makeHarness()
     defer { h.cleanup() }
 
@@ -228,7 +230,8 @@ struct ExportAllAlbumsTests {
   /// memory is bounded by one album's working set, not the cumulative
   /// 282-album sweep (issue #112). Asserts via a `RecordingPHAssetCacheControl`
   /// spy because `PHAsset` can't be constructed in unit tests.
-  @Test(.timeLimit(.minutes(1))) func bulkAlbumExportCallsForgetPHAssetCachePerAlbum() async throws {
+  @Test(.timeLimit(.minutes(1))) func bulkAlbumExportCallsForgetPHAssetCachePerAlbum() async throws
+  {
     let photoLib = FakePhotoLibraryService()
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
@@ -383,7 +386,8 @@ struct ExportAllAlbumsTests {
     #expect(h.manager.emptyRunMessage == nil)
   }
 
-  @Test(.timeLimit(.minutes(2))) func allAlbumsAlreadyExportedSetsAlreadyDoneMessage() async throws {
+  @Test(.timeLimit(.minutes(2))) func allAlbumsAlreadyExportedSetsAlreadyDoneMessage() async throws
+  {
     let h = makeHarness()
     defer { h.cleanup() }
 
