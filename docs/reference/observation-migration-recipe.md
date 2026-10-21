@@ -315,13 +315,65 @@ main at a sync. See [`scripts/README.md`](../../scripts/README.md).
 
 ## Hosted-suite flake baseline
 
-Recorded on local Xcode 27.1 (macOS 26.6), before any type flipped, over the hosted
-observation suites plus `PublisherParityTests` and `ObservationProbeTests`. With
-`-test-iterations 10 -run-tests-until-failure` the first run stopped at the iteration where
-`CollectionContentObservationTests.unrelatedQueuePublicationsDoNotRescanLoadedCollection`
-failed (497 test runs, that one failure). Rerun with that test skipped, all 10 iterations ran
-clean (45 tests, 490 test runs). That test fails on every iteration when its suite runs alone,
-on main as well, so it is a known failure rather than a flake:
-[issue #344](https://github.com/valtteriluomapareto/photo-export/issues/344). Re-record the
-baseline on the CI toolchain before comparing a flip against it. Resolving #344 is an entry
-condition for flipping `PhotoLibraryManager` and the record stores.
+The CI baseline was recorded on 2026-10-21 at untouched feature head
+`23e38aaa0c81068ea48944c1437c12d430372062`, using Xcode **26.6 (17F113)** on macOS
+26.6.2. The [baseline run](https://github.com/valtteriluomapareto/photo-export/actions/runs/39613498379)
+covered the 27 suites below: 194 test declarations and 342 expanded cases, each with
+repetitions 1–10 in the saved xcresult. All **3,420 case runs** completed: 3,410 passed and
+10 exercised the intentional `ExpectationReflectionSafetyTests` expected-failure control
+(two known issue records per repetition). There were **zero unexpected failures and no
+skips**. All 24 existing `PublisherParityTests` rows passed ten times each.
+
+The verification-only workflow ref was
+`961c535da1417e8cb0e59dd0d4eb5c13748c1141`; it checked out the exact clean source
+separately from its adapter and enforced the pinned Xcode before testing. The sorted suite
+inventory's SHA256 was `dc99ea6bfcf98f57283a1513bb3905e682e29c0c3bfdaa00fe76447043f10193`.
+The run's artifact contains the full command, toolchain/source provenance, log, summary,
+per-case repetition tree and xcresult. The workflow ref is not part of the application or
+migration branch. Later checks use this toolchain and suite inventory, adding any new
+suites and identifying cases absent from the baseline.
+
+The command below uses isolated `/tmp` paths; CI used equivalent paths under its runner
+temporary directory. Use fresh paths for another run:
+
+```bash
+caffeinate -du xcodebuild -project photo-export.xcodeproj -scheme photo-export \
+  -destination 'platform=macOS' \
+  -derivedDataPath /tmp/observation-hosted-derived-data \
+  -resultBundlePath /tmp/observation-hosted-baseline.xcresult \
+  -test-iterations 10 -run-tests-until-failure \
+  -only-testing:photo-exportTests/AppCoreTests \
+  -only-testing:photo-exportTests/AssetDetailPreviewRevisionTests \
+  -only-testing:photo-exportTests/AssetDetailStatusTests \
+  -only-testing:photo-exportTests/AssetDetailViewLifecycleTests \
+  -only-testing:photo-exportTests/AuthorizationRefreshTests \
+  -only-testing:photo-exportTests/CollectionContentObservationTests \
+  -only-testing:photo-exportTests/CollectionPlacementStatusTests \
+  -only-testing:photo-exportTests/DestinationRecoveryPresentationTests \
+  -only-testing:photo-exportTests/ExpectationReflectionSafetyTests \
+  -only-testing:photo-exportTests/ExportIssuePresentationTests \
+  -only-testing:photo-exportTests/ExportManagerObservationTests \
+  -only-testing:photo-exportTests/HistoryLoadingSummaryTests \
+  -only-testing:photo-exportTests/ImportFailurePresentationTests \
+  -only-testing:photo-exportTests/LibraryGridSelectionLifecycleTests \
+  -only-testing:photo-exportTests/LibraryWindowSizeTests \
+  -only-testing:photo-exportTests/ManualExportFeedbackViewTests \
+  -only-testing:photo-exportTests/MonthContentViewEquatableTests \
+  -only-testing:photo-exportTests/ObservableCombineBridgeTests \
+  -only-testing:photo-exportTests/ObservationProbeTests \
+  -only-testing:photo-exportTests/PublisherParityTests \
+  -only-testing:photo-exportTests/RecordStoreAlertRecoveryTests \
+  -only-testing:photo-exportTests/RecordStoreAsyncLoadTests \
+  -only-testing:photo-exportTests/RecordStoreNotificationTests \
+  -only-testing:photo-exportTests/RootViewObservationTests \
+  -only-testing:photo-exportTests/SidebarObservationTests \
+  -only-testing:photo-exportTests/ThumbnailViewLifecycleTests \
+  -only-testing:photo-exportTests/TimelineSidebarBadgeRefreshTests \
+  CODE_SIGNING_ALLOWED=NO test
+```
+
+The older local Xcode 27.1 record is historical: the original combined hosted run stopped
+at a failure in `CollectionContentObservationTests.unrelatedQueuePublicationsDoNotRescanLoadedCollection`
+(497 test runs); skipping it allowed 490 clean runs. That fixture's pending setup publication
+was corrected in [#344](https://github.com/valtteriluomapareto/photo-export/issues/344),
+which is closed. The current 26.6 baseline includes that test and requires no exclusion.
