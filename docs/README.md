@@ -8,7 +8,7 @@ This is the canonical map of where documentation lives in this repository. Other
 | --- | --- | --- |
 | End users | [`website/src/content/docs/`](../website/src/content/docs/) | Published to the project website. Install steps, feature explanations, roadmap. |
 | Contributors | [`README.md`](../README.md), [`CONTRIBUTING.md`](../CONTRIBUTING.md) | Repo overview, build/test, contribution workflow. |
-| AI agents | [`AGENTS.md`](../AGENTS.md) | Architecture, conventions, command reference. Tool-specific files (`CLAUDE.md`) are stubs that point here. |
+| AI agents | [`AGENTS.md`](../AGENTS.md) | Agent entry point linking to contributor commands, workflow and architecture. Tool-specific files (`CLAUDE.md`) point here. |
 | Maintainers | [`docs/project/`](project/) | Plans, release process, manual test guides. Decision records live in `archive/`. |
 | Reference | [`docs/reference/`](reference/) | Long-lived material: best practices, persistence format, competitor research. |
 
@@ -20,7 +20,7 @@ When a change is user-visible, update **both** the root README and the matching 
 | --- | --- | --- |
 | Install / first-run / permissions | `getting-started.md` | `README.md` if commands changed |
 | Export behavior, toggles, file naming | `features.md` and `export-icloud-photos.md` | `README.md` "Current Capabilities" |
-| App architecture (managers, protocols, conventions) | `architecture.md` | `AGENTS.md` |
+| App architecture (managers, protocols, conventions) | `architecture.md` links to the reference | `docs/reference/architecture-conventions.md` |
 | Future work, scope changes | `roadmap.md` | — (roadmap is website-only) |
 | Build, test, or release commands | — | `README.md`, `CONTRIBUTING.md`, `AGENTS.md` as applicable |
 
@@ -66,7 +66,7 @@ Completed or superseded plans, kept as decision records:
 ## Reference material
 
 - [`reference/auto-export-behavior.md`](reference/auto-export-behavior.md) — Auto Export dispatch, debounce, dirty-work, retry, safety, persistence and run-presentation contracts.
-- [`reference/architecture-conventions.md`](reference/architecture-conventions.md) — cross-cutting contracts, Host-protocol pattern, canonical `start*` shape, regression-gate tests, and extension recipes for adding new placements/variants/collaborators. Read before touching `ExportManager` or anything AutoSync observes.
+- [`reference/architecture-conventions.md`](reference/architecture-conventions.md) — contributor architecture source: composition, data flow, role map, design rationale, cross-cutting contracts, regression gates and extension recipes. Read before touching `ExportManager` or anything AutoSync observes.
 - [`reference/swift-swiftui-best-practices.md`](reference/swift-swiftui-best-practices.md) — Swift/SwiftUI patterns and style notes
 - [`reference/persistence-store.md`](reference/persistence-store.md) — export record persistence format and behavior
 - [`reference/competitors.md`](reference/competitors.md) — competitor app research for the comparison page
