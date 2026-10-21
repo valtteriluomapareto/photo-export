@@ -3,8 +3,7 @@ import Foundation
 import os
 
 struct FileIOService: FileSystemService, AtomicFileReplacing {
-  private static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "FileIO")
+  private static let logger = Logger.app(.fileIO)
 
   /// Renames `source` to `destination` with `renamex_np` flags. Returns 0 on success,
   /// otherwise the `errno` the call left.

@@ -35,8 +35,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// bookmark. Survives across launches so the same destination keeps the same id even when its
   /// fingerprint drifts (network-share remount under a new path).
   private let stableIdDefaultsKey: String
-  private let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "ExportDestination")
+  private let logger = Logger.app(.exportDestination)
 
   private var volumeObservers: [NSObjectProtocol] = []
   private let volumeNotificationCenter: NotificationCenter

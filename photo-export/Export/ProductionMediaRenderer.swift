@@ -39,8 +39,7 @@ protocol VideoExportExecutor: Sendable {
 /// surfaces render activity through an injected callback so the toolbar
 /// can show `(downloading…)` / `(rendering…)` while the user waits.
 struct ProductionMediaRenderer: MediaRenderer {
-  private static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "MediaRenderer")
+  private static let logger = Logger.app(.mediaRenderer)
   private let executor: any VideoExportExecutor
   private let activity: @Sendable (RenderActivity?) -> Void
 

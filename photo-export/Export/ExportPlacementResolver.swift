@@ -53,8 +53,7 @@ struct ExportPlacementResolver {
   private let now: () -> Date
 
   init(
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "PlacementResolver"),
+    logger: Logger = Logger.app(.placementResolver),
     now: @escaping () -> Date = Date.init
   ) {
     self.logger = logger
@@ -173,7 +172,7 @@ struct ExportPlacementResolver {
 
     // Step 2: build the candidate relative path and check for sibling collisions.
     let parentPathString = sanitizedFolderPath(descriptor.pathComponents)
-    let sanitizedLeaf = ExportPathPolicy.sanitizeComponent(descriptor.title)
+    let sanitizedLeaf = CollectionPathComponentPolicy.sanitizeComponent(descriptor.title)
     let leaf = leafWithCollisionSuffix(
       sanitizedLeaf: sanitizedLeaf,
       parentPathString: parentPathString,
@@ -256,7 +255,7 @@ struct ExportPlacementResolver {
 
     // Step 2: build the candidate path under Shared Albums/ and apply sibling
     // collision-suffixing against other shared albums only.
-    let sanitizedLeaf = ExportPathPolicy.sanitizeComponent(descriptor.title)
+    let sanitizedLeaf = CollectionPathComponentPolicy.sanitizeComponent(descriptor.title)
     let leaf = sharedAlbumLeafWithCollisionSuffix(
       sanitizedLeaf: sanitizedLeaf,
       forDescriptor: descriptor,
@@ -309,14 +308,14 @@ struct ExportPlacementResolver {
     // Trip/trip could consume the directory intended for a sibling named TRIP_2.
     let reservedLeafKeys = Set(
       collections.filter { $0.kind == .sharedAlbum }
-        .map { siblingLeafKey(ExportPathPolicy.sanitizeComponent($0.title)) })
+        .map { siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
 
     let siblingCandidates =
       collections
       .filter { $0.kind == .sharedAlbum }
       .filter { $0.localIdentifier != descriptor.localIdentifier }
       .filter { other in
-        siblingLeafKey(ExportPathPolicy.sanitizeComponent(other.title))
+        siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent(other.title))
           == leafKey
       }
       .filter { other in
@@ -427,13 +426,13 @@ struct ExportPlacementResolver {
     let leafKey = siblingLeafKey(sanitizedLeaf)
     let existingLeafKeys = Set(existingLeaves.map(siblingLeafKey))
     let reservedLeafKeys = Set(
-      siblings.map { siblingLeafKey(ExportPathPolicy.sanitizeComponent($0.title)) })
+      siblings.map { siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0.title)) })
     let siblingCandidates =
       siblings
       .filter { $0.localIdentifier != descriptor.localIdentifier }
       .filter { other in
         sanitizedFolderPath(other.pathComponents) == parentPathString
-          && siblingLeafKey(ExportPathPolicy.sanitizeComponent(other.title))
+          && siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent(other.title))
             == leafKey
       }
       .filter { other in
@@ -554,6 +553,6 @@ struct ExportPlacementResolver {
   }
 
   func sanitizedFolderPath(_ components: [String]) -> String {
-    components.map(ExportPathPolicy.sanitizeComponent).joined(separator: "/")
+    components.map(CollectionPathComponentPolicy.sanitizeComponent).joined(separator: "/")
   }
 }

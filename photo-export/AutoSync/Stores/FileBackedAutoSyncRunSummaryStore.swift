@@ -17,8 +17,7 @@ final class FileBackedAutoSyncRunSummaryStore: AutoSyncRunSummaryStore {
   init(
     baseDirectoryURL: URL,
     fileManager: FileManager = .default,
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "AutoSyncRunSummaryStore")
+    logger: Logger = Logger.app(.autoSyncRunSummaryStore)
   ) {
     self.baseDirectoryURL = baseDirectoryURL
     self.fileManager = fileManager

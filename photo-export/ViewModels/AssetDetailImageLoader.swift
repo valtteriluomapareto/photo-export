@@ -15,7 +15,7 @@ final class AssetDetailImageLoader: ObservableObject {
 
   @Published private(set) var state = State()
   private var activeRequest: UUID?
-  private let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "UI.Detail")
+  private let logger = Logger.app(.detailPreview)
 
   /// SwiftUI may render a new selection before its task starts. Never display
   /// the previous selection's image or error during that interval.

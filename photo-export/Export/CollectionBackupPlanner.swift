@@ -199,7 +199,7 @@ enum CollectionBackupPlanner {
         for: selection, collections: collections, existingPlacements: existingPlacements)
 
       let parent = resolver.sanitizedFolderPath(descriptor.pathComponents)
-      let leaf = ExportPathPolicy.sanitizeComponent(descriptor.title)
+      let leaf = CollectionPathComponentPolicy.sanitizeComponent(descriptor.title)
       let leafKey = resolver.siblingLeafKey(leaf)
       // The resolver never gives a suffixed name that is a sibling's own title.
       let reserved = Set(
@@ -207,9 +207,11 @@ enum CollectionBackupPlanner {
           .filter {
             $0.localIdentifier != id && resolver.sanitizedFolderPath($0.pathComponents) == parent
           }
-          .map { resolver.siblingLeafKey(ExportPathPolicy.sanitizeComponent($0.title)) })
+          .map {
+            resolver.siblingLeafKey(CollectionPathComponentPolicy.sanitizeComponent($0.title))
+          })
       let parentKey = index.key(
-        root, descriptor.pathComponents.map(ExportPathPolicy.sanitizeComponent))
+        root, descriptor.pathComponents.map(CollectionPathComponentPolicy.sanitizeComponent))
 
       for directory in index.children(ofKey: parentKey) {
         guard let name = directory.components.last else { continue }

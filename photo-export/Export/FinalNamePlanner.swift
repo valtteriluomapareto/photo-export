@@ -29,8 +29,7 @@ struct FinalNamePlanner: Sendable {
   /// Bytes compared between two `shouldStop` calls, each a hop to the main actor.
   static let defaultStopCheckInterval = 32 << 20
 
-  private static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "FinalNamePlanner")
+  private static let logger = Logger.app(.finalNamePlanner)
 
   let fileSystem: any FileSystemService
   let edgeChunkSize: Int

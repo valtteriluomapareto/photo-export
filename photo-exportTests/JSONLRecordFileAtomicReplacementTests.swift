@@ -49,7 +49,7 @@ struct JSONLRecordFileAtomicReplacementTests {
       snapshotURL: directory.appendingPathComponent("snapshot.json"),
       logURL: directory.appendingPathComponent("log.jsonl"),
       ioQueue: DispatchQueue(label: "JSONL-atomic-\(UUID().uuidString)"),
-      logger: Logger(subsystem: "test", category: "JSONLAtomicReplacement"),
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLAtomicReplacement"),
       fileReplacer: fileReplacer)
   }
 

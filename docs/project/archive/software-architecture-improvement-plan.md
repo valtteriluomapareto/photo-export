@@ -36,7 +36,7 @@ This plan keeps product behavior and existing data formats stable while extracti
 ### Strong Foundations
 
 - `Protocols/` provides useful test seams for Photos, resources, filesystems, and destinations.
-- `Managers/` already contains several pure policy helpers such as `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, and `ResourceSelection`.
+- `Managers/` already contains several pure policy helpers such as `ExportFilenamePolicy`, `CollectionPathComponentPolicy`, `ExportPlacementResolver`, and `ResourceSelection`.
 - `JSONLRecordFile` centralizes the JSONL-plus-snapshot persistence mechanics shared by both record stores.
 - Keeping timeline records and collection records in separate stores is still a reasonable design because their key shapes are different.
 - `AutoSyncReducer` is a good example of isolating decision logic from stateful app services.

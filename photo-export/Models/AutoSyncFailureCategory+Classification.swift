@@ -45,8 +45,7 @@ extension AutoSyncFailureCategory {
       category: category(of: error), errorSignature: signature, localizedDescription: localized)
   }
 
-  private static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "FailureClassification")
+  private static let logger = Logger.app(.failureClassification)
 
   private static func category(of error: Error) -> AutoSyncFailureCategory {
     if let destinationError = error as? ExportDestinationManager.ExportDestinationError {

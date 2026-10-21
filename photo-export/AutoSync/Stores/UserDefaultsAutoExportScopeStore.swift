@@ -26,8 +26,7 @@ final class UserDefaultsAutoExportScopeStore: ObservableObject, AutoExportScopeP
 
   init(
     userDefaults: UserDefaults,
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "AutoSyncScopes")
+    logger: Logger = Logger.app(.autoSyncScopes)
   ) {
     self.userDefaults = userDefaults
     self.logger = logger

@@ -33,7 +33,7 @@ struct JSONLRecordFileTests {
       snapshotURL: dir.appendingPathComponent("snapshot.json"),
       logURL: dir.appendingPathComponent("log.jsonl"),
       ioQueue: queue,
-      logger: Logger(subsystem: "test", category: "JSONLRecordFile")
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile")
     )
     return (dir, file, queue)
   }

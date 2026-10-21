@@ -55,8 +55,7 @@ final class DestinationSafetyMonitor: ObservableObject {
     collectionExportRecordStore: CollectionExportRecordStore,
     confirmationStore: any DestinationSafetyConfirmationStore,
     scanDirectory: @MainActor @escaping () async -> Bool,
-    log: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "DestinationSafety")
+    log: Logger = Logger.app(.destinationSafety)
   ) {
     self.identityPublisher = identityPublisher
     self.exportRecordStore = exportRecordStore
@@ -76,8 +75,7 @@ final class DestinationSafetyMonitor: ObservableObject {
     collectionExportRecordStore: CollectionExportRecordStore,
     confirmationStore: any DestinationSafetyConfirmationStore
   ) {
-    let log = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "DestinationSafety")
+    let log = Logger.app(.destinationSafety)
     let scan: @MainActor () async -> Bool = { @MainActor [weak destinationManager] in
       guard let dm = destinationManager, let scopedURL = dm.beginScopedAccess() else {
         return false

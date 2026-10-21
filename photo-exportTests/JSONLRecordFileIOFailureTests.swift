@@ -69,7 +69,7 @@ struct JSONLRecordFileIOFailureTests {
       snapshotURL: directory.appendingPathComponent("snapshot.json"),
       logURL: directory.appendingPathComponent("log.jsonl"),
       ioQueue: DispatchQueue(label: "JSONL-io-failure-\(UUID().uuidString)"),
-      logger: Logger(subsystem: "test", category: "JSONLIOFailure"),
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLIOFailure"),
       logIO: logIO)
   }
 
@@ -81,7 +81,7 @@ struct JSONLRecordFileIOFailureTests {
     let file = JSONLRecordFile<Snapshot, Mutation>(
       snapshotURL: directory.appendingPathComponent("snapshot.json"),
       logURL: directory.appendingPathComponent("log.jsonl"), ioQueue: queue,
-      logger: Logger(subsystem: "test", category: "JSONLFlushBoundary"))
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLFlushBoundary"))
     queue.suspend()
     file.append(Mutation(key: "first", value: "1"), currentSnapshot: { Snapshot(values: [:]) })
     var flushTask: Task<Void, Error>?

@@ -58,7 +58,7 @@ struct JSONLRecordFileTailRecoveryTests {
       snapshotURL: root.appendingPathComponent("snapshot.json"),
       logURL: root.appendingPathComponent("log.jsonl"),
       ioQueue: DispatchQueue(label: "JSONLTail-\(UUID())"),
-      logger: Logger(subsystem: "test", category: "JSONLTail"), fileReplacer: replacer, logIO: io)
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLTail"), fileReplacer: replacer, logIO: io)
   }
 
   private func seed(_ tail: Tail, at root: URL) throws -> Data {

@@ -188,8 +188,7 @@ struct LiveDestinationIdentityHints: Sendable {
 }
 
 extension DestinationFingerprint {
-  private static let log = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "DestinationFingerprint")
+  private static let log = Logger.app(.destinationFingerprint)
 
   /// Legacy low-confidence id derivation for migration purposes only. Returns the
   /// `SHA-256(volumeIdentifier-description || U+0000 || /relativePath)` digest the previous

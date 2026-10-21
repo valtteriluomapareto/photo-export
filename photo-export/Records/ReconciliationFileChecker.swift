@@ -49,7 +49,7 @@ struct ReconciliationFileChecker: ReconciliationFileChecking {
           path: root.path, detail: "History contains an invalid month")
       }
     }
-    let path = ExportPlacementPathPolicy.relativePath(placement: placement, subfolder: subfolder)
+    let path = ExportMediaPathPolicy.relativePath(placement: placement, subfolder: subfolder)
     return root.appendingPathComponent(path).appendingPathComponent(filename).path
   }
 }

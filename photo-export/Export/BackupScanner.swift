@@ -93,8 +93,7 @@ struct BackupScanner {
     case done
   }
 
-  static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "BackupScanner")
+  static let logger = Logger.app(.backupScanner)
 
   // MARK: - Collision suffix pattern
 

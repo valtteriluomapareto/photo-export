@@ -156,7 +156,7 @@ struct RecordStoreLoadCharacterizationTests {
       snapshotURL: root.appendingPathComponent("snapshot.json"),
       logURL: root.appendingPathComponent("log.jsonl"),
       ioQueue: DispatchQueue(label: "LoadSeparator-\(UUID())"),
-      logger: Logger(subsystem: "test", category: "LoadSeparator"), logIO: io)
+      logger: Logger(subsystem: TestLogging.subsystem, category: "LoadSeparator"), logIO: io)
   }
 
   private func line(_ id: String) throws -> Data {

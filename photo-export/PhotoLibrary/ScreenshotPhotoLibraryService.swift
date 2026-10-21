@@ -33,8 +33,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   var authorizationStatus: PHAuthorizationStatus = .authorized
   var isAuthorized: Bool = true
 
-  private let screenshotLogger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "Screenshot")
+  private let screenshotLogger = Logger.app(.screenshot)
 
   /// In-memory cache for rendered placeholder thumbnails — the gradient render is
   /// cheap but doing it on every grid scroll would still flicker. Keyed by

@@ -17,6 +17,6 @@ enum ExportVideoLayout: String, Codable, Sendable, CaseIterable {
   case flat
   /// Standalone-video assets go into a `videos/` subfolder inside the placement.
   /// Live Photo paired motion stays with its still — see
-  /// `ExportPlacementPathPolicy.subfolder(for:layout:)`.
+  /// `ExportMediaPathPolicy.subfolder(for:layout:)`.
   case subfolder
 }

@@ -21,8 +21,7 @@ import os
 /// between calls, and the default would hold the intermediate working set
 /// in the high-MB range per call indefinitely.
 struct ProductionImageConverter: ImageConverter {
-  private static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "ImageConverter")
+  private static let logger = Logger.app(.imageConverter)
 
   /// Shared CoreImage context. `CIContext` is `Sendable` and documented as
   /// thread-safe, so one shared instance serves the whole export pipeline.

@@ -106,7 +106,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
   /// enumeration loop so a reporter who can attach Instruments can pinpoint
   /// which phase a stall is happening in. Issue #92.
   private static let signposter = OSSignposter(
-    subsystem: "com.valtteriluoma.photo-export",
+    subsystem: Logger.appSubsystem,
     category: "PhotoLibraryChanges.CatchUp")
 
   var authorizationStatus: PHAuthorizationStatus {
@@ -134,8 +134,7 @@ final class PhotoLibraryPersistentChangeAdapter: NSObject, StartablePhotoLibrary
     clock: AutoSyncClock,
     reconcileInterval: TimeInterval = PhotoLibraryPersistentChangeAdapter.defaultReconcileInterval,
     onPotentialLibraryChange: (@MainActor () -> Void)? = nil,
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "PhotoLibraryChanges")
+    logger: Logger = Logger.app(.photoLibraryChanges)
   ) {
     self.explicitLibrary = library
     self.tokenStore = tokenStore
