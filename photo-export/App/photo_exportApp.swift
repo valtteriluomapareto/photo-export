@@ -14,9 +14,10 @@ struct PhotoExportApp: App {
   private let core: AppCore
   // The core's `ObservableObject`s, held as `@StateObject`s. The `@Observable` objects need no
   // wrapper: the core owns `LoginItemController` and `WhatsNewState`, `ExportManager` owns
-  // `ExportProgressState`, and nothing here reads them. Only `autoSyncManager` is read in
-  // `body`, for the menu bar label; the others only keep their instances alive alongside the
-  // core. Scenes get the same instances through `photoExportEnvironment(core)`.
+  // `ExportProgressState`, and nothing here reads them. `autoSyncManager` supplies the
+  // menu bar label and `exportRecordStore` supplies reactive timeline history readiness in
+  // `body`; the others keep their instances alive alongside the core. Scenes get the same
+  // instances through `photoExportEnvironment(core)`.
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var photoLibraryManager: PhotoLibraryManager
   @StateObject private var exportRecordStore: ExportRecordStore
@@ -60,15 +61,18 @@ struct PhotoExportApp: App {
     // so the app is still identified as "Photo Export" everywhere it
     // matters outside the chrome.
     WindowGroup("") {
-      ContentView(destinationManager: exportDestinationManager, recordStore: exportRecordStore)
-        .equatable()
-        .recordStoreAlertHost()
-        .photoExportEnvironment(core)
-        .task {
-          // PhotoKit is first touched here, after the window has rendered, not in App.init.
-          // Every window runs this; the core starts once.
-          core.start()
-        }
+      ContentView(
+        destinationManager: exportDestinationManager, recordStore: exportRecordStore,
+        timelineHistoryState: exportRecordStore.state
+      )
+      .equatable()
+      .recordStoreAlertHost()
+      .photoExportEnvironment(core)
+      .task {
+        // PhotoKit is first touched here, after the window has rendered, not in App.init.
+        // Every window runs this; the core starts once.
+        core.start()
+      }
     }
     // Default sized so the sidebar (240) and content grid (520) sit at their
     // ideal widths set in `LibraryRootView`, leaving ~520 for the detail pane.

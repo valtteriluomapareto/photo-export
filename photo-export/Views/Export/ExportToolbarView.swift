@@ -4,8 +4,6 @@ struct ExportToolbarView: ToolbarContent {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
@@ -22,6 +20,7 @@ struct ExportToolbarView: ToolbarContent {
   /// shared-album single-select case keeps its per-item label and dispatch.
   /// The global Export All Albums action excludes shared albums and would skip it.
   let focusedSelection: LibrarySelection?
+  let historyState: RecordStoreState
 
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
 
@@ -47,6 +46,20 @@ struct ExportToolbarView: ToolbarContent {
       primaryActions
     }
   }
+
+  #if DEBUG
+    /// Reads the actual button environment; native controls are absent in hosted tests here.
+    private struct ExportControlProbe: View {
+      @Environment(\.isEnabled) private var isEnabled
+      @Environment(\.bodyInvalidationCounter) private var counter
+      let help: String
+
+      var body: some View {
+        counter?.recordText([String(isEnabled), help], for: "toolbar-export-control")
+        return Color.clear.frame(width: 0, height: 0)
+      }
+    }
+  #endif
 
   // MARK: - Settings cog
 
@@ -137,6 +150,9 @@ struct ExportToolbarView: ToolbarContent {
       .controlSize(.large)
       .tint(.accentColor)
       .keyboardShortcut("e", modifiers: .command)
+      #if DEBUG
+        .background { ExportControlProbe(help: exportHelp) }
+      #endif
       .disabled(!isPrimaryActionEnabled)
       .help(exportHelp)
       .confirmationDialog(
@@ -206,7 +222,7 @@ struct ExportToolbarView: ToolbarContent {
   private var primaryAvailability: ManualExportAvailability {
     ManualExportAvailability(
       destinationCanExport: exportDestinationManager.canExportNow,
-      history: section == .timeline ? exportRecordStore.state : collectionExportRecordStore.state)
+      history: historyState)
   }
 
   /// Manual actions remain available during Auto Export so the user can confirm

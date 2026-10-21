@@ -3,8 +3,8 @@ import SwiftUI
 struct OnboardingView: View {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
+  let historyState: RecordStoreState
   let onSkip: () -> Void
 
   @State private var exportAll = true
@@ -28,10 +28,28 @@ struct OnboardingView: View {
     .background(Color(.windowBackgroundColor))
   }
 
+  #if DEBUG
+    /// Reads the rendered button's enabled environment and the live option binding.
+    private struct ExportControlProbe: View {
+      @Environment(\.isEnabled) private var isEnabled
+      @Environment(\.bodyInvalidationCounter) private var counter
+      let help: String
+      let includesOriginals: Bool
+      let toggleOriginals: () -> Void
+
+      var body: some View {
+        counter?.recordText(
+          [String(isEnabled), help, String(includesOriginals)], for: "onboarding-export-control")
+        counter?.recordAction("onboarding-toggle-originals", action: toggleOriginals)
+        return Color.clear.frame(width: 0, height: 0)
+      }
+    }
+  #endif
+
   private var exportAvailability: ManualExportAvailability {
     ManualExportAvailability(
       destinationCanExport: exportDestinationManager.canExportNow,
-      history: exportRecordStore.state)
+      history: historyState)
   }
 
   /// Why Start Export is disabled while the picked folder's history loads; empty otherwise.
@@ -159,6 +177,13 @@ struct OnboardingView: View {
           onSkip()
         }
         .buttonStyle(.borderedProminent)
+        #if DEBUG
+          .background {
+            ExportControlProbe(
+              help: startExportHelp, includesOriginals: includeOriginals,
+              toggleOriginals: { includeOriginals.toggle() })
+          }
+        #endif
         // A folder picked here has its history read first; starting meanwhile would drop the
         // export.
         .disabled(

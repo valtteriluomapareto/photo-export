@@ -5,8 +5,8 @@ import Testing
 @testable import Photo_Export
 
 #if DEBUG
-  /// The app's root views hold the record store and destination manager only for actions,
-  /// so publications from those objects must not re-run their bodies.
+  /// Root inputs admit history readiness while unrelated record and destination publications
+  /// leave action-only references and the current readiness value unchanged.
   @MainActor
   @Suite(.timeLimit(.minutes(2)), .serialized)
   struct RootViewObservationTests {
@@ -35,12 +35,16 @@ import Testing
       let counter: BodyInvalidationCounter
       var body: some View {
         let _ = counter.record("content-host")
-        ContentView(destinationManager: destination, recordStore: timeline).equatable()
+        ContentView(
+          destinationManager: destination, recordStore: timeline,
+          timelineHistoryState: timeline.state
+        ).equatable()
       }
     }
 
     @MainActor
     private final class Fixture {
+      let io = HeldReadIO()
       let root = TestScratch.directory("RootViewObservation")
       let suite = TestScratch.suiteName("RootViewObservation")
       let defaults: UserDefaults
@@ -69,9 +73,10 @@ import Testing
           validationScopeAcquirer: { _ in true }, validationScopeReleaser: { _ in })
         service.yearCounts = [(2026, 2)]
         library = PhotoLibraryManager(overrideService: service)
-        timeline = ExportRecordStore(baseDirectoryURL: root.appendingPathComponent("Records"))
+        timeline = ExportRecordStore(
+          baseDirectoryURL: root.appendingPathComponent("Records"), recordLogIO: io)
         collections = CollectionExportRecordStore(
-          baseDirectoryURL: root.appendingPathComponent("Records"))
+          baseDirectoryURL: root.appendingPathComponent("Records"), recordLogIO: io)
         timeline.configure(for: "A")
         collections.configure(for: "A")
         manager = ExportManager(
@@ -90,21 +95,22 @@ import Testing
 
       @ViewBuilder private func pane(_ surface: Surface) -> some View {
         switch surface {
-        case .library: LibraryRootView(screenshotSurfaceKey: nil)
+        case .library: LibraryRootView(screenshotSurfaceKey: nil, timelineHistoryState: .ready)
         case .content:
           ContentHost(
             manager: manager, destination: destination, timeline: timeline, counter: counter)
         }
       }
 
-      func show(_ surface: Surface) {
+      func show(_ surface: Surface, screenshotSurfaceKey: String? = nil) {
         let hosted = NSHostingView(
           rootView: pane(surface).frame(width: 1200, height: 800)
             .overlay(alignment: .topLeading) { RecordsProbe(store: timeline, counter: counter) }
             .environmentObject(library).environmentObject(timeline).environmentObject(collections)
             .environmentObject(manager).environment(manager.progressState)
             .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
-            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
+            .environment(\.bodyInvalidationCounter, counter)
+            .environment(\.screenshotSurfaceKey, screenshotSurfaceKey).defaultAppStorage(defaults))
         let owned = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
           styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -146,6 +152,7 @@ import Testing
       }
 
       func close() async {
+        io.releaseAll()
         autoSync.setEnabled(false)
         manager.cancelAndClear()
         if let sheet = window?.attachedSheet {
@@ -179,6 +186,100 @@ import Testing
             && f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
         })
       await f.quiesce()
+    }
+
+    private func beginHistoryLoad(_ f: Fixture, section: LibrarySection) -> URL {
+      let snapshotName =
+        section == .timeline
+        ? ExportRecordStore.Constants.snapshotFileName
+        : CollectionExportRecordStore.Constants.snapshotFileName
+      let snapshot = f.root.appendingPathComponent("Records/Loading")
+        .appendingPathComponent(snapshotName)
+      f.io.hold(snapshot)
+      if section == .timeline {
+        f.timeline.beginConfigure(for: "Loading")
+      } else {
+        f.collections.beginConfigure(for: "Loading")
+      }
+      return snapshot
+    }
+
+    @Test func contentRouteRendersForHistoryReadinessOnly() async throws {
+      let f = try Fixture(selectFolder: false, onboardingComplete: false)
+      try await withCleanup {
+        f.show(.content)
+        try #require(await observe { f.counter.count(for: "onboarding-auto-skip-checked") > 0 })
+        try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
+        f.destination.setSelectedFolderForTesting(f.folder)
+        f.destination.revalidateForTesting()
+        try #require(
+          await observe { f.counter.renderedText["onboarding-export-control"]?.first == "true" })
+        await f.quiesce()
+        let rootBodies = f.counter.count(for: "content-root")
+        let hostBodies = f.counter.count(for: "content-host")
+        let snapshot = beginHistoryLoad(f, section: .timeline)
+        try #require(await observe { f.counter.count(for: "content-host") > hostBodies })
+        await f.quiesce()
+        #expect(f.counter.count(for: "content-root") > rootBodies)
+        #expect(f.counter.renderedText["onboarding-export-control"]?.first == "false")
+        f.io.release(snapshot)
+        await f.timeline.waitUntilSettled()
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test(arguments: [LibrarySection.timeline, .collections])
+    func appRouteUpdatesToolbarForHistoryReadiness(section: LibrarySection) async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.show(.content, screenshotSurfaceKey: section == .timeline ? nil : "collections-favorites")
+        let key = "toolbar-export-control"
+        try #require(await observe { f.counter.renderedText[key] != nil })
+        try #require(f.counter.renderedText[key]?.first == "true")
+        let snapshot = beginHistoryLoad(f, section: section)
+        try #require(await observe { f.counter.renderedText[key]?.first == "false" })
+        #expect(f.counter.renderedText[key]?[1].contains("Loading export history") == true)
+        f.io.release(snapshot)
+        if section == .timeline {
+          await f.timeline.waitUntilSettled()
+        } else {
+          await f.collections.waitUntilSettled()
+        }
+        #expect(await observe { f.counter.renderedText[key]?.first == "true" })
+        #expect(f.counter.renderedText[key]?[1].contains("Loading export history") == false)
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test func appRouteUpdatesOnboardingAndRetainsOptionsDuringHistoryLoad() async throws {
+      let f = try Fixture(selectFolder: false, onboardingComplete: false)
+      try await withCleanup {
+        f.show(.content)
+        let key = "onboarding-export-control"
+        try #require(await observe { f.counter.count(for: "onboarding-auto-skip-checked") > 0 })
+        let toggle = try #require(f.counter.renderedActions["onboarding-toggle-originals"])
+        toggle()
+        try #require(await observe { f.counter.renderedText[key]?.last == "true" })
+        try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
+        f.destination.setSelectedFolderForTesting(f.folder)
+        f.destination.revalidateForTesting()
+        try #require(await observe { f.counter.renderedText[key]?.first == "true" })
+        let bodies = f.counter.count(for: "content-root")
+        let snapshot = beginHistoryLoad(f, section: .timeline)
+        try #require(await observe { f.counter.renderedText[key]?.first == "false" })
+        #expect(f.counter.renderedText[key]?[1].contains("Loading export history") == true)
+        #expect(f.counter.count(for: "content-root") > bodies)
+        f.io.release(snapshot)
+        await f.timeline.waitUntilSettled()
+        #expect(await observe { f.counter.renderedText[key]?.first == "true" })
+        #expect(f.counter.renderedText[key]?[1].contains("Loading export history") != true)
+        #expect(f.counter.renderedText[key]?.last == "true")
+        #expect(f.defaults.bool(forKey: "hasCompletedOnboarding") == false)
+      } cleanup: {
+        await f.close()
+      }
     }
 
     @Test func libraryRootSkipsUnrelatedTimelineRecordChanges() async throws {

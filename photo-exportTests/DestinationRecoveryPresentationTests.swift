@@ -93,7 +93,7 @@ import Testing
 
       @ViewBuilder private func pane(_ surface: Surface) -> some View {
         switch surface {
-        case .root: LibraryRootView(screenshotSurfaceKey: nil)
+        case .root: LibraryRootView(screenshotSurfaceKey: nil, timelineHistoryState: .ready)
         case .month:
           MonthContentView(
             year: 2026, month: 9, versionSelection: .edited, livePhotosPaired: false,
