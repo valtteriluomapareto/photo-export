@@ -1,154 +1,111 @@
-name: Toolchain canary
+name: Observation hosted verification
 
-# Builds and tests on the next Xcode, so a toolchain bump is a known list of fixes, and on the
-# oldest macOS the app supports. Also records, on the schedule and on dispatch, how an exclusive
-# rename behaves on HFS+, ExFAT and FAT disk images. Not part of the merge gate: build-and-test
-# in ci.yml never needs it.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '47 4 * * 1'
-  pull_request:
-    paths:
-      - .xcode-version
-      - scripts/ci/select-xcode.sh
-      - scripts/ci/build-app.sh
-      - scripts/ci/run-unit-tests.sh
-      - scripts/ci/check-built-app.sh
-      - .github/workflows/toolchain-canary.yml
+    inputs:
+      tested_sha:
+        description: Exact source commit to validate
+        required: true
+        type: string
+      evidence_label:
+        description: Baseline or candidate evidence
+        required: true
+        type: choice
+        options: [baseline, candidate]
 
 permissions:
   contents: read
 
-concurrency:
-  group: toolchain-canary-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  canary:
-    name: canary (Xcode ${{ matrix.xcode }})
-    runs-on: ${{ matrix.runs-on }}
-    # Counts from when a runner picks the job up. A preview label with no runner leaves the
-    # job queued (GitHub cancels it after 24 hours); that is a missing runner, not a result.
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # The maintainer's local toolchain, on the public-preview image: the next bump.
-          - runs-on: xcode-27
-            xcode: "27.1"
-          # The oldest macOS the app supports, with the newest Xcode that image has, so a
-          # 26-SDK build is tested where macOS 15 users run it.
-          - runs-on: macos-15
-            xcode: "26.3"
+  hosted:
+    runs-on: macos-26
+    timeout-minutes: 90
     steps:
-      - name: Check out repository
+      - name: Validate source identifier
+        env:
+          TESTED_SHA: ${{ inputs.tested_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out verification adapter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: adapter
+          persist-credentials: false
 
-      - name: Report runner image
-        run: |
-          echo "::group::Runner image"
-          echo "Runner label: ${{ matrix.runs-on }}"
-          echo "Image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
-          sw_vers
-          echo "::endgroup::"
+      - name: Check out exact tested source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tested_sha }}
+          path: source
+          persist-credentials: false
 
-      - name: Select Xcode
-        run: bash scripts/ci/select-xcode.sh ${{ matrix.xcode }}
-
-      - name: Build Debug
-        id: debug-build
-        run: bash scripts/ci/build-app.sh Debug
-
-      - name: Check xcresult diagnostics export support
-        continue-on-error: true
-        run: xcrun xcresulttool export diagnostics --help > /dev/null
-
-      - name: Run Unit Tests (Debug, with coverage)
-        id: unit-tests
-        timeout-minutes: 15
+      - name: Prove source and toolchain
+        working-directory: source
         env:
-          TEST_RUNNER_REQUIRE_SCOPE_TESTS: "1"
-        run: bash scripts/ci/run-unit-tests.sh
-
-      - name: Check regression gates ran
-        if: success()
+          TESTED_SHA: ${{ inputs.tested_sha }}
+          ADAPTER_SHA: ${{ github.sha }}
+        shell: bash
         run: |
-          echo "::group::Regression-gate result check"
-          xcrun xcresulttool version
-          python3 -B scripts/ci/check-regression-gates-ran.py --result-bundle TestResults.xcresult
-          echo "::endgroup::"
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/observation-evidence"
+          {
+            test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+            test -z "$(git status --porcelain)"
+            printf 'Source SHA: %s\nAdapter SHA: %s\n' "$TESTED_SHA" "$ADAPTER_SHA"
+            git rev-parse 'HEAD^{tree}'
+            test "$(tr -d '[:space:]' < .xcode-version)" = 26.6
+            bash scripts/ci/select-xcode.sh 26.6
+            sw_vers
+            shasum -a 256 ../adapter/observation-hosted-suites.txt
+            cat ../adapter/observation-hosted-suites.txt
+          } 2>&1 | tee "$RUNNER_TEMP/observation-evidence/provenance.log"
 
-      - name: Build Release
-        run: bash scripts/ci/build-app.sh Release
-
-      - name: Check built Release app
-        run: bash scripts/ci/check-built-app.sh ${{ matrix.xcode }}
-
-      # Runs last, even if the tests or the Release build failed, so a new warning on this Xcode
-      # fails here without skipping them. Skipped when the normal Debug build failed.
-      - name: Build Debug with warnings as errors
-        if: ${{ !cancelled() && steps.debug-build.outcome == 'success' }}
-        env:
-          SWIFT_WARNINGS_AS_ERRORS: "1"
-        run: bash scripts/ci/build-app.sh Debug
-
-      - name: Print build and test failure diagnostics
-        if: failure()
+      - name: Run ten hosted iterations
+        working-directory: source
+        shell: bash
         run: |
-          for log in debug-build.log debug-werror-build.log test.log release-build.log; do
-            if [[ -f "$log" ]]; then
-              echo "::group::Failure diagnostics: $log"
-              grep -nE '✘|↳|recorded an issue|Expectation failed|error:' "$log" || true
-              echo "::endgroup::"
-            fi
-          done
+          set -euo pipefail
+          selectors=()
+          while IFS= read -r suite; do
+            [[ -n "$suite" && "$suite" != \#* ]] || continue
+            [[ "$suite" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]]
+            test -f "photo-exportTests/$suite.swift"
+            selectors+=("-only-testing:photo-exportTests/$suite")
+          done < ../adapter/observation-hosted-suites.txt
+          test "${#selectors[@]}" -gt 0
+          command=(caffeinate -du xcodebuild
+            -project photo-export.xcodeproj -scheme photo-export
+            -destination 'platform=macOS'
+            -derivedDataPath "$RUNNER_TEMP/ObservationDerivedData"
+            -resultBundlePath "$RUNNER_TEMP/observation-evidence/HostedResults.xcresult"
+            -test-iterations 10 -run-tests-until-failure
+            "${selectors[@]}" CODE_SIGNING_ALLOWED=NO test)
+          printf '%q ' "${command[@]}" > "$RUNNER_TEMP/observation-evidence/command.txt"
+          printf '\n' >> "$RUNNER_TEMP/observation-evidence/command.txt"
+          "${command[@]}" 2>&1 | tee "$RUNNER_TEMP/observation-evidence/hosted.log" | tail -300
 
-      - name: Collect test process diagnostics
-        if: ${{ failure() && steps.unit-tests.outcome == 'failure' }}
-        continue-on-error: true
-        timeout-minutes: 2
+      - name: Export result summary
+        if: always()
+        shell: bash
         run: |
-          python3 -B scripts/ci/collect_test_diagnostics.py \
-            --since test-start.marker \
-            --result-bundle TestResults.xcresult \
-            --output TestDiagnostics
+          set -euo pipefail
+          result="$RUNNER_TEMP/observation-evidence/HostedResults.xcresult"
+          if [[ -d "$result" ]]; then
+            xcrun xcresulttool get test-results summary --path "$result" \
+              > "$RUNNER_TEMP/observation-evidence/summary.json"
+            xcrun xcresulttool get test-results tests --path "$result" \
+              > "$RUNNER_TEMP/observation-evidence/tests.json"
+          fi
 
-      - name: Upload test results
+      - name: Upload hosted evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: TestResults-${{ matrix.xcode }}
-          path: |
-            TestResults.xcresult
-            debug-build.log
-            debug-werror-build.log
-            test.log
-            release-build.log
-            TestDiagnostics/
-
-  exclusive-rename-probe:
-    name: exclusive rename probe (${{ matrix.runs-on }})
-    # The final export commit relies on these results; a pull request cannot change them.
-    if: github.event_name != 'pull_request'
-    runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        runs-on: [macos-26, macos-15]
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Report runner image
-        run: |
-          echo "::group::Runner image"
-          echo "Runner label: ${{ matrix.runs-on }}"
-          echo "Image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
-          sw_vers
-          echo "::endgroup::"
-
-      - name: Probe exclusive rename on disk images
-        run: bash scripts/probe-exclusive-rename.sh
+          name: observation-hosted-${{ inputs.evidence_label }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/observation-evidence/
+          if-no-files-found: error
+          retention-days: 14
