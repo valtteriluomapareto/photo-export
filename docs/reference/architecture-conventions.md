@@ -282,20 +282,29 @@ touch a replacement job's stage. A successful move or adoption is acknowledged t
 its captured logical destination even if the run becomes stale. The acknowledgement carries the
 committed name (`nil` when nothing was committed), and every completion path in both stores
 records that name: the direct completion, the completion deferred behind a corrupt load, the
-write into a parked destination's history, and the restore of a parked snapshot. `RecordStoreRouter` captures that store's existing JSONL owner; each
-store parks its latest snapshot only when switching away, merges the completed variant, and
-retains write failures through the existing non-destructive persistence recovery path. A corrupt
-load keeps its alert and bytes intact; only the known completion delta is deferred until a valid
-load or explicit reset. A commit acknowledged while its destination is active and `.loading` is
-deferred the same way: it keeps its choice of the active-destination branch and lands when the
-load finishes, against the state the load ends in (recorded on a ready load, deferred until the
-reset on a corrupt one, added to the restored parked history on an unreadable one); its write is
-then flushed by the store's ordinary append path. Deferred landings are kept per destination, so
-one whose load is replaced lands when that destination next finishes loading. A write failure
-retained while the destination loads parks only the commit's own snapshot, without copying the
-empty in-memory records or marking them unsaved; the finished load installs the parked history
-and goes to `.persistenceFailed`. Collection acknowledgements restore missing placement metadata without
-replacing newer metadata. No persisted schema changes or crash-atomicity guarantee is implied.
+write into a parked destination's history, and the restore of a parked snapshot.
+`RecordStoreRouter` captures that store's existing JSONL owner; each store parks its latest
+snapshot only when switching away, merges the completed variant, and retains write failures
+through the existing non-destructive persistence recovery path. A corrupt load keeps its alert
+and bytes intact; only the known completion delta is deferred until a valid load or explicit
+reset. Collection acknowledgements restore missing placement metadata without replacing newer
+metadata. No persisted schema changes or crash-atomicity guarantee is implied.
+
+A commit acknowledged while its destination is active and `.loading` is held, then lands as if
+it had arrived just after the load:
+
+- When the load finishes, it lands against the state the load ends in: recorded on a ready
+  load (its write is flushed by the store's ordinary append path), deferred until the reset on
+  a corrupt one, added to the restored parked history on an unreadable one.
+- A load replaced by another configure of the same destination keeps it for the newest load;
+  if that configure takes the retained-recovery exit instead, it lands in the retained history.
+- When the store leaves the destination before the load finishes, it is written into that
+  destination's parked history at once, on the IO queue after the discarded read, and flushed
+  before the switch continues. A later load of the destination reads it; a write failure is
+  retained for Retry like any parked commit's.
+- A write failure retained while the destination loads parks only the commit's own snapshot,
+  without copying the empty in-memory records or marking them unsaved; the finished load
+  installs the parked history and goes to `.persistenceFailed`.
 
 Queue teardown remains synchronous and does not discard this task. Replacement jobs await its
 barrier before their initial record flush, history reads, or filename allocation, then recheck

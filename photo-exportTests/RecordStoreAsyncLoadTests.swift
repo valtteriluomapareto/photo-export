@@ -101,6 +101,20 @@ struct RecordStoreAsyncLoadTests {
       router.variants(forAssetId: assetId, placement: placement)[.original]?.filename
     }
 
+    /// What fresh stores read from `destination`'s files for `assetId`.
+    func filenameOnDisk(_ destination: String, _ assetId: String = "asset") -> String? {
+      let timeline = ExportRecordStore(baseDirectoryURL: root)
+      let collections = CollectionExportRecordStore(baseDirectoryURL: root)
+      defer {
+        timeline.flushForTesting()
+        collections.flushForTesting()
+      }
+      timeline.configure(for: destination)
+      collections.configure(for: destination)
+      return RecordStoreRouter(timelineStore: timeline, collectionStore: collections)
+        .variants(forAssetId: assetId, placement: placement)[.original]?.filename
+    }
+
     func isClaimed(_ name: String) -> Bool {
       router.isFilenameClaimed(
         name, placement: placement, subfolder: nil, exceptVariant: .original, of: "someone-else")
@@ -407,6 +421,46 @@ struct RecordStoreAsyncLoadTests {
       #expect(f.filename() == Self.committed)
       #expect(f.filename("old") == "OLD.JPG")
     }
+  }
+
+  enum Departure: CaseIterable, Sendable {
+    case otherDestinationAsync, otherDestinationBlocking, cleared
+  }
+
+  /// A final commit held for its destination's load is written to that destination's files when
+  /// the store leaves it before the load finishes, so a later load of that destination finds it.
+  @Test(arguments: [false, true], Departure.allCases)
+  func finalCommitHeldForALoadIsWrittenWhenTheStoreLeaves(
+    collection: Bool, departure: Departure
+  ) async throws {
+    let f = Fixture(collection: collection)
+    defer { f.cleanup() }
+    try await f.seed("B", ["b1": "B1.JPG"])
+    try await f.seed("A", ["old": "OLD.JPG"])
+    let acknowledge = try f.capture()
+    f.configure("B")
+    f.begin("A")
+    try #require(f.state == .loading)
+    // As in `finalCommitDuringLoadIsReplayed`, the main actor stays with the acknowledgement,
+    // so the load is still running when it returns and when the store leaves the destination.
+    await acknowledge(Self.committed)
+    try #require(f.state == .loading, "the acknowledgement let the load finish first")
+
+    switch departure {
+    case .otherDestinationAsync: f.begin("B")
+    case .otherDestinationBlocking: f.configure("B")
+    case .cleared: f.begin(nil)
+    }
+    await f.settle()
+    #expect(f.filename() == nil, "the commit landed in the history the store moved to")
+
+    #expect(f.filenameOnDisk("A") == Self.committed, "the commit is not in A's files")
+    #expect(f.filenameOnDisk("A", "old") == "OLD.JPG")
+    #expect(f.filenameOnDisk("B") == nil)
+    f.configure("A")
+    #expect(f.state == .ready)
+    #expect(f.filename() == Self.committed)
+    #expect(f.filename("old") == "OLD.JPG")
   }
 
   /// A final-commit write failure retained while the destination loads parks only the commit's

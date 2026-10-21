@@ -335,9 +335,16 @@ final class CollectionExportRecordStore: ObservableObject {
       pendingRecovery[id] = Snapshot(
         version: Constants.snapshotVersion, placements: placements, records: recordBodies)
     }
+    let departingId = configuredDestinationId
     configuredDestinationId = destinationId
     persistenceError = nil
     hasUnsavedChanges = false
+    // Commits held for the departing destination's load would otherwise wait for a reload that
+    // may never come. They now land in its parked history, written on the IO queue after the
+    // discarded read. A configure of the same destination keeps them for its own load.
+    if let departingId, departingId != destinationId {
+      replayCommitsLandedWhileLoading(for: departingId)
+    }
 
     placements = [:]
     recordBodies = [:]
@@ -380,6 +387,9 @@ final class CollectionExportRecordStore: ObservableObject {
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
       setState(.persistenceFailed)
+      // No load follows, so commits held for this destination's replaced load land here, in
+      // the retained history.
+      replayCommitsLandedWhileLoading()
       changeNotifier.notifyNow()
       return nil
     }
@@ -496,6 +506,9 @@ final class CollectionExportRecordStore: ObservableObject {
 
   /// Retry storage access without resetting export history. After an append failure,
   /// save the retained in-memory state; after a read failure, reload the original files.
+  ///
+  /// No commit held for a load can be waiting here: a store leaves `.loading` only through a
+  /// finished load or the retained-recovery exit, and both land those commits.
   func retryPersistence() {
     guard state == .persistenceFailed else { return }
     guard hasUnsavedChanges, let jsonl else {
@@ -1109,61 +1122,88 @@ final class CollectionExportRecordStore: ObservableObject {
           reason: .editedUnavailableOriginalBackedUp, at: date)
       }
     }
+    // Writes the completion into the parked history of a destination the store has left.
+    let writeParked = { (filename: String) in
+      let exportedAt = Date()
+      let done = ExportVariantRecord(
+        filename: filename, status: .done, exportDate: exportedAt, lastError: nil,
+        subfolder: subfolder)
+      if context.snapshot.placements[placement.id] == nil {
+        context.snapshot.placements[placement.id] = placement
+        context.file.append(
+          .upsertPlacement(placementId: placement.id, placement: placement),
+          currentSnapshot: { context.snapshot })
+      }
+      var body = context.snapshot.records[placement.id]?[assetId] ?? RecordBody(variants: [:])
+      body.variants[variant.rawValue] = done
+      if acceptsEditedFallback {
+        // As `markVariantFailed` does: a new edited record names no file.
+        var edited =
+          body.variants[ExportVariant.edited.rawValue]
+          ?? ExportVariantRecord(filename: nil, status: .pending, exportDate: nil, lastError: nil)
+        edited.status = .failed
+        edited.exportDate = exportedAt
+        edited.lastError = ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
+        edited.reason = .editedUnavailableOriginalBackedUp
+        body.variants[ExportVariant.edited.rawValue] = edited
+      }
+      context.snapshot.records[placement.id, default: [:]][assetId] = body
+      context.file.append(
+        .upsertRecord(placementId: placement.id, assetId: assetId, body: body),
+        currentSnapshot: { context.snapshot })
+    }
     return { [self] finalFilename in
       defer { if finalCommitContext === context { finalCommitContext = nil } }
       guard let filename = finalFilename else { return }
-      let exportedAt = Date()
-      if context.needsCorruptionRecovery
-        || (configuredDestinationId == destinationId && state == .failed)
-      {
-        deferredFinalCompletions[destinationId, default: []].append { applyCompletion(filename) }
-        return
-      }
-      if configuredDestinationId == destinationId {
-        if state == .loading {
-          // Land against whatever the load ends in, as if the commit had arrived just after.
-          commitsLandedWhileLoading[destinationId, default: []].append { [weak self] in
-            self?.landOnActiveDestination(
-              filename, context: context, applyCompletion: applyCompletion)
-          }
-          return
-        }
-        guard landOnActiveDestination(filename, context: context, applyCompletion: applyCompletion)
-        else { return }
-      } else {
-        let done = ExportVariantRecord(
-          filename: filename, status: .done, exportDate: exportedAt, lastError: nil,
-          subfolder: subfolder)
-        if context.snapshot.placements[placement.id] == nil {
-          context.snapshot.placements[placement.id] = placement
-          context.file.append(
-            .upsertPlacement(placementId: placement.id, placement: placement),
-            currentSnapshot: { context.snapshot })
-        }
-        var body = context.snapshot.records[placement.id]?[assetId] ?? RecordBody(variants: [:])
-        body.variants[variant.rawValue] = done
-        if acceptsEditedFallback {
-          // As `markVariantFailed` does: a new edited record names no file.
-          var edited =
-            body.variants[ExportVariant.edited.rawValue]
-            ?? ExportVariantRecord(filename: nil, status: .pending, exportDate: nil, lastError: nil)
-          edited.status = .failed
-          edited.exportDate = exportedAt
-          edited.lastError = ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage
-          edited.reason = .editedUnavailableOriginalBackedUp
-          body.variants[ExportVariant.edited.rawValue] = edited
-        }
-        context.snapshot.records[placement.id, default: [:]][assetId] = body
-        context.file.append(
-          .upsertRecord(placementId: placement.id, assetId: assetId, body: body),
-          currentSnapshot: { context.snapshot })
-      }
+      let landing = landFinalCommit(
+        filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked)
+      guard landing != .held else { return }
       do {
         try await context.file.flush()
       } catch {
         retainFinalCommitFailure(error, context: context)
       }
     }
+  }
+
+  /// Lands an acknowledged final commit where its destination now stands: deferred behind a
+  /// corrupt load, held while the destination loads, recorded in the active history, or written
+  /// to the parked history of a destination the store has left. A held commit comes back here
+  /// when that load finishes, or when the store leaves the destination first.
+  private func landFinalCommit(
+    _ filename: String, context: FinalCommitContext<Snapshot, LogOp>,
+    applyCompletion: @escaping (String) -> Void,
+    writeParked: @escaping (String) -> Void
+  ) -> FinalCommitLanding {
+    let destinationId = context.destinationId
+    if context.needsCorruptionRecovery
+      || (configuredDestinationId == destinationId && state == .failed)
+    {
+      deferredFinalCompletions[destinationId, default: []].append { applyCompletion(filename) }
+      return .held
+    }
+    guard configuredDestinationId == destinationId else {
+      writeParked(filename)
+      return .parked
+    }
+    guard state != .loading else {
+      // Land against whatever the load ends in, as if the commit had arrived just after.
+      commitsLandedWhileLoading[destinationId, default: []].append { [weak self] in
+        guard let self else { return }
+        let landing = self.landFinalCommit(
+          filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked)
+        guard landing == .parked else { return }
+        // Nobody awaits this commit any more. Finish its write before the store moves on, so a
+        // failure is retained for Retry like any parked commit's.
+        context.file.flushForTesting()
+        if context.file.hasUnflushedChanges {
+          self.retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
+        }
+      }
+      return .held
+    }
+    return landOnActiveDestination(filename, context: context, applyCompletion: applyCompletion)
+      ? .recorded : .held
   }
 
   /// Records an acknowledged final commit in the active destination's history: deferred
@@ -1196,10 +1236,11 @@ final class CollectionExportRecordStore: ObservableObject {
     return true
   }
 
-  /// Lands the final commits acknowledged while the active destination loaded. A written
-  /// completion's flush follows the store's ordinary append path.
-  private func replayCommitsLandedWhileLoading() {
-    guard let id = configuredDestinationId else { return }
+  /// Lands the final commits acknowledged while `destinationId` loaded, by default the active
+  /// destination's. A completion recorded in the active history is flushed by the store's
+  /// ordinary append path.
+  private func replayCommitsLandedWhileLoading(for destinationId: String? = nil) {
+    guard let id = destinationId ?? configuredDestinationId else { return }
     let landings = commitsLandedWhileLoading.removeValue(forKey: id) ?? []
     for land in landings { land() }
   }
