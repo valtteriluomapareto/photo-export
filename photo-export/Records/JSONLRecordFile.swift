@@ -64,7 +64,8 @@ private final class JSONLIOFailureState: @unchecked Sendable {
 /// type is actually used. Off-actor work — the encode + write inside `append`'s
 /// `ioQueue.async` block — happens on the dispatch queue and only reads `Sendable`
 /// locals captured from the calling actor, never reaching back into `self` for
-/// non-Sendable state.
+/// non-Sendable state. `load()` is composed of the `nonisolated` static `readFiles` and
+/// `decode`, which take everything they need as arguments and can run on any thread.
 @MainActor
 final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Sendable> {
   enum Constants {
@@ -148,6 +149,18 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let malformedLineCount: Int
     /// A failed snapshot or log read. A missing file is normal and has no error.
     let ioFailure: (any Error)?
+    /// Whether the log ends in a line with no final LF, so the next append must start a
+    /// new line. `nil` when the log read failed: the file keeps what it knew before.
+    let needsLogSeparator: Bool?
+  }
+
+  /// The snapshot and log bytes as read, before any decoding. A missing file has neither
+  /// bytes nor an error.
+  struct RawLoad: Sendable {
+    let snapshotData: Data?
+    let snapshotError: (any Error)?
+    let logData: Data?
+    let logError: (any Error)?
   }
 
   /// Reads the snapshot (if any) and the log file (if any). The composing store applies
@@ -155,69 +168,106 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// do not abort the load. A missing snapshot is not an error (returns `.absent`); a
   /// present-but-undecodable snapshot is reported as `.corrupt` with the file untouched.
   func load() -> LoadResult {
+    let raw = Self.readFiles(snapshotURL: snapshotURL, logURL: logURL, logIO: logIO)
+    let result = Self.decode(
+      raw, snapshotURL: snapshotURL, logURL: logURL,
+      dateDecodingStrategy: dateDecodingStrategy, logger: logger)
+    if let separator = result.needsLogSeparator { needsLogSeparator = separator }
+    return result
+  }
+
+  /// Reads the snapshot, then the log. File IO only: nothing is decoded or logged, so the
+  /// read can run on any thread.
+  nonisolated static func readFiles(
+    snapshotURL: URL, logURL: URL, logIO: any JSONLRecordLogIO
+  ) -> RawLoad {
+    var snapshotData: Data?
+    var snapshotError: (any Error)?
+    do {
+      snapshotData = try logIO.readIfPresent(at: snapshotURL)
+    } catch {
+      snapshotError = error
+    }
+    var logData: Data?
+    var logError: (any Error)?
+    do {
+      logData = try logIO.readIfPresent(at: logURL)
+    } catch {
+      logError = error
+    }
+    return RawLoad(
+      snapshotData: snapshotData, snapshotError: snapshotError, logData: logData,
+      logError: logError)
+  }
+
+  /// Decodes what `readFiles` read and logs each failure, snapshot first. A failed log read
+  /// is the reported `ioFailure` even when the snapshot read failed too.
+  nonisolated static func decode(
+    _ raw: RawLoad, snapshotURL: URL, logURL: URL,
+    dateDecodingStrategy: JSONDecoder.DateDecodingStrategy, logger: Logger
+  ) -> LoadResult {
     var snapshot: Snapshot?
     var snapshotStatus: SnapshotStatus = .absent
     var ioFailure: (any Error)?
-    do {
-      if let data = try logIO.readIfPresent(at: snapshotURL) {
-        do {
-          let decoder = JSONDecoder()
-          decoder.dateDecodingStrategy = dateDecodingStrategy
-          snapshot = try decoder.decode(Snapshot.self, from: data)
-          snapshotStatus = .loaded
-        } catch {
-          snapshotStatus = .corrupt
-          logger.error(
-            "Failed to decode snapshot at \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
-          )
-        }
-      }
-    } catch {
+    if let error = raw.snapshotError {
       ioFailure = error
       logger.error(
-        "Failed to read snapshot at \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+        "Failed to read snapshot at \(snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
       )
+    } else if let data = raw.snapshotData {
+      do {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = dateDecodingStrategy
+        snapshot = try decoder.decode(Snapshot.self, from: data)
+        snapshotStatus = .loaded
+      } catch {
+        snapshotStatus = .corrupt
+        logger.error(
+          "Failed to decode snapshot at \(snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+        )
+      }
     }
 
     var ops: [LogOp] = []
     var malformedLineCount = 0
-    do {
-      if let fileData = try logIO.readIfPresent(at: logURL) {
-        needsLogSeparator = !fileData.isEmpty && fileData.last != 0x0A
-        // Bulk-read the log instead of one FileHandle.read(upToCount: 1) per
-        // byte. Cold-start measurement on a 184 KB log showed ~270 ms of
-        // pure syscall overhead from the per-byte reader; one Data(contentsOf:)
-        // brings that to single-digit ms. `split(separator: 0x0A,
-        // omittingEmptySubsequences: true)` already drops trailing-newline
-        // empties; explicit isEmpty skip handles back-to-back newlines too.
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = dateDecodingStrategy
-        for lineSlice in fileData.split(separator: 0x0A) {
-          if lineSlice.isEmpty { continue }
-          let lineData = Data(lineSlice)
-          do {
-            let op = try decoder.decode(LogOp.self, from: lineData)
-            ops.append(op)
-          } catch {
-            malformedLineCount += 1
-            logger.error(
-              "Skipping malformed log line in \(self.logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
-            )
-          }
-        }
-      } else {
-        needsLogSeparator = false
-      }
-    } catch {
+    let needsLogSeparator: Bool?
+    if let error = raw.logError {
+      needsLogSeparator = nil
       ioFailure = error
       logger.error(
-        "Failed to read log at \(self.logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+        "Failed to read log at \(logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
       )
+    } else if let fileData = raw.logData {
+      needsLogSeparator = !fileData.isEmpty && fileData.last != 0x0A
+      // Bulk-read the log instead of one FileHandle.read(upToCount: 1) per
+      // byte. Cold-start measurement on a 184 KB log showed ~270 ms of
+      // pure syscall overhead from the per-byte reader; one Data(contentsOf:)
+      // brings that to single-digit ms. `split(separator: 0x0A,
+      // omittingEmptySubsequences: true)` already drops trailing-newline
+      // empties; explicit isEmpty skip handles back-to-back newlines too.
+      let decoder = JSONDecoder()
+      decoder.dateDecodingStrategy = dateDecodingStrategy
+      for lineSlice in fileData.split(separator: 0x0A) {
+        if lineSlice.isEmpty { continue }
+        let lineData = Data(lineSlice)
+        do {
+          let op = try decoder.decode(LogOp.self, from: lineData)
+          ops.append(op)
+        } catch {
+          malformedLineCount += 1
+          logger.error(
+            "Skipping malformed log line in \(logURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
+          )
+        }
+      }
+    } else {
+      needsLogSeparator = false
     }
 
     return LoadResult(
       snapshot: snapshot, snapshotStatus: snapshotStatus, ops: ops,
-      malformedLineCount: malformedLineCount, ioFailure: ioFailure)
+      malformedLineCount: malformedLineCount, ioFailure: ioFailure,
+      needsLogSeparator: needsLogSeparator)
   }
 
   /// Renames the corrupt snapshot to `<name>.broken-<ISO8601>` and writes a fresh empty

@@ -41,11 +41,11 @@ final class ExportRecordStore: ObservableObject {
   /// All public read methods translate one-for-one against the original implementations;
   /// `ExportRecordStoreQueryGoldenTests` pins the exact integer outputs against
   /// hand-checked fixtures so any drift here surfaces immediately.
-  private struct MonthKey: Hashable {
+  struct MonthKey: Hashable, Sendable {
     let year: Int
     let month: Int
   }
-  private struct MonthCounters {
+  struct MonthCounters: Sendable {
     /// Per-variant, per-status occurrence count.
     var variantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
     /// Records where both `.original` and `.edited` variants are `.done`.
@@ -88,10 +88,10 @@ final class ExportRecordStore: ObservableObject {
     var pairedVideoIncomplete: Int = 0
     static let zero = MonthCounters()
   }
-  private var monthCounters: [MonthKey: MonthCounters] = [:]
+  private(set) var monthCounters: [MonthKey: MonthCounters] = [:]
 
   /// A variant's folder: its month plus the subfolder it was written into.
-  private struct ClaimFolder: Hashable {
+  struct ClaimFolder: Hashable, Sendable {
     let year: Int
     let month: Int
     let subfolder: String
@@ -157,9 +157,10 @@ final class ExportRecordStore: ObservableObject {
   /// the per-destination subdirectory before this store configures.
   let storeRootURL: URL
   private var currentStoreDirURL: URL?
+  typealias RecordFile = JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>
   /// JSONL persistence for the currently configured destination. `nil` when the store is
   /// unconfigured (no destination selected). Reconstructed on every `configure(for:)`.
-  private var jsonl: JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>?
+  private var jsonl: RecordFile?
 
   /// `baseDirectoryURL` is the parent of the per-destination folders; the app passes
   /// `AppComposition.recordsRoot`.
@@ -219,7 +220,7 @@ final class ExportRecordStore: ObservableObject {
     let dir = storeRootURL.appendingPathComponent(destinationId, isDirectory: true)
     createDirectoryIfNeeded(dir)
     currentStoreDirURL = dir
-    let file = JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>(
+    let file = RecordFile(
       snapshotURL: dir.appendingPathComponent(Constants.snapshotFileName),
       logURL: dir.appendingPathComponent(Constants.logFileName),
       ioQueue: ioQueue,
@@ -247,14 +248,12 @@ final class ExportRecordStore: ObservableObject {
       changeNotifier.notifyNow()
       return
     }
-    let loaded = file.load()
-    if let error = loaded.ioFailure {
+    switch Self.prepare(file.load()) {
+    case .ioFailure(let error):
       persistenceError = error.localizedDescription
       state = .persistenceFailed
       changeNotifier.notifyNow()
       return
-    }
-    switch loaded.snapshotStatus {
     case .corrupt:
       // Deferred-rename rule: leave the corrupt snapshot at its original path on disk so
       // a Quit-and-relaunch reproduces this `.failed` state instead of silently
@@ -264,20 +263,9 @@ final class ExportRecordStore: ObservableObject {
         "Timeline records snapshot at \(dir.appendingPathComponent(Constants.snapshotFileName).path, privacy: .public) failed to decode; store transitioning to .failed."
       )
       state = .failed
-    case .absent, .loaded:
-      if let snapshot = loaded.snapshot {
-        recordsById = snapshot
-      }
-      // During load, apply each op directly to `recordsById` without touching
-      // `monthCounters` — incrementally updating against an empty counter map would
-      // produce negative counts for keys whose snapshot value should be subtracted.
-      // After all ops are applied and recovery runs, rebuild counters once from the
-      // final `recordsById`.
-      for op in loaded.ops {
-        apply(op, recordCounters: false)
-      }
-      recoverInProgressVariants()
-      rebuildCountersFromRecords()
+    case .loaded(let prepared):
+      recordsById = prepared.records
+      monthCounters = prepared.monthCounters
       state = .ready
     }
     if state == .failed, finalCommitContext?.destinationId == configuredDestinationId {
@@ -285,6 +273,45 @@ final class ExportRecordStore: ObservableObject {
     }
     replayFinalCompletions()
     changeNotifier.notifyNow()
+  }
+
+  /// The records and counters a successful load installs.
+  struct PreparedLoad: Sendable {
+    let records: [String: ExportRecord]
+    let monthCounters: [MonthKey: MonthCounters]
+  }
+
+  /// How a load ends. A failed read outranks a corrupt snapshot, so the user is asked to
+  /// retry storage access rather than to reset history that could not be read.
+  enum LoadOutcome: Sendable {
+    case ioFailure(any Error)
+    case corrupt
+    case loaded(PreparedLoad)
+  }
+
+  /// Builds what `configure(for:)` installs from a decoded load: the snapshot, the log
+  /// replayed over it, interrupted variants recovered, then the counters counted once.
+  /// Builds no claim index; that waits for the first claim query.
+  nonisolated static func prepare(_ loaded: RecordFile.LoadResult) -> LoadOutcome {
+    if let error = loaded.ioFailure { return .ioFailure(error) }
+    switch loaded.snapshotStatus {
+    case .corrupt:
+      return .corrupt
+    case .absent, .loaded:
+      var records = loaded.snapshot ?? [:]
+      // Replay without counting: counting each op against counters that do not yet hold
+      // the snapshot would subtract records that were never added.
+      for op in loaded.ops {
+        applyMutation(op, to: &records)
+      }
+      recoverInProgressVariants(in: &records)
+      var counters: [MonthKey: MonthCounters] = [:]
+      var noClaims: FilenameClaims<ClaimFolder>?
+      for record in records.values {
+        contribute(record, sign: +1, counters: &counters, claims: &noClaims)
+      }
+      return .loaded(PreparedLoad(records: records, monthCounters: counters))
+    }
   }
 
   /// Retry storage access without resetting export history. After an append failure,
@@ -348,8 +375,8 @@ final class ExportRecordStore: ObservableObject {
 
   /// Converts any variant left as `.inProgress` after load into `.failed` with the interrupted
   /// message. No in-progress state survives app restart; `.pending` is preserved as-is.
-  private func recoverInProgressVariants() {
-    for (id, record) in recordsById {
+  nonisolated static func recoverInProgressVariants(in records: inout [String: ExportRecord]) {
+    for (id, record) in records {
       var mutated = record
       var changed = false
       for (variant, variantRecord) in record.variants where variantRecord.status == .inProgress {
@@ -361,7 +388,7 @@ final class ExportRecordStore: ObservableObject {
         changed = true
       }
       if changed {
-        recordsById[id] = mutated
+        records[id] = mutated
       }
     }
   }
@@ -539,9 +566,17 @@ final class ExportRecordStore: ObservableObject {
 
   private func currentFilenameClaims() -> FilenameClaims<ClaimFolder> {
     if let filenameClaims { return filenameClaims }
-    let claims = FilenameClaims<ClaimFolder>.build(recordCount: recordsById.count, logger: logger) {
-      claims in
-      for record in recordsById.values {
+    let claims = Self.buildClaims(from: recordsById, logger: logger)
+    filenameClaims = claims
+    return claims
+  }
+
+  /// The claim index for `records`: every filename a variant names, in its folder.
+  nonisolated static func buildClaims(
+    from records: [String: ExportRecord], logger: Logger
+  ) -> FilenameClaims<ClaimFolder> {
+    FilenameClaims<ClaimFolder>.build(recordCount: records.count, logger: logger) { claims in
+      for record in records.values {
         for variant in record.variants.values {
           claims.add(
             variant.filename,
@@ -549,8 +584,6 @@ final class ExportRecordStore: ObservableObject {
         }
       }
     }
-    filenameClaims = claims
-    return claims
   }
 
   /// Total number of assets in `year` whose `.original` variant is `.done`. Matches legacy
@@ -1041,42 +1074,51 @@ final class ExportRecordStore: ObservableObject {
     jsonl.append(mutation, currentSnapshot: { self.recordsById })
   }
 
-  /// Applies a mutation to in-memory state. When `recordCounters` is `true` (the default
-  /// for production mutations), `monthCounters` is updated incrementally by subtracting
-  /// the old record's contribution and adding the new record's. The `false` path is used
-  /// during `configure(for:)` while the snapshot+log replay rebuilds `recordsById` from
-  /// scratch — incrementally diffing against an empty counter map would produce negative
-  /// counts. After the replay, `rebuildCountersFromRecords()` populates the counters in
-  /// one O(N) pass.
-  private func apply(_ mutation: ExportRecordMutation, recordCounters: Bool = true) {
-    let oldRecord = recordsById[mutation.id]
+  /// Applies a mutation to in-memory state and updates `monthCounters` incrementally by
+  /// subtracting the old record's contribution and adding the new record's. Loading
+  /// replays ops through `applyMutation` alone and counts once afterwards (see `prepare`).
+  private func apply(_ mutation: ExportRecordMutation) {
+    guard let change = Self.applyMutation(mutation, to: &recordsById) else { return }
+    adjustCounters(old: change.old, new: change.new)
+  }
+
+  /// Applies a mutation to `records` and returns the record it replaced or removed and the
+  /// one it stored, or `nil` when it changed nothing (an upsert without a record).
+  @discardableResult
+  nonisolated static func applyMutation(
+    _ mutation: ExportRecordMutation, to records: inout [String: ExportRecord]
+  ) -> (old: ExportRecord?, new: ExportRecord?)? {
+    let oldRecord = records[mutation.id]
     switch mutation.op {
     case .upsert:
-      if let record = mutation.record {
-        recordsById[mutation.id] = record
-        if recordCounters {
-          adjustCounters(old: oldRecord, new: record)
-        }
-      }
+      guard let record = mutation.record else { return nil }
+      records[mutation.id] = record
+      return (oldRecord, record)
     case .delete:
-      recordsById.removeValue(forKey: mutation.id)
-      if recordCounters {
-        adjustCounters(old: oldRecord, new: nil)
-      }
+      records.removeValue(forKey: mutation.id)
+      return (oldRecord, nil)
     }
   }
 
   /// Subtracts the old record's contribution and adds the new record's to `monthCounters`.
   /// Either side may be `nil` (a fresh insert has no `old`; a delete has no `new`).
   private func adjustCounters(old: ExportRecord?, new: ExportRecord?) {
-    if let old { contribute(old, sign: -1) }
-    if let new { contribute(new, sign: +1) }
+    if let old {
+      Self.contribute(old, sign: -1, counters: &monthCounters, claims: &filenameClaims)
+    }
+    if let new {
+      Self.contribute(new, sign: +1, counters: &monthCounters, claims: &filenameClaims)
+    }
   }
 
   /// Adds (`sign == +1`) or removes (`sign == -1`) `record`'s contribution to its
-  /// `(year, month)` cell of `monthCounters`. Idempotent under `+1` then `-1` for the
-  /// same record value, which is what the diff in `adjustCounters` relies on.
-  private func contribute(_ record: ExportRecord, sign: Int) {
+  /// `(year, month)` cell of `counters`, and its filenames to `claims` when there is an
+  /// index. Idempotent under `+1` then `-1` for the same record value, which is what the
+  /// diff in `adjustCounters` relies on.
+  nonisolated static func contribute(
+    _ record: ExportRecord, sign: Int, counters monthCounters: inout [MonthKey: MonthCounters],
+    claims filenameClaims: inout FilenameClaims<ClaimFolder>?
+  ) {
     let key = MonthKey(year: record.year, month: record.month)
     var counters = monthCounters[key] ?? .zero
     for (variant, variantRec) in record.variants {
@@ -1130,15 +1172,13 @@ final class ExportRecordStore: ObservableObject {
   }
 
   /// Rebuilds `monthCounters` from scratch by walking `recordsById` once, and drops
-  /// `filenameClaims` for the next query to rebuild. Called from `configure(for:)` after the
-  /// snapshot is loaded and log ops are replayed (with counter updates suppressed during
-  /// replay), after `recoverInProgressVariants()` transitions any leftover in-progress
-  /// variants to failed in-memory, and whenever retained records replace the in-memory ones.
+  /// `filenameClaims` for the next query to rebuild. Called whenever retained records
+  /// replace the in-memory ones; a load counts its records in `prepare` instead.
   private func rebuildCountersFromRecords() {
     monthCounters = [:]
     filenameClaims = nil
     for record in recordsById.values {
-      contribute(record, sign: +1)
+      Self.contribute(record, sign: +1, counters: &monthCounters, claims: &filenameClaims)
     }
   }
 
