@@ -55,8 +55,8 @@ struct RecordStorePersistenceHealthTests {
       if isCollection { collection.retryPersistence() } else { timeline.retryPersistence() }
     }
     func cleanup() {
-      timeline.flushForTesting()
-      collection.flushForTesting()
+      timeline.drainSynchronously()
+      collection.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
     }
   }

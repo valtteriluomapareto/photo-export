@@ -83,7 +83,7 @@ struct JSONLRecordFileAtomicReplacementTests {
       let frozen = snapshot
       store.append(mutation, currentSnapshot: { frozen })
     }
-    store.flushForTesting()
+    store.drainSynchronously()
 
     if !automaticCompaction {
       #expect(throws: (any Error).self) { try store.writeSnapshot(snapshot) }
@@ -123,7 +123,7 @@ struct JSONLRecordFileAtomicReplacementTests {
     try store.writeSnapshot(["old": "done"])
     let snapshot = ["old": "done", "new": "done"]
     store.append(Mutation(key: "new", value: "done"), currentSnapshot: { snapshot })
-    store.flushForTesting()
+    store.drainSynchronously()
 
     try store.writeSnapshot(snapshot)
 

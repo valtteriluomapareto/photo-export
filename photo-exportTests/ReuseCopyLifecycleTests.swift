@@ -65,8 +65,8 @@ struct ReuseCopyLifecycleTests {
 
     func cleanup() {
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       destination.cleanup()
       try? FileManager.default.removeItem(at: root)
       defaults.removePersistentDomain(forName: defaultsName)

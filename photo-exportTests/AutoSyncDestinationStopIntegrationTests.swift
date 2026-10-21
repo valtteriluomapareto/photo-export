@@ -147,8 +147,8 @@ struct AutoSyncDestinationStopIntegrationTests {
     func close() {
       autoSync.setEnabled(false)
       exportManager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       destination.cleanup()
     }

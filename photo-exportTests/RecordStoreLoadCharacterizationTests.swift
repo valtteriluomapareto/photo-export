@@ -98,7 +98,7 @@ struct RecordStoreLoadCharacterizationTests {
     if collection {
       let store = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
       store.configure(for: "A")
-      defer { store.flushForTesting() }
+      defer { store.drainSynchronously() }
       return (
         store.state, store.persistenceError,
         store.recordBodies.isEmpty && store.placements.isEmpty
@@ -106,7 +106,7 @@ struct RecordStoreLoadCharacterizationTests {
     }
     let store = ExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
     store.configure(for: "A")
-    defer { store.flushForTesting() }
+    defer { store.drainSynchronously() }
     return (store.state, store.persistenceError, store.recordsById.isEmpty)
   }
 

@@ -66,8 +66,8 @@ struct AssetDetailPreviewRevisionTests {
       window.contentView = nil
       window.close()
       await replacement.releaseAll()
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
     }
 

@@ -62,7 +62,7 @@ struct JSONLRecordFileTests {
     let op2 = Operation(kind: .upsert, key: "b", value: "2")
     file.append(op1, currentSnapshot: { Snapshot(records: ["a": "1"]) })
     file.append(op2, currentSnapshot: { Snapshot(records: ["a": "1", "b": "2"]) })
-    file.flushForTesting()
+    file.drainSynchronously()
 
     let result = file.load()
     #expect(result.snapshot == nil)  // neither append crossed the threshold
@@ -78,7 +78,7 @@ struct JSONLRecordFileTests {
 
     let op = Operation(kind: .upsert, key: "a", value: "1")
     file.append(op, currentSnapshot: { Snapshot(records: ["a": "1"]) })
-    file.flushForTesting()
+    file.drainSynchronously()
 
     // Inject a malformed line into the log.
     let logURL = dir.appendingPathComponent("log.jsonl")
@@ -88,7 +88,7 @@ struct JSONLRecordFileTests {
     // Append another good line after the malformed one.
     let op2 = Operation(kind: .upsert, key: "b", value: "2")
     file.append(op2, currentSnapshot: { Snapshot(records: ["a": "1", "b": "2"]) })
-    file.flushForTesting()
+    file.drainSynchronously()
 
     let result = file.load()
     #expect(result.ops == [op, op2])
@@ -103,7 +103,7 @@ struct JSONLRecordFileTests {
 
     let op = Operation(kind: .upsert, key: "a", value: "1")
     file.append(op, currentSnapshot: { emptySnapshot() })
-    file.flushForTesting()
+    file.drainSynchronously()
 
     // Manual snapshot write should leave only the snapshot, no log content.
     try file.writeSnapshot(Snapshot(records: ["a": "1", "b": "2"]))
@@ -142,7 +142,7 @@ struct JSONLRecordFileTests {
     let op = Operation(kind: .upsert, key: "a", value: "1")
     file.append(op, currentSnapshot: { emptySnapshot() })
     try file.writeSnapshot(Snapshot(records: ["a": "1"]))
-    file.flushForTesting()
+    file.drainSynchronously()
 
     file.clearOnDiskState()
 
@@ -251,7 +251,7 @@ struct JSONLRecordFileTests {
       let captured = rolling
       file.append(op, currentSnapshot: { Snapshot(records: captured) })
     }
-    file.flushForTesting()
+    file.drainSynchronously()
 
     let result = file.load()
     #expect(result.snapshot == Snapshot(records: rolling))

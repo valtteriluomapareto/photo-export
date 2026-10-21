@@ -106,8 +106,8 @@ struct RecordStoreAsyncLoadTests {
       let timeline = ExportRecordStore(baseDirectoryURL: root)
       let collections = CollectionExportRecordStore(baseDirectoryURL: root)
       defer {
-        timeline.flushForTesting()
-        collections.flushForTesting()
+        timeline.drainSynchronously()
+        collections.drainSynchronously()
       }
       timeline.configure(for: destination)
       collections.configure(for: destination)
@@ -142,8 +142,8 @@ struct RecordStoreAsyncLoadTests {
     /// Releases every held read before the stores' IO queues are drained.
     func cleanup() {
       io.releaseAll()
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
     }
   }

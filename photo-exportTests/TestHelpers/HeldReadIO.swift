@@ -10,7 +10,7 @@ import Foundation
 /// itself: a store that loads on the main thread fails the test at once instead of hanging it.
 ///
 /// A held read blocks the store's IO queue, and so does anything that waits for that queue, such as
-/// `flushForTesting()` or a destination switch. Teardown must call `releaseAll()` before flushing.
+/// `drainSynchronously()` or a destination switch. Teardown must call `releaseAll()` before flushing.
 final class HeldReadIO: JSONLRecordLogIO, @unchecked Sendable {
   private let production = ProductionJSONLRecordLogIO()
   private let condition = NSCondition()

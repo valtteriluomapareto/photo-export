@@ -56,7 +56,7 @@ private final class JSONLIOFailureState: @unchecked Sendable {
 /// the log. An interruption before log truncation leaves a replayable log intact.
 ///
 /// `@MainActor` isolates the calling-actor side: every entry point (`load`, `append`,
-/// `writeSnapshot`, `resetToEmpty`, `clearOnDiskState`, `flushForTesting`) and every
+/// `writeSnapshot`, `resetToEmpty`, `clearOnDiskState`, `drainSynchronously`) and every
 /// mutable property (`mutationCountSinceCompact`) must be touched from the main actor.
 /// Both production composing stores (`ExportRecordStore`,
 /// `CollectionExportRecordStore`) are themselves `@MainActor`, so this matches how the
@@ -520,10 +520,11 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     mutationCountSinceCompact = 0
   }
 
-  // MARK: - Testing helpers
+  // MARK: - Synchronous IO drain
 
-  /// Blocks until pending IO is flushed.
-  func flushForTesting() {
+  /// Blocks the caller until queued IO finishes and delivers any pending failure.
+  /// Must not be called from the IO queue.
+  func drainSynchronously() {
     ioQueue.sync {}
     deliverPendingFailure()
     if ioFailureState.currentFailure() == nil { flushedRevision = submittedRevision }

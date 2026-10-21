@@ -418,7 +418,7 @@ struct CollectionExportRecordStoreTests {
     store.markVariantExported(
       assetId: "asset-1", placement: p, variant: .original,
       filename: "IMG_0001.HEIC", exportedAt: Date(timeIntervalSince1970: 12345))
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // New store instance against the same baseDirectoryURL replays the log.
     let store2 = CollectionExportRecordStore(baseDirectoryURL: dir)
@@ -472,7 +472,7 @@ struct CollectionExportRecordStoreTests {
     store.upsertPlacement(p)
     store.markVariantInProgress(
       assetId: "asset-1", placement: p, variant: .original, filename: nil)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Fresh store reloads from log — recovery pass converts the `.inProgress` to `.failed`.
     let store2 = CollectionExportRecordStore(baseDirectoryURL: dir)
@@ -708,7 +708,7 @@ struct CollectionExportRecordStoreTests {
     store.configure(for: "dest-shared")
     let placement = sharedAlbumPlacement()
     store.upsertPlacement(placement)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     #expect(store.placement(id: placement.id)?.kind == .sharedAlbum)
     #expect(store.placements(matching: .sharedAlbum).count == 1)
@@ -740,7 +740,7 @@ struct CollectionExportRecordStoreTests {
       assetId: "asset-shared", placement: sharedAlbum, variant: .original,
       filename: "asset-shared.jpg",
       exportedAt: Date(timeIntervalSince1970: 1_700_000_011))
-    store.flushForTesting()
+    store.drainSynchronously()
 
     #expect(store.recordCount(in: .album(collectionLocalId: sharedId)) == 1)
     #expect(store.recordCount(in: .sharedAlbum(collectionLocalId: sharedId)) == 1)

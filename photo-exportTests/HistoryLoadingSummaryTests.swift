@@ -61,8 +61,8 @@ import Testing
         window.contentView = nil
         window.close()
         io.releaseAll()
-        timeline.flushForTesting()
-        collections.flushForTesting()
+        timeline.drainSynchronously()
+        collections.drainSynchronously()
         try? FileManager.default.removeItem(at: root)
         defaults.removePersistentDomain(forName: defaultsName)
       }
