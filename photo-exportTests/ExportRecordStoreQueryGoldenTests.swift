@@ -1271,4 +1271,146 @@ struct ExportRecordStoreQueryGoldenTests {
     #expect(summary.exportedCount == 0)
     #expect(summary.status == .notExported)
   }
+
+  // MARK: - Reload counters against the loaded records
+
+  /// After a reload, every counter equals the counter computed from the loaded records,
+  /// including the year 0 / month 0 cell that `markVariantFailed` creates for an asset that
+  /// had no record. The load covers a snapshot, a log over it that moves, deletes and trims
+  /// records, and the recovery of interrupted variants, which must run before counting.
+  @Test func reloadedCountersMatchCountersBuiltFromTheLoadedRecords() throws {
+    let dir = TestScratch.directory("ExportRecordStoreReloadCounters")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let dest = "test"
+    let storeDir = dir.appendingPathComponent(dest, isDirectory: true)
+    let now = Date(timeIntervalSince1970: 0)
+
+    // Step 1: history that becomes the snapshot.
+    let first = ExportRecordStore(baseDirectoryURL: dir)
+    first.configure(for: dest)
+    first.markVariantExported(
+      assetId: "both", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+      filename: "BOTH.HEIC", exportedAt: now)
+    first.markVariantExported(
+      assetId: "both", variant: .edited, year: 2025, month: 6, relPath: "2025/06/",
+      filename: "BOTH.JPG", exportedAt: now)
+    first.markVariantExported(
+      assetId: "fallback", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
+      filename: "FB_orig.HEIC", exportedAt: now)
+    first.markVariantFailed(
+      assetId: "fallback", variant: .edited,
+      error: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
+      reason: .editedUnavailableOriginalBackedUp, at: now)
+    first.markVariantExported(
+      assetId: "moved", variant: .original, year: 2024, month: 12, relPath: "2024/12/",
+      filename: "MOVED.HEIC", exportedAt: now)
+    first.markVariantExported(
+      assetId: "gone", variant: .original, year: 2024, month: 12, relPath: "2024/12/",
+      filename: "GONE.HEIC", exportedAt: now)
+    first.markVariantInProgress(
+      assetId: "snapshot-stuck", variant: .edited, year: 2024, month: 12, relPath: "2024/12/",
+      filename: "STUCK.JPG")
+    first.markVariantFailed(assetId: "orphan", variant: .original, error: "no record", at: now)
+    first.markVariantExported(
+      assetId: "live", variant: .original, year: 2025, month: 7, relPath: "2025/07/",
+      filename: "LIVE.HEIC", exportedAt: now)
+    first.markVariantFailed(
+      assetId: "live", variant: .originalPairedVideo, error: "no motion file",
+      reason: .pairedVideoUnavailable, at: now)
+    first.flushForTesting()
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try encoder.encode(first.recordsById).write(
+      to: storeDir.appendingPathComponent(ExportRecordStore.Constants.snapshotFileName))
+    try Data().write(to: storeDir.appendingPathComponent(ExportRecordStore.Constants.logFileName))
+
+    // Step 2: a log over that snapshot.
+    let second = ExportRecordStore(baseDirectoryURL: dir)
+    second.configure(for: dest)
+    #expect(Set(second.recordsById.keys) == Set(first.recordsById.keys))
+    second.markVariantExported(
+      assetId: "moved", variant: .original, year: 2026, month: 1, relPath: "2026/01/",
+      filename: "MOVED.HEIC", exportedAt: now)
+    second.removeVariant(assetId: "gone", variant: .original)
+    second.removeVariant(assetId: "both", variant: .edited)
+    second.markVariantFailed(
+      assetId: "orphan-edit", variant: .edited, error: "no record", at: now)
+    second.markVariantInProgress(
+      assetId: "log-stuck", variant: .original, year: 2025, month: 7, relPath: "2025/07/",
+      filename: "LOGSTUCK.HEIC")
+    second.markVariantInProgress(
+      assetId: "live", variant: .editedPairedVideo, year: 2025, month: 7, relPath: "2025/07/",
+      filename: "LIVE.MOV")
+    second.flushForTesting()
+
+    // Step 3: reload and compare every counter with one computed from the records.
+    let reloaded = ExportRecordStore(baseDirectoryURL: dir)
+    reloaded.configure(for: dest)
+    defer { reloaded.flushForTesting() }
+    #expect(reloaded.state == .ready)
+    #expect(
+      Set(reloaded.recordsById.keys) == [
+        "both", "fallback", "moved", "snapshot-stuck", "orphan", "live", "orphan-edit",
+        "log-stuck",
+      ])
+    #expect(
+      reloaded.recordsById.values.allSatisfy { record in
+        record.variants.values.allSatisfy { $0.status != .inProgress }
+      })
+    #expect(reloaded.recordCount(year: 0, month: 0, variant: .original, status: .failed) == 1)
+    #expect(reloaded.recordCount(year: 0, month: 0, variant: .edited, status: .failed) == 1)
+    #expect(reloaded.recordCount(year: 2024, month: 12, variant: .original, status: .done) == 0)
+    #expect(reloaded.recordCountPairedVideoIncomplete(year: 2025, month: 7) == 1)
+
+    var cells = Set(reloaded.recordsById.values.map { [$0.year, $0.month] })
+    cells.formUnion([[0, 0], [2024, 12], [2025, 8]])
+    let statuses: [ExportStatus] = [.pending, .inProgress, .done, .failed]
+    for cell in cells {
+      let (year, month) = (cell[0], cell[1])
+      let records = reloaded.recordsById.values.filter { $0.year == year && $0.month == month }
+      for variant in ExportVariant.allCases {
+        for status in statuses {
+          let expected = records.filter { $0.variants[variant]?.status == status }.count
+          let actual = reloaded.recordCount(
+            year: year, month: month, variant: variant, status: status)
+          #expect(
+            actual == expected,
+            "recordCount(\(year)-\(month), \(variant), \(status)) = \(actual), expected \(expected)"
+          )
+        }
+      }
+      let originalDone = records.filter { $0.variants[.original]?.status == .done }
+      let bothDone = originalDone.filter { $0.variants[.edited]?.status == .done }.count
+      let naturalStem = originalDone.filter { record in
+        record.variants[.edited]?.status != .done
+          && record.variants[.original]?.filename.map {
+            !ExportFilenamePolicy.isOrigCompanion(filename: $0)
+          } == true
+      }.count
+      let fallback = originalDone.filter { record in
+        record.variants[.edited]?.status == .failed
+          && record.variants[.edited]?.reason == .editedUnavailableOriginalBackedUp
+      }.count
+      let pairedIncomplete = records.filter { record in
+        record.variants.contains { variant, value in
+          variant.isPairedVideo && value.status != .done
+            && !(value.status == .failed && value.reason == .pairedVideoUnavailable)
+        }
+      }.count
+      #expect(reloaded.recordCountBothVariantsDone(year: year, month: month) == bothDone)
+      #expect(
+        reloaded.recordCountOriginalDoneAtNaturalStem(year: year, month: month) == naturalStem)
+      #expect(reloaded.recordCountEditedFallback(year: year, month: month) == fallback)
+      #expect(
+        reloaded.recordCountPairedVideoIncomplete(year: year, month: month) == pairedIncomplete,
+        "pairedVideoIncomplete(\(year)-\(month))")
+    }
+    for year in Set(cells.map { $0[0] }) {
+      let expected = reloaded.recordsById.values.filter {
+        $0.year == year && (1...12).contains($0.month) && $0.variants[.original]?.status == .done
+      }.count
+      #expect(reloaded.yearExportedCount(year: year) == expected)
+    }
+  }
 }
