@@ -18,7 +18,8 @@ final class FinalCommitContext<Snapshot: Codable & Sendable, Mutation: Codable &
 
 /// Where a store put an acknowledged final commit, and so whose write it still owes a flush.
 enum FinalCommitLanding: Equatable {
-  /// Deferred behind a corrupt load or held while its destination loads; nothing written yet.
+  /// No flush is owed: deferred behind a corrupt or pending load, or already applied
+  /// and retained without an additional write to flush.
   case held
   /// Recorded in the active history through the store's ordinary append.
   case recorded

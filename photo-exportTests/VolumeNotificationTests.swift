@@ -85,8 +85,8 @@ struct VolumeNotificationTests {
     let collections = CollectionExportRecordStore(
       baseDirectoryURL: root.appendingPathComponent("Records"))
     defer {
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
     }
     var configurations: [String?] = []
     var interruptions = 0
@@ -109,8 +109,8 @@ struct VolumeNotificationTests {
     collections.markVariantExported(
       assetId: "kept", placement: placement, variant: .original,
       filename: "kept.jpg", exportedAt: Date())
-    timeline.flushForTesting()
-    collections.flushForTesting()
+    timeline.drainSynchronously()
+    collections.drainSynchronously()
     let initialConfigurations = configurations.count
     center.post(name: NSWorkspace.didMountNotification, object: nil)
     _ = await validationIterator.next()

@@ -422,7 +422,7 @@ struct EditedModeExportTests {
     store.markVariantExported(
       assetId: "edited-only-asset", variant: .edited, year: 2025, month: 6,
       relPath: "2025/06/", filename: "IMG_0001.JPG", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Under editedWithOriginals: bothDone=0, origOnlyAtStem=0, uneditedCount=0 → 0 exported.
     let summary = store.sidebarSummary(
@@ -446,7 +446,7 @@ struct EditedModeExportTests {
     store.markExported(
       assetId: "plain-asset", year: 2025, month: 7, relPath: "2025/07/",
       filename: "IMG_0002.JPG", exportedAt: now)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let summary = store.sidebarSummary(
       year: 2025, month: 7, totalCount: 2, adjustedCount: 1,

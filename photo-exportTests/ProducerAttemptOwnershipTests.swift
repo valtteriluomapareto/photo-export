@@ -183,8 +183,8 @@ struct ProducerAttemptOwnershipTests {
       await targetGate.releaseAll()
       await blockerGate.releaseAll()
       for task in physicalTasks { await task.value }
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: destination.root)
       try? FileManager.default.removeItem(at: root)
       defaults.removePersistentDomain(forName: defaultsName)
@@ -315,8 +315,8 @@ struct ProducerAttemptOwnershipTests {
         actual.exportDate = expected.exportDate
         #expect(actual == expected)
       }
-      reopenedTimeline.flushForTesting()
-      reopenedCollections.flushForTesting()
+      reopenedTimeline.drainSynchronously()
+      reopenedCollections.drainSynchronously()
       await f.cleanup()
     } cleanup: {
       await f.cleanup()

@@ -86,8 +86,8 @@ struct AutoSyncDisableStopsRunTests {
       exportManager.cancelAndClear()
       subscription = nil
       Task { [writeGate] in await writeGate.releaseAll() }
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       destination.cleanup()
     }

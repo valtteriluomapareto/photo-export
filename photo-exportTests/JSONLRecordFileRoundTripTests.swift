@@ -8,7 +8,7 @@ import os
 /// in the persistence contract before the planned performance work that moves snapshot
 /// encoding off the main actor.
 ///
-/// **Invariant under test:** for any sequence of `append` calls, after `flushForTesting`,
+/// **Invariant under test:** for any sequence of `append` calls, after `drainSynchronously`,
 /// the next `load()` plus an in-order replay of `ops` reproduces the same logical state
 /// the in-memory caller maintained. Whether that state is reconstructed from
 /// snapshot-only, log-only, or snapshot+log-overlay is an implementation detail; the
@@ -76,7 +76,7 @@ struct JSONLRecordFileRoundTripTests {
       let captured = replica.snapshot
       file.append(op, currentSnapshot: { captured })
     }
-    file.flushForTesting()
+    file.drainSynchronously()
 
     let loaded = file.load()
     var reconstructed = loaded.snapshot?.records ?? [:]
@@ -149,7 +149,7 @@ struct JSONLRecordFileRoundTripTests {
       file.append(op, currentSnapshot: { Snapshot(records: captured) })
     }
     // Drain the ioQueue so the n-1 log lines are durable; snapshot still absent.
-    file.flushForTesting()
+    file.drainSynchronously()
     #expect(!FileManager.default.fileExists(atPath: snapshotURL.path))
 
     // Build a heavy snapshot to amplify the encode cost (~1 MB of JSON).
@@ -179,7 +179,7 @@ struct JSONLRecordFileRoundTripTests {
     // Resume + drain confirms the snapshot eventually lands and reflects the frozen
     // `heavy` capture.
     queue.resume()
-    file.flushForTesting()
+    file.drainSynchronously()
     #expect(FileManager.default.fileExists(atPath: snapshotURL.path))
     let loaded = file.load()
     #expect(loaded.snapshot?.records.count == heavy.count)
@@ -324,7 +324,7 @@ struct JSONLRecordFileRoundTripTests {
       let captured = replica.snapshot
       file.append(op, currentSnapshot: { captured })
     }
-    file.flushForTesting()
+    file.drainSynchronously()
 
     // Simulate a "restart": construct a fresh instance against the same URLs.
     let snapshotURL = dir.appendingPathComponent("snapshot.json")
@@ -343,7 +343,7 @@ struct JSONLRecordFileRoundTripTests {
     replica.apply(firstAfterRestart)
     let captured = replica.snapshot
     secondInstance.append(firstAfterRestart, currentSnapshot: { captured })
-    secondInstance.flushForTesting()
+    secondInstance.drainSynchronously()
 
     let loadedAgain = secondInstance.load()
     #expect(loadedAgain.snapshot == nil, "first append after restart must not trigger compaction")
@@ -367,7 +367,7 @@ struct JSONLRecordFileRoundTripTests {
       let captured = replica.snapshot
       file.append(op, currentSnapshot: { captured })
     }
-    file.flushForTesting()
+    file.drainSynchronously()
 
     // Plant a fake "broken" snapshot so resetToEmpty has something to rename aside.
     try Data("garbage".utf8).write(to: dir.appendingPathComponent("snapshot.json"))

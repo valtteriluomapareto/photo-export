@@ -110,8 +110,8 @@ import Testing
         window.contentView = nil
         window.close()
         await gate.releaseAll()
-        timeline.flushForTesting()
-        collections.flushForTesting()
+        timeline.drainSynchronously()
+        collections.drainSynchronously()
         try? FileManager.default.removeItem(at: root)
       }
     }

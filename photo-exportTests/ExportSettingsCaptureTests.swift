@@ -146,8 +146,8 @@ struct ExportSettingsCaptureTests {
 
     func cleanup() {
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
       destination.cleanup()
     }

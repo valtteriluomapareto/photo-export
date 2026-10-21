@@ -310,7 +310,7 @@ struct FilenameClaimsTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let store = CollectionExportRecordStore(baseDirectoryURL: root)
     store.configure(for: "dest")
-    defer { store.flushForTesting() }
+    defer { store.drainSynchronously() }
     let album = ExportPlacement(
       kind: .album, id: "album:1", displayName: "Trip", collectionLocalIdentifier: "1",
       relativePath: "Collections/Albums/Trip/", createdAt: Date())
