@@ -54,7 +54,7 @@ final class ExportRecordStore: ObservableObject {
     /// AND `.edited` is not `.done`. The records-only sidebar formula's "unedited asset
     /// exported once" estimator depends on this.
     var originalDoneAtNaturalStem: Int = 0
-    /// Records covered by the issue #22 fallback: `.original.done` AND
+    /// Records covered by the fallback: `.original.done` AND
     /// `.edited.failed` with the explicit
     /// `editedUnavailableOriginalBackedUpMessage` sentinel that
     /// `runEditedFallbackOriginal` writes after a successful `_orig` write.
@@ -138,7 +138,7 @@ final class ExportRecordStore: ObservableObject {
   /// selection:)` and `monthSummary(assets:selection:)` so view-side
   /// `@EnvironmentObject` callers see the right answers without having to
   /// thread the toggle through five call sites (timeline grid, year tiles,
-  /// sidebar badges, content-pane summary, etc.). Issue #47.
+  /// sidebar badges, content-pane summary, etc.).
   ///
   /// `@Published` so views with `@EnvironmentObject private var
   /// exportRecordStore: ExportRecordStore` re-render when the toggle flips.
@@ -534,7 +534,7 @@ final class ExportRecordStore: ObservableObject {
   // MARK: - Public API (variant mutations)
 
   /// Marks a variant `.inProgress`. Creates the record if missing and upserts the variant.
-  /// `subfolder` (issue #38) is the path component inside the placement folder where
+  /// `subfolder` is the path component inside the placement folder where
   /// the file will land (e.g. `"videos"`). `nil` means the bare placement path. The
   /// value is persisted on the per-variant record so reuse-source and reconcile can
   /// recover each file's true on-disk location regardless of the current setting.
@@ -637,13 +637,13 @@ final class ExportRecordStore: ObservableObject {
   /// always use `VariantPolicy.standard` (no reduced-fidelity sources on owned-library
   /// assets).
   ///
-  /// Includes the issue #22 edited-fallback case via the policy: an adjusted asset whose
+  /// Includes the edited-fallback case via the policy: an adjusted asset whose
   /// `.edited` variant is `.failed` with the `editedUnavailableOriginalBackedUpMessage`
   /// sentinel counts as exported. See `ExportCompletionPolicy.satisfiesEditedFallback`.
   ///
   /// `livePhotosPaired` is REQUIRED — no default — because every UI call site that
   /// surfaces "is this asset exported?" must consider whether the user has opted
-  /// into paired-video accounting (issue #49). The MonthContentView per-thumbnail
+  /// into paired-video accounting. The MonthContentView per-thumbnail
   /// badge bug that motivated this constraint silently defaulted to `false` and
   /// over-reported completeness. Tests that don't care pass `livePhotosPaired: false`
   /// explicitly — boilerplate is worth catching the silent-regression class at
@@ -747,7 +747,7 @@ final class ExportRecordStore: ObservableObject {
 
   /// Selection-aware month summary. Caller supplies the month's loaded asset descriptors so the
   /// evaluator can consult each asset's `hasAdjustments`. `livePhotosPaired` is the user's
-  /// current setting (issue #49) — without it, a Live Photo whose paired video is pending
+  /// current setting — without it, a Live Photo whose paired video is pending
   /// would be miscounted as complete.
   func monthSummary(
     assets: [AssetDescriptor], selection: ExportVersionSelection, livePhotosPaired: Bool
@@ -798,7 +798,7 @@ final class ExportRecordStore: ObservableObject {
     monthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
   }
 
-  /// Records covered by the issue #22 fallback in `(year, month)`. Counted as
+  /// Records covered by the fallback in `(year, month)`. Counted as
   /// "exported" by the sidebar's records-only formula in `.edited` mode so a
   /// year that finishes with fallback-covered assets reads as 100% rather
   /// than 99% — matching the asset-aware `isExported(asset:selection:)`.
@@ -824,12 +824,12 @@ final class ExportRecordStore: ObservableObject {
   /// callers should render a neutral "loading" state in that case rather than treat nil as
   /// zero.
   ///
-  /// `livePhotosPaired` (issue #49) is REQUIRED — no default. When true, records with
+  /// `livePhotosPaired` is REQUIRED — no default. When true, records with
   /// any paired-video variant in a non-`.done` state are subtracted from the exported
   /// total so a Live Photo whose still landed but whose motion file is still pending
   /// no longer over-reports against the per-asset
   /// `isExported(asset:selection:livePhotosPaired:)`. Forcing every caller to pass
-  /// the flag prevents silent regressions at the UI seam (see issue #49 review notes).
+  /// the flag prevents silent regressions at the UI seam.
   func sidebarSummary(
     year: Int, month: Int, totalCount: Int, adjustedCount: Int?,
     selection: ExportVersionSelection,
@@ -938,10 +938,10 @@ final class ExportRecordStore: ObservableObject {
     reconciliationRevision &+= 1
     let revision = reconciliationRevision
 
-    // Phase 1 (main): snapshot every .done variant's expected on-disk path.
+    // Snapshot on main: capture every .done variant's expected on-disk path.
     let probes = try completedVariantProbes(root: root)
 
-    // Phase 2 (off-main): preserve errors until ownership has been checked.
+    // Probe off-main: preserve errors until ownership has been checked.
     let probesCopy = probes
     let fileChecker = reconciliationFileChecker
     // Cancellation stops new probes; a probe in flight finishes first.
@@ -968,7 +968,7 @@ final class ExportRecordStore: ObservableObject {
 
     let toPrune = try outcome.get()
 
-    // Phase 3 (main): apply mutations.
+    // Commit on main: apply mutations.
     var prunedVariants = 0
     var prunedRecords = 0
     for (assetId, variant) in toPrune {
@@ -998,7 +998,7 @@ final class ExportRecordStore: ObservableObject {
     var probes: [CompletedVariantProbe] = []
     for (assetId, record) in recordsById {
       for (variant, vr) in record.variants where vr.status == .done {
-        // Issue #38: probe each variant's *own* on-disk location, computed from the
+        // probe each variant's *own* on-disk location, computed from the
         // placement-derived `record.relPath` (which the timeline store sets to the
         // current target layout's effective path on every write) plus the variant's
         // persisted `subfolder`. Under mid-life toggle, two variants of one asset

@@ -156,6 +156,14 @@ From the archived [Run Ownership Model](../project/archive/auto-sync-background-
 
 > `runNow()` requested while a manual run is active follows the same dirty-and-re-evaluate path as any other auto-sync trigger: it does not supersede the manual run.
 
+The former supersession comment stated:
+
+> the automatic run is superseded with `cancelReason: .supersededByManualRun`. After the manual run finishes, the auto-sync reducer re-evaluates and schedules another run if work is still pending.
+
+The former empty-run comment stated:
+
+> auto-sync empty runs update lastRunSummary but do not show toolbar empty-run messages.
+
 From [Awaitable Export Runs](../project/archive/auto-sync-background-sync-plan.md#awaitable-export-runs):
 
 > Background runs must not clear manual toolbar messages or flash "Everything in this destination is already exported."

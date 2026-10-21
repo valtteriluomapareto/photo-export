@@ -51,7 +51,6 @@ private final class JSONLIOFailureState: @unchecked Sendable {
 ///   on each loaded op, the in-flight recovery pass, the `@Published` `mutationCounter`,
 ///   and the `RecordStoreState` machine.
 ///
-/// Phase 0/1 of `docs/project/archive/collections-export-plan.md` motivates this extraction.
 /// Both stores share the same commit order: synchronize the replacement snapshot,
 /// atomically rename it over the old snapshot, synchronize its directory, then truncate
 /// the log. An interruption before log truncation leaves a replayable log intact.

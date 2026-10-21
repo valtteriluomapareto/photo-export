@@ -16,7 +16,7 @@ struct BackupScanner {
 
   /// A file discovered in the backup folder's YYYY/MM/ hierarchy.
   ///
-  /// `subfolder` (issue #38) records the subfolder inside the month directory
+  /// `subfolder` records the subfolder inside the month directory
   /// where the file was found — `nil` for files directly under `YYYY/MM/`,
   /// `"videos"` for files inside the `YYYY/MM/videos/` subfolder that the
   /// videos-in-a-subfolder export layout writes. The matcher classifies the
@@ -145,7 +145,7 @@ struct BackupScanner {
           in: monthDir, year: year, month: month, subfolder: nil,
           reader: directoryReader, into: &results)
 
-        // Issue #38: also descend into YYYY/MM/videos/ (if present) so files written
+        // Also descend into YYYY/MM/videos/ (if present) so files written
         // under the subfolder layout are discovered by Import Existing Backup.
         let videosDir = monthDir.appendingPathComponent("videos", isDirectory: true)
         try Task.checkCancellation()
@@ -163,7 +163,7 @@ struct BackupScanner {
 
   /// Enumerates regular files directly inside `directory` and emits a
   /// `ScannedFile` for each into `results`. Used by `scanBackupFolder` to walk
-  /// both the bare month directory and its optional `videos/` child (issue #38).
+  /// both the bare month directory and its optional `videos/` child.
   /// Caller passes `subfolder = nil` for files at the month root and
   /// `subfolder = "videos"` for files in the subfolder.
   private static func appendFiles(
@@ -218,7 +218,7 @@ struct BackupScanner {
   /// Per-resource snapshot used by the matcher. Filename + the optional
   /// PhotoKit-reported file size; the size is used as a last-resort
   /// discriminator when otherwise-identical bursts would land in the
-  /// "ambiguous" bucket. See issue #32.
+  /// "ambiguous" bucket.
   struct ResourceFingerprint: Sendable, Equatable {
     let filename: String
     let fileSize: Int64?
@@ -327,7 +327,7 @@ struct BackupScanner {
         resources
         .filter { $0.type == .fullSizePairedVideo }
         .map { ResourceFingerprint(filename: $0.originalFilename, fileSize: $0.fileSize) }
-      // Issue #49: derive `isLivePhoto` from the resource list rather than mirroring
+      // Derive `isLivePhoto` from the resource list rather than mirroring
       // `asset.isLivePhoto`. The descriptor flag is gated behind the user's Settings
       // toggle (so a fresh fetch with the toggle off may return `false` even for true
       // Live Photos on iCloud-synced libraries with a missing `.photoLive` subtype).
@@ -495,7 +495,7 @@ struct BackupScanner {
     // matches a known original-resource filename (the include-originals same-extension
     // case where the original moved out of the way to the `_orig` sibling).
     // Stems are case-folded so a mixed-case sibling pair (e.g. `IMG_1.heic` next to
-    // `IMG_1_orig.HEIC`) still pairs up — case varies in real exports (issue #127).
+    // `IMG_1_orig.HEIC`) still pairs up — case varies in real exports.
     var stemsWithOrigSibling = Set<String>()
     for file in files {
       if let parsed = ExportFilenamePolicy.parseOriginalCandidate(filename: file.filename) {
@@ -504,7 +504,7 @@ struct BackupScanner {
       }
     }
 
-    // Issue #38: pre-compute the set of `baseFilename`s that appear BOTH at the bare
+    // Pre-compute the set of `baseFilename`s that appear BOTH at the bare
     // placement path AND inside `videos/` in the same group. A mid-life toggle of
     // `videoLayout` produces this pattern for a standalone video that already had
     // `.original` on disk under `.flat` and then got `.edited` written under `.subfolder` —
@@ -620,7 +620,7 @@ struct BackupScanner {
       $0.originalResourceFilenamesLowercased.contains(fileFilenameLower)
     }
     if !originalExactCandidates.isEmpty {
-      // Issue #38: subfolder-split sibling. A mid-life `videoLayout` flip leaves
+      // subfolder-split sibling. A mid-life `videoLayout` flip leaves
       // `.original` at the bare month path and writes `.edited` into `videos/` —
       // same stem, same extension, no `_orig` companion. Disambiguate by location:
       // when this scope has files at BOTH subfolders for the same stem, the one in
@@ -798,7 +798,7 @@ struct BackupScanner {
       if byDate.count > 1 {
         // Burst photos commonly land here: same filename or near-stem, same
         // creation second, identical dimensions. Resource file size is
-        // usually the only metadata that differs. See issue #32.
+        // usually the only metadata that differs.
         if let bySize = narrowByResourceFileSize(
           file: file, candidates: byDate, variant: variant), bySize.count == 1
         {

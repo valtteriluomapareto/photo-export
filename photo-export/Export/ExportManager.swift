@@ -9,9 +9,9 @@ import os
 final class ExportManager: ObservableObject {
   /// User-facing persistence key for the active version selection.
   static let versionSelectionDefaultsKey = "exportVersionSelection"
-  /// Persistence key for the Live Photo paired-video export toggle (issue #49).
+  /// Persistence key for the Live Photo paired-video export toggle.
   static let livePhotosPairedExportDefaultsKey = "livePhotosPairedExport"
-  /// Persistence key for the videos-subfolder layout setting (issue #38).
+  /// Persistence key for the videos-subfolder layout setting.
   static let videoLayoutDefaultsKey = "exportVideoLayout"
 
   /// How long the "already exported" toolbar message stays visible before it auto-clears.
@@ -23,8 +23,7 @@ final class ExportManager: ObservableObject {
     /// The placement this job is exporting under. Drives:
     /// - Which on-disk folder the asset lands in (`placement.relativePath`).
     /// - Which record store records the result (timeline → `exportRecordStore`,
-    ///   `.favorites`/`.album` → `collectionExportRecordStore`); see *Routing record
-    ///   mutations to the right store* in the plan.
+    ///   collection kinds → `collectionExportRecordStore`), routed by `RecordStoreRouter`.
     let placement: ExportPlacement
     let settings: ExportSettingsSnapshot
     var selection: ExportVersionSelection { settings.selection }
@@ -92,7 +91,7 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  /// Issue #47: when on, the export pipeline writes JPEG `.edited` variants for
+  /// When on, the export pipeline writes JPEG `.edited` variants for
   /// HEIC/HEIF assets by re-encoding via `ImageConverter`. Off by default —
   /// backward-compatible for existing users. Persisted to `UserDefaults` the
   /// same shape as `versionSelection`.
@@ -124,7 +123,7 @@ final class ExportManager: ObservableObject {
     set { versionSelection = newValue ? .editedWithOriginals : .edited }
   }
 
-  /// Issue #49: when on, Live Photos export a paired `.MOV` motion file alongside the
+  /// When on, Live Photos export a paired `.MOV` motion file alongside the
   /// still image (e.g. `IMG_0001.HEIC` + `IMG_0001.MOV`). With `.editedWithOriginals`
   /// also on, edited Live Photos additionally write `_orig.HEIC` + `_orig.MOV`.
   /// Default off — most users want stills-only and the paired video roughly doubles
@@ -141,7 +140,7 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  /// Issue #38: when `.subfolder`, standalone-video assets land in a `videos/` subfolder
+  /// when `.subfolder`, standalone-video assets land in a `videos/` subfolder
   /// inside the placement (`2026/03/videos/IMG_0002.MOV`) instead of the bare placement
   /// path. Image-mediaType assets — including Live Photos and their paired motion — stay
   /// at the bare path so the still + motion pair isn't split across folders. Default
@@ -174,7 +173,7 @@ final class ExportManager: ObservableObject {
   /// library window shows the sheet (progress, result, or why it didn't run).
   @Published private(set) var importSheetRequest: UUID?
 
-  // MARK: - Awaitable run lifecycle (auto-sync Phase 0a)
+  // MARK: - Awaitable run lifecycle
 
   /// The `ExportRunContext` of the run currently in flight, or `nil` when idle. Set by
   /// `runExport(context:)`; cleared when the run reaches a terminal state. Callers
@@ -191,7 +190,7 @@ final class ExportManager: ObservableObject {
   /// yet. Without `isEnqueueingAll` in the tuple, AutoSync could observe `.idle`
   /// during the window between `isEnqueueingAll = true` and the first
   /// `pendingJobs.append`, and race to start its own background run on top of a
-  /// user-initiated bulk export. See issue #67 item 4a.
+  /// user-initiated bulk export.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
     Publishers.CombineLatest4($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)
       .map { context, isRunning, queueCount, isEnqueueingAll in
@@ -214,7 +213,7 @@ final class ExportManager: ObservableObject {
     $versionSelection.eraseToAnyPublisher()
   }
 
-  /// Combine publisher for `convertHEICToJPEG` (issue #47). AutoSync subscribes
+  /// Combine publisher for `convertHEICToJPEG`. AutoSync subscribes
   /// so flipping the toggle re-triggers a debounced evaluation — HEIC assets
   /// previously skipped as "already exported" become eligible once
   /// `requiredVariants` widens to include `.edited`.
@@ -222,7 +221,7 @@ final class ExportManager: ObservableObject {
     $convertHEICToJPEG.eraseToAnyPublisher()
   }
 
-  /// Combine publisher for `livePhotosPairedExport` (issue #49). `PhotoLibraryManager`
+  /// Combine publisher for `livePhotosPairedExport`. `PhotoLibraryManager`
   /// subscribes via `bindLivePhotoDetectionFallback(to:)` so the resource-enumeration
   /// fallback runs only when the user has the toggle on.
   var livePhotosPairedExportPublisher: AnyPublisher<Bool, Never> {
@@ -283,8 +282,7 @@ final class ExportManager: ObservableObject {
     /// should equal `failures.count` modulo any legacy sentinel paths.
     var failures: [ExportRunFailureDetail] = []
     /// Asset count skipped at enqueue or before execution by the AutoSync retry-eligibility
-    /// gate (plan §"Phase 3"): "ineligible variants count as `skippedCount`
-    /// with a retry reason in the run summary." Reported on the summary;
+    /// gate. Reported on the summary;
     /// the per-variant detail is reconstructable from `AutoSyncRetryState`.
     var skippedCount: Int = 0
     /// Set when the run's scan did not cover its whole scope: a bulk enqueue
@@ -338,7 +336,7 @@ final class ExportManager: ObservableObject {
   let photoLibraryService: any PhotoLibraryService
   /// Seam for dropping `PhotoLibraryManager`'s long-lived PHAsset cache
   /// between bulk-export iterations. See `PHAssetCacheControlling` for the
-  /// memory-watermark backstory (issue #112).
+  /// memory-watermark backstory.
   private let phAssetCacheControl: any PHAssetCacheControlling
   let exportDestination: any ExportDestination
   let exportRecordStore: ExportRecordStore
@@ -372,7 +370,7 @@ final class ExportManager: ObservableObject {
   // DO NOT change this back to `let` without re-examining the closure
   // capture in `init` — the rebind is the whole point.
   private(set) var mediaRenderer: any MediaRenderer
-  /// Seam for the HEIC→JPEG conversion path (issue #47). `VariantExporter` invokes
+  /// Seam for the HEIC→JPEG conversion path. `VariantExporter` invokes
   /// it through this reference. Defaults to `ProductionImageConverter` (a thin
   /// CoreImage wrapper); tests inject `FakeImageConverter`.
   let imageConverter: any ImageConverter
@@ -385,7 +383,7 @@ final class ExportManager: ObservableObject {
   /// Views read the same rule through `ManualExportAvailability`, so they disable the control
   /// instead of dropping the click.
   ///
-  /// Phase 3 adds `canExportCollection` for the `.favorites`/`.album` start methods. The
+  /// Collection start methods use `canExportCollection` instead. The
   /// two are deliberately independent so a `.failed` collection store does not block
   /// timeline export and vice versa — the disjoint-key-spaces rationale (a failed
   /// favorites export can't corrupt timeline records) extends to the start-side guards.
@@ -393,7 +391,7 @@ final class ExportManager: ObservableObject {
     exportRecordStore.state == .ready
   }
 
-  /// True when the **collection** store is ready. Used by Phase 3's
+  /// True when the collection store is ready. Used by the
   /// `startExportFavorites`/`startExportAlbum` start methods.
   var canExportCollection: Bool {
     collectionExportRecordStore.state == .ready
@@ -437,7 +435,7 @@ final class ExportManager: ObservableObject {
   /// — `self` must be fully initialized before the coordinator can hold it as Host.
   private(set) var queueCoordinator: ExportQueueCoordinator!
 
-  /// Owns the Import Existing Backup flow. Phase 5 extraction. `isImporting`,
+  /// Owns the Import Existing Backup flow. `isImporting`,
   /// `importStage` and `importError` on this manager are sink-driven mirrors of the coordinator's
   /// publishers (same shape as the queue coordinator mirrors). `importResult` stays
   /// writable on the manager because external callers (test code) sometimes reset it
@@ -476,15 +474,15 @@ final class ExportManager: ObservableObject {
     get { progressState.currentJobPlacement }
     set { progressState.currentJobPlacement = newValue }
   }
-  /// Forwarder to `queueCoordinator.generation`. The Phase-0 cancellation storage
-  /// moved to `ExportQueueCoordinator` in issue #67 item 2; this computed property
+  /// Forwarder to `queueCoordinator.generation`. Cancellation storage belongs
+  /// to the queue coordinator; this computed property
   /// preserves `manager.generation` as a stable read surface for tests and
   /// in-module callers.
   var generation: Int { queueCoordinator.generation }
   /// `@Published` so AutoSync's `exportRunStatePublisher` can include the
   /// bulk-enqueue window (after the dispatcher flips this true but before the
-  /// first job lands in `pendingJobs`) in its idle/active decision. Issue #67
-  /// item 4a — without this, AutoSync would race to start a background run
+  /// first job lands in `pendingJobs`) in its idle/active decision. Without this,
+  /// AutoSync would race to start a background run
   /// during the multi-select / Export-All dispatcher's mid-enqueue window.
   @Published private(set) var isEnqueueingAll: Bool = false
   /// Forwarder to the import coordinator's task handle so existing test reads
@@ -545,7 +543,7 @@ final class ExportManager: ObservableObject {
     // contract is implicit. Initial values flow into both record stores via
     // the manual sync below (didSet is suppressed during init). All stored
     // properties must be assigned before any `self.` access, so the Live
-    // Photo paired-video toggle (issue #49) is set first.
+    // Photo paired-video toggle is set first.
     self.livePhotosPairedExport = userDefaults.bool(forKey: Self.livePhotosPairedExportDefaultsKey)
     if let raw = userDefaults.string(forKey: Self.videoLayoutDefaultsKey),
       let saved = ExportVideoLayout(rawValue: raw)
@@ -567,9 +565,9 @@ final class ExportManager: ObservableObject {
       }
     }
     // Coordinator is constructed first so it can be injected into VariantExporter
-    // and ImportCoordinator. Both reach the Phase-0 cancellation seam (generation /
+    // and ImportCoordinator. Both reach the cancellation seam (generation /
     // isCurrent / throwIfCancelledOrStale) through this reference rather than
-    // through their Host protocols (issue #67 item 2).
+    // through their Host protocols.
     self.queueCoordinator = ExportQueueCoordinator(host: self)
     self.variantExporter = VariantExporter(
       host: self,
@@ -818,7 +816,7 @@ final class ExportManager: ObservableObject {
     )
   }
 
-  // MARK: - Collection start methods (Phase 3)
+  // MARK: - Collection start methods
 
   /// Starts an export of the user's Favorites. Routes through the resolver so the
   /// placement is the canonical `collections:favorites`. Gated on
@@ -1000,7 +998,7 @@ final class ExportManager: ObservableObject {
   /// Callers supply just (a) the bulk-loop body that does the enqueue work
   /// and returns `BulkExportOutcome`, (b) the empty/done message factory used
   /// when nothing was enqueued, and (c) the partial-scan warning factory used
-  /// when the body throws after partial progress. Issue #67 item 5.
+  /// when the body throws after partial progress.
   ///
   /// The body checks `gen` after each await to protect its enqueue work.
   /// This wrapper independently checks ownership before starting and after the
@@ -1071,10 +1069,10 @@ final class ExportManager: ObservableObject {
     for item in items {
       // Drop the previous iteration's PHAsset cache before starting the
       // next. Bounds peak cache footprint at one iteration's fetch rather
-      // than the cumulative timeline/album sweep (issue #112).
+      // than the cumulative timeline/album sweep.
       phAssetCacheControl.forgetPHAssetCache()
       // Yield so WindowServer pings interleave during long bulk enqueues;
-      // without it a 282-album fan-out registers as unresponsive (issue #112).
+      // without it a 282-album fan-out registers as unresponsive.
       await Task.yield()
       let outcome = try await enqueue(item)
       guard isCurrent(gen) else { return (totals, false) }
@@ -1324,12 +1322,10 @@ final class ExportManager: ObservableObject {
     finalizeActiveRun(result: .cancelled, cancelReason: .userCancelled)
   }
 
-  /// User confirmed a manual export while an AutoSync run was active. Plan
-  /// §"Phase 4": "the automatic run is superseded with
-  /// `cancelReason: .supersededByManualRun`. After the manual run finishes,
-  /// the auto-sync reducer re-evaluates and schedules another run if work
-  /// is still pending." Resolves the active run as `.superseded` so AutoSync
-  /// knows not to clear dirty state (the run didn't actually complete).
+  /// After manual-export confirmation, supersede the automatic run so the manual
+  /// action owns the queue. The incomplete run must not clear dirty work; AutoSync
+  /// re-evaluates after manual work drains.
+  /// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
   func supersedeForManualRun() {
     logger.info("Superseding active auto-sync run for manual export")
     teardownActiveWork()
@@ -1414,9 +1410,7 @@ final class ExportManager: ObservableObject {
   /// Shows a transient message in the toolbar's progress slot for `emptyRunMessageDuration`.
   /// Replaces any previously-shown message and resets the auto-clear timer.
   ///
-  /// Auto-sync (`.background` visibility) runs suppress this — plan §"Phase 3":
-  /// "auto-sync empty runs update lastRunSummary but do not show toolbar
-  /// empty-run messages." The user-visible surface for those is
+  /// Background runs leave manual toolbar feedback alone. Their user-visible surface is
   /// AutoSyncManager.lastRunSummary, rendered in Settings → Auto Export.
   private func setEmptyRunMessage(_ message: String) {
     if activeRunContext?.visibility == .background {
@@ -1485,7 +1479,7 @@ final class ExportManager: ObservableObject {
   /// Scans the month and returns the enqueue outcome. Callers use the outcome to decide
   /// whether to surface the "already exported" toolbar message.
   @discardableResult
-  // Phase 4b lifted the per-placement queue-counter mutation into
+  // Per-placement queue-counter mutation belongs to
   // `ExportQueueCoordinator.enqueue`. The three enqueue methods retain only the
   // PhotoKit fetch + `ExportJobPlanner.plan` call.
   private func enqueueMonth(
@@ -1787,10 +1781,8 @@ final class ExportManager: ObservableObject {
   /// normally. The path that *does* cancel mid-flight is `cancelAndClear`. Use this
   /// helper at non-throwing checkpoints — typically inside escaping closures that
   /// `return` early when the run is stale. Per
-  /// `docs/project/archive/software-architecture-improvement-plan.md` "Cross-Cutting
-  /// Contracts > Generation / cancellation ownership", these helpers are the seam
-  /// the manager's own dispatchers call inline. The Phase-0 storage moved to
-  /// `ExportQueueCoordinator` in issue #67 item 2; these are thin forwarders so the
+  /// docs/reference/architecture-conventions.md#1-cancellation-contract, these helpers
+  /// forward to `ExportQueueCoordinator` so the
   /// in-module call sites (`guard self.isCurrent(gen)`, `try throwIfCancelledOrStale`)
   /// remain stable.
   func isCurrent(_ gen: Int) -> Bool {
@@ -1872,12 +1864,12 @@ final class ExportManager: ObservableObject {
       logger.debug("Begin scoped access for: \(scopedURL.path, privacy: .public)")
       defer { exportDestination.endScopedAccess(for: scopedURL) }
 
-      // Phase 3 unifies the destination resolution: every job's placement carries its
+      // Every job's placement carries its
       // own relativePath (e.g. "2025/02/" for timeline, "Collections/Albums/Trip/" for
       // an album). The destination resolver applies escape-protection regardless of
       // kind, so timeline and collection jobs flow through one path.
       //
-      // Issue #38: the *effective* relative path additionally folds in the videos-
+      // the *effective* relative path additionally folds in the videos-
       // subfolder rule. When the user has `videoLayout = .subfolder` AND this asset
       // is a standalone video (mediaType `.video`), the helper appends `videos/` to
       // the placement path. Live Photo paired motion (image asset, paired-video
@@ -1903,7 +1895,7 @@ final class ExportManager: ObservableObject {
       // (which today only accepts `ExportRecord?`). Collection placements don't have
       // year/month, so we use the placement's relPath directly.
       //
-      // Issue #38: feed `effectiveRelPath` (current target layout's path) rather than
+      // feed `effectiveRelPath` (current target layout's path) rather than
       // `placement.relativePath`. Under mid-life toggle this can differ from where
       // some already-written variants live — `inheritedGroupStem` probes the
       // *current target* directory because that's where the next write lands and
@@ -2079,7 +2071,7 @@ final class ExportManager: ObservableObject {
         return nil
       }
 
-      // Issue #22 fallback: when the user asked for `.edited` only (no
+      // Fallback: when the user asked for `.edited` only (no
       // `_orig` companion), but Photos refused the edited resource, write the
       // original to the `_orig` path. The natural-stem slot stays free, so a
       // future run can still write the edited file if Photos' state changes.
@@ -2133,7 +2125,7 @@ final class ExportManager: ObservableObject {
     }
   }
 
-  // MARK: - Edited-unavailable fallback (issue #22)
+  // MARK: - Edited-unavailable fallback
 
   /// The decision logic for running this fallback now lives in
   /// `ExportCompletionPolicy.shouldRunEditedFallback`. The call site at the end of the
@@ -2237,14 +2229,12 @@ final class ExportManager: ObservableObject {
 
   // MARK: - Helpers
 
-  // `isSourceSideCopyError` moved to `VariantExporter` along with the reuse-source copy
-  // path (Phase 3a).
+  // Reuse-source copy and source-side fallback stay together in `VariantExporter`.
 
   // MARK: - VariantExporter.Host conformance
 
-  // Generation seam (`isCurrent` + `throwIfCancelledOrStale`) and the sentinel-message
-  // `recordVariantFailed` overload are already declared above; the protocol witness
-  // table picks them up here.
+  // The sentinel-message `recordVariantFailed` overload is declared above.
+  // Cancellation goes directly through the exporter's queue coordinator.
 
   func setCurrentAssetFilename(_ name: String?) {
     progressState.currentAssetFilename = name
@@ -2258,20 +2248,17 @@ final class ExportManager: ObservableObject {
     progressState.renderActivity = nil
   }
 
-  // The rendered-media bridge that lived here in Phase 3a is gone — `VariantExporter`
-  // now holds the renderer directly. ExportManager still constructs the renderer (so
-  // it can wire the `renderActivity` callback) but no longer invokes it.
+  // `VariantExporter` invokes the renderer; the manager constructs it to wire activity.
 
   // MARK: - ExportQueueCoordinator.Host conformance
 
-  /// `generation` and `isCurrent(_:)` are already declared above; the protocol witness
-  /// picks them up here. `isEnqueueingAll` is the existing stored property.
+  // `isEnqueueingAll` supplies the coordinator's preparation guard.
 
   /// Internal observation seam for deterministic tests of final-commit admission.
   var finalCommitWaitObserver: (() -> Void)?
 
   /// Drives the per-job export pipeline on behalf of the coordinator. Wraps the
-  /// existing `export(job:gen:)` body so the coordinator's drain loop doesn't need to
+  /// existing `export(job:generation:)` body so the coordinator's drain loop doesn't need to
   /// know about it.
   func performExport(job: ExportJob, generation gen: Int) async {
     let failureSignalsBefore = manualRunFeedback?.failureSignals ?? 0
@@ -2354,14 +2341,14 @@ final class ExportManager: ObservableObject {
   }
 
   /// Called by the coordinator's drain loop on the "queue empty after a job ran" edge.
-  /// Mirrors the pre-Phase-4b `processNext` empty-branch finalize.
+  /// Manual feedback waits separately for preparation still building the queue.
   func didDrainQueue() {
     logger.info("Export queue drained")
     finalizeActiveRun(result: .completed, cancelReason: nil)
     finishManualFeedbackIfReady(generation: generation)
   }
 
-  /// Set placement BEFORE assetId per the plan's ordering rule — any cancellation
+  /// Set placement before assetId so any cancellation
   /// cleanup that observes `currentJobAssetId` must also see the matching
   /// `currentJobPlacement`. Reset `currentJobVariant` because the variant write hasn't
   /// started yet.

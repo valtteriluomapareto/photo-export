@@ -403,7 +403,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Returns the URL for the <root>/<year>/<month>/ folder, optionally creating it.
   /// Month is formatted as two digits ("01" … "12").
   ///
-  /// Backed by `urlForRelativeDirectory` after Phase 3 of the collections-export plan.
+  /// Delegates to `urlForRelativeDirectory` so all placements share path validation.
   /// Year/month-specific validation (positive year, month in `1...12`) lives here; the
   /// generic destination-escape validation lives in `urlForRelativeDirectory`.
   func urlForMonth(year: Int, month: Int, createIfNeeded: Bool = true) throws -> URL {
@@ -657,7 +657,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     DestinationFingerprint.compute(for: url)?.fingerprint
   }
 
-  /// Pre-Phase-0 destination-id derivation: SHA-256 of the security-scoped bookmark bytes.
+  /// Legacy destination-id derivation: SHA-256 of the security-scoped bookmark bytes.
   /// Kept around exclusively so `ExportRecordsDirectoryCoordinator` can locate legacy
   /// `ExportRecords/<oldId>/` directories during the lazy migration.
   static func legacyDestinationId(from bookmarkData: Data) -> String {
@@ -709,7 +709,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     if identity != .unavailable { identity = .unavailable }
   }
 
-  /// Pre-Phase-0a low-confidence legacy id for the currently selected folder. Returns the
+  /// Legacy low-confidence id for the currently selected folder. Returns the
   /// volumeIdentifier-based digest the previous code used as the record-store directory name
   /// for drives without a volume UUID; returns nil for high-confidence drives or when no
   /// folder is selected. `ExportRecordsDirectoryCoordinator` accepts this as a secondary
@@ -818,8 +818,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       // Refresh a stale bookmark only after `validate` confirms the URL is
       // actually accessible. The synchronous `url.bookmarkData(...)` call
       // inside `saveBookmark` blocks on kernel I/O when the underlying path
-      // is unreachable or sandbox-denied — that's the launch beachball in
-      // issue #92. If the destination isn't usable, the user will be prompted
+      // is unreachable or sandbox-denied, which can stall launch.
+      // If the destination isn't usable, the user will be prompted
       // to re-select; the refresh happens naturally on their next selection.
       if isStale && isAvailable {
         logger.info("Bookmark data is stale; refreshing now that destination validated")
@@ -859,7 +859,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // is stale, sandbox-denied, or the underlying volume is unreachable —
     // every subsequent resource-key read and FileManager call on this URL
     // would block on the kernel I/O timeout. Bail out instead: publish
-    // unavailable state and let the user re-select. Issue #92.
+    // unavailable state and let the user re-select.
     guard didStart else {
       isAvailable = false
       isWritable = false
