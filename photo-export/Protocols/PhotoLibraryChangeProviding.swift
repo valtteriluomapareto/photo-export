@@ -13,7 +13,7 @@ import Photos
 /// **Why `AnyPublisher` instead of `AsyncSequence`?** The rest of the manager layer uses
 /// Combine (`@Published`, `objectWillChange`), so consumers of this seam stay consistent
 /// with the rest of the codebase. AsyncSequence would force the AutoSync reducer loop to
-/// be a `Task`-based pump, which the plan doesn't require — the reducer is synchronous and
+/// be a `Task`-based pump; the current reducer is synchronous and
 /// effects are emitted as a list, with timer/IO effects executed by an effect runner that
 /// already serializes work on `@MainActor`. If the reducer ever moves to a structured-
 /// concurrency design, migrating the protocol while it has only one consumer is cheap.

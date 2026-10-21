@@ -52,16 +52,16 @@ enum VariantPolicy: Sendable {
 /// placement. Timeline and collection-side paths pass it explicitly; both ergonomic
 /// (`.standard` is a one-token literal) and safe.
 ///
-/// `convertHEICToJPEG` (issue #47) widens the `.edited` requirement to include
+/// `convertHEICToJPEG` widens the `.edited` requirement to include
 /// HEIC-original assets. When the toggle is on, an unedited HEIC counts as
 /// "requires `.edited`" because the export pipeline synthesizes a JPEG via
 /// `EditedProducer.convertHEIC`. Default `false` keeps every existing caller's
 /// behavior unchanged.
 ///
-/// `livePhotosPaired` (issue #49): when true, Live Photo assets get a paired-video
+/// `livePhotosPaired`: when true, Live Photo assets get a paired-video
 /// variant alongside each image variant. When false (today's default), Live Photos
 /// behave like any other still — only the image-side variants are emitted, byte-
-/// identical to the pre-issue-#49 behaviour. The flag is opt-in via Settings.
+/// identical to ordinary still export. The flag is opt-in via Settings.
 func requiredVariants(
   for asset: AssetDescriptor,
   selection: ExportVersionSelection,

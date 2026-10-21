@@ -9,7 +9,7 @@ extension View {
   /// their content with `Spacer()`s and have no intrinsic minimum, so without
   /// this they collapse to a near-zero minimum — letting a stale small window
   /// frame (which can survive an App Store reinstall via saved window state)
-  /// render as an unusable, non-resizable sliver (issue #125). The library
+  /// render as an unusable, non-resizable sliver. The library
   /// state sets its own minimum in `LibraryRootView`: wider, but shorter to
   /// leave room for its toolbar.
   ///

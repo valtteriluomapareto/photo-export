@@ -1,12 +1,9 @@
 import SwiftUI
 
-/// Settings → Auto Export tab. The user-visible surface for AutoSync. Plan
-/// §"Phase 4 / Settings UX": enable toggle, scope checkboxes, current status,
-/// Export Now action, last run summary.
-///
-/// Scope: this is Slice 1 of Phase 4 — minimal but functional. Limited-library
-/// notice, Export Issues link, and notification preferences land in subsequent
-/// slices.
+/// Settings → Auto Export: enablement, scope selection, current status, Export Now,
+/// run summary, login-item status and destination recovery. These settings stay
+/// separate from manual toolbar feedback.
+/// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
 struct AutoExportSettingsView: View {
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
@@ -156,7 +153,7 @@ struct AutoExportSettingsView: View {
       .environmentObject(exportDestinationManager)
     }
     .sheet(isPresented: $isShowingSafetyConfirm) {
-      // Issue #129: the destination has files but no records. Offer to rebuild
+      // The destination has files but no records. Offer to rebuild
       // progress from the drive (so re-exports skip the existing files instead
       // of creating ` (1)` duplicates) as well as the plain "these are my
       // pre-existing files" confirm. Both resolve the safety prompt by
@@ -434,7 +431,7 @@ private struct LastRunRow: View {
 }
 
 /// Shows when the safety-net reconcile last consulted PhotoKit. Trust signal for
-/// the issue #69 fix: if the user opens Settings deep into a long iCloud-sync
+/// ongoing change observation: if the user opens Settings during a long iCloud-sync
 /// session and the line still reads "a few minutes ago," they know the
 /// background-check loop is alive.
 ///
@@ -471,7 +468,7 @@ private struct LastReconciledRow: View {
 }
 
 /// Latest iCloud-Photos catch-up summary — duration + outcome — surfaced so a
-/// reporter who hit a launch beachball (issue #92) can confirm the
+/// reporter who hit a launch beachball can confirm the
 /// off-main-actor catch-up actually completed once the fix shipped. Renders
 /// quietly: only appears when there's a summary to show.
 private struct LastCatchUpRow: View {

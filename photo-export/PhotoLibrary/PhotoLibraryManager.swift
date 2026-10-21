@@ -26,7 +26,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// restart with the revision; asset grids use `.onChange` to refresh in place.
   @Published var libraryRevision: Int = 0
 
-  /// Issue #49: when the user turns on "Export Live Photos as paired image + video",
+  /// When the user turns on "Export Live Photos as paired image + video",
   /// `descriptor(from:)` enables a `PHAssetResource`-enumeration fallback to catch
   /// Live Photos whose `.photoLive` subtype flag is missing (a known iCloud-sync
   /// anomaly). Off by default so the per-asset cost is paid only by users who opted
@@ -56,14 +56,14 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Long-lived cache of PHAsset objects keyed by `localIdentifier`. Populated
   /// additively by `cacheAssets(_:)` from `fetchAssets(in:)`. Cleared by
   /// `invalidateCache()` (library change) or `forgetPHAssetCache()`
-  /// (per-iteration drops in `ExportManager.runBulkEnqueueLoop`, issue #112).
+  /// (per-iteration drops in `ExportManager.runBulkEnqueueLoop`).
   private var phAssetCache: [String: PHAsset] = [:]
 
   /// Cache of adjusted-asset counts keyed by `"YYYY-M"`. Populated lazily by
   /// `countAdjustedAssets` and cleared when the Photos library changes or the user re-authorises.
   private var adjustedCountByYearMonth: [String: Int] = [:]
 
-  /// Phase 3 collection-count cache. Keyed by scope. Invalidated on
+  /// Scope-keyed collection-count cache. Invalidated on
   /// `photoLibraryDidChange` so subsequent reads re-fetch.
   nonisolated let collectionCountCache = CollectionCountCache()
   private var countInvalidation: Task<Void, Never>?
@@ -160,9 +160,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `PHPhotoLibrary.shared().register(self)` + authorization probe move into
   /// `start()`, called from the WindowGroup's `.task` after SwiftUI has rendered.
   ///
-  /// Why: issue #92 reported a launch beachball on macOS 15.7.3 with the prior
-  /// shape, where the synchronous PhotoKit first-touch inside `init` (running
-  /// during `App.init`, before any window appears) could hang on PhotoKit's
+  /// Synchronous PhotoKit first-touch during `App.init`, before any window
+  /// appears, can hang on PhotoKit's
   /// internal account/TCC paths. Deferring those calls into the `.task` block
   /// keeps the UI responsive while the library handshake happens.
   ///
@@ -579,7 +578,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
-  // MARK: - Collection scope counts (Phase 2; uncached)
+  // MARK: - Uncached collection scope counts
 
   /// Number of assets in a fetch scope, without caching. The detached fetch keeps
   /// PhotoKit enumeration off the main actor. Call `cachedCountAssets(in:)` when
@@ -603,7 +602,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     }
   }
 
-  // MARK: - Cached counts (Phase 3)
+  // MARK: - Cached counts
 
   /// Stable string key for a scope. Same scope → same key, so the cache dedups across
   /// callers asking the same question.
@@ -982,7 +981,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   /// Reads PhotoKit's undocumented `fileSize` KVC property. Same trick used by
-  /// `assetDetails(for:)` — see issue #32. Returns nil when the property is
+  /// `assetDetails(for:)`. Returns nil when the property is
   /// missing, non-numeric, or non-positive (treated as "unknown").
   fileprivate static func resourceFileSize(_ resource: PHAssetResource) -> Int64? {
     guard let size = resource.value(forKey: "fileSize") as? Int64, size > 0
@@ -1022,7 +1021,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Resolves a single PHAsset by id from the cache, falling back to a
   /// one-shot fetch on miss. Does *not* write the miss result back: doing
   /// so would let per-asset resource-fallback resolves silently refill the
-  /// cache during export and defeat `forgetPHAssetCache()` (issue #112).
+  /// cache during export and defeat `forgetPHAssetCache()`.
   private func cachedOrFetchPHAsset(id: String) -> PHAsset? {
     if let cached = phAssetCache[id] { return cached }
     let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
@@ -1064,7 +1063,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
   /// Invalidates library metadata and optionally known changed thumbnail
   /// content. A no-argument call is the conservative path used when a
-  /// persistent-change catch-up has no PhotoKit object details (issue #69).
+  /// persistent-change catch-up has no PhotoKit object details.
   func invalidateCache(changedThumbnailAssetIDs: Set<String>? = nil) {
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
@@ -1106,8 +1105,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
   /// Drops only the PHAsset cache. Unlike `invalidateCache()` it does not
   /// bump `libraryRevision` or clear the collection tree, so it can run
-  /// mid-export without triggering SwiftUI re-fetches in sidebar/grid
-  /// (issue #112).
+  /// mid-export without triggering SwiftUI re-fetches in sidebar/grid views.
   func forgetPHAssetCache() {
     phAssetCache.removeAll()
   }
@@ -1173,7 +1171,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     // Index-based form (not `enumerateObjects`) so `autoreleasepool` wraps
     // `result.object(at:)` — that's where the autoreleased Obj-C temporaries
     // are minted. A pool inside `enumerateObjects`'s closure drains only the
-    // user-side body, not PhotoKit's allocation (issue #112).
+    // user-side body, not PhotoKit's allocation.
     for index in 0..<result.count {
       autoreleasepool {
         assets.append(result.object(at: index))
@@ -1198,7 +1196,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     var assets: [PHAsset] = []
     // See `fetchFavoritesPHAssets` above for why this uses the index-based
     // form with `autoreleasepool` wrapping `result.object(at:)` rather than
-    // `enumerateObjects { ... }` (issue #112).
+    // `enumerateObjects { ... }`.
     for index in 0..<result.count {
       autoreleasepool {
         assets.append(result.object(at: index))
@@ -1207,7 +1205,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     return assets
   }
 
-  // MARK: - Collection tree (Phase 2)
+  // MARK: - Collection tree
 
   /// Cached collection tree. Invalidated on `photoLibraryDidChange`. Constructed lazily
   /// on the first `fetchCollectionTree()` call after a change (or first launch).
@@ -1326,10 +1324,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// upstream and never reach this routing — Favorites is surfaced as a synthetic
   /// descriptor in `fetchCollectionTree()` instead.
   ///
-  /// Shared albums (`.albumCloudShared`) now route to `.sharedAlbum`. Issue #48
-  /// surfaced them as their own section in the sidebar. Earlier versions of this
-  /// codebase explicitly dropped shared albums; the comment above the call site
-  /// recorded that choice. The README's "Known limitations" was updated alongside.
+  /// Shared albums (`.albumCloudShared`) route to `.sharedAlbum` so the sidebar
+  /// and export path can preserve their distinct fidelity and placement rules.
   ///
   /// `internal` (default) instead of `fileprivate` so the routing — the single
   /// place that decides which PhotoKit subtypes the app surfaces, and how — is
@@ -1459,7 +1455,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     var assets: [PHAsset] = []
 
     // batchSize 100 (down from 500) for 5× more frequent main-thread yields
-    // during the AutoSync startup sweep (issue #112). Memory is bounded by
+    // during the AutoSync startup sweep. Memory is bounded by
     // the autoreleasepool below; this only controls yield frequency.
     let totalAssets = fetchResult.count
     let batchSize = 100
@@ -1481,7 +1477,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// Defaults `useResourceFallback: false` so the cheap path (subtype-flag only) runs
   /// for legacy/test call sites. Production fetches go through the instance methods
   /// above which read `livePhotoDetectionFallbackEnabled` and pass `true` when the
-  /// user has issue #49's Settings toggle on.
+  /// user has paired Live Photo export enabled.
   static func descriptor(from asset: PHAsset, useResourceFallback: Bool = false)
     -> AssetDescriptor
   {
@@ -1502,7 +1498,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// the cheapest reliable way to detect format without iterating
   /// `PHAssetResource.assetResources(for:)`. Same shape as the existing
   /// `resource.value(forKey: "fileSize")` call used for
-  /// `ResourceDescriptor.fileSize` (issue #32) — stable in practice through
+  /// `ResourceDescriptor.fileSize` — stable in practice through
   /// current macOS versions, but defended against KVC returning nil or
   /// non-String in case the property is renamed or removed: `originalUTI: nil`
   /// falls back to "treat as non-HEIC" which matches the conversion-off
@@ -1523,8 +1519,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// free to check. The fallback enumerates `PHAssetResource` to also catch iCloud-
   /// synced assets that drop the subtype flag — gated by `useResourceFallback` because
   /// the resource enumeration allocates per asset and would fire for every image in a
-  /// large fetch. Caller passes `true` only when the user has turned issue #49's
-  /// Settings toggle on (so paired-video export will actually use the result). Image-
+  /// large fetch. Caller passes `true` only when paired-video export is enabled
+  /// and will use the result. Image-
   /// typed assets only — video and audio assets are never Live Photos.
   static func detectLivePhoto(asset: PHAsset, useResourceFallback: Bool) -> Bool {
     guard asset.mediaType == .image else { return false }

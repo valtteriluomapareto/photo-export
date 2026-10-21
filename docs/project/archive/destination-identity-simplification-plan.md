@@ -1,9 +1,21 @@
 # Destination Identity Simplification Plan
 
 Date: 2026-06-04
-Status: Proposed (not started). Fixes the root cause behind
-[issue #127](https://github.com/valtteriluomapareto/photo-export/issues/127)
-(duplicate re-export on a network-share backup drive).
+Status: Shipped in 1.6.5 via PR #133; archived as a decision record for
+[issue #127](https://github.com/valtteriluomapareto/photo-export/issues/127).
+`ExportDestinationManager` persists the stable logical id beside the bookmark and
+publishes it atomically with the advisory fingerprint. Stable-id lifecycle and
+cross-service keying are covered by `StableDestinationIdentityTests` and
+`DestinationIdentityIntegrationTests`. The current contract is
+[Destination identity](../../reference/architecture-conventions.md#destination-identity).
+
+The larger slot/dotfile persistence redesign remains optional, tracked in the
+[migrated backlog](https://github.com/valtteriluomapareto/photo-export/issues/318#issuecomment-6311950302). Its collection-rebuild prerequisite has since
+shipped in PR #342 (#106): `BackupScanner+Collections` and
+`CollectionBackupPlanner` reconstruct Favorites, album and shared-album history,
+with round-trip coverage in `CollectionBackupImportTests`. The original design
+and its then-open prerequisites below are preserved as history, not current
+implementation instructions.
 
 ## Summary
 
@@ -320,6 +332,10 @@ when that fingerprint id still matches the id the dirs were last written under**
   re-point list plus the build-phase lint guard.
 
 ## Deferred (optional) persistence-model simplification
+
+Present status: the redesign is still deferred. Collection rebuild (item 1 below)
+has shipped; transactional switching and the slot-versus-dotfile decision have
+not. The numbered list records the prerequisites as identified during planning.
 
 The "single fixed records slot" and "records in a hidden dotfile inside the
 destination folder" ideas remain attractive but are **not required for #127** once

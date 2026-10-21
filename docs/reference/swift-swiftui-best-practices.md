@@ -1,241 +1,217 @@
 # Swift and SwiftUI Best Practices
 
-This guide distills proven Swift and SwiftUI patterns for building a robust, scalable Photos backup/export app on macOS.
-
-Use this document as a checklist when writing code or reviewing PRs.
-
----
+Use this guide when writing code or reviewing changes. The
+[architecture reference](architecture-conventions.md) owns the role map, data flow,
+state ownership and export contracts; the
+[contributor guide](../../CONTRIBUTING.md) owns commands and workflow.
 
 ## 1) Architecture & Project Structure
 
-- Prefer clear layering:
-  - **Views (SwiftUI)**: Stateless UI, render from inputs; no business logic. Grouped by feature in `Views/{Timeline,Collections,Export,Settings,Shared}/`.
-  - **ViewModels (ObservableObject)**: State, UI-friendly transformations, side-effects orchestration (`MonthViewModel`).
-  - **`Records/` / `AutoSync/` / `PhotoLibrary/`**: stateful services split by feature area (record stores + routing; auto-export state machine + file-backed stores; PhotoKit access).
-  - **`Export/`**: the façade (`ExportManager`) plus its Host-driven collaborators (`ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`) and the export-pipeline helper-policy types (`ExportJobPlanner`, `ExportFilenamePolicy`, `CollectionPathComponentPolicy`, `ExportPlacementResolver`, `ResourceSelection`, etc.).
-  - **`Destination/`**: destination concerns (`ExportDestinationManager`, `DestinationSafetyMonitor`, `DestinationSnapshotAdapter`, `FileBackedDestinationSafetyConfirmationStore`, `ExportDestinationResolver`).
-  - **`App/`**: entry point + lifecycle/process-level services (`photo_exportApp`, `AppCore`, `AppComposition`, `LoginItemController`, `AppLifecycleCoordinator`, `DiagnosticReporter`, `WhatsNewState`).
-  - **Models**: Plain value types and domain types.
-- Keep each view in its own file. Avoid multiple large `View` types in one file.
-- Make types `final` by default unless subclassing is intended. Mark helpers `private` and prefer `internal` over `public` unless needed.
-- Prefer protocol-driven boundaries for testability. The app uses `PhotoLibraryService`, `AssetResourceWriter`, `FileSystemService`, `ExportDestination`, and `MediaRenderer` protocols (see `photo-export/Protocols/`). Inside the module, `ExportManager`'s collaborators bind to it via narrow `Host` protocols (`VariantExporter.Host`, `ExportQueueCoordinator.Host`, `ImportCoordinator.Host`) — this is how an extracted collaborator points back at the façade without taking a hard dependency on `ExportManager`.
-- Use app-owned value types (`AssetDescriptor`, `ResourceDescriptor`) at non-framework boundaries instead of passing `PHAsset`/`PHAssetResource` directly.
-- For the contracts that bind `ExportManager` and its collaborators (cancellation seam, actor isolation, AutoSync seam preservation), see [`architecture-conventions.md`](architecture-conventions.md).
-
----
+Follow the [module responsibilities](architecture-conventions.md#module-responsibilities)
+when placing new code. Keep business logic out of SwiftUI bodies and use app-owned
+value types at service boundaries. Prefer narrow injected protocols for external
+operations; the [protocol directory](../../photo-export/Protocols/) is the current
+inventory. Keep classes final unless subclassing is an intentional requirement,
+and give helpers the smallest useful visibility.
 
 ## 2) Swift Concurrency
 
-- Mark UI-facing types and properties with `@MainActor` when they mutate UI state:
-```swift
-@MainActor
-final class LibraryViewModel: ObservableObject {
-    @Published var assets: [PHAsset] = []
-}
-```
-- Avoid mixing `DispatchQueue.main.async` inside `Task` blocks. Use `await MainActor.run { ... }` or mark the function `@MainActor`.
-- Always design for cancellation. When fetching on changing inputs (`year`, `month`), prefer `.task(id:)` over `onAppear`/`onChange` triads:
-```swift
-.task(id: (year, month)) {
-    await viewModel.loadAssets(forYear: year, month: month)
-}
-```
-- Propagate `async throws` up; handle errors once at the boundary, mapping them to user-visible messages.
-- Avoid detached tasks for UI work; prefer structured concurrency via `Task {}` scoped to the view.
+Use the [actor isolation policy](architecture-conventions.md#2-actor-isolation-policy)
+for collaborators and helpers. UI state belongs on the main actor; pure policies
+remain plain values. For example, this complete declaration keeps observable state
+main-bound:
 
----
+```swift
+import Combine
+
+@MainActor
+final class LibraryStatus: ObservableObject {
+  @Published private(set) var assetCount = 0
+
+  func updateCount(_ count: Int) {
+    assetCount = count
+  }
+}
+```
+
+In a view, use `.task(id:)` for a load owned by the view's identity or query inputs.
+Check cancellation and ownership before publishing a result. For visible library
+revisions, refresh in place as described below. Export work follows the
+[generation contract](architecture-conventions.md#1-cancellation-contract), and
+detached I/O uses `runDetached` to propagate cancellation and wait for physical work.
+An `await` alone does not prove that synchronous work leaves the main actor.
+
+Prefer main-actor isolation to manually dispatching UI writes. In particular, keep
+coordinator-to-manager mirrors synchronous: introducing `MainActor.run`, an async
+queue or `.receive(on:)` there breaks the
+[AutoSync seam](architecture-conventions.md#3-autosync-seam-preservation).
 
 ## 3) Photos Framework Best Practices
 
-- Authorization:
-  - Check `PHPhotoLibrary.authorizationStatus(for: .readWrite)` before querying assets.
-  - Handle `.denied`, `.restricted`, `.limited` gracefully; explain to the user how to fix access.
-  - React if access changes while the app is running via `PHPhotoLibraryChangeObserver`.
-- Fetching and memory:
-  - Use `PHFetchOptions` with predicates for date ranges and sorting by `creationDate`.
-  - For large libraries, iterate with batching and `autoreleasepool { }` (as already done) to limit memory.
-  - Avoid unnecessary casts (`PHFetchResult.object(at:)` already returns `PHAsset`).
-- Thumbnails and caching:
-  - Use `PHCachingImageManager` for thumbnail grids; preheat around the visible range and stop caching when off-screen.
-  - Set `options.isNetworkAccessAllowed = true` when iCloud originals may be remote (already done).
-- Full-size export:
-  - For export, prefer original resources over `requestImage(...)`:
-    - Images: use `PHAssetResourceManager` with `PHAssetResourceType.photo` or `PHContentEditingInput` to access `fullSizeImageURL`.
-    - Videos: `requestExportSession` for precise control; ensure you export at original quality.
-- Track assets by `localIdentifier`. Persist export status using this ID for incremental/resumable exports.
-
----
+- Keep Photos access read-only. Authorization and fetching belong behind the
+  library service; handle denied, restricted and limited access explicitly.
+- Track assets by `PHAsset.localIdentifier`, and use descriptors outside the
+  PhotoKit implementation. Existing callers and supported requests are defined by
+  [`PhotoLibraryService`](../../photo-export/Protocols/PhotoLibraryService.swift).
+- Keep enumeration bounded and cancellation-aware. Use the existing progressive
+  stream and count-cache seams instead of adding synchronous large-library work
+  to a view or the main actor.
+- Use `PHCachingImageManager` and the decoded thumbnail cache through the existing
+  library methods. Balance each consumer's preheating registrations.
+- Export bytes through the resource/render/conversion seams rather than thumbnail
+  requests. [`ResourceSelection`](../../photo-export/Export/ResourceSelection.swift)
+  owns edited-producer selection, including the edited-video render path.
 
 ## 4) Export Pipeline (Robustness Checklist)
 
-The pipeline is split across several collaborators. The list below pairs each robustness concern with the type that owns it — touch *that* type when extending the relevant behavior.
+Use the [export and record owners](architecture-conventions.md#export-and-record-owners)
+to find the implementation to extend. Check these contracts when reviewing a change:
 
-- **Pre-flight checks**
-  - Destination availability: `ExportDestinationManager` + `DestinationSafetyMonitor`.
-  - Filename / path sanitization: `ExportFilenamePolicy`, `CollectionPathComponentPolicy`. Never overwrite existing files — collision suffixing lives in `ExportDestinationResolver.uniqueFileURL`.
-- **Incremental export**
-  - Records keyed by `PHAsset.localIdentifier` (timeline) or `(placementId, assetId)` (collections), split across `ExportRecordStore` and `CollectionExportRecordStore`. Dispatch goes through `RecordStoreRouter` — do not re-inline the placement switch.
-  - "Already exported" / "edited fallback" / "asset complete" rules live in `ExportCompletionPolicy`.
-  - On launch, the record stores reload from their JSONL+snapshot files via `ExportRecordStore.configure(...)` / `CollectionExportRecordStore.configure(...)`; partial-write recovery is delegated to `JSONLRecordFile`'s reader (which tolerates an incomplete final line) rather than a separate manager-level reconciliation step.
-- **Resilience**
-  - Per-variant temp file → atomic move to final location: `VariantExporter`.
-  - Stale `.tmp` cleanup on export start: same.
-  - On interruption, the cancellation seam (`generation`) supersedes any in-flight work; new generations start fresh.
-- **Error isolation**
-  - Per-variant failure recorded via `RecordStoreRouter.recordVariantFailed`, asset run continues.
-  - Edited-variant failure does not roll back a completed original variant (the asymmetry is intentional — see `ExportCompletionPolicy`).
-- **Concurrency**
-  - Sequential drain: `ExportQueueCoordinator` runs one job at a time. Bounded parallelism (2–3 workers) is on the open-tasks list — see [`docs/project/implementation-tasks.md`](../project/implementation-tasks.md) §Performance.
-  - Per-variant heavy work (resource fetch, render, file I/O) hops off MainActor via `await` on the existing protocol seams (`PhotoLibraryService`, `MediaRenderer`, `AssetResourceWriter`, `FileSystemService`).
-- **Cancellation cooperatively**
-  - `ExportManager.generation` is the seam. Every async hop captures `let gen = generation` synchronously, re-checks `isCurrent(gen)` after each `await`. See [`architecture-conventions.md`](architecture-conventions.md) §Cancellation contract.
+- Admission preserves import conflicts, store readiness and destination availability.
+- Job settings use the [canonical entry-point capture policy](architecture-conventions.md#canonical-start-entry-point-shape).
+- Every async mutation follows the [generation cancellation contract](architecture-conventions.md#1-cancellation-contract).
+- Byte producers and cleanup follow the [final commit boundary](architecture-conventions.md#final-file-commit-boundary).
+  Filename allocation alone does not protect the commit from a collision; the
+  contract documents exclusive rename and the check-then-move filesystem limits.
+- Record reads, writes, cleanup and reuse probes go through `RecordStoreRouter`;
+  completion and fallback decisions go through `ExportCompletionPolicy`.
+- Destination state keys on the [stable logical id](architecture-conventions.md#destination-identity).
+- Auto Export keeps the [behavior reference](auto-export-behavior.md) and existing
+  [regression gates](architecture-conventions.md#regression-gates) intact.
 
----
+Bounded export parallelism remains an idea in the
+[GitHub backlog](https://github.com/valtteriluomapareto/photo-export/issues/318#issuecomment-6311950302).
+It requires a separate plan preserving cancellation and final-file ownership.
 
 ## 5) SwiftUI View Best Practices
 
-- Prefer **NavigationSplitView** (macOS) for sidebar + detail over `NavigationView`.
-- Derive state instead of storing duplicates. Keep `@State` minimal and source-of-truth single.
-- Replace multiple `onChange(of:)` with `.task(id:)` to coalesce loads:
+Prefer `NavigationSplitView` for the macOS sidebar/detail structure. Derive values
+from their owners and keep local `@State` limited to state the view owns.
+
+A task identity must conform to `Equatable`; use a named value for several inputs.
+This complete example accepts a load action without inventing another library API:
+
 ```swift
-.task(id: (year, month)) { await viewModel.loadAssets(forYear: year, month: month) }
-```
-- Extract complex UI sections into small views with clear inputs. Avoid heavy logic in `body`.
-- Pass dependencies a view uses only in actions or `onAppear` as plain `let` references or closures from an observing parent; avoid subscribing (`@EnvironmentObject`, `@ObservedObject`) to an observable that `body` doesn't read. Keep `@AppStorage` out of such a view (or give it `Equatable` and `.equatable()`): the hosted observation tests here show a view with `@AppStorage` re-running its body whenever its parent rebuilds it (not documented by Apple, observed in this app). `AutoSyncAwareExportButton` is the deliberate exception until the Observation migration.
-- Avoid creating expensive objects in `body` or tight loops. For `DateFormatter`, provide static caches:
-```swift
-enum Formatters {
-    static let monthName: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "MMMM"; return f
-    }()
+import SwiftUI
+
+struct MonthKey: Equatable, Sendable {
+  let year: Int
+  let month: Int
+}
+
+@MainActor
+struct MonthTaskExample: View {
+  let key: MonthKey
+  let load: @MainActor (MonthKey) async -> Void
+
+  var body: some View {
+    Text("\(key.year)-\(key.month)")
+      .task(id: key) {
+        await load(key)
+      }
+  }
 }
 ```
-- Use `LazyVGrid`/`LazyHGrid` for dense grids. For long horizontal strips, your `LazyHStack` is fine; consider a grid when vertical space is available.
-- Cancellation-friendly selection: cancel any in-flight full-image request when selection changes.
-- Accessibility: provide labels (`.accessibilityLabel`) and dynamic type-friendly layout where applicable.
 
----
+Use that pattern for scope changes. A Photos `libraryRevision` instead calls
+`MonthViewModel.refresh(for:)` from `.onChange` to update the visible grid in place.
+Keep surviving selections and reject superseded results. Thumbnail and detail tasks
+use per-asset content revisions. See the full
+[preview ownership contract](architecture-conventions.md#preview-content-ownership)
+and the maintained [`MonthContentView`](../../photo-export/Views/Timeline/MonthContentView.swift)
+and [`CollectionContentView`](../../photo-export/Views/Collections/CollectionContentView.swift).
+Do not replace these refresh handlers with a revision-keyed full grid load.
+
+Pass action-only dependencies as plain references or closures from an observing
+parent. Subscribe through `@EnvironmentObject` or `@ObservedObject` when the body
+reads the object's state. The hosted observation tests show that `@AppStorage` can
+rebuild an otherwise action-only view with its parent; keep it out of those leaves,
+or use the established `Equatable`/`.equatable()` pattern.
+`AutoSyncAwareExportButton` remains a deliberate exception pending Observation work.
+
+Extract complex sections, keep expensive object creation out of `body`, reuse
+formatters, and use lazy grids for thumbnails. Label icon-only status indicators
+and provide accessible controls.
 
 ## 6) Error Handling & User Messaging
 
-- Create domain errors conforming to `LocalizedError` for user-friendly messages. Avoid surfacing raw system errors to the UI.
-- Centralize error presentation (e.g., `AlertState` or a small `ErrorBanner` component). Keep messages actionable.
-- Log all recoverable errors (see Logging section) with context to aid debugging.
-
----
+Handle errors at the owning boundary and provide actionable user messages. Preserve
+error domains/codes used by retry classification and persisted signatures when
+wrapping errors. Use existing presentation surfaces for the owning feature rather
+than introducing another alert system. Record recoverable failures with enough
+context to diagnose them.
 
 ## 7) Logging & Instrumentation
 
-- Use Unified Logging (`os.Logger`) instead of `print`:
+Use Unified Logging through `os.Logger`, with the app subsystem. This complete
+example uses explicit arguments rather than undeclared application variables:
+
 ```swift
 import os
-let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Photos")
-logger.info("Fetched \(assets.count) assets for \(year)-\(month)")
-logger.error("Export failed: \(error.localizedDescription)")
-```
-- Consider signposts for export phases and thumbnail preheating to profile performance in Instruments.
 
----
-
-## 8) Performance & Memory
-
-- Keep batches small and yield with `try await Task.sleep(nanoseconds: ...)` as you do; prefer cooperative cancellation checks (`Task.checkCancellation()`).
-- Cache thumbnails and reuse across views; clear when memory pressure occurs or when leaving the screen.
-- Avoid repeatedly recreating `DateFormatter`, `NumberFormatter`, etc. Provide static singletons.
-- Avoid redundant state copies (e.g., keeping both `assets` and separate arrays of IDs unless necessary).
-- Prefer value semantics for models (`struct`) and minimal reference types.
-
----
-
-## 9) Code Style & API Design
-
-- Naming:
-  - Functions are verbs, variables are nouns. Avoid abbreviations.
-  - Keep APIs explicit; label parameters clearly (`forYear year: Int, month: Int`).
-- Access control: `private` for helpers, `internal` for module use, `public` only when needed.
-- Documentation:
-  - Use concise doc comments for public APIs and complex logic blocks.
-- Avoid force unwraps. Use `guard` and fail fast with meaningful errors.
-- Prefer `let` over `var` and immutability by default.
-- Remove unnecessary casts (e.g., `PHAsset.fetchAssets(...).object(at:)` returns `PHAsset` already).
-
----
-
-## 10) Photos Change Handling
-
-- Adopt `PHPhotoLibraryChangeObserver` to refresh lists when the library changes while the app is open.
-- Reconcile selected asset if it was deleted; fall back gracefully.
-
----
-
-## 11) Testing Matrix (Must-Haves)
-
-- Authorization flows: first run, denied, restricted, limited, revoked mid-session.
-- Libraries: very small, large (10k–100k+), and iCloud-optimized with missing originals.
-- Export targets: internal disk, external drives (unplug/plug), network shares; low-permission and low-space scenarios.
-- Filenames: non-ASCII, very long names, name collisions.
-- Resilience: crash/kill during export; resume correctness; no corrupt partial files.
-- Concurrency: cancel while loading thumbnails or full image; rapid month switching.
-
----
-
-## 12) Example: Main-Actor-safe state updates
-
-```swift
-@MainActor
-final class MonthViewModel: ObservableObject {
-    @Published private(set) var assets: [AssetDescriptor] = []
-    @Published private(set) var thumbnailsById: [String: NSImage] = [:]
-    @Published var selectedAsset: AssetDescriptor?
-    @Published var selectedImage: NSImage?
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-
-    private let library: PhotoLibraryService
-    private var imageLoadTask: Task<Void, Never>?
-
-    init(library: PhotoLibraryService) { self.library = library }
-
-    func loadAssets(forYear year: Int, month: Int) async {
-        isLoading = true
-        errorMessage = nil
-        selectedAsset = nil
-        selectedImage = nil
-        do {
-            let monthAssets = try await library.fetchAssets(year: year, month: month)
-            assets = monthAssets
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        isLoading = false
-    }
-
-    func select(_ asset: AssetDescriptor) {
-        imageLoadTask?.cancel()
-        selectedAsset = asset
-        selectedImage = nil
-        imageLoadTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let image = try await library.requestFullImage(for: asset.id)
-                try Task.checkCancellation()
-                self.selectedImage = image
-            } catch is CancellationError { /* no-op */ }
-            catch { self.errorMessage = error.localizedDescription }
-        }
-    }
+func logAssetCount(_ count: Int) {
+  let logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Photos")
+  logger.info("Fetched \(count) assets")
 }
 ```
 
----
+Use existing categories when investigating an issue. Signposts and Instruments can
+measure work around resource production, persistence and thumbnail loading.
+
+## 8) Performance & Memory
+
+Keep enumeration batches bounded, cooperate with cancellation, and yield where the
+existing pipeline does so. Avoid wall-clock delays as a substitute for ownership
+or readiness. Reuse thumbnail caches and formatters, avoid redundant model copies,
+and measure work before moving it to another actor or adding parallel exporters.
+
+## 9) Code Style & API Design
+
+Use verbs for functions and clear parameter labels. Prefer immutable values and
+private helpers; use `public` only for an actual external API. Avoid force unwraps
+unless an established initialization pattern requires them. Document reasons and
+contracts that are not evident from the code.
+
+Style thresholds and exclusions live in [`.swiftlint.yml`](../../.swiftlint.yml),
+and formatter settings in [`.swift-format.json`](../../.swift-format.json). Run the
+strict [contributor commands](../../CONTRIBUTING.md#local-setup) with the formatter's
+explicit configuration path.
+
+## 10) Photos Change Handling
+
+Preserve the existing change-observer and persistent-change adapter boundaries.
+Refresh UI descriptors without clearing visible grids, and reconcile a deleted
+selection from an owned successful result. Follow the
+[preview contract](architecture-conventions.md#preview-content-ownership) for image
+revision checks and the [Auto Export reference](auto-export-behavior.md) for dirty
+work, acknowledgement and reconciliation rules.
+
+## 11) Testing Matrix (Must-Haves)
+
+Use injected fakes for platform operations, isolated `TestScratch` preferences and
+folders, pure policy tests for combinatorial behavior, and hosted SwiftUI tests
+for bindings and rendered actions. See the
+[contributor test strategy](../../CONTRIBUTING.md#ui-behavior-test-strategy) and
+[release validation guide](../project/release-validation.md) for the automated/manual
+boundary.
+
+Relevant scenarios include authorization changes, large and iCloud-optimized
+libraries, destination disconnects and permissions, filename collisions, interrupted
+exports, and cancellation during image loading. Preserve the named regression
+gates; do not re-record them without auditing the behavior change.
+
+## 12) Example: Main-Actor-safe state updates
+
+For the actual loading, error, selection and cancellation flow, read
+[`MonthViewModel`](../../photo-export/ViewModels/MonthViewModel.swift) and its
+[`MonthViewModelTests`](../../photo-exportTests/MonthViewModelTests.swift).
+Keeping this example in the implementation avoids a second model with outdated
+library calls or weaker ownership checks. The standalone examples above demonstrate
+only isolated language/UI patterns.
 
 ## 13) References
 
-- Photos framework programming guide
-- Apple Human Interface Guidelines (macOS)
-- Instruments: Time Profiler, Memory Graph, Signposts
-- Swift Concurrency best practices (WWDC sessions)
-
----
-
-Adopting these practices will keep the app responsive and safe with very large libraries, make exports reliable and resumable, and improve overall code clarity and testability.
+- [Architecture and contracts](architecture-conventions.md)
+- [Auto Export behavior](auto-export-behavior.md)
+- [Persistence format](persistence-store.md)
+- [Contributor setup and workflow](../../CONTRIBUTING.md)

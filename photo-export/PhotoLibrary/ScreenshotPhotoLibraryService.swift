@@ -4,16 +4,11 @@ import os
 
 /// Standalone `PhotoLibraryService` conformance that serves a curated synthetic
 /// Photos library for marketing screenshot capture. Selected at app entry when the
-/// user launches with `--screenshot-mode`; see
-/// `docs/project/archive/screenshot-automation-plan.md`.
+/// user launches with `--screenshot-mode`.
 ///
-/// Since issue #67 item 1 this class **does not inherit from PhotoLibraryManager**;
-/// it is a peer conformance the manager wraps via its `overrideService` injection
-/// point. That structural fix closes the "newly-added PhotoLibraryService method
-/// silently inherits production behavior" hole that the override-gate test only
-/// partially caught (it pinned existing overrides but not future-added methods —
-/// now every `PhotoLibraryService` method must be a real implementation here or
-/// the type fails to conform).
+/// The manager wraps this independent conformance through `overrideService`.
+/// Every service requirement must be implemented here, so new requirements cannot
+/// silently inherit production PhotoKit behavior during screenshot capture.
 ///
 /// Thumbnails resolve in two tiers: first a bundled JPEG/PNG/HEIC named after
 /// the asset id (looking at both the bundle root and a `screenshots/`
@@ -83,7 +78,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
       id: "folder:trips", localIdentifier: "trips", title: "Trips",
       kind: .folder, pathComponents: [],
       children: [tripsLondon, tripsParis])
-    // Issue #48: surface an iCloud shared album in marketing captures so the
+    // Surface an iCloud shared album in marketing captures so the
     // "Shared Albums" sidebar section renders with a populated grid. Reuses
     // family bundled photos via `assetIdsByAlbum["family-stream"]` — narratively
     // this is a relative's shared family stream, semantically distinct from the
@@ -383,8 +378,8 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
   // MARK: - Image resolution
 
   /// Extensions probed when resolving an asset id to a bundled image. `jpg` /
-  /// `jpeg` are listed first because the plan's size budget assumes JPEG for
-  /// real photos (both extensions are common — macOS Preview's "Export As"
+  /// `jpeg` are listed first because bundled real photos usually use JPEG
+  /// resources (both extensions are common — macOS Preview's "Export As"
   /// defaults to `.jpeg`, while command-line tools tend toward `.jpg`).
   /// `heic` for direct Apple-format drops; `png` for UI-mock-style assets
   /// where PNG's lossless compression actually beats JPEG on size + quality.
@@ -496,7 +491,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
     // Mark ~1/4 of assets as edited so the "edited photo" indicators surface.
     let hasAdjustments = (hash % 4) == 0
     // The synthetic library's bundled images are JPEG / JPG; mark the UTI
-    // accordingly so the HEIC→JPEG conversion feature (issue #47) doesn't
+    // accordingly so the HEIC→JPEG conversion feature doesn't
     // incorrectly synthesize JPEG edits for screenshot-mode assets.
     return AssetDescriptor(
       id: id,

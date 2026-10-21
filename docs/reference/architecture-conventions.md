@@ -2,15 +2,178 @@
 
 ## Do you need this doc?
 
-**You need to read this if your change touches any of the following:** `ExportManager` or any of its collaborators (`ExportQueueCoordinator`, `VariantExporter`, `ImportCoordinator`); the AutoSync seam (`ExportManager+AutoSyncConformance.swift` or `exportRunStatePublisher` consumers); the record stores or `RecordStoreRouter`; `ExportPlacement.Kind` or `ExportVariant`; the cancellation contract (`generation`, `isCurrent`, `throwIfCancelledOrStale`); or you're extracting a new collaborator.
+Read this before changing the export pipeline, record stores, placement/variant
+models, cancellation ownership, AutoSync publications, or collaborator boundaries.
+Start with the composition and role map to find the relevant owner, then read the
+contracts and extension recipes that apply to your change.
 
-**You can skip this if your change is** a typo, a copy tweak, a website edit, a view-only change that doesn't touch the export pipeline, or a new test that doesn't modify the system under test.
+A typo, copy correction, website-only edit or test that leaves production behavior
+unchanged does not require reviewing every pipeline contract.
 
-The patterns and contracts below were established by the May 2026 architecture refactor (PR #68; Phases 0–6 + partial 7). The original design rationale lives in [`docs/project/archive/software-architecture-improvement-plan.md`](../project/archive/software-architecture-improvement-plan.md). For the friendly high-level type map, see [`website/src/content/docs/architecture.md`](../../website/src/content/docs/architecture.md). This doc covers the *contracts* — what the types must follow.
+This is the contributor-facing source for composition, module responsibilities,
+data flow and architecture contracts. Build/test commands and PR workflow live in
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md). Auto Export's dispatch, debounce, retry
+and safety rules live in [`auto-export-behavior.md`](auto-export-behavior.md), and
+disk formats live in [`persistence-store.md`](persistence-store.md). Archived plans
+are decision records; use the living references for current requirements.
 
 ## The architecture in one paragraph
 
-`ExportManager` is the façade. It owns the export-run lifecycle, the AutoSync-observable `@Published` properties, and `UserDefaults`-backed user choices (`versionSelection`). Real work is delegated to extracted collaborators: `ExportQueueCoordinator` runs the drain loop, owns queue state, and owns the Phase-0 cancellation seam (`generation`, `isCurrent`, `throwIfCancelledOrStale`, `bumpGeneration`); `VariantExporter` writes each variant; `ImportCoordinator` runs the Import Existing Backup flow; `ExportDestinationResolver` allocates filenames; `ExportJobPlanner` plans jobs; `RecordStoreRouter` dispatches record reads/writes by placement kind; `ExportCompletionPolicy` decides what counts as "done". `VariantExporter` and `ImportCoordinator` hold a direct weak reference to `ExportQueueCoordinator` for the seam; each collaborator also holds a narrow `Host` protocol back to the manager for the remaining UI-state mutations.
+`ExportManager` is the public export façade over focused collaborators. SwiftUI
+views request work and render observed state; the manager coordinates runs, the
+queue serializes jobs, and per-variant producers stage bytes before a final commit.
+Record stores track each placement's progress independently of files on the
+chosen destination. AutoSync, the code name for the **Auto Export** UI feature,
+requests work through the same façade.
+
+## App composition and data flow
+
+[`AppEntry`](../../photo-export/App/AppEntry.swift) starts `PhotoExportApp`, or the
+empty `TestHostApp` under hosted tests. [`PhotoExportApp`](../../photo-export/App/photo_exportApp.swift)
+builds one [`AppCore`](../../photo-export/App/AppCore.swift) from
+[`AppComposition.forLaunch(arguments:)`](../../photo-export/App/AppComposition.swift)
+and retains its observable services with `@StateObject`.
+
+`AppComposition` selects production or screenshot services and supplies preferences,
+app-state roots, Photos access, persistent changes, the resource writer, filesystem,
+clock and login-item service. `AppCore` assembles the object graph from those inputs.
+Tests supply isolated preferences and roots through `TestScratch`; see the
+[test-scratch guard](../../scripts/README.md).
+
+Every scene root receives the same objects, screenshot values and default
+`@AppStorage` suite through `photoExportEnvironment(_:)` in `AppCore.swift`. Add a
+new environment dependency there and update the hosted composition tests.
+
+The main window's `.task` calls `AppCore.start()` once for the whole core. Startup
+begins Photos observation after rendering, attaches the lifecycle coordinator to
+configure destination history, attaches AutoSync before starting its change source,
+and attaches destination safety monitoring. Additional windows do not repeat the
+startup catch-up. Screenshot mode supplies a synthetic library and skips AutoSync
+wiring; hosted tests build their own objects without launching production startup.
+
+The main data paths are:
+
+1. Photos → `PhotoLibraryManager` → app-owned descriptors for views and export planning.
+   Thumbnail caching and progressive grid loading stay behind the library service.
+2. A manual action or AutoSync run → `ExportManager` → job planning and
+   `ExportQueueCoordinator` → `VariantExporter`. Resource, render and conversion
+   producers write an attempt-owned stage through the injected service seams.
+3. `FinalNamePlanner` and the destination resolver choose names; `FileIOService`
+   commits staged bytes to the destination. The
+   [final commit contract](#final-file-commit-boundary) defines collision handling,
+   identical-file adoption and filesystem-specific limits.
+4. `RecordStoreRouter` sends per-variant outcomes to the timeline or collection
+   store. Both persist through `JSONLRecordFile`; records support future skips,
+   retry decisions and UI progress.
+5. Persistent Photos changes → `PhotoLibraryPersistentChangeAdapter` → AutoSync's
+   reducer/effect runner → the export façade. Destination identity, safety,
+   scope settings, import activity and run publications gate that work through
+   `AutoSyncEnvironment`; see the [behavior reference](auto-export-behavior.md).
+
+## Module responsibilities
+
+The role map names representative owners, not every type. Follow the source
+links for the current implementation and complete file inventory.
+
+- **[`App/`](../../photo-export/App/):** entry point, `AppCore` / `AppComposition`,
+  lifecycle coordination, login items, diagnostics and What's New state.
+- **[`PhotoLibrary/`](../../photo-export/PhotoLibrary/):** `PhotoLibraryManager` owns
+  authorization, asset queries and image loading; `CollectionCountCache` shares
+  concurrent count fetches; `PhotoLibraryPersistentChangeAdapter` exposes
+  persistent changes. `ScreenshotPhotoLibraryService` is a peer protocol
+  implementation providing curated synthetic assets.
+- **[`Export/`](../../photo-export/Export/):** the façade, queue, variant writer and
+  import coordinator, plus export planning, resource selection, naming, backup
+  scanning and physical producer implementations.
+- **[`Destination/`](../../photo-export/Destination/):** `ExportDestinationManager`
+  owns bookmarks and stable destination identity; safety monitoring and snapshot
+  adaptation feed AutoSync. `ExportDestinationResolver` allocates paths and stems.
+- **[`Records/`](../../photo-export/Records/):** timeline and collection stores,
+  JSONL persistence, placement routing, completion policy, filename claims and
+  reconciliation. `FinalCommitContext` tracks transient final-file ownership.
+- **[`AutoSync/`](../../photo-export/AutoSync/):** `AutoSyncManager` runs effects for
+  the pure `AutoSyncReducer`; `AutoSyncEnvironment` supplies its seams, with
+  file-backed dirty/retry/run/token stores under `Stores/`.
+- **[`Protocols/`](../../photo-export/Protocols/):** injected boundaries for Photos,
+  resources, rendering/conversion, filesystem and persistence operations, destination
+  state, login items and AutoSync services. Add a narrow seam here when a new
+  external operation needs a fake. This directory is the protocol inventory.
+- **[`Models/`](../../photo-export/Models/):** app-owned descriptors, selections,
+  placements, variants, records and run values. Keep pure rules in plain value types.
+- **[`Views/`](../../photo-export/Views/) and [`ViewModels/`](../../photo-export/ViewModels/):**
+  UI grouped by feature; `MonthViewModel` handles cancellation-aware progressive
+  loading and in-place refresh for timeline and collection scopes.
+- **[`Helpers/`](../../photo-export/Helpers/):** small pure utilities. Bundle resources,
+  supporting files and the asset catalog remain in their corresponding folders.
+
+### Export and record owners
+
+- `ExportManager` owns run lifecycle, click-time setting capture and AutoSync-facing
+  publications. `runExport(context:)` is awaitable; UI actions use the
+  [canonical `start*` shape](#canonical-start-entry-point-shape).
+- `ExportQueueCoordinator` owns pending jobs, counters, pause/resume/cancel, the
+  sequential drain and generation cancellation. `VariantExporter` and
+  `ImportCoordinator` reference it directly for that seam; their narrow Host
+  callbacks reach the façade for UI state and dependency forwarding.
+- `VariantExporter` selects a producer, stages or reuses bytes, commits the final
+  file and records each variant outcome. `ResourceSelection` owns edited-producer
+  dispatch; `ExportFilenamePolicy` owns `_orig` naming; `ExportPathPolicy` sanitizes
+  collection path components; `ExportPlacementResolver` maps library selections
+  to placements. `FinalNamePlanner` plans the final name after staging.
+- `ImportCoordinator` runs backup scan, matching, bulk history adoption and
+  reconciliation. `BackupScanner` handles timeline files and its `+Collections`
+  extension handles collection trees; `CollectionBackupPlanner` selects which
+  existing folders current collections adopt.
+- `ExportRecordStore` tracks timeline assets by local identifier.
+  `CollectionExportRecordStore` tracks Favorites, user albums and shared albums
+  by `(placementId, assetId)`. Both reconfigure for the stable destination id and
+  load history off the main actor while `.loading`.
+- `RecordStoreRouter` is the single dispatch point for reads, writes, cleanup and
+  reuse-source probes. `ExportCompletionPolicy` owns completion and edited-fallback
+  checks; required sets come from the `requiredVariants` free function in
+  [`ExportVariant.swift`](../../photo-export/Models/ExportVariant.swift). Keep those
+  rules out of the façade.
+
+### UI routing
+
+[`ContentView.swift`](../../photo-export/ContentView.swift) routes authorization,
+onboarding and library states. `LibraryRootView` hosts the split view. Timeline and
+collection sidebars normalize multi-selection through their bucket types; the
+focused year shows a summary, while months and collections show grids sharing
+`MonthViewModel`. `ThumbnailView` and `AssetDetailView` own previews;
+`ExportToolbarView` exposes actions and progress. `RecordStoreAlertHost` presents
+history recovery for either store, and `ImportView` presents import progress/results.
+See [`Views/`](../../photo-export/Views/) for the feature-specific views.
+
+## Design rationale
+
+- **Separate timeline and collection stores:** timeline records are asset-keyed,
+  whereas collection records are placement-and-asset-keyed. Separate files preserve
+  existing timeline history without a schema migration and isolate corruption.
+  A shared record protocol would obscure those different APIs; `RecordStoreRouter`
+  centralizes the actual dispatch instead.
+- **Separate UI selection and Photos query:** `LibrarySelection` models what the
+  user is looking at; `PhotoFetchScope` models what the library fetches. Keeping
+  that boundary permits UI-only states without pretending they are Photos queries.
+- **Main-actor persistence primitive:** both observable stores already call
+  `JSONLRecordFile` from the main actor. Making it another actor would add hops
+  without protecting new concurrent access. Its nonisolated I/O helpers run off
+  the main actor; see [the isolation policy](#2-actor-isolation-policy).
+- **In-place library refresh:** broad library revisions refresh descriptors and
+  counts, while per-asset content revisions drive preview replacement. Restarting
+  a visible grid load on every library edit used to blank it and lose user state.
+  Preserve selection and reject superseded results; the full rules are under
+  [preview content ownership](#preview-content-ownership), with the refresh
+  implementation in [`MonthViewModel`](../../photo-export/ViewModels/MonthViewModel.swift).
+- **Stable destination identity:** the stable id survives bookmark resolution and
+  remount drift; the fingerprint only informs safety confidence. Recomputing store
+  keys from a path can reopen empty history and duplicate exports. The complete
+  rules are under [destination identity](#destination-identity).
+- **Edited-video rendering:** PhotoKit does not expose the edited video as a static
+  resource, so `ProductionMediaRenderer` uses `requestExportSession` and
+  `AVAssetExportSession`. `ResourceSelection.selectEditedProducer` centralizes
+  resource/render/HEIC-conversion/none dispatch so callers do not scatter media
+  kind conditionals throughout the pipeline.
 
 ## Cross-cutting contracts
 
@@ -20,7 +183,7 @@ These three contracts bind every collaborator. Break one and you break either th
 
 **Storage**: `var generation: Int` lives on `ExportQueueCoordinator` (see [`ExportQueueCoordinator.swift`](../../photo-export/Export/ExportQueueCoordinator.swift) — search for `private(set) var generation`). `ExportManager` exposes a computed `var generation: Int { queueCoordinator.generation }` forwarder for test reads and in-module convenience.
 
-**Helpers** (all on `ExportQueueCoordinator`; `ExportManager` exposes thin forwarders for the dispatcher call sites):
+**Helpers** (signature excerpt from `ExportQueueCoordinator`; `ExportManager` forwards dispatcher calls):
 
 ```swift
 func isCurrent(_ gen: Int) -> Bool
@@ -346,9 +509,9 @@ Rules:
 
 ### 3. AutoSync seam preservation
 
-**Invariant**: `ExportManager+AutoSyncConformance.swift` is a thin wire-up file — only `extension ExportManager: …Host {}` conformances and explanatory docstrings, no implementation bodies. The file gains new conformances when collaborators are extracted (Phases 3a/4b/5 each added one), but it should never carry method bodies. AutoSync reads the manager via the conformance file's declared protocols; if you need a new bit of state AutoSync should see, add it to the manager (or sink it from a coordinator onto the manager — see below), then expose it through the conformance.
+**Invariant**: `ExportManager+AutoSyncConformance.swift` is a thin wire-up file — only `extension ExportManager: …Host {}` conformances and explanatory docstrings, no implementation bodies. New collaborators may add conformances, but the file must not carry method bodies. AutoSync reads the manager via the conformance file's declared protocols; if you need a new bit of state AutoSync should see, add it to the manager (or sink it from a coordinator onto the manager — see below), then expose it through the conformance.
 
-**Publisher surface** (real shape from `ExportManager.swift`):
+**Publisher surface** (contextual excerpt from `ExportManager.swift`):
 
 ```swift
 var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
@@ -369,7 +532,7 @@ var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
 
 The `CombineLatest4` over `($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)` is the AutoSync contract. The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isEnqueueingAll` participates so the bulk-enqueue window (after the dispatcher flips it true but before the first job lands in `pendingJobs`) is observable as busy too (issue #67 item 4a). Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
 
-**Mirror pattern** (when state lives on a coordinator but AutoSync needs to see it via the manager):
+**Mirror pattern** (contextual excerpts when a coordinator owns state that AutoSync observes through the manager):
 
 ```swift
 // On the coordinator:
@@ -545,11 +708,13 @@ rollback across stores or import stages.
 
 ## Host protocol pattern
 
-> The cancellation-seam methods (`isCurrent` / `throwIfCancelledOrStale` / `generation` / `bumpGeneration`) are no longer on any Host protocol — that move landed in issue #67 item 2. Collaborators that need the seam inject `ExportQueueCoordinator` directly. The remaining Host methods are UI-state mirrors and dependency forwarders, all stable.
+Collaborators that need cancellation inject `ExportQueueCoordinator` directly.
+Keep `isCurrent`, `throwIfCancelledOrStale`, `generation` and `bumpGeneration` off
+Host protocols; Host callbacks carry UI-state updates and dependency forwarding.
 
 When you extract a new collaborator from `ExportManager`, expose what you need from the manager via a narrow `@MainActor` `Host` protocol declared on the collaborator. The `@MainActor` annotation on the protocol itself is load-bearing — a non-MainActor Host would force `await` at every call site and break the mirror-sinks synchrony.
 
-Example from [`ExportQueueCoordinator.swift`](../../photo-export/Export/ExportQueueCoordinator.swift):
+Contextual excerpt from [`ExportQueueCoordinator.swift`](../../photo-export/Export/ExportQueueCoordinator.swift):
 
 ```swift
 @MainActor
@@ -571,7 +736,9 @@ final class ExportQueueCoordinator: ObservableObject {
 }
 ```
 
-On `ExportManager` (which is `final class ExportManager: ObservableObject` — no superclass), the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after all stored properties are initialized so `self` is available to pass as `host`:
+On `ExportManager` (a final `ObservableObject`), the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after all stored properties are initialized so `self` is available to pass as `host`:
+
+The following initialization excerpt omits unrelated application dependencies:
 
 ```swift
 private(set) var queueCoordinator: ExportQueueCoordinator!
@@ -597,7 +764,7 @@ Rules:
 
 ## Forwarder pattern
 
-`ExportManager` retains a stable public surface by forwarding to coordinators when sensible. Examples (search `ExportManager.swift` for the literal `{ queueCoordinator.` to find them):
+`ExportManager` retains a stable public surface by forwarding to coordinators when sensible. Contextual excerpts (search `ExportManager.swift` for `{ queueCoordinator.`):
 
 ```swift
 var pendingJobs: [ExportJob] { queueCoordinator.pendingJobs }
@@ -781,10 +948,14 @@ If you rename, move, add or remove one of these tests, update the list file, thi
 
 1. **`ExportPlacement.Kind`** ([Models](../../photo-export/Models/ExportPlacement.swift)) — add the case. The `variantPolicy` switch on `Kind` itself (same file) also needs to handle the new case — required-variants policy lives there.
 2. **`RecordStoreRouter`** ([Records](../../photo-export/Records/RecordStoreRouter.swift)) — audit every placement-kind switch, including reads, flushes, writes, captured final commits and cleanup. Closed-enum switches are compiler-enforced, but comparisons are not: explicitly audit `findReuseSource`'s `currentPlacement.kind != .timeline` check. If the new kind has its own retry scope, extend `AutoSyncRetryScopeKey`, its library-scope mapping, and every affected router scope switch/query too. Preserve captured final-commit ownership rather than routing late acknowledgments through mutable current state.
-3. **`ExportCompletionPolicy`** ([Records](../../photo-export/Records/ExportCompletionPolicy.swift)) — handle the new kind in `requiredVariants`, edited-fallback, and asset-complete checks.
+3. **Required variants and completion** — audit the `requiredVariants` free
+   function in [`ExportVariant.swift`](../../photo-export/Models/ExportVariant.swift),
+   plus the edited-fallback and asset-complete checks in
+   [`ExportCompletionPolicy`](../../photo-export/Records/ExportCompletionPolicy.swift).
 4. **`ExportPlacementResolver`** and any **`startExport*` entry point** that constructs an `ExportPlacement` for this kind from a `LibrarySelection`. If the new kind also needs a UI route, add corresponding cases to `LibrarySelection` and `PhotoFetchScope`.
 
-The `placement.kind` switch is *not* duplicated across `ExportManager` anymore — Phase 1 centralized it into `RecordStoreRouter`. If you find yourself writing `switch placement.kind` outside the router or the policy, you are probably bypassing a seam.
+Keep placement dispatch in `RecordStoreRouter` and the relevant policies. A new
+`switch placement.kind` in the façade can bypass that boundary.
 
 ### Adding a new variant
 
@@ -794,7 +965,9 @@ The `placement.kind` switch is *not* duplicated across `ExportManager` anymore �
 2. **`VariantExporter`** ([Export](../../photo-export/Export/VariantExporter.swift)) — handle it in the per-variant write switch.
 3. **`ResourceSelection.selectEditedProducer`** ([Export](../../photo-export/Export/ResourceSelection.swift)) — decide how the new variant selects bytes. The function returns an `EditedProducer` enum (`.resource | .render | .convertHEIC | .none`); extend that enum if the new variant needs an additional byte source. New media kinds change `ResourceSelection`, not the call sites.
 4. **`ExportFilenamePolicy`** — decide the suffix shape (`_orig`, plain, etc.).
-5. **`ExportCompletionPolicy`** — add the variant to `requiredVariants` where applicable.
+5. **Required variants and completion** — add the variant to `requiredVariants`
+   in [`ExportVariant.swift`](../../photo-export/Models/ExportVariant.swift) where
+   applicable, then audit `ExportCompletionPolicy`'s completion/fallback checks.
 
 ### Extracting a new collaborator from `ExportManager`
 
@@ -809,18 +982,19 @@ The `placement.kind` switch is *not* duplicated across `ExportManager` anymore �
 
 1. Add the `@Published` to the right *owner* — the collaborator if conceptually theirs; `ExportManager` if conceptually the manager's.
 2. If the owner is a collaborator: add a same-named `@Published` on `ExportManager` and `.sink` from the coordinator's publisher in `init`.
-3. If the new property changes `ExportRunState`'s shape: add it to the `CombineLatest` (you may need to bump to `CombineLatest4`). Re-record `AutoSyncSeamCharacterizationTests` after verifying the new emission sequence is correct.
+3. If the new property changes `ExportRunState`'s shape, update the publisher
+   composition deliberately. Audit the emission sequence before re-recording
+   `AutoSyncSeamCharacterizationTests`.
 4. Mention the new field in `ExportManager+AutoSyncConformance.swift` if AutoSync needs to read it directly (not via the publisher).
 
 ## Deferred follow-ups
 
-The refactor shipped with three deliberate deferrals tracked in [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67); items 2, 4, 5, and 6 landed since:
-
-1. ~~**PhotoLibrary composition refactor**~~ — landed (issue #67 item 1, May 2026): `PhotoLibraryManager` is `final`, holds an optional `overrideService`, and forwards every `PhotoLibraryService` method to it when set. `ScreenshotPhotoLibraryService` is a standalone conformance — no inheritance — so newly-added protocol methods are caught at compile time. The override-gate test stays as a behavioral pin against curated-content regressions.
-2. ~~**Generation-counter ownership transfer**~~ — landed: `var generation: Int` now lives on `ExportQueueCoordinator`; `VariantExporter` and `ImportCoordinator` hold a direct reference for the seam.
-3. ~~**Remaining Phase 7 folder moves**~~ — landed (issue #67 item 3, May 2026): `Destination/`, `Export/`, and `App/` exist; `Managers/` has been removed. The folder descriptions are a role map with key examples, not an exhaustive file inventory. `photo-export/ContentView.swift` remains at the source root with `AuthorizationView`, `YearRow` and `MonthRow`; feature views are grouped under `Views/`.
-
-A second wave of follow-ups landed with item 4 (AutoSync seam test growth) and item 5 (`start*` bulk-loop helper consolidation). Item 6 (CI regression-gate symbol guard) is also done.
+The completed extraction and folder-move decisions are retained in the
+[archived architecture plan](../project/archive/software-architecture-improvement-plan.md)
+and [issue #67](https://github.com/valtteriluomapareto/photo-export/issues/67).
+Use the [documentation index](../README.md) and
+[review backlog](https://github.com/valtteriluomapareto/photo-export/issues/318)
+for current open work rather than treating the old extraction checklist as active.
 
 ## Where to ask
 
