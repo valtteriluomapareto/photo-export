@@ -111,8 +111,8 @@ final class DestinationSafetyMonitor: ObservableObject {
   var isAttached: Bool { observation != nil }
 
   /// Subscribe to destination changes. Called from `AppCore.start()` after the lifecycle
-  /// coordinator has been attached, so the record stores have been `configure(for:)`d
-  /// before we read their counts.
+  /// coordinator has been attached, so the record stores are configured (or loading) for
+  /// the current destination before we read their counts.
   func attach() {
     guard !isAttached else { return }
     observation =
@@ -160,13 +160,18 @@ final class DestinationSafetyMonitor: ObservableObject {
 
     // Records present → user has used the app with this destination before;
     // no need to prompt. Lazy-evaluation: timeline store first, fall back to
-    // collection store. Both checks are O(1) on in-memory data.
+    // collection store. Both checks are O(1) on in-memory data. A store that is
+    // still loading reads as empty, so it is judged after the scan instead.
+    let isLoading =
+      !exportRecordStore.state.isSettled || !collectionExportRecordStore.state.isSettled
     let hasTimelineRecords = !exportRecordStore.recordsById.isEmpty
     let hasCollectionRecords = !collectionExportRecordStore.placements.isEmpty
-    if hasTimelineRecords || hasCollectionRecords {
+    if !isLoading, hasTimelineRecords || hasCollectionRecords {
       needsSafetyConfirmation = false
       return
     }
+    let timelineDestination = exportRecordStore.destinationId
+    let collectionDestination = collectionExportRecordStore.destinationId
 
     // Records empty — scan the destination directory. Async because the
     // scoped-access dance crosses an actor hop and the filesystem read
@@ -176,13 +181,18 @@ final class DestinationSafetyMonitor: ObservableObject {
       guard let self else { return }
       defer { self.completedEvaluationCount += 1 }
       let hasUserFiles = await self.scanDirectory()
-      guard self.evaluationGeneration == gen else {
-        // Stale generation — user already switched destinations.
+      // Judge the loaded history, not the empty one a loading store shows.
+      await self.exportRecordStore.waitUntilSettled()
+      await self.collectionExportRecordStore.waitUntilSettled()
+      guard self.evaluationGeneration == gen,
+        self.exportRecordStore.destinationId == timelineDestination,
+        self.collectionExportRecordStore.destinationId == collectionDestination
+      else {
+        // Stale: the user switched destinations, or the stores moved on while it waited.
         return
       }
-      // Re-check the synchronous gates against the *post-scan* world. The
-      // record stores can finish loading their JSONL during the slow
-      // filesystem scan; if they did, the destination is no longer
+      // Re-check the synchronous gates against the *post-scan* world, with both
+      // stores' history loaded: if it has records, the destination is no longer
       // "records empty" and we must not flag it. Same for confirmation:
       // the user might have confirmed via another path while we waited.
       if self.confirmationStore.isConfirmed(destinationId: id) {
