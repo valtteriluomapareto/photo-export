@@ -3,6 +3,7 @@ import SwiftUI
 struct OnboardingView: View {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
+  @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
   let onSkip: () -> Void
 
@@ -25,6 +26,12 @@ struct OnboardingView: View {
     }
     .firstRunWindowMinSize()
     .background(Color(.windowBackgroundColor))
+  }
+
+  private var exportAvailability: ManualExportAvailability {
+    ManualExportAvailability(
+      destinationCanExport: exportDestinationManager.canExportNow,
+      history: exportRecordStore.state)
   }
 
   private var content: some View {
@@ -139,13 +146,17 @@ struct OnboardingView: View {
           // selection the user made here, not the persisted default.
           exportManager.versionSelection = includeOriginals ? .editedWithOriginals : .edited
           exportManager.convertHEICToJPEG = convertHEICToJPEG
-          if exportAll && exportDestinationManager.canExportNow {
+          if exportAll && exportAvailability.canStart {
             exportManager.startExportAll()
           }
           onSkip()
         }
         .buttonStyle(.borderedProminent)
-        .disabled(exportDestinationManager.selectedFolderURL == nil)
+        // A folder picked here has its history read first; starting meanwhile would drop the
+        // export.
+        .disabled(
+          exportDestinationManager.selectedFolderURL == nil
+            || (exportAll && exportAvailability == .loadingHistory))
       }
 
       Spacer(minLength: 0)

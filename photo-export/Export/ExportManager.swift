@@ -383,7 +383,9 @@ final class ExportManager: ObservableObject {
   /// True when the **timeline** store is ready to accept writes. Timeline `startExport*`
   /// methods short-circuit when false, preventing the silent-false-success case where the
   /// pipeline would write files to disk while the store's `append` silently no-ops because
-  /// `state != .ready` (either `.unconfigured` or `.failed`).
+  /// `state != .ready` (`.unconfigured`, `.loading`, `.failed` or `.persistenceFailed`).
+  /// Views read the same rule through `ManualExportAvailability`, so they disable the control
+  /// instead of dropping the click.
   ///
   /// Phase 3 adds `canExportCollection` for the `.favorites`/`.album` start methods. The
   /// two are deliberately independent so a `.failed` collection store does not block

@@ -237,9 +237,14 @@ struct FolderContentView: View {
 
   // MARK: - Export button state
 
+  private var exportAvailability: ManualExportAvailability {
+    ManualExportAvailability(
+      destinationCanExport: exportDestinationManager.canExportNow,
+      history: collectionExportRecordStore.state)
+  }
+
   private var canExport: Bool {
-    guard exportDestinationManager.canExportNow else { return false }
-    guard exportManager.canExportCollection else { return false }
+    guard exportAvailability.canStart else { return false }
     guard !exportManager.hasActiveExportWork else { return false }
     if hasSelection {
       return !selectedAlbumIds.isEmpty
@@ -264,11 +269,10 @@ struct FolderContentView: View {
   }
 
   private var exportButtonHelp: String {
-    if !exportDestinationManager.canExportNow {
-      return exportDestinationManager.exportUnavailableHelp
-    }
-    if !exportManager.canExportCollection {
-      return "Collections store is not ready"
+    if let unavailable = exportAvailability.unavailableHelp(
+      destinationHelp: exportDestinationManager.exportUnavailableHelp)
+    {
+      return unavailable
     }
     if hasSelection {
       if selectedAlbumIds.isEmpty {
@@ -314,7 +318,7 @@ struct FolderContentView: View {
       }
       exportManager.startExportAlbums(collectionIds: albumIds)
     }
-    .disabled(albumIds.isEmpty || !exportManager.canExportCollection)
+    .disabled(albumIds.isEmpty || !exportAvailability.canStart)
   }
 
   /// The set of tile ids the right-click action should target. If the clicked tile is

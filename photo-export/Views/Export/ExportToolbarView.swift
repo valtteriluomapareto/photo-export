@@ -4,6 +4,8 @@ struct ExportToolbarView: ToolbarContent {
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
+  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
@@ -203,12 +205,20 @@ struct ExportToolbarView: ToolbarContent {
     }
   }
 
+  /// The primary action exports into the section's history.
+  private var primaryAvailability: ManualExportAvailability {
+    ManualExportAvailability(
+      destinationCanExport: exportDestinationManager.canExportNow,
+      history: section == .timeline ? exportRecordStore.state : collectionExportRecordStore.state)
+  }
+
   /// Manual exports stay clickable while an AutoSync run is in flight per
   /// plan §"Phase 4" ("Keep manual export actions enabled while Auto Export
   /// is on"). Disabled only when a *manual* run is already going, when
-  /// import is running, or when the destination isn't writable.
+  /// import is running, or when the destination or its history can't take
+  /// exports.
   private var isPrimaryActionEnabled: Bool {
-    guard exportDestinationManager.canExportNow, !exportManager.isImporting else {
+    guard primaryAvailability.canStart, !exportManager.isImporting else {
       return false
     }
     // hasActiveExportWork = true && activeRunContext?.source == .autoSync
@@ -319,8 +329,10 @@ struct ExportToolbarView: ToolbarContent {
   }
 
   private var primaryActionHelpText: String {
-    guard exportDestinationManager.canExportNow else {
-      return exportDestinationManager.exportUnavailableHelp
+    if let unavailable = primaryAvailability.unavailableHelp(
+      destinationHelp: exportDestinationManager.exportUnavailableHelp)
+    {
+      return unavailable
     }
     let multiCount: Int = {
       switch section {
