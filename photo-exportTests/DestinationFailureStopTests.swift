@@ -673,7 +673,11 @@ struct DestinationFailureStopTests {
     let f = Fixture()
     let scan = AsyncCheckpoint()
     f.photos.fetchAssetsCheckpointByYear[2027] = scan
-    f.photos.assetsByYearMonth["2027-1"] = [TestAssetFactory.makeAsset(id: "late-scan")]
+    f.photos.assetsByYearMonth["2027-1"] = [
+      TestAssetFactory.makeAsset(
+        id: "late-scan",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2027, month: 1, day: 15))!)
+    ]
     f.photos.resourcesByAssetId["late-scan"] = [.init(type: .photo, originalFilename: "LATE.JPG")]
     f.writer.writeError = CocoaError(.fileWriteOutOfSpace)
     f.manager.startExportYear(year: 2027)

@@ -93,7 +93,10 @@ struct FinalCommitCancellationTests {
     ) throws {
       defaults = TestScratch.defaults(suiteName: defaultsName)
       placement = collection ? .favorites() : .timeline(year: 2025, month: 1)
-      asset = TestAssetFactory.makeAsset(id: "asset", hasAdjustments: fallback)
+      asset = TestAssetFactory.makeAsset(
+        id: "asset",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 15))!,
+        hasAdjustments: fallback)
       timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
       collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
       timeline.configure(for: "A")

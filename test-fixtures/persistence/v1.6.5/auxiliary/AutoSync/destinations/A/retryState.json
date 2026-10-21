@@ -1,0 +1,50 @@
+{
+  "entriesByPlacement" : {
+    "album:album-a" : {
+      "asset-b" : {
+        "edited" : {
+          "attemptCount" : 3,
+          "category" : "photoKitTransient",
+          "errorSignature" : "NSPOSIXErrorDomain:5",
+          "firstFailedAt" : 700000000,
+          "lastFailedAt" : 700000060,
+          "nextEligibleAt" : 700000660
+        }
+      }
+    },
+    "favorites" : {
+      "asset-a" : {
+        "edited" : {
+          "attemptCount" : 2,
+          "category" : "destinationPermission",
+          "errorSignature" : "NSCocoaErrorDomain:513",
+          "firstFailedAt" : 700000000,
+          "lastFailedAt" : 700000030
+        }
+      }
+    },
+    "shared-album:shared-a" : {
+      "asset-c" : {
+        "originalPairedVideo" : {
+          "attemptCount" : 2,
+          "category" : "destinationPermission",
+          "errorSignature" : "NSCocoaErrorDomain:513",
+          "firstFailedAt" : 700000000,
+          "lastFailedAt" : 700000030
+        }
+      }
+    },
+    "timeline" : {
+      "asset-a" : {
+        "original" : {
+          "attemptCount" : 3,
+          "category" : "photoKitTransient",
+          "errorSignature" : "NSPOSIXErrorDomain:5",
+          "firstFailedAt" : 700000000,
+          "lastFailedAt" : 700000060,
+          "nextEligibleAt" : 700000660
+        }
+      }
+    }
+  }
+}

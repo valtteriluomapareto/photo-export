@@ -21,10 +21,18 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
   }
 
   // Error injection
-  var writeError: Error?
+  var writeError: Error? {
+    get { lock.withLock { _writeError } }
+    set { lock.withLock { _writeError = newValue } }
+  }
+  private var _writeError: Error?
 
   // Behavior: if true, creates a small file at the destination (simulating a real write)
-  var shouldCreateFile: Bool = true
+  var shouldCreateFile: Bool {
+    get { lock.withLock { _shouldCreateFile } }
+    set { lock.withLock { _shouldCreateFile = newValue } }
+  }
+  private var _shouldCreateFile: Bool = true
 
   /// Writes the bytes of another asset id instead, keyed by the asset being written, so
   /// two assets can stand in for byte-identical duplicates in Photos.
@@ -64,15 +72,21 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
   /// `await checkpoint.releaseAll()` during teardown to unblock anything still
   /// suspended (otherwise a `cancelAndClear()` from the manager strands the
   /// write task forever).
-  var checkpoint: AsyncCheckpoint?
-  var afterWriteCheckpoint: AsyncCheckpoint?
+  var checkpoint: AsyncCheckpoint? {
+    get { lock.withLock { _checkpoint } }
+    set { lock.withLock { _checkpoint = newValue } }
+  }
+  private var _checkpoint: AsyncCheckpoint?
+  var afterWriteCheckpoint: AsyncCheckpoint? {
+    get { lock.withLock { _afterWriteCheckpoint } }
+    set { lock.withLock { _afterWriteCheckpoint = newValue } }
+  }
+  private var _afterWriteCheckpoint: AsyncCheckpoint?
 
   func writeResource(_ resource: ResourceDescriptor, forAssetId assetId: String, to url: URL)
     async throws
   {
-    lock.lock()
-    _writeCalls.append(WriteCall(resource: resource, assetId: assetId, url: url))
-    lock.unlock()
+    lock.withLock { _writeCalls.append(WriteCall(resource: resource, assetId: assetId, url: url)) }
 
     if let checkpoint {
       await checkpoint.enter()

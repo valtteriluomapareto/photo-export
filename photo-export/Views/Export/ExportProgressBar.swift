@@ -133,6 +133,9 @@ struct ExportProgressBar: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 6)
     .frame(maxWidth: .infinity, alignment: .leading)
+    // Keep complete wrapped recovery text at its ideal height. A truncating fitted view
+    // can otherwise shrink its window again on each layout pass.
+    .fixedSize(horizontal: false, vertical: true)
     .background(.bar)
     .overlay(alignment: .bottom) { Divider() }
   }

@@ -1,0 +1,41 @@
+{
+  "completedCount" : 4,
+  "context" : {
+    "reason" : "photosChanged",
+    "runId" : "11111111-2222-3333-4444-555555555555",
+    "scope" : {
+      "timelineAssets" : {
+        "_0" : [
+          "asset-b",
+          "asset-a"
+        ]
+      }
+    },
+    "selection" : "editedWithOriginals",
+    "source" : "autoSync",
+    "startedAt" : 700000000,
+    "visibility" : "background"
+  },
+  "endedAt" : 700000090,
+  "enqueuedCount" : 8,
+  "failedCount" : 1,
+  "failures" : [
+    {
+      "assetId" : "asset-a",
+      "category" : "photoKitTransient",
+      "errorSignature" : "NSPOSIXErrorDomain:5",
+      "failedAt" : 700000060,
+      "localizedDescription" : "Synthetic read failure",
+      "placement" : {
+        "createdAt" : 700000000,
+        "displayName" : "Favorites",
+        "id" : "collections:favorites",
+        "kind" : "favorites",
+        "relativePath" : "Collections\/Favorites\/"
+      },
+      "variant" : "edited"
+    }
+  ],
+  "result" : "failed",
+  "skippedCount" : 3
+}

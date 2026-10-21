@@ -343,6 +343,49 @@ import Testing
     #expect(screenshot.screenshotSurfaceKey == "timeline-multi-select")
   }
 
+  @Test func autoExportMissingAccessFooterNamesThePhotosPrivacyPath() async throws {
+    try await withAppDomainUntouched {
+      var composition = makeTestComposition(label: "photos-access-footer")
+      let service = FakePhotoLibraryService()
+      service.authorizationStatus = .denied
+      service.isAuthorized = false
+      composition.photoLibraryServiceOverride = service
+      composition.wiresAutoSync = true
+      composition.defaults.set(true, forKey: AutoSyncManager.enabledDefaultsKey)
+      let core = makeCore(composition)
+      core.start()
+      #expect(core.autoSyncManager.state == .blocked(.photosAccessMissing))
+      let counter = BodyInvalidationCounter()
+      let window = NSWindow(
+        contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 900),
+        styleMask: [.titled, .closable], backing: .buffered, defer: false)
+      window.isReleasedWhenClosed = false
+      window.contentView = NSHostingView(
+        rootView: AutoExportSettingsView().photoExportEnvironment(core)
+          .environment(\.bodyInvalidationCounter, counter))
+      defer {
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+        core.autoSyncManager.setEnabled(false)
+        core.autoSyncPhotoChangeAdapter.stop()
+        core.exportManager.cancelAndClear()
+        counter.reset()
+        try? FileManager.default.removeItem(at: composition.appStateRoot)
+      }
+      window.orderFront(nil)
+      try #require(
+        await eventually("Auto Export access footer rendered") {
+          counter.renderedText["auto-export-now-footer"] != nil
+        })
+      #expect(
+        counter.renderedText["auto-export-now-footer"] == [
+          "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
+        ])
+      #expect(AutoSyncBlockedReason.photosAccessMissing.userFacingLabel == "Photos access needed")
+    }
+  }
+
   // MARK: - Isolation
 
   @Test func testCompositionKeepsAllStateUnderItsRootAndSuite() async throws {

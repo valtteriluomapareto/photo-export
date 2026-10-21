@@ -25,7 +25,9 @@ struct EmptyRunMessageTests {
     let (manager, photoLib, dest, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "done-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "done-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 3, day: 15))!)
     photoLib.assetsByYearMonth["2025-3"] = [asset]
     photoLib.resourcesByAssetId["done-asset"] = [
       TestAssetFactory.makeResource(originalFilename: "X.JPG")
@@ -86,7 +88,9 @@ struct EmptyRunMessageTests {
     let (manager, photoLib, dest, _) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "todo-asset")
+    let asset = TestAssetFactory.makeAsset(
+      id: "todo-asset",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15))!)
     photoLib.assetsByYearMonth["2025-4"] = [asset]
     photoLib.resourcesByAssetId["todo-asset"] = [
       TestAssetFactory.makeResource(originalFilename: "T.JPG")
@@ -104,7 +108,9 @@ struct EmptyRunMessageTests {
     let (manager, photoLib, dest, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "done-1")
+    let asset = TestAssetFactory.makeAsset(
+      id: "done-1",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 5, day: 15))!)
     photoLib.assetsByYearMonth["2025-5"] = [asset]
     photoLib.resourcesByAssetId["done-1"] = [
       TestAssetFactory.makeResource(originalFilename: "A.JPG")
@@ -117,7 +123,9 @@ struct EmptyRunMessageTests {
     await manager.waitForQueueDrained()
     #expect(manager.emptyRunMessage != nil)
 
-    let workAsset = TestAssetFactory.makeAsset(id: "todo-2")
+    let workAsset = TestAssetFactory.makeAsset(
+      id: "todo-2",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 6, day: 15))!)
     photoLib.assetsByYearMonth["2025-6"] = [workAsset]
     photoLib.resourcesByAssetId["todo-2"] = [
       TestAssetFactory.makeResource(originalFilename: "B.JPG")
@@ -131,7 +139,9 @@ struct EmptyRunMessageTests {
     let (manager, photoLib, dest, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "done-sel")
+    let asset = TestAssetFactory.makeAsset(
+      id: "done-sel",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 7, day: 15))!)
     photoLib.assetsByYearMonth["2025-7"] = [asset]
     photoLib.resourcesByAssetId["done-sel"] = [
       TestAssetFactory.makeResource(originalFilename: "S.JPG")
@@ -152,7 +162,9 @@ struct EmptyRunMessageTests {
     let (manager, photoLib, dest, store) = makeTestHarness()
     defer { dest.cleanup() }
 
-    let asset = TestAssetFactory.makeAsset(id: "done-cancel")
+    let asset = TestAssetFactory.makeAsset(
+      id: "done-cancel",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 8, day: 15))!)
     photoLib.assetsByYearMonth["2025-8"] = [asset]
     photoLib.resourcesByAssetId["done-cancel"] = [
       TestAssetFactory.makeResource(originalFilename: "C.JPG")

@@ -1543,7 +1543,7 @@ final class ExportManager: ObservableObject, Observable {
   /// so the active run, if any, is marked incomplete: its drain resolves `.failed`
   /// and AutoSync keeps the scope's pending work for the next run.
   private func unauthorizedScan() -> EnqueueOutcome {
-    noteManualPreparationFailure("Photos access is required to scan this selection.")
+    noteManualPreparationFailure(PhotosAccessGuidance.message)
     activeRunBookkeeping?.incompleteScan = true
     return .unauthorized
   }

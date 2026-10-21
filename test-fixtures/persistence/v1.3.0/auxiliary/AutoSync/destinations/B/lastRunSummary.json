@@ -1,0 +1,24 @@
+{
+  "cancelReason" : "userCancelled",
+  "completedCount" : 1,
+  "context" : {
+    "runId" : "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+    "scope" : {
+      "favoritesFull" : {
+
+      }
+    },
+    "selection" : "edited",
+    "source" : "manual",
+    "startedAt" : 700000100,
+    "visibility" : "userVisible"
+  },
+  "endedAt" : 700000120,
+  "enqueuedCount" : 2,
+  "failedCount" : 0,
+  "failures" : [
+
+  ],
+  "result" : "cancelled",
+  "skippedCount" : 0
+}

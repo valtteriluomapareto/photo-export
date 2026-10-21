@@ -22,7 +22,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 **read-only** — it can't modify or delete anything in your Photos library. It does not upload your photos, use any third-party cloud
 service, require an account, or ask for your Apple Account password.
 
-If Photos access is denied, choose **Open System Settings**, enable access under **Privacy & Security → Photos**, then return to Photo Export. The app checks access again so you can continue setup or browsing.
+The access screen, Auto Export Settings and manual export failures share one recovery instruction: turn on Photos access for Photo Export in **System Settings → Privacy & Security → Photos**. Choose **Open System Settings** on the access screen, then return to the app to continue.
 
 If Auto Export shows "Blocked — Photos access needed", Photos access is off and Auto Export doesn't run. Turn it back on under **System Settings → Privacy & Security → Photos**; pending changes are kept and export shortly after you return to Photo Export.
 
@@ -54,7 +54,7 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
   settings](https://valtteriluomapareto.github.io/photo-export/features/#live-photos).
 - Follow progress below the toolbar, then pause, resume, cancel or clear queued work. [Queue and safe-restart
   behavior](https://valtteriluomapareto.github.io/photo-export/features/#queue-controls).
-- See completed and failed counts after a manual export, with **View Issues** for failures. [Export
+- See completed and failed counts after a manual export, with wrapped failure details and **View Issues**. [Export
   outcomes](https://valtteriluomapareto.github.io/photo-export/export-icloud-photos/#resuming-an-interrupted-export).
 - Enable **Auto Export** to add new photos automatically, retry transient failures and optionally open at login. [Auto Export
   guide](https://valtteriluomapareto.github.io/photo-export/auto-export/).

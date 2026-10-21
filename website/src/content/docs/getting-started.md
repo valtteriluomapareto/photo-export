@@ -29,7 +29,7 @@ Both versions are identical in functionality, signed and notarized by Apple.
 
 On first launch, macOS will prompt for **Photos library access**. Allow access to let the app read your photo and video library.
 
-If you deny access, choose **Open System Settings** on the authorization screen, then enable access in **Privacy & Security → Photos**. Return to Photo Export: it checks access again and continues to onboarding or your library. Follow any relaunch instruction macOS itself presents.
+The access screen, Auto Export Settings and manual export failures give the same instruction: turn on Photos access for Photo Export in **System Settings → Privacy & Security → Photos**. If you deny access, choose **Open System Settings** on the authorization screen to get there. Return to Photo Export: it checks access again and continues to onboarding or your library. Follow any relaunch instruction macOS itself presents.
 
 ### 2. Choose an export destination
 
