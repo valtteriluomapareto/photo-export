@@ -42,6 +42,21 @@ struct ExportManagerObservationTests {
       ]
     }
 
+    func bridgedProbes() -> [ObservationProbe] {
+      [
+        ObservationProbe { _ = self.manager.isRunning },
+        ObservationProbe { _ = self.manager.queueCount },
+        ObservationProbe { _ = self.manager.activeRunContext },
+        ObservationProbe { _ = self.manager.isEnqueueingAll },
+        ObservationProbe { _ = self.manager.versionSelection },
+        ObservationProbe { _ = self.manager.convertHEICToJPEG },
+        ObservationProbe { _ = self.manager.livePhotosPairedExport },
+        ObservationProbe { _ = self.manager.isImporting },
+        ObservationProbe { _ = self.manager.importStage },
+        ObservationProbe { _ = self.manager.previousBackupMissing },
+      ]
+    }
+
     func enqueueOne() {
       manager.queueCoordinator.enqueue([
         .init(
@@ -56,6 +71,54 @@ struct ExportManagerObservationTests {
       try? await collections.flush()
       destination.cleanup()
       try? FileManager.default.removeItem(at: root)
+    }
+  }
+
+  enum Setting: CaseIterable, Sendable {
+    case versions, heic, paired
+    var index: Int {
+      switch self {
+      case .versions: 4
+      case .heic: 5
+      case .paired: 6
+      }
+    }
+    @MainActor func write(_ manager: ExportManager) {
+      switch self {
+      case .versions: manager.versionSelection = .editedWithOriginals
+      case .heic: manager.convertHEICToJPEG = true
+      case .paired: manager.livePhotosPairedExport = true
+      }
+    }
+  }
+
+  /// Own notifications are missing before bridging; sibling silence already passes.
+  @Test(arguments: Setting.allCases)
+  func settingsBridgesNotifyOnlyTheirOwnProperty(setting: Setting) async {
+    let f = Fixture()
+    await withCleanup {
+      let probes = f.bridgedProbes()
+      setting.write(f.manager)
+      var expected = Array(repeating: 0, count: 10)
+      expected[setting.index] = 1
+      #expect(probes.map(\.changeCount) == expected)
+      setting.write(f.manager)
+      #expect(probes.map(\.changeCount) == expected)
+    } cleanup: {
+      await f.close()
+    }
+  }
+
+  /// Synchronous import writes need their own dependencies without touching other bridges.
+  @Test func importBridgesNotifyTheirOwnProperties() async {
+    let f = Fixture()
+    await withCleanup {
+      let probes = f.bridgedProbes()
+      f.manager.startImport()
+      f.manager.cancelImport()
+      #expect(probes.map(\.changeCount) == [0, 0, 0, 0, 0, 0, 0, 2, 2, 0])
+    } cleanup: {
+      await f.close()
     }
   }
 
