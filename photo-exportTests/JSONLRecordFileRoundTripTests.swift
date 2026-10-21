@@ -31,7 +31,7 @@ struct JSONLRecordFileRoundTripTests {
     var records: [String: String]
   }
 
-  fileprivate struct Op: Codable, Sendable, Equatable {
+  fileprivate struct Operation: Codable, Sendable, Equatable {
     enum Kind: String, Codable { case upsert, delete }
     let kind: Kind
     let key: String
@@ -41,7 +41,7 @@ struct JSONLRecordFileRoundTripTests {
   /// In-memory replica that mirrors what the composing store would maintain.
   fileprivate final class Replica {
     var records: [String: String] = [:]
-    func apply(_ op: Op) {
+    func apply(_ op: Operation) {
       switch op.kind {
       case .upsert: records[op.key] = op.value ?? ""
       case .delete: records.removeValue(forKey: op.key)
@@ -51,13 +51,13 @@ struct JSONLRecordFileRoundTripTests {
   }
 
   private func makeStore() throws -> (
-    URL, JSONLRecordFile<Snapshot, Op>, DispatchQueue
+    URL, JSONLRecordFile<Snapshot, Operation>, DispatchQueue
   ) {
     let dir = TestScratch.directory("JSONLRecordFileRoundTrip")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let queue = DispatchQueue(
       label: "JSONLRecordFile-rt-\(UUID().uuidString)", qos: .utility)
-    let file = JSONLRecordFile<Snapshot, Op>(
+    let file = JSONLRecordFile<Snapshot, Operation>(
       snapshotURL: dir.appendingPathComponent("snapshot.json"),
       logURL: dir.appendingPathComponent("log.jsonl"),
       ioQueue: queue,
@@ -69,7 +69,7 @@ struct JSONLRecordFileRoundTripTests {
   /// Helper: run a sequence of ops through both the file and a replica, then verify that
   /// loading the file and replaying its ops reproduces the replica's state.
   private func driveAndVerify(
-    file: JSONLRecordFile<Snapshot, Op>, replica: Replica, ops: [Op]
+    file: JSONLRecordFile<Snapshot, Operation>, replica: Replica, ops: [Operation]
   ) {
     for op in ops {
       replica.apply(op)
@@ -98,14 +98,14 @@ struct JSONLRecordFileRoundTripTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
 
-    var ops: [Op] = []
+    var ops: [Operation] = []
     for k in 0..<50 {
       let key = "k\(k)"
-      ops.append(Op(kind: .upsert, key: key, value: "v0"))
-      ops.append(Op(kind: .upsert, key: key, value: "v1"))
-      ops.append(Op(kind: .upsert, key: key, value: "v2"))
-      ops.append(Op(kind: .delete, key: key, value: nil))
-      ops.append(Op(kind: .upsert, key: key, value: "final"))
+      ops.append(Operation(kind: .upsert, key: key, value: "v0"))
+      ops.append(Operation(kind: .upsert, key: key, value: "v1"))
+      ops.append(Operation(kind: .upsert, key: key, value: "v2"))
+      ops.append(Operation(kind: .delete, key: key, value: nil))
+      ops.append(Operation(kind: .upsert, key: key, value: "final"))
     }
     // 250 ops; threshold is 1000 → no compaction yet.
     driveAndVerify(file: file, replica: replica, ops: ops)
@@ -137,13 +137,13 @@ struct JSONLRecordFileRoundTripTests {
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let snapshotURL = dir.appendingPathComponent("snapshot.json")
-    let n = JSONLRecordFile<Snapshot, Op>.Constants.compactEveryNMutations
+    let n = JSONLRecordFile<Snapshot, Operation>.Constants.compactEveryNMutations
 
     // Drive (n - 1) ops without crossing the threshold so we can isolate the
     // threshold-crossing call.
     var rolling: [String: String] = [:]
     for i in 0..<(n - 1) {
-      let op = Op(kind: .upsert, key: "k\(i)", value: "v\(i)")
+      let op = Operation(kind: .upsert, key: "k\(i)", value: "v\(i)")
       rolling["k\(i)"] = "v\(i)"
       let captured = rolling
       file.append(op, currentSnapshot: { Snapshot(records: captured) })
@@ -166,7 +166,7 @@ struct JSONLRecordFileRoundTripTests {
     // function flows linearly and a failed assertion does not leak a suspended queue.)
     queue.suspend()
 
-    let crossing = Op(kind: .upsert, key: "k\(n - 1)", value: "v")
+    let crossing = Operation(kind: .upsert, key: "k\(n - 1)", value: "v")
     file.append(crossing, currentSnapshot: { Snapshot(records: heavy) })
 
     // The append-log + encode + snapshot-write all run on the suspended queue, so
@@ -194,14 +194,14 @@ struct JSONLRecordFileRoundTripTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
 
-    let n = JSONLRecordFile<Snapshot, Op>.Constants.compactEveryNMutations
-    var ops: [Op] = []
+    let n = JSONLRecordFile<Snapshot, Operation>.Constants.compactEveryNMutations
+    var ops: [Operation] = []
     for i in 0..<n {
-      ops.append(Op(kind: .upsert, key: "k\(i)", value: "v\(i)"))
+      ops.append(Operation(kind: .upsert, key: "k\(i)", value: "v\(i)"))
     }
     // Five more appends after the threshold-triggering one.
     for i in 0..<5 {
-      ops.append(Op(kind: .upsert, key: "post-\(i)", value: "p\(i)"))
+      ops.append(Operation(kind: .upsert, key: "post-\(i)", value: "p\(i)"))
     }
     driveAndVerify(file: file, replica: replica, ops: ops)
 
@@ -230,11 +230,11 @@ struct JSONLRecordFileRoundTripTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
 
-    let n = JSONLRecordFile<Snapshot, Op>.Constants.compactEveryNMutations
-    var ops: [Op] = []
+    let n = JSONLRecordFile<Snapshot, Operation>.Constants.compactEveryNMutations
+    var ops: [Operation] = []
     for batch in 0..<3 {
       for i in 0..<n {
-        ops.append(Op(kind: .upsert, key: "k-\(batch)-\(i)", value: "v"))
+        ops.append(Operation(kind: .upsert, key: "k-\(batch)-\(i)", value: "v"))
       }
     }
     driveAndVerify(file: file, replica: replica, ops: ops)
@@ -253,18 +253,18 @@ struct JSONLRecordFileRoundTripTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
 
-    let n = JSONLRecordFile<Snapshot, Op>.Constants.compactEveryNMutations
-    var ops: [Op] = []
+    let n = JSONLRecordFile<Snapshot, Operation>.Constants.compactEveryNMutations
+    var ops: [Operation] = []
     // Insert n-100 keys, delete 100 of them, then insert 100 more so the threshold
     // crosses on the (n)th op.
     for i in 0..<(n - 100) {
-      ops.append(Op(kind: .upsert, key: "k\(i)", value: "v\(i)"))
+      ops.append(Operation(kind: .upsert, key: "k\(i)", value: "v\(i)"))
     }
     for i in 0..<100 {
-      ops.append(Op(kind: .delete, key: "k\(i)", value: nil))
+      ops.append(Operation(kind: .delete, key: "k\(i)", value: nil))
     }
     for i in 0..<100 {
-      ops.append(Op(kind: .upsert, key: "post-\(i)", value: "p\(i)"))
+      ops.append(Operation(kind: .upsert, key: "post-\(i)", value: "p\(i)"))
     }
     driveAndVerify(file: file, replica: replica, ops: ops)
 
@@ -283,7 +283,7 @@ struct JSONLRecordFileRoundTripTests {
 
   // MARK: - Empty value on upsert
 
-  /// `Op.upsert` with `value: nil` (or empty string) is a valid sequence we want to
+  /// `Operation.upsert` with `value: nil` (or empty string) is a valid sequence we want to
   /// faithfully round-trip, because production placement records can carry nil filenames
   /// for in-progress variants. Lock in: the value flows through encode → decode → apply
   /// without alteration.
@@ -293,9 +293,9 @@ struct JSONLRecordFileRoundTripTests {
     let replica = Replica()
 
     let ops = [
-      Op(kind: .upsert, key: "a", value: nil),
-      Op(kind: .upsert, key: "b", value: ""),
-      Op(kind: .upsert, key: "c", value: "non-empty"),
+      Operation(kind: .upsert, key: "a", value: nil),
+      Operation(kind: .upsert, key: "b", value: ""),
+      Operation(kind: .upsert, key: "c", value: "non-empty"),
     ]
     driveAndVerify(file: file, replica: replica, ops: ops)
   }
@@ -316,10 +316,10 @@ struct JSONLRecordFileRoundTripTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
 
-    let n = JSONLRecordFile<Snapshot, Op>.Constants.compactEveryNMutations
+    let n = JSONLRecordFile<Snapshot, Operation>.Constants.compactEveryNMutations
     // Drive (n - 1) ops on the first instance — one shy of the threshold.
     for i in 0..<(n - 1) {
-      let op = Op(kind: .upsert, key: "k\(i)", value: "v")
+      let op = Operation(kind: .upsert, key: "k\(i)", value: "v")
       replica.apply(op)
       let captured = replica.snapshot
       file.append(op, currentSnapshot: { captured })
@@ -329,7 +329,7 @@ struct JSONLRecordFileRoundTripTests {
     // Simulate a "restart": construct a fresh instance against the same URLs.
     let snapshotURL = dir.appendingPathComponent("snapshot.json")
     let logURL = dir.appendingPathComponent("log.jsonl")
-    let secondInstance = JSONLRecordFile<Snapshot, Op>(
+    let secondInstance = JSONLRecordFile<Snapshot, Operation>(
       snapshotURL: snapshotURL, logURL: logURL, ioQueue: queue,
       logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile-rt-2")
     )
@@ -339,7 +339,7 @@ struct JSONLRecordFileRoundTripTests {
 
     // First append on the fresh instance must NOT compact — its counter starts at 0,
     // not at (n-1).
-    let firstAfterRestart = Op(kind: .upsert, key: "post-0", value: "v")
+    let firstAfterRestart = Operation(kind: .upsert, key: "post-0", value: "v")
     replica.apply(firstAfterRestart)
     let captured = replica.snapshot
     secondInstance.append(firstAfterRestart, currentSnapshot: { captured })
@@ -362,7 +362,7 @@ struct JSONLRecordFileRoundTripTests {
 
     // Plant some data.
     for i in 0..<10 {
-      let op = Op(kind: .upsert, key: "k\(i)", value: "v\(i)")
+      let op = Operation(kind: .upsert, key: "k\(i)", value: "v\(i)")
       replica.apply(op)
       let captured = replica.snapshot
       file.append(op, currentSnapshot: { captured })
@@ -402,16 +402,16 @@ struct JSONLRecordFileRoundTripTests {
     let replica = Replica()
 
     var rng = SeededRNG(seed: 42)
-    var ops: [Op] = []
+    var ops: [Operation] = []
     for i in 0..<500 {
       let key = "k\(rng.next() % 30)"
       let action = rng.next() % 5
-      let op: Op
+      let op: Operation
       switch action {
       case 0:
-        op = Op(kind: .delete, key: key, value: nil)
+        op = Operation(kind: .delete, key: key, value: nil)
       default:
-        op = Op(kind: .upsert, key: key, value: "v-\(i)")
+        op = Operation(kind: .upsert, key: key, value: "v-\(i)")
       }
       ops.append(op)
     }

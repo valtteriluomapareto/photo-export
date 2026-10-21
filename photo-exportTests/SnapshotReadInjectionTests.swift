@@ -82,7 +82,8 @@ struct SnapshotReadInjectionTests {
     let file = JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>(
       snapshotURL: snapshotURL, logURL: logURL,
       ioQueue: DispatchQueue(label: "SnapshotReadInjection"),
-      logger: Logger(subsystem: TestLogging.subsystem, category: "SnapshotReadInjection"), logIO: io)
+      logger: Logger(subsystem: TestLogging.subsystem, category: "SnapshotReadInjection"), logIO: io
+    )
 
     let failed = file.load()
     #expect(failed.ioFailure is SnapshotReadError)

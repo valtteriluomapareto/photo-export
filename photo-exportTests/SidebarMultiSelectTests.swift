@@ -192,7 +192,8 @@ struct SidebarMultiSelectTests {
     #expect(h.manager.totalJobsEnqueued == 3)
 
     #expect(h.manager.pendingJobs.count == 3)
-    #expect(Set(h.manager.pendingJobs.map(\.assetLocalIdentifier)) == ["y26m3-a", "y26m7-a", "y24m5-a"])
+    #expect(
+      Set(h.manager.pendingJobs.map(\.assetLocalIdentifier)) == ["y26m3-a", "y26m7-a", "y24m5-a"])
     #expect(Set(h.manager.pendingJobs.map { $0.placement.kind }) == [.timeline])
   }
 
@@ -370,7 +371,9 @@ struct SidebarMultiSelectTests {
 
   /// Folder + explicit album in the selection set deduplicate at dispatch time:
   /// the folder's descendant album appears exactly once on the queue.
-  @Test(.timeLimit(.minutes(1))) func collectionsSelectionExpandsFoldersAndDedupesAlbums() async throws {
+  @Test(.timeLimit(.minutes(1))) func collectionsSelectionExpandsFoldersAndDedupesAlbums()
+    async throws
+  {
     let h = makeHarness()
     defer { h.cleanup() }
 

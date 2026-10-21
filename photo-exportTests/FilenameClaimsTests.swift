@@ -44,7 +44,8 @@ struct FilenameClaimsTests {
     ]
     #expect(claims.count("IMG.JPG", in: "f", excluding: own.prefix(1)) == 1)
     #expect(claims.count("IMG.JPG", in: "f", excluding: own) == 1)
-    #expect(claims.count("IMG.JPG", in: "f", excluding: own + [(filename: "Img.jpg", folder: "f")]) == 0)
+    #expect(
+      claims.count("IMG.JPG", in: "f", excluding: own + [(filename: "Img.jpg", folder: "f")]) == 0)
     #expect(claims.count("IMG.JPG", in: "g", excluding: own) == 0)
   }
 

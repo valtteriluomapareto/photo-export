@@ -66,7 +66,10 @@ struct ReuseSourceCopyPathTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, _, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "shared-asset")
     photoLib.assetsByYearMonth["2025-2"] = [asset]
@@ -94,7 +97,8 @@ struct ReuseSourceCopyPathTests {
     #expect(copyCalls.first?.from.lastPathComponent == "IMG.HEIC")
 
     // Verify the favorites file actually landed.
-    let favoritesDir = try dest.urlForRelativeDirectory("Collections/Favorites/", createIfNeeded: false)
+    let favoritesDir = try dest.urlForRelativeDirectory(
+      "Collections/Favorites/", createIfNeeded: false)
     let favoritesFile = favoritesDir.appendingPathComponent("IMG.HEIC")
     #expect(FileManager.default.fileExists(atPath: favoritesFile.path))
   }
@@ -105,7 +109,10 @@ struct ReuseSourceCopyPathTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, _, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "asset-1")
     photoLib.assetsByYearMonth["2025-3"] = [asset]
@@ -135,7 +142,8 @@ struct ReuseSourceCopyPathTests {
 
     // Timeline file landed.
     let timelineDir = try dest.urlForRelativeDirectory("2025/03/", createIfNeeded: false)
-    #expect(FileManager.default.fileExists(atPath: timelineDir.appendingPathComponent("IMG.HEIC").path))
+    #expect(
+      FileManager.default.fileExists(atPath: timelineDir.appendingPathComponent("IMG.HEIC").path))
   }
 
   // MARK: - Source missing → PhotoKit fallback
@@ -147,7 +155,10 @@ struct ReuseSourceCopyPathTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, _, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "ghost-asset")
     photoLib.favoritesAssets = [asset]
@@ -176,7 +187,10 @@ struct ReuseSourceCopyPathTests {
     let (
       manager, photoLib, dest, writer, fileSystem, _, _, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "fresh")
     photoLib.assetsByYearMonth["2025-5"] = [asset]

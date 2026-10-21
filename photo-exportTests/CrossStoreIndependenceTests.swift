@@ -69,7 +69,10 @@ struct CrossStoreIndependenceTests {
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "shared-asset", year: 2025, month: 5)
     photoLib.favoritesAssets = [asset]
@@ -101,7 +104,10 @@ struct CrossStoreIndependenceTests {
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     let asset = makeAsset(id: "shared-asset", year: 2025, month: 7)
     photoLib.assetsByYearMonth["2025-7"] = [asset]
@@ -184,7 +190,8 @@ struct CrossStoreIndependenceTests {
       #expect(timelineStore.exportInfo(assetId: asset.id)?.variants[.original] == nil)
       #expect(collectionStore.exportInfo(assetId: asset.id, placement: favorites) == control)
       // Placement equality is ID-only; inspect the actual stored metadata at each boundary.
-      for placements in [placementsBeforeCancel, placementsAfterCancel, collectionStore.placements] {
+      for placements in [placementsBeforeCancel, placementsAfterCancel, collectionStore.placements]
+      {
         #expect(Set(placements.keys) == [favorites.id])
         let stored = try #require(placements[favorites.id])
         #expect(stored.id == controlPlacement.id)
@@ -273,7 +280,10 @@ struct CrossStoreIndependenceTests {
     let (
       manager, photoLib, dest, writer, _, _, collectionStore, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     // Force the collection store into .failed by writing a corrupt snapshot file at its
     // expected path and re-configuring.
@@ -307,7 +317,10 @@ struct CrossStoreIndependenceTests {
     let (
       manager, photoLib, dest, writer, _, timelineStore, _, storeRoot
     ) = try makeManager()
-    defer { try? FileManager.default.removeItem(at: storeRoot); dest.cleanup() }
+    defer {
+      try? FileManager.default.removeItem(at: storeRoot)
+      dest.cleanup()
+    }
 
     // Force the timeline store into .failed.
     let timelineDir = storeRoot.appendingPathComponent("test", isDirectory: true)

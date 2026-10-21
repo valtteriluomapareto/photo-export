@@ -5,626 +5,632 @@ import Testing
 
 @MainActor
 struct ExportRecordStoreTests {
-    @Test func testLoadEmptyStore() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destA")
-        #expect(store.recordsById.isEmpty)
+  @Test func testLoadEmptyStore() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destA")
+    #expect(store.recordsById.isEmpty)
+  }
+
+  @Test func testUpsertAndQuery() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destA")
+    let id = "asset-1"
+    store.markExported(
+      assetId: id, year: 2025, month: 2, relPath: "2025/02/", filename: "IMG_0001.JPG",
+      exportedAt: Date())
+    store.flushForTesting()
+    #expect(store.isExported(assetId: id))
+    let info = store.exportInfo(assetId: id)
+    #expect(info?.variants[.original]?.filename == "IMG_0001.JPG")
+    #expect(info?.year == 2025)
+    #expect(info?.month == 2)
+  }
+
+  @Test func testMonthSummary() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destA")
+    store.markExported(
+      assetId: "a1", year: 2025, month: 1, relPath: "2025/01/", filename: "A.jpg",
+      exportedAt: Date())
+    store.markExported(
+      assetId: "a2", year: 2025, month: 1, relPath: "2025/01/", filename: "B.jpg",
+      exportedAt: Date())
+    store.markFailed(assetId: "a3", error: "disk full", at: Date())  // wrong year/month defaults
+    store.flushForTesting()
+    let s1 = store.monthSummary(year: 2025, month: 1, totalAssets: 5)
+    #expect(s1.exportedCount == 2)
+    #expect(s1.totalCount == 5)
+    #expect(s1.status == .partial)
+    let s2 = store.monthSummary(year: 2025, month: 2, totalAssets: 3)
+    #expect(s2.exportedCount == 0)
+    #expect(s2.status == .notExported)
+  }
+
+  @Test func testFailureUpsert() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destA")
+    let id = "asset-fail"
+    store.markFailed(assetId: id, error: "network", at: Date())
+    store.flushForTesting()
+    let info = store.exportInfo(assetId: id)
+    #expect(info?.variants[.original]?.status == .failed)
+    #expect(info?.variants[.original]?.lastError == "network")
+  }
+
+  @Test func testPersistenceAcrossLaunchesAndDeletion() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store1 = ExportRecordStore(baseDirectoryURL: tempDir)
+    store1.configure(for: "destA")
+    store1.markInProgress(
+      assetId: "x1", year: 2025, month: 3, relPath: "2025/03/", filename: nil)
+    store1.markExported(
+      assetId: "x2", year: 2025, month: 3, relPath: "2025/03/", filename: "X2.jpg",
+      exportedAt: Date())
+    for variant in (store1.exportInfo(assetId: "x1").map { Array($0.variants.keys) } ?? []) {
+      store1.removeVariant(assetId: "x1", variant: variant)
     }
+    store1.flushForTesting()
 
-    @Test func testUpsertAndQuery() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destA")
-        let id = "asset-1"
-        store.markExported(
-            assetId: id, year: 2025, month: 2, relPath: "2025/02/", filename: "IMG_0001.JPG",
-            exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.isExported(assetId: id))
-        let info = store.exportInfo(assetId: id)
-        #expect(info?.variants[.original]?.filename == "IMG_0001.JPG")
-        #expect(info?.year == 2025)
-        #expect(info?.month == 2)
+    // New instance, same root and destination id
+    let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
+    store2.configure(for: "destA")
+    #expect(store2.exportInfo(assetId: "x2")?.variants[.original]?.status == .done)
+    #expect(store2.exportInfo(assetId: "x1") == nil)
+  }
+
+  @Test func testInProgressToDoneTransition() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destA")
+    store.markInProgress(
+      assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "tmp.mov")
+    store.flushForTesting()
+    #expect(store.exportInfo(assetId: "t1")?.variants[.original]?.status == .inProgress)
+    store.markExported(
+      assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "final.mov",
+      exportedAt: Date())
+    store.flushForTesting()
+    let rec = store.exportInfo(assetId: "t1")
+    #expect(rec?.variants[.original]?.status == .done)
+    #expect(rec?.variants[.original]?.filename == "final.mov")
+  }
+
+  @Test func testCorruptedLogLineIsSkipped() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    let destId = "destA"
+    store.configure(for: destId)
+    store.markExported(
+      assetId: "ok", year: 2025, month: 5, relPath: "2025/05/", filename: "OK.jpg",
+      exportedAt: Date())
+    store.flushForTesting()
+    // Append an invalid line to the destination-specific log
+    let logURL = tempDir.appendingPathComponent(destId, isDirectory: true)
+      .appendingPathComponent("export-records.jsonl")
+    let invalid = Data("{ this is not valid json }\n".utf8)
+    try invalid.append(to: logURL)
+
+    // Reload - invalid line should be skipped, valid records preserved
+    let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
+    store2.configure(for: destId)
+    #expect(store2.exportInfo(assetId: "ok")?.variants[.original]?.status == .done)
+  }
+
+  @Test func testPerDestinationIsolation() throws {
+    let root = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: root)
+
+    store.configure(for: "destA")
+    store.markExported(
+      assetId: "a1", year: 2025, month: 6, relPath: "2025/06/", filename: "A1.jpg",
+      exportedAt: Date())
+    store.flushForTesting()
+    #expect(store.isExported(assetId: "a1"))
+
+    store.configure(for: "destB")
+    #expect(!store.isExported(assetId: "a1"))
+    store.markExported(
+      assetId: "b1", year: 2025, month: 6, relPath: "2025/06/", filename: "B1.jpg",
+      exportedAt: Date())
+    store.flushForTesting()
+    #expect(store.isExported(assetId: "b1"))
+
+    store.configure(for: "destA")
+    #expect(store.isExported(assetId: "a1"))
+    #expect(!store.isExported(assetId: "b1"))
+  }
+
+  @Test func testNilDestinationShowsEmpty() throws {
+    let root = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: root)
+
+    store.configure(for: "destA")
+    store.markExported(
+      assetId: "a1", year: 2025, month: 7, relPath: "2025/07/", filename: "A1.jpg",
+      exportedAt: Date())
+    store.flushForTesting()
+    #expect(store.isExported(assetId: "a1"))
+
+    store.configure(for: nil)
+    #expect(!store.isExported(assetId: "a1"))
+    #expect(store.monthSummary(year: 2025, month: 7, totalAssets: 1).exportedCount == 0)
+  }
+
+  // MARK: - Strict, asset-aware isExported
+
+  @Test func strictIsExportedDefaultModeUneditedAsset() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destStrict")
+    let asset = TestAssetFactory.makeAsset(id: "u", hasAdjustments: false)
+    // .original.done at any filename satisfies an unedited asset's requirement.
+    store.markVariantExported(
+      assetId: asset.id, variant: .original, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "vacation_orig.JPG", exportedAt: Date())
+    store.flushForTesting()
+    #expect(store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
+    #expect(
+      store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
+  }
+
+  @Test func strictIsExportedDefaultModeAdjustedAsset() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destStrict2")
+    let asset = TestAssetFactory.makeAsset(id: "a", hasAdjustments: true)
+    // Only .original.done — adjusted asset requires .edited under default mode.
+    store.markVariantExported(
+      assetId: asset.id, variant: .original, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+    store.flushForTesting()
+    #expect(!store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
+
+    store.markVariantExported(
+      assetId: asset.id, variant: .edited, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001 (1).JPG", exportedAt: Date())
+    store.flushForTesting()
+    #expect(store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
+  }
+
+  @Test func strictIsExportedIncludeOriginalsAdjustedAssetRequiresBoth() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destStrict3")
+    let asset = TestAssetFactory.makeAsset(id: "a", hasAdjustments: true)
+    store.markVariantExported(
+      assetId: asset.id, variant: .edited, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+    store.flushForTesting()
+    #expect(
+      !store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
+
+    store.markVariantExported(
+      assetId: asset.id, variant: .original, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001_orig.JPG", exportedAt: Date())
+    store.flushForTesting()
+    #expect(
+      store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
+  }
+
+  /// Per-thumbnail badge and header summary use the same `isExported(asset:selection:livePhotosPaired:)`
+  /// overload. With the toggle on, a Live Photo whose `.original` is `.done` but
+  /// `.originalPairedVideo` is `.pending` must NOT be reported as exported — otherwise the grid
+  /// shows a green check while the header still reads partial. Pins the call-site contract that
+  /// MonthContentView's thumbnail grid forwards `livePhotosPaired`.
+  @Test func strictIsExportedLivePhotoPairedPendingNotComplete() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destLivePair")
+    let live = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
+    store.markVariantExported(
+      assetId: live.id, variant: .original, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001.HEIC", exportedAt: Date())
+    store.markVariantInProgress(
+      assetId: live.id, variant: .originalPairedVideo, year: 2025, month: 1,
+      relPath: "2025/01/", filename: nil)
+    store.flushForTesting()
+
+    // Toggle off → legacy behaviour: still-only is exported.
+    #expect(store.isExported(asset: live, selection: .edited, livePhotosPaired: false))
+    // Toggle on → paired video pending blocks completion.
+    #expect(!store.isExported(asset: live, selection: .edited, livePhotosPaired: true))
+
+    // Mark the paired video done → both modes agree.
+    store.markVariantExported(
+      assetId: live.id, variant: .originalPairedVideo, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001.MOV", exportedAt: Date())
+    store.flushForTesting()
+    #expect(store.isExported(asset: live, selection: .edited, livePhotosPaired: true))
+  }
+
+  // MARK: - Sidebar approximation: cap behaviour
+
+  @Test func sidebarSummaryCapsOriginalOnlyContributionAtUneditedCount() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destCap")
+    let now = Date()
+    // 10 records, all `.original.done` at natural stem (post-import case where the
+    // scanner couldn't tell same-extension edits apart from originals).
+    for i in 0..<10 {
+      store.markVariantExported(
+        assetId: "asset-\(i)", variant: .original, year: 2025, month: 5,
+        relPath: "2025/05/", filename: "IMG_\(i).JPG", exportedAt: now)
     }
+    store.flushForTesting()
 
-    @Test func testMonthSummary() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destA")
-        store.markExported(
-            assetId: "a1", year: 2025, month: 1, relPath: "2025/01/", filename: "A.jpg",
-            exportedAt: Date())
-        store.markExported(
-            assetId: "a2", year: 2025, month: 1, relPath: "2025/01/", filename: "B.jpg",
-            exportedAt: Date())
-        store.markFailed(assetId: "a3", error: "disk full", at: Date())  // wrong year/month defaults
-        store.flushForTesting()
-        let s1 = store.monthSummary(year: 2025, month: 1, totalAssets: 5)
-        #expect(s1.exportedCount == 2)
-        #expect(s1.totalCount == 5)
-        #expect(s1.status == .partial)
-        let s2 = store.monthSummary(year: 2025, month: 2, totalAssets: 3)
-        #expect(s2.exportedCount == 0)
-        #expect(s2.status == .notExported)
+    // 30 of 100 are adjusted; the cap pins original-only contribution at 70.
+    // editedDone is 0; exported = 0 + min(10, 70) = 10.
+    let summary = store.sidebarSummary(
+      year: 2025, month: 5, totalCount: 100, adjustedCount: 30,
+      selection: .edited, livePhotosPaired: false)
+    #expect(summary?.exportedCount == 10)
+  }
+
+  @Test func sidebarSummaryReturnsNilWhileAdjustedCountLoading() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destLoading")
+    let summary = store.sidebarSummary(
+      year: 2025, month: 5, totalCount: 100, adjustedCount: nil,
+      selection: .edited, livePhotosPaired: false)
+    #expect(summary == nil)
+  }
+
+  /// R2-6: documented mixed-partial overcount limitation. 10 assets, 5 currently
+  /// adjusted; 3 unedited originals exported plus 5 same-extension imports
+  /// mis-recorded as natural-stem `.original.done`. Asset-aware truth = 3, but the
+  /// records-only formula returns 5 because `min(8, 5) = 5`. Asserting the documented
+  /// over-count protects the invariant: future "fix" attempts that drop the cap or
+  /// reach for asset descriptors must update this test deliberately.
+  @Test func sidebarSummaryDocumentedMixedPartialOvercount() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destMixed")
+    let now = Date()
+    // 8 records, all `.original.done` at natural stem. 3 belong to unedited assets;
+    // 5 are same-extension edits mis-classified by an earlier import.
+    for i in 0..<8 {
+      store.markVariantExported(
+        assetId: "asset-\(i)", variant: .original, year: 2025, month: 6,
+        relPath: "2025/06/", filename: "IMG_\(i).JPG", exportedAt: now)
     }
+    store.flushForTesting()
 
-    @Test func testFailureUpsert() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destA")
-        let id = "asset-fail"
-        store.markFailed(assetId: id, error: "network", at: Date())
-        store.flushForTesting()
-        let info = store.exportInfo(assetId: id)
-        #expect(info?.variants[.original]?.status == .failed)
-        #expect(info?.variants[.original]?.lastError == "network")
-    }
+    // 10 assets total, 5 adjusted → uneditedCount = 5. origOnlyAtStem = 8.
+    // exported = 0 (editedDone) + min(8, 5) = 5. Asset-aware truth would be 3.
+    let summary = store.sidebarSummary(
+      year: 2025, month: 6, totalCount: 10, adjustedCount: 5,
+      selection: .edited, livePhotosPaired: false)
+    #expect(summary?.exportedCount == 5)
+  }
 
-    @Test func testPersistenceAcrossLaunchesAndDeletion() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store1 = ExportRecordStore(baseDirectoryURL: tempDir)
-        store1.configure(for: "destA")
-        store1.markInProgress(
-            assetId: "x1", year: 2025, month: 3, relPath: "2025/03/", filename: nil)
-        store1.markExported(
-            assetId: "x2", year: 2025, month: 3, relPath: "2025/03/", filename: "X2.jpg",
-            exportedAt: Date())
-        for variant in (store1.exportInfo(assetId: "x1").map { Array($0.variants.keys) } ?? []) {
-          store1.removeVariant(assetId: "x1", variant: variant)
-        }
-        store1.flushForTesting()
+  /// R2-7: documented `vacation_orig.JPG` undercount. The shape-only `isOrigCompanion`
+  /// excludes a record for an unedited asset whose actual filename ends with `_orig`
+  /// from `origOnlyAtStem`, so the sidebar under-counts by 1. Asserting the documented
+  /// under-count rather than the asset-aware truth — the asset-aware path remains
+  /// correct via `MonthContentView.exportSummaryView`.
+  @Test func sidebarSummaryUnderCountsForUserOrigFilename() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destUserOrig")
+    store.markVariantExported(
+      assetId: "user-orig", variant: .original, year: 2025, month: 7,
+      relPath: "2025/07/", filename: "vacation_orig.JPG", exportedAt: Date())
+    store.flushForTesting()
 
-        // New instance, same root and destination id
-        let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
-        store2.configure(for: "destA")
-        #expect(store2.exportInfo(assetId: "x2")?.variants[.original]?.status == .done)
-        #expect(store2.exportInfo(assetId: "x1") == nil)
-    }
+    // 1 asset, 0 adjusted → uneditedCount = 1. origOnlyAtStem excludes the record
+    // because `vacation_orig.JPG` matches `isOrigCompanion` shape-only.
+    let summary = store.sidebarSummary(
+      year: 2025, month: 7, totalCount: 1, adjustedCount: 0,
+      selection: .edited, livePhotosPaired: false)
+    #expect(summary?.exportedCount == 0)  // Documented under-count.
+    #expect(summary?.status == .notExported)
+  }
 
-    @Test func testInProgressToDoneTransition() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destA")
-        store.markInProgress(
-            assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "tmp.mov")
-        store.flushForTesting()
-        #expect(store.exportInfo(assetId: "t1")?.variants[.original]?.status == .inProgress)
-        store.markExported(
-            assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "final.mov",
-            exportedAt: Date())
-        store.flushForTesting()
-        let rec = store.exportInfo(assetId: "t1")
-        #expect(rec?.variants[.original]?.status == .done)
-        #expect(rec?.variants[.original]?.filename == "final.mov")
-    }
+  /// R2-8: year-scope sidebar aggregation. Sums per-month sidebarSummary results,
+  /// skips months with zero assets, propagates nil from any month whose
+  /// adjustedCount hasn't loaded.
+  @Test func sidebarYearExportedCountAggregatesAcrossMonths() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destYear")
+    let now = Date()
+    // March: 2 unedited assets, both exported.
+    store.markVariantExported(
+      assetId: "m3-a", variant: .original, year: 2025, month: 3,
+      relPath: "2025/03/", filename: "M3A.JPG", exportedAt: now)
+    store.markVariantExported(
+      assetId: "m3-b", variant: .original, year: 2025, month: 3,
+      relPath: "2025/03/", filename: "M3B.JPG", exportedAt: now)
+    // July: 1 adjusted asset, edit done.
+    store.markVariantExported(
+      assetId: "m7-a", variant: .edited, year: 2025, month: 7,
+      relPath: "2025/07/", filename: "M7A.JPG", exportedAt: now)
+    store.flushForTesting()
 
-    @Test func testCorruptedLogLineIsSkipped() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        let destId = "destA"
-        store.configure(for: destId)
-        store.markExported(
-            assetId: "ok", year: 2025, month: 5, relPath: "2025/05/", filename: "OK.jpg",
-            exportedAt: Date())
-        store.flushForTesting()
-        // Append an invalid line to the destination-specific log
-        let logURL = tempDir.appendingPathComponent(destId, isDirectory: true)
-            .appendingPathComponent("export-records.jsonl")
-        let invalid = "{ this is not valid json }\n".data(using: .utf8)!
-        try invalid.append(to: logURL)
+    let totals = [3: 2, 7: 1]
+    let adjusted: [Int: Int?] = [3: 0, 7: 1]
+    let count = store.sidebarYearExportedCount(
+      year: 2025,
+      totalCountsByMonth: totals,
+      adjustedCountsByMonth: adjusted,
+      selection: .edited, livePhotosPaired: false)
+    #expect(count == 3)
 
-        // Reload - invalid line should be skipped, valid records preserved
-        let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
-        store2.configure(for: destId)
-        #expect(store2.exportInfo(assetId: "ok")?.variants[.original]?.status == .done)
-    }
+    // A month whose adjustedCount is still loading contributes 0 to the total —
+    // the YearRow suppresses the badge while any populated month is nil so the
+    // user never sees this partial sum.
+    let adjustedLoading: [Int: Int?] = [3: nil, 7: 1]
+    let countWithLoading = store.sidebarYearExportedCount(
+      year: 2025,
+      totalCountsByMonth: totals,
+      adjustedCountsByMonth: adjustedLoading,
+      selection: .edited, livePhotosPaired: false)
+    #expect(countWithLoading == 1)
+  }
 
-    @Test func testPerDestinationIsolation() throws {
-        let root = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: root)
+  /// Issue #49: with the paired-video toggle off, `sidebarSummary` returns the legacy
+  /// formula's numbers unchanged. A Live Photo with `.original.done` and
+  /// `.originalPairedVideo.pending` reads as 1 of 1 exported under `.edited`. Pins
+  /// the no-regression guarantee for libraries that haven't opted in.
+  @Test func sidebarSummaryLivePhotosPairedOff_unchangedByPendingPairedVideo() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destPairOff")
+    store.markVariantExported(
+      assetId: "live", variant: .original, year: 2025, month: 8,
+      relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
+    store.markVariantInProgress(
+      assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
+      relPath: "2025/08/", filename: nil)
+    store.flushForTesting()
 
-        store.configure(for: "destA")
-        store.markExported(
-            assetId: "a1", year: 2025, month: 6, relPath: "2025/06/", filename: "A1.jpg",
-            exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.isExported(assetId: "a1"))
+    let summary = store.sidebarSummary(
+      year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+      selection: .edited, livePhotosPaired: false)
+    #expect(summary?.exportedCount == 1)
+    #expect(summary?.status == .complete)
+  }
 
-        store.configure(for: "destB")
-        #expect(!store.isExported(assetId: "a1"))
-        store.markExported(
-            assetId: "b1", year: 2025, month: 6, relPath: "2025/06/", filename: "B1.jpg",
-            exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.isExported(assetId: "b1"))
+  /// Issue #49: with the toggle on, a Live Photo whose `.original` landed but whose
+  /// `.originalPairedVideo` is still pending must NOT count as exported. The sidebar
+  /// must agree with the asset-aware `isExported(asset:selection:livePhotosPaired:)`.
+  @Test func sidebarSummaryLivePhotosPairedOn_subtractsPendingPairedVideo() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destPairOn")
+    store.markVariantExported(
+      assetId: "live", variant: .original, year: 2025, month: 8,
+      relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
+    store.markVariantInProgress(
+      assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
+      relPath: "2025/08/", filename: nil)
+    store.flushForTesting()
 
-        store.configure(for: "destA")
-        #expect(store.isExported(assetId: "a1"))
-        #expect(!store.isExported(assetId: "b1"))
-    }
+    let summary = store.sidebarSummary(
+      year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+      selection: .edited, livePhotosPaired: true)
+    #expect(summary?.exportedCount == 0)
+    #expect(summary?.status == .notExported)
 
-    @Test func testNilDestinationShowsEmpty() throws {
-        let root = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: root)
+    // Marking the paired video done brings the count up to 1.
+    store.markVariantExported(
+      assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
+      relPath: "2025/08/", filename: "IMG_0001.MOV", exportedAt: Date())
+    store.flushForTesting()
+    let done = store.sidebarSummary(
+      year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+      selection: .edited, livePhotosPaired: true)
+    #expect(done?.exportedCount == 1)
+    #expect(done?.status == .complete)
+  }
 
-        store.configure(for: "destA")
-        store.markExported(
-            assetId: "a1", year: 2025, month: 7, relPath: "2025/07/", filename: "A1.jpg",
-            exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.isExported(assetId: "a1"))
+  /// Long-term fix for the iCloud edge case: a Live Photo whose `.original` landed
+  /// but whose `.originalPairedVideo` is `.failed` with the
+  /// `pairedVideoUnavailableMessage` sentinel reads as fully exported under the
+  /// toggle. Photos has no motion file to give; the still is on disk; the asset is
+  /// as covered as it can be. Without this, libraries with iCloud-stuck Live
+  /// Photos pegged the sidebar below 100% permanently — see the deferred plan in
+  /// `Section A` of the project notes.
+  @Test func sidebarSummaryLivePhotosPairedOn_pairedVideoUnavailableSentinel_isCovered() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destPairUnavail")
+    store.markVariantExported(
+      assetId: "live", variant: .original, year: 2025, month: 8,
+      relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
+    store.markVariantFailed(
+      assetId: "live", variant: .originalPairedVideo,
+      error: ExportVariantRecovery.pairedVideoUnavailableMessage, reason: .pairedVideoUnavailable,
+      at: Date())
+    store.flushForTesting()
 
-        store.configure(for: nil)
-        #expect(!store.isExported(assetId: "a1"))
-        #expect(store.monthSummary(year: 2025, month: 7, totalAssets: 1).exportedCount == 0)
-    }
+    let summary = store.sidebarSummary(
+      year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+      selection: .edited, livePhotosPaired: true)
+    #expect(summary?.exportedCount == 1)
+    #expect(summary?.status == .complete)
+  }
 
-    // MARK: - Strict, asset-aware isExported
+  /// Sentinel specificity: a paired-video `.failed` with a generic message (or the
+  /// legacy "No exportable resource" string before the sentinel rename) must NOT
+  /// be treated as covered. The sidebar still subtracts the record so it reads as
+  /// incomplete. Mirrors the `ExportCompletionPolicyTests` regression guard for
+  /// the same case at the policy level.
+  @Test func sidebarSummaryLivePhotosPairedOn_genericPairedVideoFailure_isNotCovered() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destPairGenericFail")
+    store.markVariantExported(
+      assetId: "live", variant: .original, year: 2025, month: 8,
+      relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
+    store.markVariantFailed(
+      assetId: "live", variant: .originalPairedVideo,
+      error: "disk full", at: Date())
+    store.flushForTesting()
 
-    @Test func strictIsExportedDefaultModeUneditedAsset() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destStrict")
-        let asset = TestAssetFactory.makeAsset(id: "u", hasAdjustments: false)
-        // .original.done at any filename satisfies an unedited asset's requirement.
-        store.markVariantExported(
-            assetId: asset.id, variant: .original, year: 2025, month: 1,
-            relPath: "2025/01/", filename: "vacation_orig.JPG", exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
-        #expect(store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
-    }
+    let summary = store.sidebarSummary(
+      year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
+      selection: .edited, livePhotosPaired: true)
+    #expect(summary?.exportedCount == 0)
+  }
 
-    @Test func strictIsExportedDefaultModeAdjustedAsset() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destStrict2")
-        let asset = TestAssetFactory.makeAsset(id: "a", hasAdjustments: true)
-        // Only .original.done — adjusted asset requires .edited under default mode.
-        store.markVariantExported(
-            assetId: asset.id, variant: .original, year: 2025, month: 1,
-            relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
-        store.flushForTesting()
-        #expect(!store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
+  /// Issue #49: the `editedWithOriginals` formula uses `bothVariantsDone` plus the
+  /// natural-stem cap; the paired-video subtraction applies there too. An edited Live
+  /// Photo with `.original.done` + `.edited.done` + `.editedPairedVideo.pending` reads
+  /// as not yet exported under the toggle.
+  @Test func sidebarSummaryIncludeOriginalsLivePhotosPairedOn_subtractsPendingPairedVideo() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destPairOnIncl")
+    let now = Date()
+    store.markVariantExported(
+      assetId: "live", variant: .original, year: 2025, month: 9,
+      relPath: "2025/09/", filename: "IMG_0001_orig.HEIC", exportedAt: now)
+    store.markVariantExported(
+      assetId: "live", variant: .edited, year: 2025, month: 9,
+      relPath: "2025/09/", filename: "IMG_0001.HEIC", exportedAt: now)
+    store.markVariantInProgress(
+      assetId: "live", variant: .editedPairedVideo, year: 2025, month: 9,
+      relPath: "2025/09/", filename: nil)
+    store.flushForTesting()
 
-        store.markVariantExported(
-            assetId: asset.id, variant: .edited, year: 2025, month: 1,
-            relPath: "2025/01/", filename: "IMG_0001 (1).JPG", exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
-    }
+    let summary = store.sidebarSummary(
+      year: 2025, month: 9, totalCount: 1, adjustedCount: 1,
+      selection: .editedWithOriginals, livePhotosPaired: true)
+    #expect(summary?.exportedCount == 0)
+  }
 
-    @Test func strictIsExportedIncludeOriginalsAdjustedAssetRequiresBoth() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destStrict3")
-        let asset = TestAssetFactory.makeAsset(id: "a", hasAdjustments: true)
-        store.markVariantExported(
-            assetId: asset.id, variant: .edited, year: 2025, month: 1,
-            relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
-        store.flushForTesting()
-        #expect(!store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
+  /// Issue #49: year-scope roll-up forwards the flag.
+  @Test func sidebarYearExportedCountLivePhotosPairedOn_subtractsPerMonth() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destPairYear")
+    let now = Date()
+    // March: 1 unedited asset, still exported, paired video pending.
+    store.markVariantExported(
+      assetId: "m3", variant: .original, year: 2025, month: 3,
+      relPath: "2025/03/", filename: "M3.HEIC", exportedAt: now)
+    store.markVariantInProgress(
+      assetId: "m3", variant: .originalPairedVideo, year: 2025, month: 3,
+      relPath: "2025/03/", filename: nil)
+    // April: 1 unedited still without any paired-video record (a plain still).
+    store.markVariantExported(
+      assetId: "m4", variant: .original, year: 2025, month: 4,
+      relPath: "2025/04/", filename: "M4.JPG", exportedAt: now)
+    store.flushForTesting()
 
-        store.markVariantExported(
-            assetId: asset.id, variant: .original, year: 2025, month: 1,
-            relPath: "2025/01/", filename: "IMG_0001_orig.JPG", exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
-    }
+    let totals = [3: 1, 4: 1]
+    let adjusted: [Int: Int?] = [3: 0, 4: 0]
 
-    /// Per-thumbnail badge and header summary use the same `isExported(asset:selection:livePhotosPaired:)`
-    /// overload. With the toggle on, a Live Photo whose `.original` is `.done` but
-    /// `.originalPairedVideo` is `.pending` must NOT be reported as exported — otherwise the grid
-    /// shows a green check while the header still reads partial. Pins the call-site contract that
-    /// MonthContentView's thumbnail grid forwards `livePhotosPaired`.
-    @Test func strictIsExportedLivePhotoPairedPendingNotComplete() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destLivePair")
-        let live = TestAssetFactory.makeAsset(id: "live", isLivePhoto: true)
-        store.markVariantExported(
-            assetId: live.id, variant: .original, year: 2025, month: 1,
-            relPath: "2025/01/", filename: "IMG_0001.HEIC", exportedAt: Date())
-        store.markVariantInProgress(
-            assetId: live.id, variant: .originalPairedVideo, year: 2025, month: 1,
-            relPath: "2025/01/", filename: nil)
-        store.flushForTesting()
+    // Toggle off: both months count, total = 2.
+    let off = store.sidebarYearExportedCount(
+      year: 2025, totalCountsByMonth: totals,
+      adjustedCountsByMonth: adjusted, selection: .edited, livePhotosPaired: false)
+    #expect(off == 2)
 
-        // Toggle off → legacy behaviour: still-only is exported.
-        #expect(store.isExported(asset: live, selection: .edited, livePhotosPaired: false))
-        // Toggle on → paired video pending blocks completion.
-        #expect(!store.isExported(asset: live, selection: .edited, livePhotosPaired: true))
+    // Toggle on: March's paired-video pending drops it from the count.
+    let on = store.sidebarYearExportedCount(
+      year: 2025, totalCountsByMonth: totals,
+      adjustedCountsByMonth: adjusted, selection: .edited, livePhotosPaired: true)
+    #expect(on == 1)
+  }
 
-        // Mark the paired video done → both modes agree.
-        store.markVariantExported(
-            assetId: live.id, variant: .originalPairedVideo, year: 2025, month: 1,
-            relPath: "2025/01/", filename: "IMG_0001.MOV", exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.isExported(asset: live, selection: .edited, livePhotosPaired: true))
-    }
+  /// R2-10: explicit standalone case for an unedited asset under
+  /// `editedWithOriginals`. The asset has only `.original.done`; that's all that's
+  /// required for an unedited asset under either selection.
+  @Test func strictIsExportedIncludeOriginalsUneditedAssetSatisfiedByOriginalDone() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destUnedited")
+    let asset = TestAssetFactory.makeAsset(id: "u", hasAdjustments: false)
+    store.markVariantExported(
+      assetId: asset.id, variant: .original, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+    store.flushForTesting()
+    #expect(
+      store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
+  }
 
-    // MARK: - Sidebar approximation: cap behaviour
+  @Test func testDoneCountTracksTransitionsAndMoves() throws {
+    let tempDir = TestScratch.directory("ExportRecordStore")
+    let store = ExportRecordStore(baseDirectoryURL: tempDir)
+    store.configure(for: "destD")
+    // Export to month 9
+    store.markExported(
+      assetId: "t", year: 2025, month: 9, relPath: "2025/09/", filename: "A.jpg",
+      exportedAt: Date())
+    store.flushForTesting()
+    #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 1)
+    // Mark failed -> should decrement month 9
+    store.markFailed(assetId: "t", error: "oops", at: Date())
+    store.flushForTesting()
+    #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 0)
+    // Re-export same id to month 10 -> counts move
+    store.markExported(
+      assetId: "t", year: 2025, month: 10, relPath: "2025/10/", filename: "B.jpg",
+      exportedAt: Date())
+    store.flushForTesting()
+    #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 0)
+    #expect(store.monthSummary(year: 2025, month: 10, totalAssets: 10).exportedCount == 1)
+  }
 
-    @Test func sidebarSummaryCapsOriginalOnlyContributionAtUneditedCount() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destCap")
-        let now = Date()
-        // 10 records, all `.original.done` at natural stem (post-import case where the
-        // scanner couldn't tell same-extension edits apart from originals).
-        for i in 0..<10 {
-            store.markVariantExported(
-                assetId: "asset-\(i)", variant: .original, year: 2025, month: 5,
-                relPath: "2025/05/", filename: "IMG_\(i).JPG", exportedAt: now)
-        }
-        store.flushForTesting()
+  // MARK: - ExportVariantRecord.subfolder (issue #38)
 
-        // 30 of 100 are adjusted; the cap pins original-only contribution at 70.
-        // editedDone is 0; exported = 0 + min(10, 70) = 10.
-        let summary = store.sidebarSummary(
-            year: 2025, month: 5, totalCount: 100, adjustedCount: 30,
-            selection: .edited, livePhotosPaired: false)
-        #expect(summary?.exportedCount == 10)
-    }
+  /// Legacy snapshot JSON written before the `subfolder` field existed must
+  /// continue to decode, with `subfolder == nil`. Synthesized `Codable`
+  /// treats missing keys as nil for optionals — this test pins that
+  /// behaviour against a future custom-decoder regression.
+  @Test func variantRecordDecodesLegacySnapshotWithoutSubfolder() throws {
+    let legacyJSON = Data(
+      """
+      {
+        "filename": "IMG_0001.JPG",
+        "status": "done",
+        "exportDate": 759456000,
+        "lastError": null
+      }
+      """.utf8)
+    let decoder = JSONDecoder()
+    let decoded = try decoder.decode(ExportVariantRecord.self, from: legacyJSON)
+    #expect(decoded.filename == "IMG_0001.JPG")
+    #expect(decoded.status == .done)
+    #expect(decoded.subfolder == nil)
+  }
 
-    @Test func sidebarSummaryReturnsNilWhileAdjustedCountLoading() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destLoading")
-        let summary = store.sidebarSummary(
-            year: 2025, month: 5, totalCount: 100, adjustedCount: nil,
-            selection: .edited, livePhotosPaired: false)
-        #expect(summary == nil)
-    }
-
-    /// R2-6: documented mixed-partial overcount limitation. 10 assets, 5 currently
-    /// adjusted; 3 unedited originals exported plus 5 same-extension imports
-    /// mis-recorded as natural-stem `.original.done`. Asset-aware truth = 3, but the
-    /// records-only formula returns 5 because `min(8, 5) = 5`. Asserting the documented
-    /// over-count protects the invariant: future "fix" attempts that drop the cap or
-    /// reach for asset descriptors must update this test deliberately.
-    @Test func sidebarSummaryDocumentedMixedPartialOvercount() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destMixed")
-        let now = Date()
-        // 8 records, all `.original.done` at natural stem. 3 belong to unedited assets;
-        // 5 are same-extension edits mis-classified by an earlier import.
-        for i in 0..<8 {
-            store.markVariantExported(
-                assetId: "asset-\(i)", variant: .original, year: 2025, month: 6,
-                relPath: "2025/06/", filename: "IMG_\(i).JPG", exportedAt: now)
-        }
-        store.flushForTesting()
-
-        // 10 assets total, 5 adjusted → uneditedCount = 5. origOnlyAtStem = 8.
-        // exported = 0 (editedDone) + min(8, 5) = 5. Asset-aware truth would be 3.
-        let summary = store.sidebarSummary(
-            year: 2025, month: 6, totalCount: 10, adjustedCount: 5,
-            selection: .edited, livePhotosPaired: false)
-        #expect(summary?.exportedCount == 5)
-    }
-
-    /// R2-7: documented `vacation_orig.JPG` undercount. The shape-only `isOrigCompanion`
-    /// excludes a record for an unedited asset whose actual filename ends with `_orig`
-    /// from `origOnlyAtStem`, so the sidebar under-counts by 1. Asserting the documented
-    /// under-count rather than the asset-aware truth — the asset-aware path remains
-    /// correct via `MonthContentView.exportSummaryView`.
-    @Test func sidebarSummaryUnderCountsForUserOrigFilename() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destUserOrig")
-        store.markVariantExported(
-            assetId: "user-orig", variant: .original, year: 2025, month: 7,
-            relPath: "2025/07/", filename: "vacation_orig.JPG", exportedAt: Date())
-        store.flushForTesting()
-
-        // 1 asset, 0 adjusted → uneditedCount = 1. origOnlyAtStem excludes the record
-        // because `vacation_orig.JPG` matches `isOrigCompanion` shape-only.
-        let summary = store.sidebarSummary(
-            year: 2025, month: 7, totalCount: 1, adjustedCount: 0,
-            selection: .edited, livePhotosPaired: false)
-        #expect(summary?.exportedCount == 0)  // Documented under-count.
-        #expect(summary?.status == .notExported)
-    }
-
-    /// R2-8: year-scope sidebar aggregation. Sums per-month sidebarSummary results,
-    /// skips months with zero assets, propagates nil from any month whose
-    /// adjustedCount hasn't loaded.
-    @Test func sidebarYearExportedCountAggregatesAcrossMonths() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destYear")
-        let now = Date()
-        // March: 2 unedited assets, both exported.
-        store.markVariantExported(
-            assetId: "m3-a", variant: .original, year: 2025, month: 3,
-            relPath: "2025/03/", filename: "M3A.JPG", exportedAt: now)
-        store.markVariantExported(
-            assetId: "m3-b", variant: .original, year: 2025, month: 3,
-            relPath: "2025/03/", filename: "M3B.JPG", exportedAt: now)
-        // July: 1 adjusted asset, edit done.
-        store.markVariantExported(
-            assetId: "m7-a", variant: .edited, year: 2025, month: 7,
-            relPath: "2025/07/", filename: "M7A.JPG", exportedAt: now)
-        store.flushForTesting()
-
-        let totals = [3: 2, 7: 1]
-        let adjusted: [Int: Int?] = [3: 0, 7: 1]
-        let count = store.sidebarYearExportedCount(
-            year: 2025,
-            totalCountsByMonth: totals,
-            adjustedCountsByMonth: adjusted,
-            selection: .edited, livePhotosPaired: false)
-        #expect(count == 3)
-
-        // A month whose adjustedCount is still loading contributes 0 to the total —
-        // the YearRow suppresses the badge while any populated month is nil so the
-        // user never sees this partial sum.
-        let adjustedLoading: [Int: Int?] = [3: nil, 7: 1]
-        let countWithLoading = store.sidebarYearExportedCount(
-            year: 2025,
-            totalCountsByMonth: totals,
-            adjustedCountsByMonth: adjustedLoading,
-            selection: .edited, livePhotosPaired: false)
-        #expect(countWithLoading == 1)
-    }
-
-    /// Issue #49: with the paired-video toggle off, `sidebarSummary` returns the legacy
-    /// formula's numbers unchanged. A Live Photo with `.original.done` and
-    /// `.originalPairedVideo.pending` reads as 1 of 1 exported under `.edited`. Pins
-    /// the no-regression guarantee for libraries that haven't opted in.
-    @Test func sidebarSummaryLivePhotosPairedOff_unchangedByPendingPairedVideo() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destPairOff")
-        store.markVariantExported(
-            assetId: "live", variant: .original, year: 2025, month: 8,
-            relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
-        store.markVariantInProgress(
-            assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
-            relPath: "2025/08/", filename: nil)
-        store.flushForTesting()
-
-        let summary = store.sidebarSummary(
-            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
-            selection: .edited, livePhotosPaired: false)
-        #expect(summary?.exportedCount == 1)
-        #expect(summary?.status == .complete)
-    }
-
-    /// Issue #49: with the toggle on, a Live Photo whose `.original` landed but whose
-    /// `.originalPairedVideo` is still pending must NOT count as exported. The sidebar
-    /// must agree with the asset-aware `isExported(asset:selection:livePhotosPaired:)`.
-    @Test func sidebarSummaryLivePhotosPairedOn_subtractsPendingPairedVideo() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destPairOn")
-        store.markVariantExported(
-            assetId: "live", variant: .original, year: 2025, month: 8,
-            relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
-        store.markVariantInProgress(
-            assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
-            relPath: "2025/08/", filename: nil)
-        store.flushForTesting()
-
-        let summary = store.sidebarSummary(
-            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
-            selection: .edited, livePhotosPaired: true)
-        #expect(summary?.exportedCount == 0)
-        #expect(summary?.status == .notExported)
-
-        // Marking the paired video done brings the count up to 1.
-        store.markVariantExported(
-            assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
-            relPath: "2025/08/", filename: "IMG_0001.MOV", exportedAt: Date())
-        store.flushForTesting()
-        let done = store.sidebarSummary(
-            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
-            selection: .edited, livePhotosPaired: true)
-        #expect(done?.exportedCount == 1)
-        #expect(done?.status == .complete)
-    }
-
-    /// Long-term fix for the iCloud edge case: a Live Photo whose `.original` landed
-    /// but whose `.originalPairedVideo` is `.failed` with the
-    /// `pairedVideoUnavailableMessage` sentinel reads as fully exported under the
-    /// toggle. Photos has no motion file to give; the still is on disk; the asset is
-    /// as covered as it can be. Without this, libraries with iCloud-stuck Live
-    /// Photos pegged the sidebar below 100% permanently — see the deferred plan in
-    /// `Section A` of the project notes.
-    @Test func sidebarSummaryLivePhotosPairedOn_pairedVideoUnavailableSentinel_isCovered() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destPairUnavail")
-        store.markVariantExported(
-            assetId: "live", variant: .original, year: 2025, month: 8,
-            relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
-        store.markVariantFailed(
-            assetId: "live", variant: .originalPairedVideo,
-            error: ExportVariantRecovery.pairedVideoUnavailableMessage, reason: .pairedVideoUnavailable, at: Date())
-        store.flushForTesting()
-
-        let summary = store.sidebarSummary(
-            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
-            selection: .edited, livePhotosPaired: true)
-        #expect(summary?.exportedCount == 1)
-        #expect(summary?.status == .complete)
-    }
-
-    /// Sentinel specificity: a paired-video `.failed` with a generic message (or the
-    /// legacy "No exportable resource" string before the sentinel rename) must NOT
-    /// be treated as covered. The sidebar still subtracts the record so it reads as
-    /// incomplete. Mirrors the `ExportCompletionPolicyTests` regression guard for
-    /// the same case at the policy level.
-    @Test func sidebarSummaryLivePhotosPairedOn_genericPairedVideoFailure_isNotCovered() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destPairGenericFail")
-        store.markVariantExported(
-            assetId: "live", variant: .original, year: 2025, month: 8,
-            relPath: "2025/08/", filename: "IMG_0001.HEIC", exportedAt: Date())
-        store.markVariantFailed(
-            assetId: "live", variant: .originalPairedVideo,
-            error: "disk full", at: Date())
-        store.flushForTesting()
-
-        let summary = store.sidebarSummary(
-            year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
-            selection: .edited, livePhotosPaired: true)
-        #expect(summary?.exportedCount == 0)
-    }
-
-    /// Issue #49: the `editedWithOriginals` formula uses `bothVariantsDone` plus the
-    /// natural-stem cap; the paired-video subtraction applies there too. An edited Live
-    /// Photo with `.original.done` + `.edited.done` + `.editedPairedVideo.pending` reads
-    /// as not yet exported under the toggle.
-    @Test func sidebarSummaryIncludeOriginalsLivePhotosPairedOn_subtractsPendingPairedVideo() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destPairOnIncl")
-        let now = Date()
-        store.markVariantExported(
-            assetId: "live", variant: .original, year: 2025, month: 9,
-            relPath: "2025/09/", filename: "IMG_0001_orig.HEIC", exportedAt: now)
-        store.markVariantExported(
-            assetId: "live", variant: .edited, year: 2025, month: 9,
-            relPath: "2025/09/", filename: "IMG_0001.HEIC", exportedAt: now)
-        store.markVariantInProgress(
-            assetId: "live", variant: .editedPairedVideo, year: 2025, month: 9,
-            relPath: "2025/09/", filename: nil)
-        store.flushForTesting()
-
-        let summary = store.sidebarSummary(
-            year: 2025, month: 9, totalCount: 1, adjustedCount: 1,
-            selection: .editedWithOriginals, livePhotosPaired: true)
-        #expect(summary?.exportedCount == 0)
-    }
-
-    /// Issue #49: year-scope roll-up forwards the flag.
-    @Test func sidebarYearExportedCountLivePhotosPairedOn_subtractsPerMonth() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destPairYear")
-        let now = Date()
-        // March: 1 unedited asset, still exported, paired video pending.
-        store.markVariantExported(
-            assetId: "m3", variant: .original, year: 2025, month: 3,
-            relPath: "2025/03/", filename: "M3.HEIC", exportedAt: now)
-        store.markVariantInProgress(
-            assetId: "m3", variant: .originalPairedVideo, year: 2025, month: 3,
-            relPath: "2025/03/", filename: nil)
-        // April: 1 unedited still without any paired-video record (a plain still).
-        store.markVariantExported(
-            assetId: "m4", variant: .original, year: 2025, month: 4,
-            relPath: "2025/04/", filename: "M4.JPG", exportedAt: now)
-        store.flushForTesting()
-
-        let totals = [3: 1, 4: 1]
-        let adjusted: [Int: Int?] = [3: 0, 4: 0]
-
-        // Toggle off: both months count, total = 2.
-        let off = store.sidebarYearExportedCount(
-            year: 2025, totalCountsByMonth: totals,
-            adjustedCountsByMonth: adjusted, selection: .edited, livePhotosPaired: false)
-        #expect(off == 2)
-
-        // Toggle on: March's paired-video pending drops it from the count.
-        let on = store.sidebarYearExportedCount(
-            year: 2025, totalCountsByMonth: totals,
-            adjustedCountsByMonth: adjusted, selection: .edited, livePhotosPaired: true)
-        #expect(on == 1)
-    }
-
-    /// R2-10: explicit standalone case for an unedited asset under
-    /// `editedWithOriginals`. The asset has only `.original.done`; that's all that's
-    /// required for an unedited asset under either selection.
-    @Test func strictIsExportedIncludeOriginalsUneditedAssetSatisfiedByOriginalDone() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destUnedited")
-        let asset = TestAssetFactory.makeAsset(id: "u", hasAdjustments: false)
-        store.markVariantExported(
-            assetId: asset.id, variant: .original, year: 2025, month: 1,
-            relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
-    }
-
-    @Test func testDoneCountTracksTransitionsAndMoves() throws {
-        let tempDir = TestScratch.directory("ExportRecordStore")
-        let store = ExportRecordStore(baseDirectoryURL: tempDir)
-        store.configure(for: "destD")
-        // Export to month 9
-        store.markExported(
-            assetId: "t", year: 2025, month: 9, relPath: "2025/09/", filename: "A.jpg",
-            exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 1)
-        // Mark failed -> should decrement month 9
-        store.markFailed(assetId: "t", error: "oops", at: Date())
-        store.flushForTesting()
-        #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 0)
-        // Re-export same id to month 10 -> counts move
-        store.markExported(
-            assetId: "t", year: 2025, month: 10, relPath: "2025/10/", filename: "B.jpg",
-            exportedAt: Date())
-        store.flushForTesting()
-        #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 0)
-        #expect(store.monthSummary(year: 2025, month: 10, totalAssets: 10).exportedCount == 1)
-    }
-
-    // MARK: - ExportVariantRecord.subfolder (issue #38)
-
-    /// Legacy snapshot JSON written before the `subfolder` field existed must
-    /// continue to decode, with `subfolder == nil`. Synthesized `Codable`
-    /// treats missing keys as nil for optionals — this test pins that
-    /// behaviour against a future custom-decoder regression.
-    @Test func variantRecordDecodesLegacySnapshotWithoutSubfolder() throws {
-        let legacyJSON = """
-            {
-              "filename": "IMG_0001.JPG",
-              "status": "done",
-              "exportDate": 759456000,
-              "lastError": null
-            }
-            """.data(using: .utf8)!
-        let decoder = JSONDecoder()
-        let decoded = try decoder.decode(ExportVariantRecord.self, from: legacyJSON)
-        #expect(decoded.filename == "IMG_0001.JPG")
-        #expect(decoded.status == .done)
-        #expect(decoded.subfolder == nil)
-    }
-
-    /// Round-trip with `subfolder = "videos"` preserves the value across
-    /// encode + decode. Pins that the field flows through the same Codable
-    /// pipeline both `ExportRecord` (timeline) and `RecordBody` (collection)
-    /// use to wrap `ExportVariantRecord`.
-    @Test func variantRecordRoundTripPreservesSubfolder() throws {
-        let original = ExportVariantRecord(
-            filename: "IMG_0002.MOV",
-            status: .done,
-            exportDate: Date(timeIntervalSince1970: 759456000),
-            lastError: nil,
-            subfolder: "videos")
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(original)
-        let decoded = try JSONDecoder().decode(ExportVariantRecord.self, from: data)
-        #expect(decoded == original)
-        #expect(decoded.subfolder == "videos")
-    }
+  /// Round-trip with `subfolder = "videos"` preserves the value across
+  /// encode + decode. Pins that the field flows through the same Codable
+  /// pipeline both `ExportRecord` (timeline) and `RecordBody` (collection)
+  /// use to wrap `ExportVariantRecord`.
+  @Test func variantRecordRoundTripPreservesSubfolder() throws {
+    let original = ExportVariantRecord(
+      filename: "IMG_0002.MOV",
+      status: .done,
+      exportDate: Date(timeIntervalSince1970: 759456000),
+      lastError: nil,
+      subfolder: "videos")
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(original)
+    let decoded = try JSONDecoder().decode(ExportVariantRecord.self, from: data)
+    #expect(decoded == original)
+    #expect(decoded.subfolder == "videos")
+  }
 }
 
 extension Data {
-    fileprivate func append(to url: URL) throws {
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-        }
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: self)
-        try handle.synchronize()
+  fileprivate func append(to url: URL) throws {
+    if !FileManager.default.fileExists(atPath: url.path) {
+      FileManager.default.createFile(atPath: url.path, contents: nil)
     }
+    let handle = try FileHandle(forWritingTo: url)
+    defer { try? handle.close() }
+    try handle.seekToEnd()
+    try handle.write(contentsOf: self)
+    try handle.synchronize()
+  }
 }

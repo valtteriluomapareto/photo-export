@@ -9,7 +9,8 @@ import Testing
 struct CollectionPathComponentPolicyTests {
 
   @Test func asciiPassthrough() {
-    #expect(CollectionPathComponentPolicy.sanitizeComponent("Family Trip 2024") == "Family Trip 2024")
+    #expect(
+      CollectionPathComponentPolicy.sanitizeComponent("Family Trip 2024") == "Family Trip 2024")
     #expect(CollectionPathComponentPolicy.sanitizeComponent("simple") == "simple")
   }
 

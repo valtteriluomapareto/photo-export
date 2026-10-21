@@ -52,7 +52,8 @@ struct CollectionBulkImportTests {
     #expect(store.placements.count == 1)
     #expect(store.recordedVariantCount(of: [batch]) == 2)
     #expect(store.placements[placement.id]?.relativePath == placement.relativePath)
-    #expect(store.exportInfo(assetId: "a", placement: placement)?.variants[.original]?.status == .done)
+    #expect(
+      store.exportInfo(assetId: "a", placement: placement)?.variants[.original]?.status == .done)
     #expect(
       store.exportInfo(assetId: "v", placement: placement)?.variants[.original]?.subfolder
         == "videos")

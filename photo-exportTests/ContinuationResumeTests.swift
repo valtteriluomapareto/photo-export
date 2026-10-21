@@ -13,7 +13,9 @@ struct ContinuationResumeTests {
       for _ in 0..<callCount {
         group.addTask {
           let didResume = lock.withLock { (state: inout Bool) -> Bool in
-            let was = state; state = true; return !was
+            let was = state
+            state = true
+            return !was
           }
           if didResume {
             count.withLock { $0 += 1 }
@@ -44,20 +46,26 @@ struct ContinuationResumeTests {
     let isDegraded = true
     if !isDegraded {
       let didResume = lock.withLock { (state: inout Bool) -> Bool in
-        let was = state; state = true; return !was
+        let was = state
+        state = true
+        return !was
       }
       if didResume { resumeCount += 1 }
     }
 
     // Final callback — should resume
     let didResume = lock.withLock { (state: inout Bool) -> Bool in
-      let was = state; state = true; return !was
+      let was = state
+      state = true
+      return !was
     }
     if didResume { resumeCount += 1 }
 
     // Second final callback (shouldn't happen but guarding) — should NOT resume
     let didResume2 = lock.withLock { (state: inout Bool) -> Bool in
-      let was = state; state = true; return !was
+      let was = state
+      state = true
+      return !was
     }
     if didResume2 { resumeCount += 1 }
 
@@ -71,13 +79,17 @@ struct ContinuationResumeTests {
 
     // Error callback resumes first
     let didResume1 = lock.withLock { (state: inout Bool) -> Bool in
-      let was = state; state = true; return !was
+      let was = state
+      state = true
+      return !was
     }
     if didResume1 { resumeCount += 1 }
 
     // Final callback arrives late — should be blocked
     let didResume2 = lock.withLock { (state: inout Bool) -> Bool in
-      let was = state; state = true; return !was
+      let was = state
+      state = true
+      return !was
     }
     if didResume2 { resumeCount += 1 }
 
