@@ -161,7 +161,7 @@ struct RecordStoreObservationTests {
       }
     }
     func statePublisher(_ collection: Bool) -> AnyPublisher<RecordStoreState, Never> {
-      collection ? collections.$state.eraseToAnyPublisher() : timeline.$state.eraseToAnyPublisher()
+      collection ? collections.statePublisher : timeline.statePublisher
     }
     func readRecord(_ collection: Bool) {
       if collection {

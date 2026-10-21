@@ -156,6 +156,7 @@ final class CollectionExportRecordStore: ObservableObject {
 
   /// Per-store load state. See `RecordStoreState` for semantics.
   @Published private(set) var state: RecordStoreState = .unconfigured
+  var statePublisher: AnyPublisher<RecordStoreState, Never> { $state.eraseToAnyPublisher() }
   @Published private(set) var persistenceError: String?
   private var hasUnsavedChanges = false
   // Immediate ownership token, separate from coalesced UI notifications. Any
@@ -168,7 +169,10 @@ final class CollectionExportRecordStore: ObservableObject {
   // Final commits acknowledged while their destination loaded, landed once it has finished.
   private var commitsLandedWhileLoading: [String: [() -> Void]] = [:]
   private var configuredDestinationId: String?
-  var destinationId: String? { configuredDestinationId }
+  var destinationId: String? {
+    trackRecords()
+    return configuredDestinationId
+  }
   // Failed writes must survive destination switches until the user can retry saving.
   private var pendingRecovery: [String: Snapshot] = [:]
   // Each configure starts a new generation; only the newest load is installed.
@@ -592,15 +596,18 @@ final class CollectionExportRecordStore: ObservableObject {
   func currentPlacement(
     for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
   ) -> ExportPlacement? {
-    ExportPlacementResolver().existingCollectionPlacement(
+    trackRecords()
+    return ExportPlacementResolver().existingCollectionPlacement(
       for: selection, collections: collections, existingPlacements: Array(placements.values))
   }
 
   func placement(id: String) -> ExportPlacement? {
-    placements[id]
+    trackRecords()
+    return placements[id]
   }
 
   func placements(matching kind: ExportPlacement.Kind) -> [ExportPlacement] {
+    trackRecords()
     if kind == .timeline {
       // The collection store never holds `.timeline` placements (snapshot-decode and
       // log-apply guards enforce that), so an empty array is the correct answer for the
@@ -784,6 +791,7 @@ final class CollectionExportRecordStore: ObservableObject {
   /// How many of the batches' variants the history records as exported now, for reporting
   /// what an import adopted after the reconcile that follows it.
   func recordedVariantCount(of batches: [ImportBatch]) -> Int {
+    trackRecords()
     var count = 0
     for batch in batches {
       guard let placement = placements[batch.placement.id],
@@ -911,6 +919,7 @@ final class CollectionExportRecordStore: ObservableObject {
   func containsCompletedFile(
     at root: URL, isCurrent: @MainActor () -> Bool = { true }
   ) async throws -> Bool? {
+    trackRecords()
     guard isCurrent(), !Task.isCancelled, state == .ready else { return nil }
     let paths = try completedVariantProbes(root: root).map(\.path)
     guard !paths.isEmpty else { return nil }
@@ -918,9 +927,13 @@ final class CollectionExportRecordStore: ObservableObject {
     return try await runDetached { try await fileChecker.containsAnyFile(paths, root: root) }
   }
 
+  /// Registers reads against the same revision that coalesces record notifications.
+  private func trackRecords() { _ = mutationCounter }
+
   // MARK: - Read API
 
   func exportInfo(assetId: String, placement: ExportPlacement) -> ScopedExportRecord? {
+    trackRecords()
     guard accept(placement) else { return nil }
     guard let body = recordBodies[placement.id]?[assetId] else { return nil }
     var variantMap: [ExportVariant: ExportVariantRecord] = [:]
@@ -938,7 +951,8 @@ final class CollectionExportRecordStore: ObservableObject {
     _ filename: String, placement: ExportPlacement, subfolder: String?,
     exceptVariant variant: ExportVariant, of assetId: String
   ) -> Bool {
-    isFilenameClaimed(
+    trackRecords()
+    return isFilenameClaimed(
       filename, placement: placement, subfolder: subfolder, assetId: assetId,
       excluding: { $0 == variant.rawValue })
   }
@@ -949,7 +963,8 @@ final class CollectionExportRecordStore: ObservableObject {
     _ filename: String, placement: ExportPlacement, subfolder: String?,
     exceptAsset assetId: String
   ) -> Bool {
-    isFilenameClaimed(
+    trackRecords()
+    return isFilenameClaimed(
       filename, placement: placement, subfolder: subfolder, assetId: assetId,
       excluding: { _ in true })
   }
@@ -985,18 +1000,30 @@ final class CollectionExportRecordStore: ObservableObject {
     selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> Bool {
+    trackRecords()
+    let convertHEIC = convertHEICToJPEG
+    return isExportedUntracked(
+      asset: asset, placement: placement, selection: selection,
+      livePhotosPaired: livePhotosPaired, convertHEIC: convertHEIC)
+  }
+
+  private func isExportedUntracked(
+    asset: AssetDescriptor, placement: ExportPlacement, selection: ExportVersionSelection,
+    livePhotosPaired: Bool, convertHEIC: Bool
+  ) -> Bool {
     guard accept(placement) else { return false }
     guard let body = recordBodies[placement.id]?[asset.id] else { return false }
     return ExportCompletionPolicy.isComplete(
       variants: body.typedVariants, asset: asset, selection: selection,
       policy: placement.kind.variantPolicy,
-      convertHEICToJPEG: convertHEICToJPEG,
+      convertHEICToJPEG: convertHEIC,
       livePhotosPaired: livePhotosPaired)
   }
 
   // MARK: - Scoped queries
 
   func recordCount(in scope: CollectionPlacementScope) -> Int {
+    trackRecords()
     var count = 0
     for (placementId, byAsset) in recordBodies {
       guard let placement = placements[placementId] else { continue }
@@ -1032,15 +1059,17 @@ final class CollectionExportRecordStore: ObservableObject {
     assets: [AssetDescriptor], placement: ExportPlacement, selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> MonthStatusSummary {
+    trackRecords()
+    let convertHEIC = convertHEICToJPEG
     guard accept(placement) else {
       return MonthStatusSummary(
         year: 0, month: 0, exportedCount: 0, totalCount: assets.count, status: .notExported)
     }
     var exported = 0
     for asset in assets
-    where isExported(
+    where isExportedUntracked(
       asset: asset, placement: placement, selection: selection,
-      livePhotosPaired: livePhotosPaired)
+      livePhotosPaired: livePhotosPaired, convertHEIC: convertHEIC)
     {
       exported += 1
     }
@@ -1059,6 +1088,7 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   func summary(for placement: ExportPlacement) -> PlacementSummary {
+    trackRecords()
     guard accept(placement) else {
       return PlacementSummary(
         placementId: placement.id, exportedCount: 0, totalCount: 0, status: .notExported)

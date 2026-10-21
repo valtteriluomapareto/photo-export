@@ -418,7 +418,7 @@ struct PublisherParityTests {
     store.configure(for: "A")
     await withCleanup {
       await assertPublishedParity(
-        store, \.state, { $0.$state.eraseToAnyPublisher() },
+        store, \.state, { $0.statePublisher },
         change: { store.configure(for: nil) },
         unchangedWrite: .after { store.configure(for: nil) },
         unchangedWriteDelivery: .emits)
@@ -435,7 +435,7 @@ struct PublisherParityTests {
     store.configure(for: "A")
     await withCleanup {
       await assertPublishedParity(
-        store, \.state, { $0.$state.eraseToAnyPublisher() },
+        store, \.state, { $0.statePublisher },
         change: { store.configure(for: nil) },
         unchangedWrite: .after { store.configure(for: nil) },
         unchangedWriteDelivery: .emits)
