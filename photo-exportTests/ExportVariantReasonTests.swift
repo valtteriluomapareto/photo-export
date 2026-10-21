@@ -130,8 +130,8 @@ struct ExportVariantReasonStoreTests {
         assetId: "ordinary", placement: placement, variant: .edited,
         error: "Edited resource unavailable; original backed up as _orig", at: date)
     }
-    timeline.flushForTesting()
-    collections.flushForTesting()
+    timeline.drainSynchronously()
+    collections.drainSynchronously()
     let reopenedTimeline = ExportRecordStore(baseDirectoryURL: root)
     let reopenedCollections = CollectionExportRecordStore(baseDirectoryURL: root)
     reopenedTimeline.configure(for: "dest")
@@ -204,8 +204,8 @@ struct ExportVariantReasonStoreTests {
     #expect(
       collections.exportInfo(assetId: asset.id, placement: favorite)?.variants[.edited]?.reason
         == nil)
-    timeline.flushForTesting()
-    collections.flushForTesting()
+    timeline.drainSynchronously()
+    collections.drainSynchronously()
   }
 }
 
@@ -246,8 +246,8 @@ extension ExportVariantReasonStoreTests {
           at: Date())
       }
     }
-    timeline.flushForTesting()
-    collections.flushForTesting()
+    timeline.drainSynchronously()
+    collections.drainSynchronously()
     let reloadedTimeline = ExportRecordStore(baseDirectoryURL: root)
     let reloadedCollections = CollectionExportRecordStore(baseDirectoryURL: root)
     reloadedTimeline.configure(for: "dest")

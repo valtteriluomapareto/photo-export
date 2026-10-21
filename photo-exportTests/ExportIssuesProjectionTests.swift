@@ -70,7 +70,7 @@ struct ExportIssuesProjectionTests {
     let root = TestScratch.directory("ExportIssuesProjection")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
-    defer { store.flushForTesting() }
+    defer { store.drainSynchronously() }
     store.configure(for: "A")
     store.markVariantInProgress(
       assetId: "asset", variant: .original, year: 2026, month: 10,
@@ -79,7 +79,7 @@ struct ExportIssuesProjectionTests {
     let retries = FileBackedAutoSyncRetryStateStore(
       baseDirectoryURL: root.appendingPathComponent("Retry"))
     try retries.save(retry(at: date), destinationId: "A")
-    store.flushForTesting()
+    store.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: root)
     reopened.configure(for: "A")
     let savedDate = reopened.recordsById["asset"]?.variants[.original]?.exportDate
@@ -96,7 +96,7 @@ struct ExportIssuesProjectionTests {
     let root = TestScratch.directory("ExportIssuesProjection")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
-    defer { store.flushForTesting() }
+    defer { store.drainSynchronously() }
     store.configure(for: "A")
     store.markVariantInProgress(
       assetId: "asset", variant: .original, year: 2026, month: 10,
@@ -107,7 +107,7 @@ struct ExportIssuesProjectionTests {
     store.markVariantInProgress(
       assetId: "asset", variant: .original, year: 2026, month: 10,
       relPath: "2026/10/", filename: "x.heic")
-    store.flushForTesting()
+    store.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: root)
     reopened.configure(for: "A")
     let rows = ExportIssuesProjection.make(
@@ -128,7 +128,7 @@ struct ExportIssuesIntegrationTests {
     let root = TestScratch.directory("ExportIssuesProjection")
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
-    defer { timeline.flushForTesting() }
+    defer { timeline.drainSynchronously() }
     timeline.configure(for: "A")
     timeline.markVariantInProgress(
       assetId: "same", variant: .original, year: 2026, month: 10,

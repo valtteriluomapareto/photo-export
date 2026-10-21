@@ -48,8 +48,8 @@ final class CollectionImportHarness {
 
   /// Starts both stores on an empty history for the same folder, as after a reinstall.
   func wipeHistory() {
-    timeline.flushForTesting()
-    collections.flushForTesting()
+    timeline.drainSynchronously()
+    collections.drainSynchronously()
     destinationId += "-wiped"
     timeline.configure(for: destinationId)
     collections.configure(for: destinationId)
@@ -91,8 +91,8 @@ final class CollectionImportHarness {
 
   /// The byte-level record files of the current history.
   func historyBytes() -> [String: Data] {
-    timeline.flushForTesting()
-    collections.flushForTesting()
+    timeline.drainSynchronously()
+    collections.drainSynchronously()
     var result: [String: Data] = [:]
     let dir = storeRoot.appendingPathComponent(destinationId, isDirectory: true)
     for name in [
@@ -110,8 +110,8 @@ final class CollectionImportHarness {
     running += manager.currentPreparationTasks + [manager.currentTask].compactMap { $0 }
     for task in running { _ = await finished(task) }
     if let task = manager.importTask { _ = await finished(task) }
-    timeline.flushForTesting()
-    collections.flushForTesting()
+    timeline.drainSynchronously()
+    collections.drainSynchronously()
     try? FileManager.default.removeItem(at: storeRoot)
     destination.cleanup()
   }

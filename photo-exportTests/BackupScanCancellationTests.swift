@@ -127,8 +127,8 @@ struct BackupScanCancellationTests {
     timeline.configure(for: "A")
     collections.configure(for: "A")
     defer {
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
     }
     nonisolated(unsafe) var manager: ExportManager?
     let reader = RecordingReader(

@@ -123,8 +123,8 @@ struct LibraryGridSelectionLifecycleTests {
       window.orderOut(nil)
       window.contentView = nil
       window.close()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
       defaults.removePersistentDomain(forName: defaultsName)
     }

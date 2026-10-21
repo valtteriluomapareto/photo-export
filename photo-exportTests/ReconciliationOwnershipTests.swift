@@ -144,19 +144,19 @@ struct ReconciliationOwnershipTests {
       case .timeline:
         let store = ExportRecordStore(baseDirectoryURL: recordsRoot)
         store.configure(for: id)
-        defer { store.flushForTesting() }
+        defer { store.drainSynchronously() }
         return store.exportInfo(assetId: "same")?.variants[.original]
       case .collection:
         let store = CollectionExportRecordStore(baseDirectoryURL: recordsRoot)
         store.configure(for: id)
-        defer { store.flushForTesting() }
+        defer { store.drainSynchronously() }
         return store.exportInfo(assetId: "same", placement: placement)?.variants[.original]
       }
     }
 
     func flush() {
-      timeline.flushForTesting()
-      collection.flushForTesting()
+      timeline.drainSynchronously()
+      collection.drainSynchronously()
     }
     func cleanup() {
       flush()

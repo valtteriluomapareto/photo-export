@@ -324,8 +324,8 @@ struct ExportIssuePresentationTests {
       window.close()
       counter.reset()
       autoSync.setEnabled(false)
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       defaults.removePersistentDomain(forName: defaultsName)
       try? FileManager.default.removeItem(at: root)
     }

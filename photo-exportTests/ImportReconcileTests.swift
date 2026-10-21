@@ -347,7 +347,7 @@ struct ImportReconcileTests {
     #expect(record?.relPath == relativePath)
     #expect(record?.variants[.original]?.status == .done)
     #expect(record?.variants[.original]?.subfolder == (video ? "videos" : nil))
-    h.timeline.flushForTesting()
+    h.timeline.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: h.storeRoot)
     reopened.configure(for: "test")
     #expect(reopened.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
@@ -367,7 +367,7 @@ struct ImportReconcileTests {
       !FileManager.default.fileExists(
         atPath: h.dest.rootURL
           .appendingPathComponent("\(assetYear)/" + String(format: "%02d", assetMonth)).path))
-    reopened.flushForTesting()
+    reopened.drainSynchronously()
   }
 
   @Test(arguments: ExportVariant.allCases, [false, true])
@@ -397,11 +397,11 @@ struct ImportReconcileTests {
         year: changeYear ? 2026 : 2025, month: changeYear ? 12 : 11,
         totalAssets: 1
       ).exportedCount == 0)
-    h.timeline.flushForTesting()
+    h.timeline.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: h.storeRoot)
     reopened.configure(for: "test")
     #expect(reopened.exportInfo(assetId: "existing") == before)
-    reopened.flushForTesting()
+    reopened.drainSynchronously()
   }
 
   @Test func sameMonthVideoImportMergesWithoutChangingCompletedPlacement() async throws {
@@ -435,11 +435,11 @@ struct ImportReconcileTests {
     #expect(merged.variants[.edited]?.subfolder == nil)
     #expect(try Data(contentsOf: originalFile) == Data("original".utf8))
     #expect(try Data(contentsOf: editedFile) == Data("edited".utf8))
-    h.timeline.flushForTesting()
+    h.timeline.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: h.storeRoot)
     reopened.configure(for: "test")
     #expect(reopened.exportInfo(assetId: "video") == merged)
-    reopened.flushForTesting()
+    reopened.drainSynchronously()
   }
 
   // MARK: - Integration harness
@@ -474,8 +474,8 @@ struct ImportReconcileTests {
     /// the underlying race contributes to flake on slow runners.
     func cleanup() {
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collection.flushForTesting()
+      timeline.drainSynchronously()
+      collection.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }

@@ -140,8 +140,8 @@ struct SnapshotReadInjectionTests {
     let timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
     defer {
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       try? FileManager.default.removeItem(at: root)
     }
     if collection { collections.configure(for: "A") } else { timeline.configure(for: "A") }
