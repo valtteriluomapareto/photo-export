@@ -82,7 +82,6 @@ jobs:
             -destination 'platform=macOS'
             -derivedDataPath "$RUNNER_TEMP/ObservationDerivedData"
             -resultBundlePath "$RUNNER_TEMP/observation-evidence/HostedResults.xcresult"
-            -test-iterations 1 -run-tests-until-failure
             "${selectors[@]}" CODE_SIGNING_ALLOWED=NO test)
           printf '%q ' "${command[@]}" > "$RUNNER_TEMP/observation-evidence/command.txt"
           printf '\n' >> "$RUNNER_TEMP/observation-evidence/command.txt"
