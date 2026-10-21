@@ -26,7 +26,7 @@ Prepare the catalog and all intended release changes on a release branch. Includ
 
 ```bash
 git switch -c release/1.2.0 &&
-scripts/bump-version.sh 1.2.0 --no-tag &&
+scripts/bump-version.sh 1.2.0 &&
 python3 scripts/ci/check-version.py --expected 1.2.0 &&
 git diff &&
 git add photo-export/Models/ReleaseNotesCatalog.swift photo-export.xcodeproj/project.pbxproj website/src/layouts/MarketingLayout.astro &&
@@ -37,7 +37,7 @@ gh pr create --title "Prepare release 1.2.0" --body "Version and release notes f
 
 Follow the normal [contributor review workflow](../../CONTRIBUTING.md), including the three reviewers and green checks before merge. Never push the bump directly to protected `main`.
 
-The helper updates every `MARKETING_VERSION` assignment and the homepage's structured-data `softwareVersion`. Preparation-only is the default; `--no-tag` remains an explicit compatible spelling. For `1.3.0-beta.1`, the bundle keeps the suffix while the website and release-note catalog use base `1.3.0`. Missing catalog entries require an explicit override. A same-version call still repairs website drift and never creates a tag.
+The helper updates every `MARKETING_VERSION` assignment and the homepage's structured-data `softwareVersion`. Preparation-only is the default. For `1.3.0-beta.1`, the bundle keeps the suffix while the website and release-note catalog use base `1.3.0`. Missing catalog entries require an explicit override. A same-version call still repairs website drift and never creates a tag.
 
 ### 3. Validate the exact merged candidate
 
@@ -171,7 +171,7 @@ signing, uploads or tag creation, run `scripts/ci/test-guards.sh`.
 
 ## Beta / pre-release tags
 
-Use the same PR → merged candidate → Photos validation → explicit tag flow for betas. A beta may defer triggered validation rows; they stay owed for the stable release (see [release validation](release-validation.md#what-to-run)). In step2, prepare `scripts/bump-version.sh 1.3.0-beta.1 --no-tag` on its release branch. After merge and step3 validation, step4 uses `--expected 1.3.0-beta.1`, `git tag v1.3.0-beta.1 "$CANDIDATE_SHA"`, and `git push origin refs/tags/v1.3.0-beta.1`.
+Use the same PR → merged candidate → Photos validation → explicit tag flow for betas. A beta may defer triggered validation rows; they stay owed for the stable release (see [release validation](release-validation.md#what-to-run)). In step2, prepare `scripts/bump-version.sh 1.3.0-beta.1` on its release branch. After merge and step3 validation, step4 uses `--expected 1.3.0-beta.1`, `git tag v1.3.0-beta.1 "$CANDIDATE_SHA"`, and `git push origin refs/tags/v1.3.0-beta.1`.
 
 The accepted version format is strict semver with an optional pre-release suffix: `X.Y.Z` or `X.Y.Z-<identifier>` (e.g. `1.3.0-beta.1`, `1.3.0-rc.2`). The suffix activates the pre-release path automatically:
 
@@ -181,7 +181,7 @@ The accepted version format is strict semver with an optional pre-release suffix
 
 Beta testers see the catalog's `1.3.0` entry in the What's New sheet (since `1.2.3 < 1.3.0 ≤ 1.3.0-beta.1`). When the stable `1.3.0` ships later, testers on `1.3.0-beta.1` will *not* re-fire the sheet (the comparison treats `1.3.0-beta.1` as newer-than `1.3.0` for the `shouldShow` gate). That's intentional — they've already seen the notes.
 
-To promote a beta, prepare the bare version with `scripts/bump-version.sh 1.3.0 --no-tag` in a new PR. Merge it when green, select that merged candidate, and repeat step3's diff assessment and Photos validation before explicitly tagging `v1.3.0` at its approved SHA. A beta tag is not moved to the stable candidate.
+To promote a beta, prepare the bare version with `scripts/bump-version.sh 1.3.0` in a new PR. Merge it when green, select that merged candidate, and repeat step3's diff assessment and Photos validation before explicitly tagging `v1.3.0` at its approved SHA. A beta tag is not moved to the stable candidate.
 
 The stable tag goes through both channels (GitHub Release + App Store) as usual.
 
@@ -205,7 +205,7 @@ git push origin :refs/tags/v1.2.0
 if git show-ref --verify --quiet refs/tags/v1.2.0; then git tag -d v1.2.0; fi
 ```
 
-Prepare the correction on a branch and run `scripts/bump-version.sh 1.2.0 --no-tag` before committing, even if the project already has that version; it prepares files but **does not recreate the tag**. Include any resulting version/website changes in the reviewed correction PR. After green CI and merge, select that PR's exact clean merged commit and complete step3's validation/evidence. Then recreate and push explicitly, using that approved `CANDIDATE_SHA`:
+Prepare the correction on a branch and run `scripts/bump-version.sh 1.2.0` before committing, even if the project already has that version; it prepares files but **does not recreate the tag**. Include any resulting version/website changes in the reviewed correction PR. After green CI and merge, select that PR's exact clean merged commit and complete step3's validation/evidence. Then recreate and push explicitly, using that approved `CANDIDATE_SHA`:
 
 ```bash
 test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA" &&

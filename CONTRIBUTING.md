@@ -121,24 +121,19 @@ checked patterns and the narrow allow marker for tests that must inspect a real 
 
 ### Static guards
 
-Run the repository checks that CI runs, including self-tests of the guards:
+Run the repository checks that CI runs, including self-tests of the guards.
+Install the pinned Swift tools from [Style checks](#style-checks) first; the runner
+includes the strict app-and-test formatter check:
 
 ```bash
-scripts/ci/test-guards.sh
-python3 -B scripts/ci/check-read-only-photos.py
-python3 -B scripts/ci/check-no-plan-refs.py
-python3 -B scripts/ci/check-version.py
-python3 -B scripts/ci/check-test-waits.py
-python3 -B scripts/ci/check-test-scratch.py
-python3 -B scripts/ci/check-persistence-doc.py
-scripts/ci/check-regression-gates.sh
-scripts/ci/check-fingerprint-id-keying.sh
+scripts/ci/run-guards.sh
 ```
 
-These check source, documentation and tooling without reading your Photos library.
-See the [CI script guide](scripts/README.md#ci-scripts-scriptsci) for each guard's
-scope. Checks of built apps and test results run after the relevant build/test step
-in CI; the commands above cover the static guards.
+The runner names every check, continues after independent failures and returns nonzero
+if any check fails. These checks cover source, documentation and tooling without reading
+your Photos library. See the [CI script guide](scripts/README.md#ci-scripts-scriptsci)
+for each guard's scope. Checks of built apps and test results run after the relevant
+build/test step in CI; the runner covers the static guards.
 
 ### Style checks
 
