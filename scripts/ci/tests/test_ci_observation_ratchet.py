@@ -93,7 +93,7 @@ class ObservationRatchetGuardTests(unittest.TestCase):
         result = self.assertPasses()
         for line in (
                 "ObservableObject types: 1", "external $publisher uses: 1",
-                "@Published declarations: 2", ".environmentObject( calls: 1",
+                "@Published declarations: 2", "environmentObject( calls: 1",
                 "@EnvironmentObject properties: 1", "@StateObject properties: 1",
                 "@ObservedObject properties: 1", "external objectWillChange uses: 0"):
             self.assertIn(line, result.stdout)
@@ -111,7 +111,74 @@ class ObservationRatchetGuardTests(unittest.TestCase):
         self.write("RootView.swift", ROOT_VIEW.replace(
             ".environmentObject(manager)",
             ".environmentObject(manager)\n      .environmentObject (other)"))
-        self.assertFails(".environmentObject( calls rose from 1 to 2")
+        self.assertFails("environmentObject( calls rose from 1 to 2")
+
+    def test_new_bare_environment_object_call_fails(self):
+        self.add_view("func inject() { environmentObject(manager) }\n")
+        self.assertFails("environmentObject( calls rose from 1 to 2")
+
+    def test_environment_object_call_spellings_keep_the_existing_total(self):
+        for call in (
+                "Child().environmentObject(manager)",
+                "Child()\n      .environmentObject (manager)",
+                "self.environmentObject(manager)",
+                "environmentObject(manager)",
+                "environmentObject\n      (manager)"):
+            with self.subTest(call=call):
+                self.write("RootView.swift", ROOT_VIEW.replace(
+                    "Child().environmentObject(manager)", call))
+                result = self.assertPasses()
+                self.assertIn("environmentObject( calls: 1 (ceiling 1)", result.stdout)
+
+    def test_environment_object_call_lookalikes_are_ignored(self):
+        self.add_view(
+            "func lookalikes() {\n"
+            "  myenvironmentObject(manager)\n"
+            "  environmentObjectSuffix(manager)\n"
+            "  $environmentObject(manager)\n"
+            "  @environmentObject(manager)\n"
+            "  EnvironmentObject(manager)\n"
+            "}\n")
+        self.assertPasses()
+
+    def test_environment_object_attributes_are_not_calls(self):
+        self.ceiling(CEILING.replace("total|environment-object-property|1",
+                                     "total|environment-object-property|2"))
+        for attribute in ("@EnvironmentObject var manager: Manager", "@EnvironmentObject(manager)"):
+            with self.subTest(attribute=attribute):
+                self.add_view(attribute + "\n")
+                result = self.assertPasses()
+                self.assertIn("environmentObject( calls: 1 (ceiling 1)", result.stdout)
+                self.assertIn("@EnvironmentObject properties: 2 (ceiling 2)", result.stdout)
+
+    def test_qualified_wrappers_keep_the_existing_totals(self):
+        self.write("Manager.swift", MANAGER.replace("@Published", "@Combine.Published"))
+        source = ROOT_VIEW
+        for name in ("EnvironmentObject", "StateObject", "ObservedObject"):
+            source = source.replace("@" + name, "@SwiftUI." + name)
+        self.write("RootView.swift", source)
+        self.assertPasses()
+
+    def test_each_wrapper_spelling_enforces_its_total(self):
+        for name, module, label, baseline in (
+                ("Published", "Combine", "@Published declarations", 2),
+                ("EnvironmentObject", "SwiftUI", "@EnvironmentObject properties", 1),
+                ("StateObject", "SwiftUI", "@StateObject properties", 1),
+                ("ObservedObject", "SwiftUI", "@ObservedObject properties", 1)):
+            for attribute in ("@" + name, "@" + module + "." + name,
+                              "@ " + module + " . " + name):
+                with self.subTest(attribute=attribute):
+                    self.add_view("struct Extra { " + attribute + " var manager: Manager }\n")
+                    self.assertFails(f"{label} rose from {baseline} to {baseline + 1}")
+
+    def test_wrapper_prefix_and_suffix_lookalikes_are_ignored(self):
+        self.add_view("\n".join(
+            f"@{prefix}{name}{suffix} var manager: Manager"
+            for name in ("Published", "EnvironmentObject", "StateObject", "ObservedObject")
+            for prefix, suffix in (("My", ""), ("", "Extra"),
+                                   ("Framework.My", ""), ("Framework.", "Extra"),
+                                   ("", ".Nested"), ("Framework.", ".Nested"))))
+        self.assertPasses()
 
     def test_new_environment_object_property_fails(self):
         self.add_view("struct V: View {\n  @EnvironmentObject var m: Manager\n}\n")
@@ -196,6 +263,30 @@ class ObservationRatchetGuardTests(unittest.TestCase):
             "// final class Old: ObservableObject { @Published var x = 0 }\n"
             "/* manager.$count .environmentObject(x) @StateObject m.objectWillChange */\n"
             "let text = \"@Published @EnvironmentObject manager.$count .environmentObject(\"\n")
+        self.assertPasses()
+
+    def test_bare_calls_and_qualified_wrappers_in_comments_and_strings_are_ignored(self):
+        tokens = ("environmentObject(manager) @Combine.Published @SwiftUI.EnvironmentObject "
+                  "@SwiftUI.StateObject @SwiftUI.ObservedObject")
+        self.write(
+            "Notes.swift",
+            "// " + tokens + "\n"
+            "/* nested /* " + tokens + " */ " + tokens + " */\n"
+            'let normal = "' + tokens + '"\n'
+            'let raw = #"' + tokens + '"#\n'
+            'let multiline = """\n' + tokens + '\n"""\n')
+        self.assertPasses()
+
+    def test_own_object_will_change_and_member_lookalikes_are_not_external(self):
+        self.add_view(
+            "func internalChanges() {\n"
+            "  objectWillChange.send()\n"
+            "  self.objectWillChange.send()\n"
+            "  self?.objectWillChange.send()\n"
+            "  self!.objectWillChange.send()\n"
+            "  other.objectWillChangeExtra.send()\n"
+            "  other.myobjectWillChange.send()\n"
+            "}\n")
         self.assertPasses()
 
     def test_missing_total_row_fails(self):
