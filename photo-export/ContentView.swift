@@ -189,6 +189,7 @@ struct YearRow: View {
           Image(systemName: "checkmark.circle.fill")
             .foregroundColor(.green)
             .font(.caption)
+            .accessibilityLabel(yearTooltip(selection: selection, exported: exported, total: total))
         } else {
           let pct = Int(Double(exported) / Double(total) * 100)
           #if DEBUG
@@ -284,6 +285,7 @@ struct MonthRow: View {
           // pattern scaled the rasterised default and produced a fuzzy indicator.
           ProgressView()
             .controlSize(.mini)
+            .accessibilityLabel("Exporting \(MonthFormatting.name(for: month)) \(year)")
         }
         Text("\(queued) left")
           .font(.caption2)
@@ -298,6 +300,7 @@ struct MonthRow: View {
           Image(systemName: "checkmark.circle.fill")
             .foregroundColor(.green)
             .font(.caption)
+            .accessibilityLabel(monthTooltip(selection: selection, summary: summary))
         case .partial:
           #if DEBUG
             // swiftlint:disable:next redundant_discardable_let
