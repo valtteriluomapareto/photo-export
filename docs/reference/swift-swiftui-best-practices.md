@@ -79,6 +79,10 @@ to find the implementation to extend. Check these contracts when reviewing a cha
 - Auto Export keeps the [behavior reference](auto-export-behavior.md) and existing
   [regression gates](architecture-conventions.md#regression-gates) intact.
 
+Bounded export parallelism remains an idea in the
+[GitHub backlog](https://github.com/valtteriluomapareto/photo-export/issues/318#issuecomment-6311950302).
+It requires a separate plan preserving cancellation and final-file ownership.
+
 ## 5) SwiftUI View Best Practices
 
 Prefer `NavigationSplitView` for the macOS sidebar/detail structure. Derive values

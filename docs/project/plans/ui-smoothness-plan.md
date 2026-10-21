@@ -1,6 +1,13 @@
 # UI Smoothness and Observation Modernization Plan
 
-Status: active roadmap, revised May 2026.
+Status: Active roadmap. Measurement and smoothness work described in Phases 0–1
+has landed, with later refinements recorded below. The Observation migration is
+tracked in [#315](https://github.com/valtteriluomapareto/photo-export/issues/315)
+and developed on `feature/observable-migration`; branch work is not shipped until
+merged. On current `main`, `MonthViewModel`, `PhotoLibraryManager` and the record
+stores still use `ObservableObject` / `@Published`. Phase 3 remains conditional on
+measurement; the original sequence below is a design roadmap, not a claim that
+every proposed change is still needed.
 
 This plan merges the previous UI smoothness and SwiftUI Observation migration
 plans into one implementation order. The standalone Observation plan is archived

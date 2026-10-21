@@ -1,7 +1,13 @@
 # Edited Video Export Plan
 
 Date: 2026-05-01
-Status: Proposed (revised after multi-reviewer pass)
+Status: Shipped via PR #21 (commit `9d4f7a0`); archived as a decision record.
+`ResourceSelection.selectEditedProducer` routes edited video to
+`ProductionMediaRenderer`, backed by `PHImageManager.requestExportSession` and
+`AVAssetExportSession`. `VideoExportExecutorTests` and
+`ExportManagerVideoRenderTests` cover the renderer and pipeline. The problem and
+proposed steps below describe the pre-fix state; current behavior is documented in
+[Features](../../../website/src/content/docs/features.md).
 Tracking: [#18](https://github.com/valtteriluomapareto/photo-export/issues/18)
 
 ## Summary
