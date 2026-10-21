@@ -10,7 +10,7 @@ Photo Export is a focused macOS app for exporting and tracking Apple Photos back
 Photo Export can keep an external drive (or any folder) automatically in sync with your Apple Photos library — see the [Auto Export guide](/photo-export/auto-export/) for the full walkthrough.
 
 - Optional **Enable Auto Export** toggle in Settings — off by default
-- Pick what to back up: **Timeline**, **Favorites**, **Albums**, or any combination
+- Pick what to back up: **Timeline**, **Favorites**, **Albums**, **Shared Albums**, or any combination
 - Runs automatically while Photo Export is open; new photos in Apple Photos are added to your backup after a short delay
 - **Status surfaces** in three places: a pill in the main-window toolbar, an always-on menu bar item, and Settings → Auto Export
 - **Export Now** in Settings and the menu bar fires a run immediately without waiting
@@ -207,6 +207,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 - Works with local folders, external drives, or mounted network volumes
 - Selection persists across app launches via security-scoped bookmarks
 - Drive status indicator in the toolbar (connected/disconnected)
+- Destination problems stay visible in the main window and disable export controls whether Auto Export is on or off. Reconnect an unavailable drive or share, or restore access with **Choose Folder**
 
 ## Tracking and resume
 
@@ -220,6 +221,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 ## Queue controls
 
 - Pause and resume the export queue at any time
+- Clicking **Export Month** for a month with paused work resumes the existing queue with its original settings, including other queued months, without adding duplicate jobs
 - Cancel and restart exports safely: a cancelled scan cannot change the new run’s progress or completion. A file already moved into place finishes its timestamps and history update for the original destination before a replacement export proceeds, avoiding a duplicate on retry. History storage failures retain the completed file for non-destructive Retry; process-crash recovery remains separate. An unfinished download, render or conversion cannot damage a restarted export or add failures to its result.
 - Cancel and clear the entire batch
 - Queue progress visible in the content-column strip below the toolbar; pause/resume/cancel controls remain in the toolbar
@@ -249,6 +251,6 @@ Export progress storage errors stop further exports using the affected records a
 - macOS only (15.0+)
 - Timeline exports use the fixed year/month hierarchy; collection exports land under `Collections/Favorites/` and `Collections/Albums/`
 - Exports run sequentially (one asset at a time)
-- Folders in Photos render in the sidebar tree but are not directly exportable — pick the album you want
+- Folder export actions queue their descendant albums; folders themselves do not contain photos
 - Smart albums other than Favorites are not surfaced in the Collections sidebar
 - Shared albums are surfaced but export at reduced quality (downscaled JPEGs) — see [Shared albums (reduced fidelity)](#shared-albums-reduced-fidelity) above

@@ -85,7 +85,7 @@ struct MonthTileView: View {
       case .loaded:
         coverGrid
       case .loading, .idle:
-        ProgressView().controlSize(.small)
+        ProgressView().controlSize(.small).accessibilityHidden(true)
       case .empty:
         Image(systemName: "photo.on.rectangle.angled")
           .font(.system(size: 36))
@@ -94,6 +94,7 @@ struct MonthTileView: View {
         Image(systemName: "exclamationmark.triangle")
           .foregroundStyle(.secondary)
           .help("Couldn't load preview")
+          .accessibilityHidden(true)
       }
     }
   }
@@ -169,6 +170,11 @@ struct MonthTileView: View {
       parts.append(photoCount == 1 ? "1 photo" : "\(photoCount) photos")
     }
     if isFullyExported { parts.append("fully exported") }
+    switch coverState {
+    case .idle, .loading: parts.append("Loading preview")
+    case .failed: parts.append("Couldn't load preview")
+    case .loaded, .empty: break
+    }
     return parts.joined(separator: ", ")
   }
 
