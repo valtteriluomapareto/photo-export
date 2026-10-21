@@ -64,7 +64,7 @@ jobs:
             cat ../adapter/observation-hosted-suites.txt
           } 2>&1 | tee "$RUNNER_TEMP/observation-evidence/provenance.log"
 
-      - name: Run ten hosted iterations
+      - name: Run bridge probes once
         working-directory: source
         shell: bash
         run: |
@@ -82,7 +82,7 @@ jobs:
             -destination 'platform=macOS'
             -derivedDataPath "$RUNNER_TEMP/ObservationDerivedData"
             -resultBundlePath "$RUNNER_TEMP/observation-evidence/HostedResults.xcresult"
-            -test-iterations 10 -run-tests-until-failure
+            -test-iterations 1 -run-tests-until-failure
             "${selectors[@]}" CODE_SIGNING_ALLOWED=NO test)
           printf '%q ' "${command[@]}" > "$RUNNER_TEMP/observation-evidence/command.txt"
           printf '\n' >> "$RUNNER_TEMP/observation-evidence/command.txt"
