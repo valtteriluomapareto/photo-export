@@ -252,8 +252,9 @@ OR and duplicate suppression, so rechecking a missing backup never releases Auto
 `ImportHoldSequenceTests` pins those hold and flag sequences.
 
 The measured Published baseline already registered changing writes to these properties under
-both Xcode 26.6 and 27.1. Repeating an equal value also notified Observation. The bridges keep
-the changing-value and sibling-isolation behavior while suppressing equal-value notifications;
+both Xcode 26.6 and 27.1. Repeated setting values and equal missing-backup-flag writes also
+notified Observation. The bridges keep the changing-value and sibling-isolation behavior while
+suppressing equal-value notifications;
 Combine subscribers still receive every write. Measure a property's actual baseline before
 classifying a dependency test as failing before its migration.
 
