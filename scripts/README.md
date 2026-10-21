@@ -31,9 +31,10 @@ scripts/ci/run-guards.sh
 
 [`run-guards.sh`](ci/run-guards.sh) runs guard fixture self-tests, read-only Photos,
 source-comment plan references, test waits, test scratch state, persistence value sets,
-project versions, regression-gate symbols/documentation and destination-identity keying.
+project versions, regression-gate symbols/documentation, destination-identity keying
+and strict app-and-test formatting (using the pinned Swift tools described below).
 It names each check, continues after independent failures and reports all failed checks
-before returning nonzero. CI keeps invoking these guards individually. Swift linters,
+before returning nonzero. CI keeps invoking these guards individually. SwiftLint,
 Xcode selection, built-app checks, result-bundle gate audits and release credential checks
 use their own commands and prerequisites.
 

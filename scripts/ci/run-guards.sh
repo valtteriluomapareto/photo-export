@@ -26,6 +26,7 @@ run_guard check-persistence-doc.py python3 -B scripts/ci/check-persistence-doc.p
 run_guard check-version.py python3 -B scripts/ci/check-version.py
 run_guard check-regression-gates.sh bash scripts/ci/check-regression-gates.sh
 run_guard check-fingerprint-id-keying.sh bash scripts/ci/check-fingerprint-id-keying.sh
+run_guard check-swift-format.sh bash scripts/ci/check-swift-format.sh
 
 if (( ${#failed[@]} )); then
   echo "Static guards failed: ${failed[*]}"

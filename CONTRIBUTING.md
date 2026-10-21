@@ -119,7 +119,9 @@ checked patterns and the narrow allow marker for tests that must inspect a real 
 
 ### Static guards
 
-Run the repository checks that CI runs, including self-tests of the guards:
+Run the repository checks that CI runs, including self-tests of the guards.
+Install the pinned Swift tools from [Style checks](#style-checks) first; the runner
+includes the strict app-and-test formatter check:
 
 ```bash
 scripts/ci/run-guards.sh

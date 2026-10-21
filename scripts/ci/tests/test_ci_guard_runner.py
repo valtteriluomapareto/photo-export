@@ -13,6 +13,7 @@ GUARDS = [
     'test-guards.sh', 'check-read-only-photos.py', 'check-no-plan-refs.py',
     'check-test-waits.py', 'check-test-scratch.py', 'check-persistence-doc.py',
     'check-version.py', 'check-regression-gates.sh', 'check-fingerprint-id-keying.sh',
+    'check-swift-format.sh',
 ]
 
 
@@ -68,4 +69,4 @@ class GuardRunnerTests(unittest.TestCase):
         self.assertNotIn('All static guards passed.', result.stdout)
         for guard in failures:
             self.assertIn(f'FAIL: {guard}', result.stdout)
-        self.assertIn('PASS: check-fingerprint-id-keying.sh', result.stdout)
+        self.assertIn('PASS: check-swift-format.sh', result.stdout)
