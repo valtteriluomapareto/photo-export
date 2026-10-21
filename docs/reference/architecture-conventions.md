@@ -117,7 +117,7 @@ links for the current implementation and complete file inventory.
   callbacks reach the façade for UI state and dependency forwarding.
 - `VariantExporter` selects a producer, stages or reuses bytes, commits the final
   file and records each variant outcome. `ResourceSelection` owns edited-producer
-  dispatch; `ExportFilenamePolicy` owns `_orig` naming; `ExportPathPolicy` sanitizes
+  dispatch; `ExportFilenamePolicy` owns `_orig` naming; `CollectionPathComponentPolicy` sanitizes
   collection path components; `ExportPlacementResolver` maps library selections
   to placements. `FinalNamePlanner` plans the final name after staging.
 - `ImportCoordinator` runs backup scan, matching, bulk history adoption and
