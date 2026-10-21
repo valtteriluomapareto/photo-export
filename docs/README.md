@@ -2,6 +2,9 @@
 
 This is the canonical map of where documentation lives in this repository. Other docs (root `README.md`, `CONTRIBUTING.md`, `AGENTS.md`) link here rather than restating the layout.
 
+New contributors: begin with [CONTRIBUTING.md → Start here](../CONTRIBUTING.md#start-here)
+for the reading order, local tests, and the architecture diagram and glossary.
+
 ## Where docs live
 
 | Audience | Location | Purpose |
