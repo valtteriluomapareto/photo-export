@@ -15,7 +15,7 @@ Photo Export can keep an external drive (or any folder) automatically in sync wi
 - **Status surfaces** in three places: a pill in the main-window toolbar, an always-on menu bar item, and Settings → Auto Export
 - **Export Now** in Settings and the menu bar fires a run immediately without waiting
 - **Retry policy** waits longer between each attempt for transient failures (Photos library momentarily busy, iCloud download failed, etc.); hard failures (destination full, asset missing) need user action
-- **Export Issues** tab groups failures by category with a per-row **Retry** button
+- **Export Issues** tab groups failures by category. Matching Auto Export retry history can offer a per-row **Retry** button; other failures can be retried with a manual export. See [failed exports and retry](/photo-export/auto-export/#failed-exports-and-retry)
 - **Open Photo Export at login** for a set-it-and-forget-it workflow — the app launches with your Mac and Auto Export starts watching
 - **Manual exports always take precedence** — clicking any Export button (toolbar **Export All** or an in-pane **Export Year / Month / Folder / Album**) while an automatic run is in flight prompts to supersede the auto run
 - **Safety scan** asks for confirmation when you point Auto Export at a folder that already contains files; the confirmation persists per destination
