@@ -20,46 +20,22 @@ struct ExportQueueStateSnapshotTests {
 
   // MARK: - Harness (mirrors ExportManagerPauseResumeTests)
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let store: ExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    func cleanup() {
-      manager.cancelAndClear()
-      store.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
-    }
+  private func cleanupHarness(_ h: Harness) {
+    let manager = h.manager
+    let dest = h.dest
+    let store = h.store
+    let storeRoot = h.storeRoot
+
+    manager.cancelAndClear()
+    store.flushForTesting()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
   private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ExportQueueSnapshot")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collections.configure(for: "test")
-    let defaults = TestScratch.defaults("ExportQueueSnapshot")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      store: store, storeRoot: storeRoot)
+    Harness(label: "ExportQueueSnapshot")
   }
 
   /// Canonical queue-state at a single instant. The Phase 4b extraction must preserve
@@ -105,7 +81,7 @@ struct ExportQueueStateSnapshotTests {
   /// after the Phase 4b extraction.
   @Test func pauseResumeCancelStateSnapshot_canonicalTransitions() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let assets = (1...3).map { TestAssetFactory.makeAsset(id: "snap-\($0)") }
     h.photoLib.assetsByYearMonth["2025-7"] = assets
@@ -179,7 +155,7 @@ struct ExportQueueStateSnapshotTests {
   /// This test asserts synchronous propagation directly.
   @Test func teardownQueue_synchronouslyClearsManagerMirrors() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     // Force the coordinator into a running state cheaply by enqueueing one job and
     // gating its writer so the run loop is parked.

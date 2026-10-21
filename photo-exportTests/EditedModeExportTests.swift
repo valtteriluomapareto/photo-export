@@ -15,32 +15,9 @@ struct EditedModeExportTests {
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let tempDir = TestScratch.directory("EditedModeTest")
-    let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collections.configure(for: "test")
-
-    // Per-test UserDefaults suite isolates `versionSelection` from any other
-    // suite running concurrently. Replacing the pre-existing `.standard
-    // .removeObject(...)` pattern that raced across `@MainActor` test suites
-    // (issue #28).
-    let defaults = TestScratch.defaults("EditedMode")
-
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return (manager, photoLib, dest, writer, fileSystem, store)
+    let h = ExportManagerHarness(
+      label: "EditedModeTest", userDefaults: TestScratch.defaults("EditedMode"))
+    return (h.manager, h.photoLib, h.dest, h.writer, h.fileSystem, h.store)
   }
 
   // MARK: - Default mode: unedited asset writes original at the natural stem

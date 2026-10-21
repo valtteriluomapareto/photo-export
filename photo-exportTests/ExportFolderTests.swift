@@ -297,49 +297,24 @@ struct ExportFolderTests {
 
   // MARK: - Test harness (parallel to ExportAllAlbumsTests.Harness)
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let timelineStore: ExportRecordStore
-    let collectionStore: CollectionExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    func cleanup() {
-      manager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
-    }
+  private func cleanupHarness(_ h: Harness) {
+    let manager = h.manager
+    let dest = h.dest
+    let timelineStore = h.timelineStore
+    let collectionStore = h.collectionStore
+    let storeRoot = h.storeRoot
+
+    manager.cancelAndClear()
+    timelineStore.flushForTesting()
+    collectionStore.flushForTesting()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
   private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("ExportFolder")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("ExportFolder")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      timelineStore: timelineStore, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+    Harness(label: "ExportFolder")
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {
@@ -378,7 +353,7 @@ struct ExportFolderTests {
   /// not be touched.
   @Test func enqueuesOnlyDescendantAlbumsAcrossSubfolders() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     // Inside the target folder: one direct album + one nested under a subfolder.
     let directAlbum = seedAlbum(
@@ -436,7 +411,7 @@ struct ExportFolderTests {
   /// album, so folder-walk and per-album walk are interchangeable.
   @Test func descendantAlbumPlacementIsIdenticalToDirectExport() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let nested = seedAlbum(
       h.photoLib, localId: "summer", ids: ["s1"], pathComponents: ["2025"])
@@ -471,7 +446,7 @@ struct ExportFolderTests {
 
   @Test func emptyFolderSetsNoAlbumsMessage() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let empty = PhotoCollectionDescriptor(
       id: "folder:empty", localIdentifier: "empty", title: "Empty",
@@ -490,7 +465,7 @@ struct ExportFolderTests {
   /// refactor switches from `albumLocalIds(under:)` (recursive) to a one-level lookup.
   @Test func folderWithOnlySubfoldersStillEnqueuesNestedAlbums() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let leafAlbum = seedAlbum(
       h.photoLib, localId: "leaf", ids: ["l1"],
@@ -522,7 +497,7 @@ struct ExportFolderTests {
 
   @Test func missingFolderSetsExplanatoryMessage() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     h.photoLib.collectionTree = []
 
@@ -551,7 +526,7 @@ struct ExportFolderTests {
     async throws
   {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let album = seedAlbum(
       h.photoLib, localId: "done", ids: ["d1"], pathComponents: ["F"])
@@ -592,7 +567,7 @@ struct ExportFolderTests {
   /// expanding subfolder tiles to their descendant album ids.
   @Test func startExportAlbumsEnqueuesSuppliedAlbumsOnly() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
     let albumB = seedAlbum(h.photoLib, localId: "B", ids: ["b1", "b2"])
@@ -622,7 +597,7 @@ struct ExportFolderTests {
   /// of its child albums are both selected.
   @Test(.timeLimit(.minutes(1))) func startExportAlbumsDeduplicatesInput() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "dup", ids: ["x1", "x2"])
     h.photoLib.collectionTree = [album]
@@ -646,7 +621,7 @@ struct ExportFolderTests {
 
   @Test func startExportAlbumsWithEmptyListSetsEmptyMessage() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     h.manager.startExportAlbums(collectionIds: [])
     await waitUntil(h.manager.emptyRunMessage != nil)
@@ -659,7 +634,7 @@ struct ExportFolderTests {
     async throws
   {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "done", ids: ["d1"])
     h.photoLib.collectionTree = [album]

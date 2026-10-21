@@ -25,30 +25,10 @@ struct ExportPipelineTests {
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore
   ) {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let tempDir =
-      storeRootURL ?? TestScratch.directory("ExportPipelineTest")
-    let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
-    let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collections.configure(for: "test")
-
-    // Clear the persisted version selection so ExportManager starts at its default
-    // regardless of what a sibling test suite may have written.
-    let defaults = userDefaults ?? TestScratch.defaults("ExportPipeline")
-
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collections,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return (manager, photoLib, dest, writer, fileSystem, store)
+    let h = ExportManagerHarness(
+      label: "ExportPipelineTest", storeRootURL: storeRootURL,
+      userDefaults: userDefaults ?? TestScratch.defaults("ExportPipeline"), fileSystem: fileSystem)
+    return (h.manager, h.photoLib, h.dest, h.writer, h.fileSystem, h.store)
   }
 
   // MARK: - Export happy path

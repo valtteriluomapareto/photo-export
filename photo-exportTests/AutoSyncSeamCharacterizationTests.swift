@@ -51,52 +51,28 @@ struct AutoSyncSeamCharacterizationTests {
 
   // MARK: - Harness
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let store: ExportRecordStore
-    let collectionStore: CollectionExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    func cleanup() async {
-      if let checkpoint = writer.checkpoint {
-        await checkpoint.releaseAll()
-      }
-      manager.cancelAndClear()
-      store.flushForTesting()
-      collectionStore.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
+  private func cleanupHarness(_ h: Harness) async {
+    let manager = h.manager
+    let dest = h.dest
+    let writer = h.writer
+    let store = h.store
+    let collectionStore = h.collectionStore
+    let storeRoot = h.storeRoot
+
+    if let checkpoint = writer.checkpoint {
+      await checkpoint.releaseAll()
     }
+    manager.cancelAndClear()
+    store.flushForTesting()
+    collectionStore.flushForTesting()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
   private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("AutoSyncSeam")
-    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("AutoSyncSeam")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: store,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      store: store, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+    Harness(label: "AutoSyncSeam")
   }
 
   /// Runs `body` with a fresh harness and always awaits its cleanup, including when the
@@ -106,10 +82,10 @@ struct AutoSyncSeamCharacterizationTests {
     do {
       try await body(harness)
     } catch {
-      await harness.cleanup()
+      await cleanupHarness(harness)
       throw error
     }
-    await harness.cleanup()
+    await cleanupHarness(harness)
   }
 
   /// A state that is both manual- and AutoSync-active would let the canonical mapping

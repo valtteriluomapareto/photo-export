@@ -171,7 +171,7 @@ struct SidebarMultiSelectTests {
   /// iteration.
   @Test(.timeLimit(.minutes(1))) func timelineSelectionEnqueuesYearsAndMonths() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     // 2026 has two months; 2024 has one month seeded. The year enqueue path walks
     // all 12 months of 2026 (via the fake's `fetchAssets(year: month: nil)`), so
@@ -201,7 +201,7 @@ struct SidebarMultiSelectTests {
   /// and must not leave the manager in `isEnqueueingAll`.
   @Test func timelineSelectionEmptyBucketsSurfacesMessage() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     h.manager.startExportTimelineSelection(years: [], months: [])
     await waitUntil(h.manager.emptyRunMessage != nil)
@@ -215,7 +215,7 @@ struct SidebarMultiSelectTests {
   /// year A's jobs land, cancel, release the gate, assert the manager is idle.
   @Test func cancelMidTimelineSelectionLoopResetsState() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     h.photoLib.assetsByYearMonth["2026-3"] = [makeAsset(id: "a26", year: 2026, month: 3)]
     h.photoLib.assetsByYearMonth["2024-5"] = [makeAsset(id: "a24", year: 2024, month: 5)]
@@ -250,7 +250,7 @@ struct SidebarMultiSelectTests {
   /// scoped wrapper sees the partial state.
   @Test func timelineSelectionPartialFailureDrainsQueuedJobs() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let asset1 = makeAsset(id: "a26-1", year: 2026, month: 3)
     let asset2 = makeAsset(id: "a26-2", year: 2026, month: 3)
@@ -375,7 +375,7 @@ struct SidebarMultiSelectTests {
     async throws
   {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
     let albumB = seedAlbum(
@@ -413,7 +413,7 @@ struct SidebarMultiSelectTests {
   /// message.
   @Test func collectionsSelectionEmptyBucketsSurfacesMessage() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     h.manager.startExportCollectionsSelection(.empty)
     await waitUntil(h.manager.emptyRunMessage != nil)
@@ -431,7 +431,7 @@ struct SidebarMultiSelectTests {
   /// the generation so a re-dispatch can run cleanly.
   @Test func cancelMidCollectionsSelectionBetweenBucketsResetsState() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     // Favorites: one asset; album A: one asset. Gate album A's fetch so we can
     // cancel after favorites is done but before the album loop completes.
@@ -491,7 +491,7 @@ struct SidebarMultiSelectTests {
   /// check here is the strongest dispatcher-level property available.)
   @Test func multiSelectCollectionsDispatcherDelegatesPerBucketToEnqueueCollection() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     // One asset per bucket: favorites, a top-level album, a top-level shared
     // album. Each must produce a distinct `placement.kind` in the queue.
@@ -553,7 +553,7 @@ struct SidebarMultiSelectTests {
   /// fire as expected).
   @Test func multiSelectEnqueueRoutesThroughQueueCoordinator() async throws {
     let h = makeHarness()
-    defer { h.cleanup() }
+    defer { cleanupHarness(h) }
 
     h.photoLib.assetsByYearMonth["2026-3"] = [makeAsset(id: "a1", year: 2026, month: 3)]
     h.photoLib.resourcesByAssetId["a1"] = [
@@ -583,49 +583,24 @@ struct SidebarMultiSelectTests {
 
   // MARK: - Test harness (mirrors ExportAllAlbumsTests)
 
-  @MainActor
-  private struct Harness {
-    let manager: ExportManager
-    let photoLib: FakePhotoLibraryService
-    let dest: FakeExportDestination
-    let writer: FakeAssetResourceWriter
-    let timelineStore: ExportRecordStore
-    let collectionStore: CollectionExportRecordStore
-    let storeRoot: URL
+  private typealias Harness = ExportManagerHarness
 
-    func cleanup() {
-      manager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
-      try? FileManager.default.removeItem(at: storeRoot)
-      dest.cleanup()
-    }
+  private func cleanupHarness(_ h: Harness) {
+    let manager = h.manager
+    let dest = h.dest
+    let timelineStore = h.timelineStore
+    let collectionStore = h.collectionStore
+    let storeRoot = h.storeRoot
+
+    manager.cancelAndClear()
+    timelineStore.flushForTesting()
+    collectionStore.flushForTesting()
+    try? FileManager.default.removeItem(at: storeRoot)
+    dest.cleanup()
   }
 
   private func makeHarness() -> Harness {
-    let photoLib = FakePhotoLibraryService()
-    let dest = FakeExportDestination()
-    let writer = FakeAssetResourceWriter()
-    let fileSystem = FakeFileSystem()
-    let storeRoot = TestScratch.directory("SidebarMultiSelect")
-    let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
-    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
-    let defaults = TestScratch.defaults("SidebarMultiSelect")
-    let manager = ExportManager(
-      photoLibraryService: photoLib,
-      exportDestination: dest,
-      exportRecordStore: timelineStore,
-      collectionExportRecordStore: collectionStore,
-      assetResourceWriter: writer,
-      fileSystem: fileSystem,
-      userDefaults: defaults
-    )
-    return Harness(
-      manager: manager, photoLib: photoLib, dest: dest, writer: writer,
-      timelineStore: timelineStore, collectionStore: collectionStore,
-      storeRoot: storeRoot)
+    Harness(label: "SidebarMultiSelect")
   }
 
   private func makeAsset(id: String, year: Int = 2024, month: Int = 1) -> AssetDescriptor {
