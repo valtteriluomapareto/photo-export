@@ -280,6 +280,66 @@ struct DestinationSafetyMonitorTests {
     #expect(harness.monitor.needsSafetyConfirmation == true)
   }
 
+  /// A destination whose history is still loading when its scan finds files is judged on the
+  /// loaded history, so an existing backup is not flagged and Auto Export is not blocked.
+  @Test(.timeLimit(.minutes(2)))
+  func existingHistoryNotFlaggedWhileLoading() async throws {
+    let storeRoot = TestScratch.directory("SafetyMonitor-loading")
+    let io = HeldReadIO()
+    let recordStore = ExportRecordStore(baseDirectoryURL: storeRoot, recordLogIO: io)
+    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot, recordLogIO: io)
+    let scan = AsyncCheckpoint()
+    defer {
+      io.releaseAll()
+      recordStore.flushForTesting()
+      collectionStore.flushForTesting()
+      try? FileManager.default.removeItem(at: storeRoot)
+    }
+    let fp = fingerprint(id: "dest-loading")
+    recordStore.configure(for: fp.id)
+    recordStore.markVariantExported(
+      assetId: "asset-1", variant: .original, year: 2025, month: 1,
+      relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
+    try await recordStore.flush()
+    recordStore.configure(for: nil)
+
+    // The destination is picked: its history starts loading, held at the snapshot read, and
+    // the monitor evaluates it once.
+    let snapshot = storeRoot.appendingPathComponent(fp.id)
+      .appendingPathComponent(ExportRecordStore.Constants.snapshotFileName)
+    io.hold(snapshot)
+    recordStore.beginConfigure(for: fp.id)
+    collectionStore.beginConfigure(for: fp.id)
+    try #require(recordStore.state == .loading)
+    let monitor = DestinationSafetyMonitor(
+      identityPublisher: CurrentValueSubject<DestinationIdentity, Never>(
+        DestinationIdentity(stableId: fp.id, fingerprint: fp)
+      ).eraseToAnyPublisher(),
+      exportRecordStore: recordStore,
+      collectionExportRecordStore: collectionStore,
+      confirmationStore: InMemoryDestinationSafetyConfirmationStore(),
+      scanDirectory: { @MainActor in
+        await scan.enter()
+        return true
+      })
+    monitor.attach()
+
+    // The scan finds files while the history is still held.
+    try #require(await scan.waitForEnter(count: 1))
+    #expect(monitor.completedEvaluationCount == 0)
+    await scan.release()
+    #expect(
+      await eventually("the evaluation waits for the history or finishes") {
+        recordStore.pendingSettleWaiterCount == 1 || monitor.completedEvaluationCount == 1
+      })
+    #expect(recordStore.state == .loading)
+    io.release(snapshot)
+    #expect(await eventually("the evaluation finishes") { monitor.completedEvaluationCount == 1 })
+
+    #expect(recordStore.state == .ready)
+    #expect(monitor.needsSafetyConfirmation == false)
+  }
+
   @MainActor
   private final class ScanCallsRef {
     var callCount: Int = 0

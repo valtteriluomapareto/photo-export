@@ -168,12 +168,42 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// do not abort the load. A missing snapshot is not an error (returns `.absent`); a
   /// present-but-undecodable snapshot is reported as `.corrupt` with the file untouched.
   func load() -> LoadResult {
-    let raw = Self.readFiles(snapshotURL: snapshotURL, logURL: logURL, logIO: logIO)
-    let result = Self.decode(
-      raw, snapshotURL: snapshotURL, logURL: logURL,
-      dateDecodingStrategy: dateDecodingStrategy, logger: logger)
-    if let separator = result.needsLogSeparator { needsLogSeparator = separator }
+    let inputs = readInputs
+    let result = inputs.decode(inputs.read())
+    adoptLogSeparator(result.needsLogSeparator)
     return result
+  }
+
+  /// Everything `readFiles` and `decode` need, so a load can run them on any thread with the
+  /// same files, log IO and decoding as `load()`.
+  struct ReadInputs: Sendable {
+    let snapshotURL: URL
+    let logURL: URL
+    let logIO: any JSONLRecordLogIO
+    let dateDecodingStrategy: JSONDecoder.DateDecodingStrategy
+    let logger: Logger
+
+    func read() -> RawLoad {
+      JSONLRecordFile.readFiles(snapshotURL: snapshotURL, logURL: logURL, logIO: logIO)
+    }
+
+    func decode(_ raw: RawLoad) -> LoadResult {
+      JSONLRecordFile.decode(
+        raw, snapshotURL: snapshotURL, logURL: logURL,
+        dateDecodingStrategy: dateDecodingStrategy, logger: logger)
+    }
+  }
+
+  var readInputs: ReadInputs {
+    ReadInputs(
+      snapshotURL: snapshotURL, logURL: logURL, logIO: logIO,
+      dateDecodingStrategy: dateDecodingStrategy, logger: logger)
+  }
+
+  /// Takes on what a load found at the end of the log (`LoadResult.needsLogSeparator`). `nil`
+  /// means the log could not be read, so the file keeps what it knew before.
+  func adoptLogSeparator(_ separator: Bool?) {
+    if let separator { needsLogSeparator = separator }
   }
 
   /// Reads the snapshot, then the log. File IO only: nothing is decoded or logged, so the

@@ -83,7 +83,12 @@ struct YearContentView: View {
   }
 
   private var summaryView: some View {
-    HStack(spacing: 8) {
+    #if DEBUG
+      bodyCounter?.recordText(
+        [totalCount.map { $0 == 1 ? "1 photo" : "\($0) photos" } ?? "Counting…"],
+        for: "year-summary")
+    #endif
+    return HStack(spacing: 8) {
       Image(systemName: "calendar")
         .foregroundStyle(.secondary)
       if let totalCount {

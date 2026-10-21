@@ -182,6 +182,11 @@ struct MonthContentView: View, Equatable {
     let summary = exportRecordStore.monthSummary(
       assets: viewModel.assets, selection: versionSelection,
       livePhotosPaired: livePhotosPaired)
+    #if DEBUG
+      bodyCounter?.recordText(
+        ["\(summary.status == .notExported ? 0 : summary.exportedCount)/\(summary.totalCount) exported"],
+        for: "month-summary")
+    #endif
     return HStack(spacing: 8) {
       switch summary.status {
       case .complete:

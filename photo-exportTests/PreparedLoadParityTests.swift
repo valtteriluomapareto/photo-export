@@ -53,14 +53,19 @@ struct PreparedLoadParityTests {
     let snapshotURL = directory.appendingPathComponent(ExportRecordStore.Constants.snapshotFileName)
     let logURL = directory.appendingPathComponent(ExportRecordStore.Constants.logFileName)
     let logger = Logger(subsystem: "test", category: "PreparedLoadParity")
+    // The store's own file supplies the decoding, as the store's load does.
+    let inputs = ExportRecordStore.RecordFile(
+      snapshotURL: snapshotURL, logURL: logURL, ioQueue: DispatchQueue(label: "parity"),
+      logger: logger
+    ).readInputs
 
     // No `await` on the steps: this only compiles while none is isolated to the main actor.
     let (outcome, needsLogSeparator) = await Task.detached {
       let raw = ExportRecordStore.RecordFile.readFiles(
-        snapshotURL: snapshotURL, logURL: logURL, logIO: ProductionJSONLRecordLogIO())
+        snapshotURL: inputs.snapshotURL, logURL: inputs.logURL, logIO: inputs.logIO)
       let decoded = ExportRecordStore.RecordFile.decode(
-        raw, snapshotURL: snapshotURL, logURL: logURL, dateDecodingStrategy: .iso8601,
-        logger: logger)
+        raw, snapshotURL: inputs.snapshotURL, logURL: inputs.logURL,
+        dateDecodingStrategy: inputs.dateDecodingStrategy, logger: inputs.logger)
       return (ExportRecordStore.prepare(decoded), decoded.needsLogSeparator)
     }.value
 
@@ -97,16 +102,22 @@ struct PreparedLoadParityTests {
     let logURL = directory.appendingPathComponent(CollectionExportRecordStore.Constants.logFileName)
     let favoritesId = "collections:favorites"
     let logger = Logger(subsystem: "test", category: "PreparedLoadParity")
+    // The store's own file supplies the decoding, as the store's load does.
+    let inputs = CollectionExportRecordStore.RecordFile(
+      snapshotURL: snapshotURL, logURL: logURL, ioQueue: DispatchQueue(label: "parity"),
+      logger: logger
+    ).readInputs
 
     // No `await` on the steps: this only compiles while none is isolated to the main actor.
     let (outcome, needsLogSeparator) = await Task.detached {
       let raw = CollectionExportRecordStore.RecordFile.readFiles(
-        snapshotURL: snapshotURL, logURL: logURL, logIO: ProductionJSONLRecordLogIO())
+        snapshotURL: inputs.snapshotURL, logURL: inputs.logURL, logIO: inputs.logIO)
       let decoded = CollectionExportRecordStore.RecordFile.decode(
-        raw, snapshotURL: snapshotURL, logURL: logURL, dateDecodingStrategy: .iso8601,
-        logger: logger)
+        raw, snapshotURL: inputs.snapshotURL, logURL: inputs.logURL,
+        dateDecodingStrategy: inputs.dateDecodingStrategy, logger: inputs.logger)
       return (
-        CollectionExportRecordStore.prepare(decoded, logger: logger), decoded.needsLogSeparator
+        CollectionExportRecordStore.prepare(decoded, logger: inputs.logger),
+        decoded.needsLogSeparator
       )
     }.value
 
@@ -136,6 +147,82 @@ struct PreparedLoadParityTests {
     }
     #expect(
       store.isFilenameClaimed(
+        Self.keptName, placement: favorites, subfolder: nil, exceptAsset: "probe"))
+  }
+
+  /// The asynchronous load installs what the blocking `configure(for:)` installs.
+  @Test(arguments: ["v1.0.3/A", "v1.0.3/B", "v1.6.5/A", "v1.6.5/B"])
+  func timelineAsyncLoadMatchesConfiguredStore(fixture: String) async throws {
+    let parts = fixture.split(separator: "/").map(String.init)
+    let (tag, destination) = (parts[0], parts[1])
+    let copies = try copies(of: tag)
+    defer { copies.cleanup() }
+
+    let loaded = ExportRecordStore(baseDirectoryURL: copies.prepared)
+    loaded.beginConfigure(for: destination)
+    await loaded.waitUntilSettled()
+    defer { loaded.flushForTesting() }
+    let store = ExportRecordStore(baseDirectoryURL: copies.configured)
+    store.configure(for: destination)
+    defer { store.flushForTesting() }
+
+    #expect(loaded.state == .ready)
+    #expect(store.state == .ready)
+    #expect(!loaded.recordsById.isEmpty)
+    #expect(loaded.recordsById == store.recordsById)
+    #expect(Set(loaded.monthCounters.keys) == Set(store.monthCounters.keys))
+    for (key, counters) in store.monthCounters {
+      #expect(loaded.monthCounters[key]?.variantStatus == counters.variantStatus)
+      #expect(loaded.monthCounters[key]?.bothVariantsDone == counters.bothVariantsDone)
+      #expect(
+        loaded.monthCounters[key]?.originalDoneAtNaturalStem == counters.originalDoneAtNaturalStem)
+      #expect(loaded.monthCounters[key]?.editedFallbackCovered == counters.editedFallbackCovered)
+      #expect(loaded.monthCounters[key]?.pairedVideoIncomplete == counters.pairedVideoIncomplete)
+    }
+    guard destination == "A" else { return }
+    for name in Self.releasedTimelineNames {
+      #expect(
+        !loaded.isFilenameClaimed(
+          name, year: 2024, month: 4, subfolder: nil, exceptAsset: "probe"),
+        "\(name) is claimed after the load")
+    }
+    #expect(
+      loaded.isFilenameClaimed(
+        Self.keptName, year: 2024, month: 4, subfolder: nil, exceptAsset: "probe"))
+  }
+
+  /// The asynchronous load installs what the blocking `configure(for:)` installs.
+  @Test(arguments: ["A", "B"])
+  func collectionAsyncLoadMatchesConfiguredStore(destination: String) async throws {
+    let copies = try copies(of: "v1.6.5")
+    defer { copies.cleanup() }
+
+    let loaded = CollectionExportRecordStore(baseDirectoryURL: copies.prepared)
+    loaded.beginConfigure(for: destination)
+    await loaded.waitUntilSettled()
+    defer { loaded.flushForTesting() }
+    let store = CollectionExportRecordStore(baseDirectoryURL: copies.configured)
+    store.configure(for: destination)
+    defer { store.flushForTesting() }
+
+    #expect(loaded.state == .ready)
+    #expect(store.state == .ready)
+    #expect(!loaded.recordBodies.isEmpty)
+    #expect(loaded.recordBodies == store.recordBodies)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    encoder.dateEncodingStrategy = .iso8601
+    #expect(try encoder.encode(loaded.placements) == encoder.encode(store.placements))
+    guard destination == "A" else { return }
+    let favorites = try #require(loaded.placements["collections:favorites"])
+    for name in Self.releasedFavoritesNames {
+      #expect(
+        !loaded.isFilenameClaimed(
+          name, placement: favorites, subfolder: nil, exceptAsset: "probe"),
+        "\(name) is claimed after the load")
+    }
+    #expect(
+      loaded.isFilenameClaimed(
         Self.keptName, placement: favorites, subfolder: nil, exceptAsset: "probe"))
   }
 }

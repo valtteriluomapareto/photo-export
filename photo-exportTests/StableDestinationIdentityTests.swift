@@ -517,7 +517,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func failedRestoreKeepsLegacyHashSoSameFolderReselectMigrates() throws {
+  func failedRestoreKeepsLegacyHashSoSameFolderReselectMigrates() async throws {
     let dir = try makeTempDir()
     let recordsRoot = TestScratch.directory("StableId-Records")
     defer {
@@ -557,6 +557,11 @@ struct StableDestinationIdentityTests {
       for: stableId, destinationManager: manager,
       timelineStore: timelineStore, collectionStore: collectionStore)
     #expect(result == .success)
+    // The stores load the migrated history off the main actor before the folders are removed.
+    await timelineStore.waitUntilSettled()
+    await collectionStore.waitUntilSettled()
+    #expect(timelineStore.state == .ready)
+    #expect(collectionStore.state == .ready)
     let migratedDir = recordsRoot.appendingPathComponent(stableId, isDirectory: true)
     #expect(FileManager.default.fileExists(atPath: migratedDir.path))
     #expect(!FileManager.default.fileExists(atPath: legacyDir.path))  // renamed away, not orphaned

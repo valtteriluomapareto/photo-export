@@ -289,7 +289,9 @@ final class CollectionExportRecordStore: ObservableObject {
       changeNotifier.notifyNow()
       return
     }
-    switch Self.prepare(file.load(), logger: logger) {
+    let outcome = Self.prepare(file.load(), logger: logger)
+    finishedLoadCount += 1
+    switch outcome {
     case .ioFailure(let error):
       persistenceError = error.localizedDescription
       state = .persistenceFailed
@@ -311,6 +313,23 @@ final class CollectionExportRecordStore: ObservableObject {
     replayFinalCompletions()
     changeNotifier.notifyNow()
   }
+
+  /// Starts loading `destinationId`'s history. Not asynchronous yet.
+  func beginConfigure(for destinationId: String?) {
+    configure(for: destinationId)
+  }
+
+  /// Returns once the store is not loading.
+  func waitUntilSettled() async {}
+
+  /// Loads that finished, applied or discarded. Lets tests wait on progress.
+  private(set) var finishedLoadCount = 0
+
+  /// Tasks waiting in `waitUntilSettled()`.
+  var pendingSettleWaiterCount: Int { 0 }
+
+  /// What the current destination's load reads with.
+  var readInputs: RecordFile.ReadInputs? { jsonl?.readInputs }
 
   /// The placements and records a successful load installs.
   struct PreparedLoad: Sendable {
@@ -1051,7 +1070,7 @@ final class CollectionExportRecordStore: ObservableObject {
     for completion in completions { completion() }
   }
 
-  private func retainFinalCommitFailure(
+  func retainFinalCommitFailure(
     _ error: any Error, context: FinalCommitContext<Snapshot, LogOp>
   ) {
     if configuredDestinationId == context.destinationId {

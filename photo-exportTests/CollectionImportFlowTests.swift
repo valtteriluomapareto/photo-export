@@ -14,8 +14,10 @@ struct CollectionImportFlowTests {
 
   /// A timeline file, an album file for the same asset, a second album, and history that an
   /// import would change: a timeline record and an album record whose files are missing.
-  private func makeScenario(_ label: String) throws -> CollectionImportHarness {
-    let h = CollectionImportHarness(label)
+  private func makeScenario(
+    _ label: String, recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
+  ) throws -> CollectionImportHarness {
+    let h = CollectionImportHarness(label, recordLogIO: recordLogIO)
     h.library.collectionTree = [F.album("paris", "Paris"), F.album("rome", "Rome")]
     let both = h.addAsset("both", "IMG_0001.JPG", date: F.date(1))
     let romeOnly = h.addAsset("rome-1", "IMG_0002.JPG", date: F.date(2))
@@ -127,6 +129,109 @@ struct CollectionImportFlowTests {
     #expect(report.collectionsSkipped)
     #expect(report.collectionMatchedCount == 0)
     #expect(h.library.scopeFetchCalls.isEmpty, "albums are not read when they can't be recorded")
+    await h.cleanup()
+  }
+
+  /// Reloads one store's history with its snapshot read held, as right after a destination
+  /// change, and returns the held snapshot.
+  private func reloadHeld(
+    _ h: CollectionImportHarness, io: HeldReadIO, collection: Bool
+  ) throws -> URL {
+    h.timeline.flushForTesting()
+    h.collections.flushForTesting()
+    let snapshot = h.snapshotURL(collection: collection)
+    io.hold(snapshot)
+    if collection {
+      h.collections.configure(for: nil)
+      h.collections.beginConfigure(for: h.destinationId)
+      try #require(h.collections.state == .loading)
+    } else {
+      h.timeline.configure(for: nil)
+      h.timeline.beginConfigure(for: h.destinationId)
+      try #require(h.timeline.state == .loading)
+    }
+    return snapshot
+  }
+
+  /// An import started while the album history loads waits for it and adopts the albums.
+  @Test func importWaitsForLoadingAlbumHistoryAndAdoptsAlbums() async throws {
+    let io = HeldReadIO()
+    let h = try makeScenario("CollectionImportAlbumsLoading", recordLogIO: io)
+    let snapshot = try reloadHeld(h, io: io, collection: true)
+
+    #expect(h.manager.importCoordinator.startImport() == nil)
+    #expect(h.manager.isImporting)
+    // Keep the history held until the import waits for it, or has run without it.
+    #expect(
+      await eventually("the import waits for the album history or ends") {
+        h.collections.pendingSettleWaiterCount == 1 || !h.manager.isImporting
+      })
+    io.release(snapshot)
+    await h.manager.waitForImportCompletion()
+
+    #expect(h.manager.importError == nil)
+    let report = try #require(h.manager.importResult)
+    #expect(!report.collectionsSkipped)
+    #expect(report.collectionMatchedCount == 2)
+    let paris = try #require(
+      h.collections.placements.values.first { $0.collectionLocalIdentifier == "paris" })
+    #expect(
+      h.collections.exportInfo(assetId: "both", placement: paris)?.variants[.original]?.status
+        == .done)
+    io.releaseAll()
+    await h.cleanup()
+  }
+
+  /// An import started while the timeline history loads waits for it instead of refusing.
+  @Test func importWaitsForLoadingTimelineHistory() async throws {
+    let io = HeldReadIO()
+    let h = try makeScenario("CollectionImportTimelineLoading", recordLogIO: io)
+    let snapshot = try reloadHeld(h, io: io, collection: false)
+
+    #expect(h.manager.importCoordinator.startImport() == nil)
+    #expect(h.manager.isImporting)
+    // Keep the history held until the import waits for it, or has run without it.
+    #expect(
+      await eventually("the import waits for the timeline history or ends") {
+        h.timeline.pendingSettleWaiterCount == 1 || !h.manager.isImporting
+      })
+    io.release(snapshot)
+    await h.manager.waitForImportCompletion()
+
+    #expect(h.manager.importError == nil)
+    let report = try #require(h.manager.importResult)
+    #expect(report.matchedCount == 1)
+    #expect(h.timeline.exportInfo(assetId: "both")?.variants[.original]?.status == .done)
+    #expect(h.timeline.exportInfo(assetId: "missing") == nil)
+    io.releaseAll()
+    await h.cleanup()
+  }
+
+  /// A destination change while the import waits for the history abandons the import: nothing
+  /// is imported into the new destination's history or reported.
+  @Test func destinationChangeWhileWaitingForHistoryAbandonsImport() async throws {
+    let io = HeldReadIO()
+    let h = try makeScenario("CollectionImportLoadingSwitch", recordLogIO: io)
+    let snapshot = try reloadHeld(h, io: io, collection: false)
+
+    #expect(h.manager.importCoordinator.startImport() == nil)
+    #expect(h.manager.isImporting)
+    #expect(
+      await eventually("the import waits for the timeline history or ends") {
+        h.timeline.pendingSettleWaiterCount == 1 || !h.manager.isImporting
+      })
+    // The held read blocks the IO queue the switch drains, so release it in the same turn.
+    io.release(snapshot)
+    h.timeline.configure(for: "other")
+    h.collections.configure(for: "other")
+    await h.manager.waitForImportCompletion()
+
+    #expect(!h.manager.isImporting)
+    #expect(h.manager.importResult == nil)
+    #expect(h.manager.importError == nil)
+    #expect(h.timeline.exportInfo(assetId: "both") == nil)
+    #expect(h.collections.placements.isEmpty)
+    io.releaseAll()
     await h.cleanup()
   }
 
