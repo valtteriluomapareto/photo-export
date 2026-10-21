@@ -154,6 +154,9 @@ enum ExportIssuesProjection {
     destinationId: String?, timeline: ExportRecordStore, collections: CollectionExportRecordStore,
     retryState: AutoSyncRetryState, retryDestinationId: String?
   ) -> Snapshot {
+    // Raw record dictionaries share the coalesced revision used by store queries.
+    _ = timeline.mutationCounter
+    _ = collections.mutationCounter
     let timelineMatches = destinationId != nil && timeline.destinationId == destinationId
     let collectionsMatch = destinationId != nil && collections.destinationId == destinationId
     var unavailable: [String] = []

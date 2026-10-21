@@ -8,6 +8,43 @@ import Testing
   @MainActor
   @Suite(.timeLimit(.minutes(2)), .serialized)
   struct RecordStoreAlertRecoveryTests {
+    private final class FaultIO: JSONLRecordLogIO, @unchecked Sendable {
+      private let lock = NSLock()
+      private var readFault: Error?
+      private var writeFault: Error?
+      private var reads = 0
+      var readCount: Int { lock.withLock { reads } }
+      private let real = ProductionJSONLRecordLogIO()
+      func failReads(_ error: Error) { lock.withLock { readFault = error } }
+      func failWrites(_ error: Error) { lock.withLock { writeFault = error } }
+      func readIfPresent(at url: URL) throws -> Data? {
+        lock.withLock { reads += 1 }
+        if let error = lock.withLock({ readFault }) { throw error }
+        return try real.readIfPresent(at: url)
+      }
+      func openForAppending(at url: URL) throws -> FileHandle { try real.openForAppending(at: url) }
+      func write(_ data: Data, to handle: FileHandle) throws {
+        if let error = lock.withLock({ writeFault }) { throw error }
+        try real.write(data, to: handle)
+      }
+      func synchronize(_ handle: FileHandle) throws { try real.synchronize(handle) }
+    }
+
+    @MainActor
+    private final class Tick: ObservableObject {
+      @Published var value = 0
+    }
+
+    private struct RenderProbe: View {
+      @ObservedObject var tick: Tick
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("alert-render-tick:\(tick.value)")
+        Color.clear.frame(width: 1, height: 1)
+      }
+    }
+
     @MainActor
     private final class Fixture {
       let root = TestScratch.directory("RecordStoreAlertRecovery")
@@ -23,8 +60,12 @@ import Testing
       let photoManager: PhotoLibraryManager
       let counter = BodyInvalidationCounter()
       var window: NSWindow?
+      let tick = Tick()
 
-      init(collection: Bool = false, storageFailure: Bool = false) throws {
+      init(
+        collection: Bool = false, storageFailure: Bool = false, ready: Bool = false,
+        recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
+      ) throws {
         defaults = TestScratch.defaults(suiteName: defaultsName)
         let directory = root.appendingPathComponent("A")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -32,16 +73,21 @@ import Testing
           collection
           ? CollectionExportRecordStore.Constants.snapshotFileName
           : ExportRecordStore.Constants.snapshotFileName
-        if storageFailure {
+        if !ready, storageFailure {
           try FileManager.default.createDirectory(
             at: directory.appendingPathComponent(name), withIntermediateDirectories: true)
-        } else {
+        } else if !ready {
           try Data("corrupt tracking".utf8).write(to: directory.appendingPathComponent(name))
         }
-        timeline = ExportRecordStore(baseDirectoryURL: root)
-        collections = CollectionExportRecordStore(baseDirectoryURL: root)
+        timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: recordLogIO)
+        collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: recordLogIO)
         timeline.configure(for: "A")
         collections.configure(for: "A")
+        if ready {
+          collections.upsertPlacement(.favorites())
+          collections.flushPendingNotifications()
+          collections.drainSynchronously()
+        }
         manager = ExportManager(
           photoLibraryService: photos, exportDestination: destination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -55,6 +101,7 @@ import Testing
         let hosted = NSHostingView(
           rootView: Color.clear.frame(width: 600, height: 400)
             .recordStoreAlertHost()
+            .overlay(alignment: .topLeading) { RenderProbe(tick: tick, counter: counter) }
             .environmentObject(timeline).environmentObject(collections).environmentObject(manager)
             .environmentObject(destinationManager).environmentObject(photoManager)
             .environment(\.bodyInvalidationCounter, counter))
@@ -65,6 +112,33 @@ import Testing
         owned.contentView = hosted
         window = owned
         owned.orderFront(nil)
+      }
+
+      func barrier() async throws {
+        tick.value += 1
+        let key = "alert-render-tick:\(tick.value)"
+        try #require(await observe(in: window) { counter.count(for: key) > 0 })
+        window?.contentView?.layoutSubtreeIfNeeded()
+      }
+
+      func state(_ collection: Bool) -> RecordStoreState {
+        collection ? collections.state : timeline.state
+      }
+      func error(_ collection: Bool) -> String? {
+        collection ? collections.persistenceError : timeline.persistenceError
+      }
+      func configure(_ id: String, collection: Bool) {
+        if collection { collections.configure(for: id) } else { timeline.configure(for: id) }
+      }
+      func write(_ collection: Bool) {
+        if collection {
+          collections.markVariantInProgress(
+            assetId: "new", placement: .favorites(), variant: .original, filename: "NEW.JPG")
+        } else {
+          timeline.markVariantInProgress(
+            assetId: "new", variant: .original, year: 2026, month: 9,
+            relPath: "2026/09/", filename: "NEW.JPG")
+        }
       }
 
       func close() {
@@ -264,6 +338,110 @@ import Testing
       #expect(titles.contains("Retry"))
       #expect(!titles.contains { $0.contains("Reset") })
       #expect(!f.manager.isImporting)
+    }
+
+    /// Passes before: failures after mounting a ready host present the real recovery alert.
+    @Test(arguments: [false, true], [false, true])
+    func failureAfterMountPresentsRecoveryAlert(collection: Bool, writeFailure: Bool) async throws {
+      let io = FaultIO()
+      let f = try Fixture(ready: true, recordLogIO: io)
+      defer { f.close() }
+      #expect(f.state(collection) == .ready)
+      f.show()
+      try await f.barrier()
+      #expect(f.window?.attachedSheet == nil)
+      if writeFailure {
+        io.failWrites(CocoaError(.fileWriteOutOfSpace))
+        f.write(collection)
+        try #require(await observe(in: f.window) { f.state(collection) == .persistenceFailed })
+      } else {
+        let directory = f.root.appendingPathComponent("Corrupt")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let name =
+          collection
+          ? CollectionExportRecordStore.Constants.snapshotFileName
+          : ExportRecordStore.Constants.snapshotFileName
+        try Data("corrupt tracking".utf8).write(to: directory.appendingPathComponent(name))
+        f.configure("Corrupt", collection: collection)
+        #expect(f.state(collection) == .failed)
+      }
+      let views = try await alertViews(f)
+      let titles = views.compactMap { ($0 as? NSButton)?.title }
+      #expect(writeFailure ? titles.contains("Retry") : titles.contains("Reset Records"))
+    }
+
+    /// Passes before: after a failed retry and native dismissal, the storage alert remains dismissed.
+    @Test(arguments: [false, true], [false, true])
+    func failedRetryKeepsTheStorageAlert(collection: Bool, writeFailure: Bool) async throws {
+      let io = FaultIO()
+      let f = try Fixture(ready: true, recordLogIO: io)
+      defer { f.close() }
+      f.show()
+      try await f.barrier()
+      var retrySnapshot: URL?
+      if writeFailure {
+        let name =
+          collection
+          ? CollectionExportRecordStore.Constants.snapshotFileName
+          : ExportRecordStore.Constants.snapshotFileName
+        let blocked = f.root.appendingPathComponent("A").appendingPathComponent(name)
+        let temporary = blocked.appendingPathExtension("tmp")
+        retrySnapshot = temporary
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+        try Data("replacement probe".utf8).write(to: temporary)
+        var failure: Error?
+        do {
+          try FileIOService().replaceItemAtomically(from: temporary, to: blocked)
+        } catch { failure = error }
+        try FileManager.default.removeItem(at: temporary)
+        io.failWrites(try #require(failure))
+        f.write(collection)
+        try #require(await observe(in: f.window) { f.state(collection) == .persistenceFailed })
+      } else {
+        io.failReads(CocoaError(.fileReadNoPermission))
+        f.configure("A", collection: collection)
+      }
+      let originalError = try #require(f.error(collection))
+      let views = try await alertViews(f)
+      let button = try #require(views.compactMap { $0 as? NSButton }.first { $0.title == "Retry" })
+      let ended = "retry-sheet-ended"
+      let token = NotificationCenter.default.addObserver(
+        forName: NSWindow.didEndSheetNotification, object: f.window, queue: .main
+      ) { _ in MainActor.assumeIsolated { f.counter.record(ended) } }
+      defer { NotificationCenter.default.removeObserver(token) }
+      let readsBeforeRetry = io.readCount
+      if let retrySnapshot { #expect(!FileManager.default.fileExists(atPath: retrySnapshot.path)) }
+      button.performClick(nil)
+      if let retrySnapshot {
+        let attemptedSnapshot = FileManager.default.fileExists(atPath: retrySnapshot.path)
+        #expect(attemptedSnapshot, "Retry must prepare a new snapshot before replacement fails")
+        if attemptedSnapshot {
+          let data = try Data(contentsOf: retrySnapshot)
+          let decoder = JSONDecoder()
+          decoder.dateDecodingStrategy = .iso8601
+          if collection {
+            let snapshot = try decoder.decode(CollectionExportRecordStore.Snapshot.self, from: data)
+            #expect(
+              snapshot.records[ExportPlacement.favorites().id]?["new"]?.variants["original"]?.status
+                == .inProgress)
+          } else {
+            let snapshot = try decoder.decode([String: ExportRecord].self, from: data)
+            #expect(snapshot["new"]?.variants[.original]?.status == .inProgress)
+          }
+        }
+      } else {
+        #expect(
+          io.readCount > readsBeforeRetry, "Retry must attempt to read the failed store again")
+      }
+      #expect(f.state(collection) == .persistenceFailed)
+      #expect(f.error(collection) == originalError)
+      try #require(await observe(in: f.window) { f.counter.count(for: ended) > 0 })
+      try await f.barrier()
+      let attached = f.window?.attachedSheet != nil
+      #expect(!attached)
+      Attachment.record(
+        "collection=\(collection), writeFailure=\(writeFailure), attached=\(attached)",
+        named: "failed-retry-alert.txt")
     }
 
   }

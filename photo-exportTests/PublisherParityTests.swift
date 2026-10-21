@@ -411,6 +411,40 @@ struct PublisherParityTests {
 
   // MARK: - Record stores
 
+  /// Already passes: state delivery includes equal writes and retains Published ordering.
+  @Test func timelineState() async {
+    let root = TestScratch.directory("ParityTimelineState")
+    let store = ExportRecordStore(baseDirectoryURL: root, notificationClock: TestClock())
+    store.configure(for: "A")
+    await withCleanup {
+      await assertPublishedParity(
+        store, \.state, { $0.statePublisher },
+        change: { store.configure(for: nil) },
+        unchangedWrite: .after { store.configure(for: nil) },
+        unchangedWriteDelivery: .emits)
+    } cleanup: {
+      try? await store.flush()
+      try? FileManager.default.removeItem(at: root)
+    }
+  }
+
+  /// Already passes: the collection load state has the same delivery contract as the timeline.
+  @Test func collectionState() async {
+    let root = TestScratch.directory("ParityCollectionState")
+    let store = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: TestClock())
+    store.configure(for: "A")
+    await withCleanup {
+      await assertPublishedParity(
+        store, \.state, { $0.statePublisher },
+        change: { store.configure(for: nil) },
+        unchangedWrite: .after { store.configure(for: nil) },
+        unchangedWriteDelivery: .emits)
+    } cleanup: {
+      try? await store.flush()
+      try? FileManager.default.removeItem(at: root)
+    }
+  }
+
   @Test func timelineMutationCounter() async {
     let root = TestScratch.directory("ParityTimelineCounter")
     let store = ExportRecordStore(baseDirectoryURL: root, notificationClock: TestClock())

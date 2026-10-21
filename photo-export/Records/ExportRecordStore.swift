@@ -109,6 +109,7 @@ final class ExportRecordStore: ObservableObject {
 
   /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
   @Published private(set) var state: RecordStoreState = .unconfigured
+  var statePublisher: AnyPublisher<RecordStoreState, Never> { $state.eraseToAnyPublisher() }
   @Published private(set) var persistenceError: String?
   private var hasUnsavedChanges = false
   // Immediate ownership token, separate from coalesced UI notifications. Any
@@ -121,7 +122,10 @@ final class ExportRecordStore: ObservableObject {
   // Final commits acknowledged while their destination loaded, landed once it has finished.
   private var commitsLandedWhileLoading: [String: [() -> Void]] = [:]
   private var configuredDestinationId: String?
-  var destinationId: String? { configuredDestinationId }
+  var destinationId: String? {
+    trackRecords()
+    return configuredDestinationId
+  }
   // Failed writes must survive destination switches until the user can retry saving.
   private var pendingRecovery: [String: [String: ExportRecord]] = [:]
   // Each configure starts a new generation; only the newest load is installed.
@@ -654,15 +658,27 @@ final class ExportRecordStore: ObservableObject {
     asset: AssetDescriptor, selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> Bool {
+    trackRecords()
+    let convertHEIC = convertHEICToJPEG
+    return isExportedUntracked(
+      asset: asset, selection: selection, livePhotosPaired: livePhotosPaired,
+      convertHEIC: convertHEIC)
+  }
+
+  private func isExportedUntracked(
+    asset: AssetDescriptor, selection: ExportVersionSelection,
+    livePhotosPaired: Bool, convertHEIC: Bool
+  ) -> Bool {
     guard let record = recordsById[asset.id] else { return false }
     return ExportCompletionPolicy.isComplete(
       variants: record.variants, asset: asset, selection: selection, policy: .standard,
-      convertHEICToJPEG: convertHEICToJPEG,
+      convertHEICToJPEG: convertHEIC,
       livePhotosPaired: livePhotosPaired)
   }
 
   func exportInfo(assetId: String) -> ExportRecord? {
-    recordsById[assetId]
+    trackRecords()
+    return recordsById[assetId]
   }
 
   /// Whether a record names `filename` in the folder for `year`/`month` and `subfolder`,
@@ -671,7 +687,8 @@ final class ExportRecordStore: ObservableObject {
     _ filename: String, year: Int, month: Int, subfolder: String?,
     exceptVariant variant: ExportVariant, of assetId: String
   ) -> Bool {
-    isFilenameClaimed(
+    trackRecords()
+    return isFilenameClaimed(
       filename, year: year, month: month, subfolder: subfolder, assetId: assetId,
       excluding: { $0 == variant })
   }
@@ -682,7 +699,8 @@ final class ExportRecordStore: ObservableObject {
     _ filename: String, year: Int, month: Int, subfolder: String?,
     exceptAsset assetId: String
   ) -> Bool {
-    isFilenameClaimed(
+    trackRecords()
+    return isFilenameClaimed(
       filename, year: year, month: month, subfolder: subfolder, assetId: assetId,
       excluding: { _ in true })
   }
@@ -726,9 +744,13 @@ final class ExportRecordStore: ObservableObject {
     }
   }
 
+  /// Registers reads against the same revision that coalesces record notifications.
+  private func trackRecords() { _ = mutationCounter }
+
   /// Total number of assets in `year` whose `.original` variant is `.done`. Matches legacy
   /// yearly progress counting for unadjusted libraries.
   func yearExportedCount(year: Int) -> Int {
+    trackRecords()
     var total = 0
     for month in 1...12 {
       total +=
@@ -741,6 +763,7 @@ final class ExportRecordStore: ObservableObject {
   /// Legacy month summary that counts `.original` done records. Preserved for call sites that
   /// have not yet adopted `monthSummary(assets:selection:)`.
   func monthSummary(year: Int, month: Int, totalAssets: Int) -> MonthStatusSummary {
+    trackRecords()
     let exportedCount =
       monthCounters[MonthKey(year: year, month: month)]?
       .variantStatus[.original]?[.done] ?? 0
@@ -754,6 +777,8 @@ final class ExportRecordStore: ObservableObject {
   func monthSummary(
     assets: [AssetDescriptor], selection: ExportVersionSelection, livePhotosPaired: Bool
   ) -> MonthStatusSummary {
+    trackRecords()
+    let convertHEIC = convertHEICToJPEG
     let year =
       assets.first.map { Calendar.current.component(.year, from: $0.creationDate ?? Date()) }
       ?? 0
@@ -763,7 +788,10 @@ final class ExportRecordStore: ObservableObject {
 
     var exported = 0
     for asset in assets
-    where isExported(asset: asset, selection: selection, livePhotosPaired: livePhotosPaired) {
+    where isExportedUntracked(
+      asset: asset, selection: selection, livePhotosPaired: livePhotosPaired,
+      convertHEIC: convertHEIC)
+    {
       exported += 1
     }
     return makeSummary(year: year, month: month, exported: exported, total: assets.count)
@@ -775,7 +803,8 @@ final class ExportRecordStore: ObservableObject {
   func recordCount(
     year: Int, month: Int, variant: ExportVariant, status: ExportStatus
   ) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?
       .variantStatus[variant]?[status] ?? 0
   }
 
@@ -783,13 +812,15 @@ final class ExportRecordStore: ObservableObject {
   /// `.done`. These records are definitely fully complete under `editedWithOriginals`
   /// regardless of whether the asset is currently adjusted.
   func recordCountBothVariantsDone(year: Int, month: Int) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?.bothVariantsDone ?? 0
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?.bothVariantsDone ?? 0
   }
 
   /// Count of records in `year`/`month` whose `.edited` variant is `.done`. Used by the
   /// records-only sidebar formula for the default mode.
   func recordCountEditedDone(year: Int, month: Int) -> Int {
-    recordCount(year: year, month: month, variant: .edited, status: .done)
+    trackRecords()
+    return recordCount(year: year, month: month, variant: .edited, status: .done)
   }
 
   /// Count of records in `year`/`month` with `.original.done` at a natural-stem filename
@@ -797,7 +828,8 @@ final class ExportRecordStore: ObservableObject {
   /// sidebar formula to estimate "unedited asset, exported once" rows without loading
   /// descriptors.
   func recordCountOriginalDoneAtNaturalStem(year: Int, month: Int) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
   }
 
   /// Records covered by the fallback in `(year, month)`. Counted as
@@ -805,7 +837,8 @@ final class ExportRecordStore: ObservableObject {
   /// year that finishes with fallback-covered assets reads as 100% rather
   /// than 99% — matching the asset-aware `isExported(asset:selection:)`.
   func recordCountEditedFallback(year: Int, month: Int) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?.editedFallbackCovered ?? 0
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?.editedFallbackCovered ?? 0
   }
 
   /// Records in `(year, month)` with at least one paired-video variant whose
@@ -814,7 +847,8 @@ final class ExportRecordStore: ObservableObject {
   /// whose motion file is still pending no longer reads as fully exported
   /// in the timeline sidebar / month tile badges.
   func recordCountPairedVideoIncomplete(year: Int, month: Int) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?.pairedVideoIncomplete ?? 0
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?.pairedVideoIncomplete ?? 0
   }
 
   /// Records-only approximation of "fully exported under this selection," capped by the
@@ -837,6 +871,7 @@ final class ExportRecordStore: ObservableObject {
     selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> MonthStatusSummary? {
+    trackRecords()
     guard let adjustedCount else { return nil }
     let uneditedCount = max(0, totalCount - adjustedCount)
     let origOnlyAtStem = recordCountOriginalDoneAtNaturalStem(year: year, month: month)
@@ -873,6 +908,7 @@ final class ExportRecordStore: ObservableObject {
     selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> Int {
+    trackRecords()
     var total = 0
     for month in 1...12 {
       let monthTotal = totalCountsByMonth[month] ?? 0
@@ -1022,6 +1058,7 @@ final class ExportRecordStore: ObservableObject {
   func containsCompletedFile(
     at root: URL, isCurrent: @MainActor () -> Bool = { true }
   ) async throws -> Bool? {
+    trackRecords()
     guard isCurrent(), !Task.isCancelled, state == .ready else { return nil }
     let paths = try completedVariantProbes(root: root).map(\.path)
     guard !paths.isEmpty else { return nil }

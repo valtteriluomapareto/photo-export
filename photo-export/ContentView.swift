@@ -184,6 +184,8 @@ struct YearRow: View {
     let total = yearTotal()
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("timeline-year-body:\(year)")
+      // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([], for: "timeline-year:\(year)")
     #endif
     return HStack(spacing: 8) {
