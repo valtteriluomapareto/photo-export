@@ -320,6 +320,12 @@ struct AmbiguousSameFolderTests {
       dest.cleanup()
     }
 
+    // The lifecycle coordinator starts reading the destination's history off the main actor,
+    // and a store still loading takes no writes, so the history is seeded once it has loaded.
+    await timelineStore.waitUntilSettled()
+    await collectionStore.waitUntilSettled()
+    try #require(timelineStore.state == .ready)
+
     // History whose file is in the folder, so the check proceeds to a full import. On the
     // wrong folder the file only appears once the user has chosen the right one.
     let dir = try dest.urlForRelativeDirectory("2025/03/", createIfNeeded: true)
