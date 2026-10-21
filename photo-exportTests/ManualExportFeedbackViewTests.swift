@@ -125,12 +125,6 @@ import Testing
       }
     }
 
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-    }
-
     private func reached(_ gate: AsyncCheckpoint) async -> Bool {
       await gate.waitForEnter(count: 1)
     }

@@ -133,12 +133,6 @@ struct LibraryGridSelectionLifecycleTests {
   /// SwiftUI schedules render passes independently of the stream producer. The
   /// test's time limit bounds a failed observation; stream continuations control
   /// all races.
-  private func observe(
-    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-  ) async -> Bool {
-    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-  }
-
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func disappearingGridReleasesItsPreheatWindowAndReappears(grid: Grid) async throws {
     let fixture = Fixture(grid: grid)

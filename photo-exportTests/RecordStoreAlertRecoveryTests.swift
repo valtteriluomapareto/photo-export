@@ -86,12 +86,6 @@ import Testing
       }
     }
 
-    private func observe(
-      _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-    ) async -> Bool {
-      await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-    }
-
     private func descendants(_ view: NSView) -> [NSView] {
       [view] + view.subviews.flatMap(descendants)
     }

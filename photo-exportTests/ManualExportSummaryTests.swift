@@ -61,12 +61,6 @@ struct ManualExportSummaryTests {
     await gate.waitForEnter(count: 1)
   }
 
-  private func observe(
-    _ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation
-  ) async -> Bool {
-    await eventually("observed condition", sourceLocation: sourceLocation) { condition() }
-  }
-
   private final class FailingLogIO: JSONLRecordLogIO, @unchecked Sendable {
     private let lock = NSLock()
     private var writes = 0
