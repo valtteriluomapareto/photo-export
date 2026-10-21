@@ -60,14 +60,15 @@ Run the same enforcing style checks as CI from the repository root:
 
 ```bash
 swiftlint --strict
-swift-format lint --strict --configuration .swift-format.json --recursive photo-export
+bash scripts/ci/check-swift-format.sh
 ```
 
 The formatter uses two-space indentation and 100 columns, preserving the style
 previously applied by its defaults. `.swift-format.json` must be passed explicitly;
 automatic discovery uses a different filename. To apply formatting, run
-`swift-format format --configuration .swift-format.json --recursive --in-place photo-export`
-and review the diff. The formatter check covers app sources only.
+`swift-format format --configuration .swift-format.json --recursive --in-place photo-export photo-exportTests`
+and review the diff. Both linters cover app and unit-test sources; the template
+UI-test target stays outside their scope.
 
 Docs website setup:
 

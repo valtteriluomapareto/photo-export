@@ -91,9 +91,7 @@ jobs:
 
       - name: SwiftFormat (check)
         run: |
-          echo "Running strict swift-format lint on photo-export/..."
-          swift-format lint --strict --configuration .swift-format.json --recursive photo-export
-          echo "swift-format lint passed."
+          bash scripts/ci/check-swift-format.sh
 
       - name: Check read-only Photos access and guard self-tests
         run: |

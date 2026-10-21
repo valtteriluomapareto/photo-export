@@ -184,7 +184,7 @@ struct WhatsNewStateTests {
   }
 
   @Test func productionCatalogIsCurrentOrAheadOfBundleVersion() {
-    // Guard against forgetting to update the catalog before bumping
+    // Guard against forgetting to update the catalog before bumping the version.
     // The MARKETING_VERSION setting has two acceptable states:
     //
     //   - Catalog's newest entry == bundle version (we've shipped and
