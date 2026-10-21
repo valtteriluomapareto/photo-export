@@ -16,7 +16,7 @@ Per file, against `type` and `external-publisher` rows:
 
 As repository totals, against `total` rows (so moving a use between files passes):
 - `@Published` declarations;
-- `.environmentObject(` calls;
+- `environmentObject(` calls, with or without a leading dot;
 - `@EnvironmentObject`, `@StateObject` and `@ObservedObject` properties;
 - external `objectWillChange` uses (through another object; `objectWillChange`,
   `self.objectWillChange` and `self?.objectWillChange` are internal).
@@ -27,7 +27,8 @@ stops conforming, so the ceiling is lowered in the same change and cannot creep
 back up later.
 
 This is a lexical guard over comment- and string-masked source, like the other
-structural guards.
+structural guards. Wrapper names may be qualified; imports and name resolution
+are not checked.
 """
 
 import collections
@@ -49,15 +50,17 @@ EXTERNAL_PUBLISHER = re.compile(r"\.\s*\$[A-Za-z_]\w*")
 OBJECT_WILL_CHANGE = re.compile(r"\.\s*objectWillChange\b")
 # The receiver before the dot is `self`, `self?` or `self!`.
 SELF_RECEIVER = re.compile(r"(?<![\w.])self\s*[?!]?\s*$")
+# Match an attribute name after optional module/type qualifiers.
+ATTRIBUTE_PREFIX = r"@\s*(?:[A-Za-z_]\w*\s*\.\s*)*"
 
 TOTALS = collections.OrderedDict([
-    ("published", ("@Published declarations", re.compile(r"@Published\b"))),
+    ("published", ("@Published declarations", re.compile(ATTRIBUTE_PREFIX + r"Published\b(?!\s*\.)"))),
     ("environment-object",
-     (".environmentObject( calls", re.compile(r"\.\s*environmentObject\s*\("))),
+     ("environmentObject( calls", re.compile(r"(?<![\w$@])environmentObject\s*\("))),
     ("environment-object-property",
-     ("@EnvironmentObject properties", re.compile(r"@EnvironmentObject\b"))),
-    ("state-object", ("@StateObject properties", re.compile(r"@StateObject\b"))),
-    ("observed-object", ("@ObservedObject properties", re.compile(r"@ObservedObject\b"))),
+     ("@EnvironmentObject properties", re.compile(ATTRIBUTE_PREFIX + r"EnvironmentObject\b(?!\s*\.)"))),
+    ("state-object", ("@StateObject properties", re.compile(ATTRIBUTE_PREFIX + r"StateObject\b(?!\s*\.)"))),
+    ("observed-object", ("@ObservedObject properties", re.compile(ATTRIBUTE_PREFIX + r"ObservedObject\b(?!\s*\.)"))),
     ("object-will-change", ("external objectWillChange uses", None)),
 ])
 EXTERNAL_LABEL = "external $publisher uses"

@@ -70,12 +70,15 @@ Per file under `photo-export/` it checks `ObservableObject` conformances (by typ
 including protocols and extensions, across line breaks) and `$property` publishers reached
 through another object (`manager.$identity`; the owner's own `$property`, `self.$property` and
 `self?.$property` are not counted). As repository totals, so moving a use between files
-passes, it checks `@Published`, `.environmentObject(` calls, `@EnvironmentObject`,
-`@StateObject` and `@ObservedObject` properties, and `objectWillChange` reached through
-another object. It fails when a count rises or an unlisted type or file appears, and also
-when a count falls or a type stops conforming: lower or remove the row in the same change, so
+passes, it checks `@Published`, `environmentObject(` calls with or without a leading
+dot, `@EnvironmentObject`, `@StateObject` and `@ObservedObject` properties, and
+`objectWillChange` reached through another object. Wrapper attributes also count when
+qualified, such as `@Combine.Published` or `@SwiftUI.StateObject`. It fails when a count
+rises or an unlisted type or file appears, and also when a count falls or a type stops
+conforming: lower or remove the row in the same change, so
 the ceiling cannot creep back up. Expose a named `AnyPublisher` accessor on the owning type
-instead of a new external `$property`. It is lexical, like the other guards.
+instead of a new external `$property`. It is lexical, like the other guards: qualified
+wrapper names are matched by their final token without resolving imports or types.
 
 `check-persistence-doc.py` compares the "Record-store value sets" table in
 [`docs/reference/persistence-store.md`](../docs/reference/persistence-store.md) with the

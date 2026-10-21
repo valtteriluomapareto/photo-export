@@ -306,8 +306,10 @@ The flip still owes:
 [`scripts/ci/check-observation-ratchet.py`](../../scripts/ci/check-observation-ratchet.py)
 holds `photo-export/` to [`scripts/ci/observation-ratchet.txt`](../../scripts/ci/observation-ratchet.txt):
 `ObservableObject` types and external `$property` uses per file, and repository totals of
-`@Published`, `.environmentObject(`, `@EnvironmentObject`, `@StateObject`, `@ObservedObject`
-and external `objectWillChange`. A flip lowers or removes its rows in the same change; the
+`@Published`, `environmentObject(` calls (dotted or bare), `@EnvironmentObject`,
+`@StateObject`, `@ObservedObject` and external `objectWillChange`. Qualified wrapper
+attributes such as `@Combine.Published` count too; names are matched lexically, without
+import or type resolution. A flip lowers or removes its rows in the same change; the
 guard fails until it does, and fails on any new old-pattern use, including one arriving from
 main at a sync. See [`scripts/README.md`](../../scripts/README.md).
 
