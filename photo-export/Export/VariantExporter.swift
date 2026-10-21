@@ -8,19 +8,16 @@ import OSLog
 /// - In-progress record marking + in-flight tracking handoff.
 /// - Reuse-source copy path (cross-placement clone of an existing `.done` write).
 /// - Byte production: static resources via `AssetResourceWriter`; rendered media via
-///   `MediaRenderer` directly (Phase 3b).
+///   `MediaRenderer` directly.
 /// - Final-name planning against the staged bytes (via `FinalNamePlanner`): the atomic
 ///   move of `.tmp` into place + timestamp application, or adoption of an identical
 ///   existing file that no record names.
 /// - Per-variant exported / failed record write.
 ///
-/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 3b, the
-/// rendered-media path is invoked on the exporter's own `mediaRenderer` dependency.
-/// `ExportManager` still constructs the renderer (so it can inject the
-/// `renderActivity` callback) but no longer invokes it. The cancellation seam
-/// (`isCurrent` / `throwIfCancelledOrStale`) is now reached directly through the
-/// injected `ExportQueueCoordinator` reference (issue #67 item 2). UI-state mutations
-/// continue to route through the host.
+/// The exporter invokes its renderer directly. `ExportManager` constructs it to wire
+/// render activity, while UI mutations route through the narrow Host. Cancellation
+/// reaches the injected `ExportQueueCoordinator` directly so it stays independent
+/// of UI callbacks. See docs/reference/architecture-conventions.md.
 @MainActor
 final class VariantExporter {
 
@@ -38,7 +35,7 @@ final class VariantExporter {
     func setCurrentJobVariant(_ variant: ExportVariant?)
     func clearRenderActivity()
 
-    /// Reads the HEIC→JPEG toggle's current value (issue #47). Read at write
+    /// Reads the HEIC→JPEG toggle's current value. Read at write
     /// time so a mid-run toggle change takes effect on the next variant
     /// without an in-flight reconfigure; the queue is small enough that a
     /// flip mid-run is bounded.
@@ -58,16 +55,14 @@ final class VariantExporter {
   private let logger = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "VariantExporter")
   private weak var host: Host?
-  /// Cancellation seam (Phase 0). Held as a weak reference because the queue
-  /// coordinator and the exporter have the same lifetime owner (`ExportManager`)
-  /// — a strong reference would create a retain cycle through `Host`.
+  /// Cancellation seam. A weak reference keeps collaborator lifetimes bounded by
+  /// their shared owner, `ExportManager`.
   private weak var queueCoordinator: ExportQueueCoordinator?
   private let destinationResolver: ExportDestinationResolver
   private let recordStoreRouter: RecordStoreRouter
   private let assetResourceWriter: any AssetResourceWriter
   private let mediaRenderer: any MediaRenderer
-  /// HEIC→JPEG converter used by the `EditedProducer.convertHEIC` write arm
-  /// (issue #47).
+  /// HEIC→JPEG converter used by the `EditedProducer.convertHEIC` write arm.
   private let imageConverter: any ImageConverter
 
   /// JPEG quality used for HEIC→JPEG synthesis. `0.85` matches the default
@@ -178,9 +173,9 @@ final class VariantExporter {
     }
 
     // Single point of byte-source dispatch: `ResourceSelection.selectProducer` returns
-    // the same `EditedProducer` enum for every variant (issue #49 — keep the seam
-    // enum-shaped rather than branching by variant here). `convertHEICToJPEG` (issue
-    // #47) is forwarded so the `.edited` case can synthesize a JPEG from a HEIC source.
+    // the same `EditedProducer` enum for every variant, keeping byte production
+    // enum-shaped rather than branching by variant here. `convertHEICToJPEG` is
+    // forwarded so the `.edited` case can synthesize a JPEG from a HEIC source.
     let producer = ResourceSelection.selectProducer(
       variant: variant, from: resources, descriptor: descriptor,
       convertHEICToJPEG: host?.convertHEICToJPEG ?? false)
@@ -293,7 +288,7 @@ final class VariantExporter {
     // file, all other placements just clone it.
     var didCopyFromReuseSource = false
     if let reuseSource {
-      // Issue #38: the source file lives at the placement path plus the *source
+      // the source file lives at the placement path plus the *source
       // variant's* persisted `subfolder` — NOT recomputed from the current
       // `videoLayout` setting. A mid-life-toggle source could have been written
       // under `.flat` (subfolder == nil) and now we're under `.subfolder`, or vice

@@ -16,27 +16,25 @@ enum DestinationIdentityConfidence: String, Codable, Equatable, Sendable {
   case low
 }
 
-/// Stable, persistable identity for a destination folder. Wraps record-store id derivation in
-/// a structured value so identity-confidence and migration-conflict handling are first-class
-/// instead of implicit in a hex string.
+/// Persistable advisory fingerprint for a destination folder. Structured confidence
+/// and path components support safety decisions and seed a new stable destination id.
 ///
-/// `id` is a SHA-256 hex digest used as the per-destination directory name in the App Support
-/// record store. For `.high` confidence (volume UUID available) the bytes are bug-for-bug
-/// compatible with the pre-Phase-0 derivation in
-/// `ExportDestinationManager.computeDestinationId(for:)`, so existing record stores keep
-/// working without a migration. For `.low` confidence the bytes are the digest of the
-/// canonical/standardized path only — the plan explicitly forbids encoding
-/// `URLResourceValues.volumeIdentifier` (a same-session-only token) as the primary identity.
+/// `id` is a SHA-256 digest used to seed a new stable logical destination id. Existing
+/// destinations keep their persisted stable id across fingerprint drift. High-confidence
+/// digests retain the volume-UUID/relative-path derivation; low-confidence digests use
+/// the canonical standardized path. `URLResourceValues.volumeIdentifier` is a
+/// same-session-only token and cannot provide durable identity.
+/// See docs/reference/architecture-conventions.md#destination-identity.
 ///
 /// Migration notes:
-///   - Pre-Phase-0a users with low-confidence drives (no volume UUID — exFAT, network
+///   - Older versions on low-confidence drives (no volume UUID — exFAT, network
 ///     shares) had their record store keyed by a digest that included `volumeIdentifier`.
 ///     `ExportRecordsDirectoryCoordinator` accepts `preV2LowConfidenceId(for:)` as a
 ///     secondary legacy id so those record stores migrate transparently on first launch
 ///     after the upgrade.
-///   - The persisted `Codable` shape changed: pre-Phase-0a fingerprints carried an `id`
+///   - The persisted `Codable` shape changed: older fingerprints carried an `id`
 ///     key; the new form excludes it. Decoding is forward-compatible (extra keys are
-///     ignored), but anyone holding pre-Phase-0a JSON should re-encode it on next save.
+///     ignored), but anyone holding older JSON should re-encode it on next save.
 struct DestinationFingerprint: Codable, Hashable, Sendable {
   /// Schema version of the fingerprint format. Bumping this is a deliberate breaking change
   /// that requires a migration plan; v1 reproduces the existing high-confidence id derivation.
@@ -161,7 +159,7 @@ struct DestinationFingerprint: Codable, Hashable, Sendable {
 
   /// v1 id derivation: SHA-256(identityKey || U+0000 || pathComponent).
   /// `.high`: volume UUID + relative path within the volume. `.low`: empty key + canonical
-  /// standardized path. Bug-for-bug compatible with the pre-Phase-0a high-confidence
+  /// standardized path. Compatible with the earlier high-confidence
   /// derivation; low-confidence callers are migrated separately by
   /// `ExportRecordsDirectoryCoordinator` via `preV2LowConfidenceId(for:)`.
   private var idV1: String {
@@ -193,7 +191,7 @@ extension DestinationFingerprint {
   private static let log = Logger(
     subsystem: "com.valtteriluoma.photo-export", category: "DestinationFingerprint")
 
-  /// Pre-Phase-0a low-confidence id derivation for migration purposes only. Returns the
+  /// Legacy low-confidence id derivation for migration purposes only. Returns the
   /// `SHA-256(volumeIdentifier-description || U+0000 || /relativePath)` digest the previous
   /// code used as the record-store directory name when no volume UUID was available.
   /// Returns `nil` for high-confidence drives (the high-confidence id derivation is

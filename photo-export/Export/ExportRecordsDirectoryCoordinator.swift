@@ -3,11 +3,8 @@ import os
 
 /// Owns the lifecycle of the per-destination `ExportRecords/<destinationId>/` directory.
 ///
-/// Phase 0 of the collections-export plan replaced the bookmark-hash-based `destinationId`
-/// with a stable volume-UUID + canonical-path derivation. The auto-sync plan's Phase 0a then
-/// changed the *low-confidence* fallback (drives without a volume UUID — exFAT, network
-/// shares) from a `volumeIdentifier`-based digest to a `standardizedPath`-only digest, since
-/// `volumeIdentifier` is a same-session-only token. On upgrade, existing users have records
+/// Earlier versions keyed records by bookmark hash or by a digest that included
+/// `volumeIdentifier`, a same-session-only token. On upgrade, existing users have records
 /// under one of two possible legacy directory names; this coordinator renames the first
 /// matching legacy directory to `ExportRecords/<newId>/` once before any record store calls
 /// `configure(for: newId)`.
@@ -58,9 +55,9 @@ struct ExportRecordsDirectoryCoordinator {
   ///
   /// The coordinator does not create `<newId>/` itself; that's the record store's job.
   ///
-  /// `legacyIds` is the list of pre-Phase-0a forms in priority order. Pass an empty array
+  /// `legacyIds` lists historical key forms in priority order. Pass an empty array
   /// when no legacy migration applies. The list typically holds the bookmark-hash legacy id
-  /// first and the pre-Phase-0a low-confidence (`volumeIdentifier`-based) id second; only
+  /// first and the legacy low-confidence (`volumeIdentifier`-based) id second; only
   /// non-nil values are passed in by callers.
   func prepareDirectory(
     for newId: String, legacyIds: [String]

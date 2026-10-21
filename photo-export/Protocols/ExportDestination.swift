@@ -22,7 +22,7 @@ protocol ExportDestination: AnyObject {
   func urlForRelativeDirectory(_ relativePath: String, createIfNeeded: Bool) throws -> URL
 
   /// Convenience for the timeline `<YYYY>/<MM>/` layout. Backed by
-  /// `urlForRelativeDirectory` after Phase 3.
+  /// `urlForRelativeDirectory` so timeline and collection paths share validation.
   func urlForMonth(year: Int, month: Int, createIfNeeded: Bool) throws -> URL
 
   func beginScopedAccess() -> URL?

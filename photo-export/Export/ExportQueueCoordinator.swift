@@ -3,25 +3,14 @@ import Foundation
 import OSLog
 import os
 
-/// Owns the queue side of export execution: pending jobs, drain loop, pause/resume/clear,
-/// per-placement queue counters, and the published mirrors for queue depth + total
-/// counters. Also owns the Phase-0 cancellation seam — `generation` storage plus the
-/// `isCurrent(_:)` / `throwIfCancelledOrStale(_:)` / `bumpGeneration()` helpers — which
-/// moved here from `ExportManager` as part of issue #67 item 2.
+/// Owns pending jobs, the drain loop, pause/resume/clear, per-placement queue counts,
+/// and published queue counters. Owns the cooperative cancellation generation and its
+/// `isCurrent(_:)`, `throwIfCancelledOrStale(_:)`, and `bumpGeneration()` helpers.
 ///
-/// Per `docs/project/archive/software-architecture-improvement-plan.md` Phase 4b, this is
-/// where `pendingJobs`, `isProcessing`, `currentTask`, `queuedCountsByPlacementId`,
-/// `processQueueIfNeeded`, `processNext`, `updateQueueCount`, `pause`, `resume`, and
-/// `clearPending` live. ExportManager retains the `currentJob*` UI identifiers, the
-/// per-asset bookkeeping, and the `export(job:gen:)` body itself — the coordinator
-/// drives the loop and calls back via `Host` to run each job.
-///
-/// `@Published` state on the coordinator is mirrored on ExportManager via sinks so
-/// existing views and the AutoSync `exportRunStatePublisher` keep their stable read
-/// surface. The Cross-Cutting Contract's "passthrough vs stored mirror" decision was
-/// applied at the AutoSync seam (passthrough where the property was new). The queue
-/// state was already stored `@Published` on ExportManager, so this phase keeps that
-/// shape on the manager — the coordinator's publishers feed those mirrors.
+/// `ExportManager` retains current-job identifiers and per-asset bookkeeping; the
+/// coordinator calls its narrow `Host` to run each job and finalize the queue.
+/// Synchronous sinks mirror published state onto the manager so SwiftUI and AutoSync
+/// observe consistent transitions. See docs/reference/architecture-conventions.md.
 @MainActor
 final class ExportQueueCoordinator: ObservableObject {
 
@@ -29,9 +18,8 @@ final class ExportQueueCoordinator: ObservableObject {
 
   /// Hooks back to ExportManager for state it still owns: the export work itself,
   /// the queue-drain finalize hook, and the UI-state cleanup that runs between jobs.
-  /// The Phase-0 cancellation seam (`generation`, `isCurrent`) is no longer on this
-  /// protocol — the coordinator owns its own storage and the manager forwards via
-  /// computed property + thin method (issue #67 item 2).
+  /// Cancellation stays on the coordinator; the manager forwards to its generation
+  /// helpers instead of extending this Host protocol.
   @MainActor
   protocol Host: AnyObject {
     /// True while a bulk-album enqueue Task is still building the queue. The coordinator
@@ -88,8 +76,7 @@ final class ExportQueueCoordinator: ObservableObject {
     category: "Export.Run")
   private var runInterval: OSSignpostIntervalState?
 
-  // MARK: - Cancellation seam (Phase-0 contract; storage moved here from
-  //         ExportManager in issue #67 item 2)
+  // MARK: - Cooperative cancellation
 
   /// Generation counter bumped by every cancellation transition
   /// (`cancelAndClear`, `supersedeForManualRun`, `interruptForDestinationUnavailable`,
