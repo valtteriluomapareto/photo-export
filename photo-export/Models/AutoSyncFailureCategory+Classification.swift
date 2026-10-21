@@ -5,11 +5,10 @@ import os
 
 /// Structured result of categorising an export failure. Carries both the
 /// retry-policy bucket (`category`) and a stable string identity
-/// (`errorSignature`) that survives across runs. Plan §"Retry and Failure
-/// Policy": "Retry counts are scoped to scope/placement + assetId + variant
-/// + category + errorSignature" — so the signature is what tells the retry
-/// store "this is the same failure recurring" vs "this is a different
-/// failure that should reset the attempt count."
+/// (`errorSignature`) that survives across runs. The retry store combines the
+/// scope/placement, asset, variant, category and signature so a different failure
+/// resets the attempt count instead of inheriting an unrelated backoff.
+/// See docs/reference/auto-export-behavior.md#retry-and-failure-policy.
 struct ExportFailureSignal: Equatable, Sendable {
   let category: AutoSyncFailureCategory
   let errorSignature: String

@@ -1,9 +1,8 @@
 import Foundation
 
-/// Whether the safety gate allows automatic export to the current destination. Phase 0b
-/// will widen this to a richer set of reasons (low-confidence identity, non-empty backup
-/// without import, migration conflict, etc.); Phase 2 only needs the binary-plus-conflict
-/// shape so the reducer can route between `idle` / `blocked(.destinationUnsafe)`.
+/// Whether the safety gate allows automatic export to the current destination.
+/// Confirmation and migration conflicts block the reducer until the user resolves them.
+/// See docs/reference/auto-export-behavior.md#destination-safety.
 enum DestinationSafetyState: Equatable, Sendable {
   /// Automatic export is allowed: empty destination, or non-empty with a confirmation
   /// record matching the current scope selection.

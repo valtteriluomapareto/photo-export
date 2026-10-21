@@ -1,6 +1,6 @@
 import Foundation
 
-/// Inputs the AutoSync reducer reacts to. Plan §"State Reducer" — one event per
+/// Inputs the AutoSync reducer reacts to: one event per
 /// observable change in the manager's environment.
 ///
 /// Events arrive serialized through the effect runner; the reducer is invoked once per
@@ -21,7 +21,7 @@ enum AutoSyncEvent: Sendable {
   /// Include-originals (or future export-version) selection changed.
   case versionSelectionChanged(ExportVersionSelection)
 
-  /// `Convert HEIC to JPEG` toggle changed (issue #47). The toggle widens
+  /// `Convert HEIC to JPEG` toggle changed. The toggle widens
   /// `requiredVariants` for HEIC assets, so previously-skipped HEIC items
   /// become eligible; the reducer re-evaluates at the standard 2s debounce.
   case convertHEICToJPEGChanged(Bool)
@@ -87,9 +87,8 @@ enum AutoSyncEvent: Sendable {
 
   /// User clicked `Export Now`. Routed through the existing
   /// `.userExportNow` trigger path so the recompute pass schedules a run at
-  /// 0s debounce delay (plan §"Trigger and Debounce Rules" — manual Export Now
-  /// has no debounce after guard checks). UI gates the button on
-  /// `state != .disabled`; the broader "bypass disabled / retry timers"
-  /// behavior the plan specifies for menu-bar Export Now lands later.
+  /// 0s debounce delay after guard checks. The UI uses `AutoSyncState.canRunNow`;
+  /// this action does not bypass disabled mode or retry eligibility.
+  /// See docs/reference/auto-export-behavior.md#triggers-and-debounce.
   case runNowRequested
 }

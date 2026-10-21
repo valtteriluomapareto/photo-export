@@ -1,7 +1,7 @@
 import Foundation
 
-/// Persists per-destination `lastDurablyRecordedToken` snapshots. Plan
-/// §"Persistence Keys": `AutoSync/destinations/<destinationId>/lastDurablyRecordedToken.data`.
+/// Persists per-destination `lastDurablyRecordedToken` snapshots at
+/// `AutoSync/destinations/<destinationId>/lastDurablyRecordedToken.data`.
 /// The token records advisory acknowledgement after dirty-state persistence.
 /// It is currently loaded but does not drive fetching or resume decisions;
 /// the PhotoKit adapter owns an independent global cursor.
