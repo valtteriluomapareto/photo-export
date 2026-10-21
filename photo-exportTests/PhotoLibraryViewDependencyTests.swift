@@ -63,6 +63,7 @@ import Testing
       }
     }
 
+    /// Already passes: metadata is reread while the unrelated preview load remains suspended.
     @Test func assetDetailRereadsMetadataAfterALibraryChange() async throws {
       let f = Fixture()
       f.service.detailsByAssetId["selected"] = AssetDetails(
@@ -85,6 +86,7 @@ import Testing
       }
     }
 
+    /// Already passes: the year total follows library invalidation without remounting.
     @Test func yearSummaryRecountsAfterALibraryChange() async throws {
       let f = Fixture()
       let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!

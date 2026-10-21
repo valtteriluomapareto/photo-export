@@ -8,6 +8,7 @@ import Testing
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct PhotoLibraryManagerObservationTests {
+  /// Changing access fails without its dependency; equal writes already stay silent.
   @Test func isAuthorizedRegistersADependency() {
     let service = FakePhotoLibraryService()
     let library = PhotoLibraryManager(overrideService: service)
@@ -24,6 +25,7 @@ struct PhotoLibraryManagerObservationTests {
     #expect(probe.changeCount == afterChange)
   }
 
+  /// Changing status fails without a dependency independent of access sufficiency.
   @Test func authorizationStatusRegistersADependency() {
     let service = FakePhotoLibraryService()
     service.authorizationStatus = .denied
@@ -38,6 +40,7 @@ struct PhotoLibraryManagerObservationTests {
     }
   }
 
+  /// Combine repeats and sibling silence already pass; the status dependency is missing.
   @Test func limitedAccessWritesOnlyTheStatus() {
     let service = FakePhotoLibraryService()
     let library = PhotoLibraryManager(overrideService: service)
@@ -57,6 +60,7 @@ struct PhotoLibraryManagerObservationTests {
     withExtendedLifetime(subscription) {}
   }
 
+  /// The own-property notification is missing; unrelated dependency silence already passes.
   @Test func isAuthorizedWriteNotifiesOnlyItself() {
     let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
     let authorized = ObservationProbe { _ = library.isAuthorized }
@@ -71,6 +75,7 @@ struct PhotoLibraryManagerObservationTests {
     #expect(revision.changeCount == 0)
   }
 
+  /// Equal-write delivery and silence already pass; the changing-write control needs a dependency.
   @Test func equalAuthorizationWritesDeliverWithoutNotifying() {
     let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
     let authorized = ObservationProbe { _ = library.isAuthorized }
@@ -100,6 +105,7 @@ struct PhotoLibraryManagerObservationTests {
     withExtendedLifetime((statusSubscription, authorizedSubscription)) {}
   }
 
+  /// Revision notifications are missing; forgetting cached assets already stays silent.
   @Test func libraryRevisionNotifiesOnEveryInvalidation() {
     let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
     let probe = ObservationProbe { _ = library.libraryRevision }
@@ -114,6 +120,7 @@ struct PhotoLibraryManagerObservationTests {
     #expect(probe.changeCount == afterInvalidation)
   }
 
+  /// Overridden query reads fail to follow invalidations until they register a revision dependency.
   @Test func collectionTreeAndAssetDetailsFollowLibraryChanges() {
     let service = FakePhotoLibraryService()
     service.detailsByAssetId["A"] = AssetDetails(
@@ -136,6 +143,7 @@ struct PhotoLibraryManagerObservationTests {
     #expect(details.changeCount == afterDetails)
   }
 
+  /// Content notifications are missing; empty-ID changes and cache eviction already stay silent.
   @Test func thumbnailRevisionFollowsContentChangesOnly() {
     let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
     let probe = ObservationProbe { _ = library.thumbnailContentRevision(for: "A") }
@@ -159,6 +167,7 @@ struct PhotoLibraryManagerObservationTests {
     #expect(probe.changeCount == afterOverflow)
   }
 
+  /// Already passes: initialization defers live status reads and mirrors an override.
   @Test func initReadsNoLiveStatusAndStartsUnauthorized() {
     let reads = LiveStatusReads()
     let library = PhotoLibraryManager(liveAuthorizationStatus: {

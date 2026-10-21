@@ -157,6 +157,7 @@ import Testing
       }
     }
 
+    /// Already passes: revoking access clears the years and granting access reloads them.
     @Test(.timeLimit(.minutes(1)))
     func timelineSidebarClearsOnRevokeAndReloadsOnGrant() async throws {
       let f = Fixture()
@@ -183,6 +184,7 @@ import Testing
       }
     }
 
+    /// Already passes: Favorites and the recursive album row refresh their cached counts.
     @Test(.timeLimit(.minutes(1)))
     func collectionRowCountsReloadAfterALibraryChange() async throws {
       let f = Fixture(includeAlbum: true)

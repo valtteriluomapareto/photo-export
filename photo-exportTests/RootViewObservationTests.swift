@@ -375,6 +375,7 @@ import Testing
       }
     }
 
+    /// Already passes: access changes route through denied, restricted and library panes.
     @Test func contentViewRoutesFollowAuthorization() async throws {
       let f = try Fixture()
       try await withCleanup {
@@ -408,6 +409,7 @@ import Testing
         pathComponents: [], children: [])
     }
 
+    /// Already passes: the selected album title follows the current collection tree.
     @Test func libraryRootTitleFollowsAnAlbumRename() async throws {
       let f = try Fixture()
       try await withCleanup {
@@ -423,6 +425,8 @@ import Testing
       }
     }
 
+    /// The album bound already passes; unrelated library changes still invalidate the other roots.
+    /// Measured maximum 1 for each root on d49d304, Xcode 26.6, across ten iterations.
     @Test(arguments: LibraryReadSurface.allCases)
     func rootsSkipLibraryChangesTheyDoNotRead(surface: LibraryReadSurface) async throws {
       let f = try Fixture()

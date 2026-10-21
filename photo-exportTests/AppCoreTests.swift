@@ -242,6 +242,7 @@ import Testing
   }
 
   #if DEBUG
+    /// Already passes: scene composition renders the curated service without starting the core.
     @Test func screenshotCompositionRendersTheCuratedLibrary() async throws {
       var composition = makeTestComposition(label: "app-core-curated-library")
       let curated = ScreenshotPhotoLibraryService()

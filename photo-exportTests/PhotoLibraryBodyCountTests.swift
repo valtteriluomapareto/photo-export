@@ -145,6 +145,10 @@ import Testing
       }
     }
 
+    /// Publication-backed cells already meet the upper bounds; their three non-reloader zero
+    /// targets fail until rendering follows only the dependencies each cell reads.
+    /// Measured on d49d304 with Xcode 26.6 across ten iterations: non-reload maxima 1,
+    /// reload maxima 3, with all 60 cells mounted and HQ images visibly applied.
     @Test func thumbnailCellsRenderOnlyForTheirContent() async throws {
       let f = Fixture()
       defer { f.close() }
