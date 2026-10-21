@@ -20,7 +20,7 @@ struct ExportRecordStoreTests {
     store.markExported(
       assetId: id, year: 2025, month: 2, relPath: "2025/02/", filename: "IMG_0001.JPG",
       exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.isExported(assetId: id))
     let info = store.exportInfo(assetId: id)
     #expect(info?.variants[.original]?.filename == "IMG_0001.JPG")
@@ -39,7 +39,7 @@ struct ExportRecordStoreTests {
       assetId: "a2", year: 2025, month: 1, relPath: "2025/01/", filename: "B.jpg",
       exportedAt: Date())
     store.markFailed(assetId: "a3", error: "disk full", at: Date())  // wrong year/month defaults
-    store.flushForTesting()
+    store.drainSynchronously()
     let s1 = store.monthSummary(year: 2025, month: 1, totalAssets: 5)
     #expect(s1.exportedCount == 2)
     #expect(s1.totalCount == 5)
@@ -55,7 +55,7 @@ struct ExportRecordStoreTests {
     store.configure(for: "destA")
     let id = "asset-fail"
     store.markFailed(assetId: id, error: "network", at: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     let info = store.exportInfo(assetId: id)
     #expect(info?.variants[.original]?.status == .failed)
     #expect(info?.variants[.original]?.lastError == "network")
@@ -73,7 +73,7 @@ struct ExportRecordStoreTests {
     for variant in (store1.exportInfo(assetId: "x1").map { Array($0.variants.keys) } ?? []) {
       store1.removeVariant(assetId: "x1", variant: variant)
     }
-    store1.flushForTesting()
+    store1.drainSynchronously()
 
     // New instance, same root and destination id
     let store2 = ExportRecordStore(baseDirectoryURL: tempDir)
@@ -88,12 +88,12 @@ struct ExportRecordStoreTests {
     store.configure(for: "destA")
     store.markInProgress(
       assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "tmp.mov")
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.exportInfo(assetId: "t1")?.variants[.original]?.status == .inProgress)
     store.markExported(
       assetId: "t1", year: 2025, month: 4, relPath: "2025/04/", filename: "final.mov",
       exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     let rec = store.exportInfo(assetId: "t1")
     #expect(rec?.variants[.original]?.status == .done)
     #expect(rec?.variants[.original]?.filename == "final.mov")
@@ -107,7 +107,7 @@ struct ExportRecordStoreTests {
     store.markExported(
       assetId: "ok", year: 2025, month: 5, relPath: "2025/05/", filename: "OK.jpg",
       exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     // Append an invalid line to the destination-specific log
     let logURL = tempDir.appendingPathComponent(destId, isDirectory: true)
       .appendingPathComponent("export-records.jsonl")
@@ -128,7 +128,7 @@ struct ExportRecordStoreTests {
     store.markExported(
       assetId: "a1", year: 2025, month: 6, relPath: "2025/06/", filename: "A1.jpg",
       exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.isExported(assetId: "a1"))
 
     store.configure(for: "destB")
@@ -136,7 +136,7 @@ struct ExportRecordStoreTests {
     store.markExported(
       assetId: "b1", year: 2025, month: 6, relPath: "2025/06/", filename: "B1.jpg",
       exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.isExported(assetId: "b1"))
 
     store.configure(for: "destA")
@@ -152,7 +152,7 @@ struct ExportRecordStoreTests {
     store.markExported(
       assetId: "a1", year: 2025, month: 7, relPath: "2025/07/", filename: "A1.jpg",
       exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.isExported(assetId: "a1"))
 
     store.configure(for: nil)
@@ -171,7 +171,7 @@ struct ExportRecordStoreTests {
     store.markVariantExported(
       assetId: asset.id, variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "vacation_orig.JPG", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
     #expect(
       store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
@@ -186,13 +186,13 @@ struct ExportRecordStoreTests {
     store.markVariantExported(
       assetId: asset.id, variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(!store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
 
     store.markVariantExported(
       assetId: asset.id, variant: .edited, year: 2025, month: 1,
       relPath: "2025/01/", filename: "IMG_0001 (1).JPG", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
   }
 
@@ -204,14 +204,14 @@ struct ExportRecordStoreTests {
     store.markVariantExported(
       assetId: asset.id, variant: .edited, year: 2025, month: 1,
       relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(
       !store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
 
     store.markVariantExported(
       assetId: asset.id, variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "IMG_0001_orig.JPG", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(
       store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
   }
@@ -232,7 +232,7 @@ struct ExportRecordStoreTests {
     store.markVariantInProgress(
       assetId: live.id, variant: .originalPairedVideo, year: 2025, month: 1,
       relPath: "2025/01/", filename: nil)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // Toggle off → legacy behaviour: still-only is exported.
     #expect(store.isExported(asset: live, selection: .edited, livePhotosPaired: false))
@@ -243,7 +243,7 @@ struct ExportRecordStoreTests {
     store.markVariantExported(
       assetId: live.id, variant: .originalPairedVideo, year: 2025, month: 1,
       relPath: "2025/01/", filename: "IMG_0001.MOV", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.isExported(asset: live, selection: .edited, livePhotosPaired: true))
   }
 
@@ -261,7 +261,7 @@ struct ExportRecordStoreTests {
         assetId: "asset-\(i)", variant: .original, year: 2025, month: 5,
         relPath: "2025/05/", filename: "IMG_\(i).JPG", exportedAt: now)
     }
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // 30 of 100 are adjusted; the cap pins original-only contribution at 70.
     // editedDone is 0; exported = 0 + min(10, 70) = 10.
@@ -299,7 +299,7 @@ struct ExportRecordStoreTests {
         assetId: "asset-\(i)", variant: .original, year: 2025, month: 6,
         relPath: "2025/06/", filename: "IMG_\(i).JPG", exportedAt: now)
     }
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // 10 assets total, 5 adjusted → uneditedCount = 5. origOnlyAtStem = 8.
     // exported = 0 (editedDone) + min(8, 5) = 5. Asset-aware truth would be 3.
@@ -321,7 +321,7 @@ struct ExportRecordStoreTests {
     store.markVariantExported(
       assetId: "user-orig", variant: .original, year: 2025, month: 7,
       relPath: "2025/07/", filename: "vacation_orig.JPG", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
 
     // 1 asset, 0 adjusted → uneditedCount = 1. origOnlyAtStem excludes the record
     // because `vacation_orig.JPG` matches `isOrigCompanion` shape-only.
@@ -351,7 +351,7 @@ struct ExportRecordStoreTests {
     store.markVariantExported(
       assetId: "m7-a", variant: .edited, year: 2025, month: 7,
       relPath: "2025/07/", filename: "M7A.JPG", exportedAt: now)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let totals = [3: 2, 7: 1]
     let adjusted: [Int: Int?] = [3: 0, 7: 1]
@@ -388,7 +388,7 @@ struct ExportRecordStoreTests {
     store.markVariantInProgress(
       assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
       relPath: "2025/08/", filename: nil)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let summary = store.sidebarSummary(
       year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
@@ -410,7 +410,7 @@ struct ExportRecordStoreTests {
     store.markVariantInProgress(
       assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
       relPath: "2025/08/", filename: nil)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let summary = store.sidebarSummary(
       year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
@@ -422,7 +422,7 @@ struct ExportRecordStoreTests {
     store.markVariantExported(
       assetId: "live", variant: .originalPairedVideo, year: 2025, month: 8,
       relPath: "2025/08/", filename: "IMG_0001.MOV", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     let done = store.sidebarSummary(
       year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
       selection: .edited, livePhotosPaired: true)
@@ -448,7 +448,7 @@ struct ExportRecordStoreTests {
       assetId: "live", variant: .originalPairedVideo,
       error: ExportVariantRecovery.pairedVideoUnavailableMessage, reason: .pairedVideoUnavailable,
       at: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let summary = store.sidebarSummary(
       year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
@@ -472,7 +472,7 @@ struct ExportRecordStoreTests {
     store.markVariantFailed(
       assetId: "live", variant: .originalPairedVideo,
       error: "disk full", at: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let summary = store.sidebarSummary(
       year: 2025, month: 8, totalCount: 1, adjustedCount: 0,
@@ -498,7 +498,7 @@ struct ExportRecordStoreTests {
     store.markVariantInProgress(
       assetId: "live", variant: .editedPairedVideo, year: 2025, month: 9,
       relPath: "2025/09/", filename: nil)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let summary = store.sidebarSummary(
       year: 2025, month: 9, totalCount: 1, adjustedCount: 1,
@@ -523,7 +523,7 @@ struct ExportRecordStoreTests {
     store.markVariantExported(
       assetId: "m4", variant: .original, year: 2025, month: 4,
       relPath: "2025/04/", filename: "M4.JPG", exportedAt: now)
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let totals = [3: 1, 4: 1]
     let adjusted: [Int: Int?] = [3: 0, 4: 0]
@@ -552,7 +552,7 @@ struct ExportRecordStoreTests {
     store.markVariantExported(
       assetId: asset.id, variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(
       store.isExported(asset: asset, selection: .editedWithOriginals, livePhotosPaired: false))
   }
@@ -565,17 +565,17 @@ struct ExportRecordStoreTests {
     store.markExported(
       assetId: "t", year: 2025, month: 9, relPath: "2025/09/", filename: "A.jpg",
       exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 1)
     // Mark failed -> should decrement month 9
     store.markFailed(assetId: "t", error: "oops", at: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 0)
     // Re-export same id to month 10 -> counts move
     store.markExported(
       assetId: "t", year: 2025, month: 10, relPath: "2025/10/", filename: "B.jpg",
       exportedAt: Date())
-    store.flushForTesting()
+    store.drainSynchronously()
     #expect(store.monthSummary(year: 2025, month: 9, totalAssets: 10).exportedCount == 0)
     #expect(store.monthSummary(year: 2025, month: 10, totalAssets: 10).exportedCount == 1)
   }

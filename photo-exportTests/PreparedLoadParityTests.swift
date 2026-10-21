@@ -72,7 +72,7 @@ struct PreparedLoadParityTests {
 
     let store = ExportRecordStore(baseDirectoryURL: copies.configured)
     store.configure(for: destination)
-    defer { store.flushForTesting() }
+    defer { store.drainSynchronously() }
     #expect(store.state == .ready)
     // Every fixture log ends in LF.
     #expect(needsLogSeparator == false)
@@ -124,7 +124,7 @@ struct PreparedLoadParityTests {
 
     let store = CollectionExportRecordStore(baseDirectoryURL: copies.configured)
     store.configure(for: destination)
-    defer { store.flushForTesting() }
+    defer { store.drainSynchronously() }
     #expect(store.state == .ready)
     // Every fixture log ends in LF.
     #expect(needsLogSeparator == false)
@@ -162,10 +162,10 @@ struct PreparedLoadParityTests {
     let loaded = ExportRecordStore(baseDirectoryURL: copies.prepared)
     loaded.beginConfigure(for: destination)
     await loaded.waitUntilSettled()
-    defer { loaded.flushForTesting() }
+    defer { loaded.drainSynchronously() }
     let store = ExportRecordStore(baseDirectoryURL: copies.configured)
     store.configure(for: destination)
-    defer { store.flushForTesting() }
+    defer { store.drainSynchronously() }
 
     #expect(loaded.state == .ready)
     #expect(store.state == .ready)
@@ -201,10 +201,10 @@ struct PreparedLoadParityTests {
     let loaded = CollectionExportRecordStore(baseDirectoryURL: copies.prepared)
     loaded.beginConfigure(for: destination)
     await loaded.waitUntilSettled()
-    defer { loaded.flushForTesting() }
+    defer { loaded.drainSynchronously() }
     let store = CollectionExportRecordStore(baseDirectoryURL: copies.configured)
     store.configure(for: destination)
-    defer { store.flushForTesting() }
+    defer { store.drainSynchronously() }
 
     #expect(loaded.state == .ready)
     #expect(store.state == .ready)

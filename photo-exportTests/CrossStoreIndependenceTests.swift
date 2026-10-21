@@ -151,8 +151,8 @@ struct CrossStoreIndependenceTests {
       manager.cancelAndClear()
       await gate.releaseAll()
       for task in tasks { await task.value }
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -226,8 +226,8 @@ struct CrossStoreIndependenceTests {
       manager.cancelAndClear()
       await gate.releaseAll()
       for task in tasks { await task.value }
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }

@@ -99,8 +99,8 @@ struct AmbiguousSameFolderTests {
 
     func cleanup() {
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collection.flushForTesting()
+      timeline.drainSynchronously()
+      collection.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -312,8 +312,8 @@ struct AmbiguousSameFolderTests {
     defer {
       autoSync.setEnabled(false)
       exportManager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       try? FileManager.default.removeItem(at: pickedDir)
       defaults.removePersistentDomain(forName: suite)
@@ -653,8 +653,8 @@ struct AmbiguousSameFolderTests {
       userDefaults: TestScratch.defaults("UnclearPickBusy"))
     defer {
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collection.flushForTesting()
+      timeline.drainSynchronously()
+      collection.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }

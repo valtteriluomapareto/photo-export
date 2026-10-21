@@ -150,8 +150,8 @@ struct IdenticalFileAdoptionTests {
     func cleanup() async {
       manager.cancelAndClear()
       if let task = manager.currentTask { _ = await finished(task) }
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       destination.cleanup()
       try? FileManager.default.removeItem(at: storeRoot)
       defaults.removePersistentDomain(forName: defaultsName)

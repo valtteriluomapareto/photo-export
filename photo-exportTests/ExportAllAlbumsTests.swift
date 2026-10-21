@@ -113,8 +113,8 @@ struct ExportAllAlbumsTests {
     /// that have nothing to wake them up.
     func cleanup() {
       manager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
@@ -256,8 +256,8 @@ struct ExportAllAlbumsTests {
     )
     defer {
       manager.cancelAndClear()
-      timelineStore.flushForTesting()
-      collectionStore.flushForTesting()
+      timelineStore.drainSynchronously()
+      collectionStore.drainSynchronously()
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }

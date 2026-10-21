@@ -57,7 +57,7 @@ struct CollectionBulkImportTests {
     #expect(
       store.exportInfo(assetId: "v", placement: placement)?.variants[.original]?.subfolder
         == "videos")
-    store.flushForTesting()
+    store.drainSynchronously()
     let lines = try #require(logBytes(dir)).split(separator: UInt8(ascii: "\n"))
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
@@ -155,7 +155,7 @@ struct CollectionBulkImportTests {
         placement: placement,
         records: ["a": [.original: done("A.JPG"), .edited: done("A.HEIC")]])
     ])
-    store.flushForTesting()
+    store.drainSynchronously()
 
     let reopened = CollectionExportRecordStore(baseDirectoryURL: dir)
     reopened.configure(for: "dest")
@@ -164,7 +164,7 @@ struct CollectionBulkImportTests {
     let variants = reopened.exportInfo(assetId: "a", placement: placement)?.variants
     #expect(variants?[.original]?.filename == "A.JPG")
     #expect(variants?[.edited]?.filename == "A.HEIC")
-    reopened.flushForTesting()
+    reopened.drainSynchronously()
   }
 
   @Test func repeatedImportWritesNoBytes() throws {
@@ -173,13 +173,13 @@ struct CollectionBulkImportTests {
     let batch = CollectionExportRecordStore.ImportBatch(
       placement: album(), records: ["a": [.original: done("A.JPG")]])
     store.bulkImportRecords([batch])
-    store.flushForTesting()
+    store.drainSynchronously()
     let before = try #require(logBytes(dir))
     store.flushPendingNotifications()
     let counter = store.mutationCounter
 
     store.bulkImportRecords([batch])
-    store.flushForTesting()
+    store.drainSynchronously()
 
     #expect(store.recordedVariantCount(of: [batch]) == 1)
     #expect(logBytes(dir) == before)

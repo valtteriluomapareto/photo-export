@@ -49,8 +49,8 @@ struct ManualExportSummaryTests {
       guard !closed else { return }
       closed = true
       manager.cancelAndClear()
-      timeline.flushForTesting()
-      collections.flushForTesting()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
       destination.cleanup()
       defaults.removePersistentDomain(forName: suite)
       try? FileManager.default.removeItem(at: root)

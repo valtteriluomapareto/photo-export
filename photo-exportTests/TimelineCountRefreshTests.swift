@@ -17,7 +17,7 @@ struct TimelineCountRefreshTests {
     let root = TestScratch.directory("TimelineCountRefresh")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
-    defer { store.flushForTesting() }
+    defer { store.drainSynchronously() }
     store.configure(for: "A")
     store.markVariantExported(
       assetId: "old", variant: .original, year: 2025, month: 1,

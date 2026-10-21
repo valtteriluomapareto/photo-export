@@ -244,7 +244,7 @@ struct ExportRecordStoreRecoveryTests {
     // Poll for the snapshot file to appear.
     let snapFile = snapshotURL(base: base, dest: dest)
     _ = await eventually("compaction snapshot written") {
-      store.flushForTesting()
+      store.drainSynchronously()
       return FileManager.default.fileExists(atPath: snapFile.path)
     }
 
@@ -275,7 +275,7 @@ struct ExportRecordStoreRecoveryTests {
 
     let snapFile = snapshotURL(base: base, dest: dest)
     _ = await eventually("compaction snapshot written") {
-      store.flushForTesting()
+      store.drainSynchronously()
       return FileManager.default.fileExists(atPath: snapFile.path)
     }
 
@@ -331,7 +331,7 @@ struct ExportRecordStoreRecoveryTests {
       assetId: "rt-1", year: 2025, month: 3, relPath: "2025/03/",
       filename: "RT1.JPG", exportedAt: Date())
     store1.markFailed(assetId: "rt-2", error: "Something broke", at: Date())
-    store1.flushForTesting()
+    store1.drainSynchronously()
 
     // Create a fresh store and reload
     let store2 = ExportRecordStore(baseDirectoryURL: base)
