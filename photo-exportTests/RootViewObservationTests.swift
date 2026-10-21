@@ -233,7 +233,7 @@ import Testing
       return snapshot
     }
 
-    /// Readiness already refreshes the current host; unrelated records still rebuild it.
+    /// Readiness passes before; unrelated-record silence fails on the observing app-style base.
     @Test func mainWindowRootFollowsTimelineReadinessOnly() async throws {
       let f = try Fixture()
       try await withCleanup {
