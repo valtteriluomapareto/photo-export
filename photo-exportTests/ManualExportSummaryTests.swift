@@ -136,6 +136,12 @@ struct ManualExportSummaryTests {
     let summary = try #require(f.manager.progressState.manualSummary)
     #expect(summary.completedCount == 0 && summary.result == .failed)
     #expect(summary.failureMessage?.isEmpty == false)
+    if unauthorized {
+      #expect(
+        summary.failureMessage
+          == "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
+      )
+    }
     #expect(summary.message == "Export incomplete")
   }
 
