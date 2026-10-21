@@ -95,7 +95,7 @@ final class AppLifecycleCoordinator: ObservableObject {
     interruptForDestinationUnavailable: @escaping () -> Void,
     configureRecordStores: @escaping (String?) -> ConfigureRecordStoresResult,
     gcLegacyState: @escaping (String) -> Void = { _ in },
-    log: Logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "Lifecycle")
+    log: Logger = Logger.app(.lifecycle)
   ) {
     self.cancelActiveWork = cancelActiveWork
     self.interruptForDestinationUnavailable = interruptForDestinationUnavailable

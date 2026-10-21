@@ -34,7 +34,7 @@ struct PhotoCollectionDescriptor: Identifiable, Hashable, Sendable {
   /// for `.folder`. `nil` for `.favorites` (synthetic).
   let localIdentifier: String?
 
-  /// Display title as shown in Photos. Unsanitized — `ExportPathPolicy` sanitizes it
+  /// Display title as shown in Photos. Unsanitized — `CollectionPathComponentPolicy` sanitizes it
   /// when constructing on-disk paths.
   let title: String
 
@@ -42,7 +42,7 @@ struct PhotoCollectionDescriptor: Identifiable, Hashable, Sendable {
 
   /// Display hierarchy from the root down to (but not including) this collection's title.
   /// Empty for top-level collections. Unsanitized — sanitization happens in
-  /// `ExportPathPolicy`. Used by the placement-id format's `displayPathHash8` segment so a
+  /// `CollectionPathComponentPolicy`. Used by the placement-id format's `displayPathHash8` segment so a
   /// rename of an album within its folder produces a fresh placement id.
   let pathComponents: [String]
 

@@ -72,7 +72,7 @@ final class AutoSyncManager: ObservableObject {
   private var queuedEvents: [AutoSyncEvent] = []
 
   init(
-    log: Logger = Logger(subsystem: "com.valtteriluoma.photo-export", category: "AutoSync")
+    log: Logger = Logger.app(.autoSync)
   ) {
     self.log = log
   }

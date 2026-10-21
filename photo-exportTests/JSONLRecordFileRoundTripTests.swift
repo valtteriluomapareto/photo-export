@@ -61,7 +61,7 @@ struct JSONLRecordFileRoundTripTests {
       snapshotURL: dir.appendingPathComponent("snapshot.json"),
       logURL: dir.appendingPathComponent("log.jsonl"),
       ioQueue: queue,
-      logger: Logger(subsystem: "test", category: "JSONLRecordFile-rt")
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile-rt")
     )
     return (dir, file, queue)
   }
@@ -331,7 +331,7 @@ struct JSONLRecordFileRoundTripTests {
     let logURL = dir.appendingPathComponent("log.jsonl")
     let secondInstance = JSONLRecordFile<Snapshot, Operation>(
       snapshotURL: snapshotURL, logURL: logURL, ioQueue: queue,
-      logger: Logger(subsystem: "test", category: "JSONLRecordFile-rt-2")
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile-rt-2")
     )
     let loaded = secondInstance.load()
     #expect(loaded.snapshot == nil)

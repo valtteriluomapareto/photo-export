@@ -7,7 +7,7 @@ import os
 @MainActor
 enum AppDiagnostics {
   static let signposter = OSSignposter(
-    subsystem: "com.valtteriluoma.photo-export",
+    subsystem: Logger.appSubsystem,
     category: "AppLifecycle")
 
   private static var launchInterval: OSSignpostIntervalState?
@@ -43,7 +43,7 @@ enum AppDiagnostics {
   /// context — `OSSignposter` is `Sendable` and the property is an
   /// immutable `let`.
   nonisolated static let recordStoreSignposter = OSSignposter(
-    subsystem: "com.valtteriluoma.photo-export",
+    subsystem: Logger.appSubsystem,
     category: "RecordStore")
 
   /// Begin a `Configure` interval for the named store. Returns a handle

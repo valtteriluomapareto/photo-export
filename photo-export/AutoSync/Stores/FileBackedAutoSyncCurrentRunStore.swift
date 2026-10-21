@@ -40,8 +40,7 @@ final class FileBackedAutoSyncCurrentRunStore: AutoSyncCurrentRunStore {
     baseDirectoryURL: URL,
     fileManager: FileManager = .default,
     directoryFsync: any DirectoryFsyncing = ProductionDirectoryFsync(),
-    logger: Logger = Logger(
-      subsystem: "com.valtteriluoma.photo-export", category: "AutoSyncCurrentRunStore")
+    logger: Logger = Logger.app(.autoSyncCurrentRunStore)
   ) {
     self.baseDirectoryURL = baseDirectoryURL
     self.fileManager = fileManager

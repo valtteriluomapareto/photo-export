@@ -224,7 +224,7 @@ links for the current implementation and complete file inventory.
   callbacks reach the façade for UI state and dependency forwarding.
 - `VariantExporter` selects a producer, stages or reuses bytes, commits the final
   file and records each variant outcome. `ResourceSelection` owns edited-producer
-  dispatch; `ExportFilenamePolicy` owns `_orig` naming; `ExportPathPolicy` sanitizes
+  dispatch; `ExportFilenamePolicy` owns `_orig` naming; `CollectionPathComponentPolicy` sanitizes
   collection path components; `ExportPlacementResolver` maps library selections
   to placements. `FinalNamePlanner` plans the final name after staging.
 - `ImportCoordinator` runs backup scan, matching, bulk history adoption and
@@ -601,7 +601,7 @@ the owning generation before changing UI state.
 | `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager`, `ExportRecordStore`, `CollectionExportRecordStore` |
 | Main-actor collaborator without `@Published` (mutates shared state from MainActor only) | `@MainActor final class` | `VariantExporter`, `RecordStoreRouter`, `JSONLRecordFile` |
 | Main-actor composition wrapper — final, conforms to `PhotoLibraryService`, optionally wraps an injected service for curated screenshot content | `@MainActor final class` | `PhotoLibraryManager` (wraps `overrideService`), `ScreenshotPhotoLibraryService` (peer, no inheritance) |
-| Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `ExportPathPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `BackupScanner`, `FileIOService`, `FinalNamePlanner`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` |
+| Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `CollectionPathComponentPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `BackupScanner`, `FileIOService`, `FinalNamePlanner`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` |
 | Concurrent state holder | `actor` | `CollectionCountCache` |
 | Heavy work that must hop off MainActor | `nonisolated async` selectively on protocol-conforming methods | `PhotoLibraryService` (selectively `nonisolated` count methods), `MediaRenderer`, `AssetResourceWriter`, `FileSystemService` |
 

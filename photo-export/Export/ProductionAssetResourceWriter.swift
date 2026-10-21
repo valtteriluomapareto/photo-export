@@ -71,8 +71,7 @@ struct ProductionAssetResourceWriter: AssetResourceWriter {
     }
   }
 
-  private static let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "ResourceWriter")
+  private static let logger = Logger.app(.resourceWriter)
   private let backend: Backend
 
   init(backend: Backend = .live) {

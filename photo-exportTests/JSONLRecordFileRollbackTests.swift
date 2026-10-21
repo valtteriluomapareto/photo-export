@@ -65,7 +65,7 @@ struct JSONLRecordFileRollbackTests {
       snapshotURL: dir.appendingPathComponent("snapshot.json"),
       logURL: dir.appendingPathComponent("log.jsonl"),
       ioQueue: queue,
-      logger: Logger(subsystem: "test", category: "JSONLRecordFile-rollback")
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile-rollback")
     )
     return (file, queue)
   }
@@ -181,7 +181,7 @@ struct JSONLRecordFileRollbackTests {
       snapshotURL: nonexistentDir.appendingPathComponent("snapshot.json"),
       logURL: nonexistentDir.appendingPathComponent("log.jsonl"),
       ioQueue: queue,
-      logger: Logger(subsystem: "test", category: "JSONLRecordFile-logfail")
+      logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile-logfail")
     )
 
     let op = Operation(key: "k", value: "v")

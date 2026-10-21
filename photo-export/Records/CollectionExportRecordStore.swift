@@ -126,8 +126,7 @@ final class CollectionExportRecordStore: ObservableObject {
 
   // MARK: - State
 
-  private let logger = Logger(
-    subsystem: "com.valtteriluoma.photo-export", category: "CollectionExportRecords")
+  private let logger = Logger.app(.collectionExportRecords)
   private let ioQueue = DispatchQueue(
     label: "com.valtteriluoma.photo-export.collection-records-io", qos: .utility)
 
