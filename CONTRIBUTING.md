@@ -77,14 +77,16 @@ caffeinate -du xcodebuild \
   test
 ```
 
-For one test, append its method name to the suite identifier. For example:
+For one Swift Testing test, append its full method identifier, including parentheses
+and any parameter labels, to the suite identifier. Quote the argument for the shell.
+For example:
 
 ```bash
 caffeinate -du xcodebuild \
   -project photo-export.xcodeproj \
   -scheme "photo-export" \
   -destination 'platform=macOS' \
-  -only-testing:photo-exportTests/ExportRecordStoreTests/testLoadEmptyStore \
+  '-only-testing:photo-exportTests/ExportRecordStoreTests/testLoadEmptyStore()' \
   CODE_SIGNING_ALLOWED=NO \
   test
 ```
