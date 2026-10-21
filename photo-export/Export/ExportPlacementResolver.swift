@@ -8,7 +8,7 @@ import os
 /// in production. Pure with respect to its inputs: same `(selection, collections,
 /// existingPlacements)` triple always yields the same placement.
 ///
-/// Identity rules (per `docs/project/archive/collections-export-plan.md` §"Placement IDs"):
+/// Identity rules keep renamed or moved albums in distinct export placements:
 /// - Timeline: `timeline:<YYYY>-<MM>`. The synthetic constructor on `ExportPlacement`
 ///   already handles this; the resolver is only consulted for collection selections.
 /// - Favorites: fixed `collections:favorites`.
@@ -24,7 +24,7 @@ import os
 ///   (`Collections/Shared Albums/`) disjoint from the `.album` prefix
 ///   (`Collections/Albums/`) makes cross-kind collisions impossible.
 ///
-/// Sibling-collision disambiguation (per §"Path Policy → Disambiguation"):
+/// Sibling-collision rules preserve existing folder claims:
 /// - Two distinct placements that, after sanitization and case folding, share a leaf
 ///   under the same parent folder under `Collections/Albums/` are *sibling collisions*.
 /// - First claimant keeps the bare path; new placements get `_2`, `_3`, … suffixes.

@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Settings → Advanced tab. Houses mode-setting export-format options that
 /// affect every future run rather than the immediate action: `Include
-/// originals` (issue #19), `Convert HEIC to JPEG` (issue #47), and `Export
-/// Live Photos as paired image + video` (issue #49). The first two previously
+/// originals`, `Convert HEIC to JPEG`, and `Export
+/// Live Photos as paired image + video`. The first two previously
 /// lived in the toolbar's Format menu, where a SwiftUI `Menu`'s inability to
 /// surface per-item tooltips meant the deferred-semantics caveats were
 /// invisible. Migrating to Settings gives each toggle a caption-style

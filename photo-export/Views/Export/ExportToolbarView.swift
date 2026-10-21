@@ -19,11 +19,8 @@ struct ExportToolbarView: ToolbarContent {
   /// dispatch buckets at action time. Empty set → the section's "Export All" path.
   let selectionSet: Set<LibrarySelection>
   /// Most-recently-clicked item, surfaced from `LibraryRootView`. Used so the
-  /// shared-album single-select case can keep its per-item label and
-  /// dispatch (issue #91 — shared albums are excluded from the global
-  /// "Export All Albums" scope, so flipping the toolbar to a global action
-  /// that would silently skip them is actively worse than the per-item
-  /// dispatch).
+  /// shared-album single-select case keeps its per-item label and dispatch.
+  /// The global Export All Albums action excludes shared albums and would skip it.
   let focusedSelection: LibrarySelection?
 
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
@@ -212,11 +209,9 @@ struct ExportToolbarView: ToolbarContent {
       history: section == .timeline ? exportRecordStore.state : collectionExportRecordStore.state)
   }
 
-  /// Manual exports stay clickable while an AutoSync run is in flight per
-  /// plan §"Phase 4" ("Keep manual export actions enabled while Auto Export
-  /// is on"). Disabled only when a *manual* run is already going, when
-  /// import is running, or when the destination or its history can't take
-  /// exports.
+  /// Manual actions remain available during Auto Export so the user can confirm
+  /// superseding it. Manual work, import, or unavailable destination/history disables
+  /// the action. See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
   private var isPrimaryActionEnabled: Bool {
     guard primaryAvailability.canStart, !exportManager.isImporting else {
       return false
@@ -249,7 +244,7 @@ struct ExportToolbarView: ToolbarContent {
           years: buckets.years, months: buckets.months)
         return
       }
-      // Issue #91: with 0 OR 1 sidebar items selected, the toolbar's primary
+      // With 0 OR 1 sidebar items selected, the toolbar's primary
       // action is the global "Export All". Single-item dispatch (Export
       // Month, Export Year) remains available via the per-pane button inside
       // `MonthContentView` / `YearContentView`. Without this, selecting any
@@ -288,9 +283,8 @@ struct ExportToolbarView: ToolbarContent {
   /// Builds the synthesized `CollectionsSelectionBuckets` used by the
   /// toolbar's "Export All Albums" dispatch when 0 or 1 collection items are
   /// in the sidebar selection. Includes Favorites and every user album under
-  /// the current Photos tree; deliberately excludes shared albums (issue #91
-  /// + the iCloud shared-album reduced-fidelity caveat — `startExportAll`-
-  /// style actions historically don't cover shared albums on this app).
+  /// the current Photos tree; shared albums use a separate reduced-fidelity export
+  /// action and are excluded from the global albums action.
   private func allButSharedBuckets() -> CollectionsSelectionBuckets {
     let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
     let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
@@ -306,7 +300,7 @@ struct ExportToolbarView: ToolbarContent {
         let buckets = TimelineSelectionBuckets.normalize(timelineItems)
         return "Export \(buckets.count) \(buckets.count == 1 ? "Item" : "Items")"
       }
-      // Issue #91: the toolbar's primary action is the global "Export All"
+      // The toolbar's primary action is the global "Export All"
       // when 0 or 1 sidebar items are selected. Per-pane "Export Month" /
       // "Export Year" buttons handle the single-item action.
       return "Export All"

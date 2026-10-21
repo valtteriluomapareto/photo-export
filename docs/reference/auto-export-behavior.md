@@ -48,6 +48,14 @@ From [Photo Library Changes](../project/archive/auto-sync-background-sync-plan.m
 
 > Treat deleted asset IDs as non-export work for MVP. Do not delete exported files or records automatically.
 
+The same archived section requires:
+
+> Distinguish three failure modes from `fetchPersistentChanges(since:)` and route each explicitly: token-expired, token-invalid, and details-unavailable.
+
+The [change adapter](../../photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift)
+rebases its global cursor after a failure; the reducer schedules bounded full reconciliation.
+This preserves failure identity without treating destination snapshots as replay cursors.
+
 From [Dirty State](../project/archive/auto-sync-background-sync-plan.md#dirty-state):
 
 > Persist per-destination dirty state so accumulated work survives interruption, restart, and disable/enable cycles.
@@ -112,6 +120,14 @@ contract:
 > into `unsafeNeedsConfirmation`. Switching to a destination the user has
 > already confirmed in the past is `.safe` without re-prompting.
 
+The archived [Safety Invariants](../project/archive/auto-sync-background-sync-plan.md#safety-invariants)
+state:
+
+> The app does not delete user-visible files.
+
+Recovery rebuilds internal history from existing destination files. Internal legacy-state
+cleanup remains separate from user-visible destination content.
+
 [DestinationSafetyMonitor](../../photo-export/Destination/DestinationSafetyMonitor.swift)
 uses the stable destination id. It requires confirmation when both record stores are empty,
 the destination root has a non-hidden entry, and there is no saved confirmation.
@@ -155,6 +171,31 @@ From the archived [Run Ownership Model](../project/archive/auto-sync-background-
 > If auto-sync wants to run while a manual export or import is active, `AutoSyncManager` marks itself dirty and re-evaluates after manual work drains. It does not enqueue work inside `ExportManager`.
 
 > `runNow()` requested while a manual run is active follows the same dirty-and-re-evaluate path as any other auto-sync trigger: it does not supersede the manual run.
+
+The former toolbar comment required:
+
+> Keep manual export actions enabled while Auto Export is on
+
+The former status-pill comment specified:
+
+> Show concise main-window status: waiting, scheduled, blocked, running, last run.
+
+Current boundary: the pill shows current state and opens Settings; last-run history is in
+Settings. The former menu comment specified:
+
+> Add an `NSStatusItem` (menu bar item) **in MVP** with: Enable/Disable Auto Export, Export Now, current status, Open Issues, Open Settings. Required because launch-at-login starts the app without showing the main window.
+
+The shipped menu uses SwiftUI `MenuBarExtra` and has Open Settings, with no dedicated
+Open Issues action. The archived startup-presentation rationale
+is historical; this contract does not promise a hidden main window at login.
+
+The former supersession comment stated:
+
+> the automatic run is superseded with `cancelReason: .supersededByManualRun`. After the manual run finishes, the auto-sync reducer re-evaluates and schedules another run if work is still pending.
+
+The former empty-run comment stated:
+
+> auto-sync empty runs update lastRunSummary but do not show toolbar empty-run messages.
 
 From [Awaitable Export Runs](../project/archive/auto-sync-background-sync-plan.md#awaitable-export-runs):
 

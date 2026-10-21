@@ -11,7 +11,7 @@ import Foundation
 /// `scripts/bump-version.sh`, add the new entry here. If you forget,
 /// the modal degrades gracefully — it shows a generic "Photo Export has
 /// been updated — see release notes on GitHub" message instead of
-/// stale per-version copy. The plan's `docs/project/release-process.md`
+/// stale per-version copy. `docs/project/release-process.md`
 /// names this step.
 enum ReleaseNotesCatalog {
   /// All release notes, newest first or oldest first — the lookup uses

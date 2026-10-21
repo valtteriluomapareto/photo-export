@@ -23,7 +23,7 @@ final class MonthViewModel: ObservableObject {
   /// code typically caches scores to low hundreds); passing the full scope —
   /// e.g. a 37k-asset Favorites collection — choked the shared caching manager
   /// and stalled every subsequent `requestImage`, so the grid sat on the
-  /// spinner forever (issue #109). 500 covers any realistic visible row count
+  /// spinner forever. 500 covers any realistic visible row count
   /// for the 144 pt tile grid with comfortable headroom.
   private let cachingWindowSize: Int = 500
 

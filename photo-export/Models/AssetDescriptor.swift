@@ -18,7 +18,7 @@ struct AssetDescriptor: Identifiable, Sendable, Equatable {
   /// it for this asset (rare — defensively nil-checked since the underlying API
   /// is undocumented and could regress on a future macOS).
   ///
-  /// Used by the HEIC→JPEG conversion feature (issue #47) to decide whether an
+  /// Used by the HEIC→JPEG conversion feature to decide whether an
   /// asset's exports should include a synthesized JPEG `.edited` variant. Treat
   /// `nil` as "not HEIC" — the default conversion-off behavior matches.
   let originalUTI: String?
