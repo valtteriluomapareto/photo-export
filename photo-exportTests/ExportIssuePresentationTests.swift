@@ -357,6 +357,40 @@ struct ExportIssuePresentationTests {
         == nil)
   }
 
+  /// Passes before: a new failed variant appears while the issue list is already mounted.
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func failureRecordedWhileShownAppears(collection: Bool) async throws {
+    let f = try Fixture(created: created, failedAt: failedAt)
+    defer { f.close() }
+    f.window.orderFront(nil)
+    try #require(
+      await observe(in: f.window) {
+        f.counter.renderedText["issue-row:asset"] != nil
+          && f.counter.count(for: "issue-metadata:\(f.destinationId):0") > 0
+      })
+    if collection {
+      let placement = ExportPlacement.favorites()
+      f.collections.upsertPlacement(placement)
+      f.collections.markVariantInProgress(
+        assetId: "new-failure", placement: placement, variant: .original, filename: "NEW.JPG")
+      f.collections.markVariantFailed(
+        assetId: "new-failure", placement: placement, variant: .original,
+        error: "New failure while shown", at: failedAt)
+      f.collections.flushPendingNotifications()
+    } else {
+      f.timeline.markVariantInProgress(
+        assetId: "new-failure", variant: .original, year: 2026, month: 10,
+        relPath: "2026/10/", filename: "NEW.JPG")
+      f.timeline.markVariantFailed(
+        assetId: "new-failure", variant: .original, error: "New failure while shown", at: failedAt)
+      f.timeline.flushPendingNotifications()
+    }
+    #expect(
+      await observe(in: f.window) {
+        f.counter.renderedText["issue-row:new-failure"]?.first?.contains("NEW.JPG") == true
+      })
+  }
+
   // MARK: - Retry footer
 
   private func issue(

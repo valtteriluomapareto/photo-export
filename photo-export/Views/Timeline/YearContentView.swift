@@ -50,6 +50,8 @@ struct YearContentView: View {
       ?? "Export every photo in this year"
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("year-content-body:\(year)")
+      // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([exportHelp], for: "year-export-help")
     #endif
     VStack(alignment: .leading, spacing: 12) {

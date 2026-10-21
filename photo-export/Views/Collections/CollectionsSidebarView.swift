@@ -412,6 +412,10 @@ private struct CollectionRow: View {
   var depth: Int = 0
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("collection-row-body:\(descriptor.id)")
+    #endif
     HStack(spacing: 8) {
       if depth > 0 {
         // Indent nested albums under folders so the hierarchy reads at a glance.
@@ -515,6 +519,10 @@ private struct FolderRow: View {
   }
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("folder-row-body:\(descriptor.id)")
+    #endif
     HStack(spacing: 8) {
       if depth > 0 {
         Color.clear.frame(width: CGFloat(depth) * 8, height: 1)

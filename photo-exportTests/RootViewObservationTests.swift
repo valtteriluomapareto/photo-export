@@ -40,6 +40,16 @@ import Testing
       }
     }
 
+    private struct CollectionRecordsProbe: View {
+      @ObservedObject var store: CollectionExportRecordStore
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("collection-records:\(store.mutationCounter)")
+        Color.clear.frame(width: 1, height: 1)
+      }
+    }
+
     /// Rebuilds `ContentView` whenever the manager, destination or record store publishes,
     /// as `App.body` does in production.
     @MainActor
@@ -128,6 +138,9 @@ import Testing
           )
           .overlay(alignment: .topLeading) { RecordsProbe(store: timeline, counter: counter) }
           .overlay(alignment: .topTrailing) { LibraryProbe(library: library, counter: counter) }
+          .overlay(alignment: .bottomLeading) {
+            CollectionRecordsProbe(store: collections, counter: counter)
+          }
           .environmentObject(library).environmentObject(timeline).environmentObject(collections)
           .environmentObject(manager).environment(manager.progressState)
           .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
@@ -305,6 +318,32 @@ import Testing
         #expect(f.counter.renderedText[key]?[1].contains("Loading export history") != true)
         #expect(f.counter.renderedText[key]?.last == "true")
         #expect(f.defaults.bool(forKey: "hasCompletedOnboarding") == false)
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    /// Fails before collection dependency tracking is limited to the visible section.
+    @Test func libraryRootSkipsCollectionRecordChangesInTimeline() async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.show(.library)
+        try await settle(f, key: "library-root")
+        let bodies = f.counter.count(for: "library-root")
+        let placement = ExportPlacement.favorites()
+        f.collections.upsertPlacement(placement)
+        f.collections.markVariantExported(
+          assetId: "unrelated-collection", placement: placement, variant: .original,
+          filename: "UNRELATED.JPG", exportedAt: Date())
+        f.collections.flushPendingNotifications()
+        let key = "collection-records:\(f.collections.mutationCounter)"
+        try #require(await observe(in: f.window) { f.counter.count(for: key) > 0 })
+        await f.quiesce()
+        withKnownIssue("The library root still observes all collection-store publications") {
+          #expect(f.counter.count(for: "library-root") == bodies)
+        } when: {
+          true
+        }
       } cleanup: {
         await f.close()
       }
