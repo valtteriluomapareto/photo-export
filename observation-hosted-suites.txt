@@ -30,3 +30,4 @@ PhotoLibraryManagerObservationTests
 PhotoLibraryViewDependencyTests
 RecordStoreObservationTests
 RecordStoreViewObservationTests
+ImportHoldSequenceTests
