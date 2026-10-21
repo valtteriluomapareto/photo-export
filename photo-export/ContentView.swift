@@ -116,7 +116,12 @@ struct AuthorizationView: View {
       if photoLibraryManager.authorizationStatus == .denied
         || photoLibraryManager.authorizationStatus == .restricted
       {
-        Text("Enable Photos access in System Settings, then return to Photo Export to continue.")
+        let message = PhotosAccessGuidance.message
+        #if DEBUG
+          // swiftlint:disable:next redundant_discardable_let
+          let _ = bodyCounter?.recordText([message], for: "photos-access-guidance")
+        #endif
+        Text(message)
           .foregroundColor(.secondary)
           .padding()
 

@@ -903,7 +903,7 @@ struct ExportManagerRunExportTests {
       // their years or albums throws, and keep the bulk scan message.
       let manualMessage =
         scope == .favorites
-        ? "Photos access is required to scan this selection."
+        ? "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
         : "Some requested photos could not be scanned. Try exporting again."
       #expect(
         harness.manager.progressState.manualSummary?.failureMessage

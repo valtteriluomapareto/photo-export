@@ -22,7 +22,7 @@ Photo Export runs locally on your Mac. It uses Apple's PhotoKit framework to rea
 **read-only** — it can't modify or delete anything in your Photos library. It does not upload your photos, use any third-party cloud
 service, require an account, or ask for your Apple Account password.
 
-If Photos access is denied, choose **Open System Settings**, enable access under **Privacy & Security → Photos**, then return to Photo Export. The app checks access again so you can continue setup or browsing.
+The access screen, Auto Export Settings and manual export failures share one recovery instruction: turn on Photos access for Photo Export in **System Settings → Privacy & Security → Photos**. Choose **Open System Settings** on the access screen, then return to the app to continue.
 
 If Auto Export shows "Blocked — Photos access needed", Photos access is off and Auto Export doesn't run. Turn it back on under **System Settings → Privacy & Security → Photos**; pending changes are kept and export shortly after you return to Photo Export.
 

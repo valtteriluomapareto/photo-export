@@ -148,6 +148,18 @@ import Testing
       #expect(f.service.requestAuthorizationCalls == 0)
     }
 
+    @Test(arguments: [PHAuthorizationStatus.denied, .restricted])
+    func accessGuidanceNamesThePhotosPrivacyPath(status: PHAuthorizationStatus) async throws {
+      let f = Fixture(status: status)
+      defer { f.close() }
+      f.show()
+      try #require(await observe { f.counter.renderedText["photos-access-guidance"] != nil })
+      #expect(
+        f.counter.renderedText["photos-access-guidance"] == [
+          "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
+        ])
+    }
+
     @Test func settingsActionOpensTheExistingPhotosPrivacyURL() async throws {
       let f = Fixture()
       defer { f.close() }

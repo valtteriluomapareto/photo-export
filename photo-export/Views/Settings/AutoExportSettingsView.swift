@@ -13,6 +13,10 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
   @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
 
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
   @State private var isShowingMigrationRecoverySheet = false
   @State private var isShowingSafetyConfirm = false
 
@@ -107,7 +111,12 @@ struct AutoExportSettingsView: View {
           .disabled(!autoSyncManager.state.canRunNow)
         }
       } footer: {
-        Text(exportNowFooter)
+        let message = exportNowFooter
+        #if DEBUG
+          // swiftlint:disable:next redundant_discardable_let
+          let _ = bodyCounter?.recordText([message], for: "auto-export-now-footer")
+        #endif
+        Text(message)
           .font(.caption)
           .foregroundStyle(.secondary)
       }
@@ -234,8 +243,7 @@ struct AutoExportSettingsView: View {
     case .blocked(.destinationUnsafe):
       return "The destination has unresolved issues. Open the destination indicator to review."
     case .blocked(.photosAccessMissing):
-      return
-        "Turn on Photos access for Photo Export in System Settings → Privacy & Security → Photos."
+      return PhotosAccessGuidance.message
     case .blocked:
       return "Auto Export is blocked. Resolve the issue above to run now."
     case .running:
