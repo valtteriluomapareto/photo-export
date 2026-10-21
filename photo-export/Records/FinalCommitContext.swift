@@ -15,3 +15,13 @@ final class FinalCommitContext<Snapshot: Codable & Sendable, Mutation: Codable &
     self.snapshot = snapshot
   }
 }
+
+/// Where a store put an acknowledged final commit, and so whose write it still owes a flush.
+enum FinalCommitLanding: Equatable {
+  /// Deferred behind a corrupt load or held while its destination loads; nothing written yet.
+  case held
+  /// Recorded in the active history through the store's ordinary append.
+  case recorded
+  /// Written to the parked history of a destination the store is no longer configured for.
+  case parked
+}

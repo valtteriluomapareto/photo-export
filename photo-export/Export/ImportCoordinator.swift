@@ -120,7 +120,10 @@ final class ImportCoordinator: ObservableObject {
 
   /// Starts the Import Existing Backup flow. Idempotent: re-entry while an import is
   /// already in flight is a no-op. Other guards (no destination, store not ready,
-  /// active export work) log and return the reason.
+  /// active export work) log and return the reason. While either history is still loading,
+  /// the import starts at once, holding exports, and waits for it; if the timeline history
+  /// then isn't ready, the import ends without running and says why, through the same outcome
+  /// as other failures.
   ///
   /// `requiringPreviousBackup` is for a folder the user said is their previous backup: when the
   /// history has completed files and none of them are in the folder, nothing is imported or
@@ -137,15 +140,8 @@ final class ImportCoordinator: ObservableObject {
     } else if host.exportDestination.selectedFolderURL == nil {
       logger.warning("Cannot import: no destination selected")
       refusal = .noDestination
-    } else if host.exportRecordStore.state != .ready {
-      // Gate the import on a `.ready` timeline store. Otherwise the scanner would happily
-      // run, the bulkImportRecords call would silently drop every record (its `.ready`
-      // guard short-circuits on `.unconfigured`/`.failed`), and the user would see a
-      // success report with the matched counts despite nothing being persisted. This is
-      // the same hazard `canExportTimeline` guards on the export-start side.
-      logger.error(
-        "Cannot import: timeline record store state=\(String(describing: host.exportRecordStore.state), privacy: .public) (need .ready)"
-      )
+    } else if host.exportRecordStore.state.isSettled, !isTimelineHistoryReady(host) {
+      // A history that is still loading is waited for below; any other state refuses now.
       refusal = .historyNotReady
     } else {
       refusal = nil
@@ -155,14 +151,14 @@ final class ImportCoordinator: ObservableObject {
         previousBackupMissing = false
         importStage = nil
         host.setImportResult(nil)
-        importError =
-          refusal == .exportActive
-          ? "Photo Export couldn\u{2019}t check this folder against your export history while an export is running. Your export history was kept. Choose File \u{2192} Import Existing Backup\u{2026} when the export finishes."
-          : "Photo Export couldn\u{2019}t check this folder against your export history. Your export history was kept."
+        importError = Self.previousBackupCheckMessage(for: refusal)
       }
       return refusal
     }
     guard let rootURL = host.exportDestination.selectedFolderURL else { return .noDestination }
+    // A destination change while the import waits for the history abandons it.
+    let timelineDestination = host.exportRecordStore.destinationId
+    let collectionDestination = host.collectionExportRecordStore.destinationId
 
     let importGen = queueCoordinator?.generation ?? 0
     let operationID = UUID()
@@ -180,6 +176,26 @@ final class ImportCoordinator: ObservableObject {
       // invalidation before Task entry. A replacement UUID remains untouched.
       defer { self.finishOwnedImport(operationID) }
       guard self.isCurrentImport(operationID, generation: importGen) else { return }
+
+      // Right after a destination change its history is still loading. The import holds
+      // exports while it waits, then checks it still owns the same destination.
+      await host.exportRecordStore.waitUntilSettled()
+      await host.collectionExportRecordStore.waitUntilSettled()
+      guard self.isCurrentImport(operationID, generation: importGen) else { return }
+      guard host.exportRecordStore.destinationId == timelineDestination,
+        host.collectionExportRecordStore.destinationId == collectionDestination
+      else {
+        self.logger.info("Import abandoned: the destination changed while its history loaded")
+        return
+      }
+      guard self.isTimelineHistoryReady(host) else {
+        self.finishOwnedImport(
+          operationID,
+          error: requiringPreviousBackup
+            ? Self.previousBackupCheckMessage(for: .historyNotReady)
+            : Self.historyUnavailableMessage)
+        return
+      }
 
       do {
         guard let scopedURL = host.exportDestination.beginScopedAccess() else {
@@ -396,6 +412,34 @@ final class ImportCoordinator: ObservableObject {
       }
     }
     return nil
+  }
+
+  /// Imports need a `.ready` timeline store. Otherwise the scanner would happily run, the
+  /// bulkImportRecords call would silently drop every record (its `.ready` guard
+  /// short-circuits on `.unconfigured`/`.failed`), and the user would see a success report with
+  /// the matched counts despite nothing being persisted. This is the same hazard
+  /// `canExportTimeline` guards on the export-start side.
+  private func isTimelineHistoryReady(_ host: Host) -> Bool {
+    let state = host.exportRecordStore.state
+    guard state == .ready else {
+      logger.error(
+        "Cannot import: timeline record store state=\(String(describing: state), privacy: .public) (need .ready)"
+      )
+      return false
+    }
+    return true
+  }
+
+  /// Why an import that waited for the history ended without running, when the history it
+  /// loaded isn't ready.
+  static let historyUnavailableMessage =
+    "Export history isn\u{2019}t available. Resolve the export history alert, then import again."
+
+  /// What a "Same Folder" check that could not run tells the user.
+  private static func previousBackupCheckMessage(for refusal: StartRefusal) -> String {
+    refusal == .exportActive
+      ? "Photo Export couldn\u{2019}t check this folder against your export history while an export is running. Your export history was kept. Choose File \u{2192} Import Existing Backup\u{2026} when the export finishes."
+      : "Photo Export couldn\u{2019}t check this folder against your export history. Your export history was kept."
   }
 
   /// Ends the wait after a "previous backup missing" result: the user chose what to do, or the

@@ -318,9 +318,13 @@ struct CollectionContentView: View, Equatable {
 
   // MARK: - Export button
 
-  private var canExport: Bool {
-    exportDestinationManager.canExportNow && collectionExportRecordStore.state == .ready
+  private var exportAvailability: ManualExportAvailability {
+    ManualExportAvailability(
+      destinationCanExport: exportDestinationManager.canExportNow,
+      history: collectionExportRecordStore.state)
   }
+
+  private var canExport: Bool { exportAvailability.canStart }
 
   private var exportButtonTitle: String {
     switch selection {
@@ -334,13 +338,9 @@ struct CollectionContentView: View, Equatable {
   }
 
   private var exportButtonHelp: String {
-    if !exportDestinationManager.canExportNow {
-      return exportDestinationManager.exportUnavailableHelp
-    }
-    if collectionExportRecordStore.state != .ready {
-      return "Collections store is not ready"
-    }
-    return "Export every photo in this collection that isn't already exported."
+    exportAvailability.unavailableHelp(
+      destinationHelp: exportDestinationManager.exportUnavailableHelp)
+      ?? "Export every photo in this collection that isn't already exported."
   }
 
   private var overlayViews: some View {

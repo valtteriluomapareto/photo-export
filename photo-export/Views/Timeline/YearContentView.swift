@@ -42,9 +42,13 @@ struct YearContentView: View {
   @State private var totalCount: Int?
 
   var body: some View {
+    let availability = ManualExportAvailability(
+      destinationCanExport: exportDestinationManager.canExportNow,
+      history: exportRecordStore.state)
     let exportHelp =
-      exportDestinationManager.canExportNow
-      ? "Export every photo in this year" : exportDestinationManager.exportUnavailableHelp
+      availability.unavailableHelp(
+        destinationHelp: exportDestinationManager.exportUnavailableHelp)
+      ?? "Export every photo in this year"
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([exportHelp], for: "year-export-help")
@@ -65,7 +69,7 @@ struct YearContentView: View {
           exportManager.startExportYear(year: year)
         }
         .buttonStyle(.bordered)
-        .disabled(!exportDestinationManager.canExportNow)
+        .disabled(!availability.canStart)
         .help(exportHelp)
       }
 
@@ -83,18 +87,24 @@ struct YearContentView: View {
   }
 
   private var summaryView: some View {
-    HStack(spacing: 8) {
+    let text: String
+    if exportRecordStore.state == .loading {
+      // The month tiles' exported badges wait for the history too.
+      text = ManualExportAvailability.loadingHistoryText
+    } else if let totalCount {
+      text = totalCount == 1 ? "1 photo" : "\(totalCount) photos"
+    } else {
+      text = "Counting\u{2026}"
+    }
+    #if DEBUG
+      bodyCounter?.recordText([text], for: "year-summary")
+    #endif
+    return HStack(spacing: 8) {
       Image(systemName: "calendar")
         .foregroundStyle(.secondary)
-      if let totalCount {
-        Text(totalCount == 1 ? "1 photo" : "\(totalCount) photos")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-      } else {
-        Text("Counting…")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-      }
+      Text(text)
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
     }
   }
 

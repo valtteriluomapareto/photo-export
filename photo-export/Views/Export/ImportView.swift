@@ -103,6 +103,12 @@ struct ImportView: View {
     }
   }
 
+  private var timelineExportAvailability: ManualExportAvailability {
+    ManualExportAvailability(
+      destinationCanExport: exportDestinationManager.canExportNow,
+      history: exportRecordStore.state)
+  }
+
   private var canRetryImport: Bool {
     exportDestinationManager.canImportNow && exportRecordStore.state == .ready
       && !collectionExportRecordStore.state.needsRecovery
@@ -320,6 +326,10 @@ struct ImportView: View {
           }
         }
         .buttonStyle(.borderedProminent)
+        .disabled(!timelineExportAvailability.canStart)
+        .help(
+          timelineExportAvailability.unavailableHelp(
+            destinationHelp: exportDestinationManager.exportUnavailableHelp) ?? "")
       }
     }
   }

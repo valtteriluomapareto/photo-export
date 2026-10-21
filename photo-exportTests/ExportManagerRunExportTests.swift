@@ -571,6 +571,51 @@ struct ExportManagerRunExportTests {
     }
   }
 
+  /// An Auto Export run that starts while the timeline history is still loading fails at once
+  /// with nothing enqueued; a run after the load finishes exports.
+  @Test func runExportFailsFastWhileLoading() async throws {
+    let storeRoot = TestScratch.directory("ExportManagerRunExportLoading")
+    let store = ExportRecordStore(baseDirectoryURL: storeRoot)
+    let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
+    collectionStore.configure(for: "test")
+    let photoLib = FakePhotoLibraryService()
+    let dest = FakeExportDestination()
+    let writer = FakeAssetResourceWriter()
+    let manager = ExportManager(
+      photoLibraryService: photoLib, exportDestination: dest, exportRecordStore: store,
+      collectionExportRecordStore: collectionStore, assetResourceWriter: writer,
+      fileSystem: FakeFileSystem(), userDefaults: TestScratch.defaults("RunExportLoading"))
+    let harness = Harness(
+      manager: manager, photoLib: photoLib, dest: dest, writer: writer, store: store,
+      collectionStore: collectionStore, storeRoot: storeRoot)
+    try await withCleanup {
+      seedAssets(
+        [TestAssetFactory.makeAsset(id: "loading-asset", creationDate: makeDate(2025, 1, 1))],
+        for: .timeline, in: harness)
+      store.beginConfigure(for: "test")
+      try #require(store.state == .loading)
+
+      // A load is installed on the main actor, which `runExport` keeps until it has decided,
+      // so the run starts while the history loads. No read is held: a run that waited for IO
+      // would fail the checks below instead of hanging the test until its time limit, which
+      // makes Xcode restart the test process.
+      let summary = await manager.runExport(context: makeContext(scope: .timelineFullLibrary))
+      #expect(summary.result == .failed)
+      #expect(summary.enqueuedCount == 0)
+      #expect(manager.pendingJobs.isEmpty)
+      #expect(!manager.hasActiveExportWork)
+      #expect(writer.writeCalls.isEmpty)
+
+      await store.waitUntilSettled()
+      #expect(store.state == .ready)
+      let retry = await manager.runExport(context: makeContext(scope: .timelineFullLibrary))
+      #expect(retry.result == .completed)
+      #expect(writer.writeCalls.count == 1)
+    } cleanup: {
+      await harness.cleanup()
+    }
+  }
+
   @Test func persistenceFailureCannotReportSuccessfulRun() async throws {
     let harness = makeHarness()
     try await withCleanup {
