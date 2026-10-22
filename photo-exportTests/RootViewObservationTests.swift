@@ -49,8 +49,8 @@ import Testing
       }
     }
 
-    /// Rebuilds the production window root for coarse manager, destination and record changes
-    /// to stress the equatable router independently of its own dependencies.
+    /// Rebuilds the window root for queue, destination and record changes to stress the
+    /// equatable router independently of its own dependencies.
     @MainActor
     private struct ContentHost: View {
       let manager: ExportManager
@@ -575,8 +575,7 @@ import Testing
       }
     }
 
-    /// Button enablement already passes; the label probe is required before asserting pause
-    /// liveness. Only the unrelated root-body silence is a future tightening.
+    /// The toolbar tracks admission and pause labels without rebuilding the unrelated root.
     @Test func toolbarExportControlFollowsManualQueueWork() async throws {
       let f = try Fixture()
       try await withCleanup {

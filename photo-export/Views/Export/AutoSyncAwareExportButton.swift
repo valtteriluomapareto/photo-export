@@ -12,10 +12,8 @@ import SwiftUI
 ///   `supersedeForManualRun` so AutoSync yields to the manual run.
 /// - Otherwise dispatches the action immediately.
 ///
-/// The wrapper owns its own `@EnvironmentObject ExportManager` subscription. It's
-/// a tiny view (single Button + dialog config), so the per-`objectWillChange`
-/// re-render cost is negligible — the heavy LazyVGrid sitting *above* this button
-/// is insulated by its parent's `.equatable()` modifier.
+/// The button tracks the manager values its body reads through the typed environment.
+/// Its parent grid retains its separate value-input and equatable rendering boundary.
 struct AutoSyncAwareExportButton<Label: View>: View {
   @Environment(ExportManager.self) private var exportManager
 

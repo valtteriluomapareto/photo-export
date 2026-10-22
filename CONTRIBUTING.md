@@ -210,7 +210,7 @@ npm run dev
 ## Developing new features
 
 Before adding an export entry point, placement kind, variant, collaborator, or
-`@Published` property AutoSync observes:
+property or named publisher accessor AutoSync observes:
 
 1. Read [`docs/reference/architecture-conventions.md`](docs/reference/architecture-conventions.md) —
    the canonical home for the contracts, the canonical `start*` entry-point shape, and the "to add a
@@ -256,8 +256,8 @@ Before adding an export entry point, placement kind, variant, collaborator, or
    The list lives in `scripts/ci/regression-gates.txt`; CI fails if this list misses a gate from it
    or if a gate is skipped.
 3. For a new collaborator, follow the reference's Host pattern and state ownership
-   rules. Coordinator state has one owner; intentional `@Published` mirrors on the
-   manager use synchronous sinks so AutoSync sees consistent state.
+   rules. Coordinator state has one owner; synchronous sinks update the manager's
+   bridged named-accessor state or plain tracked UI state so AutoSync sees consistent state.
 
 ## Reference material
 

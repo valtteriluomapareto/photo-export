@@ -2,18 +2,13 @@ import AppKit
 import Photos
 import SwiftUI
 
-/// Asset-grid pane for a single (year, month). Intentionally does *not* hold
-/// `ExportManager` as `@EnvironmentObject` — that would subscribe the body (and
-/// therefore the `LazyVGrid` re-evaluation) to every `ExportManager.objectWillChange`
-/// emission, of which there are several per job during a run (sink'd `queueCount`,
-/// activeRunContext transitions, etc.). Instead the parent (`LibraryRootView`)
-/// reads the few fields we need from its own subscription and passes them in as
-/// plain values, plus a closure for the Export Month action.
+/// Asset-grid pane for a single (year, month). `LibraryRootView` passes the export
+/// settings as plain values and supplies the Export Month action as a closure.
+/// This keeps the grid's rendering inputs independent of the parent's other dependencies.
 ///
-/// **Equatable + `.equatable()` at the call site** is load-bearing. `LibraryRootView`
-/// still subscribes to `ExportManager` (it reads other fields), so its `body`
-/// re-evaluates on every manager emission and constructs a *new* `MonthContentView`
-/// value each time — the `onExportMonth` closure is a fresh allocation per render.
+/// **Equatable + `.equatable()` at the call site** is load-bearing. When another
+/// dependency rebuilds `LibraryRootView`, it constructs a new `MonthContentView`
+/// with a fresh `onExportMonth` closure.
 /// Without the explicit `Equatable` conformance below, SwiftUI's struct-diff would
 /// see the new closure as a "changed" property and re-evaluate this body anyway.
 /// The conformance compares only the value fields that actually affect rendering

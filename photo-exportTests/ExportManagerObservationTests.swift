@@ -6,9 +6,8 @@ import Testing
 
 @testable import Photo_Export
 
-/// The run-state properties behind `exportRunStatePublisher` register Observation
-/// dependencies, so a view reading them refreshes without holding the manager as an
-/// `ObservableObject`, while `objectWillChange` keeps firing as `@Published` fires it.
+/// Manager reads register field-specific Observation dependencies while named Combine
+/// accessors retain synchronous replay, every-write delivery and delivery before storage.
 @MainActor
 @Suite(.timeLimit(.minutes(2)), .serialized)
 struct ExportManagerObservationTests {
@@ -416,7 +415,7 @@ struct ExportManagerObservationTests {
       }
     }
 
-    /// The publication barrier stays live independently of the plain reader's dependencies.
+    /// The queue value key stays live independently of the month reader's dependencies.
     @MainActor
     private struct QueuePublicationProbe: View {
       let manager: ExportManager
@@ -476,7 +475,7 @@ struct ExportManagerObservationTests {
       }
     }
 
-    /// Re-runs on every manager publication, so its key shows a publication has rendered.
+    /// A setting value key provides a render barrier independent of the run-state reader.
     @MainActor
     private struct PublicationProbe: View {
       let manager: ExportManager

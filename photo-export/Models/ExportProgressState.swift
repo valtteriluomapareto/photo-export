@@ -2,10 +2,8 @@ import Combine
 import Foundation
 import Observation
 
-/// Frequently-mutating per-job / per-variant state, split off from `ExportManager`
-/// so that each progress update doesn't fan out as an `ExportManager.objectWillChange`
-/// storm to every view holding the manager as `@EnvironmentObject`. Observation tracks
-/// each field separately, so a view re-renders only for the fields it reads.
+/// Per-job and per-variant state with its own observable owner. Both this state and
+/// `ExportManager` track fields separately, so a view re-renders only for values it reads.
 ///
 /// Why this exists: during a typical run, `currentAssetFilename`, `renderActivity`,
 /// `totalJobsCompleted`, and `currentJobPlacement` all change several times per

@@ -59,7 +59,7 @@ final class ExportManager {
     var month: Int { placement.timelineYearMonth?.month ?? 0 }
   }
 
-  // MARK: - Published State (Export)
+  // MARK: - Export state
   // `isRunning`, `queueCount`, `activeRunContext` and `isEnqueueingAll` feed
   // `exportRunStatePublisher`. Each is held in an `ObservableCombineBridge` so views track
   // them through Observation while AutoSync keeps `@Published` delivery (see `bridgedWrite`).
@@ -75,9 +75,8 @@ final class ExportManager {
   private let queueCountBridge = ObservableCombineBridge(0)
   private(set) var isPaused: Bool = false
 
-  /// Frequently-mutating progress-bar state lives here so the per-asset filename and
-  /// per-job counter updates don't trigger `ExportManager.objectWillChange` storms.
-  /// See `ExportProgressState` for the rationale and tests-still-pass forwarders below.
+  /// Per-asset progress has its own observable owner. Views track only the progress
+  /// fields they read; the forwarders below preserve the manager's read surface.
   let progressState = ExportProgressState()
 
   /// Forwarders to `progressState`. Read-only at the manager surface so callers that
@@ -185,7 +184,7 @@ final class ExportManager {
     }
   }
 
-  // MARK: - Published State (Import)
+  // MARK: - Import state
   private(set) var isImporting: Bool {
     get { bridgedRead(isImportingBridge, \.isImporting) }
     set { bridgedWrite(isImportingBridge, \.isImporting, newValue) }
@@ -281,7 +280,7 @@ final class ExportManager {
 
   // The accessors below expose single properties to subscribers outside this type with
   // `$property` semantics: synchronous, delivered before the value is stored, and replaying
-  // the current value (pinned by `PublisherParityTests`), from `@Published` or a bridge.
+  // the current value (pinned by `PublisherParityTests`), from the contract bridges.
 
   /// `$isImporting` alone. `isImportingPublisher` is AutoSync's hold, which also covers a
   /// missing previous backup and drops repeats.
@@ -493,11 +492,9 @@ final class ExportManager {
   /// Owns `pendingJobs`, `isProcessing`, `currentTask`, the per-placement queue
   /// counters, and the drain loop. ExportManager forwards reads via computed properties
   /// below (for call-site stability) and forwards control calls (`pause`, `resume`,
-  /// `clearPending`, `processQueueIfNeeded`). The @Published mirrors on this manager
-  /// (`isRunning`, `isPaused`, `queueCount`, `totalJobsEnqueued`, `totalJobsCompleted`)
-  /// are kept in sync with the coordinator's own publishers via sinks established in
-  /// `init` — so existing UI bindings and the AutoSync `exportRunStatePublisher` keep
-  /// emitting from the same `ExportManager` source.
+  /// `clearPending`, `processQueueIfNeeded`). Synchronous sinks in `init` update the
+  /// manager's bridged running/depth values, tracked pause flag and progress-state
+  /// counters, preserving the UI reads and AutoSync's named publisher contract.
   ///
   /// IUO for the same `host: self` cycle as `variantExporter` (see that property above)
   /// — `self` must be fully initialized before the coordinator can hold it as Host.
@@ -545,11 +542,9 @@ final class ExportManager {
   /// cleanup paths to route the `removeVariant` call to the correct store via
   /// `placement.kind`.
   ///
-  /// The observable storage lives on `progressState` so that the per-job mutation
-  /// (set on job start, cleared on job end — twice per asset) doesn't fan out as
-  /// `ExportManager.objectWillChange` to every view holding the manager. The only
-  /// SwiftUI reader is `MonthRow`'s in-flight spinner; it subscribes to
-  /// `ExportProgressState` directly. This forwarder keeps internal write sites in
+  /// The observable storage lives on `progressState`. The per-job mutation
+  /// (set on job start, cleared on job end) notifies the in-flight spinner's direct
+  /// `ExportProgressState` dependency. This forwarder keeps internal write sites in
   /// the manager unchanged. `private(set)` preserves the pre-extraction surface —
   /// only the manager (and a `setCurrentJob` / `clearCurrentJobIdentifiers` it
   /// owns) may mutate the in-flight placement.
@@ -704,11 +699,9 @@ final class ExportManager {
 
   // MARK: - Observation bridge
   //
-  // `ExportManager` is still an `ObservableObject`, and also `Observable` for the bridged
-  // properties: a read registers an Observation dependency, and a write sends
-  // `objectWillChange` first, as `@Published` does, so `@EnvironmentObject` holders refresh
-  // as before. An equal write is delivered to Combine subscribers and sends
-  // `objectWillChange`, but does not notify Observation.
+  // Computed bridge properties register with the macro's registrar. A changing write
+  // notifies Observation before synchronous Combine delivery and storage. Equal writes
+  // still reach Combine subscribers while leaving Observation readers unchanged.
 
   private func bridgedRead<Value>(
     _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
@@ -726,7 +719,7 @@ final class ExportManager {
 
   // MARK: - Lifetime contract
   //
-  // `ExportManager` is owned by `PhotoExportApp` as an `@StateObject` for the entire
+  // `AppCore` owns `ExportManager` for the entire
   // app lifetime, so a pending `runExport` continuation effectively cannot outlive the
   // process. Tests must call `cancelAndClear()` (or `interruptForDestinationUnavailable()`)
   // during teardown to resolve any active run before the harness drops its reference —
@@ -2651,7 +2644,7 @@ final class ExportManager {
 
   // MARK: - ImportCoordinator.Host conformance
 
-  /// Writes the import report back to the manager's `@Published` mirror. Kept as a Host
+  /// Writes the import report back to the manager's tracked state. Kept as a Host
   /// method (not a sink) because `importResult` is intentionally writable on the
   /// manager — test code resets it directly between consecutive imports.
   func setImportResult(_ result: ImportReport?) {
