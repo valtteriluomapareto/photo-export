@@ -16,7 +16,7 @@ import Testing
     enum LibraryReadSurface: CaseIterable { case content, timeline, album }
 
     private struct LibraryProbe: View {
-      @ObservedObject var library: PhotoLibraryManager
+      let library: PhotoLibraryManager
       let counter: BodyInvalidationCounter
       var body: some View {
         // swiftlint:disable:next redundant_discardable_let
@@ -148,7 +148,7 @@ import Testing
           .overlay(alignment: .bottomLeading) {
             CollectionRecordsProbe(store: collections, counter: counter)
           }
-          .environmentObject(library).environment(timeline).environment(collections)
+          .environment(library).environment(timeline).environment(collections)
           .environment(manager).environment(manager.progressState)
           .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
           .environment(\.bodyInvalidationCounter, counter)

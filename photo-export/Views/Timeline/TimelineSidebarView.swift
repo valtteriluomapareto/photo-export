@@ -12,7 +12,7 @@ struct TimelineSidebarView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   /// Multi-select state bound from `LibraryRootView`. The binding filter below
   /// strips non-timeline values defensively so the sidebar can never persist a

@@ -88,7 +88,7 @@ import Testing
       let key = pane == .month ? "month-summary" : "year-summary"
       window.contentView = NSHostingView(
         rootView: Host(pane: pane, service: service)
-          .environmentObject(PhotoLibraryManager(overrideService: service))
+          .environment(PhotoLibraryManager(overrideService: service))
           .environment(timeline)
           .environment(collections)
           .environment(manager)

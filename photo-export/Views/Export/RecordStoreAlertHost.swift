@@ -9,7 +9,7 @@ struct RecordStoreAlertHost: ViewModifier {
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @State private var isShowingRecoveryImport = false
 
   func body(content: Content) -> some View {

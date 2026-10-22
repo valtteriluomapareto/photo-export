@@ -125,7 +125,7 @@ private struct SharedAlbumsHintSection: View {
 /// counts come from `cachedCountAssets(in:)` so concurrent sidebar reads share one
 /// fetch and the cache is cleared on the same change observer.
 struct CollectionsSidebarView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter

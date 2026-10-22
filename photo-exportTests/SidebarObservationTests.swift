@@ -135,7 +135,7 @@ import Testing
               counter: hostCounter)
           }
         }
-        .environmentObject(library).environment(timeline)
+        .environment(library).environment(timeline)
         .environment(collections).environment(manager)
         .environment(manager.progressState)
         .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)

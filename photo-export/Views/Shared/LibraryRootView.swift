@@ -10,7 +10,7 @@ struct LibraryRootView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
@@ -115,7 +115,7 @@ struct LibraryRootView: View {
       },
       detail: {
         AssetDetailView(asset: selectedAsset, placement: detailPlacement)
-          .environmentObject(photoLibraryManager)
+          .environment(photoLibraryManager)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     )
@@ -350,7 +350,7 @@ struct LibraryRootView: View {
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .timelineMonth(let year, let month):
@@ -365,7 +365,7 @@ struct LibraryRootView: View {
         photoLibraryService: photoLibraryManager
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .favorites:
@@ -378,7 +378,7 @@ struct LibraryRootView: View {
         photoLibraryService: photoLibraryManager
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .album(let collectionId):
@@ -394,7 +394,7 @@ struct LibraryRootView: View {
         photoLibraryService: photoLibraryManager
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .sharedAlbum(let collectionId):
@@ -410,7 +410,7 @@ struct LibraryRootView: View {
         photoLibraryService: photoLibraryManager
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .folder(let collectionId):
@@ -421,7 +421,7 @@ struct LibraryRootView: View {
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case nil:

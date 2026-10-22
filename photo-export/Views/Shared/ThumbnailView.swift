@@ -10,7 +10,7 @@ struct ThumbnailView: View {
   let isSelected: Bool
   let isExported: Bool
 
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   @State private var image: CGImage?
   @State private var failed: Bool = false

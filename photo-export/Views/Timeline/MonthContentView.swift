@@ -16,7 +16,7 @@ import SwiftUI
 /// the closure and the binding wrapper are excluded so SwiftUI short-circuits the
 /// LazyVGrid re-evaluation when those rendering inputs are unchanged.
 struct MonthContentView: View, Equatable {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 

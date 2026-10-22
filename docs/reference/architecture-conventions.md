@@ -33,7 +33,8 @@ empty `TestHostApp` under hosted tests. [`PhotoExportApp`](../../photo-export/Ap
 builds one [`AppCore`](../../photo-export/App/AppCore.swift) from
 [`AppComposition.forLaunch(arguments:)`](../../photo-export/App/AppComposition.swift)
 and retains its remaining `ObservableObject` services with `@StateObject`.
-The core owns the `@Observable` `ExportManager`, `LoginItemController`, `WhatsNewState` and both record stores;
+The core owns the `@Observable` `PhotoLibraryManager`, `ExportManager`, `LoginItemController`,
+`WhatsNewState` and both record stores;
 `ExportManager` owns `ExportProgressState`. These objects reach views through
 `.environment(_:)` without additional app-level wrappers. `MainWindowRoot` reads the timeline
 store's history readiness in its body and passes that value through `ContentView` to
@@ -327,7 +328,9 @@ func bumpGeneration()
 Thumbnail and detail tasks use asset ID plus the existing
 `PhotoLibraryManager.thumbnailContentRevision(for:)` value, not broad `libraryRevision`.
 Known content edits invalidate only affected IDs; unknown changes and bounded-tracking overflow
-use the existing global fallback. Placement/history changes do not change preview identity.
+use the existing global fallback. The query registers a shared content counter, so an edit may
+reevaluate each cell once; only a changed per-asset task identity starts a replacement decode.
+Placement/history changes do not change preview identity.
 The detail loader checks its captured revision predicate before installing a request and before
 publishing success or error, in addition to UUID and Task cancellation guards. This rejects a
 superseded response even before SwiftUI starts the replacement task. Same-asset replacement
@@ -744,8 +747,8 @@ macOS posts no notification when access changes, so access is refreshed at three
 before each fired debounce (the only path to a run), before each scope of the AutoSync
 fan-out (stopping the fan-out if access is gone), and app-wide on
 `NSApplication.didBecomeActiveNotification`. `refreshAuthorization()` publishes
-synchronously before it returns, so the reducer is blocked before the event that would start
-the run; the sink must use the value it receives. A grant made without bringing the app
+synchronously through the authorization bridge before storage, so the reducer is blocked
+before the event that would start the run; the sink must use the value it receives. A grant made without bringing the app
 forward waits for the next activation or launch.
 
 Access returning is handled like a failed change fetch: every selected scope gets

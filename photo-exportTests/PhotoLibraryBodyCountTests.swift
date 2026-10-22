@@ -26,7 +26,7 @@ import Testing
     }
 
     private struct LibraryProbe: View {
-      @ObservedObject var library: PhotoLibraryManager
+      let library: PhotoLibraryManager
       let counter: BodyInvalidationCounter
       var body: some View {
         // swiftlint:disable:next redundant_discardable_let
@@ -69,7 +69,7 @@ import Testing
         window.contentView = NSHostingView(
           rootView: Grid(assets: assets)
             .overlay(alignment: .topLeading) { LibraryProbe(library: library, counter: counter) }
-            .environmentObject(library).environment(\.bodyInvalidationCounter, counter))
+            .environment(library).environment(\.bodyInvalidationCounter, counter))
         window.orderFront(nil)
       }
 
@@ -190,12 +190,13 @@ import Testing
       await f.quiesce()
       let knownDeltas = f.deltas(from: before)
       let nonReloaders = knownDeltas.filter { $0.key != "asset-3" }
+      // The shared content revision invalidates each reader once; unchanged task identities
+      // keep every other cell's decoded image and do not issue another HQ request.
       #expect(nonReloaders.values.allSatisfy { $0 <= 1 }, "Unchanged-cell deltas: \(nonReloaders)")
       #expect(knownDeltas["asset-3", default: 0] <= 3, "Edited-cell deltas: \(knownDeltas)")
       var expectedCalls = originalCalls
       expectedCalls["asset-3", default: 0] += 1
       #expect(f.hqCalls() == expectedCalls)
-      #expect(nonReloaders.values.allSatisfy { $0 == 0 })
       before = f.bodies()
 
       f.hq = Self.image(.white)

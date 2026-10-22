@@ -22,7 +22,7 @@ struct ExportToolbarView: ToolbarContent {
   let focusedSelection: LibrarySelection?
   let historyState: RecordStoreState
 
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   /// macOS 14+ environment action for opening the `Settings` scene. Used by
   /// the toolbar cog button so users have an in-app affordance for Settings

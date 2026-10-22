@@ -102,7 +102,7 @@ struct LibraryGridSelectionLifecycleTests {
         userDefaults: defaults)
       let hosted = NSHostingView(
         rootView: HostedGrid(grid: grid, service: service, selection: selection)
-          .environmentObject(library)
+          .environment(library)
           .environment(\.bodyInvalidationCounter, counter)
           .environment(timelineStore)
           .environment(collectionStore)

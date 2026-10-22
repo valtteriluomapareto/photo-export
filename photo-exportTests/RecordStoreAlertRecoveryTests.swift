@@ -103,7 +103,7 @@ import Testing
             .recordStoreAlertHost()
             .overlay(alignment: .topLeading) { RenderProbe(tick: tick, counter: counter) }
             .environment(timeline).environment(collections).environment(manager)
-            .environmentObject(destinationManager).environmentObject(photoManager)
+            .environmentObject(destinationManager).environment(photoManager)
             .environment(\.bodyInvalidationCounter, counter))
         let owned = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 400),
