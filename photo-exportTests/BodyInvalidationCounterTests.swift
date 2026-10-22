@@ -1,37 +1,27 @@
-import SwiftUI
 import Testing
 
 @testable import Photo_Export
 
 #if DEBUG
   @MainActor
-  @Suite(.serialized)
+  @Suite(.serialized, .timeLimit(.minutes(1)))
   struct BodyInvalidationCounterTests {
-    init() {
-      BodyInvalidationCounter.shared.reset()
-    }
-
     @Test func recordIncrementsPerCall() {
-      #expect(BodyInvalidationCounter.shared.count(for: "X") == 0)
-      BodyInvalidationCounter.shared.record("X")
-      BodyInvalidationCounter.shared.record("X")
-      BodyInvalidationCounter.shared.record("Y")
-      #expect(BodyInvalidationCounter.shared.count(for: "X") == 2)
-      #expect(BodyInvalidationCounter.shared.count(for: "Y") == 1)
+      let counter = BodyInvalidationCounter()
+      #expect(counter.count(for: "X") == 0)
+      counter.record("X")
+      counter.record("X")
+      counter.record("Y")
+      #expect(counter.count(for: "X") == 2)
+      #expect(counter.count(for: "Y") == 1)
     }
 
     @Test func resetClearsAllCounts() {
-      BodyInvalidationCounter.shared.record("X")
-      BodyInvalidationCounter.shared.reset()
-      #expect(BodyInvalidationCounter.shared.count(for: "X") == 0)
-      #expect(BodyInvalidationCounter.shared.snapshot().isEmpty)
-    }
-
-    @Test func measureBodyInvalidationsModifierRecords() {
-      _ = Text("Hello").measureBodyInvalidations("TestView")
-      #expect(BodyInvalidationCounter.shared.count(for: "TestView") == 1)
-      _ = Text("Hello").measureBodyInvalidations("TestView")
-      #expect(BodyInvalidationCounter.shared.count(for: "TestView") == 2)
+      let counter = BodyInvalidationCounter()
+      counter.record("X")
+      counter.reset()
+      #expect(counter.count(for: "X") == 0)
+      #expect(counter.snapshot().isEmpty)
     }
   }
 #endif

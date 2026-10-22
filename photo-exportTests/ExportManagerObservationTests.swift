@@ -144,12 +144,6 @@ struct ExportManagerObservationTests {
         #expect(h.manager.importSheetRequest != nil)
       }
       let actual = probes.map(\.changeCount)
-      Attachment.record(
-        [
-          "property=\(property.rawValue)",
-          "order=pause,videoLayout,importError,importResult,importSheetRequest",
-          "counts=\(actual)",
-        ].joined(separator: "\n"), named: "plain-manager-dependencies.txt")
       var expected = Array(repeating: 0, count: 5)
       expected[property.index] = 1
       #expect(actual == expected)

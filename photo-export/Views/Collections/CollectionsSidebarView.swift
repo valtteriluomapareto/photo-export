@@ -192,7 +192,6 @@ struct CollectionsSidebarView: View {
     .task(id: photoLibraryManager.libraryRevision) {
       reloadTree()
     }
-    .measureBodyInvalidations("CollectionsSidebarView")
   }
 
   // MARK: - Tree rendering

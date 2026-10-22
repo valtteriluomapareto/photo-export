@@ -155,7 +155,6 @@ struct MonthContentView: View, Equatable {
         #endif
       }
     }
-    .measureBodyInvalidations("MonthContentView")
   }
 
   private var overlayViews: some View {

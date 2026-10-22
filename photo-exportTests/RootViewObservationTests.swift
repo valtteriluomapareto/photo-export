@@ -271,9 +271,6 @@ import Testing
         let bodies = f.counter.count(for: f.windowRootBodyKey)
         try await f.changeUnrelatedRecord()
         let delta = f.counter.count(for: f.windowRootBodyKey) - bodies
-        Attachment.record(
-          "ready=\(readyBodies) loading=\(loadingBodies) settled=\(bodies) unrelated=\(delta)",
-          named: "main-window-root-bodies.txt")
         #expect(delta == 0)
       } cleanup: {
         await f.close()
@@ -537,7 +534,6 @@ import Testing
         await f.quiesce()
         let delta = f.counter.count(for: key) - before
         #expect(delta <= 1, "Root body delta: \(delta)")
-        Attachment.record("\(surface): \(delta)", named: "root-body-count.txt")
         if surface != .album {
           #expect(delta == 0)
         }
@@ -607,7 +603,6 @@ import Testing
             f.counter.renderedText["toolbar-pause-label"] == ["Resume"]
           })
         let delta = f.counter.count(for: "library-root") - before
-        Attachment.record("pause=\(delta)", named: "toolbar-root-bodies.txt")
         #expect(delta == 0)
         try await ExportManagerRenderProbe.change(
           manager: f.manager, counter: f.counter, in: f.window
@@ -707,7 +702,6 @@ import Testing
           f.manager.videoLayout = .subfolder
         }
         let layout = f.counter.count(for: "library-root") - paused
-        Attachment.record("pause=\(pause) layout=\(layout)", named: "root-manager-bodies.txt")
         #expect(layout == 0)
       } cleanup: {
         await f.close()

@@ -381,33 +381,30 @@ import or type resolution. A flip lowers or removes its rows in the same change;
 guard fails until it does, and fails on any new old-pattern use, including one arriving from
 main at a sync. See [`scripts/README.md`](../../scripts/README.md).
 
+The migrated core types (`ExportManager`, both record stores and `PhotoLibraryManager`) have
+zero `ObservableObject` type rows and no `@Published` properties. Eight Combine services remain:
+the export/import coordinators, destination manager, safety monitor, lifecycle coordinator,
+Auto Export manager and scope store, and persistent photo-change adapter. Their existing
+allowlist and coordinator publisher projections remain in the tested scanner; replacing it
+with grep would lose its handling of qualified wrappers and multiline source.
+
 ## Hosted-suite flake baseline
 
-The CI baseline was recorded on 2026-10-21 at untouched feature head
-`23e38aaa0c81068ea48944c1437c12d430372062`, using Xcode **26.6 (17F113)** on macOS
-26.6.2. The [baseline run](https://github.com/valtteriluomapareto/photo-export/actions/runs/39613498379)
-covered the 27 suites below: 194 test declarations and 342 expanded cases, each with
-repetitions 1–10 in the saved xcresult. All **3,420 case runs** completed: 3,410 passed and
-10 exercised the intentional `ExpectationReflectionSafetyTests` expected-failure control
-(two known issue records per repetition). There were **zero unexpected failures and no
-skips**. All 24 existing `PublisherParityTests` rows passed ten times each.
+Hosted reader tests use Xcode 26.6 (17F113) on macOS 26.6.2. The reproducible command
+below covers the 34 suites that exercise the migrated core types, their scenes and sheets,
+and their Combine contracts. Historical run provenance is recorded on
+[issue #315](https://github.com/valtteriluomapareto/photo-export/issues/315).
 
 Later runs on Xcode 26.6 (17F113) found a pre-existing flake in
 `ManualExportFeedbackViewTests.multilineFailureFitsFirstLayoutAndMountedReplacements(initialHeight:)`
 with height 600: Settings can open on the previous tab, about 1 in 70 case runs
 ([#433](https://github.com/valtteriluomapareto/photo-export/issues/433)).
 
-The verification-only workflow ref was
-`961c535da1417e8cb0e59dd0d4eb5c13748c1141`; it checked out the exact clean source
-separately from its adapter and enforced the pinned Xcode before testing. The sorted suite
-inventory's SHA256 was `dc99ea6bfcf98f57283a1513bb3905e682e29c0c3bfdaa00fe76447043f10193`.
-The run's artifact contains the full command, toolchain/source provenance, log, summary,
-per-case repetition tree and xcresult. The workflow ref is not part of the application or
-migration branch. Later checks use this toolchain and suite inventory, adding any new
-suites and identifying cases absent from the baseline.
+Barriered silence checks, structural bounds, visible updates, gates and parity assertions
+decide correctness. A failure already present on the unflipped base is recorded as a flake;
+advisory diagnostic counts do not gate a flip.
 
-The command below uses isolated `/tmp` paths; CI used equivalent paths under its runner
-temporary directory. Use fresh paths for another run:
+Use fresh isolated paths for each run:
 
 ```bash
 caffeinate -du xcodebuild -project photo-export.xcodeproj -scheme photo-export \
@@ -442,11 +439,12 @@ caffeinate -du xcodebuild -project photo-export.xcodeproj -scheme photo-export \
   -only-testing:photo-exportTests/SidebarObservationTests \
   -only-testing:photo-exportTests/ThumbnailViewLifecycleTests \
   -only-testing:photo-exportTests/TimelineSidebarBadgeRefreshTests \
+  -only-testing:photo-exportTests/PhotoLibraryBodyCountTests \
+  -only-testing:photo-exportTests/PhotoLibraryManagerObservationTests \
+  -only-testing:photo-exportTests/PhotoLibraryViewDependencyTests \
+  -only-testing:photo-exportTests/RecordStoreObservationTests \
+  -only-testing:photo-exportTests/RecordStoreViewObservationTests \
+  -only-testing:photo-exportTests/ImportHoldSequenceTests \
+  -only-testing:photo-exportTests/AutoExportSettingsSheetTests \
   CODE_SIGNING_ALLOWED=NO test
 ```
-
-The older local Xcode 27.1 record is historical: the original combined hosted run stopped
-at a failure in `CollectionContentObservationTests.unrelatedQueuePublicationsDoNotRescanLoadedCollection`
-(497 test runs); skipping it allowed 490 clean runs. That fixture's pending setup publication
-was corrected in [#344](https://github.com/valtteriluomapareto/photo-export/issues/344),
-which is closed. The current 26.6 baseline includes that test and requires no exclusion.

@@ -439,9 +439,6 @@ import Testing
       try await f.barrier()
       let attached = f.window?.attachedSheet != nil
       #expect(!attached)
-      Attachment.record(
-        "collection=\(collection), writeFailure=\(writeFailure), attached=\(attached)",
-        named: "failed-retry-alert.txt")
     }
 
   }
