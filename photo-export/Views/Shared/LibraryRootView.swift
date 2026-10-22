@@ -91,6 +91,8 @@ struct LibraryRootView: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("library-root")
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([String(canImport)], for: "library-can-import")
     #endif
     NavigationSplitView(
       sidebar: {
@@ -144,6 +146,7 @@ struct LibraryRootView: View {
           isShowingImportSheet = false
         })
         .environmentObject(exportManager)
+        .environment(exportManager)
       }
     )
     // An import the app started itself (checking the history after "Same Folder") shows the

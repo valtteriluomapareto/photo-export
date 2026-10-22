@@ -12,33 +12,13 @@ import Testing
 /// are only inspected, never built into a core.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct AppCoreTests {
-  private final class FakeLoginItemService: LoginItemService {
-    var status: LoginItemController.Status = .notRegistered
-    func register() throws {}
-    func unregister() throws {}
-    func openSystemLoginItems() {}
-  }
-
   private func makeTestComposition(label: String) -> AppComposition {
-    AppComposition(
-      defaults: TestScratch.defaults(label),
-      appStateRoot: TestScratch.directory(label),
-      photoLibraryServiceOverride: FakePhotoLibraryService(),
-      persistentChangeSource: FakePersistentChangeSource(),
-      assetResourceWriter: FakeAssetResourceWriter(),
-      phAssetCacheControl: { $0 },
-      fileSystem: FakeFileSystem(),
-      clock: TestClock(),
-      loginItemService: FakeLoginItemService(),
-      wiresAutoSync: false,
-      isScreenshotMode: false,
-      screenshotWindowSize: nil,
-      screenshotSurfaceKey: nil)
+    AppCoreTestHarness.makeTestComposition(label: label)
   }
 
-  /// The one place these tests build a core. Call it inside `withAppDomainUntouched`.
+  /// Builds the shared scratch composition inside the existing domain guard.
   private func makeCore(_ composition: AppComposition) -> AppCore {
-    AppCore(composition: composition)
+    AppCoreTestHarness.makeCore(composition)
   }
 
   private func makeDestinationFolder(_ label: String) throws -> URL {
@@ -181,6 +161,7 @@ import Testing
     var storedValue: String?
     var whatsNewState: WhatsNewState?
     var progressState: ExportProgressState?
+    var exportManager: ExportManager?
     var loginItemController: LoginItemController?
     var exportRecordStore: ExportRecordStore?
     var collectionExportRecordStore: CollectionExportRecordStore?
@@ -196,6 +177,7 @@ import Testing
     // these non-optionally, where a missing injection compiles but traps at runtime.
     @Environment(WhatsNewState.self) private var whatsNewState: WhatsNewState?
     @Environment(ExportProgressState.self) private var progressState: ExportProgressState?
+    @Environment(ExportManager.self) private var exportManager: ExportManager?
     @Environment(LoginItemController.self) private var loginItemController: LoginItemController?
     @Environment(ExportRecordStore.self) private var exportRecordStore: ExportRecordStore?
     @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore:
@@ -213,6 +195,7 @@ import Testing
       reading.storedValue = storedValue
       reading.whatsNewState = whatsNewState
       reading.progressState = progressState
+      reading.exportManager = exportManager
       reading.loginItemController = loginItemController
       reading.exportRecordStore = exportRecordStore
       reading.collectionExportRecordStore = collectionExportRecordStore
@@ -244,6 +227,7 @@ import Testing
       // The `@Observable` objects arrive through `.environment(_:)`, as the core's own instances.
       #expect(reading.whatsNewState === core.whatsNewState)
       #expect(reading.progressState === core.exportManager.progressState)
+      #expect(reading.exportManager === core.exportManager)
       #expect(reading.loginItemController === core.loginItemController)
       #expect(reading.exportRecordStore === core.exportRecordStore)
       #expect(reading.collectionExportRecordStore === core.collectionExportRecordStore)
@@ -402,13 +386,7 @@ import Testing
       core.start()
       #expect(core.autoSyncManager.state == .blocked(.photosAccessMissing))
       let counter = BodyInvalidationCounter()
-      let window = NSWindow(
-        contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 900),
-        styleMask: [.titled, .closable], backing: .buffered, defer: false)
-      window.isReleasedWhenClosed = false
-      window.contentView = NSHostingView(
-        rootView: AutoExportSettingsView().photoExportEnvironment(core)
-          .environment(\.bodyInvalidationCounter, counter))
+      let window = AppCoreTestHarness.settingsWindow(core: core, counter: counter)
       defer {
         window.orderOut(nil)
         window.contentView = nil

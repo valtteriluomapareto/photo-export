@@ -328,6 +328,7 @@ extension View {
     self.environmentObject(core.exportDestinationManager)
       .environmentObject(core.photoLibraryManager)
       .environmentObject(core.exportManager)
+      .environment(core.exportManager)
       .environment(core.exportManager.progressState)
       .environment(core.exportRecordStore)
       .environment(core.collectionExportRecordStore)

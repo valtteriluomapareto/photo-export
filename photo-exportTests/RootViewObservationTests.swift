@@ -79,6 +79,7 @@ import Testing
       let timeline: ExportRecordStore
       let collections: CollectionExportRecordStore
       let fakeDestination = FakeExportDestination()
+      let writer = FakeAssetResourceWriter()
       let manager: ExportManager
       let autoSync = AutoSyncManager()
       let whatsNew: WhatsNewState
@@ -108,7 +109,7 @@ import Testing
         manager = ExportManager(
           photoLibraryService: service, exportDestination: fakeDestination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
-          assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+          assetResourceWriter: writer, fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         whatsNew = WhatsNewState(userDefaults: defaults, currentVersion: "test", catalog: [])
         if whatsNewSeen { whatsNew.markAsSeen() }
@@ -137,6 +138,9 @@ import Testing
           rootView: pane(surface, screenshotSurfaceKey: screenshotSurfaceKey).frame(
             width: 1200, height: 800
           )
+          .overlay(alignment: .bottomTrailing) {
+            ExportManagerRenderProbe(manager: manager, counter: counter)
+          }
           .overlay(alignment: .topLeading) { RecordsProbe(store: timeline, counter: counter) }
           .overlay(alignment: .topTrailing) { LibraryProbe(library: library, counter: counter) }
           .overlay(alignment: .bottomLeading) {
@@ -536,6 +540,165 @@ import Testing
           withKnownIssue("The root still observes every library publication") {
             #expect(delta == 0)
           }
+        }
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    /// Already passes: the sheet reads the same manager as its library window. A missing
+    /// manager injection traps the process; the behavioral mutant injects a different manager.
+    @Test func importSheetFollowsTheLibraryManager() async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.show(.library)
+        try await settle(f, key: "library-root")
+        #expect(f.counter.renderedText["import-title"] == nil)
+        f.manager.importResult = ImportReport(
+          matchedCount: 1, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 1)
+        f.manager.requestImportSheet()
+        try #require(await observe(in: f.window) { f.window?.attachedSheet != nil })
+        try #require(
+          await observe(in: f.window?.attachedSheet) {
+            f.counter.renderedText["import-title"] != nil
+          })
+        try #require(f.counter.renderedText["import-title"] == ["Import Complete"])
+        f.manager.importResult = nil
+        #expect(
+          await observe(in: f.window?.attachedSheet) {
+            f.counter.renderedText["import-title"] == ["Import Stopped"]
+          })
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    /// Button enablement already passes; the label probe is required before asserting pause
+    /// liveness. Only the unrelated root-body silence is a future tightening.
+    @Test func toolbarExportControlFollowsManualQueueWork() async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.show(.library)
+        try await settle(f, key: "library-root")
+        let control = "toolbar-export-control"
+        try #require(
+          await observe(in: f.window) { f.counter.renderedText[control]?.first == "true" })
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.queueCoordinator.enqueue([
+            .init(
+              assetLocalIdentifier: "queued", placement: .timeline(year: 2026, month: 9),
+              selection: .edited)
+          ])
+        }
+        #expect(
+          await observe(in: f.window) { f.counter.renderedText[control]?.first == "false" })
+        try #require(
+          await observe(in: f.window) { f.counter.renderedText["toolbar-pause-label"] == ["Pause"] }
+        )
+        let before = f.counter.count(for: "library-root")
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.pause()
+        }
+        #expect(
+          await observe(in: f.window) {
+            f.counter.renderedText["toolbar-pause-label"] == ["Resume"]
+          })
+        let delta = f.counter.count(for: "library-root") - before
+        Attachment.record("pause=\(delta)", named: "toolbar-root-bodies.txt")
+        withKnownIssue("The root still observes every manager publication") {
+          #expect(delta == 0)
+        }
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.cancelAndClear()
+        }
+        #expect(
+          await observe(in: f.window) { f.counter.renderedText[control]?.first == "true" })
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    /// Fails before the admission text probe; actual held export work closes and reopens it.
+    @Test func canImportFollowsActiveExportWork() async throws {
+      let f = try Fixture()
+      let gate = AsyncCheckpoint()
+      try await withCleanup {
+        f.show(.library)
+        try await settle(f, key: "library-root")
+        let key = "library-can-import"
+        try #require(f.counter.renderedText[key] == ["true"])
+        let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
+        f.service.assetsByYearMonth["2026-9"] = [
+          TestAssetFactory.makeAsset(id: "held", creationDate: date)
+        ]
+        f.service.resourcesByAssetId["held"] = [
+          ResourceDescriptor(type: .photo, originalFilename: "HELD.JPG")
+        ]
+        f.writer.checkpoint = gate
+        f.manager.queueCoordinator.enqueue([
+          .init(
+            assetLocalIdentifier: "held", placement: .timeline(year: 2026, month: 9),
+            selection: .edited)
+        ])
+        f.manager.queueCoordinator.processQueueIfNeeded()
+        try #require(await gate.waitForEnter(count: 1))
+        try #require(f.manager.isRunning)
+        #expect(await observe(in: f.window) { f.counter.renderedText[key] == ["false"] })
+        let task = f.manager.currentTask
+        f.manager.cancelAndClear()
+        await gate.releaseAll()
+        if let task { _ = await finished(task) }
+        #expect(await observe(in: f.window) { f.counter.renderedText[key] == ["true"] })
+      } cleanup: {
+        let task = f.manager.currentTask
+        f.manager.cancelAndClear()
+        await gate.releaseAll()
+        if let task { _ = await finished(task) }
+        await f.close()
+      }
+    }
+
+    /// Fails before property-specific manager observation: neither write changes root content.
+    @Test func libraryRootSkipsPauseAndVideoLayout() async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.show(.library)
+        try await settle(f, key: "library-root")
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.queueCoordinator.enqueue([
+            .init(
+              assetLocalIdentifier: "queued", placement: .timeline(year: 2026, month: 9),
+              selection: .edited)
+          ])
+        }
+        let before = f.counter.count(for: "library-root")
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.pause()
+        }
+        let pause = f.counter.count(for: "library-root") - before
+        withKnownIssue("The root still observes every manager publication") {
+          #expect(pause == 0)
+        }
+        let paused = f.counter.count(for: "library-root")
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.videoLayout = .subfolder
+        }
+        let layout = f.counter.count(for: "library-root") - paused
+        Attachment.record("pause=\(pause) layout=\(layout)", named: "root-manager-bodies.txt")
+        withKnownIssue("The root still observes every manager publication") {
+          #expect(layout == 0)
         }
       } cleanup: {
         await f.close()
