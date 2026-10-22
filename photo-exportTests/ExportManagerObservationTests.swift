@@ -74,6 +74,95 @@ struct ExportManagerObservationTests {
     }
   }
 
+  enum PlainProperty: String, CaseIterable, Sendable {
+    case pause, videoLayout, importError, importResult, importSheetRequest
+
+    var index: Int {
+      switch self {
+      case .pause: 0
+      case .videoLayout: 1
+      case .importError: 2
+      case .importResult: 3
+      case .importSheetRequest: 4
+      }
+    }
+  }
+
+  /// Already passes: changing a property invalidates only its own readers.
+  @Test(arguments: PlainProperty.allCases)
+  func plainTrackedPropertiesRegisterDependencies(property: PlainProperty) async throws {
+    let h = ExportManagerHarness(label: "PlainManagerDependency-\(property.rawValue)")
+    try await withCleanup {
+      #expect(!h.manager.isPaused)
+      #expect(h.manager.videoLayout == .flat)
+      #expect(h.manager.importError == nil)
+      #expect(h.manager.importResult == nil)
+      #expect(h.manager.importSheetRequest == nil)
+      var importTask: Task<Void, Never>?
+      if property == .pause {
+        h.manager.queueCoordinator.enqueue([
+          .init(
+            assetLocalIdentifier: "plain-dependency", placement: .timeline(year: 2026, month: 9),
+            selection: .edited)
+        ])
+        #expect(h.manager.canTogglePause)
+        #expect(!h.manager.isPaused)
+      } else if property == .importError {
+        h.dest.scopedAccessAvailable = false
+        h.manager.startImport()
+        importTask = try #require(h.manager.importTask)
+        #expect(h.manager.isImporting)
+        #expect(h.manager.importError == nil)
+      }
+      let probes = [
+        ObservationProbe { _ = h.manager.isPaused },
+        ObservationProbe { _ = h.manager.videoLayout },
+        ObservationProbe { _ = h.manager.importError },
+        ObservationProbe { _ = h.manager.importResult },
+        ObservationProbe { _ = h.manager.importSheetRequest },
+      ]
+      defer { probes.forEach { $0.stop() } }
+      switch property {
+      case .pause:
+        h.manager.pause()
+        #expect(h.manager.isPaused)
+      case .videoLayout:
+        h.manager.videoLayout = .subfolder
+        #expect(h.manager.videoLayout == .subfolder)
+      case .importError:
+        let task = try #require(importTask)
+        try #require(await finished(task))
+        #expect(!h.manager.isImporting)
+        #expect(h.dest.beginScopedAccessCount == 1)
+        #expect(h.manager.importError == "Could not access the export folder.")
+      case .importResult:
+        let report = ImportReport(
+          matchedCount: 1, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 1)
+        h.manager.setImportResult(report)
+        #expect(h.manager.importResult == report)
+      case .importSheetRequest:
+        h.manager.requestImportSheet()
+        #expect(h.manager.importSheetRequest != nil)
+      }
+      let actual = probes.map(\.changeCount)
+      Attachment.record(
+        [
+          "property=\(property.rawValue)",
+          "order=pause,videoLayout,importError,importResult,importSheetRequest",
+          "counts=\(actual)",
+        ].joined(separator: "\n"), named: "plain-manager-dependencies.txt")
+      var expected = Array(repeating: 0, count: 5)
+      expected[property.index] = 1
+      #expect(actual == expected)
+    } cleanup: {
+      h.manager.cancelAndClear()
+      try? await h.store.flush()
+      try? await h.collectionStore.flush()
+      h.dest.cleanup()
+      try? FileManager.default.removeItem(at: h.storeRoot)
+    }
+  }
+
   enum Setting: CaseIterable, Sendable {
     case versions, heic, paired
     var index: Int {
