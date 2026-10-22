@@ -7,28 +7,23 @@ import Testing
 
 #if DEBUG
   /// Missing banner actions fail before instrumentation. A sheet without its manager traps
-  /// the process; each test requires the actual recovery header in the attached sheet.
+  /// the process; each test witnesses the header's title from its mounted background.
   @MainActor
   @Suite(.serialized, .timeLimit(.minutes(1)))
   struct AutoExportSettingsSheetTests {
-    private func descendants(_ view: NSView) -> [NSView] {
-      [view] + view.subviews.flatMap(descendants)
-    }
-
-    private func expectHeader(_ title: String, in window: NSWindow) async throws {
+    private func expectHeader(
+      _ title: String, in window: NSWindow, counter: BodyInvalidationCounter
+    ) async throws {
       try #require(await observe(in: window) { window.attachedSheet != nil })
       let sheet = try #require(window.attachedSheet)
-      let content = try #require(sheet.contentView)
-      content.layoutSubtreeIfNeeded()
-      Attachment.record(
-        descendants(content).map { "\(type(of: $0)): \(($0 as? NSTextField)?.stringValue ?? "")" }
-          .joined(separator: "\n"), named: "recovery-sheet-descendants.txt")
-      #expect(
+      try #require(
         await observe(in: sheet) {
-          descendants(content).compactMap { $0 as? NSTextField }.contains {
-            $0.stringValue == title
-          }
-        })
+          counter.renderedText["destination-recovery-header"] == [title]
+        }, "The attached recovery header must record its actual title")
+      let actual = try #require(counter.renderedText["destination-recovery-header"])
+      Attachment.record(
+        "expected=\(title)\nactual=\(actual)\nsheet=\(window.attachedSheet === sheet)",
+        named: "recovery-header.txt")
     }
 
     private func close(_ window: NSWindow, core: AppCore, counter: BodyInvalidationCounter) async {
@@ -69,8 +64,10 @@ import Testing
         try #require(
           await observe(in: window) { counter.renderedText["auto-export-now-footer"] != nil })
         let action = try #require(counter.renderedActions["auto-export-safety-confirmation"])
+        #expect(window.attachedSheet == nil)
+        #expect(counter.renderedText["destination-recovery-header"] == nil)
         action()
-        try await expectHeader("Confirm This Destination", in: window)
+        try await expectHeader("Confirm This Destination", in: window, counter: counter)
       } cleanup: {
         await close(window, core: core, counter: counter)
       }
@@ -100,8 +97,10 @@ import Testing
         try #require(
           await observe(in: window) { counter.renderedText["auto-export-now-footer"] != nil })
         let action = try #require(counter.renderedActions["auto-export-migration-recovery"])
+        #expect(window.attachedSheet == nil)
+        #expect(counter.renderedText["destination-recovery-header"] == nil)
         action()
-        try await expectHeader("Destination Has Unresolved Issues", in: window)
+        try await expectHeader("Destination Has Unresolved Issues", in: window, counter: counter)
       } cleanup: {
         await close(window, core: core, counter: counter)
       }
