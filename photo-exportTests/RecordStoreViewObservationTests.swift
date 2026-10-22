@@ -128,7 +128,7 @@ import Testing
         // The deterministic stores need their own clock; the shared window factory still applies.
         let content = Host(surface: surface, service: service, manager: manager)
           .overlay(alignment: .topLeading) { RenderProbe(tick: tick, counter: counter) }
-          .environmentObject(library).environmentObject(timeline).environmentObject(collections)
+          .environmentObject(library).environment(timeline).environmentObject(collections)
           .environmentObject(manager).environment(manager.progressState)
           .environmentObject(destinationManager).environmentObject(autoSync)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)

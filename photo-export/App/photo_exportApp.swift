@@ -13,14 +13,13 @@ import SwiftUI
 struct PhotoExportApp: App {
   private let core: AppCore
   // The core's `ObservableObject`s, held as `@StateObject`s. The `@Observable` objects need no
-  // wrapper: the core owns `LoginItemController` and `WhatsNewState`, `ExportManager` owns
-  // `ExportProgressState`, and nothing here reads them. `autoSyncManager` supplies the
-  // menu bar label and `exportRecordStore` supplies reactive timeline history readiness in
-  // `body`; the others keep their instances alive alongside the core. Scenes get the same
-  // instances through `photoExportEnvironment(core)`.
+  // wrapper: the core owns `LoginItemController`, `WhatsNewState` and `ExportRecordStore`,
+  // while `ExportManager` owns `ExportProgressState`. `MainWindowRoot` observes timeline
+  // history readiness; `autoSyncManager` supplies the menu bar label. The remaining wrappers
+  // keep their instances alive alongside the core. Scenes get the same instances through
+  // `photoExportEnvironment(core)`.
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var photoLibraryManager: PhotoLibraryManager
-  @StateObject private var exportRecordStore: ExportRecordStore
   @StateObject private var collectionExportRecordStore: CollectionExportRecordStore
   @StateObject private var exportManager: ExportManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
@@ -43,7 +42,6 @@ struct PhotoExportApp: App {
     self.core = core
     _exportDestinationManager = StateObject(wrappedValue: core.exportDestinationManager)
     _photoLibraryManager = StateObject(wrappedValue: core.photoLibraryManager)
-    _exportRecordStore = StateObject(wrappedValue: core.exportRecordStore)
     _collectionExportRecordStore = StateObject(wrappedValue: core.collectionExportRecordStore)
     _exportManager = StateObject(wrappedValue: core.exportManager)
     _lifecycleCoordinator = StateObject(wrappedValue: core.lifecycleCoordinator)
@@ -61,11 +59,9 @@ struct PhotoExportApp: App {
     // so the app is still identified as "Photo Export" everywhere it
     // matters outside the chrome.
     WindowGroup("") {
-      ContentView(
-        destinationManager: exportDestinationManager, recordStore: exportRecordStore,
-        timelineHistoryState: exportRecordStore.state
+      MainWindowRoot(
+        destinationManager: exportDestinationManager, recordStore: core.exportRecordStore
       )
-      .equatable()
       .recordStoreAlertHost()
       .photoExportEnvironment(core)
       .task {
@@ -99,7 +95,7 @@ struct PhotoExportApp: App {
       }
       CommandGroup(after: .help) {
         SaveDiagnosticReportCommand(
-          timelineStore: exportRecordStore,
+          timelineStore: core.exportRecordStore,
           collectionStore: collectionExportRecordStore,
           destinationManager: exportDestinationManager,
           photoChangeAdapter: autoSyncPhotoChangeAdapter,
@@ -134,6 +130,26 @@ struct PhotoExportApp: App {
         .photoExportEnvironment(core)
     }
     .windowResizability(.contentMinSize)
+  }
+}
+
+/// Supplies timeline history readiness as a render-time input to the equatable router.
+struct MainWindowRoot: View {
+  let destinationManager: ExportDestinationManager
+  let recordStore: ExportRecordStore
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
+  var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("main-window-root")
+    #endif
+    ContentView(
+      destinationManager: destinationManager, recordStore: recordStore,
+      timelineHistoryState: recordStore.state
+    ).equatable()
   }
 }
 

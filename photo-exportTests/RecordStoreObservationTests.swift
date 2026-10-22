@@ -194,7 +194,7 @@ struct RecordStoreObservationTests {
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(probe.changeCount == 1)
       } when: {
-        true
+        query.collection
       }
     } cleanup: {
       await f.close()
@@ -216,14 +216,14 @@ struct RecordStoreObservationTests {
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(probe.changeCount == 1)
       } when: {
-        true
+        collection
       }
       f.configure("B", collection: collection)
       #expect(f.counter(collection) == before + 2)
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(probe.changeCount == 2)
       } when: {
-        true
+        collection
       }
     } cleanup: {
       await f.close()
@@ -269,12 +269,12 @@ struct RecordStoreObservationTests {
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(exported.changeCount == 1)
       } when: {
-        true
+        collection
       }
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(month.changeCount == 1)
       } when: {
-        true
+        collection
       }
       #expect(sibling.changeCount == 0)
       let changedCounts = [exported.changeCount, month.changeCount, sibling.changeCount]
@@ -315,7 +315,7 @@ struct RecordStoreObservationTests {
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(probe.changeCount == 1)
       } when: {
-        true
+        collection
       }
       let waiter = Task { @MainActor in
         await f.waitUntilSettled(collection)
@@ -328,18 +328,18 @@ struct RecordStoreObservationTests {
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(settled.1 == 2)
       } when: {
-        true
+        collection
       }
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(readyProbeCount == 2)
       } when: {
-        true
+        collection
       }
       f.configure(nil, collection: collection)
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(probe.changeCount == 3)
       } when: {
-        true
+        collection
       }
       let afterNil = probe.changeCount
       f.configure(nil, collection: collection)
@@ -384,7 +384,7 @@ struct RecordStoreObservationTests {
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(counter.changeCount == 1)
       } when: {
-        true
+        collection
       }
       try await f.flush()
       let beforeFailure = counter.changeCount
@@ -394,7 +394,7 @@ struct RecordStoreObservationTests {
       withKnownIssue("Record store reads do not register this Observation dependency yet") {
         #expect(state.changeCount == 1)
       } when: {
-        true
+        collection
       }
       #expect(counter.changeCount == beforeFailure)
     } cleanup: {

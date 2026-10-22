@@ -10,7 +10,7 @@ struct ExportIssuesView: View {
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @Environment(ExportRecordStore.self) private var exportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
 
   private var snapshot: ExportIssuesProjection.Snapshot {

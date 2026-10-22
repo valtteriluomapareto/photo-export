@@ -329,7 +329,7 @@ extension View {
       .environmentObject(core.photoLibraryManager)
       .environmentObject(core.exportManager)
       .environment(core.exportManager.progressState)
-      .environmentObject(core.exportRecordStore)
+      .environment(core.exportRecordStore)
       .environmentObject(core.collectionExportRecordStore)
       .environmentObject(core.lifecycleCoordinator)
       .environmentObject(core.autoSyncManager)

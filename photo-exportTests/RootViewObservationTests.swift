@@ -11,7 +11,7 @@ import Testing
   @MainActor
   @Suite(.timeLimit(.minutes(2)), .serialized)
   struct RootViewObservationTests {
-    enum Surface { case library, content }
+    enum Surface { case library, content, mainWindow }
     enum ExistingState: CaseIterable { case destination, records, neither }
     enum LibraryReadSurface: CaseIterable { case content, timeline, album }
 
@@ -26,11 +26,10 @@ import Testing
       }
     }
 
-    /// Renders once per timeline-store publication, so a test can wait for a record change
-    /// to reach SwiftUI before checking that a root body did not run for it.
+    /// Renders each timeline revision independently before a root-body silence check.
     @MainActor
     private struct RecordsProbe: View {
-      @ObservedObject var store: ExportRecordStore
+      let store: ExportRecordStore
       let counter: BodyInvalidationCounter
       var body: some View {
         // A declaration keeps the probe out of ViewBuilder's view expressions.
@@ -50,22 +49,21 @@ import Testing
       }
     }
 
-    /// Rebuilds `ContentView` whenever the manager, destination or record store publishes,
-    /// as `App.body` does in production.
+    /// Rebuilds the production window root for coarse manager, destination and record changes
+    /// to stress the equatable router independently of its own dependencies.
     @MainActor
     private struct ContentHost: View {
       @ObservedObject var manager: ExportManager
       @ObservedObject var destination: ExportDestinationManager
-      @ObservedObject var timeline: ExportRecordStore
+      let timeline: ExportRecordStore
       let counter: BodyInvalidationCounter
       var body: some View {
         // A declaration keeps the probe out of ViewBuilder's view expressions.
         // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("content-host")
-        ContentView(
-          destinationManager: destination, recordStore: timeline,
-          timelineHistoryState: timeline.state
-        ).equatable()
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = timeline.mutationCounter
+        MainWindowRoot(destinationManager: destination, recordStore: timeline)
       }
     }
 
@@ -87,6 +85,7 @@ import Testing
       let counter = BodyInvalidationCounter()
       var window: NSWindow?
       var folder: URL { root.appendingPathComponent("Backup") }
+      var windowRootBodyKey: String { "main-window-root" }
 
       init(
         selectFolder: Bool = true, onboardingComplete: Bool = true, whatsNewSeen: Bool = true
@@ -128,6 +127,8 @@ import Testing
         case .content:
           ContentHost(
             manager: manager, destination: destination, timeline: timeline, counter: counter)
+        case .mainWindow:
+          MainWindowRoot(destinationManager: destination, recordStore: timeline)
         }
       }
 
@@ -141,7 +142,7 @@ import Testing
           .overlay(alignment: .bottomLeading) {
             CollectionRecordsProbe(store: collections, counter: counter)
           }
-          .environmentObject(library).environmentObject(timeline).environmentObject(collections)
+          .environmentObject(library).environment(timeline).environmentObject(collections)
           .environmentObject(manager).environment(manager.progressState)
           .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
           .environment(\.bodyInvalidationCounter, counter)
@@ -230,6 +231,47 @@ import Testing
         f.collections.beginConfigure(for: "Loading")
       }
       return snapshot
+    }
+
+    /// Readiness passes before; unrelated-record silence fails on the observing app-style base.
+    @Test func mainWindowRootFollowsTimelineReadinessOnly() async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.show(.mainWindow)
+        let control = "toolbar-export-control"
+        try #require(
+          await observe(in: f.window) {
+            f.counter.count(for: f.windowRootBodyKey) > 0
+              && f.counter.renderedText[control]?.first == "true"
+          })
+        await f.quiesce()
+        let readyBodies = f.counter.count(for: f.windowRootBodyKey)
+        let snapshot = beginHistoryLoad(f, section: .timeline)
+        let loadingKey = "timeline-records:\(f.timeline.mutationCounter)"
+        try #require(await observe(in: f.window) { f.counter.count(for: loadingKey) > 0 })
+        await f.quiesce()
+        #expect(f.counter.count(for: f.windowRootBodyKey) > readyBodies)
+        #expect(f.counter.renderedText[control]?.first == "false")
+        #expect(f.counter.renderedText[control]?[1].contains("Loading export history") == true)
+        let loadingBodies = f.counter.count(for: f.windowRootBodyKey)
+        f.io.release(snapshot)
+        await f.timeline.waitUntilSettled()
+        let settledKey = "timeline-records:\(f.timeline.mutationCounter)"
+        try #require(await observe(in: f.window) { f.counter.count(for: settledKey) > 0 })
+        await f.quiesce()
+        #expect(f.counter.count(for: f.windowRootBodyKey) > loadingBodies)
+        #expect(f.counter.renderedText[control]?.first == "true")
+        #expect(f.counter.renderedText[control]?[1].contains("Loading export history") == false)
+        let bodies = f.counter.count(for: f.windowRootBodyKey)
+        try await f.changeUnrelatedRecord()
+        let delta = f.counter.count(for: f.windowRootBodyKey) - bodies
+        Attachment.record(
+          "ready=\(readyBodies) loading=\(loadingBodies) settled=\(bodies) unrelated=\(delta)",
+          named: "main-window-root-bodies.txt")
+        #expect(delta == 0)
+      } cleanup: {
+        await f.close()
+      }
     }
 
     @Test func contentRouteRendersForHistoryReadinessOnly() async throws {

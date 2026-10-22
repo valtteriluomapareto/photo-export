@@ -22,7 +22,7 @@ import SwiftUI
 /// LazyVGrid re-evaluation when those rendering inputs are unchanged.
 struct MonthContentView: View, Equatable {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @Environment(ExportRecordStore.self) private var exportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   #if DEBUG

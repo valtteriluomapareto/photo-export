@@ -113,7 +113,7 @@ import Testing
         let content = Host(
           manager: manager, collections: collections, service: service, counter: counter
         )
-        .environmentObject(library).environmentObject(timeline)
+        .environmentObject(library).environment(timeline)
         .environmentObject(collections).environmentObject(manager)
         .environment(manager.progressState)
         .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)

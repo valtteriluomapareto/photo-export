@@ -33,10 +33,10 @@ empty `TestHostApp` under hosted tests. [`PhotoExportApp`](../../photo-export/Ap
 builds one [`AppCore`](../../photo-export/App/AppCore.swift) from
 [`AppComposition.forLaunch(arguments:)`](../../photo-export/App/AppComposition.swift)
 and retains its remaining `ObservableObject` services with `@StateObject`.
-The core owns the `@Observable` `LoginItemController` and `WhatsNewState`;
+The core owns the `@Observable` `LoginItemController`, `WhatsNewState` and `ExportRecordStore`;
 `ExportManager` owns `ExportProgressState`. These objects reach views through
-`.environment(_:)` without additional app-level wrappers. The app reads the timeline
-store's history readiness in `body` and passes that value through `ContentView` to
+`.environment(_:)` without additional app-level wrappers. `MainWindowRoot` reads the timeline
+store's history readiness in its body and passes that value through `ContentView` to
 the active child; the existing collection-store observer in `LibraryRootView`
 supplies collection readiness. See the [Observation migration recipe](observation-migration-recipe.md)
 for publisher delivery and observation ownership contracts.
@@ -605,7 +605,8 @@ the owning generation before changing UI state.
 
 | Type kind | Isolation | Examples |
 | --- | --- | --- |
-| `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager`, `ExportRecordStore`, `CollectionExportRecordStore` |
+| `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager`, `CollectionExportRecordStore` |
+| `@Observable` state observed by SwiftUI | `@MainActor final class` | `ExportRecordStore` |
 | Main-actor collaborator without `@Published` (mutates shared state from MainActor only) | `@MainActor final class` | `VariantExporter`, `RecordStoreRouter`, `JSONLRecordFile` |
 | Main-actor composition wrapper — final, conforms to `PhotoLibraryService`, optionally wraps an injected service for curated screenshot content | `@MainActor final class` | `PhotoLibraryManager` (wraps `overrideService`), `ScreenshotPhotoLibraryService` (peer, no inheritance) |
 | Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `CollectionPathComponentPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `BackupScanner`, `FileIOService`, `FinalNamePlanner`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` |

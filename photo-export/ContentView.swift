@@ -168,7 +168,7 @@ struct YearRow: View {
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
   @EnvironmentObject private var exportManager: ExportManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @Environment(ExportRecordStore.self) private var exportRecordStore
 
   let year: Int
   let totalAssets: Int
@@ -248,7 +248,7 @@ struct MonthRow: View {
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
   @EnvironmentObject private var exportManager: ExportManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @Environment(ExportRecordStore.self) private var exportRecordStore
   /// Reads `currentJobPlacement` from the live-progress observable rather than the
   /// manager, so the per-job placement mutations don't ripple through every view
   /// holding `ExportManager` as `@EnvironmentObject`. `MonthRow` still observes

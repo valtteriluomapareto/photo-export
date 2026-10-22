@@ -14,7 +14,7 @@ import Testing
     private struct SubscribingView: View {
       @EnvironmentObject var manager: ExportManager
       @EnvironmentObject var library: PhotoLibraryManager
-      @EnvironmentObject var store: ExportRecordStore
+      @Environment(ExportRecordStore.self) var store
       @EnvironmentObject var collections: CollectionExportRecordStore
       @Environment(ExportProgressState.self) var progress
       let counts: TimelineSidebarCounts
@@ -59,7 +59,7 @@ import Testing
         counts = TimelineSidebarCounts(service: service)
         monthViewModel = MonthViewModel(photoLibraryService: service)
         let content = SubscribingView(counts: counts)
-          .environmentObject(library).environmentObject(timeline).environmentObject(collections)
+          .environmentObject(library).environment(timeline).environmentObject(collections)
           .environmentObject(manager).environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         hostingView = NSHostingView(rootView: content)

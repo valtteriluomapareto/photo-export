@@ -4,7 +4,7 @@ import SwiftUI
 
 struct AssetDetailView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @Environment(ExportRecordStore.self) private var exportRecordStore
   @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
 
   let asset: AssetDescriptor?
