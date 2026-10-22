@@ -623,7 +623,7 @@ import Testing
       }
     }
 
-    /// Fails before the admission text probe; actual held export work closes and reopens it.
+    /// Photos access and held export work both close and reopen the rendered admission state.
     @Test func canImportFollowsActiveExportWork() async throws {
       let f = try Fixture()
       let gate = AsyncCheckpoint()
@@ -632,6 +632,14 @@ import Testing
         try await settle(f, key: "library-root")
         let key = "library-can-import"
         try #require(f.counter.renderedText[key] == ["true"])
+        f.service.authorizationStatus = .denied
+        f.service.isAuthorized = false
+        f.library.refreshAuthorizationStatus()
+        #expect(await observe(in: f.window) { f.counter.renderedText[key] == ["false"] })
+        f.service.authorizationStatus = .authorized
+        f.service.isAuthorized = true
+        f.library.refreshAuthorizationStatus()
+        #expect(await observe(in: f.window) { f.counter.renderedText[key] == ["true"] })
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         f.service.assetsByYearMonth["2026-9"] = [
           TestAssetFactory.makeAsset(id: "held", creationDate: date)
