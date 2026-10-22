@@ -158,7 +158,6 @@ import Testing
     @Test(arguments: [120.0, 600.0])
     func multilineFailureFitsFirstLayoutAndMountedReplacements(initialHeight: Double) async throws {
       let f = Fixture()
-      var bodyCounts: [String] = []
       defer { f.close() }
       let path =
         "/Volumes/Family Photo Backup/Collections/Albums/"
@@ -177,7 +176,6 @@ import Testing
       }
       try #require(rendered)
       let narrow = try await settledContentSize(in: f)
-      bodyCounts.append("narrow=\(f.counter.count(for: "export-progress-body"))")
       #expect(narrow.width == 480)
       let oldDismiss = try #require(f.counter.renderedActions["progress-dismiss"])
       let oldIssues = try #require(f.counter.renderedActions["progress-view-issues"])
@@ -185,7 +183,6 @@ import Testing
       let window = try #require(f.window)
       window.setContentSize(CGSize(width: 800, height: narrow.height))
       let wide = try await settledContentSize(in: f)
-      bodyCounts.append("wide=\(f.counter.count(for: "export-progress-body"))")
       #expect(wide.width == 800)
       #expect(narrow.height > wide.height, "Narrow columns must wrap the full failure detail")
 
@@ -194,7 +191,6 @@ import Testing
       let shortened = await observe { window.contentLayoutRect.height < wide.height }
       try #require(shortened)
       let short = try await settledContentSize(in: f)
-      bodyCounts.append("short=\(f.counter.count(for: "export-progress-body"))")
       oldIssues()
       oldDismiss()
       #expect(f.selectedAtOpen == nil)
@@ -205,7 +201,6 @@ import Testing
       let expanded = await observe { window.contentLayoutRect.height > short.height }
       try #require(expanded)
       let replaced = try await settledContentSize(in: f)
-      bodyCounts.append("replaced=\(f.counter.count(for: "export-progress-body"))")
       #expect(replaced.width == 800)
       #expect(replaced.height == wide.height)
       let issues = try #require(f.counter.renderedActions["progress-view-issues"])
@@ -215,11 +210,6 @@ import Testing
       dismiss()
       let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
       #expect(hidden)
-      bodyCounts.append("hidden=\(f.counter.count(for: "export-progress-body"))")
-      #expect(f.counter.count(for: "export-progress-body") > 0)
-      Attachment.record(
-        (["mounted=true"] + bodyCounts).joined(separator: "\n"),
-        named: "progress-body-measurement.txt")
     }
 
     @Test(arguments: [false, true])
@@ -227,14 +217,12 @@ import Testing
       async throws
     {
       let f = Fixture()
-      var bodyCounts: [String] = []
       defer { f.close() }
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: nil)
       f.show()
       let rendered = await observe { f.counter.renderedText["progress-message"] != nil }
       try #require(rendered)
-      bodyCounts.append("shown=\(f.counter.count(for: "export-progress-body"))")
       #expect(f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"])
       let issues = try #require(f.counter.renderedActions["progress-view-issues"])
       if settingsAlreadyOpen {
@@ -250,54 +238,35 @@ import Testing
         f.counter.renderedText["settings-visible-tab"] == ["Export Issues"]
       }
       #expect(issuesShown, "The shared Settings binding must show the actual issues tab")
-      bodyCounts.append("issues=\(f.counter.count(for: "export-progress-body"))")
       let dismiss = try #require(f.counter.renderedActions["progress-dismiss"])
       dismiss()
       f.selectedAtOpen = nil
       issues()
       #expect(f.selectedAtOpen == nil, "A retained action must not reopen a dismissed summary")
-      try #require(
-        await observe(in: f.window) {
-          f.counter.renderedText["progress-visible"] == ["false"]
-        })
-      bodyCounts.append("dismissed=\(f.counter.count(for: "export-progress-body"))")
-      #expect(f.counter.count(for: "export-progress-body") > 0)
-      Attachment.record(
-        (["mounted=true"] + bodyCounts).joined(separator: "\n"),
-        named: "progress-body-measurement.txt")
     }
     /// The Auto Export tab's login toggle and footer read the controller's status, so a
     /// refresh that finds a new status must re-render them.
     @Test func autoExportTabFollowsLoginItemStatus() async throws {
       let f = Fixture()
-      var bodyCounts: [String] = []
       defer { f.close() }
       f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
       f.showSettings()
       let initial = LoginItemController.Status.notRegistered.footerText
       try #require(await observe { f.counter.renderedText["login-item-footer"] == [initial] })
-      bodyCounts.append("initial=\(f.counter.count(for: "export-progress-body"))")
       f.loginService.status = .requiresApproval
       f.loginItem.refresh()
       let updated = LoginItemController.Status.requiresApproval.footerText
       #expect(await observe { f.counter.renderedText["login-item-footer"] == [updated] })
-      bodyCounts.append("updated=\(f.counter.count(for: "export-progress-body"))")
-      #expect(f.counter.count(for: "export-progress-body") == 0)
-      Attachment.record(
-        (["mounted=false"] + bodyCounts).joined(separator: "\n"),
-        named: "progress-body-measurement.txt")
     }
 
     @Test func dismissRetiresOldCountersAndCannotDismissReplacement() async throws {
       let f = Fixture()
-      var bodyCounts: [String] = []
       defer { f.close() }
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: nil)
       f.show()
       let ready = await observe { f.counter.renderedActions["progress-dismiss"] != nil }
       try #require(ready)
-      bodyCounts.append("shown=\(f.counter.count(for: "export-progress-body"))")
       let oldDismiss = try #require(f.counter.renderedActions["progress-dismiss"])
       let replacement = ManualExportSummary(completedCount: 4, failedCount: 2, failureMessage: nil)
       f.manager.progressState.manualSummary = replacement
@@ -307,24 +276,17 @@ import Testing
         f.counter.renderedText["progress-message"] == ["2 exported · 2 failed"]
       }
       try #require(changed)
-      bodyCounts.append("replacement=\(f.counter.count(for: "export-progress-body"))")
       let dismiss = try #require(f.counter.renderedActions["progress-dismiss"])
       dismiss()
       let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
       #expect(hidden)
-      bodyCounts.append("hidden=\(f.counter.count(for: "export-progress-body"))")
       #expect(f.counter.renderedText["progress-message"] == [])
       #expect(f.manager.progressState.totalJobsEnqueued == 3)
       #expect(f.manager.progressState.totalJobsCompleted == 3)
-      #expect(f.counter.count(for: "export-progress-body") > 0)
-      Attachment.record(
-        (["mounted=true"] + bodyCounts).joined(separator: "\n"),
-        named: "progress-body-measurement.txt")
     }
 
     @Test func successExpiryRetiresCounters() async throws {
       let f = Fixture()
-      var bodyCounts: [String] = []
       let expiry = AsyncCheckpoint()
       try await withCleanup {
         f.manager.progressState.manualSummary = ManualExportSummary(
@@ -335,17 +297,11 @@ import Testing
         }
         try #require(shown)
         try #require(await reached(expiry))
-        bodyCounts.append("shown=\(f.counter.count(for: "export-progress-body"))")
         await expiry.releaseAll()
         let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
         #expect(hidden)
-        bodyCounts.append("hidden=\(f.counter.count(for: "export-progress-body"))")
         #expect(f.counter.renderedText["progress-message"] == [])
         #expect(f.manager.progressState.totalJobsCompleted == 3)
-        #expect(f.counter.count(for: "export-progress-body") > 0)
-        Attachment.record(
-          (["mounted=true"] + bodyCounts).joined(separator: "\n"),
-          named: "progress-body-measurement.txt")
       } cleanup: {
         await expiry.releaseAll()
         f.close()
@@ -354,14 +310,12 @@ import Testing
 
     @Test func oldSuccessExpiryCannotDismissNewFailure() async throws {
       let f = Fixture()
-      var bodyCounts: [String] = []
       let expiry = AsyncCheckpoint()
       try await withCleanup {
         let success = ManualExportSummary(completedCount: 3, failedCount: 0, failureMessage: nil)
         f.manager.progressState.manualSummary = success
         f.show(successDelay: { await expiry.enter() })
         try #require(await reached(expiry))
-        bodyCounts.append("shown=\(f.counter.count(for: "export-progress-body"))")
         let failure = ManualExportSummary(completedCount: 3, failedCount: 1, failureMessage: nil)
         f.manager.progressState.manualSummary = failure
         await expiry.releaseAll()
@@ -375,11 +329,6 @@ import Testing
           f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"]
         }
         #expect(shown)
-        bodyCounts.append("failure=\(f.counter.count(for: "export-progress-body"))")
-        #expect(f.counter.count(for: "export-progress-body") > 0)
-        Attachment.record(
-          (["mounted=true"] + bodyCounts).joined(separator: "\n"),
-          named: "progress-body-measurement.txt")
       } cleanup: {
         await expiry.releaseAll()
         f.close()

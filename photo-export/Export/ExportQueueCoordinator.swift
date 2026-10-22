@@ -125,6 +125,7 @@ final class ExportQueueCoordinator: ObservableObject {
   private(set) var currentTask: Task<Void, Never>?
   private(set) var queuedCountsByPlacementId: [String: Int] = [:]
 
+  /// Compares the pending count, processing task and per-placement queue totals.
   private struct QueueFingerprint: Equatable {
     let pendingJobCount: Int
     let isProcessing: Bool

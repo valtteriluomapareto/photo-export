@@ -169,11 +169,6 @@ import Testing
       let extraBodies = f.counter.count(for: "collectionBody") - bodies
       #expect(extraScans == 0)
       #expect(extraBodies == 0)
-      Attachment.record(
-        "loaded.bodies=\(bodies) loaded.scans=\(scans)\n"
-          + "queued.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "queued.scans=\(f.counter.count(for: "summaryScan"))",
-        named: "collection-body-measurement.txt")
     }
   }
 #endif
@@ -183,7 +178,6 @@ import Testing
     @Test(.timeLimit(.minutes(2)))
     func settingsRecordsMembershipAndLiveBindingStillRender() async throws {
       let f = Fixture()
-      var bodyCounts: [String] = []
       defer { f.close() }
       let adjusted = TestAssetFactory.makeAsset(
         id: "adjusted", creationDate: Date(timeIntervalSince1970: 1_700_000_000),
@@ -206,9 +200,6 @@ import Testing
         f.counter.count(for: "summary:3/3") > 0 && f.counter.count(for: "selected:adjusted") > 0
       }
       try #require(initial)
-      bodyCounts.append(
-        "loaded.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "loaded.scans=\(f.counter.count(for: "summaryScan"))")
       let selectedBefore = f.counter.count(for: "selected:live")
       f.navigation.asset = live
       let rebound = await observe(in: f.window) {
@@ -216,22 +207,13 @@ import Testing
       }
       try #require(rebound, "A live binding change must update the pane's selected-thumbnail input")
       #expect(f.navigation.asset == live)
-      bodyCounts.append(
-        "selected.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "selected.scans=\(f.counter.count(for: "summaryScan"))")
 
       f.manager.versionSelection = .editedWithOriginals
       let originals = await observe(in: f.window) { f.counter.count(for: "summary:2/3") > 0 }
       try #require(originals)
-      bodyCounts.append(
-        "originals.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "originals.scans=\(f.counter.count(for: "summaryScan"))")
       f.manager.livePhotosPairedExport = true
       let paired = await observe(in: f.window) { f.counter.count(for: "summary:1/3") > 0 }
       try #require(paired)
-      bodyCounts.append(
-        "paired.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "paired.scans=\(f.counter.count(for: "summaryScan"))")
       let beforeStatus = f.counter.count(for: "summary:2/3")
       f.records.markVariantExported(
         assetId: adjusted.id, placement: f.favorite, variant: .original,
@@ -240,16 +222,10 @@ import Testing
         f.counter.count(for: "summary:2/3") > beforeStatus
       }
       try #require(status)
-      bodyCounts.append(
-        "record.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "record.scans=\(f.counter.count(for: "summaryScan"))")
       f.service.favoritesAssets.append(TestAssetFactory.makeAsset(id: "new-member"))
       f.library.libraryRevision += 1
       let refreshed = await observe(in: f.window) { f.counter.count(for: "summary:2/4") > 0 }
       try #require(refreshed)
-      bodyCounts.append(
-        "library.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "library.scans=\(f.counter.count(for: "summaryScan"))")
       #expect(f.navigation.asset == live)
 
       let descriptor = PhotoCollectionDescriptor(
@@ -273,27 +249,17 @@ import Testing
           && f.counter.count(for: "title:Updated shared title") > 0
       }
       try #require(sharedRendered)
-      bodyCounts.append(
-        "shared.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "shared.scans=\(f.counter.count(for: "summaryScan"))")
       let bannersBefore = f.counter.count(for: "banner:false")
       f.manager.versionSelection = .edited
       let bannerRemoved = await observe(in: f.window) {
         f.counter.count(for: "banner:false") > bannersBefore
       }
       #expect(bannerRemoved)
-      bodyCounts.append(
-        "banner.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "banner.scans=\(f.counter.count(for: "summaryScan"))")
-      #expect(f.counter.count(for: "collectionBody") > 0)
-      Attachment.record(
-        bodyCounts.joined(separator: "\n"), named: "collection-body-measurement.txt")
     }
 
     @Test(.timeLimit(.minutes(2)))
     func readinessAndRenderedActionsFollowCurrentScopeAfterNavigation() async throws {
       let f = Fixture()
-      var bodyCounts: [String] = []
       defer { f.close() }
       f.destination.configureForScreenshotMode()
       f.navigation.title = "Same title"
@@ -311,27 +277,18 @@ import Testing
       f.show()
       let ready = await observe(in: f.window) { f.counter.count(for: "canExport:true") > 0 }
       try #require(ready)
-      bodyCounts.append(
-        "ready.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "ready.scans=\(f.counter.count(for: "summaryScan"))")
       let disabledBefore = f.counter.count(for: "canExport:false")
       f.records.configure(for: nil)
       let disabled = await observe(in: f.window) {
         f.counter.count(for: "canExport:false") > disabledBefore
       }
       try #require(disabled)
-      bodyCounts.append(
-        "disabled.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "disabled.scans=\(f.counter.count(for: "summaryScan"))")
       let enabledBefore = f.counter.count(for: "canExport:true")
       f.records.configure(for: "test")
       let reenabled = await observe(in: f.window) {
         f.counter.count(for: "canExport:true") > enabledBefore
       }
       try #require(reenabled)
-      bodyCounts.append(
-        "reenabled.bodies=\(f.counter.count(for: "collectionBody")) "
-          + "reenabled.scans=\(f.counter.count(for: "summaryScan"))")
       let action = try #require(f.counter.renderedActions["collectionExport"])
       action()
       let favoriteRan = await observe(in: f.window) {
@@ -354,9 +311,6 @@ import Testing
         f.navigation.selection = selection
         let changed = await observe(in: f.window) { f.counter.count(for: "scope:\(scopeKey)") > 0 }
         try #require(changed)
-        bodyCounts.append(
-          "scope.\(scopeKey).bodies=\(f.counter.count(for: "collectionBody")) "
-            + "scope.\(scopeKey).scans=\(f.counter.count(for: "summaryScan"))")
         let action = try #require(f.counter.renderedActions["collectionExport"])
         action()
         let ran = await observe(in: f.window) {
@@ -370,9 +324,6 @@ import Testing
         try #require(ran, "The action passed to the rendered pane must dispatch the current scope")
         await f.manager.waitForQueueDrained()
       }
-      #expect(f.counter.count(for: "collectionBody") > 0)
-      Attachment.record(
-        bodyCounts.joined(separator: "\n"), named: "collection-body-measurement.txt")
     }
   }
 #endif

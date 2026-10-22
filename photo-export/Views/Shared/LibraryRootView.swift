@@ -145,7 +145,6 @@ struct LibraryRootView: View {
           choosesFolderAfterImportSheet = true
           isShowingImportSheet = false
         })
-
         .environment(exportManager)
       }
     )

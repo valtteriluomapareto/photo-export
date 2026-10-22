@@ -282,7 +282,7 @@ final class ExportManager {
   // `$property` semantics: synchronous, delivered before the value is stored, and replaying
   // the current value (pinned by `PublisherParityTests`), from the contract bridges.
 
-  /// `$isImporting` alone. `isImportingPublisher` is AutoSync's hold, which also covers a
+  /// The import activity flag alone. `isImportingPublisher` is AutoSync's hold, which also covers a
   /// missing previous backup and drops repeats.
   var isImportingFlagOnlyPublisher: AnyPublisher<Bool, Never> {
     isImportingBridge.publisher

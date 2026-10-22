@@ -327,7 +327,6 @@ extension View {
   func photoExportEnvironment(_ core: AppCore) -> some View {
     self.environmentObject(core.exportDestinationManager)
       .environmentObject(core.photoLibraryManager)
-
       .environment(core.exportManager)
       .environment(core.exportManager.progressState)
       .environment(core.exportRecordStore)

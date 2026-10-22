@@ -171,7 +171,6 @@ struct AutoExportSettingsView: View {
         onUseAsIs: nil
       )
       .environmentObject(lifecycleCoordinator)
-
       .environment(exportManagerFromEnvironment)
       .environmentObject(exportDestinationManager)
     }
@@ -188,15 +187,13 @@ struct AutoExportSettingsView: View {
         onUseAsIs: { safetyMonitor.confirmCurrentDestination() }
       )
       .environmentObject(lifecycleCoordinator)
-
       .environment(exportManagerFromEnvironment)
       .environmentObject(exportDestinationManager)
     }
   }
 
-  // SwiftUI environment objects don't get auto-propagated across sheet
-  // boundaries on macOS in all configurations, so re-pass them explicitly.
-  // The sheet's view re-declares the same @EnvironmentObjects.
+  // Supply the existing manager to both recovery sheets so their actions share the app's
+  // export state alongside the lifecycle and destination services.
   @Environment(ExportManager.self) private var exportManagerFromEnvironment
 
   // MARK: - Scope binding helper
