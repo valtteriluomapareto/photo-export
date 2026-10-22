@@ -508,8 +508,8 @@ import Testing
       }
     }
 
-    /// The album bound already passes; unrelated library changes still invalidate the other roots.
-    /// Measured maximum 1 for each root on d49d304, Xcode 26.6, across ten iterations.
+    /// A collection query registers the revision and may render once for its publication;
+    /// roots that do not read library content remain unchanged after the render barrier.
     @Test(arguments: LibraryReadSurface.allCases)
     func rootsSkipLibraryChangesTheyDoNotRead(surface: LibraryReadSurface) async throws {
       let f = try Fixture()
@@ -539,9 +539,7 @@ import Testing
         #expect(delta <= 1, "Root body delta: \(delta)")
         Attachment.record("\(surface): \(delta)", named: "root-body-count.txt")
         if surface != .album {
-          withKnownIssue("The root still observes every library publication") {
-            #expect(delta == 0)
-          }
+          #expect(delta == 0)
         }
       } cleanup: {
         await f.close()

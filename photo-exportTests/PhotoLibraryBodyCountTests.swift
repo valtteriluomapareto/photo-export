@@ -145,10 +145,8 @@ import Testing
       }
     }
 
-    /// Publication-backed cells already meet the upper bounds; their three non-reloader zero
-    /// targets fail until rendering follows only the dependencies each cell reads.
-    /// Measured on d49d304 with Xcode 26.6 across ten iterations: non-reload maxima 1,
-    /// reload maxima 3, with all 60 cells mounted and HQ images visibly applied.
+    /// Unrelated publications do not invalidate cells. A reload can render for invalidation,
+    /// the fast image and the high-quality image, so it has at most three body evaluations.
     @Test func thumbnailCellsRenderOnlyForTheirContent() async throws {
       let f = Fixture()
       defer { f.close() }
@@ -168,9 +166,7 @@ import Testing
       let emptyDeltas = f.deltas(from: before)
       #expect(emptyDeltas.values.allSatisfy { $0 <= 1 }, "Empty-ID deltas: \(emptyDeltas)")
       #expect(f.hqCalls() == originalCalls)
-      withKnownIssue("Thumbnail cells still observe every library publication") {
-        #expect(emptyDeltas.values.allSatisfy { $0 == 0 })
-      }
+      #expect(emptyDeltas.values.allSatisfy { $0 == 0 })
       before = f.bodies()
 
       f.service.authorizationStatus = .limited
@@ -181,9 +177,7 @@ import Testing
       let statusDeltas = f.deltas(from: before)
       #expect(statusDeltas.values.allSatisfy { $0 <= 1 }, "Status-only deltas: \(statusDeltas)")
       #expect(f.hqCalls() == originalCalls)
-      withKnownIssue("Thumbnail cells still observe every library publication") {
-        #expect(statusDeltas.values.allSatisfy { $0 == 0 })
-      }
+      #expect(statusDeltas.values.allSatisfy { $0 == 0 })
       before = f.bodies()
 
       f.hq = Self.image(.green)
@@ -201,9 +195,7 @@ import Testing
       var expectedCalls = originalCalls
       expectedCalls["asset-3", default: 0] += 1
       #expect(f.hqCalls() == expectedCalls)
-      withKnownIssue("Thumbnail cells still observe every library publication") {
-        #expect(nonReloaders.values.allSatisfy { $0 == 0 })
-      }
+      #expect(nonReloaders.values.allSatisfy { $0 == 0 })
       before = f.bodies()
 
       f.hq = Self.image(.white)
