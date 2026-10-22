@@ -59,6 +59,18 @@ import Testing
       }
     }
 
+    private struct StaticCollectionsHost: View {
+      let manager: ExportManager
+      let counter: BodyInvalidationCounter
+      @State private var selection: Set<LibrarySelection> = []
+      var body: some View {
+        HStack {
+          CollectionsSidebarView(selectionSet: $selection, exportManager: manager).frame(width: 260)
+          ExportManagerRenderProbe(manager: manager, counter: counter)
+        }
+      }
+    }
+
     @MainActor
     private final class Fixture {
       let root = TestScratch.directory("SidebarObservation")
@@ -73,7 +85,7 @@ import Testing
       let counter = BodyInvalidationCounter()
       let window: NSWindow
 
-      init(includeAlbum: Bool = false) {
+      init(includeAlbum: Bool = false, staticCollections: Bool = false) {
         defaults = TestScratch.defaults(suiteName: suite)
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         let assets = ["first", "second"].map {
@@ -110,9 +122,19 @@ import Testing
           exportRecordStore: timeline, collectionExportRecordStore: collections,
           assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
           userDefaults: defaults)
-        let content = Host(
-          manager: manager, collections: collections, service: service, counter: counter
-        )
+        let hostManager = manager
+        let hostCollections = collections
+        let hostService = service
+        let hostCounter = counter
+        let content = Group {
+          if staticCollections {
+            StaticCollectionsHost(manager: hostManager, counter: hostCounter)
+          } else {
+            Host(
+              manager: hostManager, collections: hostCollections, service: hostService,
+              counter: hostCounter)
+          }
+        }
         .environmentObject(library).environment(timeline)
         .environment(collections).environmentObject(manager)
         .environment(manager.progressState)
@@ -154,6 +176,45 @@ import Testing
         destination.cleanup()
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
+      }
+    }
+
+    /// Already passes: the static sidebar parent reads none of these manager publications.
+    @Test(.timeLimit(.minutes(1)))
+    func collectionsSidebarSkipsManagerPublicationsItDoesNotRead() async throws {
+      let f = Fixture(staticCollections: true)
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["collection-sidebar:favorites"]
+              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+          })
+        await f.quiesce()
+        let bodies = f.counter.count(for: "collections-sidebar")
+        try #require(bodies > 0)
+        let mutations: [() -> Void] = [
+          { f.manager.versionSelection = .editedWithOriginals },
+          { f.manager.livePhotosPairedExport = true },
+          {
+            f.manager.queueCoordinator.enqueue([
+              .init(assetLocalIdentifier: "queued", placement: .favorites(), selection: .edited)
+            ])
+          },
+          { f.manager.pause() },
+          { f.manager.cancelAndClear() },
+        ]
+        var deltas: [Int] = []
+        for mutation in mutations {
+          try await ExportManagerRenderProbe.change(
+            manager: f.manager, counter: f.counter, in: f.window, mutation)
+          let delta = f.counter.count(for: "collections-sidebar") - bodies
+          deltas.append(delta)
+          #expect(delta == 0)
+        }
+        Attachment.record(
+          "baseline=\(bodies) deltas=\(deltas)", named: "static-sidebar-manager-bodies.txt")
+      } cleanup: {
+        await f.close()
       }
     }
 

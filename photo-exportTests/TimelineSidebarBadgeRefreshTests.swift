@@ -10,11 +10,16 @@ import Testing
   struct TimelineSidebarBadgeRefreshTests {
     private struct Host: View {
       let service: FakePhotoLibraryService
+      let manager: ExportManager
+      let counter: BodyInvalidationCounter
       @State private var selection: Set<LibrarySelection> = [.timelineMonth(year: 2026, month: 9)]
 
       var body: some View {
         TimelineSidebarView(selectionSet: $selection, photoLibraryService: service)
           .overlay(alignment: .topLeading) { ProgressProbe() }
+          .overlay(alignment: .bottomLeading) {
+            ExportManagerRenderProbe(manager: manager, counter: counter)
+          }
       }
     }
 
@@ -71,7 +76,7 @@ import Testing
           collectionExportRecordStore: collections,
           assetResourceWriter: writer, fileSystem: FakeFileSystem(),
           userDefaults: defaults)
-        let content = Host(service: service)
+        let content = Host(service: service, manager: manager, counter: counter)
           .environmentObject(library).environment(store).environmentObject(manager)
           .environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
@@ -102,6 +107,49 @@ import Testing
         let collapsedYear = counter.renderedText["timeline-year:2025"] ?? []
         return "loads=\(loads), tasks=\(counter.tasks.count), years=\(years), "
           + "month=\(month), expanded=\(expandedYear), collapsed=\(collapsedYear)"
+      }
+    }
+
+    /// Fails before property-specific manager observation: pause and layout leave this badge unchanged.
+    @Test(.timeLimit(.minutes(1)))
+    func monthRowsSkipPauseAndVideoLayout() async throws {
+      let f = Fixture()
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) { f.counter.renderedText["timeline-month:2026-9"] == ["1/2"] }
+        )
+        for task in f.counter.tasks { _ = await finished(task) }
+        f.window.contentView?.layoutSubtreeIfNeeded()
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.queueCoordinator.enqueue([
+            .init(
+              assetLocalIdentifier: "queued", placement: .timeline(year: 2026, month: 9),
+              selection: .edited)
+          ])
+        }
+        let key = "timeline-month-body:2026-9"
+        let before = f.counter.count(for: key)
+        try #require(before > 0)
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.pause()
+        }
+        let pause = f.counter.count(for: key) - before
+        #expect(pause == 0)
+        let paused = f.counter.count(for: key)
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.videoLayout = .subfolder
+        }
+        let layout = f.counter.count(for: key) - paused
+        Attachment.record("pause=\(pause) layout=\(layout)", named: "month-manager-bodies.txt")
+        #expect(layout == 0)
+      } cleanup: {
+        await f.close()
       }
     }
 
