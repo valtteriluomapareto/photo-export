@@ -364,6 +364,11 @@ repetitions 1–10 in the saved xcresult. All **3,420 case runs** completed: 3,4
 (two known issue records per repetition). There were **zero unexpected failures and no
 skips**. All 24 existing `PublisherParityTests` rows passed ten times each.
 
+Later runs on Xcode 26.6 (17F113) found a pre-existing flake in
+`ManualExportFeedbackViewTests.multilineFailureFitsFirstLayoutAndMountedReplacements(initialHeight:)`
+with height 600: Settings can open on the previous tab, about 1 in 70 case runs
+([#433](https://github.com/valtteriluomapareto/photo-export/issues/433)).
+
 The verification-only workflow ref was
 `961c535da1417e8cb0e59dd0d4eb5c13748c1141`; it checked out the exact clean source
 separately from its adapter and enforced the pinned Xcode before testing. The sorted suite

@@ -118,7 +118,7 @@ import Testing
       func show(_ surface: Surface = .root) {
         let hosted = NSHostingView(
           rootView: self.hosted.environment(pane(surface).frame(width: 1200, height: 800))
-            .environment(\.bodyInvalidationCounter, counter))
+            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let owned = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1200, height: 800),
           styleMask: [.titled, .closable])

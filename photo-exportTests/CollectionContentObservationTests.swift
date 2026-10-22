@@ -49,6 +49,7 @@ import Testing
     private final class Fixture {
       let navigation = Navigation()
       let counter = BodyInvalidationCounter()
+      let clock = TestClock()
       let service: FakePhotoLibraryService
       let library: PhotoLibraryManager
       let manager: ExportManager
@@ -70,7 +71,7 @@ import Testing
         library = PhotoLibraryManager(overrideService: service)
         defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline = ExportRecordStore(baseDirectoryURL: root)
-        records = CollectionExportRecordStore(baseDirectoryURL: root)
+        records = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
         timeline.configure(for: "test")
         records.configure(for: "test")
         records.upsertPlacement(favorite)
@@ -195,6 +196,7 @@ import Testing
           assetId: asset.id, placement: f.favorite, variant: .original,
           filename: "IMG.JPG", exportedAt: Date())
       }
+      f.records.flushPendingNotifications()
       f.show()
       let initial = await observe(in: f.window) {
         f.counter.count(for: "summary:3/3") > 0 && f.counter.count(for: "selected:adjusted") > 0
@@ -218,6 +220,7 @@ import Testing
       f.records.markVariantExported(
         assetId: adjusted.id, placement: f.favorite, variant: .original,
         filename: "ORIGINAL.HEIC", exportedAt: Date())
+      f.records.flushPendingNotifications()
       let status = await observe(in: f.window) {
         f.counter.count(for: "summary:2/3") > beforeStatus
       }
@@ -240,6 +243,9 @@ import Testing
       f.records.markVariantExported(
         assetId: adjusted.id, placement: shared, variant: .original,
         filename: "SHARED.JPG", exportedAt: Date())
+      f.records.flushPendingNotifications()
+      try #require(
+        f.clock.pendingCount == 0, "Record publications must finish before shared-album navigation")
       f.service.assetsBySharedAlbumLocalId["shared"] = [adjusted]
       f.navigation.asset = nil
       f.navigation.selection = .sharedAlbum(collectionId: "shared")
