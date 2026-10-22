@@ -1,17 +1,12 @@
-name: Observation hosted verification
+name: Settings and collection diagnostics
 
 on:
   workflow_dispatch:
     inputs:
       tested_sha:
-        description: Exact source commit to validate
+        description: Exact diagnostic source commit
         required: true
         type: string
-      evidence_label:
-        description: Baseline or candidate evidence
-        required: true
-        type: choice
-        options: [baseline, candidate]
 
 permissions:
   contents: read
@@ -51,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/observation-evidence"
+          mkdir -p "$RUNNER_TEMP/settings-diagnostics/settings" "$RUNNER_TEMP/settings-diagnostics/collection"
           {
             test "$(git rev-parse HEAD)" = "$TESTED_SHA"
             test -z "$(git status --porcelain)"
@@ -60,52 +55,111 @@ jobs:
             test "$(tr -d '[:space:]' < .xcode-version)" = 26.6
             bash scripts/ci/select-xcode.sh 26.6
             sw_vers
-            shasum -a 256 ../adapter/observation-hosted-suites.txt
-            cat ../adapter/observation-hosted-suites.txt
-          } 2>&1 | tee "$RUNNER_TEMP/observation-evidence/provenance.log"
+          } 2>&1 | tee "$RUNNER_TEMP/settings-diagnostics/provenance.log"
 
-      - name: Run ten hosted iterations
+      - name: Run Settings control once
         working-directory: source
         shell: bash
         run: |
           set -euo pipefail
-          selectors=()
-          while IFS= read -r suite; do
-            [[ -n "$suite" && "$suite" != \#* ]] || continue
-            [[ "$suite" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]]
-            test -f "photo-exportTests/$suite.swift"
-            selectors+=("-only-testing:photo-exportTests/$suite")
-          done < ../adapter/observation-hosted-suites.txt
-          test "${#selectors[@]}" -gt 0
+          evidence="$RUNNER_TEMP/settings-diagnostics/settings"
           command=(caffeinate -du xcodebuild
             -project photo-export.xcodeproj -scheme photo-export
             -destination 'platform=macOS'
-            -derivedDataPath "$RUNNER_TEMP/ObservationDerivedData"
-            -resultBundlePath "$RUNNER_TEMP/observation-evidence/HostedResults.xcresult"
-            -test-iterations 10 -run-tests-until-failure
-            "${selectors[@]}" CODE_SIGNING_ALLOWED=NO test)
-          printf '%q ' "${command[@]}" > "$RUNNER_TEMP/observation-evidence/command.txt"
-          printf '\n' >> "$RUNNER_TEMP/observation-evidence/command.txt"
-          "${command[@]}" 2>&1 | tee "$RUNNER_TEMP/observation-evidence/hosted.log" | tail -300
+            -derivedDataPath "$RUNNER_TEMP/SettingsDiagnosticDerivedData"
+            -resultBundlePath "$evidence/Results.xcresult"
+            '-only-testing:photo-exportTests/ManualExportFeedbackViewTests/viewIssuesReselectsTheTabAfterAnotherOwnerChangesPreferences()'
+            CODE_SIGNING_ALLOWED=NO test)
+          printf '%q ' "${command[@]}" > "$evidence/command.txt"
+          printf '\n' >> "$evidence/command.txt"
+          "${command[@]}" 2>&1 | tee "$evidence/hosted.log" | tail -100
 
-      - name: Export result summary
+      - name: Require the exact single Settings pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/settings-diagnostics/settings"
+          xcrun xcresulttool get test-results summary --path "$evidence/Results.xcresult" > "$evidence/summary.json"
+          xcrun xcresulttool get test-results tests --path "$evidence/Results.xcresult" > "$evidence/tests.json"
+          python3 - "$evidence" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          folder = Path(sys.argv[1])
+          summary = json.loads((folder / 'summary.json').read_text())
+          tree = json.loads((folder / 'tests.json').read_text())
+          expected = 'ManualExportFeedbackViewTests/viewIssuesReselectsTheTabAfterAnotherOwnerChangesPreferences()'
+          assert summary['result'] == 'Passed' and summary['totalTestCount'] == 1, summary
+          fields = {'passedTests': 1, 'expectedFailures': 0, 'failedTests': 0, 'skippedTests': 0}
+          assert all(summary[k] == v for k, v in fields.items()), summary
+          configurations = summary['devicesAndConfigurations']
+          assert len(configurations) == 1, configurations
+          assert all(configurations[0][k] == v for k, v in fields.items()), configurations
+          cases = []
+          def collect(node):
+              if node['nodeType'] == 'Test Case':
+                  cases.append(node)
+              for child in node.get('children', []):
+                  collect(child)
+          for node in tree['testNodes']:
+              collect(node)
+          assert len(cases) == 1, cases
+          assert cases[0]['nodeIdentifier'] == expected and cases[0]['result'] == 'Passed', cases
+          result = {'testIdentifier': expected, 'executions': 1, 'result': 'Passed'}
+          (folder / 'selection-check.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result))
+          PY
+
+      - name: Run collection trace up to ten times
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/settings-diagnostics/collection"
+          command=(caffeinate -du xcodebuild
+            -project photo-export.xcodeproj -scheme photo-export
+            -destination 'platform=macOS'
+            -derivedDataPath "$RUNNER_TEMP/SettingsDiagnosticDerivedData"
+            -resultBundlePath "$evidence/Results.xcresult"
+            -test-iterations 10 -run-tests-until-failure
+            '-only-testing:photo-exportTests/CollectionContentObservationTests/settingsRecordsMembershipAndLiveBindingStillRender()'
+            CODE_SIGNING_ALLOWED=NO test)
+          printf '%q ' "${command[@]}" > "$evidence/command.txt"
+          printf '\n' >> "$evidence/command.txt"
+          "${command[@]}" 2>&1 | tee "$evidence/hosted.log" | tail -100
+
+      - name: Export result summaries and attachments
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          result="$RUNNER_TEMP/observation-evidence/HostedResults.xcresult"
-          if [[ -d "$result" ]]; then
-            xcrun xcresulttool get test-results summary --path "$result" \
-              > "$RUNNER_TEMP/observation-evidence/summary.json"
-            xcrun xcresulttool get test-results tests --path "$result" \
-              > "$RUNNER_TEMP/observation-evidence/tests.json"
-          fi
+          export_failed=0
+          for selection in settings collection; do
+            evidence="$RUNNER_TEMP/settings-diagnostics/$selection"
+            if [[ -d "$evidence/Results.xcresult" ]]; then
+              summary_status=0
+              xcrun xcresulttool get test-results summary --path "$evidence/Results.xcresult" \
+                > "$evidence/summary.json" || summary_status=$?
+              tests_status=0
+              xcrun xcresulttool get test-results tests --path "$evidence/Results.xcresult" \
+                > "$evidence/tests.json" || tests_status=$?
+              attachments_status=0
+              xcrun xcresulttool export attachments --path "$evidence/Results.xcresult" \
+                --output-path "$evidence/measurements" > "$evidence/export.log" 2>&1 || attachments_status=$?
+              printf 'summary_exit=%s\ntests_exit=%s\nattachments_exit=%s\n' \
+                "$summary_status" "$tests_status" "$attachments_status" > "$evidence/export-status.txt"
+              if (( summary_status != 0 || tests_status != 0 || attachments_status != 0 )); then
+                export_failed=1
+              fi
+            fi
+          done
+          exit "$export_failed"
 
-      - name: Upload hosted evidence
+      - name: Upload diagnostic evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: observation-hosted-${{ inputs.evidence_label }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/observation-evidence/
+          name: settings-bounded-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/settings-diagnostics/
           if-no-files-found: error
           retention-days: 14
