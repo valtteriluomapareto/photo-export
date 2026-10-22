@@ -74,7 +74,7 @@ final class AppCore {
       phAssetCacheControl: composition.phAssetCacheControl(plm), userDefaults: defaults)
     // Drive the PhotoLibraryManager `descriptor(from:)` Live Photo resource fallback from the
     // toggle ExportManager owns. Synchronous sink so the next fetch sees the current value;
-    // the initial value flows immediately because `@Published` re-emits to new subscribers.
+    // the named bridge accessor synchronously replays its current value to new subscribers.
     plm.bindLivePhotoDetectionFallback(to: em.livePhotosPairedExportPublisher)
 
     let configure: (String?) -> ConfigureRecordStoresResult = { [edm, ers, cers] newId in
@@ -327,7 +327,6 @@ extension View {
   func photoExportEnvironment(_ core: AppCore) -> some View {
     self.environmentObject(core.exportDestinationManager)
       .environmentObject(core.photoLibraryManager)
-      .environmentObject(core.exportManager)
       .environment(core.exportManager)
       .environment(core.exportManager.progressState)
       .environment(core.exportRecordStore)

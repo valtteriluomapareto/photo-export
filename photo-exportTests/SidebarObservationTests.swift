@@ -10,7 +10,7 @@ import Testing
   struct SidebarObservationTests {
     @MainActor
     private struct QueueProbe: View {
-      @ObservedObject var manager: ExportManager
+      let manager: ExportManager
       let counter: BodyInvalidationCounter
       var body: some View {
         // A declaration keeps the probe out of ViewBuilder's view expressions.
@@ -24,7 +24,7 @@ import Testing
     /// Its counter key confirms this parent rendered before child-body silence checks.
     @MainActor
     private struct CollectionsHost: View {
-      @ObservedObject var manager: ExportManager
+      let manager: ExportManager
       let collections: CollectionExportRecordStore
       @Binding var selectionSet: Set<LibrarySelection>
       let counter: BodyInvalidationCounter
@@ -136,7 +136,7 @@ import Testing
           }
         }
         .environmentObject(library).environment(timeline)
-        .environment(collections).environmentObject(manager)
+        .environment(collections).environment(manager)
         .environment(manager.progressState)
         .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window = NSWindow(

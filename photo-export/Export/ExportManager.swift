@@ -6,8 +6,9 @@ import Photos
 import SwiftUI
 import os
 
+@Observable
 @MainActor
-final class ExportManager: ObservableObject, Observable {
+final class ExportManager {
   /// User-facing persistence key for the active version selection.
   static let versionSelectionDefaultsKey = "exportVersionSelection"
   /// Persistence key for the Live Photo paired-video export toggle.
@@ -58,7 +59,7 @@ final class ExportManager: ObservableObject, Observable {
     var month: Int { placement.timelineYearMonth?.month ?? 0 }
   }
 
-  // MARK: - Published State (Export)
+  // MARK: - Export state
   // `isRunning`, `queueCount`, `activeRunContext` and `isEnqueueingAll` feed
   // `exportRunStatePublisher`. Each is held in an `ObservableCombineBridge` so views track
   // them through Observation while AutoSync keeps `@Published` delivery (see `bridgedWrite`).
@@ -72,11 +73,10 @@ final class ExportManager: ObservableObject, Observable {
     set { bridgedWrite(queueCountBridge, \.queueCount, newValue) }
   }
   private let queueCountBridge = ObservableCombineBridge(0)
-  @Published private(set) var isPaused: Bool = false
+  private(set) var isPaused: Bool = false
 
-  /// Frequently-mutating progress-bar state lives here so the per-asset filename and
-  /// per-job counter updates don't trigger `ExportManager.objectWillChange` storms.
-  /// See `ExportProgressState` for the rationale and tests-still-pass forwarders below.
+  /// Per-asset progress has its own observable owner. Views track only the progress
+  /// fields they read; the forwarders below preserve the manager's read surface.
   let progressState = ExportProgressState()
 
   /// Forwarders to `progressState`. Read-only at the manager surface so callers that
@@ -89,7 +89,7 @@ final class ExportManager: ObservableObject, Observable {
   var emptyRunMessage: String? { progressState.emptyRunMessage }
   var queueWarningMessage: String? { progressState.queueWarningMessage }
 
-  private var emptyRunMessageTask: Task<Void, Never>?
+  @ObservationIgnored private var emptyRunMessageTask: Task<Void, Never>?
 
   /// Which variants the pipeline writes for each asset. Persisted to `UserDefaults` so the
   /// choice survives restart and stays globally consistent regardless of destination.
@@ -175,7 +175,7 @@ final class ExportManager: ObservableObject, Observable {
   /// `requiredVariants` (no asset becomes "incomplete" when toggled). Reconcile
   /// correctness instead rides on the per-variant `subfolder` field on
   /// `ExportVariantRecord`. Don't add a store push.
-  @Published var videoLayout: ExportVideoLayout {
+  var videoLayout: ExportVideoLayout {
     didSet {
       userDefaults.set(videoLayout.rawValue, forKey: Self.videoLayoutDefaultsKey)
       // Same rationale as the `livePhotosPairedExport` setter: a layout change can make
@@ -184,7 +184,7 @@ final class ExportManager: ObservableObject, Observable {
     }
   }
 
-  // MARK: - Published State (Import)
+  // MARK: - Import state
   private(set) var isImporting: Bool {
     get { bridgedRead(isImportingBridge, \.isImporting) }
     set { bridgedWrite(isImportingBridge, \.isImporting, newValue) }
@@ -195,16 +195,16 @@ final class ExportManager: ObservableObject, Observable {
     set { bridgedWrite(importStageBridge, \.importStage, newValue) }
   }
   private let importStageBridge = ObservableCombineBridge<BackupScanner.ImportStage?>(nil)
-  @Published private(set) var importError: String?
+  private(set) var importError: String?
   private(set) var previousBackupMissing: Bool {
     get { bridgedRead(previousBackupMissingBridge, \.previousBackupMissing) }
     set { bridgedWrite(previousBackupMissingBridge, \.previousBackupMissing, newValue) }
   }
   private let previousBackupMissingBridge = ObservableCombineBridge<Bool>(false)
-  @Published var importResult: ImportReport?
+  var importResult: ImportReport?
   /// Changes each time the app starts an import the user didn't open the Import sheet for, so the
   /// library window shows the sheet (progress, result, or why it didn't run).
-  @Published private(set) var importSheetRequest: UUID?
+  private(set) var importSheetRequest: UUID?
 
   // MARK: - Awaitable run lifecycle
 
@@ -280,9 +280,9 @@ final class ExportManager: ObservableObject, Observable {
 
   // The accessors below expose single properties to subscribers outside this type with
   // `$property` semantics: synchronous, delivered before the value is stored, and replaying
-  // the current value (pinned by `PublisherParityTests`), from `@Published` or a bridge.
+  // the current value (pinned by `PublisherParityTests`), from the contract bridges.
 
-  /// `$isImporting` alone. `isImportingPublisher` is AutoSync's hold, which also covers a
+  /// The import activity flag alone. `isImportingPublisher` is AutoSync's hold, which also covers a
   /// missing previous backup and drops repeats.
   var isImportingFlagOnlyPublisher: AnyPublisher<Bool, Never> {
     isImportingBridge.publisher
@@ -330,7 +330,8 @@ final class ExportManager: ObservableObject, Observable {
   /// `ExportManager` enqueue paths that call it are already `@MainActor`,
   /// so this is a no-op at runtime but prevents future off-main callers
   /// from compiling.
-  var autoSyncEligibilityCheck: (@MainActor (String, ExportPlacement, ExportVariant, Date) -> Bool)?
+  @ObservationIgnored var autoSyncEligibilityCheck:
+    (@MainActor (String, ExportPlacement, ExportVariant, Date) -> Bool)?
 
   private struct ActiveRunBookkeeping {
     let totalJobsEnqueuedAtStart: Int
@@ -361,7 +362,7 @@ final class ExportManager: ObservableObject, Observable {
     /// change-event-driven debounce retries.
     var incompleteScan: Bool = false
   }
-  private var activeRunBookkeeping: ActiveRunBookkeeping?
+  @ObservationIgnored private var activeRunBookkeeping: ActiveRunBookkeeping?
 
   private struct ManualRunFeedback {
     let generation: Int
@@ -370,7 +371,7 @@ final class ExportManager: ObservableObject, Observable {
     var failureSignals = 0
     var failureMessage: String?
   }
-  private var manualRunFeedback: ManualRunFeedback?
+  @ObservationIgnored private var manualRunFeedback: ManualRunFeedback?
 
   /// Whether the export queue is active (has pending/in-flight work).
   var hasActiveExportWork: Bool {
@@ -424,7 +425,7 @@ final class ExportManager: ObservableObject, Observable {
   /// property has a value. The IUO is assigned at the end of `init` (before init exits)
   /// and never reassigned thereafter; it retires whenever the Host protocol shrinks
   /// to zero callbacks that need `self` (a future refactor task — not load-bearing).
-  private(set) var variantExporter: VariantExporter!
+  @ObservationIgnored private(set) var variantExporter: VariantExporter!
   let assetResourceWriter: any AssetResourceWriter
   // `var` rather than `let` so we can rebind it at the end of `init` with a
   // callback that captures `self` weakly. Swift forbids referencing `self`
@@ -434,7 +435,7 @@ final class ExportManager: ObservableObject, Observable {
   // ready. Functionally a `let`; the `var` is purely for the init order.
   // DO NOT change this back to `let` without re-examining the closure
   // capture in `init` — the rebind is the whole point.
-  private(set) var mediaRenderer: any MediaRenderer
+  @ObservationIgnored private(set) var mediaRenderer: any MediaRenderer
   /// Seam for the HEIC→JPEG conversion path. `VariantExporter` invokes
   /// it through this reference. Defaults to `ProductionImageConverter` (a thin
   /// CoreImage wrapper); tests inject `FakeImageConverter`.
@@ -464,7 +465,8 @@ final class ExportManager: ObservableObject, Observable {
 
   // Unpublished lifetime handles for deterministic preparation completion.
   // These do not participate in UI/AutoSync admission or publications.
-  private var preparationTasks: [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
+  @ObservationIgnored private var preparationTasks:
+    [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
   var currentPreparationTasks: [Task<Void, Never>] {
     preparationTasks.values.filter { $0.generation == generation }.map(\.task)
   }
@@ -490,24 +492,22 @@ final class ExportManager: ObservableObject, Observable {
   /// Owns `pendingJobs`, `isProcessing`, `currentTask`, the per-placement queue
   /// counters, and the drain loop. ExportManager forwards reads via computed properties
   /// below (for call-site stability) and forwards control calls (`pause`, `resume`,
-  /// `clearPending`, `processQueueIfNeeded`). The @Published mirrors on this manager
-  /// (`isRunning`, `isPaused`, `queueCount`, `totalJobsEnqueued`, `totalJobsCompleted`)
-  /// are kept in sync with the coordinator's own publishers via sinks established in
-  /// `init` — so existing UI bindings and the AutoSync `exportRunStatePublisher` keep
-  /// emitting from the same `ExportManager` source.
+  /// `clearPending`, `processQueueIfNeeded`). Synchronous sinks in `init` update the
+  /// manager's bridged running/depth values, tracked pause flag and progress-state
+  /// counters, preserving the UI reads and AutoSync's named publisher contract.
   ///
   /// IUO for the same `host: self` cycle as `variantExporter` (see that property above)
   /// — `self` must be fully initialized before the coordinator can hold it as Host.
-  private(set) var queueCoordinator: ExportQueueCoordinator!
+  @ObservationIgnored private(set) var queueCoordinator: ExportQueueCoordinator!
 
   /// Owns the Import Existing Backup flow. `isImporting`,
   /// `importStage` and `importError` on this manager are sink-driven mirrors of the coordinator's
   /// publishers (same shape as the queue coordinator mirrors). `importResult` stays
   /// writable on the manager because external callers (test code) sometimes reset it
   /// directly; the coordinator writes through `Host.setImportResult`.
-  private(set) var importCoordinator: ImportCoordinator!
-  private var importCancellables: Set<AnyCancellable> = []
-  private var queueCancellables: Set<AnyCancellable> = []
+  @ObservationIgnored private(set) var importCoordinator: ImportCoordinator!
+  @ObservationIgnored private var importCancellables: Set<AnyCancellable> = []
+  @ObservationIgnored private var queueCancellables: Set<AnyCancellable> = []
 
   // Forwarders to the coordinator's internal state. Kept on ExportManager so existing
   // test reads (`manager.pendingJobs`, `manager.currentTask`,
@@ -531,21 +531,10 @@ final class ExportManager: ObservableObject, Observable {
   }
 
   /// Tracks the coordinator's unpublished values without extra manager publications.
-  private(set) var queueMutationCounter: Int {
-    get {
-      observationRegistrar.access(self, keyPath: \.queueMutationCounter)
-      return queueMutationCounterStorage
-    }
-    set {
-      observationRegistrar.withMutation(of: self, keyPath: \.queueMutationCounter) {
-        queueMutationCounterStorage = newValue
-      }
-    }
-  }
-  private var queueMutationCounterStorage = 0
+  private(set) var queueMutationCounter = 0
 
-  private(set) var currentJobAssetId: String?
-  private(set) var currentJobVariant: ExportVariant?
+  @ObservationIgnored private(set) var currentJobAssetId: String?
+  @ObservationIgnored private(set) var currentJobVariant: ExportVariant?
   /// The placement of the job currently in flight. Set in `processNext()` *before*
   /// `currentJobAssetId` and reset everywhere `currentJobAssetId` is reset, so any
   /// cancellation cleanup that observes `currentJobAssetId` is guaranteed to see the
@@ -553,11 +542,9 @@ final class ExportManager: ObservableObject, Observable {
   /// cleanup paths to route the `removeVariant` call to the correct store via
   /// `placement.kind`.
   ///
-  /// The observable storage lives on `progressState` so that the per-job mutation
-  /// (set on job start, cleared on job end — twice per asset) doesn't fan out as
-  /// `ExportManager.objectWillChange` to every view holding the manager. The only
-  /// SwiftUI reader is `MonthRow`'s in-flight spinner; it subscribes to
-  /// `ExportProgressState` directly. This forwarder keeps internal write sites in
+  /// The observable storage lives on `progressState`. The per-job mutation
+  /// (set on job start, cleared on job end) notifies the in-flight spinner's direct
+  /// `ExportProgressState` dependency. This forwarder keeps internal write sites in
   /// the manager unchanged. `private(set)` preserves the pre-extraction surface —
   /// only the manager (and a `setCurrentJob` / `clearCurrentJobIdentifiers` it
   /// owns) may mutate the in-flight placement.
@@ -712,18 +699,14 @@ final class ExportManager: ObservableObject, Observable {
 
   // MARK: - Observation bridge
   //
-  // `ExportManager` is still an `ObservableObject`, and also `Observable` for the bridged
-  // properties: a read registers an Observation dependency, and a write sends
-  // `objectWillChange` first, as `@Published` does, so `@EnvironmentObject` holders refresh
-  // as before. An equal write is delivered to Combine subscribers and sends
-  // `objectWillChange`, but does not notify Observation.
-
-  private let observationRegistrar = ObservationRegistrar()
+  // Computed bridge properties register with the macro's registrar. A changing write
+  // notifies Observation before synchronous Combine delivery and storage. Equal writes
+  // still reach Combine subscribers while leaving Observation readers unchanged.
 
   private func bridgedRead<Value>(
     _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
   ) -> Value {
-    observationRegistrar.access(self, keyPath: keyPath)
+    access(keyPath: keyPath)
     return bridge.value
   }
 
@@ -731,13 +714,12 @@ final class ExportManager: ObservableObject, Observable {
     _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>,
     _ newValue: Value
   ) {
-    objectWillChange.send()
-    bridge.write(newValue) { observationRegistrar.withMutation(of: self, keyPath: keyPath, $0) }
+    bridge.write(newValue) { withMutation(keyPath: keyPath, $0) }
   }
 
   // MARK: - Lifetime contract
   //
-  // `ExportManager` is owned by `PhotoExportApp` as an `@StateObject` for the entire
+  // `AppCore` owns `ExportManager` for the entire
   // app lifetime, so a pending `runExport` continuation effectively cannot outlive the
   // process. Tests must call `cancelAndClear()` (or `interruptForDestinationUnavailable()`)
   // during teardown to resolve any active run before the harness drops its reference —
@@ -2380,7 +2362,7 @@ final class ExportManager: ObservableObject, Observable {
   }
 
   /// Internal observation seam for deterministic tests of final-commit admission.
-  var finalCommitWaitObserver: (() -> Void)?
+  @ObservationIgnored var finalCommitWaitObserver: (() -> Void)?
 
   /// Drives the per-job export pipeline on behalf of the coordinator. Wraps the
   /// existing `export(job:generation:)` body so the coordinator's drain loop doesn't need to
@@ -2662,7 +2644,7 @@ final class ExportManager: ObservableObject, Observable {
 
   // MARK: - ImportCoordinator.Host conformance
 
-  /// Writes the import report back to the manager's `@Published` mirror. Kept as a Host
+  /// Writes the import report back to the manager's tracked state. Kept as a Host
   /// method (not a sink) because `importResult` is intentionally writable on the
   /// manager — test code resets it directly between consecutive imports.
   func setImportResult(_ result: ImportReport?) {

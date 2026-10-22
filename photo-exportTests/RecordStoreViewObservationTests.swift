@@ -129,7 +129,7 @@ import Testing
         let content = Host(surface: surface, service: service, manager: manager)
           .overlay(alignment: .topLeading) { RenderProbe(tick: tick, counter: counter) }
           .environmentObject(library).environment(timeline).environment(collections)
-          .environmentObject(manager).environment(manager.progressState)
+          .environment(manager).environment(manager.progressState)
           .environmentObject(destinationManager).environmentObject(autoSync)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window.contentView = NSHostingView(rootView: content)

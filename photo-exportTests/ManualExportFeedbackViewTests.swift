@@ -83,7 +83,7 @@ import Testing
               selectedAtOpen = defaults.string(forKey: SettingsTab.storageKey)
             }
           )
-          .environmentObject(manager).environment(manager.progressState)
+          .environment(manager).environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let owned = NSWindow(
           contentRect: NSRect(origin: CGPoint(x: -10000, y: -10000), size: initialSize),
@@ -99,7 +99,7 @@ import Testing
         let hosted = NSHostingView(
           rootView: SettingsRootView()
             .environmentObject(library)
-            .environmentObject(manager).environmentObject(autoSync).environmentObject(
+            .environment(manager).environmentObject(autoSync).environmentObject(
               destinationManager
             )
             .environment(timeline).environment(collections)

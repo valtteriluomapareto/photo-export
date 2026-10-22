@@ -496,7 +496,7 @@ private struct FolderRow: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
 

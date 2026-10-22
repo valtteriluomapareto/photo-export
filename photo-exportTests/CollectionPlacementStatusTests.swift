@@ -159,7 +159,7 @@ import Testing
               folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane
             )
             .environmentObject(library).environment(timeline).environment(records)
-            .environmentObject(manager)
+            .environment(manager)
             .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
             .environment(\.bodyInvalidationCounter, counter))
         let hostWindow = NSWindow(

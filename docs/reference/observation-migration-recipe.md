@@ -159,12 +159,12 @@ plain class, not a macro: the owner writes the property by hand around it.
   property through a real mutation path and checks that the probes on its bridged siblings stay
   at 0, so a key path passed to the wrong bridge fails.
 
-**While the owner is still `ObservableObject`** (`ExportManager` today), it conforms to
+**While an owner is still `ObservableObject`**, it can conform to
 `Observable` by hand and holds its own registrar:
 
 ```swift
 @MainActor
-final class ExportManager: ObservableObject, Observable {
+final class PlumbedOwner: ObservableObject, Observable {
   private(set) var isRunning: Bool {
     get { bridgedRead(isRunningBridge, \.isRunning) }
     set { bridgedWrite(isRunningBridge, \.isRunning, newValue) }
@@ -174,14 +174,14 @@ final class ExportManager: ObservableObject, Observable {
   private let observationRegistrar = ObservationRegistrar()
 
   private func bridgedRead<Value>(
-    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<PlumbedOwner, Value>
   ) -> Value {
     observationRegistrar.access(self, keyPath: keyPath)
     return bridge.value
   }
 
   private func bridgedWrite<Value>(
-    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>,
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<PlumbedOwner, Value>,
     _ newValue: Value
   ) {
     objectWillChange.send()
@@ -194,22 +194,33 @@ The accessor reads the bridge: `isRunningBridge.publisher`, or a combination suc
 `Publishers.CombineLatest4(activeRunContextBridge.publisher, isRunningBridge.publisher, …)`.
 `$isRunning` no longer exists, so a missed subscriber is a compile error.
 
-**After the flip** the macro supplies the registrar. Drop `objectWillChange`, the registrar
-and the helpers, and keep the hand-written property (the macro leaves computed properties and
-`let`s alone):
+**After the flip** the macro supplies the registrar. Remove the manual registrar and
+`objectWillChange.send()`. Keep the hand-written properties and shared bridge helpers;
+the macro leaves computed properties and `let`s alone:
 
 ```swift
 @Observable
 @MainActor
 final class ExportManager {
   private(set) var isRunning: Bool {
-    get {
-      access(keyPath: \.isRunning)
-      return isRunningBridge.value
-    }
-    set { isRunningBridge.write(newValue) { withMutation(keyPath: \.isRunning, $0) } }
+    get { bridgedRead(isRunningBridge, \.isRunning) }
+    set { bridgedWrite(isRunningBridge, \.isRunning, newValue) }
   }
   private let isRunningBridge = ObservableCombineBridge(false)
+
+  private func bridgedRead<Value>(
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
+  ) -> Value {
+    access(keyPath: keyPath)
+    return bridge.value
+  }
+
+  private func bridgedWrite<Value>(
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>,
+    _ newValue: Value
+  ) {
+    bridge.write(newValue) { withMutation(keyPath: keyPath, $0) }
+  }
 }
 ```
 
@@ -221,23 +232,23 @@ delivery; an equal write delivered without an Observation notification; and, whi
 ### `ExportManager`: the contract bridges
 
 The four inputs of `exportRunStatePublisher` (`activeRunContext`, `isRunning`, `queueCount`,
-`isEnqueueingAll`) are bridged in the plumbing shape above. `ExportManagerObservationTests`
+`isEnqueueingAll`) use the macro-backed bridge shape above. `ExportManagerObservationTests`
 shows that each property, and each input of the derived reads views make
 (`hasActiveExportWork`, `canTogglePause`, `manualExportShouldConfirmSupersede`), registers a
 dependency, and that a view holding the manager as a plain `let` refreshes for queued work. An
-idle teardown rewrites every input with its current value: Observation stays silent, and
-`objectWillChange` fires once per write, as with `@Published`, and before the bridged
-delivery.
+idle teardown rewrites every input with its current value: Observation stays silent while
+Combine still delivers each write. There is no manager `objectWillChange` publisher.
 
 The five queue read-throughs (`pendingJobs`, `currentTask`, `queuedCountsByPlacementId`,
 `isProcessing` and `queuedCount(year:month:)`) touch `queueMutationCounter`. The coordinator
 reports a changed contents fingerprint through its Host after synchronous queue mutations;
-the manager bumps that counter without an extra `objectWillChange` publication. The first
+the manager bumps that macro-tracked stored counter. The first
 dequeue keeps `queueCount` equal, and its bridge's equality guard skips Observation
 notification independently of the toolchain. The contents counter still notifies those
-readers. After `isPaused` and `importError` become macro-tracked, whether their equal
-writes notify depends on the toolchain; neither needs a notification when its value stays
-unchanged.
+readers. `isPaused`, `videoLayout`, `importError`, `importResult` and `importSheetRequest`
+are macro-tracked stored properties; changing writes notify only their own readers. Equal
+writes follow the toolchain's macro behavior, characterized by `ObservationEqualWriteTests`;
+neither an unchanged pause flag nor an unchanged import error needs a notification.
 
 `canExportTimeline` and `canExportCollection` are admission reads used outside view bodies.
 Views use `ManualExportAvailability` over store state, so those two helpers need no separate
@@ -258,12 +269,11 @@ suppressing equal-value notifications;
 Combine subscribers still receive every write. Measure a property's actual baseline before
 classifying a dependency test as failing before its migration.
 
-The flip still owes:
+No `ExportManager` flip items remain. Its implementation storage is ignored, `AppCore` owns
+its lifetime, and scenes and sheets inject the same instance through the typed environment.
 
-- bridges for a coordinator's mirrored properties if `ExportQueueCoordinator` or
-  `ImportCoordinator` flips;
-- `@ObservationIgnored` on the collaborators, IUOs, caches and tasks;
-- the wrapper and injection flips.
+`ExportQueueCoordinator` and `ImportCoordinator` remain `ObservableObject`. A future migration
+of either coordinator must bridge its mirrored publisher properties before changing its kind.
 
 ## Record stores
 

@@ -17,7 +17,7 @@ import Testing
 
     @MainActor
     private struct Parent: View {
-      @ObservedObject var manager: ExportManager
+      let manager: ExportManager
       @ObservedObject var navigation: Navigation
       let service: FakePhotoLibraryService
       let counter: BodyInvalidationCounter
@@ -88,7 +88,7 @@ import Testing
             manager: manager, navigation: navigation,
             service: service, counter: counter
           )
-          .environmentObject(library).environment(records).environmentObject(manager)
+          .environmentObject(library).environment(records).environment(manager)
           .environmentObject(destination).environment(\.bodyInvalidationCounter, counter))
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 400),

@@ -13,7 +13,7 @@ import SwiftUI
 /// Onboarding keeps its inline toggles — first-run users shouldn't have to
 /// open Settings to set the initial export shape.
 struct AdvancedSettingsView: View {
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
 
   var body: some View {
     Form {
@@ -39,7 +39,7 @@ struct AdvancedSettingsView: View {
   }
 
   private var includeOriginalsRow: some View {
-    Toggle(isOn: $exportManager.includeOriginals) {
+    Toggle(isOn: Bindable(exportManager).includeOriginals) {
       VStack(alignment: .leading, spacing: 4) {
         Text("Include originals for edited photos")
         Text(includeOriginalsDescription)
@@ -52,7 +52,7 @@ struct AdvancedSettingsView: View {
   }
 
   private var convertHEICToJPEGRow: some View {
-    Toggle(isOn: $exportManager.convertHEICToJPEG) {
+    Toggle(isOn: Bindable(exportManager).convertHEICToJPEG) {
       VStack(alignment: .leading, spacing: 4) {
         Text("Convert HEIC to JPEG")
         Text(convertHEICToJPEGDescription)
@@ -65,7 +65,7 @@ struct AdvancedSettingsView: View {
   }
 
   private var livePhotosPairedRow: some View {
-    Toggle(isOn: $exportManager.livePhotosPairedExport) {
+    Toggle(isOn: Bindable(exportManager).livePhotosPairedExport) {
       VStack(alignment: .leading, spacing: 4) {
         Text("Export Live Photos as paired image + video")
         Text(livePhotosPairedDescription)

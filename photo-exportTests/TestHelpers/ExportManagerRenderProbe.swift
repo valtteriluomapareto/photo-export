@@ -8,7 +8,7 @@ import Testing
   /// A sibling render barrier, independent of the production view being measured.
   @MainActor
   struct ExportManagerRenderProbe: View {
-    @ObservedObject var manager: ExportManager
+    let manager: ExportManager
     let counter: BodyInvalidationCounter
 
     static func key(for manager: ExportManager) -> String {

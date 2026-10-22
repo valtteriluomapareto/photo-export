@@ -93,7 +93,7 @@ import Testing
       func show() {
         let hosted = NSHostingView(
           rootView: ImportView()
-            .environmentObject(manager).environment(timeline).environment(collections)
+            .environment(manager).environment(timeline).environment(collections)
             .environmentObject(destinationManager).environment(\.bodyInvalidationCounter, counter))
         let hostWindow = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 460, height: Self.hostHeight),

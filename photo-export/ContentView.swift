@@ -167,7 +167,7 @@ struct YearRow: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
 
   let year: Int
@@ -247,12 +247,10 @@ struct MonthRow: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
-  /// Reads `currentJobPlacement` from the live-progress observable rather than the
-  /// manager, so the per-job placement mutations don't ripple through every view
-  /// holding `ExportManager` as `@EnvironmentObject`. `MonthRow` still observes
-  /// `ExportManager` for `versionSelection`, `livePhotosPairedExport` and the queue badge.
+  /// Reads the in-flight placement directly from its progress owner. The row separately
+  /// tracks the manager's version selection, Live Photo setting and queue-count query.
   @Environment(ExportProgressState.self) private var progressState
 
   let year: Int
@@ -267,8 +265,8 @@ struct MonthRow: View {
       selection: selection,
       livePhotosPaired: exportManager.livePhotosPairedExport)
     // `queuedCount(year:month:)` reads the queue coordinator's unpublished per-month counts.
-    // The "N left" badge relies on the manager publishing `queueCount` (and, for a job
-    // starting, `progressState` publishing `currentJobPlacement`) in the same turn.
+    // Its tracked contents counter updates the "N left" badge even when a first dequeue
+    // leaves the total queue depth unchanged.
     let queued = exportManager.queuedCount(year: year, month: month)
     // Only the row owning the currently-in-flight job spins. Other rows with queued work
     // show just the "N left" text — a spinner on every queued row of a Year export reads

@@ -106,7 +106,7 @@ struct LibraryGridSelectionLifecycleTests {
           .environment(\.bodyInvalidationCounter, counter)
           .environment(timelineStore)
           .environment(collectionStore)
-          .environmentObject(manager)
+          .environment(manager)
           .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults)))
       hostingView = hosted
       window = NSWindow(

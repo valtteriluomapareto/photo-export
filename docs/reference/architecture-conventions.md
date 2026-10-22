@@ -33,7 +33,7 @@ empty `TestHostApp` under hosted tests. [`PhotoExportApp`](../../photo-export/Ap
 builds one [`AppCore`](../../photo-export/App/AppCore.swift) from
 [`AppComposition.forLaunch(arguments:)`](../../photo-export/App/AppComposition.swift)
 and retains its remaining `ObservableObject` services with `@StateObject`.
-The core owns the `@Observable` `LoginItemController`, `WhatsNewState` and both record stores;
+The core owns the `@Observable` `ExportManager`, `LoginItemController`, `WhatsNewState` and both record stores;
 `ExportManager` owns `ExportProgressState`. These objects reach views through
 `.environment(_:)` without additional app-level wrappers. `MainWindowRoot` reads the timeline
 store's history readiness in its body and passes that value through `ContentView` to
@@ -605,8 +605,8 @@ the owning generation before changing UI state.
 
 | Type kind | Isolation | Examples |
 | --- | --- | --- |
-| `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager` |
-| `@Observable` state observed by SwiftUI | `@MainActor final class` | `ExportRecordStore`, `CollectionExportRecordStore` |
+| `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager` |
+| `@Observable` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore` |
 | Main-actor collaborator without `@Published` (mutates shared state from MainActor only) | `@MainActor final class` | `VariantExporter`, `RecordStoreRouter`, `JSONLRecordFile` |
 | Main-actor composition wrapper — final, conforms to `PhotoLibraryService`, optionally wraps an injected service for curated screenshot content | `@MainActor final class` | `PhotoLibraryManager` (wraps `overrideService`), `ScreenshotPhotoLibraryService` (peer, no inheritance) |
 | Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `CollectionPathComponentPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `BackupScanner`, `FileIOService`, `FinalNamePlanner`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` |
@@ -668,7 +668,7 @@ queueCoordinator.$queueCount
   .store(in: &queueCancellables)
 ```
 
-Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
+Both objects are `@MainActor`. The coordinator's `@Published` delivery and the manager's bridge delivery and storage are synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
 
 Unpublished queue contents stay owned by the coordinator. It compares the pending-job count,
 processing flag, current task identity and placement counts around queue mutations, then calls
@@ -862,12 +862,12 @@ final class ExportQueueCoordinator: ObservableObject {
 }
 ```
 
-On `ExportManager` (a final `ObservableObject`), the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after all stored properties are initialized so `self` is available to pass as `host`:
+On `ExportManager` (an `@Observable @MainActor final class`), the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after all stored properties are initialized so `self` is available to pass as `host`:
 
 The following initialization excerpt omits unrelated application dependencies:
 
 ```swift
-private(set) var queueCoordinator: ExportQueueCoordinator!
+@ObservationIgnored private(set) var queueCoordinator: ExportQueueCoordinator!
 
 init(...) {
   // ...assign all stored dependencies first...
@@ -890,11 +890,17 @@ Rules:
 
 ## Forwarder pattern
 
-`ExportManager` retains a stable public surface by forwarding to coordinators when sensible. Contextual excerpts (search `ExportManager.swift` for `{ queueCoordinator.`):
+`ExportManager` retains a stable public surface by forwarding to coordinators when sensible. Contextual excerpts (search `ExportManager.swift` for these property and method names):
 
 ```swift
-var pendingJobs: [ExportJob] { queueCoordinator.pendingJobs }
-var isProcessing: Bool { queueCoordinator.isProcessing }
+var pendingJobs: [ExportJob] {
+  _ = queueMutationCounter
+  return queueCoordinator.pendingJobs
+}
+var isProcessing: Bool {
+  _ = queueMutationCounter
+  return queueCoordinator.isProcessing
+}
 func processQueueIfNeeded() { queueCoordinator.processQueueIfNeeded() }
 private func resetProgressCounters() { queueCoordinator.resetProgressCounters() }
 ```
@@ -903,7 +909,7 @@ Rules:
 
 - **Read-only forwarders are fine.** They let existing call sites (and future features written against the old `ExportManager` API) keep working without rewrites. The sidebar multi-select feature merged from `main` integrated cleanly thanks to these forwarders.
 - **Avoid writing through to coordinator-owned state from `ExportManager` directly** unless the coordinator deliberately exposes a setter. Mutating `queueCoordinator.pendingJobs` from outside the coordinator breaks the Host-protocol invariant; go through a method the coordinator publishes.
-- **Avoid adding new `@Published` properties to `ExportManager` for state that conceptually lives on a coordinator.** Add the `@Published` to the coordinator and sink it onto the manager via the mirror pattern. (Exception: state that AutoSync observes via `exportRunStatePublisher` may need to live on the manager so the publisher composes — see §AutoSync seam preservation.)
+- **Keep coordinator-owned state on the coordinator.** Sink its `@Published` values synchronously onto a macro-tracked manager mirror for UI-only state, or onto an `ObservableCombineBridge` when a named Combine accessor exposes the manager property. State that composes `exportRunStatePublisher` remains intentionally bridged on the manager; see §AutoSync seam preservation.
 
 ## Canonical `start*` entry-point shape
 
@@ -1099,16 +1105,16 @@ Keep placement dispatch in `RecordStoreRouter` and the relevant policies. A new
 ### Extracting a new collaborator from `ExportManager`
 
 1. Identify the seam — what *state and methods* on the manager does the new collaborator need? Write that as a `protocol Host: AnyObject` on the new class.
-2. Move the relevant `@Published` state to the new class. Keep the type the same on `ExportManager` as a mirror (sink in init).
-3. Construct the collaborator post-init with `host: self`. Store it as an IUO (`var coordinator: NewCoordinator!`).
+2. Move the relevant `@Published` state to the new class. Preserve its public type and manager mirror with a synchronous sink in init. Use a bridge for a named Combine accessor and macro-tracked storage for UI-only manager state.
+3. Construct the collaborator post-init with `host: self`. Store it as an ignored IUO (`@ObservationIgnored var coordinator: NewCoordinator!`).
 4. Move the methods. Replace each call site on `ExportManager` with a forwarder (`func foo() { coordinator.foo() }`) so existing tests and callers keep working.
 5. Verify the AutoSync seam: run [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift). If the emission sequence changes, the mirror sinks are wrong (likely async, or in the wrong order).
 6. Verify the synchrony pin: run [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) if the new collaborator owns any queue-adjacent state.
 
-### Adding a new published property AutoSync should observe
+### Adding a property AutoSync should observe
 
-1. Add the property to the right *owner* — the collaborator if conceptually theirs; `ExportManager` if conceptually the manager's. On a collaborator it is `@Published`; on `ExportManager`, a property that feeds `exportRunStatePublisher` is held in an `ObservableCombineBridge` instead (see [`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge).
-2. If the owner is a collaborator: add a same-named property on `ExportManager` (bridged if it feeds `exportRunStatePublisher`, otherwise `@Published`) and `.sink` from the coordinator's publisher in `init`.
+1. Add the property to the right *owner* — the collaborator if conceptually theirs; `ExportManager` if conceptually the manager's. On an `ObservableObject` collaborator it is `@Published`; a manager property exposed through any named Combine accessor uses `ObservableCombineBridge` (see [`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge). UI-only manager state is macro-tracked.
+2. If the owner is a collaborator, add the required manager mirror and `.sink` synchronously from the coordinator's publisher in `init`. Choose bridged or plain tracked manager storage using the accessor rule above.
 3. If the new property changes `ExportRunState`'s shape, update the publisher
    composition deliberately using its bridge's `publisher`, not `$x`. Audit the
    emission sequence before re-recording `AutoSyncSeamCharacterizationTests`.
@@ -1125,4 +1131,4 @@ for current open work rather than treating the old extraction checklist as activ
 
 ## Where to ask
 
-If a contract above conflicts with the code (e.g. you find a `@Published` on the manager that should be a mirror, or a `Host` method that has become permanent and should be documented as such), open a PR — these rules are living. The plan doc that originated them is archived at [`docs/project/archive/software-architecture-improvement-plan.md`](../project/archive/software-architecture-improvement-plan.md) for historical context.
+If a contract above conflicts with the code (e.g. you find a manager field that should belong to a collaborator, or a `Host` method that has become permanent and should be documented as such), open a PR — these rules are living. The plan doc that originated them is archived at [`docs/project/archive/software-architecture-improvement-plan.md`](../project/archive/software-architecture-improvement-plan.md) for historical context.

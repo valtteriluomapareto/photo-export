@@ -91,7 +91,7 @@ import Testing
           .environmentObject(PhotoLibraryManager(overrideService: service))
           .environment(timeline)
           .environment(collections)
-          .environmentObject(manager)
+          .environment(manager)
           .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
           .environment(\.bodyInvalidationCounter, counter))
       window.orderFront(nil)
