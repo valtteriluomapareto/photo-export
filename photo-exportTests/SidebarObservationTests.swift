@@ -25,7 +25,7 @@ import Testing
     @MainActor
     private struct CollectionsHost: View {
       @ObservedObject var manager: ExportManager
-      @ObservedObject var collections: CollectionExportRecordStore
+      let collections: CollectionExportRecordStore
       @Binding var selectionSet: Set<LibrarySelection>
       let counter: BodyInvalidationCounter
       var body: some View {
@@ -114,7 +114,7 @@ import Testing
           manager: manager, collections: collections, service: service, counter: counter
         )
         .environmentObject(library).environment(timeline)
-        .environmentObject(collections).environmentObject(manager)
+        .environment(collections).environmentObject(manager)
         .environment(manager.progressState)
         .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window = NSWindow(

@@ -158,7 +158,7 @@ import Testing
               service: service, manager: manager, selection: selectionOverride ?? selection,
               folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane
             )
-            .environmentObject(library).environment(timeline).environmentObject(records)
+            .environmentObject(library).environment(timeline).environment(records)
             .environmentObject(manager)
             .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
             .environment(\.bodyInvalidationCounter, counter))

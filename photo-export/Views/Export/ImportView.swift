@@ -4,7 +4,7 @@ import SwiftUI
 struct ImportView: View {
   @EnvironmentObject private var exportManager: ExportManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(\.dismiss) private var dismiss
 

@@ -90,7 +90,7 @@ import Testing
         rootView: Host(pane: pane, service: service)
           .environmentObject(PhotoLibraryManager(overrideService: service))
           .environment(timeline)
-          .environmentObject(collections)
+          .environment(collections)
           .environmentObject(manager)
           .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
           .environment(\.bodyInvalidationCounter, counter))

@@ -13,14 +13,13 @@ import SwiftUI
 struct PhotoExportApp: App {
   private let core: AppCore
   // The core's `ObservableObject`s, held as `@StateObject`s. The `@Observable` objects need no
-  // wrapper: the core owns `LoginItemController`, `WhatsNewState` and `ExportRecordStore`,
+  // wrapper: the core owns `LoginItemController`, `WhatsNewState` and both record stores,
   // while `ExportManager` owns `ExportProgressState`. `MainWindowRoot` observes timeline
   // history readiness; `autoSyncManager` supplies the menu bar label. The remaining wrappers
   // keep their instances alive alongside the core. Scenes get the same instances through
   // `photoExportEnvironment(core)`.
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var photoLibraryManager: PhotoLibraryManager
-  @StateObject private var collectionExportRecordStore: CollectionExportRecordStore
   @StateObject private var exportManager: ExportManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @StateObject private var autoSyncManager: AutoSyncManager
@@ -42,7 +41,6 @@ struct PhotoExportApp: App {
     self.core = core
     _exportDestinationManager = StateObject(wrappedValue: core.exportDestinationManager)
     _photoLibraryManager = StateObject(wrappedValue: core.photoLibraryManager)
-    _collectionExportRecordStore = StateObject(wrappedValue: core.collectionExportRecordStore)
     _exportManager = StateObject(wrappedValue: core.exportManager)
     _lifecycleCoordinator = StateObject(wrappedValue: core.lifecycleCoordinator)
     _autoSyncManager = StateObject(wrappedValue: core.autoSyncManager)
@@ -96,7 +94,7 @@ struct PhotoExportApp: App {
       CommandGroup(after: .help) {
         SaveDiagnosticReportCommand(
           timelineStore: core.exportRecordStore,
-          collectionStore: collectionExportRecordStore,
+          collectionStore: core.collectionExportRecordStore,
           destinationManager: exportDestinationManager,
           photoChangeAdapter: autoSyncPhotoChangeAdapter,
           currentRunStore: core.autoSyncEnvironment.currentRunStore)

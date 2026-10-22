@@ -198,7 +198,8 @@ import Testing
     @Environment(ExportProgressState.self) private var progressState: ExportProgressState?
     @Environment(LoginItemController.self) private var loginItemController: LoginItemController?
     @Environment(ExportRecordStore.self) private var exportRecordStore: ExportRecordStore?
-    @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+    @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore:
+      CollectionExportRecordStore?
 
     var body: some View {
       // swiftlint:disable:next redundant_discardable_let

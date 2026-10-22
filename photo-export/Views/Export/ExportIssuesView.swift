@@ -11,7 +11,7 @@ struct ExportIssuesView: View {
   #endif
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
 
   private var snapshot: ExportIssuesProjection.Snapshot {
     ExportIssuesProjection.snapshot(

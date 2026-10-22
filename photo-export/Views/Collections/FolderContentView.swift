@@ -9,7 +9,7 @@ import SwiftUI
 /// gets from per-album exports today.
 struct FolderContentView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 

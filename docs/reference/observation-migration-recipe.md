@@ -265,17 +265,18 @@ The flip still owes:
 - `@ObservationIgnored` on the collaborators, IUOs, caches and tasks;
 - the wrapper and injection flips.
 
-## Timeline record store
+## Record stores
 
-`ExportRecordStore` is an `@Observable @MainActor` store. Its ignored dictionaries,
-filename claims and load/persistence machinery do not notify views directly. Every public
-record query registers the bridged `mutationCounter`, preserving the existing coalesced
+`ExportRecordStore` and `CollectionExportRecordStore` are `@Observable @MainActor` stores.
+Their ignored dictionaries, filename claims and load/persistence machinery do not notify views
+directly. Every public record query registers the bridged `mutationCounter`, preserving the coalesced
 notification window. The conversion setting and persistence error are tracked stored values.
 `statePublisher` and `mutationCounterPublisher` retain synchronous replay/every-write/pre-store
 delivery through their bridges; the unchanged state funnel resumes waiters after storage.
-`CollectionExportRecordStore` retains its `ObservableObject` shape until its own flip.
+`LibraryRootView` reads collection readiness only for the visible collection section, so
+collection record publications leave the timeline root alone.
 
-`AppCore` owns the timeline store and injects it through `.environment(_:)` for every scene.
+`AppCore` owns both stores and injects them through `.environment(_:)` for every scene.
 `MainWindowRoot` holds plain destination/store references and reads only timeline readiness
 before constructing the equatable `ContentView`. Recovery-alert and environment modifiers
 stay outside the root. Unrelated record revisions leave this root alone; the hosted root

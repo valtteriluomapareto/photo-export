@@ -405,7 +405,7 @@ private struct CollectionRow: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
 
   let descriptor: PhotoCollectionDescriptor
   let count: Int?
@@ -498,7 +498,7 @@ private struct FolderRow: View {
   #endif
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
 
   let descriptor: PhotoCollectionDescriptor
   let depth: Int

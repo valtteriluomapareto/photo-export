@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Observation
 import os
 
 /// Per-destination record store for **collection** exports (favorites + user albums).
@@ -24,8 +25,9 @@ import os
 /// `ExportManager` is responsible for routing record mutations to the correct store via
 /// `placement.kind`; this store's defenses ensure that even a tampered-on-disk file
 /// cannot violate the invariant.
+@Observable
 @MainActor
-final class CollectionExportRecordStore: ObservableObject {
+final class CollectionExportRecordStore {
   enum Constants {
     static let logFileName = "collection-records.jsonl"
     static let snapshotFileName = "collection-records.json"
@@ -130,12 +132,13 @@ final class CollectionExportRecordStore: ObservableObject {
   private let ioQueue = DispatchQueue(
     label: "com.valtteriluoma.photo-export.collection-records-io", qos: .utility)
 
+  /// Raw storage: view readers use a query or register `mutationCounter`.
   /// Top-level placement metadata, keyed by placement id. Stale entries from deleted albums
   /// remain here intentionally — they are load-bearing for collision detection and rename
   /// history. Deleted-album placements retain their export history.
-  private(set) var placements: [String: ExportPlacement] = [:]
+  @ObservationIgnored private(set) var placements: [String: ExportPlacement] = [:]
   /// Per-placement record bodies, keyed by `[placementId][assetId]`.
-  private(set) var recordBodies: [String: [String: RecordBody]] = [:]
+  @ObservationIgnored private(set) var recordBodies: [String: [String: RecordBody]] = [:]
 
   /// A variant's folder: its placement (whose relative path is fixed at creation) plus
   /// the subfolder it was written into.
@@ -152,51 +155,61 @@ final class CollectionExportRecordStore: ObservableObject {
   /// a session's first collection export, and maintained in `apply` after that; nil until
   /// then, and again whenever `recordBodies` is replaced wholesale. See
   /// `ExportRecordStore.filenameClaims` for why it is built lazily.
-  private var filenameClaims: FilenameClaims<ClaimFolder>?
+  @ObservationIgnored private var filenameClaims: FilenameClaims<ClaimFolder>?
 
   /// Per-store load state. See `RecordStoreState` for semantics.
-  @Published private(set) var state: RecordStoreState = .unconfigured
-  var statePublisher: AnyPublisher<RecordStoreState, Never> { $state.eraseToAnyPublisher() }
-  @Published private(set) var persistenceError: String?
-  private var hasUnsavedChanges = false
+  private(set) var state: RecordStoreState {
+    get {
+      access(keyPath: \.state)
+      return stateBridge.value
+    }
+    set { stateBridge.write(newValue) { withMutation(keyPath: \.state, $0) } }
+  }
+  private let stateBridge = ObservableCombineBridge<RecordStoreState>(.unconfigured)
+  var statePublisher: AnyPublisher<RecordStoreState, Never> { stateBridge.publisher }
+  private(set) var persistenceError: String?
+  @ObservationIgnored private var hasUnsavedChanges = false
   // Immediate ownership token, separate from coalesced UI notifications. Any
   // configuration, accepted mutation, reset or newer reconciliation invalidates probes.
-  private var reconciliationRevision: UInt64 = 0
-  private var finalCommitContext: FinalCommitContext<Snapshot, LogOp>?
+  @ObservationIgnored private var reconciliationRevision: UInt64 = 0
+  @ObservationIgnored private var finalCommitContext: FinalCommitContext<Snapshot, LogOp>?
   // Only completion deltas survive a corrupt load; full snapshots must not bypass
   // the corruption alert or its explicit reset/forensic-backup path.
-  private var deferredFinalCompletions: [String: [() -> Void]] = [:]
+  @ObservationIgnored private var deferredFinalCompletions: [String: [() -> Void]] = [:]
   // Final commits acknowledged while their destination loaded, landed once it has finished.
-  private var commitsLandedWhileLoading: [String: [() -> Void]] = [:]
-  private var configuredDestinationId: String?
+  @ObservationIgnored private var commitsLandedWhileLoading: [String: [() -> Void]] = [:]
+  @ObservationIgnored private var configuredDestinationId: String?
   var destinationId: String? {
     trackRecords()
     return configuredDestinationId
   }
   // Failed writes must survive destination switches until the user can retry saving.
-  private var pendingRecovery: [String: Snapshot] = [:]
+  @ObservationIgnored private var pendingRecovery: [String: Snapshot] = [:]
   // Each configure starts a new generation; only the newest load is installed.
-  private var loadGeneration: UInt64 = 0
+  @ObservationIgnored private var loadGeneration: UInt64 = 0
   private let latestLoad = RecordStoreLoadGeneration()
-  private var settleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+  @ObservationIgnored private var settleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
-  @Published private(set) var mutationCounter: Int = 0
-  /// `$mutationCounter` for subscribers outside this type: synchronous, delivered before the
-  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
-  var mutationCounterPublisher: AnyPublisher<Int, Never> { $mutationCounter.eraseToAnyPublisher() }
+  /// Coalesced revision registered by queries over the ignored record storage.
+  private(set) var mutationCounter: Int {
+    get {
+      access(keyPath: \.mutationCounter)
+      return mutationCounterBridge.value
+    }
+    set { mutationCounterBridge.write(newValue) { withMutation(keyPath: \.mutationCounter, $0) } }
+  }
+  private let mutationCounterBridge = ObservableCombineBridge(0)
+  /// Synchronous revision delivery before storage, replaying the current value to new subscribers.
+  var mutationCounterPublisher: AnyPublisher<Int, Never> { mutationCounterBridge.publisher }
 
-  /// Mirror of `ExportManager.convertHEICToJPEG`. Kept in sync by the manager
-  /// (init + didSet on the published property). Read by
-  /// `isExported(asset:placement:selection:)` so collection-grid view callers
-  /// see the right answers without threading the toggle through every
-  /// `@EnvironmentObject` site.
-  ///
-  /// `@Published` (rather than plain stored) so `@EnvironmentObject` views
-  /// re-render when the toggle flips. See `ExportRecordStore`'s sibling
-  /// docstring; the same reasoning applies to collection placements.
-  @Published var convertHEICToJPEG: Bool = false
+  /// Mirrors the manager's conversion setting at initialization and on each setting write.
+  /// Queries register this flag so conversion changes refresh exported badges without waiting
+  /// for another coalesced record notification.
+  var convertHEICToJPEG: Bool = false
   private let notificationClock: any AutoSyncClock
-  private lazy var changeNotifier = RecordStoreChangeNotifier(clock: notificationClock) {
+  @ObservationIgnored private lazy var changeNotifier = RecordStoreChangeNotifier(
+    clock: notificationClock
+  ) {
     [weak self] in
     self?.mutationCounter &+= 1
   }
@@ -205,9 +218,9 @@ final class CollectionExportRecordStore: ObservableObject {
   private let recordLogIO: any JSONLRecordLogIO
   private let reconciliationFileChecker: any ReconciliationFileChecking
   let storeRootURL: URL
-  private var currentStoreDirURL: URL?
+  @ObservationIgnored private var currentStoreDirURL: URL?
   typealias RecordFile = JSONLRecordFile<Snapshot, LogOp>
-  private var jsonl: RecordFile?
+  @ObservationIgnored private var jsonl: RecordFile?
 
   // MARK: - Init
 
@@ -296,7 +309,7 @@ final class CollectionExportRecordStore: ObservableObject {
   }
 
   /// Loads that finished, applied or discarded. Exists for tests, to wait on progress.
-  private(set) var finishedLoadCount = 0
+  @ObservationIgnored private(set) var finishedLoadCount = 0
 
   /// Tasks waiting in `waitUntilSettled()`. Exists for tests, to wait on progress.
   var pendingSettleWaiterCount: Int { settleWaiters.count }

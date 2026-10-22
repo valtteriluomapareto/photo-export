@@ -11,7 +11,7 @@ import SwiftUI
 /// on unrelated queue publications. Record/library/destination observations stay live.
 struct CollectionContentView: View, Equatable {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
