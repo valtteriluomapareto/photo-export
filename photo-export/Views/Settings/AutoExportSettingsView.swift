@@ -23,18 +23,25 @@ struct AutoExportSettingsView: View {
   var body: some View {
     Form {
       if lifecycleCoordinator.migrationConflict != nil {
+        let showRecovery = { isShowingMigrationRecoverySheet = true }
+        #if DEBUG
+          // swiftlint:disable:next redundant_discardable_let
+          let _ = bodyCounter?.recordAction("auto-export-migration-recovery", action: showRecovery)
+        #endif
         Section {
-          MigrationConflictBanner {
-            isShowingMigrationRecoverySheet = true
-          }
-          .listRowInsets(EdgeInsets())
+          MigrationConflictBanner(onTap: showRecovery)
+            .listRowInsets(EdgeInsets())
         }
       } else if safetyMonitor.needsSafetyConfirmation {
+        let showConfirmation = { isShowingSafetyConfirm = true }
+        #if DEBUG
+          // swiftlint:disable:next redundant_discardable_let
+          let _ = bodyCounter?.recordAction(
+            "auto-export-safety-confirmation", action: showConfirmation)
+        #endif
         Section {
-          SafetyConfirmationBanner {
-            isShowingSafetyConfirm = true
-          }
-          .listRowInsets(EdgeInsets())
+          SafetyConfirmationBanner(onTap: showConfirmation)
+            .listRowInsets(EdgeInsets())
         }
       }
 
@@ -165,6 +172,7 @@ struct AutoExportSettingsView: View {
       )
       .environmentObject(lifecycleCoordinator)
       .environmentObject(exportManagerFromEnvironment)
+      .environment(exportManagerFromEnvironment)
       .environmentObject(exportDestinationManager)
     }
     .sheet(isPresented: $isShowingSafetyConfirm) {
@@ -181,6 +189,7 @@ struct AutoExportSettingsView: View {
       )
       .environmentObject(lifecycleCoordinator)
       .environmentObject(exportManagerFromEnvironment)
+      .environment(exportManagerFromEnvironment)
       .environmentObject(exportDestinationManager)
     }
   }

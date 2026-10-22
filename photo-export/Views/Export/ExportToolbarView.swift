@@ -192,8 +192,13 @@ struct ExportToolbarView: ToolbarContent {
             exportManager.pause()
           }
         } label: {
+          let pauseLabel = exportManager.isPaused ? "Resume" : "Pause"
+          #if DEBUG
+            // swiftlint:disable:next redundant_discardable_let
+            let _ = bodyCounter?.recordText([pauseLabel], for: "toolbar-pause-label")
+          #endif
           Label(
-            exportManager.isPaused ? "Resume" : "Pause",
+            pauseLabel,
             systemImage: exportManager.isPaused ? "play.fill" : "pause.fill")
         }
         .help(exportManager.isPaused ? "Resume export" : "Pause export")
