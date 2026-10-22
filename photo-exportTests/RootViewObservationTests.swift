@@ -381,11 +381,7 @@ import Testing
         let key = "collection-records:\(f.collections.mutationCounter)"
         try #require(await observe(in: f.window) { f.counter.count(for: key) > 0 })
         await f.quiesce()
-        withKnownIssue("The library root still observes all collection-store publications") {
-          #expect(f.counter.count(for: "library-root") == bodies)
-        } when: {
-          true
-        }
+        #expect(f.counter.count(for: "library-root") == bodies)
       } cleanup: {
         await f.close()
       }

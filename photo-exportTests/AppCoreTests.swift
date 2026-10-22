@@ -183,6 +183,7 @@ import Testing
     var progressState: ExportProgressState?
     var loginItemController: LoginItemController?
     var exportRecordStore: ExportRecordStore?
+    var collectionExportRecordStore: CollectionExportRecordStore?
   }
 
   private struct EnvironmentProbe: View {
@@ -197,6 +198,7 @@ import Testing
     @Environment(ExportProgressState.self) private var progressState: ExportProgressState?
     @Environment(LoginItemController.self) private var loginItemController: LoginItemController?
     @Environment(ExportRecordStore.self) private var exportRecordStore: ExportRecordStore?
+    @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
 
     var body: some View {
       // swiftlint:disable:next redundant_discardable_let
@@ -212,6 +214,7 @@ import Testing
       reading.progressState = progressState
       reading.loginItemController = loginItemController
       reading.exportRecordStore = exportRecordStore
+      reading.collectionExportRecordStore = collectionExportRecordStore
     }
   }
 
@@ -242,6 +245,7 @@ import Testing
       #expect(reading.progressState === core.exportManager.progressState)
       #expect(reading.loginItemController === core.loginItemController)
       #expect(reading.exportRecordStore === core.exportRecordStore)
+      #expect(reading.collectionExportRecordStore === core.collectionExportRecordStore)
     }
   }
 
