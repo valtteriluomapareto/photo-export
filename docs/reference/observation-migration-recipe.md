@@ -400,6 +400,11 @@ Later runs on Xcode 26.6 (17F113) found a pre-existing flake in
 with height 600: Settings can open on the previous tab, about 1 in 70 case runs
 ([#433](https://github.com/valtteriluomapareto/photo-export/issues/433)).
 
+The loaded-collection isolation fixture also reported one extra body/scan in 1 of 8
+case runs on Xcode 26.6 (17F113), with its record revision unchanged. Its initial
+selection is now seeded before hosting, and a render-phase acknowledgement replaces
+the fixed wait so setup reconstruction stays outside the queue-only measurement.
+
 Barriered silence checks, structural bounds, visible updates, gates and parity assertions
 decide correctness. A failure already present on the unflipped base is recorded as a flake;
 advisory diagnostic counts do not gate a flip.
