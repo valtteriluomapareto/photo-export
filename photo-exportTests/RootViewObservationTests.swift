@@ -53,7 +53,7 @@ import Testing
     /// to stress the equatable router independently of its own dependencies.
     @MainActor
     private struct ContentHost: View {
-      @ObservedObject var manager: ExportManager
+      let manager: ExportManager
       @ObservedObject var destination: ExportDestinationManager
       let timeline: ExportRecordStore
       let counter: BodyInvalidationCounter
@@ -63,6 +63,8 @@ import Testing
         let _ = counter.record("content-host")
         // swiftlint:disable:next redundant_discardable_let
         let _ = timeline.mutationCounter
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = manager.queueCount
         MainWindowRoot(destinationManager: destination, recordStore: timeline)
       }
     }
@@ -147,7 +149,7 @@ import Testing
             CollectionRecordsProbe(store: collections, counter: counter)
           }
           .environmentObject(library).environment(timeline).environment(collections)
-          .environmentObject(manager).environment(manager.progressState)
+          .environment(manager).environment(manager.progressState)
           .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
           .environment(\.bodyInvalidationCounter, counter)
           .environment(\.screenshotSurfaceKey, screenshotSurfaceKey).defaultAppStorage(defaults))
@@ -609,9 +611,7 @@ import Testing
           })
         let delta = f.counter.count(for: "library-root") - before
         Attachment.record("pause=\(delta)", named: "toolbar-root-bodies.txt")
-        withKnownIssue("The root still observes every manager publication") {
-          #expect(delta == 0)
-        }
+        #expect(delta == 0)
         try await ExportManagerRenderProbe.change(
           manager: f.manager, counter: f.counter, in: f.window
         ) {
@@ -686,9 +686,7 @@ import Testing
           f.manager.pause()
         }
         let pause = f.counter.count(for: "library-root") - before
-        withKnownIssue("The root still observes every manager publication") {
-          #expect(pause == 0)
-        }
+        #expect(pause == 0)
         let paused = f.counter.count(for: "library-root")
         try await ExportManagerRenderProbe.change(
           manager: f.manager, counter: f.counter, in: f.window
@@ -697,9 +695,7 @@ import Testing
         }
         let layout = f.counter.count(for: "library-root") - paused
         Attachment.record("pause=\(pause) layout=\(layout)", named: "root-manager-bodies.txt")
-        withKnownIssue("The root still observes every manager publication") {
-          #expect(layout == 0)
-        }
+        #expect(layout == 0)
       } cleanup: {
         await f.close()
       }

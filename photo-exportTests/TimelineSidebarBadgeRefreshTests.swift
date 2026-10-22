@@ -77,7 +77,7 @@ import Testing
           assetResourceWriter: writer, fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         let content = Host(service: service, manager: manager, counter: counter)
-          .environmentObject(library).environment(store).environmentObject(manager)
+          .environmentObject(library).environment(store).environment(manager)
           .environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window = NSWindow(
@@ -138,9 +138,7 @@ import Testing
           f.manager.pause()
         }
         let pause = f.counter.count(for: key) - before
-        withKnownIssue("Month rows still observe every manager publication") {
-          #expect(pause == 0)
-        }
+        #expect(pause == 0)
         let paused = f.counter.count(for: key)
         try await ExportManagerRenderProbe.change(
           manager: f.manager, counter: f.counter, in: f.window
@@ -149,9 +147,7 @@ import Testing
         }
         let layout = f.counter.count(for: key) - paused
         Attachment.record("pause=\(pause) layout=\(layout)", named: "month-manager-bodies.txt")
-        withKnownIssue("Month rows still observe every manager publication") {
-          #expect(layout == 0)
-        }
+        #expect(layout == 0)
       } cleanup: {
         await f.close()
       }

@@ -14,7 +14,7 @@ struct HostedViewHarness {
 
   func environment<Content: View>(_ root: Content) -> some View {
     root.environmentObject(library).environment(export.store)
-      .environment(export.collectionStore).environmentObject(export.manager)
+      .environment(export.collectionStore).environment(export.manager)
       .environment(export.manager.progressState).environmentObject(destination)
       .environmentObject(autoSync).environment(whatsNew)
   }

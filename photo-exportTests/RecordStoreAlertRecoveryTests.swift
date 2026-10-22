@@ -102,7 +102,7 @@ import Testing
           rootView: Color.clear.frame(width: 600, height: 400)
             .recordStoreAlertHost()
             .overlay(alignment: .topLeading) { RenderProbe(tick: tick, counter: counter) }
-            .environment(timeline).environment(collections).environmentObject(manager)
+            .environment(timeline).environment(collections).environment(manager)
             .environmentObject(destinationManager).environmentObject(photoManager)
             .environment(\.bodyInvalidationCounter, counter))
         let owned = NSWindow(

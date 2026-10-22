@@ -12,7 +12,7 @@ import Testing
   @Suite(.timeLimit(.minutes(1)))
   struct ExpectationReflectionSafetyTests {
     private struct SubscribingView: View {
-      @EnvironmentObject var manager: ExportManager
+      @Environment(ExportManager.self) var manager
       @EnvironmentObject var library: PhotoLibraryManager
       @Environment(ExportRecordStore.self) var store
       @Environment(CollectionExportRecordStore.self) var collections
@@ -60,7 +60,7 @@ import Testing
         monthViewModel = MonthViewModel(photoLibraryService: service)
         let content = SubscribingView(counts: counts)
           .environmentObject(library).environment(timeline).environment(collections)
-          .environmentObject(manager).environment(manager.progressState)
+          .environment(manager).environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         hostingView = NSHostingView(rootView: content)
         window = NSWindow(
