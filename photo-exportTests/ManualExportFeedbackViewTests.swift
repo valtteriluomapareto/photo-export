@@ -42,6 +42,8 @@ import Testing
       var hosted: NSView?
       var settingsWindow: NSWindow?
       var selectedAtOpen: String?
+      var settingsOpenCount = 0
+      var settingsTrace: [String] = []
 
       init() {
         defaults = TestScratch.defaults(suiteName: suite)
@@ -80,7 +82,10 @@ import Testing
             successDelay: successDelay,
             settingsOpener: { [weak self] in
               guard let self else { return }
-              selectedAtOpen = defaults.string(forKey: SettingsTab.storageKey)
+              let selected = defaults.string(forKey: SettingsTab.storageKey)
+              selectedAtOpen = selected
+              settingsOpenCount += 1
+              traceSettings("opener")
             }
           )
           .environmentObject(manager).environment(manager.progressState)
@@ -114,6 +119,14 @@ import Testing
         owned.contentView = hosted
         settingsWindow = owned
         owned.orderFront(nil)
+      }
+
+      func traceSettings(_ phase: String) {
+        let summary = manager.progressState.manualSummary
+        settingsTrace.append(
+          "phase=\(phase) calls=\(settingsOpenCount) observed=\(selectedAtOpen ?? "nil") "
+            + "summary=\(summary?.id.uuidString ?? "nil") "
+            + "dismissed=\(summary.map { String($0.isDismissed) } ?? "nil")")
       }
 
       func close() {
@@ -159,7 +172,12 @@ import Testing
     func multilineFailureFitsFirstLayoutAndMountedReplacements(initialHeight: Double) async throws {
       let f = Fixture()
       var bodyCounts: [String] = []
-      defer { f.close() }
+      defer {
+        Attachment.record(
+          (["suite=\(f.suite)", "initialHeight=\(initialHeight)"] + f.settingsTrace)
+            .joined(separator: "\n"), named: "settings-order-trace.txt")
+        f.close()
+      }
       let path =
         "/Volumes/Family Photo Backup/Collections/Albums/"
         + "Summer trips with family and friends/Coastal walks and mountain holidays/"
@@ -178,14 +196,17 @@ import Testing
       try #require(rendered)
       let narrow = try await settledContentSize(in: f)
       bodyCounts.append("narrow=\(f.counter.count(for: "export-progress-body"))")
+      f.traceSettings("initial-layout")
       #expect(narrow.width == 480)
       let oldDismiss = try #require(f.counter.renderedActions["progress-dismiss"])
       let oldIssues = try #require(f.counter.renderedActions["progress-view-issues"])
+      f.traceSettings("retained-actions")
 
       let window = try #require(f.window)
       window.setContentSize(CGSize(width: 800, height: narrow.height))
       let wide = try await settledContentSize(in: f)
       bodyCounts.append("wide=\(f.counter.count(for: "export-progress-body"))")
+      f.traceSettings("wide-layout")
       #expect(wide.width == 800)
       #expect(narrow.height > wide.height, "Narrow columns must wrap the full failure detail")
 
@@ -195,10 +216,12 @@ import Testing
       try #require(shortened)
       let short = try await settledContentSize(in: f)
       bodyCounts.append("short=\(f.counter.count(for: "export-progress-body"))")
+      f.traceSettings("short-layout")
       oldIssues()
       oldDismiss()
       #expect(f.selectedAtOpen == nil)
       #expect(f.manager.progressState.manualSummary?.isDismissed == false)
+      f.traceSettings("old-actions-checked")
 
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: detail)
@@ -206,11 +229,17 @@ import Testing
       try #require(expanded)
       let replaced = try await settledContentSize(in: f)
       bodyCounts.append("replaced=\(f.counter.count(for: "export-progress-body"))")
+      f.traceSettings("replacement-layout")
       #expect(replaced.width == 800)
       #expect(replaced.height == wide.height)
       let issues = try #require(f.counter.renderedActions["progress-view-issues"])
+      f.traceSettings("current-action")
       issues()
       #expect(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
+      f.traceSettings("immediate-assertion")
+      let domain = f.defaults.persistentDomain(forName: f.suite)?[SettingsTab.storageKey] as? String
+      let readback = f.defaults.string(forKey: SettingsTab.storageKey)
+      f.settingsTrace.append("after-assert readback=\(readback ?? "nil") domain=\(domain ?? "nil")")
       let dismiss = try #require(f.counter.renderedActions["progress-dismiss"])
       dismiss()
       let hidden = await observe { f.counter.renderedText["progress-visible"] == ["false"] }
@@ -220,6 +249,7 @@ import Testing
       Attachment.record(
         (["mounted=true"] + bodyCounts).joined(separator: "\n"),
         named: "progress-body-measurement.txt")
+      f.traceSettings("hidden")
     }
 
     @Test(arguments: [false, true])
