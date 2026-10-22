@@ -20,8 +20,8 @@ import Testing
       }
     }
 
-    /// Rebuilds the collections sidebar on every manager or collection-store publication, as
-    /// `LibraryRootView` does in production. Its own key shows a publication has rendered.
+    /// Rebuilds for manager publications and coalesced collection revisions to stress the sidebar.
+    /// Its counter key confirms this parent rendered before child-body silence checks.
     @MainActor
     private struct CollectionsHost: View {
       @ObservedObject var manager: ExportManager
