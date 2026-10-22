@@ -102,7 +102,7 @@ import Testing
             .environmentObject(manager).environmentObject(autoSync).environmentObject(
               destinationManager
             )
-            .environment(timeline).environmentObject(collections)
+            .environment(timeline).environment(collections)
             .environmentObject(lifecycle).environmentObject(scopeStore).environment(loginItem)
             .environmentObject(safetyMonitor).environmentObject(photoChangeAdapter)
             .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)

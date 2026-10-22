@@ -307,7 +307,7 @@ struct ExportIssuePresentationTests {
           stableId: destinationId, fingerprint: nil, isAvailable: true, safety: .safe))
       autoSync.attach(to: builder.environment)
       let content = ExportIssuesView()
-        .environmentObject(destination).environment(timeline).environmentObject(collections)
+        .environmentObject(destination).environment(timeline).environment(collections)
         .environmentObject(library).environmentObject(autoSync)
         .environment(\.bodyInvalidationCounter, counter)
         .environment(\.locale, Locale(identifier: "en_US_POSIX"))

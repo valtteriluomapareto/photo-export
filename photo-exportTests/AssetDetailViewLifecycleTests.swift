@@ -31,7 +31,7 @@ struct AssetDetailViewLifecycleTests {
         if selection.showsDetail {
           AssetDetailView(asset: selection.asset, placement: .timeline(year: 2025, month: 1))
             .environmentObject(photoLibraryManager)
-            .environment(exportRecordStore).environmentObject(collectionStore)
+            .environment(exportRecordStore).environment(collectionStore)
         } else {
           Color.clear
         }

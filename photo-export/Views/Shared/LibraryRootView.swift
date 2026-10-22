@@ -13,7 +13,7 @@ struct LibraryRootView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @Environment(WhatsNewState.self) private var whatsNewState
 
   let timelineHistoryState: RecordStoreState

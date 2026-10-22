@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 struct RecordStoreAlertHost: ViewModifier {
   @Environment(ExportRecordStore.self) private var exportRecordStore
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @EnvironmentObject private var exportManager: ExportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager

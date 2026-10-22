@@ -330,7 +330,7 @@ extension View {
       .environmentObject(core.exportManager)
       .environment(core.exportManager.progressState)
       .environment(core.exportRecordStore)
-      .environmentObject(core.collectionExportRecordStore)
+      .environment(core.collectionExportRecordStore)
       .environmentObject(core.lifecycleCoordinator)
       .environmentObject(core.autoSyncManager)
       .environmentObject(core.autoSyncScopeStore)

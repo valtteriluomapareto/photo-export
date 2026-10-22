@@ -105,7 +105,7 @@ struct LibraryGridSelectionLifecycleTests {
           .environmentObject(library)
           .environment(\.bodyInvalidationCounter, counter)
           .environment(timelineStore)
-          .environmentObject(collectionStore)
+          .environment(collectionStore)
           .environmentObject(manager)
           .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults)))
       hostingView = hosted

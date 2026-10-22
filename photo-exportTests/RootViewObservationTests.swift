@@ -40,7 +40,7 @@ import Testing
     }
 
     private struct CollectionRecordsProbe: View {
-      @ObservedObject var store: CollectionExportRecordStore
+      let store: CollectionExportRecordStore
       let counter: BodyInvalidationCounter
       var body: some View {
         // swiftlint:disable:next redundant_discardable_let
@@ -142,7 +142,7 @@ import Testing
           .overlay(alignment: .bottomLeading) {
             CollectionRecordsProbe(store: collections, counter: counter)
           }
-          .environmentObject(library).environment(timeline).environmentObject(collections)
+          .environmentObject(library).environment(timeline).environment(collections)
           .environmentObject(manager).environment(manager.progressState)
           .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
           .environment(\.bodyInvalidationCounter, counter)
@@ -381,11 +381,7 @@ import Testing
         let key = "collection-records:\(f.collections.mutationCounter)"
         try #require(await observe(in: f.window) { f.counter.count(for: key) > 0 })
         await f.quiesce()
-        withKnownIssue("The library root still observes all collection-store publications") {
-          #expect(f.counter.count(for: "library-root") == bodies)
-        } when: {
-          true
-        }
+        #expect(f.counter.count(for: "library-root") == bodies)
       } cleanup: {
         await f.close()
       }

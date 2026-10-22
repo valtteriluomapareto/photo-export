@@ -22,15 +22,14 @@ type|photo-export/Export/ExportQueueCoordinator.swift|ExportQueueCoordinator
 type|photo-export/Export/ImportCoordinator.swift|ImportCoordinator
 type|photo-export/PhotoLibrary/PhotoLibraryManager.swift|PhotoLibraryManager
 type|photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift|PhotoLibraryPersistentChangeAdapter
-type|photo-export/Records/CollectionExportRecordStore.swift|CollectionExportRecordStore
 
 # The coordinator -> manager mirror sinks (AutoSync seam); both coordinators stay
 # ObservableObject, so these stay as they are.
 external-publisher|photo-export/Export/ExportManager.swift|9
 
-total|published|36
-total|environment-object|23
-total|environment-object-property|61
-total|state-object|9
+total|published|32
+total|environment-object|22
+total|environment-object-property|52
+total|state-object|8
 total|observed-object|1
 total|object-will-change|0
