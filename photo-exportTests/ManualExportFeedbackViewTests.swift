@@ -242,6 +242,46 @@ import Testing
       f.traceSettings("hidden")
     }
 
+    @Test func viewIssuesReselectsTheTabAfterAnotherOwnerChangesPreferences() async throws {
+      let f = Fixture()
+      defer {
+        Attachment.record(
+          (["suite=\(f.suite)"] + f.settingsTrace).joined(separator: "\n"),
+          named: "settings-reselection-control.txt")
+        f.close()
+      }
+      f.manager.progressState.manualSummary = ManualExportSummary(
+        completedCount: 3, failedCount: 1, failureMessage: nil)
+      f.show()
+      try #require(
+        await observe(in: f.window) {
+          f.counter.renderedText["progress-message"] == ["2 exported · 1 failed"]
+            && f.counter.renderedActions["progress-view-issues"] != nil
+        })
+      let action = try #require(f.counter.renderedActions["progress-view-issues"])
+      let summaryID = try #require(f.manager.progressState.manualSummary?.id)
+      action()
+      try #require(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
+      try #require(f.settingsOpenCount == 1)
+      try #require(f.manager.progressState.manualSummary?.id == summaryID)
+      try #require(f.manager.progressState.manualSummary?.isDismissed == false)
+      f.traceSettings("first-open-checked")
+
+      f.defaults.set(SettingsTab.advanced.rawValue, forKey: SettingsTab.storageKey)
+      try #require(
+        f.defaults.string(forKey: SettingsTab.storageKey) == SettingsTab.advanced.rawValue)
+      f.selectedAtOpen = nil
+      action()
+      #expect(f.selectedAtOpen == SettingsTab.exportIssues.rawValue)
+      #expect(f.settingsOpenCount == 2)
+      #expect(f.manager.progressState.manualSummary?.id == summaryID)
+      #expect(f.manager.progressState.manualSummary?.isDismissed == false)
+      f.traceSettings("second-open-checked")
+      let domain = f.defaults.persistentDomain(forName: f.suite)?[SettingsTab.storageKey] as? String
+      let readback = f.defaults.string(forKey: SettingsTab.storageKey)
+      f.settingsTrace.append("after-assert readback=\(readback ?? "nil") domain=\(domain ?? "nil")")
+    }
+
     @Test(arguments: [false, true])
     func failureShowsOutcomeAndSelectsIssuesBeforeOpeningSettings(settingsAlreadyOpen: Bool)
       async throws
