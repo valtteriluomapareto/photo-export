@@ -313,7 +313,8 @@ import Testing
           + "banner.scans=\(f.counter.count(for: "summaryScan"))")
       capturePhase("banner")
       #expect(f.counter.count(for: "collectionBody") > 0)
-      Attachment.record(bodyCounts.joined(separator: "\n"), named: "collection-body-measurement.txt")
+      Attachment.record(
+        bodyCounts.joined(separator: "\n"), named: "collection-body-measurement.txt")
     }
 
     @Test(.timeLimit(.minutes(2)))
@@ -397,7 +398,8 @@ import Testing
         await f.manager.waitForQueueDrained()
       }
       #expect(f.counter.count(for: "collectionBody") > 0)
-      Attachment.record(bodyCounts.joined(separator: "\n"), named: "collection-body-measurement.txt")
+      Attachment.record(
+        bodyCounts.joined(separator: "\n"), named: "collection-body-measurement.txt")
     }
   }
 #endif
