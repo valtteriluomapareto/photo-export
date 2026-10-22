@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Failed variants from current export records, with matching Auto Export retry history.
 struct ExportIssuesView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   @State private var loadedMetadata:
     (request: ExportIssueMetadataRequest, values: [String: ExportIssue.AssetMetadata])?

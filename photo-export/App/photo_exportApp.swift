@@ -13,13 +13,12 @@ import SwiftUI
 struct PhotoExportApp: App {
   private let core: AppCore
   // The core's `ObservableObject`s, held as `@StateObject`s. The `@Observable` objects need no
-  // wrapper: the core owns `ExportManager`, `LoginItemController`, `WhatsNewState` and both stores,
+  // wrapper: the core owns the library/export managers, login controller, What's New and both stores,
   // while `ExportManager` owns `ExportProgressState`. `MainWindowRoot` observes timeline
   // history readiness; `autoSyncManager` supplies the menu bar label. The remaining wrappers
   // keep their instances alive alongside the core. Scenes get the same instances through
   // `photoExportEnvironment(core)`.
   @StateObject private var exportDestinationManager: ExportDestinationManager
-  @StateObject private var photoLibraryManager: PhotoLibraryManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @StateObject private var autoSyncManager: AutoSyncManager
   @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
@@ -39,7 +38,6 @@ struct PhotoExportApp: App {
       composition: .forLaunch(arguments: ProcessInfo.processInfo.arguments))
     self.core = core
     _exportDestinationManager = StateObject(wrappedValue: core.exportDestinationManager)
-    _photoLibraryManager = StateObject(wrappedValue: core.photoLibraryManager)
     _lifecycleCoordinator = StateObject(wrappedValue: core.lifecycleCoordinator)
     _autoSyncManager = StateObject(wrappedValue: core.autoSyncManager)
     _autoSyncScopeStore = StateObject(wrappedValue: core.autoSyncScopeStore)

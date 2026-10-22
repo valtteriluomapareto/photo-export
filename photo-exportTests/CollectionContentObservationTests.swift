@@ -88,7 +88,7 @@ import Testing
             manager: manager, navigation: navigation,
             service: service, counter: counter
           )
-          .environmentObject(library).environment(records).environment(manager)
+          .environment(library).environment(records).environment(manager)
           .environmentObject(destination).environment(\.bodyInvalidationCounter, counter))
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 400),

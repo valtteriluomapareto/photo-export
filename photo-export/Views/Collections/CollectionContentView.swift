@@ -10,7 +10,7 @@ import SwiftUI
 /// MonthContentView, `.equatable()` at every call site filters fresh action closures
 /// on unrelated queue publications. Record/library/destination observations stay live.
 struct CollectionContentView: View, Equatable {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   #if DEBUG

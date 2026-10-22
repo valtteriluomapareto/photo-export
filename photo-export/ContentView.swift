@@ -17,7 +17,7 @@ struct ContentView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @Environment(\.screenshotSurfaceKey) private var screenshotSurfaceKey
   /// Action-only references for onboarding auto-skip in `onAppear`, with no body subscriptions.
   /// History readiness arrives separately as a render-time value from the app owner.
@@ -79,8 +79,8 @@ struct ContentView: View {
 extension ContentView: Equatable {
   /// Compares the injected references by identity, for `.equatable()` at the call site.
   /// The `@AppStorage` property otherwise makes SwiftUI re-run this body every time
-  /// `App.body` rebuilds the view. The view's own `@AppStorage` and `@EnvironmentObject`
-  /// changes still re-run it. History-readiness value changes also reach the active child.
+  /// `App.body` rebuilds the view. Its preferences and tracked environment reads still
+  /// invalidate the body. History-readiness value changes also reach the active child.
   static func == (lhs: ContentView, rhs: ContentView) -> Bool {
     lhs.destinationManager === rhs.destinationManager && lhs.recordStore === rhs.recordStore
       && lhs.timelineHistoryState == rhs.timelineHistoryState
@@ -92,7 +92,7 @@ struct AuthorizationView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @ObservedObject var photoLibraryManager: PhotoLibraryManager
+  let photoLibraryManager: PhotoLibraryManager
 
   var body: some View {
     #if DEBUG

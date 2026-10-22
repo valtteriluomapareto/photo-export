@@ -98,7 +98,7 @@ import Testing
       func showSettings() {
         let hosted = NSHostingView(
           rootView: SettingsRootView()
-            .environmentObject(library)
+            .environment(library)
             .environment(manager).environmentObject(autoSync).environmentObject(
               destinationManager
             )

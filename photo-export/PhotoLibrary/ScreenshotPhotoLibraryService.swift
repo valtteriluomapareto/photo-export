@@ -24,7 +24,7 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
 
   // Authorization state for the curated mode. Always-authorized; the values are
   // surfaced through the (now-required) protocol properties below so the wrapping
-  // `PhotoLibraryManager` can mirror them onto its `@Published` properties.
+  // `PhotoLibraryManager` can seed its observable authorization bridges.
   var authorizationStatus: PHAuthorizationStatus = .authorized
   var isAuthorized: Bool = true
 

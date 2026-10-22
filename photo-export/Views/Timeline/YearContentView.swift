@@ -9,7 +9,7 @@ import SwiftUI
 /// exported" badge agrees with the sidebar's `YearRow` / `MonthRow` badges without us
 /// having to re-derive the formula.
 struct YearContentView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
   @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager

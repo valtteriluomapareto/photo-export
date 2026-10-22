@@ -95,6 +95,28 @@ struct PhotoLibraryManagerObservationTests {
     withExtendedLifetime((statusSubscription, authorizedSubscription)) {}
   }
 
+  /// Observation notifies before synchronous publisher delivery; subscribers still read old storage.
+  @Test func authorizationWritesNotifyBeforeDelivery() {
+    let service = FakePhotoLibraryService()
+    let library = PhotoLibraryManager(overrideService: service)
+    let status = ObservationProbe { _ = library.authorizationStatus }
+    var events: [String] = []
+    let statusSubscription = library.authorizationStatusPublisher.dropFirst().sink {
+      events.append("status \($0.rawValue)")
+      #expect(status.changeCount == 1)
+      #expect(library.authorizationStatus == .authorized)
+    }
+    let authorizedSubscription = library.isAuthorizedPublisher.dropFirst().sink {
+      events.append("authorized \($0)")
+    }
+    service.authorizationStatus = .denied
+    service.isAuthorized = false
+
+    library.refreshAuthorizationStatus()
+    #expect(events == ["status \(PHAuthorizationStatus.denied.rawValue)", "authorized false"])
+    withExtendedLifetime((statusSubscription, authorizedSubscription)) {}
+  }
+
   /// Every invalidation notifies revision readers; forgetting cached assets stays silent.
   @Test func libraryRevisionNotifiesOnEveryInvalidation() {
     let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
@@ -118,12 +140,8 @@ struct PhotoLibraryManagerObservationTests {
     let details = ObservationProbe { _ = library.assetDetails(for: "A") }
 
     library.invalidateCache(changedThumbnailAssetIDs: [])
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(tree.changeCount == 1)
-    }
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(details.changeCount == 1)
-    }
+    #expect(tree.changeCount == 1)
+    #expect(details.changeCount == 1)
     let afterTree = tree.changeCount
     let afterDetails = details.changeCount
     library.forgetPHAssetCache()
@@ -139,17 +157,11 @@ struct PhotoLibraryManagerObservationTests {
     library.invalidateCache(changedThumbnailAssetIDs: [])
     #expect(probe.changeCount == 0)
     library.invalidateCache(changedThumbnailAssetIDs: ["B"])
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(probe.changeCount == 1)
-    }
+    #expect(probe.changeCount == 1)
     library.invalidateCache()
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(probe.changeCount == 2)
-    }
+    #expect(probe.changeCount == 2)
     library.invalidateCache(changedThumbnailAssetIDs: Set((0..<600).map { "overflow-\($0)" }))
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(probe.changeCount == 3)
-    }
+    #expect(probe.changeCount == 3)
     let afterOverflow = probe.changeCount
     library.forgetPHAssetCache()
     #expect(probe.changeCount == afterOverflow)

@@ -3,7 +3,7 @@ import Photos
 import SwiftUI
 
 struct AssetDetailView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
 

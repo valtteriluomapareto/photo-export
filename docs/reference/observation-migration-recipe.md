@@ -58,9 +58,9 @@ carries a Combine contract, and the flip must not change a single delivery.
 - Public queries over ignored storage (the record stores' dictionaries) must touch a tracked
   property, such as `mutationCounter`, so a view that calls them registers a dependency and the
   existing notification coalescing still decides when it refreshes.
-- `@Observable` on an `NSObject` subclass (`PhotoLibraryManager`,
-  `PhotoLibraryPersistentChangeAdapter`) needs a check that KVO-backed and `@objc` members
-  still behave; flip those last in their slice.
+- Keep `NSObject` and PhotoKit observer conformance when migrating a library service.
+  Compile the actual subclass and check its query liveness through injected services;
+  include actual Photos callbacks in the final smoke run. The change adapter remains on Combine.
 - `init` must do no work a view would repeat: `@State` builds a new instance on every view
   init and keeps only the first, so service calls, subscriptions and tasks belong in `.task`
   or an explicit `start()`.
@@ -292,6 +292,24 @@ before constructing the equatable `ContentView`. Recovery-alert and environment 
 stay outside the root. Unrelated record revisions leave this root alone; the hosted root
 test reads the real production component, with an independent revision-render barrier before
 its silence assertion. Its noisy parent fixture separately preserves the router stress tests.
+
+## Photo library
+
+`PhotoLibraryManager` is an `@Observable @MainActor` NSObject subclass. It keeps its
+PhotoKit observer conformance and app-owned lifetime; AppCore injects the same instance
+through the typed environment. The authorization properties use the synchronous Combine
+bridges, while `libraryRevision` and `nextThumbnailContentRevision` are tracked counters.
+Caches, tasks and other implementation state are ignored.
+
+Collection-tree and asset-detail queries register `libraryRevision` before choosing the
+injected or live service path. Thumbnail queries register only the shared content counter,
+so metadata-only invalidations and authorization writes leave cells alone. A content edit
+may reevaluate each thumbnail once; unchanged per-asset task identities retain their image
+and issue no replacement decode. A changed image can render for invalidation, its fast
+image and its high-quality image, giving a structural upper bound of three evaluations.
+
+The NSObject/macro shape compiles and has injected-service liveness coverage. The final
+maintainer smoke run checks actual Photos callbacks and app lifecycle behavior.
 
 ## Tests
 

@@ -12,7 +12,7 @@ import Testing
   struct AuthorizationRefreshTests {
     @MainActor
     private struct Host: View {
-      @ObservedObject var library: PhotoLibraryManager
+      let library: PhotoLibraryManager
       let counter: BodyInvalidationCounter
       var body: some View {
         let route = library.isAuthorized ? "authorized" : "authorization"

@@ -16,7 +16,7 @@ import Testing
     enum LibraryReadSurface: CaseIterable { case content, timeline, album }
 
     private struct LibraryProbe: View {
-      @ObservedObject var library: PhotoLibraryManager
+      let library: PhotoLibraryManager
       let counter: BodyInvalidationCounter
       var body: some View {
         // swiftlint:disable:next redundant_discardable_let
@@ -148,7 +148,7 @@ import Testing
           .overlay(alignment: .bottomLeading) {
             CollectionRecordsProbe(store: collections, counter: counter)
           }
-          .environmentObject(library).environment(timeline).environment(collections)
+          .environment(library).environment(timeline).environment(collections)
           .environment(manager).environment(manager.progressState)
           .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
           .environment(\.bodyInvalidationCounter, counter)
@@ -508,8 +508,8 @@ import Testing
       }
     }
 
-    /// The album bound already passes; unrelated library changes still invalidate the other roots.
-    /// Measured maximum 1 for each root on d49d304, Xcode 26.6, across ten iterations.
+    /// A collection query registers the revision and may render once for its publication;
+    /// roots that do not read library content remain unchanged after the render barrier.
     @Test(arguments: LibraryReadSurface.allCases)
     func rootsSkipLibraryChangesTheyDoNotRead(surface: LibraryReadSurface) async throws {
       let f = try Fixture()
@@ -539,9 +539,7 @@ import Testing
         #expect(delta <= 1, "Root body delta: \(delta)")
         Attachment.record("\(surface): \(delta)", named: "root-body-count.txt")
         if surface != .album {
-          withKnownIssue("The root still observes every library publication") {
-            #expect(delta == 0)
-          }
+          #expect(delta == 0)
         }
       } cleanup: {
         await f.close()
