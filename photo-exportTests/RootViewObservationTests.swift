@@ -635,11 +635,19 @@ import Testing
         f.service.authorizationStatus = .denied
         f.service.isAuthorized = false
         f.library.refreshAuthorizationStatus()
-        #expect(await observe(in: f.window) { f.counter.renderedText[key] == ["false"] })
+        let deniedKey =
+          "library-probe:\(f.library.libraryRevision):\(f.library.authorizationStatus.rawValue)"
+        try #require(await observe(in: f.window) { f.counter.count(for: deniedKey) > 0 })
+        await f.quiesce()
+        #expect(f.counter.renderedText[key] == ["false"])
         f.service.authorizationStatus = .authorized
         f.service.isAuthorized = true
         f.library.refreshAuthorizationStatus()
-        #expect(await observe(in: f.window) { f.counter.renderedText[key] == ["true"] })
+        let grantedKey =
+          "library-probe:\(f.library.libraryRevision):\(f.library.authorizationStatus.rawValue)"
+        try #require(await observe(in: f.window) { f.counter.count(for: grantedKey) > 0 })
+        await f.quiesce()
+        #expect(f.counter.renderedText[key] == ["true"])
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         f.service.assetsByYearMonth["2026-9"] = [
           TestAssetFactory.makeAsset(id: "held", creationDate: date)

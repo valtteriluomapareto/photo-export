@@ -20,7 +20,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, Observable, PhotoLi
     get { bridgedRead(authorizationStatusBridge, \.authorizationStatus) }
     set { bridgedWrite(authorizationStatusBridge, \.authorizationStatus, newValue) }
   }
-  private let authorizationStatusBridge = ObservableCombineBridge(PHAuthorizationStatus.notDetermined)
+  private let authorizationStatusBridge = ObservableCombineBridge(
+    PHAuthorizationStatus.notDetermined)
 
   var isAuthorized: Bool {
     get { bridgedRead(isAuthorizedBridge, \.isAuthorized) }

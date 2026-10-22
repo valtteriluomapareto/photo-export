@@ -95,16 +95,14 @@ struct PhotoLibraryManagerObservationTests {
     withExtendedLifetime((statusSubscription, authorizedSubscription)) {}
   }
 
-  /// Revision notifications are missing; forgetting cached assets already stays silent.
+  /// Every invalidation notifies revision readers; forgetting cached assets stays silent.
   @Test func libraryRevisionNotifiesOnEveryInvalidation() {
     let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
     let probe = ObservationProbe { _ = library.libraryRevision }
 
     library.invalidateCache()
     library.invalidateCache(changedThumbnailAssetIDs: [])
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(probe.changeCount == 2)
-    }
+    #expect(probe.changeCount == 2)
     let afterInvalidation = probe.changeCount
     library.forgetPHAssetCache()
     #expect(probe.changeCount == afterInvalidation)
