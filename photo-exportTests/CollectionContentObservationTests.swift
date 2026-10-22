@@ -184,7 +184,23 @@ import Testing
     func settingsRecordsMembershipAndLiveBindingStillRender() async throws {
       let f = Fixture()
       var bodyCounts: [String] = []
-      defer { f.close() }
+      var phaseTrace: [String] = []
+      func capturePhase(_ phase: String) {
+        phaseTrace.append(
+          "phase=\(phase) bodies=\(f.counter.count(for: "collectionBody"))"
+            + " scans=\(f.counter.count(for: "summaryScan"))"
+            + " favoritesBodies=\(f.counter.count(for: "scope:favorites"))"
+            + " sharedBodies=\(f.counter.count(for: "scope:shared-album:shared"))"
+            + " refreshReturns=\(f.counter.count(for: "grid-refresh-finished"))"
+            + " libraryRevision=\(f.library.libraryRevision)"
+            + " recordRevision=\(f.records.mutationCounter)")
+      }
+      defer {
+        Attachment.record(
+          (["suite=\(f.defaultsName)"] + phaseTrace).joined(separator: "\n"),
+          named: "collection-phase-trace.txt")
+        f.close()
+      }
       let adjusted = TestAssetFactory.makeAsset(
         id: "adjusted", creationDate: Date(timeIntervalSince1970: 1_700_000_000),
         hasAdjustments: true)
@@ -209,6 +225,7 @@ import Testing
       bodyCounts.append(
         "loaded.bodies=\(f.counter.count(for: "collectionBody")) "
           + "loaded.scans=\(f.counter.count(for: "summaryScan"))")
+      capturePhase("loaded")
       let selectedBefore = f.counter.count(for: "selected:live")
       f.navigation.asset = live
       let rebound = await observe(in: f.window) {
@@ -219,6 +236,7 @@ import Testing
       bodyCounts.append(
         "selected.bodies=\(f.counter.count(for: "collectionBody")) "
           + "selected.scans=\(f.counter.count(for: "summaryScan"))")
+      capturePhase("selected")
 
       f.manager.versionSelection = .editedWithOriginals
       let originals = await observe(in: f.window) { f.counter.count(for: "summary:2/3") > 0 }
@@ -226,12 +244,14 @@ import Testing
       bodyCounts.append(
         "originals.bodies=\(f.counter.count(for: "collectionBody")) "
           + "originals.scans=\(f.counter.count(for: "summaryScan"))")
+      capturePhase("originals")
       f.manager.livePhotosPairedExport = true
       let paired = await observe(in: f.window) { f.counter.count(for: "summary:1/3") > 0 }
       try #require(paired)
       bodyCounts.append(
         "paired.bodies=\(f.counter.count(for: "collectionBody")) "
           + "paired.scans=\(f.counter.count(for: "summaryScan"))")
+      capturePhase("paired")
       let beforeStatus = f.counter.count(for: "summary:2/3")
       f.records.markVariantExported(
         assetId: adjusted.id, placement: f.favorite, variant: .original,
@@ -243,6 +263,7 @@ import Testing
       bodyCounts.append(
         "record.bodies=\(f.counter.count(for: "collectionBody")) "
           + "record.scans=\(f.counter.count(for: "summaryScan"))")
+      capturePhase("record")
       f.service.favoritesAssets.append(TestAssetFactory.makeAsset(id: "new-member"))
       f.library.libraryRevision += 1
       let refreshed = await observe(in: f.window) { f.counter.count(for: "summary:2/4") > 0 }
@@ -250,6 +271,7 @@ import Testing
       bodyCounts.append(
         "library.bodies=\(f.counter.count(for: "collectionBody")) "
           + "library.scans=\(f.counter.count(for: "summaryScan"))")
+      capturePhase("library")
       #expect(f.navigation.asset == live)
 
       let descriptor = PhotoCollectionDescriptor(
@@ -257,6 +279,7 @@ import Testing
         pathComponents: [], children: [])
       f.service.collectionTree.append(descriptor)
       f.library.invalidateCache(changedThumbnailAssetIDs: [])
+      capturePhase("cache-invalidated")
       let shared = try ExportPlacementResolver().placement(
         for: .sharedAlbum(collectionId: "shared"), collections: [descriptor], existingPlacements: []
       )
@@ -264,10 +287,12 @@ import Testing
       f.records.markVariantExported(
         assetId: adjusted.id, placement: shared, variant: .original,
         filename: "SHARED.JPG", exportedAt: Date())
+      capturePhase("records-updated")
       f.service.assetsBySharedAlbumLocalId["shared"] = [adjusted]
       f.navigation.asset = nil
       f.navigation.selection = .sharedAlbum(collectionId: "shared")
       f.navigation.title = "Updated shared title"
+      capturePhase("navigation-updated")
       let sharedRendered = await observe(in: f.window) {
         f.counter.count(for: "summary:1/1") > 0 && f.counter.count(for: "banner:true") > 0
           && f.counter.count(for: "title:Updated shared title") > 0
@@ -276,6 +301,7 @@ import Testing
       bodyCounts.append(
         "shared.bodies=\(f.counter.count(for: "collectionBody")) "
           + "shared.scans=\(f.counter.count(for: "summaryScan"))")
+      capturePhase("shared")
       let bannersBefore = f.counter.count(for: "banner:false")
       f.manager.versionSelection = .edited
       let bannerRemoved = await observe(in: f.window) {
@@ -285,6 +311,7 @@ import Testing
       bodyCounts.append(
         "banner.bodies=\(f.counter.count(for: "collectionBody")) "
           + "banner.scans=\(f.counter.count(for: "summaryScan"))")
+      capturePhase("banner")
       #expect(f.counter.count(for: "collectionBody") > 0)
       Attachment.record(bodyCounts.joined(separator: "\n"), named: "collection-body-measurement.txt")
     }
