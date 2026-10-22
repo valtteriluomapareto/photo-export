@@ -162,6 +162,7 @@ import Testing
     var whatsNewState: WhatsNewState?
     var progressState: ExportProgressState?
     var exportManager: ExportManager?
+    var photoLibraryManager: PhotoLibraryManager?
     var loginItemController: LoginItemController?
     var exportRecordStore: ExportRecordStore?
     var collectionExportRecordStore: CollectionExportRecordStore?
@@ -178,6 +179,7 @@ import Testing
     @Environment(WhatsNewState.self) private var whatsNewState: WhatsNewState?
     @Environment(ExportProgressState.self) private var progressState: ExportProgressState?
     @Environment(ExportManager.self) private var exportManager: ExportManager?
+    @Environment(PhotoLibraryManager.self) private var photoLibraryManager: PhotoLibraryManager?
     @Environment(LoginItemController.self) private var loginItemController: LoginItemController?
     @Environment(ExportRecordStore.self) private var exportRecordStore: ExportRecordStore?
     @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore:
@@ -196,6 +198,7 @@ import Testing
       reading.whatsNewState = whatsNewState
       reading.progressState = progressState
       reading.exportManager = exportManager
+      reading.photoLibraryManager = photoLibraryManager
       reading.loginItemController = loginItemController
       reading.exportRecordStore = exportRecordStore
       reading.collectionExportRecordStore = collectionExportRecordStore
@@ -228,6 +231,7 @@ import Testing
       #expect(reading.whatsNewState === core.whatsNewState)
       #expect(reading.progressState === core.exportManager.progressState)
       #expect(reading.exportManager === core.exportManager)
+      #expect(reading.photoLibraryManager === core.photoLibraryManager)
       #expect(reading.loginItemController === core.loginItemController)
       #expect(reading.exportRecordStore === core.exportRecordStore)
       #expect(reading.collectionExportRecordStore === core.collectionExportRecordStore)

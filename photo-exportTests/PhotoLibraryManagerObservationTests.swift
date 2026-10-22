@@ -17,9 +17,7 @@ struct PhotoLibraryManagerObservationTests {
     service.isAuthorized = false
 
     library.refreshAuthorizationStatus()
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(probe.changeCount == 1)
-    }
+    #expect(probe.changeCount == 1)
     let afterChange = probe.changeCount
     library.isAuthorized = false
     #expect(probe.changeCount == afterChange)
@@ -35,9 +33,7 @@ struct PhotoLibraryManagerObservationTests {
 
     service.authorizationStatus = .restricted
     library.refreshAuthorizationStatus()
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(probe.changeCount == 1)
-    }
+    #expect(probe.changeCount == 1)
   }
 
   /// Combine repeats and sibling silence already pass; the status dependency is missing.
@@ -52,9 +48,7 @@ struct PhotoLibraryManagerObservationTests {
     service.authorizationStatus = .limited
     service.isAuthorized = true
     library.refreshAuthorizationStatus()
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(status.changeCount == 1)
-    }
+    #expect(status.changeCount == 1)
     #expect(authorized.changeCount == 0)
     #expect(values == [true])
     withExtendedLifetime(subscription) {}
@@ -68,9 +62,7 @@ struct PhotoLibraryManagerObservationTests {
     let revision = ObservationProbe { _ = library.libraryRevision }
 
     library.isAuthorized = false
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(authorized.changeCount == 1)
-    }
+    #expect(authorized.changeCount == 1)
     #expect(status.changeCount == 0)
     #expect(revision.changeCount == 0)
   }
@@ -97,24 +89,20 @@ struct PhotoLibraryManagerObservationTests {
     #expect(authorized.changeCount == 0)
 
     library.isAuthorized = false
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(authorized.changeCount == 1)
-    }
+    #expect(authorized.changeCount == 1)
     #expect(status.changeCount == 0)
     #expect(authorizedValues == [true, false])
     withExtendedLifetime((statusSubscription, authorizedSubscription)) {}
   }
 
-  /// Revision notifications are missing; forgetting cached assets already stays silent.
+  /// Every invalidation notifies revision readers; forgetting cached assets stays silent.
   @Test func libraryRevisionNotifiesOnEveryInvalidation() {
     let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
     let probe = ObservationProbe { _ = library.libraryRevision }
 
     library.invalidateCache()
     library.invalidateCache(changedThumbnailAssetIDs: [])
-    withKnownIssue("The library does not register this Observation dependency yet") {
-      #expect(probe.changeCount == 2)
-    }
+    #expect(probe.changeCount == 2)
     let afterInvalidation = probe.changeCount
     library.forgetPHAssetCache()
     #expect(probe.changeCount == afterInvalidation)

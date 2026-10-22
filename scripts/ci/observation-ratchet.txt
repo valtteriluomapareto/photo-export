@@ -26,7 +26,7 @@ type|photo-export/PhotoLibrary/PhotoLibraryPersistentChangeAdapter.swift|PhotoLi
 # ObservableObject, so these stay as they are.
 external-publisher|photo-export/Export/ExportManager.swift|9
 
-total|published|27
+total|published|25
 total|environment-object|18
 total|environment-object-property|37
 total|state-object|7
