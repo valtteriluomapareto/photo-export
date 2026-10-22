@@ -553,14 +553,16 @@ import Testing
       try await withCleanup {
         f.show(.library)
         try await settle(f, key: "library-root")
+        #expect(f.counter.renderedText["import-title"] == nil)
         f.manager.importResult = ImportReport(
           matchedCount: 1, ambiguousCount: 0, unmatchedCount: 0, totalScanned: 1)
         f.manager.requestImportSheet()
         try #require(await observe(in: f.window) { f.window?.attachedSheet != nil })
         try #require(
           await observe(in: f.window?.attachedSheet) {
-            f.counter.renderedText["import-title"] == ["Import Complete"]
+            f.counter.renderedText["import-title"] != nil
           })
+        try #require(f.counter.renderedText["import-title"] == ["Import Complete"])
         f.manager.importResult = nil
         #expect(
           await observe(in: f.window?.attachedSheet) {
