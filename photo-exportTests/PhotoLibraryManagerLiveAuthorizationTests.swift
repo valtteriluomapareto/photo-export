@@ -61,7 +61,14 @@ struct PhotoLibraryManagerLiveAuthorizationTests {
   }
 
   private static func waitUntilDenied(_ manager: PhotoLibraryManager) async {
-    for await authorized in manager.isAuthorizedPublisher.values where !authorized { return }
+    let (values, continuation) = AsyncStream<Bool>.makeStream()
+    // Keep Combine demand on the main actor while the waiter suspends on the stream.
+    let subscription = manager.isAuthorizedPublisher.sink { continuation.yield($0) }
+    defer {
+      subscription.cancel()
+      continuation.finish()
+    }
+    for await authorized in values where !authorized { return }
   }
 
   @Test func progressiveFetchThrowsOnALiveDenialAndRefreshesTheCachedFlag() async {
