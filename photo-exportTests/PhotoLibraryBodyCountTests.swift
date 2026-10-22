@@ -211,12 +211,6 @@ import Testing
       #expect(globalDeltas.values.allSatisfy { $0 <= 3 }, "Global reload deltas: \(globalDeltas)")
       for id in ids { expectedCalls[id, default: 0] += 1 }
       #expect(f.hqCalls() == expectedCalls)
-      let measurements = [
-        "empty": emptyDeltas, "status": statusDeltas, "known": knownDeltas, "global": globalDeltas,
-      ]
-      Attachment.record(
-        try JSONSerialization.data(withJSONObject: measurements, options: [.sortedKeys]),
-        named: "thumbnail-body-counts.json")
     }
   }
 #endif

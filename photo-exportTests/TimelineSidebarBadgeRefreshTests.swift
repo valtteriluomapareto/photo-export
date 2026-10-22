@@ -146,7 +146,6 @@ import Testing
           f.manager.videoLayout = .subfolder
         }
         let layout = f.counter.count(for: key) - paused
-        Attachment.record("pause=\(pause) layout=\(layout)", named: "month-manager-bodies.txt")
         #expect(layout == 0)
       } cleanup: {
         await f.close()

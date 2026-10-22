@@ -20,10 +20,6 @@ import Testing
         await observe(in: sheet) {
           counter.renderedText["destination-recovery-header"] == [title]
         }, "The attached recovery header must record its actual title")
-      let actual = try #require(counter.renderedText["destination-recovery-header"])
-      Attachment.record(
-        "expected=\(title)\nactual=\(actual)\nsheet=\(window.attachedSheet === sheet)",
-        named: "recovery-header.txt")
     }
 
     private func close(_ window: NSWindow, core: AppCore, counter: BodyInvalidationCounter) async {

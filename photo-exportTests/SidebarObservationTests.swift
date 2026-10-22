@@ -203,16 +203,12 @@ import Testing
           { f.manager.pause() },
           { f.manager.cancelAndClear() },
         ]
-        var deltas: [Int] = []
         for mutation in mutations {
           try await ExportManagerRenderProbe.change(
             manager: f.manager, counter: f.counter, in: f.window, mutation)
           let delta = f.counter.count(for: "collections-sidebar") - bodies
-          deltas.append(delta)
           #expect(delta == 0)
         }
-        Attachment.record(
-          "baseline=\(bodies) deltas=\(deltas)", named: "static-sidebar-manager-bodies.txt")
       } cleanup: {
         await f.close()
       }

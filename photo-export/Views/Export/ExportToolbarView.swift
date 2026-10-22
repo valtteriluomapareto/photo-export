@@ -47,20 +47,6 @@ struct ExportToolbarView: ToolbarContent {
     }
   }
 
-  #if DEBUG
-    /// Reads the actual button environment; native controls are absent in hosted tests here.
-    private struct ExportControlProbe: View {
-      @Environment(\.isEnabled) private var isEnabled
-      @Environment(\.bodyInvalidationCounter) private var counter
-      let help: String
-
-      var body: some View {
-        counter?.recordText([String(isEnabled), help], for: "toolbar-export-control")
-        return Color.clear.frame(width: 0, height: 0)
-      }
-    }
-  #endif
-
   // MARK: - Settings cog
 
   /// In-app entry point to the Settings window. Sits between the AutoSync pill
@@ -153,7 +139,7 @@ struct ExportToolbarView: ToolbarContent {
       .tint(.accentColor)
       .keyboardShortcut("e", modifiers: .command)
       #if DEBUG
-        .background { ExportControlProbe(help: exportHelp) }
+        .background { ExportControlProbe(key: "toolbar-export-control", help: exportHelp) }
       #endif
       .disabled(!isPrimaryActionEnabled)
       .help(exportHelp)

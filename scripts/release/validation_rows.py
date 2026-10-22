@@ -194,6 +194,7 @@ CORE_ONLY = [
     "photo-export/Helpers/Logger+App.swift",
     "photo-export/App/DiagnosticReporter.swift",
     "photo-export/App/BodyInvalidationCounter.swift",
+    "photo-export/Views/Shared/ExportControlProbe.swift",
     "photo-export/App/WhatsNewState.swift",
     "photo-export/Views/Settings/AboutView.swift",
     "photo-export/Views/Settings/AdvancedSettingsView.swift",

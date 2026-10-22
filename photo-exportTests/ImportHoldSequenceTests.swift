@@ -11,22 +11,15 @@ struct ImportHoldSequenceTests {
   private final class Trace {
     private(set) var holds: [Bool] = []
     private(set) var flags: [Bool] = []
-    private(set) var events: [String] = []
     private var subscriptions = Set<AnyCancellable>()
 
     init(_ manager: ExportManager) {
       manager.isImportingPublisher.sink { [weak self] in
         self?.holds.append($0)
-        self?.events.append("hold:\($0)")
       }.store(in: &subscriptions)
       manager.isImportingFlagOnlyPublisher.sink { [weak self] in
         self?.flags.append($0)
-        self?.events.append("flag:\($0)")
       }.store(in: &subscriptions)
-    }
-
-    func record() {
-      Attachment.record(events.joined(separator: "\n"), named: "import-hold-sequence.txt")
     }
 
     func stop() { subscriptions.removeAll() }
@@ -75,7 +68,6 @@ struct ImportHoldSequenceTests {
       try await finishImport(h)
       #expect(trace.holds == [false, true, false])
       #expect(trace.flags == [false, true, false])
-      trace.record()
     } cleanup: {
       await close(h, trace: trace)
     }
@@ -92,7 +84,6 @@ struct ImportHoldSequenceTests {
       try #require(h.manager.previousBackupMissing)
       #expect(trace.holds == [false, true])
       #expect(trace.flags == [false, true, false])
-      trace.record()
     } cleanup: {
       await close(h, trace: trace)
     }
@@ -112,7 +103,6 @@ struct ImportHoldSequenceTests {
       try await finishImport(h)
       #expect(trace.holds == [false, true])
       #expect(trace.flags == [false, true, false, true, false])
-      trace.record()
     } cleanup: {
       await close(h, trace: trace)
     }
@@ -130,7 +120,6 @@ struct ImportHoldSequenceTests {
       h.manager.cancelAndClear()
       #expect(trace.holds == [false, true, false])
       #expect(trace.flags == [false, true, false])
-      trace.record()
     } cleanup: {
       await close(h, trace: trace)
     }
@@ -154,7 +143,6 @@ struct ImportHoldSequenceTests {
       #expect(stage.changeCount == 0)
       #expect(trace.holds == [false, true, false])
       #expect(trace.flags == [false, true, false])
-      trace.record()
     } cleanup: {
       await close(h, trace: trace)
     }

@@ -185,12 +185,6 @@ import Testing
         for (key, value) in before { #expect(count(key) - value <= limit, "\(key)") }
       }
 
-      func attach(_ before: [String: Int], surface: String) throws {
-        let after = measure(Array(before.keys))
-        let data = try JSONSerialization.data(withJSONObject: ["before": before, "after": after])
-        Attachment.record(data, named: "record-store-bodies-\(surface).json")
-      }
-
       func bitmap() -> NSBitmapImageRep? {
         guard let view = window.contentView,
           let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)
@@ -235,12 +229,6 @@ import Testing
         return count
       }
 
-      func attachTile(_ name: String) throws {
-        let captured = try #require(bitmap())
-        let data = try #require(captured.representation(using: .png, properties: [:]))
-        Attachment.record(data, named: "month-tile-\(name).png")
-      }
-
       func close() async {
         manager.cancelAndClear()
         window.orderOut(nil)
@@ -283,7 +271,6 @@ import Testing
           })
         try await f.barrier()
         f.expectBodies(before, atMost: 1)
-        try f.attach(before, surface: "month")
       } cleanup: {
         await f.close()
       }
@@ -299,7 +286,6 @@ import Testing
           })
         let cover = try #require(f.coverRegion())
         #expect(f.greenPixels(in: cover) == 0)
-        try f.attachTile("before")
         await f.quiesce()
         let before = f.measure(["year-content-body:2026"])
         for id in ["first", "second"] {
@@ -309,10 +295,8 @@ import Testing
         }
         f.clock.advance(by: 0.201)
         try #require(await observe(in: f.window) { f.greenPixels(in: cover) > 5 })
-        try f.attachTile("complete")
         try await f.barrier()
         f.expectBodies(before, atMost: 1)
-        try f.attach(before, surface: "year")
       } cleanup: {
         await f.close()
       }
@@ -352,9 +336,6 @@ import Testing
           try await f.barrier()
           f.expectBodies(own, atMost: 1)
           f.expectBodies(sibling, atMost: 0)
-          try f.attach(
-            own.merging(sibling) { first, _ in first },
-            surface: collection ? "collection" : "timeline")
         }
       } cleanup: {
         await f.close()

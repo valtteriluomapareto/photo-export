@@ -3,8 +3,6 @@ import SwiftUI
 #if DEBUG
   @MainActor
   final class BodyInvalidationCounter {
-    static let shared = BodyInvalidationCounter()
-
     private(set) var renderedText: [String: [String]] = [:]
     private(set) var tasks: [Task<Void, Never>] = []
     private var countsByKey: [String: Int] = [:]
@@ -36,21 +34,10 @@ import SwiftUI
   }
 
   extension EnvironmentValues {
-    /// Optional per-host instrumentation; isolated from the shared counter/reset.
+    /// Optional instrumentation owned by the hosted view under test.
     var bodyInvalidationCounter: BodyInvalidationCounter? {
       get { self[BodyInvalidationCounterKey.self] }
       set { self[BodyInvalidationCounterKey.self] = newValue }
     }
   }
 #endif
-
-extension View {
-  /// Records one body evaluation under `key`. No-op in Release.
-  @MainActor
-  func measureBodyInvalidations(_ key: String) -> Self {
-    #if DEBUG
-      BodyInvalidationCounter.shared.record(key)
-    #endif
-    return self
-  }
-}

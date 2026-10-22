@@ -134,7 +134,6 @@ struct CollectionContentView: View, Equatable {
         #endif
       }
     }
-    .measureBodyInvalidations("CollectionContentView")
   }
 
   #if DEBUG
