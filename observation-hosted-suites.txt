@@ -31,3 +31,4 @@ PhotoLibraryViewDependencyTests
 RecordStoreObservationTests
 RecordStoreViewObservationTests
 ImportHoldSequenceTests
+AutoExportSettingsSheetTests
