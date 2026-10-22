@@ -11,7 +11,7 @@ import SwiftUI
 struct YearContentView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   #if DEBUG

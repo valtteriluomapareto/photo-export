@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ExportToolbarView: ToolbarContent {
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   #if DEBUG

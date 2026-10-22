@@ -46,7 +46,7 @@ struct DestinationRecordRecoveryView: View {
   let onUseAsIs: (() -> Void)?
 
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(\.dismiss) private var dismiss
 

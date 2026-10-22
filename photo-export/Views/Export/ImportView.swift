@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Sheet view that shows import progress and results for "Import Existing Backup…".
 struct ImportView: View {
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager

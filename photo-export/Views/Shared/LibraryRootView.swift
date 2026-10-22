@@ -11,7 +11,7 @@ struct LibraryRootView: View {
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @Environment(WhatsNewState.self) private var whatsNewState
@@ -145,7 +145,7 @@ struct LibraryRootView: View {
           choosesFolderAfterImportSheet = true
           isShowingImportSheet = false
         })
-        .environmentObject(exportManager)
+
         .environment(exportManager)
       }
     )

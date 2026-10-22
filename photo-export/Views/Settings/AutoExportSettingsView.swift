@@ -171,7 +171,7 @@ struct AutoExportSettingsView: View {
         onUseAsIs: nil
       )
       .environmentObject(lifecycleCoordinator)
-      .environmentObject(exportManagerFromEnvironment)
+
       .environment(exportManagerFromEnvironment)
       .environmentObject(exportDestinationManager)
     }
@@ -188,7 +188,7 @@ struct AutoExportSettingsView: View {
         onUseAsIs: { safetyMonitor.confirmCurrentDestination() }
       )
       .environmentObject(lifecycleCoordinator)
-      .environmentObject(exportManagerFromEnvironment)
+
       .environment(exportManagerFromEnvironment)
       .environmentObject(exportDestinationManager)
     }
@@ -197,7 +197,7 @@ struct AutoExportSettingsView: View {
   // SwiftUI environment objects don't get auto-propagated across sheet
   // boundaries on macOS in all configurations, so re-pass them explicitly.
   // The sheet's view re-declares the same @EnvironmentObjects.
-  @EnvironmentObject private var exportManagerFromEnvironment: ExportManager
+  @Environment(ExportManager.self) private var exportManagerFromEnvironment
 
   // MARK: - Scope binding helper
 

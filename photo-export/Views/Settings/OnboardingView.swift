@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct OnboardingView: View {
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   let historyState: RecordStoreState

@@ -16,7 +16,7 @@ import SwiftUI
 /// message. While hidden it occupies zero height — the content area
 /// keeps its full real estate when the queue is idle.
 struct ExportProgressBar: View {
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   /// Read frequently-mutating progress state from a dedicated observable so the
   /// per-asset filename / per-job counter updates don't fan out as
   /// `ExportManager.objectWillChange` storms across every observing view (sidebar,
@@ -90,6 +90,7 @@ struct ExportProgressBar: View {
 
   #if DEBUG
     private func recordVisibility() {
+      counter?.record("export-progress-body")
       counter?.recordText([String(isVisible)], for: "progress-visible")
       if !isVisible { counter?.recordText([], for: "progress-message") }
     }

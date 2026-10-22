@@ -20,7 +20,6 @@ struct PhotoExportApp: App {
   // `photoExportEnvironment(core)`.
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var photoLibraryManager: PhotoLibraryManager
-  @StateObject private var exportManager: ExportManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @StateObject private var autoSyncManager: AutoSyncManager
   @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
@@ -41,7 +40,6 @@ struct PhotoExportApp: App {
     self.core = core
     _exportDestinationManager = StateObject(wrappedValue: core.exportDestinationManager)
     _photoLibraryManager = StateObject(wrappedValue: core.photoLibraryManager)
-    _exportManager = StateObject(wrappedValue: core.exportManager)
     _lifecycleCoordinator = StateObject(wrappedValue: core.lifecycleCoordinator)
     _autoSyncManager = StateObject(wrappedValue: core.autoSyncManager)
     _autoSyncScopeStore = StateObject(wrappedValue: core.autoSyncScopeStore)

@@ -10,7 +10,7 @@ import SwiftUI
 struct FolderContentView: View {
   @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   #if DEBUG

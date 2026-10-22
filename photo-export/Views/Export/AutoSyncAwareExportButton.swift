@@ -17,7 +17,7 @@ import SwiftUI
 /// re-render cost is negligible — the heavy LazyVGrid sitting *above* this button
 /// is insulated by its parent's `.equatable()` modifier.
 struct AutoSyncAwareExportButton<Label: View>: View {
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
 
   /// Short verb-phrase used in the dialog's "Run X Now" confirm button. Should
   /// match the visible label (e.g. "Export Year", "Export 3 Albums").
