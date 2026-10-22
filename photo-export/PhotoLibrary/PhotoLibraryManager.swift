@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Observation
 import Photos
 import SwiftUI
 import os
@@ -11,20 +12,28 @@ import os
 /// Independent conformances require every protocol method to be implemented, so a new
 /// requirement cannot silently inherit production PhotoKit behavior in screenshot mode.
 @MainActor
-final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService,
+final class PhotoLibraryManager: NSObject, ObservableObject, Observable, PhotoLibraryService,
   PHAssetCacheControlling
 {
-  /// Published properties to track authorization status
-  @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
-  @Published var isAuthorized: Bool = false
-  /// `$authorizationStatus` for subscribers outside this type: synchronous, delivered before the
-  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
-  var authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never> {
-    $authorizationStatus.eraseToAnyPublisher()
+  /// Authorization changes retain synchronous Combine delivery and register Observation reads.
+  var authorizationStatus: PHAuthorizationStatus {
+    get { bridgedRead(authorizationStatusBridge, \.authorizationStatus) }
+    set { bridgedWrite(authorizationStatusBridge, \.authorizationStatus, newValue) }
   }
-  /// `$isAuthorized` for subscribers outside this type: synchronous, delivered before the
-  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
-  var isAuthorizedPublisher: AnyPublisher<Bool, Never> { $isAuthorized.eraseToAnyPublisher() }
+  private let authorizationStatusBridge = ObservableCombineBridge(PHAuthorizationStatus.notDetermined)
+
+  var isAuthorized: Bool {
+    get { bridgedRead(isAuthorizedBridge, \.isAuthorized) }
+    set { bridgedWrite(isAuthorizedBridge, \.isAuthorized, newValue) }
+  }
+  private let isAuthorizedBridge = ObservableCombineBridge(false)
+
+  /// Synchronous, delivered before storage, and replaying the current value.
+  var authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never> {
+    authorizationStatusBridge.publisher
+  }
+  /// Synchronous, delivered before storage, and replaying the current value.
+  var isAuthorizedPublisher: AnyPublisher<Bool, Never> { isAuthorizedBridge.publisher }
 
   /// Bumps on every `photoLibraryDidChange`. Sidebar/grid views that depend on the
   /// current PhotoKit state observe this to trigger a re-fetch — without it, a user who
@@ -33,6 +42,23 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// purpose is to signal that dependent views should refresh. Sidebar count tasks
   /// restart with the revision; asset grids use `.onChange` to refresh in place.
   @Published var libraryRevision: Int = 0
+
+  private let observationRegistrar = ObservationRegistrar()
+
+  private func bridgedRead<Value>(
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<PhotoLibraryManager, Value>
+  ) -> Value {
+    observationRegistrar.access(self, keyPath: keyPath)
+    return bridge.value
+  }
+
+  private func bridgedWrite<Value>(
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<PhotoLibraryManager, Value>,
+    _ newValue: Value
+  ) {
+    objectWillChange.send()
+    bridge.write(newValue) { observationRegistrar.withMutation(of: self, keyPath: keyPath, $0) }
+  }
 
   /// When the user turns on "Export Live Photos as paired image + video",
   /// `descriptor(from:)` enables a `PHAssetResource`-enumeration fallback to catch
