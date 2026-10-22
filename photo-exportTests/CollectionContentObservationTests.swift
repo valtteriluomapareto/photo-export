@@ -216,6 +216,9 @@ import Testing
       }
       try #require(rebound, "A live binding change must update the pane's selected-thumbnail input")
       #expect(f.navigation.asset == live)
+      bodyCounts.append(
+        "selected.bodies=\(f.counter.count(for: "collectionBody")) "
+          + "selected.scans=\(f.counter.count(for: "summaryScan"))")
 
       f.manager.versionSelection = .editedWithOriginals
       let originals = await observe(in: f.window) { f.counter.count(for: "summary:2/3") > 0 }
