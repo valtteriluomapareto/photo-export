@@ -349,6 +349,7 @@ struct RecordStoreMaintenanceTests {
     try await withCleanup {
       await f.replacement.entered.waitForEnter(count: 1)
       manager.cancelAndClear()
+      try #require(f.closed)
       #expect(manager.queueCount == 0 && !manager.isRunning && !manager.isEnqueueingAll)
       writer.checkpoint = nil
       start()
@@ -409,7 +410,7 @@ struct RecordStoreMaintenanceTests {
       }
       try #require(
         await eventually("parked completion reaches admission") {
-          f.waiters > 0 || writerFinished.value
+          f.waiters > 0 || parkedContainsCommit() || writerFinished.value
         })
       #expect(f.closed)
       #expect(!parkedContainsCommit())
