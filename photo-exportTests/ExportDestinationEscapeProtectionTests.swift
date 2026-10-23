@@ -107,6 +107,23 @@ struct ExportDestinationEscapeProtectionTests {
     }
   }
 
+  @Test(arguments: [false, true])
+  func sameInodeReparentCannotEscapeThroughCachedLeafOrAncestor(ancestor: Bool) throws {
+    let (manager, _) = try makeManagerAndRoot()
+    let directory = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
+    let originalIdentity = try FileIOService().directoryIdentity(at: directory)
+    let moved = TestScratch.directory("ReparentedDirectory")
+    let source = ancestor ? directory.deletingLastPathComponent() : directory
+    try FileManager.default.moveItem(at: source, to: moved)
+    let movedDirectory = ancestor ? moved.appendingPathComponent("02", isDirectory: true) : moved
+    #expect(try FileIOService().directoryIdentity(at: movedDirectory) == originalIdentity)
+    try FileManager.default.createSymbolicLink(at: source, withDestinationURL: moved)
+    #expect(try FileIOService().directoryIdentity(at: directory) == originalIdentity)
+    #expect(throws: ExportDestinationManager.ExportDestinationError.self) {
+      _ = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
+    }
+  }
+
   /// Keeps resolution on the real manager while scratch URLs need no security bookmark.
   private final class ScratchDestination: ExportDestination {
     let manager: ExportDestinationManager
