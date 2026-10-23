@@ -423,6 +423,7 @@ final class ExportManager {
   // MARK: - Dependencies
   private let logger = Logger.app(.exportOperations)
   let photoLibraryService: any PhotoLibraryService
+  private let photoKitReader: any PhotoKitReading
   /// Seam for dropping `PhotoLibraryManager`'s long-lived PHAsset cache
   /// between bulk-export iterations. See `PHAssetCacheControlling` for the
   /// memory-watermark backstory.
@@ -627,6 +628,7 @@ final class ExportManager {
 
   init(
     photoLibraryService: any PhotoLibraryService,
+    photoKitReader: (any PhotoKitReading)? = nil,
     exportDestination: any ExportDestination,
     exportRecordStore: ExportRecordStore,
     collectionExportRecordStore: CollectionExportRecordStore,
@@ -647,6 +649,7 @@ final class ExportManager {
     self.userDefaults = userDefaults
     self.runActivity = runActivity ?? SystemExportRunActivity()
     self.photoLibraryService = photoLibraryService
+    self.photoKitReader = photoKitReader ?? PhotoLibraryServiceReader(service: photoLibraryService)
     self.exportDestination = exportDestination
     self.exportRecordStore = exportRecordStore
     self.phAssetCacheControl = phAssetCacheControl
@@ -2049,8 +2052,13 @@ final class ExportManager {
           userInfo: [NSLocalizedDescriptionKey: "Timeline placement has no year and month"])
       }
 
-      guard let descriptor = photoLibraryService.fetchAssetDescriptor(for: job.assetLocalIdentifier)
-      else {
+      let metadata = await photoKitReader.readAsset(
+        id: job.assetLocalIdentifier, livePhotosPaired: job.livePhotosPaired)
+      try throwIfCancelledOrStale(gen)
+      guard exportDestination.selectedFolderURL == root,
+        recordStoreRouter.destinationId(for: job.placement) == destinationId
+      else { throw CancellationError() }
+      guard let metadata else {
         try throwIfCancelledOrStale(gen)
         await recordVariantFailed(
           assetId: job.assetLocalIdentifier, placement: job.placement, variant: .original,
@@ -2059,6 +2067,7 @@ final class ExportManager {
           "Asset not found for id: \(job.assetLocalIdentifier, privacy: .public)")
         return nil
       }
+      let descriptor = metadata.descriptor
       let required = requiredVariants(
         for: descriptor, selection: job.selection,
         policy: job.placement.kind.variantPolicy,
@@ -2133,7 +2142,7 @@ final class ExportManager {
       try variantExporter.checkOwnership(destinationContext, placement: job.placement)
       let relPath = effectiveRelPath
 
-      let resources = photoLibraryService.resources(for: descriptor.id)
+      let resources = metadata.resources
       let resourceSummary = resources.map { "\($0.type.rawValue):\($0.originalFilename)" }.joined(
         separator: ", ")
       logger.debug("Asset resources: \(resourceSummary, privacy: .public)")

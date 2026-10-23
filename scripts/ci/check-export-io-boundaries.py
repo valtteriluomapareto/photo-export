@@ -10,7 +10,8 @@ from swift_source import code_only
 
 PATTERNS = {
     'filesystem': re.compile(r'\bFileManager\b|\.\s*(?:resourceValues|checkResourceIsReachable|resolvingSymlinksInPath)\s*\('),
-    'photos': re.compile(r'\bPHAsset\s*\.\s*fetch[A-Za-z_0-9]*\s*\('),
+    'photos': re.compile(r'\bPHAsset\s*\.\s*fetch[A-Za-z_0-9]*\s*\(|\bPHAssetResource\s*\.\s*assetResources\s*\('),
+    'job_metadata': re.compile(r'\bphotoLibraryService\s*\.\s*(?:fetchAssetDescriptor|resources)\s*\('),
 }
 # These adapters intentionally own platform calls; orchestration files receive no exemption.
 BOUNDARIES = {
@@ -19,6 +20,7 @@ BOUNDARIES = {
     'Export/BackupScanner.swift': {'filesystem'},
     'Export/BackupScanner+Collections.swift': {'filesystem'},
     'Export/ProductionAssetResourceWriter.swift': {'photos'},
+    'Export/ProductionPhotoKitReader.swift': {'photos'},
     'Export/ProductionMediaRenderer.swift': {'photos'},
     'Destination/DestinationValidationProbe.swift': {'filesystem'},
 }
