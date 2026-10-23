@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Observation
 import SwiftUI
 import Testing
 
@@ -9,6 +10,19 @@ import Testing
   @MainActor
   @Suite(.timeLimit(.minutes(2)), .serialized)
   struct ManualExportFeedbackViewTests {
+    @Observable
+    final class RenderTick { var value = 0 }
+
+    private struct RenderBarrier: View {
+      let tick: RenderTick
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("progress-barrier:\(tick.value)")
+        Color.clear.frame(width: 1, height: 1)
+      }
+    }
+
     @MainActor
     private final class LoginService: LoginItemService {
       var status: LoginItemController.Status = .notRegistered
@@ -29,6 +43,7 @@ import Testing
       let loginService = LoginService()
       var loginItem: LoginItemController { core.loginItemController }
       let counter = BodyInvalidationCounter()
+      let tick = RenderTick()
       var window: NSWindow?
       var hosted: NSView?
       var settingsWindow: NSWindow?
@@ -51,6 +66,7 @@ import Testing
 
       func show(
         initialSize: CGSize = CGSize(width: 800, height: 120),
+        progress: ExportProgressState? = nil,
         successDelay: @escaping @Sendable () async throws -> Void = {}
       ) {
         let hosted = NSHostingView(
@@ -61,7 +77,8 @@ import Testing
               selectedAtOpen = defaults.string(forKey: SettingsTab.storageKey)
             }
           )
-          .environment(manager).environment(manager.progressState)
+          .environment(manager).environment(progress ?? manager.progressState)
+          .overlay { RenderBarrier(tick: tick, counter: counter) }
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let owned = NSWindow(
           contentRect: NSRect(origin: CGPoint(x: -10000, y: -10000), size: initialSize),
@@ -71,6 +88,13 @@ import Testing
         self.hosted = hosted
         window = owned
         owned.orderFront(nil)
+      }
+
+      func renderBarrier() async throws {
+        tick.value += 1
+        let key = "progress-barrier:\(tick.value)"
+        try #require(await observe(in: window) { counter.count(for: key) > 0 })
+        window?.contentView?.layoutSubtreeIfNeeded()
       }
 
       func showSettings() {
@@ -124,6 +148,41 @@ import Testing
       try #require(settled, "The fitted summary window did not settle")
       #expect(window.contentLayoutRect.height >= hosted.fittingSize.height)
       return window.contentLayoutRect.size
+    }
+
+    @Test
+    func progressContentWaitsForClockTicksAndShowsLatestValues() async throws {
+      let f = Fixture()
+      defer { f.close() }
+      let clock = TestClock()
+      let progress = ExportProgressState()
+      progress.totalJobsEnqueued = 4
+      progress.currentAssetFilename = "first.JPG"
+      clock.advance(by: 0.2)
+      f.show(progress: progress)
+      try #require(await observe(in: f.window) {
+        f.counter.renderedText["progress-message"] == ["0/4 assets"]
+          && f.counter.renderedText["progress-asset"]?.first == "first.JPG"
+      })
+      try await f.renderBarrier()
+      let bodies = f.counter.count(for: "export-progress-body")
+      progress.totalJobsCompleted = 1
+      progress.currentAssetFilename = "intermediate.JPG"
+      progress.totalJobsCompleted = 2
+      progress.totalJobsEnqueued = 5
+      progress.currentAssetFilename = "latest.JPG"
+      progress.renderActivity = .rendering
+      try await f.renderBarrier()
+      #expect(progress.totalJobsCompleted == 2)
+      #expect(progress.totalJobsEnqueued == 5)
+      #expect(f.counter.count(for: "export-progress-body") - bodies == 0)
+      #expect(f.counter.renderedText["progress-message"] == ["0/4 assets"])
+      clock.advance(by: 0.2)
+      try #require(await observe(in: f.window) {
+        f.counter.renderedText["progress-message"] == ["2/5 assets"]
+          && f.counter.renderedText["progress-asset"] == ["latest.JPG", "rendering"]
+      })
+      #expect(f.counter.count(for: "export-progress-body") > bodies)
     }
 
     @Test(arguments: [120.0, 600.0])

@@ -88,6 +88,10 @@ struct ExportProgressBar: View {
 
   #if DEBUG
     private func recordVisibility() {
+      counter?.record("export-progress-body")
+      counter?.recordText(
+        [progressState.currentAssetFilename ?? "", progressState.renderActivity.map { String(describing: $0) } ?? ""],
+        for: "progress-asset")
       counter?.recordText([String(isVisible)], for: "progress-visible")
       if !isVisible { counter?.recordText([], for: "progress-message") }
     }
