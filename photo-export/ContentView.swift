@@ -17,12 +17,14 @@ struct ContentView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @Environment(\.screenshotSurfaceKey) private var screenshotSurfaceKey
-  /// Read only by the onboarding auto-skip in `onAppear`. Plain references rather than
-  /// environment objects, so destination and record publications don't re-run the root body.
+  /// Action-only references for onboarding auto-skip in `onAppear`, with no body subscriptions.
+  /// History readiness arrives separately as a render-time value from the app owner.
   let destinationManager: ExportDestinationManager
   let recordStore: ExportRecordStore
+  /// Render-time readiness supplied by the observing app owner, independently of the action-only refs.
+  let timelineHistoryState: RecordStoreState
 
   // Onboarding — default to false for new users; existing users are auto-detected in .onAppear
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -47,11 +49,12 @@ struct ContentView: View {
     #endif
     Group {
       if Self.forceOnboarding || (photoLibraryManager.isAuthorized && !hasCompletedOnboarding) {
-        OnboardingView {
+        OnboardingView(historyState: timelineHistoryState) {
           hasCompletedOnboarding = true
         }
       } else if photoLibraryManager.isAuthorized {
-        LibraryRootView(screenshotSurfaceKey: screenshotSurfaceKey)
+        LibraryRootView(
+          screenshotSurfaceKey: screenshotSurfaceKey, timelineHistoryState: timelineHistoryState)
       } else {
         AuthorizationView(photoLibraryManager: photoLibraryManager)
       }
@@ -76,10 +79,11 @@ struct ContentView: View {
 extension ContentView: Equatable {
   /// Compares the injected references by identity, for `.equatable()` at the call site.
   /// The `@AppStorage` property otherwise makes SwiftUI re-run this body every time
-  /// `App.body` rebuilds the view. The view's own `@AppStorage` and `@EnvironmentObject`
-  /// changes still re-run it.
+  /// `App.body` rebuilds the view. Its preferences and tracked environment reads still
+  /// invalidate the body. History-readiness value changes also reach the active child.
   static func == (lhs: ContentView, rhs: ContentView) -> Bool {
     lhs.destinationManager === rhs.destinationManager && lhs.recordStore === rhs.recordStore
+      && lhs.timelineHistoryState == rhs.timelineHistoryState
   }
 }
 
@@ -88,7 +92,7 @@ struct AuthorizationView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @ObservedObject var photoLibraryManager: PhotoLibraryManager
+  let photoLibraryManager: PhotoLibraryManager
 
   var body: some View {
     #if DEBUG
@@ -163,8 +167,8 @@ struct YearRow: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var exportManager: ExportManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @Environment(ExportManager.self) private var exportManager
+  @Environment(ExportRecordStore.self) private var exportRecordStore
 
   let year: Int
   let totalAssets: Int
@@ -179,6 +183,8 @@ struct YearRow: View {
       livePhotosPaired: exportManager.livePhotosPairedExport)
     let total = yearTotal()
     #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("timeline-year-body:\(year)")
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([], for: "timeline-year:\(year)")
     #endif
@@ -241,13 +247,11 @@ struct MonthRow: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var exportManager: ExportManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  /// Reads `currentJobPlacement` from the live-progress observable rather than the
-  /// manager, so the per-job placement mutations don't ripple through every view
-  /// holding `ExportManager` as `@EnvironmentObject`. `MonthRow` still observes
-  /// `ExportManager` for `versionSelection`, `livePhotosPairedExport` and the queue badge.
-  @EnvironmentObject private var progressState: ExportProgressState
+  @Environment(ExportManager.self) private var exportManager
+  @Environment(ExportRecordStore.self) private var exportRecordStore
+  /// Reads the in-flight placement directly from its progress owner. The row separately
+  /// tracks the manager's version selection, Live Photo setting and queue-count query.
+  @Environment(ExportProgressState.self) private var progressState
 
   let year: Int
   let month: Int
@@ -261,8 +265,8 @@ struct MonthRow: View {
       selection: selection,
       livePhotosPaired: exportManager.livePhotosPairedExport)
     // `queuedCount(year:month:)` reads the queue coordinator's unpublished per-month counts.
-    // The "N left" badge relies on the manager publishing `queueCount` (and, for a job
-    // starting, `progressState` publishing `currentJobPlacement`) in the same turn.
+    // Its tracked contents counter updates the "N left" badge even when a first dequeue
+    // leaves the total queue depth unchanged.
     let queued = exportManager.queuedCount(year: year, month: month)
     // Only the row owning the currently-in-flight job spins. Other rows with queued work
     // show just the "N left" text — a spinner on every queued row of a Year export reads
@@ -272,6 +276,8 @@ struct MonthRow: View {
     let inFlight = progressState.currentJobPlacement?.timelineYearMonth
     let isActive = inFlight?.year == year && inFlight?.month == month
     #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("timeline-month-body:\(year)-\(month)")
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([], for: "timeline-month:\(year)-\(month)")
     #endif

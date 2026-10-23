@@ -198,4 +198,53 @@ struct TimelineSidebarCountsTests {
     #expect(loader.assetCountsByYearMonth["2025-6"] == 1)
     #expect(loader.assetCountsByYearMonth["2010-6"] == 1)
   }
+
+  // MARK: - Observation
+
+  /// The sidebar and year pane own the loader as `@State`, which builds a new one on every
+  /// view init and keeps only the first, so building one must not touch the library.
+  @Test func initMakesNoServiceCalls() async {
+    let service = RecordingPhotoLibraryService()
+    let loader = TimelineSidebarCounts(service: service)
+    // Work the init schedules on the main actor would have run by now.
+    for _ in 0..<10 { await Task.yield() }
+    #expect(service.calls.isEmpty)
+    withExtendedLifetime(loader) {}
+  }
+
+  /// `YearRow`, `MonthRow` and the year tiles render from `countsByYearMonth`: each month
+  /// lands its total, then its pair, and an identical refresh or a second reset changes
+  /// nothing and must not re-render them.
+  @Test func countReadersAreNotifiedPerLandedValueOnly() async {
+    let service = FakePhotoLibraryService()
+    service.cachedCountOverride = { _, adjusted in adjusted ? 0 : 1 }
+    let loader = TimelineSidebarCounts(service: service)
+    let probe = ObservationProbe {
+      _ = loader.countsByYearMonth
+      _ = loader.monthsWithAssets(for: 2025)
+    }
+    await loader.loadCounts(forYears: [2025])
+    #expect(probe.changeCount == 24)
+    await loader.loadCounts(forYears: [2025])
+    #expect(probe.changeCount == 24)
+    loader.reset()
+    #expect(probe.changeCount == 25)
+    loader.reset()
+    #expect(probe.changeCount == 25)
+  }
+
+  /// `countsByYearMonth` is written by hand around its bridge, so a wrong key path would notify
+  /// `lastError`'s readers instead of the counts'.
+  @Test func countsWriteNotifiesOnlyItsOwnReaders() async {
+    let service = FakePhotoLibraryService()
+    service.cachedCountOverride = { scope, adjusted in
+      scope == .timeline(year: 2025, month: 1) && !adjusted ? 1 : 0
+    }
+    let loader = TimelineSidebarCounts(service: service)
+    let counts = ObservationProbe { _ = loader.countsByYearMonth }
+    let lastError = ObservationProbe { _ = loader.lastError }
+    await loader.loadCounts(forYears: [2025])
+    #expect(counts.changeCount > 0)
+    #expect(lastError.changeCount == 0)
+  }
 }

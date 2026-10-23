@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Observation
 import os
 
 /// Thread-safe-ish store using a serial IO queue for disk operations and in-memory map for queries.
@@ -14,8 +15,9 @@ import os
 /// - Legacy flat records (single filename/status fields) decode into a synthesized `.original` variant.
 /// - On load, any variant left as `.inProgress` is converted to `.failed` with `ExportVariantRecovery.interruptedMessage`
 ///   because no in-progress state survives app restart.
+@Observable
 @MainActor
-final class ExportRecordStore: ObservableObject {
+final class ExportRecordStore {
   struct Constants {
     static let directoryName = "ExportRecords"
     static let logFileName = "export-records.jsonl"
@@ -27,7 +29,7 @@ final class ExportRecordStore: ObservableObject {
   private let ioQueue = DispatchQueue(
     label: "com.valtteriluoma.photo-export.records-io", qos: .utility)
 
-  private(set) var recordsById: [String: ExportRecord] = [:]
+  @ObservationIgnored private(set) var recordsById: [String: ExportRecord] = [:]
 
   /// Incrementally-maintained per-`(year, month)` counters that back the public count
   /// queries. Without these, `recordCount`, `monthSummary`, `sidebarSummary`, and the
@@ -87,7 +89,7 @@ final class ExportRecordStore: ObservableObject {
     var pairedVideoIncomplete: Int = 0
     static let zero = MonthCounters()
   }
-  private(set) var monthCounters: [MonthKey: MonthCounters] = [:]
+  @ObservationIgnored private(set) var monthCounters: [MonthKey: MonthCounters] = [:]
 
   /// A variant's folder: its month plus the subfolder it was written into.
   struct ClaimFolder: Hashable, Sendable {
@@ -105,50 +107,62 @@ final class ExportRecordStore: ObservableObject {
   /// a session's first export, so a launch that exports nothing never pays for it (about
   /// 0.4 s per 500k records); kept with `monthCounters` after that. Nil until then, and again
   /// whenever the records are replaced wholesale.
-  private var filenameClaims: FilenameClaims<ClaimFolder>?
+  @ObservationIgnored private var filenameClaims: FilenameClaims<ClaimFolder>?
 
   /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
-  @Published private(set) var state: RecordStoreState = .unconfigured
-  @Published private(set) var persistenceError: String?
-  private var hasUnsavedChanges = false
+  private(set) var state: RecordStoreState {
+    get {
+      access(keyPath: \.state)
+      return stateBridge.value
+    }
+    set { stateBridge.write(newValue) { withMutation(keyPath: \.state, $0) } }
+  }
+  private let stateBridge = ObservableCombineBridge<RecordStoreState>(.unconfigured)
+  var statePublisher: AnyPublisher<RecordStoreState, Never> { stateBridge.publisher }
+  private(set) var persistenceError: String?
+  @ObservationIgnored private var hasUnsavedChanges = false
   // Immediate ownership token, separate from coalesced UI notifications. Any
   // configuration, accepted mutation, reset or newer reconciliation invalidates probes.
-  private var reconciliationRevision: UInt64 = 0
-  private var finalCommitContext: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>?
+  @ObservationIgnored private var reconciliationRevision: UInt64 = 0
+  @ObservationIgnored private var finalCommitContext:
+    FinalCommitContext<[String: ExportRecord], ExportRecordMutation>?
   // Only completion deltas survive a corrupt load; full snapshots must not bypass
   // the corruption alert or its explicit reset/forensic-backup path.
-  private var deferredFinalCompletions: [String: [() -> Void]] = [:]
+  @ObservationIgnored private var deferredFinalCompletions: [String: [() -> Void]] = [:]
   // Final commits acknowledged while their destination loaded, landed once it has finished.
-  private var commitsLandedWhileLoading: [String: [() -> Void]] = [:]
-  private var configuredDestinationId: String?
-  var destinationId: String? { configuredDestinationId }
+  @ObservationIgnored private var commitsLandedWhileLoading: [String: [() -> Void]] = [:]
+  @ObservationIgnored private var configuredDestinationId: String?
+  var destinationId: String? {
+    trackRecords()
+    return configuredDestinationId
+  }
   // Failed writes must survive destination switches until the user can retry saving.
-  private var pendingRecovery: [String: [String: ExportRecord]] = [:]
+  @ObservationIgnored private var pendingRecovery: [String: [String: ExportRecord]] = [:]
   // Each configure starts a new generation; only the newest load is installed.
-  private var loadGeneration: UInt64 = 0
+  @ObservationIgnored private var loadGeneration: UInt64 = 0
   private let latestLoad = RecordStoreLoadGeneration()
-  private var settleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+  @ObservationIgnored private var settleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
-  // Published bump used to notify SwiftUI of logical changes
-  @Published private(set) var mutationCounter: Int = 0
+  /// Coalesced revision registered by queries over the ignored record storage.
+  private(set) var mutationCounter: Int {
+    get {
+      access(keyPath: \.mutationCounter)
+      return mutationCounterBridge.value
+    }
+    set { mutationCounterBridge.write(newValue) { withMutation(keyPath: \.mutationCounter, $0) } }
+  }
+  private let mutationCounterBridge = ObservableCombineBridge(0)
+  /// Synchronous revision delivery before storage, replaying the current value to new subscribers.
+  var mutationCounterPublisher: AnyPublisher<Int, Never> { mutationCounterBridge.publisher }
 
-  /// Mirror of `ExportManager.convertHEICToJPEG`. Kept in sync by the manager
-  /// (init + didSet on the published property). Read by `isExported(asset:
-  /// selection:)` and `monthSummary(assets:selection:)` so view-side
-  /// `@EnvironmentObject` callers see the right answers without having to
-  /// thread the toggle through five call sites (timeline grid, year tiles,
-  /// sidebar badges, content-pane summary, etc.).
-  ///
-  /// `@Published` so views with `@EnvironmentObject private var
-  /// exportRecordStore: ExportRecordStore` re-render when the toggle flips.
-  /// `MonthContentView` is `Equatable` over a stable value set and is not
-  /// otherwise re-evaluated on toggle changes, so without the publish here
-  /// "exported" thumbnail badges would stay stale until the next mutation.
-  /// Change rate is zero outside user-toggle clicks, so no render-storm
-  /// concern.
-  @Published var convertHEICToJPEG: Bool = false
+  /// Mirrors the manager's conversion setting at initialization and on each setting write.
+  /// Queries register this flag so conversion changes refresh exported badges without waiting
+  /// for another coalesced record notification.
+  var convertHEICToJPEG: Bool = false
   private let notificationClock: any AutoSyncClock
-  private lazy var changeNotifier = RecordStoreChangeNotifier(clock: notificationClock) {
+  @ObservationIgnored private lazy var changeNotifier = RecordStoreChangeNotifier(
+    clock: notificationClock
+  ) {
     [weak self] in
     self?.mutationCounter &+= 1
   }
@@ -161,11 +175,11 @@ final class ExportRecordStore: ObservableObject {
   /// `ExportRecordsDirectoryCoordinator`, which needs to manage
   /// the per-destination subdirectory before this store configures.
   let storeRootURL: URL
-  private var currentStoreDirURL: URL?
+  @ObservationIgnored private var currentStoreDirURL: URL?
   typealias RecordFile = JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>
   /// JSONL persistence for the currently configured destination. `nil` when the store is
   /// unconfigured (no destination selected). Reconstructed on every `configure(for:)`.
-  private var jsonl: RecordFile?
+  @ObservationIgnored private var jsonl: RecordFile?
 
   /// `baseDirectoryURL` is the parent of the per-destination folders; the app passes
   /// `AppComposition.recordsRoot`.
@@ -250,7 +264,7 @@ final class ExportRecordStore: ObservableObject {
   }
 
   /// Loads that finished, applied or discarded. Exists for tests, to wait on progress.
-  private(set) var finishedLoadCount = 0
+  @ObservationIgnored private(set) var finishedLoadCount = 0
 
   /// Tasks waiting in `waitUntilSettled()`. Exists for tests, to wait on progress.
   var pendingSettleWaiterCount: Int { settleWaiters.count }
@@ -651,15 +665,27 @@ final class ExportRecordStore: ObservableObject {
     asset: AssetDescriptor, selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> Bool {
+    trackRecords()
+    let convertHEIC = convertHEICToJPEG
+    return isExportedUntracked(
+      asset: asset, selection: selection, livePhotosPaired: livePhotosPaired,
+      convertHEIC: convertHEIC)
+  }
+
+  private func isExportedUntracked(
+    asset: AssetDescriptor, selection: ExportVersionSelection,
+    livePhotosPaired: Bool, convertHEIC: Bool
+  ) -> Bool {
     guard let record = recordsById[asset.id] else { return false }
     return ExportCompletionPolicy.isComplete(
       variants: record.variants, asset: asset, selection: selection, policy: .standard,
-      convertHEICToJPEG: convertHEICToJPEG,
+      convertHEICToJPEG: convertHEIC,
       livePhotosPaired: livePhotosPaired)
   }
 
   func exportInfo(assetId: String) -> ExportRecord? {
-    recordsById[assetId]
+    trackRecords()
+    return recordsById[assetId]
   }
 
   /// Whether a record names `filename` in the folder for `year`/`month` and `subfolder`,
@@ -668,7 +694,8 @@ final class ExportRecordStore: ObservableObject {
     _ filename: String, year: Int, month: Int, subfolder: String?,
     exceptVariant variant: ExportVariant, of assetId: String
   ) -> Bool {
-    isFilenameClaimed(
+    trackRecords()
+    return isFilenameClaimed(
       filename, year: year, month: month, subfolder: subfolder, assetId: assetId,
       excluding: { $0 == variant })
   }
@@ -679,7 +706,8 @@ final class ExportRecordStore: ObservableObject {
     _ filename: String, year: Int, month: Int, subfolder: String?,
     exceptAsset assetId: String
   ) -> Bool {
-    isFilenameClaimed(
+    trackRecords()
+    return isFilenameClaimed(
       filename, year: year, month: month, subfolder: subfolder, assetId: assetId,
       excluding: { _ in true })
   }
@@ -723,9 +751,13 @@ final class ExportRecordStore: ObservableObject {
     }
   }
 
+  /// Registers reads against the same revision that coalesces record notifications.
+  private func trackRecords() { _ = mutationCounter }
+
   /// Total number of assets in `year` whose `.original` variant is `.done`. Matches legacy
   /// yearly progress counting for unadjusted libraries.
   func yearExportedCount(year: Int) -> Int {
+    trackRecords()
     var total = 0
     for month in 1...12 {
       total +=
@@ -738,6 +770,7 @@ final class ExportRecordStore: ObservableObject {
   /// Legacy month summary that counts `.original` done records. Preserved for call sites that
   /// have not yet adopted `monthSummary(assets:selection:)`.
   func monthSummary(year: Int, month: Int, totalAssets: Int) -> MonthStatusSummary {
+    trackRecords()
     let exportedCount =
       monthCounters[MonthKey(year: year, month: month)]?
       .variantStatus[.original]?[.done] ?? 0
@@ -751,6 +784,8 @@ final class ExportRecordStore: ObservableObject {
   func monthSummary(
     assets: [AssetDescriptor], selection: ExportVersionSelection, livePhotosPaired: Bool
   ) -> MonthStatusSummary {
+    trackRecords()
+    let convertHEIC = convertHEICToJPEG
     let year =
       assets.first.map { Calendar.current.component(.year, from: $0.creationDate ?? Date()) }
       ?? 0
@@ -760,7 +795,10 @@ final class ExportRecordStore: ObservableObject {
 
     var exported = 0
     for asset in assets
-    where isExported(asset: asset, selection: selection, livePhotosPaired: livePhotosPaired) {
+    where isExportedUntracked(
+      asset: asset, selection: selection, livePhotosPaired: livePhotosPaired,
+      convertHEIC: convertHEIC)
+    {
       exported += 1
     }
     return makeSummary(year: year, month: month, exported: exported, total: assets.count)
@@ -772,7 +810,8 @@ final class ExportRecordStore: ObservableObject {
   func recordCount(
     year: Int, month: Int, variant: ExportVariant, status: ExportStatus
   ) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?
       .variantStatus[variant]?[status] ?? 0
   }
 
@@ -780,13 +819,15 @@ final class ExportRecordStore: ObservableObject {
   /// `.done`. These records are definitely fully complete under `editedWithOriginals`
   /// regardless of whether the asset is currently adjusted.
   func recordCountBothVariantsDone(year: Int, month: Int) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?.bothVariantsDone ?? 0
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?.bothVariantsDone ?? 0
   }
 
   /// Count of records in `year`/`month` whose `.edited` variant is `.done`. Used by the
   /// records-only sidebar formula for the default mode.
   func recordCountEditedDone(year: Int, month: Int) -> Int {
-    recordCount(year: year, month: month, variant: .edited, status: .done)
+    trackRecords()
+    return recordCount(year: year, month: month, variant: .edited, status: .done)
   }
 
   /// Count of records in `year`/`month` with `.original.done` at a natural-stem filename
@@ -794,7 +835,8 @@ final class ExportRecordStore: ObservableObject {
   /// sidebar formula to estimate "unedited asset, exported once" rows without loading
   /// descriptors.
   func recordCountOriginalDoneAtNaturalStem(year: Int, month: Int) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?.originalDoneAtNaturalStem ?? 0
   }
 
   /// Records covered by the fallback in `(year, month)`. Counted as
@@ -802,7 +844,8 @@ final class ExportRecordStore: ObservableObject {
   /// year that finishes with fallback-covered assets reads as 100% rather
   /// than 99% — matching the asset-aware `isExported(asset:selection:)`.
   func recordCountEditedFallback(year: Int, month: Int) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?.editedFallbackCovered ?? 0
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?.editedFallbackCovered ?? 0
   }
 
   /// Records in `(year, month)` with at least one paired-video variant whose
@@ -811,7 +854,8 @@ final class ExportRecordStore: ObservableObject {
   /// whose motion file is still pending no longer reads as fully exported
   /// in the timeline sidebar / month tile badges.
   func recordCountPairedVideoIncomplete(year: Int, month: Int) -> Int {
-    monthCounters[MonthKey(year: year, month: month)]?.pairedVideoIncomplete ?? 0
+    trackRecords()
+    return monthCounters[MonthKey(year: year, month: month)]?.pairedVideoIncomplete ?? 0
   }
 
   /// Records-only approximation of "fully exported under this selection," capped by the
@@ -834,6 +878,7 @@ final class ExportRecordStore: ObservableObject {
     selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> MonthStatusSummary? {
+    trackRecords()
     guard let adjustedCount else { return nil }
     let uneditedCount = max(0, totalCount - adjustedCount)
     let origOnlyAtStem = recordCountOriginalDoneAtNaturalStem(year: year, month: month)
@@ -870,6 +915,7 @@ final class ExportRecordStore: ObservableObject {
     selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> Int {
+    trackRecords()
     var total = 0
     for month in 1...12 {
       let monthTotal = totalCountsByMonth[month] ?? 0
@@ -1019,6 +1065,7 @@ final class ExportRecordStore: ObservableObject {
   func containsCompletedFile(
     at root: URL, isCurrent: @MainActor () -> Bool = { true }
   ) async throws -> Bool? {
+    trackRecords()
     guard isCurrent(), !Task.isCancelled, state == .ready else { return nil }
     let paths = try completedVariantProbes(root: root).map(\.path)
     guard !paths.isEmpty else { return nil }

@@ -176,6 +176,28 @@ struct WhatsNewStateTests {
     #expect(state.isFirstLaunch == false)
   }
 
+  /// `LibraryRootView` presents the sheet from `shouldShow` and `WhatsNewView` renders from
+  /// the version snapshot, so dismissing must notify readers of both, once.
+  @Test func markAsSeenNotifiesTheSheetAndContentReadersOnce() {
+    let defaults = makeDefaults()
+    defaults.set("1.2.3", forKey: WhatsNewState.lastSeenVersionKey)
+    let state = WhatsNewState(
+      userDefaults: defaults, currentVersion: "1.3.0", catalog: [makeNote("1.3.0")])
+    let sheet = ObservationProbe { _ = state.shouldShow }
+    let firstLaunch = ObservationProbe { _ = state.isFirstLaunch }
+    let notes = ObservationProbe { _ = state.upgradeNotes }
+
+    state.markAsSeen()
+    #expect(sheet.changeCount == 1)
+    #expect(firstLaunch.changeCount == 1)
+    #expect(notes.changeCount == 1)
+
+    state.markAsSeen()
+    #expect(sheet.changeCount == 1, "Dismissing again must not re-notify the sheet")
+    #expect(firstLaunch.changeCount == 1, "Dismissing again stores an equal version")
+    #expect(notes.changeCount == 1, "Dismissing again stores equal notes")
+  }
+
   @Test func lastSeenEqualToCurrentReturnsEmptyNotes() {
     let result = ReleaseNotesCatalog.notesForUpgrade(
       lastSeen: "1.3.0", current: "1.3.0",

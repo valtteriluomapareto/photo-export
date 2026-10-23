@@ -10,7 +10,7 @@ struct ThumbnailView: View {
   let isSelected: Bool
   let isExported: Bool
 
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   @State private var image: CGImage?
   @State private var failed: Bool = false
@@ -46,6 +46,8 @@ struct ThumbnailView: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([String(isExported)], for: "thumbnail-exported:\(asset.id)")
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("thumbnail-body:\(asset.id)")
     #endif
     let identity = loadIdentity
     ZStack {

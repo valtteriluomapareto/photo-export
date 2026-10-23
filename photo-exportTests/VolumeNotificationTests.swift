@@ -100,7 +100,7 @@ struct VolumeNotificationTests {
       })
     lifecycle.attach(
       initial: DestinationIdentitySnapshot(identity: manager.identity),
-      identityPublisher: manager.$identity.eraseToAnyPublisher())
+      identityPublisher: manager.identityPublisher)
     timeline.markVariantExported(
       assetId: "kept", variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "kept.jpg", exportedAt: Date())

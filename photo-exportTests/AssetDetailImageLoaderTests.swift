@@ -125,4 +125,37 @@ struct AssetDetailImageLoaderTests {
     #expect(loader.state.errorMessage == nil)
     #expect(!loader.state.isLoading)
   }
+
+  /// `AssetDetailView` renders `state(for:)`, so each step of a load re-renders it: the
+  /// spinner, the image, and clearing on disappear.
+  @Test func detailReadersAreNotifiedForEachPreviewStep() async {
+    let loader = AssetDetailImageLoader()
+    let service = FakePhotoLibraryService()
+    service.fullImagesByAssetId["A"] = NSImage(size: NSSize(width: 10, height: 10))
+    let probe = ObservationProbe { _ = loader.state(for: "A") }
+    await loader.load(for: "A", using: service)
+    #expect(probe.changeCount == 2)
+    loader.clear()
+    #expect(probe.changeCount == 3)
+  }
+
+  /// A response the newer request superseded writes nothing, so it does not re-render the
+  /// detail view; the request token itself is not view state.
+  @Test func supersededResponseDoesNotNotifyDetailReaders() async {
+    let loader = AssetDetailImageLoader()
+    let service = FakePhotoLibraryService()
+    let oldGate = AsyncCheckpoint()
+    service.fullImageRequestOverride = { id in
+      if id == "A" { await oldGate.enter() }
+      return NSImage(size: NSSize(width: 10, height: 10))
+    }
+    let old = Task { await loader.load(for: "A", using: service) }
+    await oldGate.waitForEnter(count: 1)
+    await loader.load(for: "B", using: service)
+    let probe = ObservationProbe { _ = loader.state(for: "B") }
+    await oldGate.releaseAll()
+    await old.value
+    #expect(probe.changeCount == 0)
+    #expect(loader.state.assetId == "B")
+  }
 }

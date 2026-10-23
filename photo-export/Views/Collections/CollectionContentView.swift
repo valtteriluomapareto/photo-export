@@ -10,14 +10,14 @@ import SwiftUI
 /// MonthContentView, `.equatable()` at every call site filters fresh action closures
 /// on unrelated queue publications. Record/library/destination observations stay live.
 struct CollectionContentView: View, Equatable {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
 
-  @StateObject private var viewModel: MonthViewModel
+  @State private var viewModel: MonthViewModel
 
   let selection: LibrarySelection
   let title: String
@@ -45,8 +45,7 @@ struct CollectionContentView: View, Equatable {
     self.onExportCollection = onExportCollection
     self.selectedAssetId = selectedAsset.wrappedValue?.id
     self._selectedAsset = selectedAsset
-    _viewModel = StateObject(
-      wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
+    _viewModel = State(wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
   var body: some View {
@@ -135,7 +134,6 @@ struct CollectionContentView: View, Equatable {
         #endif
       }
     }
-    .measureBodyInvalidations("CollectionContentView")
   }
 
   #if DEBUG

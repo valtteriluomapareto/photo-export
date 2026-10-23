@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Observation
 import Photos
 import SwiftUI
 import os
@@ -10,13 +11,39 @@ import os
 /// class forwards service methods to an injected `overrideService` when present.
 /// Independent conformances require every protocol method to be implemented, so a new
 /// requirement cannot silently inherit production PhotoKit behavior in screenshot mode.
+@Observable
 @MainActor
-final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService,
-  PHAssetCacheControlling
-{
-  /// Published properties to track authorization status
-  @Published var authorizationStatus: PHAuthorizationStatus = .notDetermined
-  @Published var isAuthorized: Bool = false
+final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheControlling {
+  /// Authorization changes retain synchronous Combine delivery and register Observation reads.
+  var authorizationStatus: PHAuthorizationStatus {
+    get {
+      access(keyPath: \.authorizationStatus)
+      return authorizationStatusBridge.value
+    }
+    set {
+      authorizationStatusBridge.write(newValue) { withMutation(keyPath: \.authorizationStatus, $0) }
+    }
+  }
+  private let authorizationStatusBridge = ObservableCombineBridge(
+    PHAuthorizationStatus.notDetermined)
+
+  var isAuthorized: Bool {
+    get {
+      access(keyPath: \.isAuthorized)
+      return isAuthorizedBridge.value
+    }
+    set {
+      isAuthorizedBridge.write(newValue) { withMutation(keyPath: \.isAuthorized, $0) }
+    }
+  }
+  private let isAuthorizedBridge = ObservableCombineBridge(false)
+
+  /// Synchronous, delivered before storage, and replaying the current value.
+  var authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never> {
+    authorizationStatusBridge.publisher
+  }
+  /// Synchronous, delivered before storage, and replaying the current value.
+  var isAuthorizedPublisher: AnyPublisher<Bool, Never> { isAuthorizedBridge.publisher }
 
   /// Bumps on every `photoLibraryDidChange`. Sidebar/grid views that depend on the
   /// current PhotoKit state observe this to trigger a re-fetch — without it, a user who
@@ -24,7 +51,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// stale data until manually re-selecting. The counter doesn't carry payload; its sole
   /// purpose is to signal that dependent views should refresh. Sidebar count tasks
   /// restart with the revision; asset grids use `.onChange` to refresh in place.
-  @Published var libraryRevision: Int = 0
+  var libraryRevision: Int = 0
 
   /// When the user turns on "Export Live Photos as paired image + video",
   /// `descriptor(from:)` enables a `PHAssetResource`-enumeration fallback to catch
@@ -32,11 +59,12 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// anomaly). Off by default so the per-asset cost is paid only by users who opted
   /// into the feature. Driven by `bindLivePhotoDetectionFallback(to:)` from the app-
   /// level wiring.
+  @ObservationIgnored
   var livePhotoDetectionFallbackEnabled: Bool = false
 
   /// Bag for the publisher subscription wired by `bindLivePhotoDetectionFallback`. Kept
-  /// alive for the manager's lifetime — `PhotoLibraryManager` is held by the app's
-  /// `@StateObject` so this is process-lifetime in practice.
+  /// alive for the manager's lifetime; AppCore owns the manager for the app's lifetime.
+  @ObservationIgnored
   private var livePhotoDetectionCancellables = Set<AnyCancellable>()
 
   private let logger = Logger.app(.photos)
@@ -57,23 +85,30 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// additively by `cacheAssets(_:)` from `fetchAssets(in:)`. Cleared by
   /// `invalidateCache()` (library change) or `forgetPHAssetCache()`
   /// (per-iteration drops in `ExportManager.runBulkEnqueueLoop`).
+  @ObservationIgnored
   private var phAssetCache: [String: PHAsset] = [:]
 
   /// Cache of adjusted-asset counts keyed by `"YYYY-M"`. Populated lazily by
   /// `countAdjustedAssets` and cleared when the Photos library changes or the user re-authorises.
+  @ObservationIgnored
   private var adjustedCountByYearMonth: [String: Int] = [:]
 
   /// Scope-keyed collection-count cache. Invalidated on
   /// `photoLibraryDidChange` so subsequent reads re-fetch.
   nonisolated let collectionCountCache = CollectionCountCache()
+  @ObservationIgnored
   private var countInvalidation: Task<Void, Never>?
+  @ObservationIgnored
   private var countInvalidationGeneration = 0
+  @ObservationIgnored
   private var countInvalidationOverride: (@Sendable () async -> Void)?
+  @ObservationIgnored
   private var countInvalidationWaitObserver: (@MainActor () -> Void)?
 
   /// Bounded `CGImage` cache for thumbnail renders, keyed by content revision.
   /// Known edits supersede only their asset's entries; unknown changes clear
   /// the cache. Set up after init so the decode closure captures `[weak self]`.
+  @ObservationIgnored
   private(set) var decodedThumbnailCache: DecodedThumbnailCache!
 
   /// Only thumbnail-requested PHAssets are inspected on a PhotoKit change.
@@ -82,14 +117,19 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// is exceeded or an asset lookup fails, the next change uses the
   /// conservative global invalidation.
   private static let thumbnailTrackingLimit = 512
+  @ObservationIgnored
   private var observedThumbnailAssets: [String: PHAsset] = [:]
+  @ObservationIgnored
   private var thumbnailTrackingIncomplete = false
 
   /// Stable task/cache identity for edited content. The global value covers
   /// changes whose affected IDs are unknown; per-asset values avoid restarting
   /// unrelated visible thumbnails when PhotoKit identifies changed content.
+  /// Tracks content edits independently of metadata-only library invalidations.
   private var nextThumbnailContentRevision = 0
+  @ObservationIgnored
   private var globalThumbnailContentRevision = 0
+  @ObservationIgnored
   private var assetThumbnailContentRevisions: [String: Int] = [:]
 
   /// Optional injection point that replaces the production PhotoKit implementation on
@@ -298,7 +338,8 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   func thumbnailContentRevision(for assetId: String) -> Int {
-    max(globalThumbnailContentRevision, assetThumbnailContentRevisions[assetId] ?? 0)
+    access(keyPath: \.nextThumbnailContentRevision)
+    return max(globalThumbnailContentRevision, assetThumbnailContentRevisions[assetId] ?? 0)
   }
 
   /// Performs the PhotoKit authorization probe and registers as a
@@ -331,6 +372,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
     isAuthorized = Self.isAuthorizationSufficient(authorizationStatus)
   }
 
+  @ObservationIgnored
   private var hasStarted = false
 
   /// Verify that Photos usage description is properly set in Info.plist
@@ -362,6 +404,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
       }
   }
 
+  @ObservationIgnored
   private var appActivationSubscription: AnyCancellable?
 
   /// Re-reads existing permission without prompting. Install fresh-cache barriers
@@ -397,7 +440,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   /// Subscribes `livePhotoDetectionFallbackEnabled` to a Bool publisher — typically
-  /// `ExportManager.$livePhotosPairedExport`. Drives the `descriptor(from:)` resource
+  /// `ExportManager.livePhotosPairedExportPublisher`. Drives the `descriptor(from:)` resource
   /// fallback so it fires only when the user has opted into paired-video export.
   /// Synchronous sink (no `.receive(on:)`) so the value is observable immediately when
   /// the next fetch starts. Calling this multiple times replaces the prior binding.
@@ -990,6 +1033,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   }
 
   func assetDetails(for assetId: String) -> AssetDetails? {
+    access(keyPath: \.libraryRevision)
     if let s = overrideService { return s.assetDetails(for: assetId) }
     guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
     let phResources = PHAssetResource.assetResources(for: asset)
@@ -1209,6 +1253,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
 
   /// Cached collection tree. Invalidated on `photoLibraryDidChange`. Constructed lazily
   /// on the first `fetchCollectionTree()` call after a change (or first launch).
+  @ObservationIgnored
   private var cachedCollectionTree: [PhotoCollectionDescriptor]?
 
   /// Builds the user's Photos collection tree: a synthetic Favorites entry first, then
@@ -1226,6 +1271,7 @@ final class PhotoLibraryManager: NSObject, ObservableObject, PhotoLibraryService
   /// `descriptorKind(for:)` subtype switch is the single source of truth for which
   /// collections we surface and how.
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
+    access(keyPath: \.libraryRevision)
     if let s = overrideService { return try s.fetchCollectionTree() }
     // A cache hit stays cheap and keeps the album sidebar while access is being rechecked.
     // Every collection scan still meets the live check in `fetchAssetsProgressive`.

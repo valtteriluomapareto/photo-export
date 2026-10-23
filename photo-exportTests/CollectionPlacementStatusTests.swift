@@ -51,6 +51,7 @@ import Testing
       let records: CollectionExportRecordStore
       let manager: ExportManager
       let fakeDestination = FakeExportDestination()
+      // Preserve rendered snapshots while mounted; unchanged children may skip body evaluation.
       let counter = BodyInvalidationCounter()
       let asset = TestAssetFactory.makeAsset(id: "changed-asset")
       let unchangedAsset = TestAssetFactory.makeAsset(id: "unchanged-asset")
@@ -158,8 +159,8 @@ import Testing
               service: service, manager: manager, selection: selectionOverride ?? selection,
               folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane
             )
-            .environmentObject(library).environmentObject(timeline).environmentObject(records)
-            .environmentObject(manager)
+            .environment(library).environment(timeline).environment(records)
+            .environment(manager)
             .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
             .environment(\.bodyInvalidationCounter, counter))
         let hostWindow = NSWindow(
@@ -367,7 +368,6 @@ import Testing
       try await loaded(f)
       let initial = await observe { f.counter.renderedText["collection-summary"] == ["1/1"] }
       try #require(initial)
-      f.counter.reset()
       f.service.collectionTree = f.currentTree
       f.library.invalidateCache(changedThumbnailAssetIDs: [])
       await expectStatus(f, exported: false, currentExists: false)
@@ -378,7 +378,6 @@ import Testing
       await expectStatus(f, exported: true)
       let currentMutations = f.records.mutationCounter
       for fails in [false, true] {
-        f.counter.reset()
         f.service.collectionTree = []
         f.service.collectionTreeError = fails ? CocoaError(.fileReadUnknown) : nil
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
@@ -388,7 +387,6 @@ import Testing
         }
         #expect(missing)
         #expect(f.records.mutationCounter == currentMutations)
-        f.counter.reset()
         f.service.collectionTreeError = nil
         f.service.collectionTree = f.currentTree
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
@@ -417,7 +415,6 @@ import Testing
       }
       try #require(original)
       try await f.records.flush()
-      f.counter.reset()
       f.records.configure(for: "B")
       let other = await observe {
         f.counter.renderedText["collection-summary"] == ["0/1"]
@@ -426,7 +423,6 @@ import Testing
       }
       #expect(other)
       #expect(f.records.placements.isEmpty)
-      f.counter.reset()
       f.records.configure(for: "A")
       let restored = await observe {
         f.counter.renderedText["collection-summary"] == ["1/1"]

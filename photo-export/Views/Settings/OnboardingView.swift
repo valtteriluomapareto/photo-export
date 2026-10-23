@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct OnboardingView: View {
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
 
+  let historyState: RecordStoreState
   let onSkip: () -> Void
 
   @State private var exportAll = true
@@ -31,7 +31,7 @@ struct OnboardingView: View {
   private var exportAvailability: ManualExportAvailability {
     ManualExportAvailability(
       destinationCanExport: exportDestinationManager.canExportNow,
-      history: exportRecordStore.state)
+      history: historyState)
   }
 
   /// Why Start Export is disabled while the picked folder's history loads; empty otherwise.
@@ -160,6 +160,14 @@ struct OnboardingView: View {
           onSkip()
         }
         .buttonStyle(.borderedProminent)
+        #if DEBUG
+          .background {
+            ExportControlProbe(
+              key: "onboarding-export-control", help: startExportHelp,
+              includesOriginals: includeOriginals,
+              toggleOriginals: { includeOriginals.toggle() })
+          }
+        #endif
         // A folder picked here has its history read first; starting meanwhile would drop the
         // export.
         .disabled(

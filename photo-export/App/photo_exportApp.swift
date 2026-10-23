@@ -8,22 +8,20 @@
 import SwiftUI
 
 /// Started by `AppEntry` for normal launches. The object graph lives on `AppCore`; this
-/// type holds its objects as `@StateObject`s and lays out the scenes.
+/// type holds the core's remaining `ObservableObject`s as `@StateObject`s and lays out the
+/// scenes.
 struct PhotoExportApp: App {
   private let core: AppCore
-  // The core's objects, held as `@StateObject`s. Only `autoSyncManager` is read in `body`, for
-  // the menu bar label; the other wrappers are dropped in the fixture-mode slice. Scenes get
-  // the same instances through `photoExportEnvironment(core)`.
+  // The core's `ObservableObject`s, held as `@StateObject`s. The `@Observable` objects need no
+  // wrapper: the core owns the library/export managers, login controller, What's New and both stores,
+  // while `ExportManager` owns `ExportProgressState`. `MainWindowRoot` observes timeline
+  // history readiness; `autoSyncManager` supplies the menu bar label. The remaining wrappers
+  // keep their instances alive alongside the core. Scenes get the same instances through
+  // `photoExportEnvironment(core)`.
   @StateObject private var exportDestinationManager: ExportDestinationManager
-  @StateObject private var photoLibraryManager: PhotoLibraryManager
-  @StateObject private var exportRecordStore: ExportRecordStore
-  @StateObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @StateObject private var exportManager: ExportManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @StateObject private var autoSyncManager: AutoSyncManager
   @StateObject private var autoSyncScopeStore: UserDefaultsAutoExportScopeStore
-  @StateObject private var loginItemController: LoginItemController
-  @StateObject private var whatsNewState: WhatsNewState
   @StateObject private var autoSyncPhotoChangeAdapter: PhotoLibraryPersistentChangeAdapter
   @StateObject private var destinationSafetyMonitor: DestinationSafetyMonitor
 
@@ -40,15 +38,9 @@ struct PhotoExportApp: App {
       composition: .forLaunch(arguments: ProcessInfo.processInfo.arguments))
     self.core = core
     _exportDestinationManager = StateObject(wrappedValue: core.exportDestinationManager)
-    _photoLibraryManager = StateObject(wrappedValue: core.photoLibraryManager)
-    _exportRecordStore = StateObject(wrappedValue: core.exportRecordStore)
-    _collectionExportRecordStore = StateObject(wrappedValue: core.collectionExportRecordStore)
-    _exportManager = StateObject(wrappedValue: core.exportManager)
     _lifecycleCoordinator = StateObject(wrappedValue: core.lifecycleCoordinator)
     _autoSyncManager = StateObject(wrappedValue: core.autoSyncManager)
     _autoSyncScopeStore = StateObject(wrappedValue: core.autoSyncScopeStore)
-    _loginItemController = StateObject(wrappedValue: core.loginItemController)
-    _whatsNewState = StateObject(wrappedValue: core.whatsNewState)
     _destinationSafetyMonitor = StateObject(wrappedValue: core.destinationSafetyMonitor)
     _autoSyncPhotoChangeAdapter = StateObject(wrappedValue: core.autoSyncPhotoChangeAdapter)
   }
@@ -61,15 +53,16 @@ struct PhotoExportApp: App {
     // so the app is still identified as "Photo Export" everywhere it
     // matters outside the chrome.
     WindowGroup("") {
-      ContentView(destinationManager: exportDestinationManager, recordStore: exportRecordStore)
-        .equatable()
-        .recordStoreAlertHost()
-        .photoExportEnvironment(core)
-        .task {
-          // PhotoKit is first touched here, after the window has rendered, not in App.init.
-          // Every window runs this; the core starts once.
-          core.start()
-        }
+      MainWindowRoot(
+        destinationManager: exportDestinationManager, recordStore: core.exportRecordStore
+      )
+      .recordStoreAlertHost()
+      .photoExportEnvironment(core)
+      .task {
+        // PhotoKit is first touched here, after the window has rendered, not in App.init.
+        // Every window runs this; the core starts once.
+        core.start()
+      }
     }
     // Default sized so the sidebar (240) and content grid (520) sit at their
     // ideal widths set in `LibraryRootView`, leaving ~520 for the detail pane.
@@ -96,8 +89,8 @@ struct PhotoExportApp: App {
       }
       CommandGroup(after: .help) {
         SaveDiagnosticReportCommand(
-          timelineStore: exportRecordStore,
-          collectionStore: collectionExportRecordStore,
+          timelineStore: core.exportRecordStore,
+          collectionStore: core.collectionExportRecordStore,
           destinationManager: exportDestinationManager,
           photoChangeAdapter: autoSyncPhotoChangeAdapter,
           currentRunStore: core.autoSyncEnvironment.currentRunStore)
@@ -131,6 +124,26 @@ struct PhotoExportApp: App {
         .photoExportEnvironment(core)
     }
     .windowResizability(.contentMinSize)
+  }
+}
+
+/// Supplies timeline history readiness as a render-time input to the equatable router.
+struct MainWindowRoot: View {
+  let destinationManager: ExportDestinationManager
+  let recordStore: ExportRecordStore
+  #if DEBUG
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+  #endif
+
+  var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("main-window-root")
+    #endif
+    ContentView(
+      destinationManager: destinationManager, recordStore: recordStore,
+      timelineHistoryState: recordStore.state
+    ).equatable()
   }
 }
 

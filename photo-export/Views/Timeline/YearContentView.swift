@@ -9,9 +9,9 @@ import SwiftUI
 /// exported" badge agrees with the sidebar's `YearRow` / `MonthRow` badges without us
 /// having to re-derive the formula.
 struct YearContentView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(ExportRecordStore.self) private var exportRecordStore
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   #if DEBUG
@@ -23,7 +23,7 @@ struct YearContentView: View {
   @Binding var selectedAsset: AssetDescriptor?
 
   private let photoLibraryService: any PhotoLibraryService
-  @StateObject private var counts: TimelineSidebarCounts
+  @State private var counts: TimelineSidebarCounts
 
   init(
     year: Int,
@@ -35,8 +35,7 @@ struct YearContentView: View {
     self._selection = selection
     self._selectedAsset = selectedAsset
     self.photoLibraryService = photoLibraryService
-    _counts = StateObject(
-      wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
+    _counts = State(wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
   }
 
   @State private var totalCount: Int?
@@ -50,6 +49,8 @@ struct YearContentView: View {
         destinationHelp: exportDestinationManager.exportUnavailableHelp)
       ?? "Export every photo in this year"
     #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("year-content-body:\(year)")
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.recordText([exportHelp], for: "year-export-help")
     #endif

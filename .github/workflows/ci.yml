@@ -120,6 +120,15 @@ jobs:
           python3 -B scripts/ci/check-test-scratch.py
           echo "::endgroup::"
 
+      - name: Check observation ratchet
+        run: |
+          echo "::group::Observation ratchet"
+          echo "Comparing ObservableObject types and external \$publisher uses per file, and @Published,"
+          echo ".environmentObject(, @EnvironmentObject, @StateObject, @ObservedObject and external"
+          echo "objectWillChange totals in photo-export/ with scripts/ci/observation-ratchet.txt."
+          python3 -B scripts/ci/check-observation-ratchet.py
+          echo "::endgroup::"
+
       - name: Check persistence doc value sets
         run: |
           echo "::group::Persistence-doc guard"

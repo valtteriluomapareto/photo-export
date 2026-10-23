@@ -151,6 +151,7 @@ class GateResultCheckTests(unittest.TestCase):
             add_case(self.results, "AutoSyncSeamCharacterizationTests", method)
         add_suite(self.results, "AmbiguousSameFolderTests",
                   "sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds")
+        add_suite(self.results, "PublisherParityTests", "destinationIdentity")
         add_suite(self.results, "CollectionBackupImportTests",
                   "importAdoptsAlbumHistorySoExportsWriteNothing",
                   "exportWipeImportRoundTripRestoresPlacements")

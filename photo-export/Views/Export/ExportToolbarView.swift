@@ -1,11 +1,9 @@
 import SwiftUI
 
 struct ExportToolbarView: ToolbarContent {
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
@@ -22,8 +20,9 @@ struct ExportToolbarView: ToolbarContent {
   /// shared-album single-select case keeps its per-item label and dispatch.
   /// The global Export All Albums action excludes shared albums and would skip it.
   let focusedSelection: LibrarySelection?
+  let historyState: RecordStoreState
 
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   /// macOS 14+ environment action for opening the `Settings` scene. Used by
   /// the toolbar cog button so users have an in-app affordance for Settings
@@ -139,6 +138,9 @@ struct ExportToolbarView: ToolbarContent {
       .controlSize(.large)
       .tint(.accentColor)
       .keyboardShortcut("e", modifiers: .command)
+      #if DEBUG
+        .background { ExportControlProbe(key: "toolbar-export-control", help: exportHelp) }
+      #endif
       .disabled(!isPrimaryActionEnabled)
       .help(exportHelp)
       .confirmationDialog(
@@ -176,8 +178,13 @@ struct ExportToolbarView: ToolbarContent {
             exportManager.pause()
           }
         } label: {
+          let pauseLabel = exportManager.isPaused ? "Resume" : "Pause"
+          #if DEBUG
+            // swiftlint:disable:next redundant_discardable_let
+            let _ = bodyCounter?.recordText([pauseLabel], for: "toolbar-pause-label")
+          #endif
           Label(
-            exportManager.isPaused ? "Resume" : "Pause",
+            pauseLabel,
             systemImage: exportManager.isPaused ? "play.fill" : "pause.fill")
         }
         .help(exportManager.isPaused ? "Resume export" : "Pause export")
@@ -214,7 +221,7 @@ struct ExportToolbarView: ToolbarContent {
   private var primaryAvailability: ManualExportAvailability {
     ManualExportAvailability(
       destinationCanExport: exportDestinationManager.canExportNow,
-      history: section == .timeline ? exportRecordStore.state : collectionExportRecordStore.state)
+      history: historyState)
   }
 
   /// Manual actions remain available during Auto Export so the user can confirm

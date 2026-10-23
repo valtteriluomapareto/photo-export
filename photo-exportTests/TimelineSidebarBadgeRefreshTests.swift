@@ -6,13 +6,34 @@ import Testing
 
 #if DEBUG
   @MainActor
+  @Suite(.serialized)
   struct TimelineSidebarBadgeRefreshTests {
     private struct Host: View {
       let service: FakePhotoLibraryService
+      let manager: ExportManager
+      let counter: BodyInvalidationCounter
       @State private var selection: Set<LibrarySelection> = [.timelineMonth(year: 2026, month: 9)]
 
       var body: some View {
         TimelineSidebarView(selectionSet: $selection, photoLibraryService: service)
+          .overlay(alignment: .topLeading) { ProgressProbe() }
+          .overlay(alignment: .bottomLeading) {
+            ExportManagerRenderProbe(manager: manager, counter: counter)
+          }
+      }
+    }
+
+    /// Renders for each per-asset progress change, so a test can wait for one to reach SwiftUI
+    /// before checking that the month rows did not render for it.
+    private struct ProgressProbe: View {
+      @Environment(ExportProgressState.self) private var progress
+      @Environment(\.bodyInvalidationCounter) private var counter
+      var body: some View {
+        // A declaration keeps the probe out of ViewBuilder's view expressions.
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter?.record(
+          "progress-probe:\(progress.currentAssetFilename ?? ""):\(progress.totalJobsCompleted)")
+        Color.clear.frame(width: 1, height: 1)
       }
     }
 
@@ -55,9 +76,9 @@ import Testing
           collectionExportRecordStore: collections,
           assetResourceWriter: writer, fileSystem: FakeFileSystem(),
           userDefaults: defaults)
-        let content = Host(service: service)
-          .environmentObject(library).environmentObject(store).environmentObject(manager)
-          .environmentObject(manager.progressState)
+        let content = Host(service: service, manager: manager, counter: counter)
+          .environment(library).environment(store).environment(manager)
+          .environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 300, height: 500),
@@ -86,6 +107,48 @@ import Testing
         let collapsedYear = counter.renderedText["timeline-year:2025"] ?? []
         return "loads=\(loads), tasks=\(counter.tasks.count), years=\(years), "
           + "month=\(month), expanded=\(expandedYear), collapsed=\(collapsedYear)"
+      }
+    }
+
+    /// Fails before property-specific manager observation: pause and layout leave this badge unchanged.
+    @Test(.timeLimit(.minutes(1)))
+    func monthRowsSkipPauseAndVideoLayout() async throws {
+      let f = Fixture()
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) { f.counter.renderedText["timeline-month:2026-9"] == ["1/2"] }
+        )
+        for task in f.counter.tasks { _ = await finished(task) }
+        f.window.contentView?.layoutSubtreeIfNeeded()
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.queueCoordinator.enqueue([
+            .init(
+              assetLocalIdentifier: "queued", placement: .timeline(year: 2026, month: 9),
+              selection: .edited)
+          ])
+        }
+        let key = "timeline-month-body:2026-9"
+        let before = f.counter.count(for: key)
+        try #require(before > 0)
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.pause()
+        }
+        let pause = f.counter.count(for: key) - before
+        #expect(pause == 0)
+        let paused = f.counter.count(for: key)
+        try await ExportManagerRenderProbe.change(
+          manager: f.manager, counter: f.counter, in: f.window
+        ) {
+          f.manager.videoLayout = .subfolder
+        }
+        let layout = f.counter.count(for: key) - paused
+        #expect(layout == 0)
+      } cleanup: {
+        await f.close()
       }
     }
 
@@ -161,6 +224,39 @@ import Testing
       for task in f.counter.tasks { _ = await finished(task) }
       await f.close()
       if let failure { throw failure }
+    }
+
+    /// Month rows read only the in-flight placement from the progress state, so the per-asset
+    /// filename and counter writes of a run must not re-render them; a new in-flight placement
+    /// must.
+    @Test(.timeLimit(.minutes(1)))
+    func monthRowsSkipPerAssetProgressButFollowTheInFlightPlacement() async throws {
+      let f = Fixture()
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
+          })
+        for task in f.counter.tasks { _ = await finished(task) }
+        f.window.contentView?.layoutSubtreeIfNeeded()
+        let key = "timeline-month-body:2026-9"
+        let rows = f.counter.count(for: key)
+        try #require(rows > 0)
+        let progress = f.manager.progressState
+        for step in 1...3 {
+          progress.currentAssetFilename = "IMG_000\(step).JPG"
+          progress.totalJobsCompleted = step
+          let probe = "progress-probe:IMG_000\(step).JPG:\(step)"
+          try #require(await observe(in: f.window) { f.counter.count(for: probe) > 0 })
+        }
+        #expect(
+          f.counter.count(for: key) == rows,
+          "Per-asset progress re-rendered the month row: \(rows) → \(f.counter.count(for: key))")
+        progress.currentJobPlacement = .timeline(year: 2026, month: 9)
+        #expect(await observe(in: f.window) { f.counter.count(for: key) > rows })
+      } cleanup: {
+        await f.close()
+      }
     }
 
     @Test(.timeLimit(.minutes(1)))

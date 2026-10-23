@@ -11,7 +11,7 @@ import Testing
   struct ManualExportFeedbackViewTests {
     @MainActor
     private final class LoginService: LoginItemService {
-      var status: LoginItemController.Status { .notRegistered }
+      var status: LoginItemController.Status = .notRegistered
       func register() throws {}
       func unregister() throws {}
       func openSystemLoginItems() {}
@@ -33,7 +33,8 @@ import Testing
         cancelActiveWork: {}, interruptForDestinationUnavailable: {},
         configureRecordStores: { _ in .success })
       let scopeStore: UserDefaultsAutoExportScopeStore
-      let loginItem = LoginItemController(service: LoginService())
+      let loginService = LoginService()
+      let loginItem: LoginItemController
       let safetyMonitor: DestinationSafetyMonitor
       let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
       let counter = BodyInvalidationCounter()
@@ -45,6 +46,7 @@ import Testing
       init() {
         defaults = TestScratch.defaults(suiteName: suite)
         defaults.set(SettingsTab.advanced.rawValue, forKey: SettingsTab.storageKey)
+        loginItem = LoginItemController(service: loginService)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)
         timeline.configure(for: "A")
@@ -58,7 +60,7 @@ import Testing
         destinationManager.configureForScreenshotMode()
         scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: defaults)
         safetyMonitor = DestinationSafetyMonitor(
-          identityPublisher: destinationManager.$identity.eraseToAnyPublisher(),
+          identityPublisher: destinationManager.identityPublisher,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
           confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { false })
         photoChangeAdapter = PhotoLibraryPersistentChangeAdapter(
@@ -81,7 +83,7 @@ import Testing
               selectedAtOpen = defaults.string(forKey: SettingsTab.storageKey)
             }
           )
-          .environmentObject(manager).environmentObject(manager.progressState)
+          .environment(manager).environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let owned = NSWindow(
           contentRect: NSRect(origin: CGPoint(x: -10000, y: -10000), size: initialSize),
@@ -96,12 +98,12 @@ import Testing
       func showSettings() {
         let hosted = NSHostingView(
           rootView: SettingsRootView()
-            .environmentObject(library)
-            .environmentObject(manager).environmentObject(autoSync).environmentObject(
+            .environment(library)
+            .environment(manager).environmentObject(autoSync).environmentObject(
               destinationManager
             )
-            .environmentObject(timeline).environmentObject(collections)
-            .environmentObject(lifecycle).environmentObject(scopeStore).environmentObject(loginItem)
+            .environment(timeline).environment(collections)
+            .environmentObject(lifecycle).environmentObject(scopeStore).environment(loginItem)
             .environmentObject(safetyMonitor).environmentObject(photoChangeAdapter)
             .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
             .onAppear { [counter] in counter.record("settings-root-visible") })
@@ -242,6 +244,21 @@ import Testing
       issues()
       #expect(f.selectedAtOpen == nil, "A retained action must not reopen a dismissed summary")
     }
+    /// The Auto Export tab's login toggle and footer read the controller's status, so a
+    /// refresh that finds a new status must re-render them.
+    @Test func autoExportTabFollowsLoginItemStatus() async throws {
+      let f = Fixture()
+      defer { f.close() }
+      f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
+      f.showSettings()
+      let initial = LoginItemController.Status.notRegistered.footerText
+      try #require(await observe { f.counter.renderedText["login-item-footer"] == [initial] })
+      f.loginService.status = .requiresApproval
+      f.loginItem.refresh()
+      let updated = LoginItemController.Status.requiresApproval.footerText
+      #expect(await observe { f.counter.renderedText["login-item-footer"] == [updated] })
+    }
+
     @Test func dismissRetiresOldCountersAndCannotDismissReplacement() async throws {
       let f = Fixture()
       defer { f.close() }

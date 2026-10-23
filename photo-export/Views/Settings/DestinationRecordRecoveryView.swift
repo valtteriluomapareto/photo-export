@@ -46,7 +46,7 @@ struct DestinationRecordRecoveryView: View {
   let onUseAsIs: (() -> Void)?
 
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(\.dismiss) private var dismiss
 
@@ -104,13 +104,17 @@ struct DestinationRecordRecoveryView: View {
   // MARK: - Subviews
 
   private var header: some View {
-    HStack(spacing: 10) {
+    let title = headerTitle
+    return HStack(spacing: 10) {
       Image(systemName: headerSymbol)
         .foregroundStyle(.orange)
         .font(.title2)
       VStack(alignment: .leading, spacing: 2) {
-        Text(headerTitle)
+        Text(title)
           .font(.headline)
+          #if DEBUG
+            .background { RecoveryHeaderRecord(title: title) }
+          #endif
         Text(headerSubtitle)
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -364,3 +368,17 @@ struct DestinationRecordRecoveryView: View {
       && !exportManager.hasActiveExportWork
   }
 }
+
+#if DEBUG
+  /// Records the title from the mounted header's text background.
+  private struct RecoveryHeaderRecord: View {
+    let title: String
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+
+    var body: some View {
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([title], for: "destination-recovery-header")
+      Color.clear
+    }
+  }
+#endif

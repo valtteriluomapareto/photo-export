@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Failed variants from current export records, with matching Auto Export retry history.
 struct ExportIssuesView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @EnvironmentObject private var autoSyncManager: AutoSyncManager
   @State private var loadedMetadata:
     (request: ExportIssueMetadataRequest, values: [String: ExportIssue.AssetMetadata])?
@@ -10,8 +10,8 @@ struct ExportIssuesView: View {
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(ExportRecordStore.self) private var exportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
 
   private var snapshot: ExportIssuesProjection.Snapshot {
     ExportIssuesProjection.snapshot(

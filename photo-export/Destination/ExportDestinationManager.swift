@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CryptoKit
 import Foundation
 import SwiftUI
@@ -9,6 +10,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   // MARK: - Published State
   @Published private(set) var selectedFolderURL: URL?
   @Published private(set) var isAvailable: Bool = false
+  /// `$isAvailable` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var isAvailablePublisher: AnyPublisher<Bool, Never> { $isAvailable.eraseToAnyPublisher() }
   @Published private(set) var isWritable: Bool = false
   @Published private(set) var status: ExportDestinationStatus = .noSelection
   var statusMessage: String? { status.statusMessage }
@@ -21,6 +25,11 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// (identity-confidence) only. See `DestinationIdentity` and
   /// `docs/reference/architecture-conventions.md` §Destination identity.
   @Published private(set) var identity: DestinationIdentity = .unavailable
+  /// `$identity` for subscribers outside this type: synchronous, delivered before the
+  /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  var identityPublisher: AnyPublisher<DestinationIdentity, Never> {
+    $identity.eraseToAnyPublisher()
+  }
 
   /// Read-through of `identity.stableId` for synchronous callers (diagnostics, tests). This is
   /// the keying id every per-destination store uses. `nil` while the destination is

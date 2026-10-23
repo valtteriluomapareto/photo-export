@@ -288,7 +288,7 @@ struct AmbiguousSameFolderTests {
     let confirmations = InMemoryDestinationSafetyConfirmationStore()
     try confirmations.confirm(destinationId: stableId)
     let safetyMonitor = DestinationSafetyMonitor(
-      identityPublisher: destinationManager.$identity.eraseToAnyPublisher(),
+      identityPublisher: destinationManager.identityPublisher,
       exportRecordStore: timelineStore, collectionExportRecordStore: collectionStore,
       confirmationStore: confirmations, scanDirectory: { @MainActor in false })
     let adapter = DestinationSnapshotAdapter(
@@ -296,7 +296,7 @@ struct AmbiguousSameFolderTests {
       safetyMonitor: safetyMonitor)
     lifecycle.attach(
       initial: DestinationIdentitySnapshot(identity: destinationManager.identity),
-      identityPublisher: destinationManager.$identity.eraseToAnyPublisher())
+      identityPublisher: destinationManager.identityPublisher)
     safetyMonitor.attach()
 
     let builder = FakeAutoSyncEnvironmentBuilder()

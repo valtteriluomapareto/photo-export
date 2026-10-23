@@ -422,7 +422,7 @@ struct MonthViewModelTests {
     try await withCleanup {
       let vm = MonthViewModel(photoLibraryService: svc)
       let firstVisible = AsyncCheckpoint()
-      let subscription = vm.$selectedAssetId.sink { id in
+      let subscription = vm.selectedAssetIdPublisher.sink { id in
         if id == "first" { Task { await firstVisible.enter() } }
       }
       try await withCleanup {
@@ -886,5 +886,94 @@ struct MonthViewModelTests {
 
     #expect(vm.assets.map(\.id) == ["wrapper"])
     #expect(vm.selectedAssetId == "wrapper")
+  }
+
+  // MARK: - Observation
+
+  /// The month and collection grids own the model as `@State`, which builds a new one on every
+  /// view init and keeps only the first, so building one must not touch the library.
+  @Test func initMakesNoServiceCalls() async {
+    let service = RecordingPhotoLibraryService()
+    let model = MonthViewModel(photoLibraryService: service)
+    // Work the init schedules on the main actor would have run by now.
+    for _ in 0..<10 { await Task.yield() }
+    #expect(service.calls.isEmpty)
+    withExtendedLifetime(model) {}
+  }
+
+  /// The grids' error overlay reads `errorMessage`: a failing load must notify it once (the
+  /// load's opening clear of an absent message stores an equal value).
+  @Test func errorMessageReadersAreNotifiedByAFailingLoad() async {
+    let service = FakePhotoLibraryService()
+    service.fetchAssetsError = NSError(
+      domain: "Test", code: 7, userInfo: [NSLocalizedDescriptionKey: "boom"])
+    let model = MonthViewModel(photoLibraryService: service)
+    let error = ObservationProbe { _ = model.errorMessage }
+    await model.loadAssets(for: .timeline(year: 2025, month: 4))
+    #expect(error.changeCount == 1)
+    #expect(model.errorMessage == "boom")
+  }
+
+  /// The grids' spinner reads `isLoading`: a load on a new scope turns it on, then off at the
+  /// first batch, and the later stores of `false` are equal writes.
+  @Test func isLoadingReadersFollowAFreshLoad() async {
+    let service = FakePhotoLibraryService()
+    service.assetsByYearMonth["2025-6"] = [makeAsset(id: "a0")]
+    service.assetsByYearMonth["2025-7"] = [makeAsset(id: "b0")]
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .timeline(year: 2025, month: 6))
+    let loading = ObservationProbe { _ = model.isLoading }
+    await model.loadAssets(for: .timeline(year: 2025, month: 7))
+    #expect(loading.changeCount == 2)
+    #expect(!model.isLoading)
+  }
+
+  /// The grid bodies render `assets`, `isLoading` and `errorMessage`; the selection reaches
+  /// them through the binding instead. Selecting, an idle deactivate and a refresh that finds
+  /// the same assets must not re-render the grid, and a refresh with new content must.
+  @Test func gridReadersFollowContentButNotSelection() async {
+    let service = FakePhotoLibraryService()
+    service.assetsByYearMonth["2025-6"] = (0..<3).map { makeAsset(id: "a\($0)") }
+    let model = MonthViewModel(photoLibraryService: service)
+    let scope = PhotoFetchScope.timeline(year: 2025, month: 6)
+    await model.loadAssets(for: scope)
+    let grid = ObservationProbe {
+      _ = model.assets
+      _ = model.isLoading
+      _ = model.errorMessage
+    }
+    let selection = ObservationProbe { _ = model.selectedAssetId }
+
+    model.select(assetId: "a1")
+    model.select(assetId: "a1")
+    await model.refresh(for: scope)
+    #expect(grid.changeCount == 0)
+    #expect(selection.changeCount == 1)
+
+    service.assetsByYearMonth["2025-6"]?.append(makeAsset(id: "a3"))
+    await model.refresh(for: scope)
+    #expect(grid.changeCount == 1)
+    #expect(selection.changeCount == 1, "The selected asset survived the refresh")
+
+    model.deactivate()
+    #expect(grid.changeCount == 1, "Deactivating an idle grid stores an unchanged isLoading")
+  }
+
+  /// `selectedAssetId` is written by hand around its bridge, so a wrong key path would notify
+  /// the grid's readers instead of the selection's.
+  @Test func selectionWriteNotifiesOnlyItsOwnReaders() async {
+    let service = FakePhotoLibraryService()
+    service.assetsByYearMonth["2025-6"] = (0..<2).map { makeAsset(id: "a\($0)") }
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .timeline(year: 2025, month: 6))
+    let selection = ObservationProbe { _ = model.selectedAssetId }
+    let siblings = [
+      ObservationProbe { _ = model.assets },
+      ObservationProbe { _ = model.isLoading },
+      ObservationProbe { _ = model.errorMessage },
+    ]
+    model.select(assetId: "a1")
+    #expect(selection.changeCount == 1)
+    #expect(siblings.map(\.changeCount) == [0, 0, 0])
   }
 }

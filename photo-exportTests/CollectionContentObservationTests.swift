@@ -13,11 +13,12 @@ import Testing
       @Published var selection: LibrarySelection = .favorites
       @Published var title = "Favorites"
       @Published var asset: AssetDescriptor?
+      @Published var renderPhase = 0
     }
 
     @MainActor
     private struct Parent: View {
-      @ObservedObject var manager: ExportManager
+      let manager: ExportManager
       @ObservedObject var navigation: Navigation
       let service: FakePhotoLibraryService
       let counter: BodyInvalidationCounter
@@ -27,6 +28,7 @@ import Testing
         // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("parent:\(manager.queueCount)")
         let scope = navigation.selection
+        let phase = navigation.renderPhase
         let pane = CollectionContentView(
           selection: navigation.selection, title: navigation.title,
           versionSelection: manager.versionSelection,
@@ -42,6 +44,10 @@ import Testing
           selectedAsset: $navigation.asset, photoLibraryService: service
         )
         pane.equatable()
+          .overlay {
+            Color.clear.frame(width: 1, height: 1)
+              .task(id: phase) { counter.record("render-phase:\(phase)") }
+          }
       }
     }
 
@@ -49,6 +55,7 @@ import Testing
     private final class Fixture {
       let navigation = Navigation()
       let counter = BodyInvalidationCounter()
+      let clock = TestClock()
       let service: FakePhotoLibraryService
       let library: PhotoLibraryManager
       let manager: ExportManager
@@ -62,15 +69,17 @@ import Testing
       let window: NSWindow
       let favorite = ExportPlacement.favorites()
 
-      init() {
+      init(preselectFirstAsset: Bool = false) {
         service = BulkLibraryFixture.makeFakeLibrary(
           timelineAssets: 0,
           albumFolders: 1, albumsPerFolder: 1, assetsPerAlbum: 10_000)
         service.favoritesAssets = service.assetsByAlbumLocalId["bulk-album-0-0"]!
+        // Seed selection before the host captures the pane's rendering inputs.
+        if preselectFirstAsset { navigation.asset = service.favoritesAssets.first }
         library = PhotoLibraryManager(overrideService: service)
         defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline = ExportRecordStore(baseDirectoryURL: root)
-        records = CollectionExportRecordStore(baseDirectoryURL: root)
+        records = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
         timeline.configure(for: "test")
         records.configure(for: "test")
         records.upsertPlacement(favorite)
@@ -87,7 +96,7 @@ import Testing
             manager: manager, navigation: navigation,
             service: service, counter: counter
           )
-          .environmentObject(library).environmentObject(records).environmentObject(manager)
+          .environment(library).environment(records).environment(manager)
           .environmentObject(destination).environment(\.bodyInvalidationCounter, counter))
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 600, height: 400),
@@ -111,10 +120,10 @@ import Testing
         fakeDestination.cleanup()
       }
 
-      func renderBarrier() async {
-        window.contentView?.layoutSubtreeIfNeeded()
-        // Let the acknowledged parent transaction commit its children through AppKit.
-        try? await Task.sleep(for: .milliseconds(30))
+      func renderBarrier() async throws {
+        navigation.renderPhase += 1
+        let key = "render-phase:\(navigation.renderPhase)"
+        try #require(await observe(in: window) { counter.count(for: key) > 0 })
         window.contentView?.layoutSubtreeIfNeeded()
       }
 
@@ -132,7 +141,7 @@ import Testing
     /// modifier alone doesn't fail this.
     @Test(.timeLimit(.minutes(2)))
     func unrelatedQueuePublicationsDoNotRescanLoadedCollection() async throws {
-      let f = Fixture()
+      let f = Fixture(preselectFirstAsset: true)
       defer { f.close() }
       f.show()
       let loaded = await observe(in: f.window) {
@@ -142,7 +151,7 @@ import Testing
       try #require(
         loaded, "Must measure a loaded collection with an actual matching placement: \(diagnostics)"
       )
-      await f.renderBarrier()
+      try await f.renderBarrier()
       let scans = f.counter.count(for: "summaryScan")
       let bodies = f.counter.count(for: "collectionBody")
       let revision = f.records.mutationCounter
@@ -159,11 +168,11 @@ import Testing
         ])
         let acknowledged = await observe(in: f.window) { f.counter.count(for: key) > parent }
         try #require(acknowledged, "Parent must process the actual queue-count publication")
-        await f.renderBarrier()
+        try await f.renderBarrier()
       }
       // Surface any record publication still inside its coalescing window.
       f.records.flushPendingNotifications()
-      await f.renderBarrier()
+      try await f.renderBarrier()
       #expect(f.records.mutationCounter == revision, "record publication during the loop")
       let extraScans = f.counter.count(for: "summaryScan") - scans
       let extraBodies = f.counter.count(for: "collectionBody") - bodies
@@ -195,6 +204,7 @@ import Testing
           assetId: asset.id, placement: f.favorite, variant: .original,
           filename: "IMG.JPG", exportedAt: Date())
       }
+      f.records.flushPendingNotifications()
       f.show()
       let initial = await observe(in: f.window) {
         f.counter.count(for: "summary:3/3") > 0 && f.counter.count(for: "selected:adjusted") > 0
@@ -218,6 +228,7 @@ import Testing
       f.records.markVariantExported(
         assetId: adjusted.id, placement: f.favorite, variant: .original,
         filename: "ORIGINAL.HEIC", exportedAt: Date())
+      f.records.flushPendingNotifications()
       let status = await observe(in: f.window) {
         f.counter.count(for: "summary:2/3") > beforeStatus
       }
@@ -240,6 +251,9 @@ import Testing
       f.records.markVariantExported(
         assetId: adjusted.id, placement: shared, variant: .original,
         filename: "SHARED.JPG", exportedAt: Date())
+      f.records.flushPendingNotifications()
+      try #require(
+        f.clock.pendingCount == 0, "Record publications must finish before shared-album navigation")
       f.service.assetsBySharedAlbumLocalId["shared"] = [adjusted]
       f.navigation.asset = nil
       f.navigation.selection = .sharedAlbum(collectionId: "shared")

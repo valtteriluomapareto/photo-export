@@ -43,7 +43,7 @@ struct AssetDetailPreviewRevisionTests {
         rootView: AssetDetailView(
           asset: TestAssetFactory.makeAsset(id: "A"), placement: .timeline(year: 2025, month: 1)
         )
-        .environmentObject(manager).environmentObject(timeline).environmentObject(collections)
+        .environment(manager).environment(timeline).environment(collections)
         .environment(\.bodyInvalidationCounter, counter))
       window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 360, height: 540),

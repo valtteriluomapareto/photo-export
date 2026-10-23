@@ -12,7 +12,7 @@ struct TimelineSidebarView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   /// Multi-select state bound from `LibraryRootView`. The binding filter below
   /// strips non-timeline values defensively so the sidebar can never persist a
@@ -22,14 +22,13 @@ struct TimelineSidebarView: View {
   @State private var years: [Int] = []
   @State private var expandedYears: Set<Int> = []
   @State private var assetCountsByYear: [Int: Int] = [:]
-  @StateObject private var counts: TimelineSidebarCounts
+  @State private var counts: TimelineSidebarCounts
 
   init(
     selectionSet: Binding<Set<LibrarySelection>>, photoLibraryService: any PhotoLibraryService
   ) {
     self._selectionSet = selectionSet
-    _counts = StateObject(
-      wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
+    _counts = State(wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
   }
 
   var body: some View {
@@ -100,7 +99,6 @@ struct TimelineSidebarView: View {
     .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
       handleAppear()
     }
-    .measureBodyInvalidations("TimelineSidebarView")
   }
 
   // MARK: - Selection bridging
@@ -139,7 +137,7 @@ struct TimelineSidebarView: View {
       preferredYear = year
     }
     // Fan out per-month total + adjusted count fetches for every year. Lands
-    // progressively via `@Published` updates on `counts` — collapsed years'
+    // progressively via observed updates on `counts` — collapsed years'
     // badges populate as their data arrives. The current year (if selected)
     // goes first so its data is ready by the time the user might expand it.
     let yearsCopy = years

@@ -81,7 +81,7 @@ struct TimelineCountRefreshTests {
       return adjusted ? 1 : 2
     }
     var observed: [String] = []
-    let subscription = loader.$countsByYearMonth.sink { snapshot in
+    let subscription = loader.countsByYearMonthPublisher.sink { snapshot in
       observed.append("\(snapshot["2025-1"]?.total ?? -1):\(snapshot["2025-1"]?.adjusted ?? -1)")
     }
     let refresh = Task { await loader.loadCounts(forYears: [2025]) }
@@ -115,14 +115,17 @@ struct TimelineCountRefreshTests {
     service.cachedCountOverride = { _, adjusted in adjusted ? 0 : 1 }
     let loader = TimelineSidebarCounts(service: service)
     await loader.loadCounts(forYears: [2025])
-    var publications = 0
-    let subscription = loader.objectWillChange.sink { publications += 1 }
+    let probe = ObservationProbe {
+      _ = loader.countsByYearMonth
+      _ = loader.lastError
+    }
     var snapshots = 0
-    let countSubscription = loader.$countsByYearMonth.dropFirst().sink { _ in snapshots += 1 }
+    let countSubscription = loader.countsByYearMonthPublisher.dropFirst()
+      .sink { _ in snapshots += 1 }
     await loader.loadCounts(forYears: [2025])
-    #expect(publications == 0)
+    #expect(probe.changeCount == 0)
     #expect(snapshots == 0)
-    withExtendedLifetime((subscription, countSubscription)) {}
+    withExtendedLifetime(countSubscription) {}
   }
 
   @Test(arguments: [true, false])

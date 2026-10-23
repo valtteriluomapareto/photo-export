@@ -53,8 +53,10 @@ struct LibraryWindowSizeTests {
       styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
       toolbarStyle: .unified)
     window.contentView = NSHostingView(
-      rootView: hosted.environment(LibraryRootView(screenshotSurfaceKey: nil))
-        .defaultAppStorage(defaults))
+      rootView: hosted.environment(
+        LibraryRootView(screenshotSurfaceKey: nil, timelineHistoryState: .ready)
+      )
+      .defaultAppStorage(defaults))
     try await withCleanup {
       window.orderFront(nil)
       window.layoutIfNeeded()

@@ -3,9 +3,9 @@ import Photos
 import SwiftUI
 
 struct AssetDetailView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(ExportRecordStore.self) private var exportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
 
   let asset: AssetDescriptor?
   let placement: ExportPlacement?
@@ -23,7 +23,7 @@ struct AssetDetailView: View {
     let color: Color
   }
 
-  @StateObject private var imageLoader = AssetDetailImageLoader()
+  @State private var imageLoader = AssetDetailImageLoader()
 
   private struct LoadIdentity: Hashable {
     let assetId: String?

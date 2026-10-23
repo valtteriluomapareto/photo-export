@@ -13,10 +13,10 @@ struct HostedViewHarness {
   let whatsNew: WhatsNewState
 
   func environment<Content: View>(_ root: Content) -> some View {
-    root.environmentObject(library).environmentObject(export.store)
-      .environmentObject(export.collectionStore).environmentObject(export.manager)
-      .environmentObject(export.manager.progressState).environmentObject(destination)
-      .environmentObject(autoSync).environmentObject(whatsNew)
+    root.environment(library).environment(export.store)
+      .environment(export.collectionStore).environment(export.manager)
+      .environment(export.manager.progressState).environmentObject(destination)
+      .environmentObject(autoSync).environment(whatsNew)
   }
 
   static func makeWindow(

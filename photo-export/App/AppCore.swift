@@ -74,7 +74,7 @@ final class AppCore {
       phAssetCacheControl: composition.phAssetCacheControl(plm), userDefaults: defaults)
     // Drive the PhotoLibraryManager `descriptor(from:)` Live Photo resource fallback from the
     // toggle ExportManager owns. Synchronous sink so the next fetch sees the current value;
-    // the initial value flows immediately because `@Published` re-emits to new subscribers.
+    // the named bridge accessor synchronously replays its current value to new subscribers.
     plm.bindLivePhotoDetectionFallback(to: em.livePhotosPairedExportPublisher)
 
     let configure: (String?) -> ConfigureRecordStoresResult = { [edm, ers, cers] newId in
@@ -111,7 +111,7 @@ final class AppCore {
     // counts refresh alongside AutoSync. `[weak plm]` to avoid pinning the manager.
     let photoAdapter = PhotoLibraryPersistentChangeAdapter(
       tokenStore: tokenStore,
-      authorizationStatusPublisher: plm.$authorizationStatus.eraseToAnyPublisher(),
+      authorizationStatusPublisher: plm.authorizationStatusPublisher,
       clock: clock,
       onPotentialLibraryChange: { [weak plm] in plm?.invalidateCache() }
     )
@@ -182,7 +182,7 @@ final class AppCore {
     // Configures the record stores for the current destination and follows its changes.
     lifecycleCoordinator.attach(
       initial: DestinationIdentitySnapshot(identity: exportDestinationManager.identity),
-      identityPublisher: exportDestinationManager.$identity.eraseToAnyPublisher()
+      identityPublisher: exportDestinationManager.identityPublisher
     )
     if composition.wiresAutoSync {
       // After the lifecycle coordinator, so the destination snapshot adapter sees the
@@ -325,19 +325,19 @@ extension View {
   /// screenshot-mode flag and surface, and its preferences suite as the default
   /// `@AppStorage` store.
   func photoExportEnvironment(_ core: AppCore) -> some View {
-    environmentObject(core.exportDestinationManager)
-      .environmentObject(core.photoLibraryManager)
-      .environmentObject(core.exportManager)
-      .environmentObject(core.exportManager.progressState)
-      .environmentObject(core.exportRecordStore)
-      .environmentObject(core.collectionExportRecordStore)
+    self.environmentObject(core.exportDestinationManager)
+      .environment(core.photoLibraryManager)
+      .environment(core.exportManager)
+      .environment(core.exportManager.progressState)
+      .environment(core.exportRecordStore)
+      .environment(core.collectionExportRecordStore)
       .environmentObject(core.lifecycleCoordinator)
       .environmentObject(core.autoSyncManager)
       .environmentObject(core.autoSyncScopeStore)
       .environmentObject(core.autoSyncPhotoChangeAdapter)
       .environmentObject(core.destinationSafetyMonitor)
-      .environmentObject(core.loginItemController)
-      .environmentObject(core.whatsNewState)
+      .environment(core.loginItemController)
+      .environment(core.whatsNewState)
       .environment(\.isScreenshotMode, core.composition.isScreenshotMode)
       .environment(\.screenshotSurfaceKey, core.composition.screenshotSurfaceKey)
       .defaultAppStorage(core.composition.defaults)

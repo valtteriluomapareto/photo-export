@@ -102,11 +102,11 @@ struct LibraryGridSelectionLifecycleTests {
         userDefaults: defaults)
       let hosted = NSHostingView(
         rootView: HostedGrid(grid: grid, service: service, selection: selection)
-          .environmentObject(library)
+          .environment(library)
           .environment(\.bodyInvalidationCounter, counter)
-          .environmentObject(timelineStore)
-          .environmentObject(collectionStore)
-          .environmentObject(manager)
+          .environment(timelineStore)
+          .environment(collectionStore)
+          .environment(manager)
           .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults)))
       hostingView = hosted
       window = NSWindow(

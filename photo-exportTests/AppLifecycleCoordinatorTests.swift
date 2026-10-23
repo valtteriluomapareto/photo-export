@@ -123,7 +123,7 @@ struct AppLifecycleCoordinatorTests {
       configureRecordStores: { _ in .success }
     )
     var emissions = 0
-    let cancellable = coordinator.$currentDestination.dropFirst().sink { _ in
+    let cancellable = coordinator.currentDestinationPublisher.dropFirst().sink { _ in
       emissions += 1
     }
 

@@ -1,12 +1,14 @@
 import AppKit
 import Combine
 import Foundation
+import Observation
 import Photos
 import SwiftUI
 import os
 
+@Observable
 @MainActor
-final class ExportManager: ObservableObject {
+final class ExportManager {
   /// User-facing persistence key for the active version selection.
   static let versionSelectionDefaultsKey = "exportVersionSelection"
   /// Persistence key for the Live Photo paired-video export toggle.
@@ -57,14 +59,24 @@ final class ExportManager: ObservableObject {
     var month: Int { placement.timelineYearMonth?.month ?? 0 }
   }
 
-  // MARK: - Published State (Export)
-  @Published private(set) var isRunning: Bool = false
-  @Published private(set) var queueCount: Int = 0
-  @Published private(set) var isPaused: Bool = false
+  // MARK: - Export state
+  // `isRunning`, `queueCount`, `activeRunContext` and `isEnqueueingAll` feed
+  // `exportRunStatePublisher`. Each is held in an `ObservableCombineBridge` so views track
+  // them through Observation while AutoSync keeps `@Published` delivery (see `bridgedWrite`).
+  private(set) var isRunning: Bool {
+    get { bridgedRead(isRunningBridge, \.isRunning) }
+    set { bridgedWrite(isRunningBridge, \.isRunning, newValue) }
+  }
+  private let isRunningBridge = ObservableCombineBridge(false)
+  private(set) var queueCount: Int {
+    get { bridgedRead(queueCountBridge, \.queueCount) }
+    set { bridgedWrite(queueCountBridge, \.queueCount, newValue) }
+  }
+  private let queueCountBridge = ObservableCombineBridge(0)
+  private(set) var isPaused: Bool = false
 
-  /// Frequently-mutating progress-bar state lives here so the per-asset filename and
-  /// per-job counter updates don't trigger `ExportManager.objectWillChange` storms.
-  /// See `ExportProgressState` for the rationale and tests-still-pass forwarders below.
+  /// Per-asset progress has its own observable owner. Views track only the progress
+  /// fields they read; the forwarders below preserve the manager's read surface.
   let progressState = ExportProgressState()
 
   /// Forwarders to `progressState`. Read-only at the manager surface so callers that
@@ -77,12 +89,14 @@ final class ExportManager: ObservableObject {
   var emptyRunMessage: String? { progressState.emptyRunMessage }
   var queueWarningMessage: String? { progressState.queueWarningMessage }
 
-  private var emptyRunMessageTask: Task<Void, Never>?
+  @ObservationIgnored private var emptyRunMessageTask: Task<Void, Never>?
 
   /// Which variants the pipeline writes for each asset. Persisted to `UserDefaults` so the
   /// choice survives restart and stays globally consistent regardless of destination.
-  @Published var versionSelection: ExportVersionSelection {
-    didSet {
+  var versionSelection: ExportVersionSelection {
+    get { bridgedRead(versionSelectionBridge, \.versionSelection) }
+    set {
+      bridgedWrite(versionSelectionBridge, \.versionSelection, newValue)
       userDefaults.set(
         versionSelection.rawValue, forKey: Self.versionSelectionDefaultsKey)
       // The "already exported" copy is scoped to the previous selection — under a new
@@ -90,6 +104,7 @@ final class ExportManager: ObservableObject {
       clearEmptyRunMessage()
     }
   }
+  private let versionSelectionBridge: ObservableCombineBridge<ExportVersionSelection>
 
   /// When on, the export pipeline writes JPEG `.edited` variants for
   /// HEIC/HEIF assets by re-encoding via `ImageConverter`. Off by default —
@@ -99,11 +114,13 @@ final class ExportManager: ObservableObject {
   /// When flipped on, already-exported HEIC assets become "incomplete" under
   /// `requiredVariants` (which now requires `.edited` for HEIC) and will
   /// re-enqueue on the next manual or auto-export action. The record stores
-  /// observe `_convertHEICToJPEG` via their own published state so view-side
+  /// mirror `convertHEICToJPEG` in their own observable state so view-side
   /// `isExported` queries stay accurate without callers having to thread the
   /// flag.
-  @Published var convertHEICToJPEG: Bool {
-    didSet {
+  var convertHEICToJPEG: Bool {
+    get { bridgedRead(convertHEICToJPEGBridge, \.convertHEICToJPEG) }
+    set {
+      bridgedWrite(convertHEICToJPEGBridge, \.convertHEICToJPEG, newValue)
       userDefaults.set(convertHEICToJPEG, forKey: Self.convertHEICToJPEGDefaultsKey)
       exportRecordStore.convertHEICToJPEG = convertHEICToJPEG
       collectionExportRecordStore.convertHEICToJPEG = convertHEICToJPEG
@@ -112,12 +129,13 @@ final class ExportManager: ObservableObject {
       clearEmptyRunMessage()
     }
   }
+  private let convertHEICToJPEGBridge: ObservableCombineBridge<Bool>
 
   static let convertHEICToJPEGDefaultsKey = "exportConvertHEICToJPEG"
 
   /// Toolbar/onboarding-friendly view of `versionSelection`. Off ↔ `.edited`, on ↔
   /// `.editedWithOriginals`. Mutations route back through `versionSelection` so
-  /// `@Published` observation and `UserDefaults` persistence flow through one source.
+  /// Observation and `UserDefaults` persistence flow through one source.
   var includeOriginals: Bool {
     get { versionSelection == .editedWithOriginals }
     set { versionSelection = newValue ? .editedWithOriginals : .edited }
@@ -131,14 +149,17 @@ final class ExportManager: ObservableObject {
   /// choice survives restart and stays globally consistent regardless of destination.
   /// Snapshotted onto each `ExportJob` at enqueue time (alongside `selection`) so a
   /// mid-run toggle change does not corrupt in-flight work or strand orphans.
-  @Published var livePhotosPairedExport: Bool {
-    didSet {
+  var livePhotosPairedExport: Bool {
+    get { bridgedRead(livePhotosPairedExportBridge, \.livePhotosPairedExport) }
+    set {
+      bridgedWrite(livePhotosPairedExportBridge, \.livePhotosPairedExport, newValue)
       userDefaults.set(livePhotosPairedExport, forKey: Self.livePhotosPairedExportDefaultsKey)
       // The "already exported" copy is scoped to the previous setting — under a new
       // setting the user may have new work, so the message would be misleading.
       clearEmptyRunMessage()
     }
   }
+  private let livePhotosPairedExportBridge: ObservableCombineBridge<Bool>
 
   /// when `.subfolder`, standalone-video assets land in a `videos/` subfolder
   /// inside the placement (`2026/03/videos/IMG_0002.MOV`) instead of the bare placement
@@ -154,24 +175,36 @@ final class ExportManager: ObservableObject {
   /// `requiredVariants` (no asset becomes "incomplete" when toggled). Reconcile
   /// correctness instead rides on the per-variant `subfolder` field on
   /// `ExportVariantRecord`. Don't add a store push.
-  @Published var videoLayout: ExportVideoLayout {
+  var videoLayout: ExportVideoLayout {
     didSet {
       userDefaults.set(videoLayout.rawValue, forKey: Self.videoLayoutDefaultsKey)
-      // Same rationale as `livePhotosPairedExport.didSet`: a layout change can make
+      // Same rationale as the `livePhotosPairedExport` setter: a layout change can make
       // "already exported" misleading for a future re-export attempt on the same scope.
       clearEmptyRunMessage()
     }
   }
 
-  // MARK: - Published State (Import)
-  @Published private(set) var isImporting: Bool = false
-  @Published private(set) var importStage: BackupScanner.ImportStage?
-  @Published private(set) var importError: String?
-  @Published private(set) var previousBackupMissing: Bool = false
-  @Published var importResult: ImportReport?
+  // MARK: - Import state
+  private(set) var isImporting: Bool {
+    get { bridgedRead(isImportingBridge, \.isImporting) }
+    set { bridgedWrite(isImportingBridge, \.isImporting, newValue) }
+  }
+  private let isImportingBridge = ObservableCombineBridge<Bool>(false)
+  private(set) var importStage: BackupScanner.ImportStage? {
+    get { bridgedRead(importStageBridge, \.importStage) }
+    set { bridgedWrite(importStageBridge, \.importStage, newValue) }
+  }
+  private let importStageBridge = ObservableCombineBridge<BackupScanner.ImportStage?>(nil)
+  private(set) var importError: String?
+  private(set) var previousBackupMissing: Bool {
+    get { bridgedRead(previousBackupMissingBridge, \.previousBackupMissing) }
+    set { bridgedWrite(previousBackupMissingBridge, \.previousBackupMissing, newValue) }
+  }
+  private let previousBackupMissingBridge = ObservableCombineBridge<Bool>(false)
+  var importResult: ImportReport?
   /// Changes each time the app starts an import the user didn't open the Import sheet for, so the
   /// library window shows the sheet (progress, result, or why it didn't run).
-  @Published private(set) var importSheetRequest: UUID?
+  private(set) var importSheetRequest: UUID?
 
   // MARK: - Awaitable run lifecycle
 
@@ -180,7 +213,11 @@ final class ExportManager: ObservableObject {
   /// observing this property see exactly one transition `nil → context → nil` per
   /// awaitable run; no event is emitted for runs started via the existing fire-and-forget
   /// `start*` methods.
-  @Published private(set) var activeRunContext: ExportRunContext?
+  private(set) var activeRunContext: ExportRunContext? {
+    get { bridgedRead(activeRunContextBridge, \.activeRunContext) }
+    set { bridgedWrite(activeRunContextBridge, \.activeRunContext, newValue) }
+  }
+  private let activeRunContextBridge = ObservableCombineBridge<ExportRunContext?>(nil)
 
   /// Composite run-state observable for AutoSync. Republishes whenever the active
   /// context, the running flag, the queue depth, or the bulk-enqueue flag changes
@@ -192,25 +229,28 @@ final class ExportManager: ObservableObject {
   /// `pendingJobs.append`, and race to start its own background run on top of a
   /// user-initiated bulk export.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
-    Publishers.CombineLatest4($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)
-      .map { context, isRunning, queueCount, isEnqueueingAll in
-        let manualFireAndForget =
-          context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
-        return ExportRunState(
-          activeContext: context,
-          isManualActive: context?.source == .manual || manualFireAndForget,
-          isAutoSyncActive: context?.source == .autoSync
-        )
-      }
-      .removeDuplicates()
-      .eraseToAnyPublisher()
+    Publishers.CombineLatest4(
+      activeRunContextBridge.publisher, isRunningBridge.publisher,
+      queueCountBridge.publisher, isEnqueueingAllBridge.publisher
+    )
+    .map { context, isRunning, queueCount, isEnqueueingAll in
+      let manualFireAndForget =
+        context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
+      return ExportRunState(
+        activeContext: context,
+        isManualActive: context?.source == .manual || manualFireAndForget,
+        isAutoSyncActive: context?.source == .autoSync
+      )
+    }
+    .removeDuplicates()
+    .eraseToAnyPublisher()
   }
 
   /// Combine publisher for `versionSelection` so AutoSync can subscribe to user
   /// changes (Include Originals toggle). Without this, the reducer would default
   /// to `.edited` regardless of the user's actual setting.
   var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> {
-    $versionSelection.eraseToAnyPublisher()
+    versionSelectionBridge.publisher
   }
 
   /// Combine publisher for `convertHEICToJPEG`. AutoSync subscribes
@@ -218,24 +258,49 @@ final class ExportManager: ObservableObject {
   /// previously skipped as "already exported" become eligible once
   /// `requiredVariants` widens to include `.edited`.
   var convertHEICToJPEGPublisher: AnyPublisher<Bool, Never> {
-    $convertHEICToJPEG.eraseToAnyPublisher()
+    convertHEICToJPEGBridge.publisher
   }
 
   /// Combine publisher for `livePhotosPairedExport`. `PhotoLibraryManager`
   /// subscribes via `bindLivePhotoDetectionFallback(to:)` so the resource-enumeration
   /// fallback runs only when the user has the toggle on.
   var livePhotosPairedExportPublisher: AnyPublisher<Bool, Never> {
-    $livePhotosPairedExport.eraseToAnyPublisher()
+    livePhotosPairedExportBridge.publisher
   }
 
   /// Combine publisher for the import flag.
   var isImportingPublisher: AnyPublisher<Bool, Never> {
     // A "previous backup missing" result holds AutoSync like a running import until the user
     // decides, so nothing is exported into the folder they were just told is wrong.
-    $isImporting.combineLatest($previousBackupMissing)
+    isImportingBridge.publisher.combineLatest(previousBackupMissingBridge.publisher)
       .map { $0 || $1 }
       .removeDuplicates()
       .eraseToAnyPublisher()
+  }
+
+  // The accessors below expose single properties to subscribers outside this type with
+  // `$property` semantics: synchronous, delivered before the value is stored, and replaying
+  // the current value (pinned by `PublisherParityTests`), from the contract bridges.
+
+  /// The import activity flag alone. `isImportingPublisher` is AutoSync's hold, which also covers a
+  /// missing previous backup and drops repeats.
+  var isImportingFlagOnlyPublisher: AnyPublisher<Bool, Never> {
+    isImportingBridge.publisher
+  }
+
+  /// `$importStage`.
+  var importStagePublisher: AnyPublisher<BackupScanner.ImportStage?, Never> {
+    importStageBridge.publisher
+  }
+
+  /// `activeRunContext`, from its bridge.
+  var activeRunContextPublisher: AnyPublisher<ExportRunContext?, Never> {
+    activeRunContextBridge.publisher
+  }
+
+  /// `isEnqueueingAll`, from its bridge.
+  var isEnqueueingAllPublisher: AnyPublisher<Bool, Never> {
+    isEnqueueingAllBridge.publisher
   }
 
   /// Emits an `ExportRunSummary` whenever a `runExport(context:)` run reaches a
@@ -265,7 +330,8 @@ final class ExportManager: ObservableObject {
   /// `ExportManager` enqueue paths that call it are already `@MainActor`,
   /// so this is a no-op at runtime but prevents future off-main callers
   /// from compiling.
-  var autoSyncEligibilityCheck: (@MainActor (String, ExportPlacement, ExportVariant, Date) -> Bool)?
+  @ObservationIgnored var autoSyncEligibilityCheck:
+    (@MainActor (String, ExportPlacement, ExportVariant, Date) -> Bool)?
 
   private struct ActiveRunBookkeeping {
     let totalJobsEnqueuedAtStart: Int
@@ -296,7 +362,7 @@ final class ExportManager: ObservableObject {
     /// change-event-driven debounce retries.
     var incompleteScan: Bool = false
   }
-  private var activeRunBookkeeping: ActiveRunBookkeeping?
+  @ObservationIgnored private var activeRunBookkeeping: ActiveRunBookkeeping?
 
   private struct ManualRunFeedback {
     let generation: Int
@@ -305,7 +371,7 @@ final class ExportManager: ObservableObject {
     var failureSignals = 0
     var failureMessage: String?
   }
-  private var manualRunFeedback: ManualRunFeedback?
+  @ObservationIgnored private var manualRunFeedback: ManualRunFeedback?
 
   /// Whether the export queue is active (has pending/in-flight work).
   var hasActiveExportWork: Bool {
@@ -359,7 +425,7 @@ final class ExportManager: ObservableObject {
   /// property has a value. The IUO is assigned at the end of `init` (before init exits)
   /// and never reassigned thereafter; it retires whenever the Host protocol shrinks
   /// to zero callbacks that need `self` (a future refactor task — not load-bearing).
-  private(set) var variantExporter: VariantExporter!
+  @ObservationIgnored private(set) var variantExporter: VariantExporter!
   let assetResourceWriter: any AssetResourceWriter
   // `var` rather than `let` so we can rebind it at the end of `init` with a
   // callback that captures `self` weakly. Swift forbids referencing `self`
@@ -369,7 +435,7 @@ final class ExportManager: ObservableObject {
   // ready. Functionally a `let`; the `var` is purely for the init order.
   // DO NOT change this back to `let` without re-examining the closure
   // capture in `init` — the rebind is the whole point.
-  private(set) var mediaRenderer: any MediaRenderer
+  @ObservationIgnored private(set) var mediaRenderer: any MediaRenderer
   /// Seam for the HEIC→JPEG conversion path. `VariantExporter` invokes
   /// it through this reference. Defaults to `ProductionImageConverter` (a thin
   /// CoreImage wrapper); tests inject `FakeImageConverter`.
@@ -399,7 +465,8 @@ final class ExportManager: ObservableObject {
 
   // Unpublished lifetime handles for deterministic preparation completion.
   // These do not participate in UI/AutoSync admission or publications.
-  private var preparationTasks: [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
+  @ObservationIgnored private var preparationTasks:
+    [UUID: (generation: Int, task: Task<Void, Never>)] = [:]
   var currentPreparationTasks: [Task<Void, Never>] {
     preparationTasks.values.filter { $0.generation == generation }.map(\.task)
   }
@@ -425,36 +492,49 @@ final class ExportManager: ObservableObject {
   /// Owns `pendingJobs`, `isProcessing`, `currentTask`, the per-placement queue
   /// counters, and the drain loop. ExportManager forwards reads via computed properties
   /// below (for call-site stability) and forwards control calls (`pause`, `resume`,
-  /// `clearPending`, `processQueueIfNeeded`). The @Published mirrors on this manager
-  /// (`isRunning`, `isPaused`, `queueCount`, `totalJobsEnqueued`, `totalJobsCompleted`)
-  /// are kept in sync with the coordinator's own publishers via sinks established in
-  /// `init` — so existing UI bindings and the AutoSync `exportRunStatePublisher` keep
-  /// emitting from the same `ExportManager` source.
+  /// `clearPending`, `processQueueIfNeeded`). Synchronous sinks in `init` update the
+  /// manager's bridged running/depth values, tracked pause flag and progress-state
+  /// counters, preserving the UI reads and AutoSync's named publisher contract.
   ///
   /// IUO for the same `host: self` cycle as `variantExporter` (see that property above)
   /// — `self` must be fully initialized before the coordinator can hold it as Host.
-  private(set) var queueCoordinator: ExportQueueCoordinator!
+  @ObservationIgnored private(set) var queueCoordinator: ExportQueueCoordinator!
 
   /// Owns the Import Existing Backup flow. `isImporting`,
   /// `importStage` and `importError` on this manager are sink-driven mirrors of the coordinator's
   /// publishers (same shape as the queue coordinator mirrors). `importResult` stays
   /// writable on the manager because external callers (test code) sometimes reset it
   /// directly; the coordinator writes through `Host.setImportResult`.
-  private(set) var importCoordinator: ImportCoordinator!
-  private var importCancellables: Set<AnyCancellable> = []
-  private var queueCancellables: Set<AnyCancellable> = []
+  @ObservationIgnored private(set) var importCoordinator: ImportCoordinator!
+  @ObservationIgnored private var importCancellables: Set<AnyCancellable> = []
+  @ObservationIgnored private var queueCancellables: Set<AnyCancellable> = []
 
   // Forwarders to the coordinator's internal state. Kept on ExportManager so existing
   // test reads (`manager.pendingJobs`, `manager.currentTask`,
   // `manager.queuedCountsByPlacementId`) and the "fresh-start condition" check in the
   // `start*` methods (`!isProcessing`) don't have to thread through `queueCoordinator`.
-  var pendingJobs: [ExportJob] { queueCoordinator.pendingJobs }
-  var currentTask: Task<Void, Never>? { queueCoordinator.currentTask }
-  var queuedCountsByPlacementId: [String: Int] { queueCoordinator.queuedCountsByPlacementId }
-  var isProcessing: Bool { queueCoordinator.isProcessing }
+  var pendingJobs: [ExportJob] {
+    _ = queueMutationCounter
+    return queueCoordinator.pendingJobs
+  }
+  var currentTask: Task<Void, Never>? {
+    _ = queueMutationCounter
+    return queueCoordinator.currentTask
+  }
+  var queuedCountsByPlacementId: [String: Int] {
+    _ = queueMutationCounter
+    return queueCoordinator.queuedCountsByPlacementId
+  }
+  var isProcessing: Bool {
+    _ = queueMutationCounter
+    return queueCoordinator.isProcessing
+  }
 
-  private(set) var currentJobAssetId: String?
-  private(set) var currentJobVariant: ExportVariant?
+  /// Tracks the coordinator's unpublished values without extra manager publications.
+  private(set) var queueMutationCounter = 0
+
+  @ObservationIgnored private(set) var currentJobAssetId: String?
+  @ObservationIgnored private(set) var currentJobVariant: ExportVariant?
   /// The placement of the job currently in flight. Set in `processNext()` *before*
   /// `currentJobAssetId` and reset everywhere `currentJobAssetId` is reset, so any
   /// cancellation cleanup that observes `currentJobAssetId` is guaranteed to see the
@@ -462,11 +542,9 @@ final class ExportManager: ObservableObject {
   /// cleanup paths to route the `removeVariant` call to the correct store via
   /// `placement.kind`.
   ///
-  /// The observable storage lives on `progressState` so that the per-job mutation
-  /// (set on job start, cleared on job end — twice per asset) doesn't fan out as
-  /// `ExportManager.objectWillChange` to every view holding the manager. The only
-  /// SwiftUI reader is `MonthRow`'s in-flight spinner; it subscribes to
-  /// `ExportProgressState` directly. This forwarder keeps internal write sites in
+  /// The observable storage lives on `progressState`. The per-job mutation
+  /// (set on job start, cleared on job end) notifies the in-flight spinner's direct
+  /// `ExportProgressState` dependency. This forwarder keeps internal write sites in
   /// the manager unchanged. `private(set)` preserves the pre-extraction surface —
   /// only the manager (and a `setCurrentJob` / `clearCurrentJobIdentifiers` it
   /// owns) may mutate the in-flight placement.
@@ -479,12 +557,16 @@ final class ExportManager: ObservableObject {
   /// preserves `manager.generation` as a stable read surface for tests and
   /// in-module callers.
   var generation: Int { queueCoordinator.generation }
-  /// `@Published` so AutoSync's `exportRunStatePublisher` can include the
+  /// Published (through its bridge) so AutoSync's `exportRunStatePublisher` can include the
   /// bulk-enqueue window (after the dispatcher flips this true but before the
   /// first job lands in `pendingJobs`) in its idle/active decision. Without this,
   /// AutoSync would race to start a background run
   /// during the multi-select / Export-All dispatcher's mid-enqueue window.
-  @Published private(set) var isEnqueueingAll: Bool = false
+  private(set) var isEnqueueingAll: Bool {
+    get { bridgedRead(isEnqueueingAllBridge, \.isEnqueueingAll) }
+    set { bridgedWrite(isEnqueueingAllBridge, \.isEnqueueingAll, newValue) }
+  }
+  private let isEnqueueingAllBridge = ObservableCombineBridge(false)
   /// Forwarder to the import coordinator's task handle so existing test reads
   /// (`manager.importTask`) and the `waitForImportCompletion` test helper continue to
   /// resolve against the same in-flight Task.
@@ -531,19 +613,19 @@ final class ExportManager: ObservableObject {
     } else {
       self.mediaRenderer = ProductionMediaRenderer { _ in }
     }
+    let versionSelection: ExportVersionSelection
     if let raw = userDefaults.string(forKey: Self.versionSelectionDefaultsKey),
       let saved = ExportVersionSelection(rawValue: raw)
     {
-      self.versionSelection = saved
+      versionSelection = saved
     } else {
-      self.versionSelection = .edited
+      versionSelection = .edited
     }
-    // `bool(forKey:)` returns `false` for an unset key — the off-by-default
-    // contract is implicit. Initial values flow into both record stores via
-    // the manual sync below (didSet is suppressed during init). All stored
-    // properties must be assigned before any `self.` access, so the Live
-    // Photo paired-video toggle is set first.
-    self.livePhotosPairedExport = userDefaults.bool(forKey: Self.livePhotosPairedExportDefaultsKey)
+    self.versionSelectionBridge = ObservableCombineBridge(versionSelection)
+    // Seed the persisted settings without running their setter side effects. The explicit
+    // store synchronization below also handles unset boolean defaults, which read as false.
+    let livePhotosPairedExport = userDefaults.bool(forKey: Self.livePhotosPairedExportDefaultsKey)
+    self.livePhotosPairedExportBridge = ObservableCombineBridge(livePhotosPairedExport)
     if let raw = userDefaults.string(forKey: Self.videoLayoutDefaultsKey),
       let saved = ExportVideoLayout(rawValue: raw)
     {
@@ -551,9 +633,10 @@ final class ExportManager: ObservableObject {
     } else {
       self.videoLayout = .flat
     }
-    self.convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
-    self.exportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
-    self.collectionExportRecordStore.convertHEICToJPEG = self.convertHEICToJPEG
+    let convertHEICToJPEG = userDefaults.bool(forKey: Self.convertHEICToJPEGDefaultsKey)
+    self.convertHEICToJPEGBridge = ObservableCombineBridge(convertHEICToJPEG)
+    self.exportRecordStore.convertHEICToJPEG = convertHEICToJPEG
+    self.collectionExportRecordStore.convertHEICToJPEG = convertHEICToJPEG
     // `self` is fully initialised now — rebind the default renderer with
     // a callback that routes render activity back to `renderActivity`.
     if mediaRenderer == nil {
@@ -614,9 +697,29 @@ final class ExportManager: ObservableObject {
       .store(in: &importCancellables)
   }
 
+  // MARK: - Observation bridge
+  //
+  // Computed bridge properties register with the macro's registrar. A changing write
+  // notifies Observation before synchronous Combine delivery and storage. Equal writes
+  // still reach Combine subscribers while leaving Observation readers unchanged.
+
+  private func bridgedRead<Value>(
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>
+  ) -> Value {
+    access(keyPath: keyPath)
+    return bridge.value
+  }
+
+  private func bridgedWrite<Value>(
+    _ bridge: ObservableCombineBridge<Value>, _ keyPath: KeyPath<ExportManager, Value>,
+    _ newValue: Value
+  ) {
+    bridge.write(newValue) { withMutation(keyPath: keyPath, $0) }
+  }
+
   // MARK: - Lifetime contract
   //
-  // `ExportManager` is owned by `PhotoExportApp` as an `@StateObject` for the entire
+  // `AppCore` owns `ExportManager` for the entire
   // app lifetime, so a pending `runExport` continuation effectively cannot outlive the
   // process. Tests must call `cancelAndClear()` (or `interruptForDestinationUnavailable()`)
   // during teardown to resolve any active run before the harness drops its reference —
@@ -1715,6 +1818,7 @@ final class ExportManager: ObservableObject {
   /// placement id and looking it up in the placement-keyed dict. Existing call sites use
   /// `(year, month)` and stay unchanged.
   func queuedCount(year: Int, month: Int) -> Int {
+    _ = queueMutationCounter
     let placementId = ExportPlacement.timeline(year: year, month: month).id
     return queueCoordinator.queuedCount(placementId: placementId)
   }
@@ -2253,8 +2357,12 @@ final class ExportManager: ObservableObject {
 
   // `isEnqueueingAll` supplies the coordinator's preparation guard.
 
+  func queueContentsDidChange() {
+    queueMutationCounter &+= 1
+  }
+
   /// Internal observation seam for deterministic tests of final-commit admission.
-  var finalCommitWaitObserver: (() -> Void)?
+  @ObservationIgnored var finalCommitWaitObserver: (() -> Void)?
 
   /// Drives the per-job export pipeline on behalf of the coordinator. Wraps the
   /// existing `export(job:generation:)` body so the coordinator's drain loop doesn't need to
@@ -2536,7 +2644,7 @@ final class ExportManager: ObservableObject {
 
   // MARK: - ImportCoordinator.Host conformance
 
-  /// Writes the import report back to the manager's `@Published` mirror. Kept as a Host
+  /// Writes the import report back to the manager's tracked state. Kept as a Host
   /// method (not a sink) because `importResult` is intentionally writable on the
   /// manager — test code resets it directly between consecutive imports.
   func setImportResult(_ result: ImportReport?) {

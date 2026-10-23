@@ -2,18 +2,13 @@ import AppKit
 import Photos
 import SwiftUI
 
-/// Asset-grid pane for a single (year, month). Intentionally does *not* hold
-/// `ExportManager` as `@EnvironmentObject` — that would subscribe the body (and
-/// therefore the `LazyVGrid` re-evaluation) to every `ExportManager.objectWillChange`
-/// emission, of which there are several per job during a run (sink'd `queueCount`,
-/// activeRunContext transitions, etc.). Instead the parent (`LibraryRootView`)
-/// reads the few fields we need from its own subscription and passes them in as
-/// plain values, plus a closure for the Export Month action.
+/// Asset-grid pane for a single (year, month). `LibraryRootView` passes the export
+/// settings as plain values and supplies the Export Month action as a closure.
+/// This keeps the grid's rendering inputs independent of the parent's other dependencies.
 ///
-/// **Equatable + `.equatable()` at the call site** is load-bearing. `LibraryRootView`
-/// still subscribes to `ExportManager` (it reads other fields), so its `body`
-/// re-evaluates on every manager emission and constructs a *new* `MonthContentView`
-/// value each time — the `onExportMonth` closure is a fresh allocation per render.
+/// **Equatable + `.equatable()` at the call site** is load-bearing. When another
+/// dependency rebuilds `LibraryRootView`, it constructs a new `MonthContentView`
+/// with a fresh `onExportMonth` closure.
 /// Without the explicit `Equatable` conformance below, SwiftUI's struct-diff would
 /// see the new closure as a "changed" property and re-evaluate this body anyway.
 /// The conformance compares only the value fields that actually affect rendering
@@ -21,15 +16,15 @@ import SwiftUI
 /// the closure and the binding wrapper are excluded so SwiftUI short-circuits the
 /// LazyVGrid re-evaluation when those rendering inputs are unchanged.
 struct MonthContentView: View, Equatable {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportRecordStore: ExportRecordStore
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(ExportRecordStore.self) private var exportRecordStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
 
-  @StateObject private var viewModel: MonthViewModel
+  @State private var viewModel: MonthViewModel
 
   let year: Int
   let month: Int
@@ -65,8 +60,7 @@ struct MonthContentView: View, Equatable {
     self.onExportMonth = onExportMonth
     self.selectedAssetId = selectedAsset.wrappedValue?.id
     self._selectedAsset = selectedAsset
-    _viewModel = StateObject(
-      wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
+    _viewModel = State(wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
   var body: some View {
@@ -161,7 +155,6 @@ struct MonthContentView: View, Equatable {
         #endif
       }
     }
-    .measureBodyInvalidations("MonthContentView")
   }
 
   private var overlayViews: some View {

@@ -32,7 +32,15 @@ requests work through the same façade.
 empty `TestHostApp` under hosted tests. [`PhotoExportApp`](../../photo-export/App/photo_exportApp.swift)
 builds one [`AppCore`](../../photo-export/App/AppCore.swift) from
 [`AppComposition.forLaunch(arguments:)`](../../photo-export/App/AppComposition.swift)
-and retains its observable services with `@StateObject`.
+and retains its remaining `ObservableObject` services with `@StateObject`.
+The core owns the `@Observable` `PhotoLibraryManager`, `ExportManager`, `LoginItemController`,
+`WhatsNewState` and both record stores;
+`ExportManager` owns `ExportProgressState`. These objects reach views through
+`.environment(_:)` without additional app-level wrappers. `MainWindowRoot` reads the timeline
+store's history readiness in its body and passes that value through `ContentView` to
+the active child; `LibraryRootView` reads collection readiness only when collections are visible.
+See the [Observation migration recipe](observation-migration-recipe.md) for publisher delivery
+and observation ownership contracts.
 
 `AppComposition` selects production or screenshot services and supplies preferences,
 app-state roots, Photos access, persistent changes, the resource writer, filesystem,
@@ -320,7 +328,9 @@ func bumpGeneration()
 Thumbnail and detail tasks use asset ID plus the existing
 `PhotoLibraryManager.thumbnailContentRevision(for:)` value, not broad `libraryRevision`.
 Known content edits invalidate only affected IDs; unknown changes and bounded-tracking overflow
-use the existing global fallback. Placement/history changes do not change preview identity.
+use the existing global fallback. The query registers a shared content counter, so an edit may
+reevaluate each cell once; only a changed per-asset task identity starts a replacement decode.
+Placement/history changes do not change preview identity.
 The detail loader checks its captured revision predicate before installing a request and before
 publishing success or error, in addition to UUID and Task cancellation guards. This rejects a
 superseded response even before SwiftUI starts the replacement task. Same-asset replacement
@@ -598,7 +608,8 @@ the owning generation before changing UI state.
 
 | Type kind | Isolation | Examples |
 | --- | --- | --- |
-| `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager`, `ExportRecordStore`, `CollectionExportRecordStore` |
+| `ObservableObject` with `@Published` state observed by SwiftUI | `@MainActor final class` | `ExportQueueCoordinator`, `ImportCoordinator`, `ExportDestinationManager` |
+| `@Observable` state observed by SwiftUI | `@MainActor final class` | `ExportManager`, `ExportRecordStore`, `CollectionExportRecordStore` |
 | Main-actor collaborator without `@Published` (mutates shared state from MainActor only) | `@MainActor final class` | `VariantExporter`, `RecordStoreRouter`, `JSONLRecordFile` |
 | Main-actor composition wrapper — final, conforms to `PhotoLibraryService`, optionally wraps an injected service for curated screenshot content | `@MainActor final class` | `PhotoLibraryManager` (wraps `overrideService`), `ScreenshotPhotoLibraryService` (peer, no inheritance) |
 | Pure helper / policy (value-typed, no I/O state) | plain `struct` or `enum`, `Sendable` where it crosses tasks | `ExportJobPlanner`, `ExportCompletionPolicy`, `ExportDestinationResolver`, `ExportFilenamePolicy`, `CollectionPathComponentPolicy`, `ExportPlacementResolver`, `ResourceSelection`, `BackupScanner`, `FileIOService`, `FinalNamePlanner`, `ProductionAssetResourceWriter`, `ProductionMediaRenderer` |
@@ -622,22 +633,25 @@ Rules:
 
 ```swift
 var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
-  Publishers.CombineLatest4($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)
-    .map { context, isRunning, queueCount, isEnqueueingAll in
-      let manualFireAndForget =
-        context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
-      return ExportRunState(
-        activeContext: context,
-        isManualActive: context?.source == .manual || manualFireAndForget,
-        isAutoSyncActive: context?.source == .autoSync
-      )
-    }
-    .removeDuplicates()
-    .eraseToAnyPublisher()
+  Publishers.CombineLatest4(
+    activeRunContextBridge.publisher, isRunningBridge.publisher,
+    queueCountBridge.publisher, isEnqueueingAllBridge.publisher
+  )
+  .map { context, isRunning, queueCount, isEnqueueingAll in
+    let manualFireAndForget =
+      context == nil && (isRunning || queueCount > 0 || isEnqueueingAll)
+    return ExportRunState(
+      activeContext: context,
+      isManualActive: context?.source == .manual || manualFireAndForget,
+      isAutoSyncActive: context?.source == .autoSync
+    )
+  }
+  .removeDuplicates()
+  .eraseToAnyPublisher()
 }
 ```
 
-The `CombineLatest4` over `($activeRunContext, $isRunning, $queueCount, $isEnqueueingAll)` is the AutoSync contract. The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isEnqueueingAll` participates so the bulk-enqueue window (after the dispatcher flips it true but before the first job lands in `pendingJobs`) is observable as busy too (issue #67 item 4a). Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
+The `CombineLatest4` over `(activeRunContext, isRunning, queueCount, isEnqueueingAll)` is the AutoSync contract. Each is held in an `ObservableCombineBridge`, which delivers exactly as `@Published` does while views track the properties through Observation ([`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge). The `manualFireAndForget` branch makes toolbar exports (which never set `activeRunContext`) register as `isManualActive` — without it, AutoSync would attempt to start a background run while the toolbar queue was busy. `isEnqueueingAll` participates so the bulk-enqueue window (after the dispatcher flips it true but before the first job lands in `pendingJobs`) is observable as busy too (issue #67 item 4a). Adding new state to the quadruple is a deliberate, audited change — re-record the [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift) snapshots only after verifying the new emission sequence is correct.
 
 **Mirror pattern** (contextual excerpts when a coordinator owns state that AutoSync observes through the manager):
 
@@ -657,7 +671,15 @@ queueCoordinator.$queueCount
   .store(in: &queueCancellables)
 ```
 
-Both objects are `@MainActor` and `@Published`'s `willSet` is synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
+Both objects are `@MainActor`. The coordinator's `@Published` delivery and the manager's bridge delivery and storage are synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
+
+Unpublished queue contents stay owned by the coordinator. It compares the pending-job count,
+processing flag, current task identity and placement counts around queue mutations, then calls
+`Host.queueContentsDidChange()` once when that fingerprint changes. The manager increments
+an Observation-only `queueMutationCounter`; all five queue read-throughs touch it before
+returning the coordinator's values. This adds no `objectWillChange` publication and keeps
+the mirrors above synchronous. A first dequeue changes the contents even while total queue
+depth stays equal, so its readers do not depend on a depth notification.
 
 ### AutoSync dirty-work acknowledgement
 
@@ -725,8 +747,8 @@ macOS posts no notification when access changes, so access is refreshed at three
 before each fired debounce (the only path to a run), before each scope of the AutoSync
 fan-out (stopping the fan-out if access is gone), and app-wide on
 `NSApplication.didBecomeActiveNotification`. `refreshAuthorization()` publishes
-synchronously before it returns, so the reducer is blocked before the event that would start
-the run; the sink must use the value it receives. A grant made without bringing the app
+synchronously through the authorization bridge before storage, so the reducer is blocked
+before the event that would start the run; the sink must use the value it receives. A grant made without bringing the app
 forward waits for the next activation or launch.
 
 Access returning is handled like a failed change fetch: every selected scope gets
@@ -843,12 +865,12 @@ final class ExportQueueCoordinator: ObservableObject {
 }
 ```
 
-On `ExportManager` (a final `ObservableObject`), the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after all stored properties are initialized so `self` is available to pass as `host`:
+On `ExportManager` (an `@Observable @MainActor final class`), the collaborator is stored as an implicitly-unwrapped optional (IUO) and assigned after all stored properties are initialized so `self` is available to pass as `host`:
 
 The following initialization excerpt omits unrelated application dependencies:
 
 ```swift
-private(set) var queueCoordinator: ExportQueueCoordinator!
+@ObservationIgnored private(set) var queueCoordinator: ExportQueueCoordinator!
 
 init(...) {
   // ...assign all stored dependencies first...
@@ -871,11 +893,17 @@ Rules:
 
 ## Forwarder pattern
 
-`ExportManager` retains a stable public surface by forwarding to coordinators when sensible. Contextual excerpts (search `ExportManager.swift` for `{ queueCoordinator.`):
+`ExportManager` retains a stable public surface by forwarding to coordinators when sensible. Contextual excerpts (search `ExportManager.swift` for these property and method names):
 
 ```swift
-var pendingJobs: [ExportJob] { queueCoordinator.pendingJobs }
-var isProcessing: Bool { queueCoordinator.isProcessing }
+var pendingJobs: [ExportJob] {
+  _ = queueMutationCounter
+  return queueCoordinator.pendingJobs
+}
+var isProcessing: Bool {
+  _ = queueMutationCounter
+  return queueCoordinator.isProcessing
+}
 func processQueueIfNeeded() { queueCoordinator.processQueueIfNeeded() }
 private func resetProgressCounters() { queueCoordinator.resetProgressCounters() }
 ```
@@ -884,7 +912,7 @@ Rules:
 
 - **Read-only forwarders are fine.** They let existing call sites (and future features written against the old `ExportManager` API) keep working without rewrites. The sidebar multi-select feature merged from `main` integrated cleanly thanks to these forwarders.
 - **Avoid writing through to coordinator-owned state from `ExportManager` directly** unless the coordinator deliberately exposes a setter. Mutating `queueCoordinator.pendingJobs` from outside the coordinator breaks the Host-protocol invariant; go through a method the coordinator publishes.
-- **Avoid adding new `@Published` properties to `ExportManager` for state that conceptually lives on a coordinator.** Add the `@Published` to the coordinator and sink it onto the manager via the mirror pattern. (Exception: state that AutoSync observes via `exportRunStatePublisher` may need to live on the manager so the publisher composes — see §AutoSync seam preservation.)
+- **Keep coordinator-owned state on the coordinator.** Sink its `@Published` values synchronously onto a macro-tracked manager mirror for UI-only state, or onto an `ObservableCombineBridge` when a named Combine accessor exposes the manager property. State that composes `exportRunStatePublisher` remains intentionally bridged on the manager; see §AutoSync seam preservation.
 
 ## Canonical `start*` entry-point shape
 
@@ -1033,6 +1061,7 @@ If you rename, move, add or remove one of these tests, update the list file, thi
 | [`ImportIdempotencyTests`](../../photo-exportTests/ImportIdempotencyTests.swift) | The import flow loses idempotency on retry | Audit. Two consecutive `startImport()` runs over the same backup tree must not double-write records. |
 | `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck` | The `isExported` predicate runs *after* the retry-gate (instead of before) | Restore the order. `isExported` must run first so already-done assets are not blocked by the retry-gate. |
 | `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds` | An AutoSync run starts while the history check after "Same Folder" is still running, or no run follows it | The check must start in the same main-actor turn as the identity publish (`onAmbiguousSameFolderChosen`), and a debounce an import cancels must keep its reason for the resume hook. |
+| [`PublisherParityTests`](../../photo-exportTests/PublisherParityTests.swift) | A named publisher accessor (`identityPublisher`, `exportRunStatePublisher`, …) stops replaying its current value, delivers asynchronously or after the value is stored, replays a nested subscription differently, or changes whether an unchanged write is delivered | Audit. These pin `@Published` delivery; a migration of the property's storage (the Observation bridge) must match it rather than re-record. See [`observation-migration-recipe.md`](observation-migration-recipe.md). |
 | [`CollectionBackupImportTests.importAdoptsAlbumHistorySoExportsWriteNothing`](../../photo-exportTests/CollectionBackupImportTests.swift) | Exporting an album, shared album or Favorites (manually or from Auto Export) after Import Existing Backup writes, copies or moves a file that was already in its folder, or its no-import control stops writing | Audit the collection scan and folder matching (`BackupScanner+Collections`, `CollectionBackupPlanner`). Adopted placements must keep the id `ExportPlacementResolver` gives the collection. |
 | `CollectionBackupImportTests.exportWipeImportRoundTripRestoresPlacements` | After export, wiping both histories and importing, the album placements differ from the exported ones (id, kind, `relativePath`), or the second export writes, copies or moves a file. Covers nested albums, a `_2` sibling, a lossy sanitized title, Favorites and a shared album, each under unedited originals, Edited mode, Include Originals, a paired Live Photo, and flat videos | Keep folder names coming from `ExportPlacementResolver`; do not add naming rules to the import. |
 | [`FileIOServiceTests.existingFileAtCommitIsNeverReplaced`](../../photo-exportTests/FileIOServiceTests.swift) | A file that appears at the final name right before the commit call is replaced, or is refused with a signature other than `Export:2`, or the commit stops using `RENAME_EXCL` on a capable volume (the scratch volume, through the production capability check), or an `EEXIST` from that rename falls back to check-then-move | Restore the refusal. The final commit must never replace an existing file, and its collision must keep the `Export:2` signature retry state uses. The check-then-move case only proves that `moveItem`'s own refusal keeps `Export:2`; it cannot prove the window inside `moveItem` is closed. |
@@ -1079,19 +1108,19 @@ Keep placement dispatch in `RecordStoreRouter` and the relevant policies. A new
 ### Extracting a new collaborator from `ExportManager`
 
 1. Identify the seam — what *state and methods* on the manager does the new collaborator need? Write that as a `protocol Host: AnyObject` on the new class.
-2. Move the relevant `@Published` state to the new class. Keep the type the same on `ExportManager` as a mirror (sink in init).
-3. Construct the collaborator post-init with `host: self`. Store it as an IUO (`var coordinator: NewCoordinator!`).
+2. Move the relevant `@Published` state to the new class. Preserve its public type and manager mirror with a synchronous sink in init. Use a bridge for a named Combine accessor and macro-tracked storage for UI-only manager state.
+3. Construct the collaborator post-init with `host: self`. Store it as an ignored IUO (`@ObservationIgnored var coordinator: NewCoordinator!`).
 4. Move the methods. Replace each call site on `ExportManager` with a forwarder (`func foo() { coordinator.foo() }`) so existing tests and callers keep working.
 5. Verify the AutoSync seam: run [`AutoSyncSeamCharacterizationTests`](../../photo-exportTests/AutoSyncSeamCharacterizationTests.swift). If the emission sequence changes, the mirror sinks are wrong (likely async, or in the wrong order).
 6. Verify the synchrony pin: run [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) if the new collaborator owns any queue-adjacent state.
 
-### Adding a new `@Published` property AutoSync should observe
+### Adding a property AutoSync should observe
 
-1. Add the `@Published` to the right *owner* — the collaborator if conceptually theirs; `ExportManager` if conceptually the manager's.
-2. If the owner is a collaborator: add a same-named `@Published` on `ExportManager` and `.sink` from the coordinator's publisher in `init`.
+1. Add the property to the right *owner* — the collaborator if conceptually theirs; `ExportManager` if conceptually the manager's. On an `ObservableObject` collaborator it is `@Published`; a manager property exposed through any named Combine accessor uses `ObservableCombineBridge` (see [`observation-migration-recipe.md`](observation-migration-recipe.md) §The bridge). UI-only manager state is macro-tracked.
+2. If the owner is a collaborator, add the required manager mirror and `.sink` synchronously from the coordinator's publisher in `init`. Choose bridged or plain tracked manager storage using the accessor rule above.
 3. If the new property changes `ExportRunState`'s shape, update the publisher
-   composition deliberately. Audit the emission sequence before re-recording
-   `AutoSyncSeamCharacterizationTests`.
+   composition deliberately using its bridge's `publisher`, not `$x`. Audit the
+   emission sequence before re-recording `AutoSyncSeamCharacterizationTests`.
 4. Mention the new field in `ExportManager+AutoSyncConformance.swift` if AutoSync needs to read it directly (not via the publisher).
 
 ## Deferred follow-ups
@@ -1105,4 +1134,4 @@ for current open work rather than treating the old extraction checklist as activ
 
 ## Where to ask
 
-If a contract above conflicts with the code (e.g. you find a `@Published` on the manager that should be a mirror, or a `Host` method that has become permanent and should be documented as such), open a PR — these rules are living. The plan doc that originated them is archived at [`docs/project/archive/software-architecture-improvement-plan.md`](../project/archive/software-architecture-improvement-plan.md) for historical context.
+If a contract above conflicts with the code (e.g. you find a manager field that should belong to a collaborator, or a `Host` method that has become permanent and should be documented as such), open a PR — these rules are living. The plan doc that originated them is archived at [`docs/project/archive/software-architecture-improvement-plan.md`](../project/archive/software-architecture-improvement-plan.md) for historical context.

@@ -55,6 +55,7 @@ reference:
 - `ImportIdempotencyTests`
 - `ExportManagerRunExportTests.autoSyncRunFilterAlreadyExportedBeforeRetryCheck`
 - `AmbiguousSameFolderTests.sameFolderForUnclearPickHoldsAutoExportUntilHistoryCheckEnds`
+- `PublisherParityTests`
 - `CollectionBackupImportTests.importAdoptsAlbumHistorySoExportsWriteNothing`
 - `CollectionBackupImportTests.exportWipeImportRoundTripRestoresPlacements`
 - `FileIOServiceTests.existingFileAtCommitIsNeverReplaced`

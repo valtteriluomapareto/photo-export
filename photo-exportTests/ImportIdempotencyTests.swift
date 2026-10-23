@@ -137,7 +137,7 @@ struct ImportIdempotencyTests {
     ]
 
     var seenStages: [BackupScanner.ImportStage] = []
-    let cancellable = manager.$importStage.sink { stage in
+    let cancellable = manager.importStagePublisher.sink { stage in
       if let stage { seenStages.append(stage) }
     }
     defer { cancellable.cancel() }

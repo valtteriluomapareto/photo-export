@@ -12,7 +12,7 @@ import Testing
   struct AuthorizationRefreshTests {
     @MainActor
     private struct Host: View {
-      @ObservedObject var library: PhotoLibraryManager
+      let library: PhotoLibraryManager
       let counter: BodyInvalidationCounter
       var body: some View {
         let route = library.isAuthorized ? "authorized" : "authorization"
@@ -196,7 +196,7 @@ import Testing
         }, countInvalidationWaitObserver: { waits += 1 })
       var revisionAtAuthorization: Int?
       var query: Task<Int, Error>?
-      let observation = manager.$isAuthorized.dropFirst().sink { authorized in
+      let observation = manager.isAuthorizedPublisher.dropFirst().sink { authorized in
         guard authorized else { return }
         revisionAtAuthorization = manager.libraryRevision
         query = Task { try await manager.cachedCountAssets(in: scope) }

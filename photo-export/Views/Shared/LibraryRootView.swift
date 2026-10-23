@@ -10,11 +10,13 @@ struct LibraryRootView: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var whatsNewState: WhatsNewState
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
+  @Environment(WhatsNewState.self) private var whatsNewState
+
+  let timelineHistoryState: RecordStoreState
 
   @State private var section: LibrarySection
 
@@ -36,7 +38,8 @@ struct LibraryRootView: View {
   /// production launches it is `nil` and the defaults below apply (Timeline / current
   /// month). The mapping lives in `ScreenshotSurfaceResolver` so it's testable without
   /// instantiating SwiftUI views.
-  init(screenshotSurfaceKey: String?) {
+  init(screenshotSurfaceKey: String?, timelineHistoryState: RecordStoreState) {
+    self.timelineHistoryState = timelineHistoryState
     let surface = ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
     let now = Date()
     let currentYear = Calendar.current.component(.year, from: now)
@@ -88,6 +91,8 @@ struct LibraryRootView: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("library-root")
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([String(canImport)], for: "library-can-import")
     #endif
     NavigationSplitView(
       sidebar: {
@@ -110,7 +115,7 @@ struct LibraryRootView: View {
       },
       detail: {
         AssetDetailView(asset: selectedAsset, placement: detailPlacement)
-          .environmentObject(photoLibraryManager)
+          .environment(photoLibraryManager)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     )
@@ -121,7 +126,9 @@ struct LibraryRootView: View {
       ExportToolbarView(
         section: section,
         selectionSet: selectionSet,
-        focusedSelection: focusedSelection)
+        focusedSelection: focusedSelection,
+        historyState: section == .timeline
+          ? timelineHistoryState : collectionExportRecordStore.state)
     }
     .sheet(
       isPresented: $isShowingImportSheet,
@@ -138,7 +145,7 @@ struct LibraryRootView: View {
           choosesFolderAfterImportSheet = true
           isShowingImportSheet = false
         })
-        .environmentObject(exportManager)
+        .environment(exportManager)
       }
     )
     // An import the app started itself (checking the history after "Same Folder") shows the
@@ -150,7 +157,7 @@ struct LibraryRootView: View {
     // explaining new UI surfaces and reassuring the user about file safety.
     // Attached here (not on `ContentView`) so it only renders post-auth /
     // post-onboarding, when the user is in the main library view. The
-    // sheet's @Published `shouldShow` flips to false on dismiss, so the
+    // sheet's observed `shouldShow` flips to false on dismiss, so the
     // binding doesn't re-present.
     .sheet(
       isPresented: Binding(
@@ -343,18 +350,12 @@ struct LibraryRootView: View {
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .timelineMonth(let year, let month):
-      // Pass `versionSelection` down as a value rather than letting
-      // `MonthContentView` subscribe to `ExportManager` directly. The manager
-      // fires `objectWillChange` per export job (queueCount sink, etc.);
-      // `.equatable()` on a value-comparing `MonthContentView` then
-      // short-circuits the LazyVGrid re-evaluation when the rendering inputs
-      // are unchanged. Without `.equatable()` the freshly-allocated
-      // `onExportMonth` closure per render would defeat SwiftUI's structural
-      // diff.
+      // Pass export settings as value inputs. Equatable comparison keeps the grid
+      // stable when another parent dependency changes and creates a fresh action closure.
       MonthContentView(
         year: year, month: month,
         versionSelection: exportManager.versionSelection,
@@ -364,7 +365,7 @@ struct LibraryRootView: View {
         photoLibraryService: photoLibraryManager
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .favorites:
@@ -377,7 +378,7 @@ struct LibraryRootView: View {
         photoLibraryService: photoLibraryManager
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .album(let collectionId):
@@ -393,7 +394,7 @@ struct LibraryRootView: View {
         photoLibraryService: photoLibraryManager
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .sharedAlbum(let collectionId):
@@ -409,7 +410,7 @@ struct LibraryRootView: View {
         photoLibraryService: photoLibraryManager
       )
       .equatable()
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case .folder(let collectionId):
@@ -420,7 +421,7 @@ struct LibraryRootView: View {
         selectedAsset: $selectedAsset,
         photoLibraryService: photoLibraryManager
       )
-      .environmentObject(photoLibraryManager)
+      .environment(photoLibraryManager)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
 
     case nil:

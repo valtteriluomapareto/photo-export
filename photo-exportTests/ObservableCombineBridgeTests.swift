@@ -1,0 +1,275 @@
+import Combine
+import Foundation
+import Observation
+import Testing
+
+@testable import Photo_Export
+
+/// A property stored in an `ObservableCombineBridge`, as both owner shapes declare it.
+@MainActor
+private protocol BridgedCount: AnyObject {
+  var count: Int { get set }
+  var countPublisher: AnyPublisher<Int, Never> { get }
+}
+
+/// The owner while it is still `ObservableObject`: its own registrar, and `objectWillChange`
+/// sent before the bridge delivers. It has no `@Published` property left, so it relies on the
+/// synthesized `objectWillChange`. A template for the plumbing shape, removed with the last
+/// plumbed owner.
+@MainActor
+private final class PlumbedOwner: ObservableObject, Observable, BridgedCount {
+  private let registrar = ObservationRegistrar()
+  private let countBridge = ObservableCombineBridge(0)
+
+  var count: Int {
+    get {
+      registrar.access(self, keyPath: \.count)
+      return countBridge.value
+    }
+    set {
+      objectWillChange.send()
+      countBridge.write(newValue) { registrar.withMutation(of: self, keyPath: \.count, $0) }
+    }
+  }
+
+  var countPublisher: AnyPublisher<Int, Never> { countBridge.publisher }
+}
+
+/// The owner after the flip: the macro's registrar, no `objectWillChange`.
+@Observable
+@MainActor
+private final class FlippedOwner: BridgedCount {
+  var label = ""
+  private let countBridge = ObservableCombineBridge(0)
+
+  var count: Int {
+    get {
+      access(keyPath: \.count)
+      return countBridge.value
+    }
+    set { countBridge.write(newValue) { withMutation(keyPath: \.count, $0) } }
+  }
+
+  var countPublisher: AnyPublisher<Int, Never> { countBridge.publisher }
+}
+
+/// The bridge contract: the Combine side delivers exactly as `@Published` does, and the
+/// Observation side notifies as the `@Observable` macro does, for both owner shapes.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct ObservableCombineBridgeTests {
+  enum Shape: CaseIterable { case plumbed, flipped }
+
+  private static func owner(_ shape: Shape) -> any BridgedCount {
+    switch shape {
+    case .plumbed: PlumbedOwner()
+    case .flipped: FlippedOwner()
+    }
+  }
+
+  /// Replay, synchronous delivery before the store, nested subscription, resubscription and
+  /// unchanged-write delivery, checked by the same helper `PublisherParityTests` uses on every
+  /// accessor, then the subscriber edge cases `PublishedParityHelperTests.publishedPasses` pins
+  /// for `@Published`.
+  @Test(arguments: Shape.allCases)
+  func deliversAsPublished(_ shape: Shape) async {
+    let owner = Self.owner(shape)
+    await assertPublishedParity(
+      { owner.countPublisher }, value: { owner.count },
+      change: {
+        owner.count = 1
+        owner.count = 2
+      },
+      unchangedWrite: .before { owner.count = owner.count })
+    assertSubscriberEdgeParity {
+      let owner = Self.owner(shape)
+      return EdgeSubject(
+        publisher: owner.countPublisher, value: { owner.count },
+        first: { owner.count = 1 }, second: { owner.count = 2 })
+    }
+  }
+
+  /// Observation's willSet runs before subscribers receive the value, as SwiftUI's own
+  /// invalidation does for `@Published`.
+  @Test(arguments: Shape.allCases)
+  func observationIsNotifiedBeforeDelivery(_ shape: Shape) {
+    let owner = Self.owner(shape)
+    let probe = ObservationProbe { _ = owner.count }
+    var notifiedAtDelivery: [Int] = []
+    let subscription = owner.countPublisher.sink { _ in
+      notifiedAtDelivery.append(probe.changeCount)
+    }
+    defer { subscription.cancel() }
+    owner.count = 1
+    owner.count = 2
+    #expect(notifiedAtDelivery == [0, 1, 2])
+  }
+
+  /// An equal write is delivered to subscribers but does not notify Observation, matching
+  /// `ObservationEqualWriteTests.equalEquatableWriteDoesNotNotify` for a macro property.
+  @Test(arguments: Shape.allCases)
+  func equalWriteIsDeliveredWithoutNotifyingObservation(_ shape: Shape) {
+    let owner = Self.owner(shape)
+    let probe = ObservationProbe { _ = owner.count }
+    var received: [Int] = []
+    let subscription = owner.countPublisher.sink { received.append($0) }
+    defer { subscription.cancel() }
+    owner.count = owner.count
+    #expect(received == [0, 0])
+    #expect(probe.changeCount == 0)
+    owner.count = 1
+    #expect(received == [0, 0, 1])
+    #expect(probe.changeCount == 1)
+  }
+
+  /// A bridged property and a macro property each notify only their own readers.
+  @Test func observationTracksTheReadPropertyOnly() {
+    let owner = FlippedOwner()
+    let labelReader = ObservationProbe { _ = owner.label }
+    let countReader = ObservationProbe { _ = owner.count }
+    owner.count = 1
+    #expect(countReader.changeCount == 1)
+    #expect(labelReader.changeCount == 0)
+    owner.label = "changed"
+    #expect(countReader.changeCount == 1)
+    #expect(labelReader.changeCount == 1)
+  }
+
+  /// While the owner is still `ObservableObject`, every write sends `objectWillChange` first,
+  /// an equal write included, as `@Published` does.
+  @Test func plumbedOwnerSendsObjectWillChangeBeforeEveryDelivery() {
+    let owner = PlumbedOwner()
+    var events: [String] = []
+    let will = owner.objectWillChange.sink { events.append("will") }
+    let values = owner.countPublisher.sink { events.append("value \($0)") }
+    defer {
+      will.cancel()
+      values.cancel()
+    }
+    owner.count = 1
+    owner.count = 1
+    #expect(events == ["value 0", "will", "value 1", "will", "value 1"])
+  }
+
+  /// An owner with no `@Published` left still has one `objectWillChange`: the synthesized
+  /// publisher is kept, not made fresh on each access, so a view subscribed to it hears every
+  /// later send.
+  @Test func ownerWithoutPublishedKeepsOneObjectWillChange() {
+    let owner = PlumbedOwner()
+    #expect(owner.objectWillChange === owner.objectWillChange)
+    var sends = 0
+    let subscription = owner.objectWillChange.sink { sends += 1 }
+    defer { subscription.cancel() }
+    owner.count = 1
+    #expect(sends == 1)
+  }
+
+  /// `@Published` sends to the synthesized `objectWillChange` only: once an owner declares its
+  /// own, its remaining `@Published` properties stop sending. An owner that still has any must
+  /// keep the synthesized one.
+  @Test func publishedDoesNotSendToAHandDeclaredObjectWillChange() {
+    let owner = HandDeclaredOwner()
+    var sends = 0
+    let subscription = owner.objectWillChange.sink { sends += 1 }
+    defer { subscription.cancel() }
+    owner.value = 1
+    #expect(sends == 0)
+  }
+
+  // MARK: - Cancellation
+
+  /// A cancelled subscriber receives nothing more, and neither it nor its subscription outlives
+  /// the cancel: the bridge drops the subscription, and the subscription drops the subscriber.
+  @Test(arguments: Shape.allCases)
+  func cancelStopsDeliveryAndReleasesTheSubscriber(_ shape: Shape) {
+    let owner = Self.owner(shape)
+    var recorder: DemandRecorder<Int>? = DemandRecorder(initial: .unlimited)
+    weak var weakRecorder: DemandRecorder<Int>?
+    weak var weakSubscription: AnyObject?
+    weakRecorder = recorder
+    owner.countPublisher.subscribe(recorder!)
+    weakSubscription = recorder?.subscription as AnyObject?
+    recorder?.cancel()
+    owner.count = 1
+    #expect(recorder?.received == [0])
+    recorder = nil
+    // The owner, and so its bridge, must outlive the checks, or releasing it frees the
+    // subscription whether or not the bridge dropped it.
+    withExtendedLifetime(owner) {
+      #expect(weakRecorder == nil)
+      #expect(weakSubscription == nil)
+    }
+  }
+
+  /// A subscriber cancelled by another subscriber's sink during a write does not get that write.
+  /// `@Published` does the same when the cancelling sink is delivered first, but its fan-out order
+  /// is not fixed (it varies between instances); the bridge delivers in subscription order.
+  @Test(arguments: Shape.allCases)
+  func cancelDuringFanOutStopsTheWriteInFlight(_ shape: Shape) {
+    let owner = Self.owner(shape)
+    let second = DemandRecorder<Int>(initial: .unlimited)
+    let first = owner.countPublisher.sink { if $0 == 1 { second.cancel() } }
+    defer { first.cancel() }
+    owner.countPublisher.subscribe(second)
+    owner.count = 1
+    #expect(second.received == [0])
+  }
+
+  /// Releasing a subscription off the main actor is legal with `@Published` (an `AnyCancellable`
+  /// released in a background deinit), so cancelling hops to the main actor instead of trapping.
+  @Test(arguments: Shape.allCases)
+  func cancelOffTheMainActorTakesEffectAfterTheHop(_ shape: Shape) async {
+    let owner = Self.owner(shape)
+    let recorder = DemandRecorder<Int>(initial: .unlimited)
+    owner.countPublisher.subscribe(recorder)
+    let subscription = UncheckedBox(recorder.subscription)
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      DispatchQueue.global().async {
+        subscription.value?.cancel()
+        // Queued on the main queue after the cancel's own hop.
+        DispatchQueue.main.async { continuation.resume() }
+      }
+    }
+    owner.count = 1
+    #expect(recorder.received == [0])
+  }
+
+  /// A cancel from another thread stops delivery at once, before its hop to the main queue
+  /// releases the subscription: a write made on the main actor in between delivers nothing.
+  @Test(arguments: Shape.allCases)
+  func cancelOffTheMainActorStopsDeliveryBeforeTheHop(_ shape: Shape) async {
+    let owner = Self.owner(shape)
+    let recorder = DemandRecorder<Int>(initial: .unlimited)
+    owner.countPublisher.subscribe(recorder)
+    // The main thread stays busy from the cancel to the write, so the hop cannot have run yet.
+    Self.cancelOnAnotherThread(UncheckedBox(recorder.subscription))
+    owner.count = 1
+    #expect(recorder.received == [0])
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      DispatchQueue.main.async { continuation.resume() }
+    }
+  }
+
+  /// Cancels on a thread of its own and blocks the caller until it has: `DispatchQueue.sync`
+  /// onto a global queue may run the block on the calling thread.
+  private static func cancelOnAnotherThread(_ subscription: UncheckedBox<(any Subscription)?>) {
+    let cancelled = DispatchSemaphore(value: 0)
+    Thread {
+      subscription.value?.cancel()
+      cancelled.signal()
+    }.start()
+    cancelled.wait()
+  }
+}
+
+/// Carries a non-`Sendable` value to another thread in a test that orders the access itself.
+private struct UncheckedBox<Value>: @unchecked Sendable {
+  let value: Value
+  init(_ value: Value) { self.value = value }
+}
+
+@MainActor
+private final class HandDeclaredOwner: ObservableObject {
+  nonisolated let objectWillChange = ObservableObjectPublisher()
+  @Published var value = 0
+}

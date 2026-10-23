@@ -8,9 +8,9 @@ import SwiftUI
 /// its own existing album placement, so the on-disk layout matches what the user
 /// gets from per-album exports today.
 struct FolderContentView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
 
   #if DEBUG

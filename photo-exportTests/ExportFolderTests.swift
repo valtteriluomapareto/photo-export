@@ -546,7 +546,7 @@ struct ExportFolderTests {
       filename: "d1.HEIC", exportedAt: Date())
 
     var messages: [String] = []
-    let observation = h.manager.progressState.$emptyRunMessage.compactMap { $0 }.sink {
+    let observation = h.manager.progressState.emptyRunMessagePublisher.compactMap { $0 }.sink {
       messages.append($0)
     }
     h.manager.startExportFolder(folderId: "F")
@@ -649,7 +649,7 @@ struct ExportFolderTests {
       filename: "d1.HEIC", exportedAt: Date())
 
     var messages: [String] = []
-    let observation = h.manager.progressState.$emptyRunMessage.compactMap { $0 }.sink {
+    let observation = h.manager.progressState.emptyRunMessagePublisher.compactMap { $0 }.sink {
       messages.append($0)
     }
     h.manager.startExportAlbums(collectionIds: ["done"])

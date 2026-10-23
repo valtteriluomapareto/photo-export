@@ -9,7 +9,7 @@ struct AutoExportSettingsView: View {
   @EnvironmentObject private var scopeStore: UserDefaultsAutoExportScopeStore
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @EnvironmentObject private var lifecycleCoordinator: AppLifecycleCoordinator
-  @EnvironmentObject private var loginItemController: LoginItemController
+  @Environment(LoginItemController.self) private var loginItemController
   @EnvironmentObject private var safetyMonitor: DestinationSafetyMonitor
   @EnvironmentObject private var photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
 
@@ -23,18 +23,25 @@ struct AutoExportSettingsView: View {
   var body: some View {
     Form {
       if lifecycleCoordinator.migrationConflict != nil {
+        let showRecovery = { isShowingMigrationRecoverySheet = true }
+        #if DEBUG
+          // swiftlint:disable:next redundant_discardable_let
+          let _ = bodyCounter?.recordAction("auto-export-migration-recovery", action: showRecovery)
+        #endif
         Section {
-          MigrationConflictBanner {
-            isShowingMigrationRecoverySheet = true
-          }
-          .listRowInsets(EdgeInsets())
+          MigrationConflictBanner(onTap: showRecovery)
+            .listRowInsets(EdgeInsets())
         }
       } else if safetyMonitor.needsSafetyConfirmation {
+        let showConfirmation = { isShowingSafetyConfirm = true }
+        #if DEBUG
+          // swiftlint:disable:next redundant_discardable_let
+          let _ = bodyCounter?.recordAction(
+            "auto-export-safety-confirmation", action: showConfirmation)
+        #endif
         Section {
-          SafetyConfirmationBanner {
-            isShowingSafetyConfirm = true
-          }
-          .listRowInsets(EdgeInsets())
+          SafetyConfirmationBanner(onTap: showConfirmation)
+            .listRowInsets(EdgeInsets())
         }
       }
 
@@ -139,6 +146,12 @@ struct AutoExportSettingsView: View {
             Text(loginItemController.status.footerText)
               .font(.caption)
               .foregroundStyle(.secondary)
+              #if DEBUG
+                .background {
+                  RenderedTextRecord(
+                    key: "login-item-footer", text: loginItemController.status.footerText)
+                }
+              #endif
           }
         }
         if loginItemController.status == .requiresApproval {
@@ -158,7 +171,7 @@ struct AutoExportSettingsView: View {
         onUseAsIs: nil
       )
       .environmentObject(lifecycleCoordinator)
-      .environmentObject(exportManagerFromEnvironment)
+      .environment(exportManagerFromEnvironment)
       .environmentObject(exportDestinationManager)
     }
     .sheet(isPresented: $isShowingSafetyConfirm) {
@@ -174,15 +187,14 @@ struct AutoExportSettingsView: View {
         onUseAsIs: { safetyMonitor.confirmCurrentDestination() }
       )
       .environmentObject(lifecycleCoordinator)
-      .environmentObject(exportManagerFromEnvironment)
+      .environment(exportManagerFromEnvironment)
       .environmentObject(exportDestinationManager)
     }
   }
 
-  // SwiftUI environment objects don't get auto-propagated across sheet
-  // boundaries on macOS in all configurations, so re-pass them explicitly.
-  // The sheet's view re-declares the same @EnvironmentObjects.
-  @EnvironmentObject private var exportManagerFromEnvironment: ExportManager
+  // Supply the existing manager to both recovery sheets so their actions share the app's
+  // export state alongside the lifecycle and destination services.
+  @Environment(ExportManager.self) private var exportManagerFromEnvironment
 
   // MARK: - Scope binding helper
 
@@ -514,3 +526,19 @@ private struct LastCatchUpRow: View {
 // Per-view label extensions removed — surface uses
 // `AutoSyncReason.userFacingLabel` / `AutoSyncBlockedReason.userFacingLabel`
 // directly. See `AutoSyncReason.swift`.
+
+#if DEBUG
+  /// Records the text of the view it backs, so a hosted test reads what that view renders
+  /// rather than what the enclosing body computed.
+  private struct RenderedTextRecord: View {
+    let key: String
+    let text: String
+    @Environment(\.bodyInvalidationCounter) private var bodyCounter
+
+    var body: some View {
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([text], for: key)
+      Color.clear
+    }
+  }
+#endif

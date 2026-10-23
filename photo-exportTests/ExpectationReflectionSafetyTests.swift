@@ -12,12 +12,12 @@ import Testing
   @Suite(.timeLimit(.minutes(1)))
   struct ExpectationReflectionSafetyTests {
     private struct SubscribingView: View {
-      @EnvironmentObject var manager: ExportManager
-      @EnvironmentObject var library: PhotoLibraryManager
-      @EnvironmentObject var store: ExportRecordStore
-      @EnvironmentObject var collections: CollectionExportRecordStore
-      @EnvironmentObject var progress: ExportProgressState
-      @ObservedObject var counts: TimelineSidebarCounts
+      @Environment(ExportManager.self) var manager
+      @Environment(PhotoLibraryManager.self) var library
+      @Environment(ExportRecordStore.self) var store
+      @Environment(CollectionExportRecordStore.self) var collections
+      @Environment(ExportProgressState.self) var progress
+      let counts: TimelineSidebarCounts
       var body: some View {
         Text(
           "\(manager.queueCount) \(library.libraryRevision) \(store.state) \(progress.totalJobsCompleted)"
@@ -59,8 +59,8 @@ import Testing
         counts = TimelineSidebarCounts(service: service)
         monthViewModel = MonthViewModel(photoLibraryService: service)
         let content = SubscribingView(counts: counts)
-          .environmentObject(library).environmentObject(timeline).environmentObject(collections)
-          .environmentObject(manager).environmentObject(manager.progressState)
+          .environment(library).environment(timeline).environment(collections)
+          .environment(manager).environment(manager.progressState)
           .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         hostingView = NSHostingView(rootView: content)
         window = NSWindow(

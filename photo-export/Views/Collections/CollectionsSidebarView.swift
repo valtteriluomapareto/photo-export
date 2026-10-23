@@ -125,7 +125,7 @@ private struct SharedAlbumsHintSection: View {
 /// counts come from `cachedCountAssets(in:)` so concurrent sidebar reads share one
 /// fetch and the cache is cleared on the same change observer.
 struct CollectionsSidebarView: View {
-  @EnvironmentObject private var photoLibraryManager: PhotoLibraryManager
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
@@ -192,7 +192,6 @@ struct CollectionsSidebarView: View {
     .task(id: photoLibraryManager.libraryRevision) {
       reloadTree()
     }
-    .measureBodyInvalidations("CollectionsSidebarView")
   }
 
   // MARK: - Tree rendering
@@ -405,13 +404,17 @@ private struct CollectionRow: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
 
   let descriptor: PhotoCollectionDescriptor
   let count: Int?
   var depth: Int = 0
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("collection-row-body:\(descriptor.id)")
+    #endif
     HStack(spacing: 8) {
       if depth > 0 {
         // Indent nested albums under folders so the hierarchy reads at a glance.
@@ -492,9 +495,9 @@ private struct FolderRow: View {
   #if DEBUG
     @Environment(\.bodyInvalidationCounter) private var bodyCounter
   #endif
-  @EnvironmentObject private var exportManager: ExportManager
+  @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @EnvironmentObject private var collectionExportRecordStore: CollectionExportRecordStore
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
 
   let descriptor: PhotoCollectionDescriptor
   let depth: Int
@@ -515,6 +518,10 @@ private struct FolderRow: View {
   }
 
   var body: some View {
+    #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("folder-row-body:\(descriptor.id)")
+    #endif
     HStack(spacing: 8) {
       if depth > 0 {
         Color.clear.frame(width: CGFloat(depth) * 8, height: 1)

@@ -19,8 +19,8 @@ import Testing
     @MainActor
     private struct Host: View {
       @ObservedObject var navigation: Navigation
-      @ObservedObject var library: PhotoLibraryManager
-      @ObservedObject var collections: CollectionExportRecordStore
+      let library: PhotoLibraryManager
+      let collections: CollectionExportRecordStore
       var body: some View {
         let current: ExportPlacement? = {
           guard let selection = navigation.selection else { return navigation.placement }
@@ -65,7 +65,7 @@ import Testing
         }
         let hosting = NSHostingView(
           rootView: Host(navigation: navigation, library: library, collections: collections)
-            .environmentObject(library).environmentObject(timeline).environmentObject(collections)
+            .environment(library).environment(timeline).environment(collections)
             .environment(\.bodyInvalidationCounter, counter))
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 500, height: 600),

@@ -36,7 +36,7 @@ struct ThumbnailViewLifecycleTests {
           isSelected: false, isExported: true
         )
         .frame(width: 100, height: 100)
-        .environmentObject(manager))
+        .environment(manager))
       window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 100, height: 100),
         styleMask: [.borderless], backing: .buffered, defer: false)

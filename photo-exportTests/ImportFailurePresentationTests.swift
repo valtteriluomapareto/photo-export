@@ -93,7 +93,7 @@ import Testing
       func show() {
         let hosted = NSHostingView(
           rootView: ImportView()
-            .environmentObject(manager).environmentObject(timeline).environmentObject(collections)
+            .environment(manager).environment(timeline).environment(collections)
             .environmentObject(destinationManager).environment(\.bodyInvalidationCounter, counter))
         let hostWindow = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 460, height: Self.hostHeight),
@@ -164,7 +164,7 @@ import Testing
       defer { f.close() }
       var started = false
       var terminal: (error: String?, stage: BackupScanner.ImportStage?, report: ImportReport?)?
-      let subscription = f.manager.$isImporting.sink { active in
+      let subscription = f.manager.isImportingFlagOnlyPublisher.sink { active in
         if active {
           started = true
         } else if started {
@@ -396,7 +396,7 @@ import Testing
         }
         #expect(!old.isCancelled)
         var lateStages: [BackupScanner.ImportStage?] = []
-        let subscription = f.manager.$importStage.dropFirst().sink { lateStages.append($0) }
+        let subscription = f.manager.importStagePublisher.dropFirst().sink { lateStages.append($0) }
         defer { subscription.cancel() }
         await gate.releaseAll()
         await old.value

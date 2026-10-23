@@ -10,7 +10,7 @@ import Testing
   struct SidebarObservationTests {
     @MainActor
     private struct QueueProbe: View {
-      @ObservedObject var manager: ExportManager
+      let manager: ExportManager
       let counter: BodyInvalidationCounter
       var body: some View {
         // A declaration keeps the probe out of ViewBuilder's view expressions.
@@ -20,12 +20,12 @@ import Testing
       }
     }
 
-    /// Rebuilds the collections sidebar on every manager or collection-store publication, as
-    /// `LibraryRootView` does in production. Its own key shows a publication has rendered.
+    /// Rebuilds for manager publications and coalesced collection revisions to stress the sidebar.
+    /// Its counter key confirms this parent rendered before child-body silence checks.
     @MainActor
     private struct CollectionsHost: View {
-      @ObservedObject var manager: ExportManager
-      @ObservedObject var collections: CollectionExportRecordStore
+      let manager: ExportManager
+      let collections: CollectionExportRecordStore
       @Binding var selectionSet: Set<LibrarySelection>
       let counter: BodyInvalidationCounter
       var body: some View {
@@ -59,6 +59,18 @@ import Testing
       }
     }
 
+    private struct StaticCollectionsHost: View {
+      let manager: ExportManager
+      let counter: BodyInvalidationCounter
+      @State private var selection: Set<LibrarySelection> = []
+      var body: some View {
+        HStack {
+          CollectionsSidebarView(selectionSet: $selection, exportManager: manager).frame(width: 260)
+          ExportManagerRenderProbe(manager: manager, counter: counter)
+        }
+      }
+    }
+
     @MainActor
     private final class Fixture {
       let root = TestScratch.directory("SidebarObservation")
@@ -73,7 +85,7 @@ import Testing
       let counter = BodyInvalidationCounter()
       let window: NSWindow
 
-      init() {
+      init(includeAlbum: Bool = false, staticCollections: Bool = false) {
         defaults = TestScratch.defaults(suiteName: suite)
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         let assets = ["first", "second"].map {
@@ -82,7 +94,23 @@ import Testing
         service.assetsByYearMonth["2026-9"] = assets
         service.favoritesAssets = assets
         service.yearCounts = [(2026, 2)]
-        library = PhotoLibraryManager(overrideService: service)
+        if includeAlbum {
+          service.collectionTree = [
+            PhotoCollectionDescriptor(
+              id: "album:family", localIdentifier: "family", title: "Family", kind: .album,
+              pathComponents: [], children: [])
+          ]
+          service.assetsByAlbumLocalId["family"] = assets
+        }
+        let cache = service.collectionCountCache
+        let invalidateCounts: (@Sendable () async -> Void)?
+        if includeAlbum {
+          invalidateCounts = { await cache.invalidateAll() }
+        } else {
+          invalidateCounts = nil
+        }
+        library = PhotoLibraryManager(
+          overrideService: service, countInvalidationOverride: invalidateCounts)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)
         timeline.configure(for: "A")
@@ -94,11 +122,22 @@ import Testing
           exportRecordStore: timeline, collectionExportRecordStore: collections,
           assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
           userDefaults: defaults)
-        let content = Host(
-          manager: manager, collections: collections, service: service, counter: counter
-        )
-        .environmentObject(library).environmentObject(timeline)
-        .environmentObject(collections).environmentObject(manager)
+        let hostManager = manager
+        let hostCollections = collections
+        let hostService = service
+        let hostCounter = counter
+        let content = Group {
+          if staticCollections {
+            StaticCollectionsHost(manager: hostManager, counter: hostCounter)
+          } else {
+            Host(
+              manager: hostManager, collections: hostCollections, service: hostService,
+              counter: hostCounter)
+          }
+        }
+        .environment(library).environment(timeline)
+        .environment(collections).environment(manager)
+        .environment(manager.progressState)
         .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window = NSWindow(
           contentRect: NSRect(x: -10_000, y: -10_000, width: 560, height: 500),
@@ -137,6 +176,95 @@ import Testing
         destination.cleanup()
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
+      }
+    }
+
+    /// Already passes: the static sidebar parent reads none of these manager publications.
+    @Test(.timeLimit(.minutes(1)))
+    func collectionsSidebarSkipsManagerPublicationsItDoesNotRead() async throws {
+      let f = Fixture(staticCollections: true)
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["collection-sidebar:favorites"]
+              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+          })
+        await f.quiesce()
+        let bodies = f.counter.count(for: "collections-sidebar")
+        try #require(bodies > 0)
+        let mutations: [() -> Void] = [
+          { f.manager.versionSelection = .editedWithOriginals },
+          { f.manager.livePhotosPairedExport = true },
+          {
+            f.manager.queueCoordinator.enqueue([
+              .init(assetLocalIdentifier: "queued", placement: .favorites(), selection: .edited)
+            ])
+          },
+          { f.manager.pause() },
+          { f.manager.cancelAndClear() },
+        ]
+        for mutation in mutations {
+          try await ExportManagerRenderProbe.change(
+            manager: f.manager, counter: f.counter, in: f.window, mutation)
+          let delta = f.counter.count(for: "collections-sidebar") - bodies
+          #expect(delta == 0)
+        }
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    /// Already passes: revoking access clears the years and granting access reloads them.
+    @Test(.timeLimit(.minutes(1)))
+    func timelineSidebarClearsOnRevokeAndReloadsOnGrant() async throws {
+      let f = Fixture()
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+          })
+        await f.quiesce()
+        f.service.authorizationStatus = .denied
+        f.service.isAuthorized = false
+        f.library.refreshAuthorizationStatus()
+        try #require(
+          await observe(in: f.window) { f.counter.renderedText["timeline-sidebar-years"] == [] })
+        f.service.authorizationStatus = .authorized
+        f.service.isAuthorized = true
+        f.library.refreshAuthorizationStatus()
+        #expect(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+          })
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    /// Already passes: Favorites and the recursive album row refresh their cached counts.
+    @Test(.timeLimit(.minutes(1)))
+    func collectionRowCountsReloadAfterALibraryChange() async throws {
+      let f = Fixture(includeAlbum: true)
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["collection-sidebar:favorites"]
+              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 2))]
+              && f.counter.renderedText["collection-sidebar:album:family"] == ["count:2"]
+          })
+        await f.quiesce()
+        let extra = TestAssetFactory.makeAsset(id: "extra")
+        f.service.favoritesAssets.append(extra)
+        f.service.assetsByAlbumLocalId["family", default: []].append(extra)
+        f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        #expect(
+          await observe(in: f.window) {
+            f.counter.renderedText["collection-sidebar:favorites"]
+              == [String(describing: CollectionSidebarBadge.State.notStarted(total: 3))]
+              && f.counter.renderedText["collection-sidebar:album:family"] == ["count:3"]
+          })
+      } cleanup: {
+        await f.close()
       }
     }
 

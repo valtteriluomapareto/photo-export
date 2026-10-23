@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[3]
 RUNNER = ROOT / 'scripts/ci/run-guards.sh'
 GUARDS = [
     'test-guards.sh', 'check-read-only-photos.py', 'check-no-plan-refs.py',
-    'check-test-waits.py', 'check-test-scratch.py', 'check-persistence-doc.py',
+    'check-test-waits.py', 'check-test-scratch.py', 'check-observation-ratchet.py',
+    'check-persistence-doc.py',
     'check-version.py', 'check-regression-gates.sh', 'check-fingerprint-id-keying.sh',
     'check-swift-format.sh',
 ]
@@ -62,7 +63,7 @@ class GuardRunnerTests(unittest.TestCase):
         self.assertIn('All static guards passed.', result.stdout)
 
     def test_multiple_failures_are_reported_and_later_success_still_runs(self):
-        failures = ['test-guards.sh', 'check-test-waits.py']
+        failures = ['test-guards.sh', 'check-test-waits.py', 'check-observation-ratchet.py']
         result = self.run_fixture(','.join(failures))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.invocations.read_text().splitlines(), GUARDS)
