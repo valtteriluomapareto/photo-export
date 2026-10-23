@@ -42,7 +42,7 @@ struct ReuseCopyLifecycleTests {
     let defaults: UserDefaults
     let asset = TestAssetFactory.makeAsset(id: "shared", hasAdjustments: false)
 
-    init() throws {
+    init(destinationIO: (any DestinationIOExecuting)? = nil) throws {
       defaults = TestScratch.defaults(suiteName: defaultsName)
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
@@ -51,7 +51,8 @@ struct ReuseCopyLifecycleTests {
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, fileSystem: files, userDefaults: defaults)
+        assetResourceWriter: writer, fileSystem: files,
+        destinationIOFactory: { _ in destinationIO ?? DestinationIO() }, userDefaults: defaults)
       photos.favoritesAssets = [asset]
       photos.resourcesByAssetId[asset.id] = [
         ResourceDescriptor(type: .photo, originalFilename: "IMG.JPG")
@@ -161,11 +162,20 @@ struct ReuseCopyLifecycleTests {
 
   @Test(.timeLimit(.minutes(1)))
   func oldCopyCleanupCannotDamageSamePathReplacement() async throws {
-    let fixture = try Fixture()
+    let io = RecordingDestinationIO()
+    let fixture = try Fixture(destinationIO: io)
     let gate = CopyGate()
+    let cleanupGate = CopyGate()
+    let oldStage = LockedBox<URL?>(nil)
     let replacementWritten = AsyncCheckpoint()
     try await withCleanup {
-      fixture.files.copyHook = { _, _ in try gate.hold() }
+      fixture.files.copyHook = { _, output in
+        oldStage.mutate { $0 = output }
+        try gate.hold()
+      }
+      fixture.files.existsHook = { path in
+        if path == oldStage.value?.path { try? cleanupGate.hold() }
+      }
       fixture.manager.startExportFavorites()
       await gate.started.waitForEnter(count: 1)
       let old = try #require(fixture.manager.currentTask)
@@ -177,12 +187,16 @@ struct ReuseCopyLifecycleTests {
       }
       fixture.writer.afterWriteCheckpoint = replacementWritten
       fixture.manager.startExportFavorites()
+      try #require(await eventually("replacement sweep admitted") { io.submissions.value == 3 })
+      #expect(fixture.writer.writeCalls.isEmpty)
+      gate.release()
+      await cleanupGate.started.waitForEnter(count: 1)
       await replacementWritten.waitForEnter(count: 1)
       let replacement = try #require(fixture.manager.currentTask)
       let output = try #require(fixture.writer.writeCalls.last?.url)
       let expectedBytes = try Data(contentsOf: output)
       fixture.manager.progressState.renderActivity = .rendering
-      gate.release()
+      cleanupGate.release()
       await old.value
       #expect(try Data(contentsOf: output) == expectedBytes)
       #expect(fixture.manager.currentJobAssetId == fixture.asset.id)
@@ -205,10 +219,14 @@ struct ReuseCopyLifecycleTests {
       #expect(
         fixture.collections.exportInfo(assetId: fixture.asset.id, placement: .favorites())?
           .variants[.original]?.status == .done)
+      #expect(fixture.destination.beginScopedAccessCount == 2)
+      #expect(fixture.destination.endScopedAccessCount == 2)
     } cleanup: {
       gate.release()
+      cleanupGate.release()
       fixture.cleanup()
       await gate.started.releaseAll()
+      await cleanupGate.started.releaseAll()
       await replacementWritten.releaseAll()
     }
   }
