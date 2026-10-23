@@ -130,4 +130,114 @@ struct ExportPreparationTests {
       cleanup(h)
     }
   }
+
+  private final class ScratchDestination: ExportDestination {
+    let manager: ExportDestinationManager
+    var opened: [URL] = []
+    var closed: [URL] = []
+    init(_ manager: ExportDestinationManager) { self.manager = manager }
+    var selectedFolderURL: URL? { manager.selectedFolderURL }
+    var canExportNow: Bool { manager.canExportNow }
+    var canImportNow: Bool { manager.canImportNow }
+    func beginScopedAccess() -> URL? {
+      if let selectedFolderURL { opened.append(selectedFolderURL) }
+      return selectedFolderURL
+    }
+    func endScopedAccess(for url: URL) { closed.append(url) }
+    func resetDirectoryResolution() { manager.resetDirectoryResolution() }
+    func prepareDirectoryResolution(generation: Int) {
+      manager.prepareDirectoryResolution(generation: generation)
+    }
+    func revalidateDirectory(_ path: String) throws { try manager.revalidateDirectory(path) }
+    func urlForRelativeDirectory(_ path: String, createIfNeeded: Bool) throws -> URL {
+      try manager.urlForRelativeDirectory(path, createIfNeeded: createIfNeeded)
+    }
+    func urlForMonth(year: Int, month: Int, createIfNeeded: Bool) throws -> URL {
+      try manager.urlForMonth(year: year, month: month, createIfNeeded: createIfNeeded)
+    }
+  }
+
+  private final class PreparationFixture {
+    let root = TestScratch.directory("CapturedPreparation")
+    let recordsRoot = TestScratch.directory("CapturedPreparationRecords")
+    let files = FakeFileSystem()
+    let photos = FakePhotoLibraryService()
+    let writer = FakeAssetResourceWriter()
+    let timeline: ExportRecordStore
+    let collections: CollectionExportRecordStore
+    let destination: ScratchDestination
+    let manager: ExportManager
+    init(io: any DestinationIOExecuting) throws {
+      let first = root.appendingPathComponent("A")
+      try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+      let realDestination = ExportDestinationManager(
+        skipRestore: true, userDefaults: TestScratch.defaults("CapturedPreparationDestination"),
+        fileSystem: files)
+      realDestination.setSelectedFolderForTesting(first)
+      destination = ScratchDestination(realDestination)
+      timeline = ExportRecordStore(baseDirectoryURL: recordsRoot)
+      collections = CollectionExportRecordStore(baseDirectoryURL: recordsRoot)
+      timeline.configure(for: "A")
+      collections.configure(for: "A")
+      manager = ExportManager(
+        photoLibraryService: photos, exportDestination: destination,
+        exportRecordStore: timeline, collectionExportRecordStore: collections,
+        assetResourceWriter: writer, fileSystem: files,
+        destinationIOFactory: { _ in io }, userDefaults: TestScratch.defaults("CapturedPreparation")
+      )
+      let asset = TestAssetFactory.makeAsset(
+        id: "prepare",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15)))
+      photos.assetsByYearMonth["2025-4"] = [asset]
+      photos.resourcesByAssetId[asset.id] = [.init(type: .photo, originalFilename: "IMG.JPG")]
+    }
+    func cleanup() {
+      manager.cancelAndClear()
+      timeline.drainSynchronously()
+      collections.drainSynchronously()
+      try? FileManager.default.removeItem(at: root)
+      try? FileManager.default.removeItem(at: recordsRoot)
+    }
+  }
+
+  @Test func preparationFilesystemCallsUseCapturedWorker() async throws {
+    let io = RecordingDestinationIO()
+    let f = try PreparationFixture(io: io)
+    defer { f.cleanup() }
+    f.manager.startExportMonth(year: 2025, month: 4)
+    await f.manager.waitForQueueDrained()
+    #expect(f.timeline.exportInfo(assetId: "prepare")?.variants[.original]?.status == .done)
+    #expect(f.files.calls.contains { $0.operation == "openDirectory" && !$0.onMainThread })
+    #expect(f.files.calls.allSatisfy { !$0.onMainThread })
+    #expect(io.workerChecks.value.allSatisfy { $0 })
+    #expect(f.destination.opened == f.destination.closed)
+  }
+
+  @Test func destinationReplacementDuringPrepareCannotDispatchOrBorrowNewScope() async throws {
+    let gate = LeafGate()
+    let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
+    let f = try PreparationFixture(io: io)
+    defer {
+      gate.release()
+      f.cleanup()
+    }
+    f.manager.startExportMonth(year: 2025, month: 4)
+    try #require(await gate.entered.waitForEnter(count: 1))
+    let old = try #require(f.manager.currentTask)
+    let first = try #require(f.destination.selectedFolderURL)
+    f.manager.interruptForDestinationUnavailable()
+    let second = f.root.appendingPathComponent("B")
+    try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+    f.destination.manager.setSelectedFolderForTesting(second)
+    f.timeline.configure(for: "B")
+    f.collections.configure(for: "B")
+    #expect(f.destination.closed.isEmpty)
+    gate.release()
+    await old.value
+    #expect(f.writer.writeCalls.isEmpty)
+    #expect(f.files.moveCalls.isEmpty)
+    #expect(f.destination.closed == [first])
+    #expect(try FileManager.default.contentsOfDirectory(atPath: second.path).isEmpty)
+    #expect(f.timeline.exportInfo(assetId: "prepare") == nil)
+  }
 }
