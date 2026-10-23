@@ -51,6 +51,8 @@ struct VariantExporterTests {
     var isEnqueueingAll: Bool { false }
     func performExport(job: ExportManager.ExportJob, generation: Int) async {}
     func didDrainQueue() {}
+    func beginProgressUpdates() {}
+    func endProgressUpdates() {}
     func queueContentsDidChange() {}
     func setCurrentJob(_ job: ExportManager.ExportJob) {}
     func clearCurrentJobIdentifiers(keepingPlacement: Bool) {}

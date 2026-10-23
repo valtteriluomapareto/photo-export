@@ -35,6 +35,11 @@ final class ExportQueueCoordinator: ObservableObject {
     /// run. Distinct from `clearCurrentJobIdentifiers` (which runs between jobs).
     func didDrainQueue()
 
+    /// Brackets a complete synchronous queue transition so presentation callbacks run
+    /// only after its counters, dispatch ownership and mirrors have committed.
+    func beginProgressUpdates()
+    func endProgressUpdates()
+
     /// Reports changed pending or in-flight contents after their synchronous updates.
     func queueContentsDidChange()
 
@@ -216,11 +221,15 @@ final class ExportQueueCoordinator: ObservableObject {
   /// admission check (`canTogglePause`) lives on `ExportManager` — pause is also valid
   /// during the "jobs queued, run loop not started yet" window the manager handles.
   func pause() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     isPaused = true
     logger.info("Export queue paused")
   }
 
   func resume() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     guard isPaused else { return }
     isPaused = false
     logger.info("Export queue resumed")
@@ -234,6 +243,8 @@ final class ExportQueueCoordinator: ObservableObject {
   /// after enqueueing (so a single processing kick can cover multiple enqueues in a
   /// bulk-album run).
   func enqueue(_ jobs: [ExportManager.ExportJob]) {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     let previous = queueFingerprint
     jobStorage.append(contentsOf: jobs)
     if !jobs.isEmpty { placementRevision &+= 1 }
@@ -257,6 +268,8 @@ final class ExportQueueCoordinator: ObservableObject {
   /// the per-placement counters, and updates `queueCount`. Used by the `clearPending`
   /// ExportManager API and by the cancellation path.
   func clearPending() -> Int {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     let previous = queueFingerprint
     let removed = pendingJobs.count
     removePendingJobs()
@@ -278,6 +291,8 @@ final class ExportQueueCoordinator: ObservableObject {
   /// split lets `clearPending` (queue-only drop, no cancellation of in-flight work)
   /// share the queue teardown logic.
   func teardownQueue() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     let previous = queueFingerprint
     currentTask?.cancel()
     currentTask = nil
@@ -295,6 +310,8 @@ final class ExportQueueCoordinator: ObservableObject {
   /// Resets the published progress counters. ExportManager calls this before a fresh run
   /// starts so the UI doesn't carry counters from the previous run.
   func resetProgressCounters() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     let previous = queueFingerprint
     totalJobsEnqueued = 0
     totalJobsCompleted = 0
@@ -310,6 +327,8 @@ final class ExportQueueCoordinator: ObservableObject {
   /// edge: when called with no pending jobs and no bulk-enqueue task in flight, the
   /// host's `didDrainQueue` fires so any `runExport` awaitable resolves.
   func processQueueIfNeeded() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     guard !isProcessing else { return }
     guard !isPaused else { return }
     guard !pendingJobs.isEmpty else {
@@ -332,6 +351,8 @@ final class ExportQueueCoordinator: ObservableObject {
   }
 
   private func processNext() {
+    host?.beginProgressUpdates()
+    defer { host?.endProgressUpdates() }
     let previous = queueFingerprint
     if isPaused {
       isProcessing = false
@@ -371,6 +392,8 @@ final class ExportQueueCoordinator: ObservableObject {
       await host?.performExport(job: job, generation: currentGen)
       await MainActor.run { [weak self] in
         guard let self, self.isCurrent(currentGen) else { return }
+        host?.beginProgressUpdates()
+        defer { host?.endProgressUpdates() }
         host?.clearCurrentJobIdentifiers(keepingPlacement: true)
         self.totalJobsCompleted += 1
         self.processNext()
