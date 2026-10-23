@@ -19,7 +19,7 @@ struct DestinationIOTests {
   }
 
   @Test func serialLeavesFinishInOrderWhileOtherDestinationProgresses() async throws {
-    let first = DestinationIO()
+    let first = RecordingDestinationIO()
     let other = DestinationIO()
     let gate = Gate()
     let order = LockedBox<[Int]>([])
@@ -33,8 +33,10 @@ struct DestinationIOTests {
     defer { gate.release() }
     try #require(await gate.entered.waitForEnter(count: 1))
     let pending = Task { await first.run { order.mutate { $0.append(3) } } }
-    let onWorker = await other.run { pthread_main_np() == 0 }
-    #expect(onWorker)
+    try #require(await eventually("second leaf admitted") { first.submissions.value == 2 })
+    let independent = Task { await other.run { pthread_main_np() == 0 } }
+    try #require(await finished(independent))
+    #expect(await independent.value)
     #expect(order.value == [1])
     gate.release()
     await held.value
@@ -48,6 +50,7 @@ struct DestinationIOTests {
     let gate = Gate()
     let physical = LockedBox(false)
     let returned = LockedBox(false)
+    defer { gate.release() }
     let predecessor: Task<Void, Never>?
     if queued {
       predecessor = Task { await io.run { gate.hold() } }
@@ -55,7 +58,6 @@ struct DestinationIOTests {
     } else {
       predecessor = nil
     }
-    defer { gate.release() }
     let task = Task {
       await io.run {
         if !queued { gate.hold() }
@@ -66,7 +68,8 @@ struct DestinationIOTests {
     if !queued { try #require(await gate.entered.waitForEnter(count: 1)) }
     try #require(await eventually("leaf admitted") { io.submissions.value == (queued ? 2 : 1) })
     task.cancel()
-    await DestinationIO().run {}
+    let independent = Task { await DestinationIO().run {} }
+    try #require(await finished(independent))
     #expect(!physical.value)
     #expect(!returned.value)
     gate.release()
@@ -147,7 +150,8 @@ struct DestinationIOTests {
     defer { gate.release() }
     try #require(await gate.entered.waitForEnter(count: 1))
     task.cancel()
-    await DestinationIO().run {}
+    let independent = Task { await DestinationIO().run {} }
+    try #require(await finished(independent))
     #expect(!returned.value)
     #expect(files.readCloses.isEmpty)
     gate.release()
@@ -178,6 +182,68 @@ struct DestinationIOTests {
     #expect(files.readOpens.count == 2)
     #expect(files.readCloses == [stage])
     #expect(io.workerChecks.value.allSatisfy { $0 })
+  }
+
+  private final class QueueIdentity: @unchecked Sendable {
+    private let key = DispatchSpecificKey<String>()
+    func executor(_ id: String) -> DestinationIO {
+      let queue = DispatchQueue(label: "test.destination.\(id)", qos: .utility)
+      queue.setSpecific(key: key, value: id)
+      return DestinationIO(queue: queue)
+    }
+    var current: String? { DispatchQueue.getSpecific(key: key) }
+  }
+
+  @MainActor
+  @Test func admittedOldCommitAndCleanupKeepTheirDestinationContext() async throws {
+    let identity = QueueIdentity()
+    let h = ExportManagerHarness(
+      label: "CapturedDestinationIO", destinationId: "A",
+      destinationIOFactory: { identity.executor($0 ?? "none") })
+    let gate = Gate()
+    defer {
+      gate.release()
+      h.store.drainSynchronously()
+      h.collectionStore.drainSynchronously()
+      h.dest.cleanup()
+      try? FileManager.default.removeItem(at: h.storeRoot)
+    }
+    let timestamps = LockedBox<[String]>([])
+    let cleanupContexts = LockedBox<[String]>([])
+    h.fileSystem.beforeMoveHook = { _, destination in
+      if destination.lastPathComponent == "A.JPG" { gate.hold() }
+    }
+    h.fileSystem.afterTimestampsHook = { _ in
+      timestamps.mutate { $0.append(identity.current ?? "missing") }
+    }
+    h.fileSystem.existsHook = { path in
+      if path.contains(".photo-export-") {
+        cleanupContexts.mutate { $0.append(identity.current ?? "missing") }
+      }
+    }
+    func admit(_ id: String) {
+      let asset = TestAssetFactory.makeAsset(id: id)
+      h.photoLib.assetsByYearMonth["2025-4"] = [asset]
+      h.photoLib.resourcesByAssetId[id] = [
+        .init(type: .photo, originalFilename: "\(id).JPG", fileSize: 12)
+      ]
+      h.manager.startExportMonth(year: 2025, month: 4)
+    }
+    admit("A")
+    try #require(await gate.entered.waitForEnter(count: 1))
+    h.manager.cancelAndClear()
+    h.store.configure(for: "B")
+    h.collectionStore.configure(for: "B")
+    admit("B")
+    #expect(h.dest.endScopedAccessCount == 0)
+    gate.release()
+    await h.manager.waitForQueueDrained()
+    try #require(
+      await eventually("both captured scopes released") { h.dest.endScopedAccessCount == 2 })
+    #expect(timestamps.value == ["A", "B"])
+    #expect(cleanupContexts.value.contains("A"))
+    #expect(cleanupContexts.value.contains("B"))
+    #expect(!cleanupContexts.value.contains("missing"))
   }
 
   @MainActor
