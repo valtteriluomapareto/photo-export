@@ -13,7 +13,6 @@ struct LibraryRootView: View {
   @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @Environment(ExportManager.self) private var exportManager
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
-  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @Environment(WhatsNewState.self) private var whatsNewState
 
   let timelineHistoryState: RecordStoreState
@@ -118,7 +117,7 @@ struct LibraryRootView: View {
           }
       },
       detail: {
-        SelectedAssetDetailPane(selection: assetSelection, placement: detailPlacement)
+        SelectedAssetDetailPane(selection: assetSelection, focusedSelection: focusedSelection)
           .environment(photoLibraryManager)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
@@ -127,12 +126,9 @@ struct LibraryRootView: View {
       ToolbarItem(placement: .navigation) {
         sectionPicker
       }
-      ExportToolbarView(
-        section: section,
-        selectionSet: selectionSet,
-        focusedSelection: focusedSelection,
-        historyState: section == .timeline
-          ? timelineHistoryState : collectionExportRecordStore.state)
+      LibraryExportToolbar(
+        section: section, selectionSet: selectionSet, focusedSelection: focusedSelection,
+        timelineHistoryState: timelineHistoryState)
     }
     .sheet(
       isPresented: $isShowingImportSheet,
@@ -209,21 +205,6 @@ struct LibraryRootView: View {
     )
     .background(Color(.windowBackgroundColor))
     .modifier(LibraryTreeLoading())
-  }
-
-  private var detailPlacement: ExportPlacement? {
-    guard let focusedSelection else { return nil }
-    switch focusedSelection {
-    case .timelineMonth(let year, let month):
-      return .timeline(year: year, month: month)
-    case .favorites:
-      return collectionExportRecordStore.currentPlacement(for: focusedSelection, collections: [])
-    case .album, .sharedAlbum:
-      guard let tree = photoLibraryManager.libraryRefresh.tree else { return nil }
-      return collectionExportRecordStore.currentPlacement(for: focusedSelection, collections: tree)
-    case .timelineYear, .folder:
-      return nil
-    }
   }
 
   // MARK: - Section picker
@@ -550,9 +531,43 @@ struct LibraryRootView: View {
 
 /// Reads selection beside the grid rather than in the split-view layout owner.
 private struct SelectedAssetDetailPane: View {
+  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   let selection: AssetSelectionModel
-  let placement: ExportPlacement?
+  let focusedSelection: LibrarySelection?
   var body: some View { AssetDetailView(asset: selection.asset, placement: placement) }
+
+  private var placement: ExportPlacement? {
+    guard let focusedSelection else { return nil }
+    switch focusedSelection {
+    case .timelineMonth(let year, let month):
+      return .timeline(year: year, month: month)
+    case .favorites:
+      return collectionExportRecordStore.currentGridPlacement(
+        for: focusedSelection, collections: [])
+    case .album, .sharedAlbum:
+      guard let tree = photoLibraryManager.libraryRefresh.tree else { return nil }
+      return collectionExportRecordStore.currentGridPlacement(
+        for: focusedSelection, collections: tree)
+    case .timelineYear, .folder:
+      return nil
+    }
+  }
+
+}
+
+/// Collection readiness is owned beside the controls that consume it.
+private struct LibraryExportToolbar: ToolbarContent {
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
+  let section: LibrarySection
+  let selectionSet: Set<LibrarySelection>
+  let focusedSelection: LibrarySelection?
+  let timelineHistoryState: RecordStoreState
+  var body: some ToolbarContent {
+    ExportToolbarView(
+      section: section, selectionSet: selectionSet, focusedSelection: focusedSelection,
+      historyState: section == .timeline ? timelineHistoryState : collectionExportRecordStore.state)
+  }
 }
 
 /// Binding construction reads the value eagerly; keep that read in the content's scope.
