@@ -1590,20 +1590,29 @@ final class ExportRecordStore {
     return { [self] finalFilename in
       defer { if finalCommitContext === context { finalCommitContext = nil } }
       guard let filename = finalFilename else { return }
-      await prepareFinalCommitRecovery(context)
-      #if DEBUG
-        await finalCommitLandingCheckpoint?()
-      #endif
-      try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
-      let landing = mutationAdmission.perform {
-        landFinalCommit(
-          filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked)
-      }
-      guard landing != .held else { return }
-      do {
-        try await context.file.flush()
-      } catch {
-        retainFinalCommitFailure(error, context: context)
+      while true {
+        await prepareFinalCommitRecovery(context)
+        #if DEBUG
+          await finalCommitLandingCheckpoint?()
+        #endif
+        try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
+        let landing: FinalCommitLanding? = mutationAdmission.perform {
+          // A replacement load can finish unreadably while preparation for its predecessor waits.
+          guard
+            configurationPending || configuredDestinationId != context.destinationId
+              || state != .persistenceFailed || hasUnsavedChanges
+          else { return nil }
+          return landFinalCommit(
+            filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked)
+        }
+        guard let landing else { continue }
+        guard landing != .held else { return }
+        do {
+          try await context.file.flush()
+        } catch {
+          retainFinalCommitFailure(error, context: context)
+        }
+        return
       }
     }
   }
