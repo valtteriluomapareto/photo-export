@@ -1,6 +1,7 @@
 import AppKit
 import Photos
 import SwiftUI
+import Observation
 import Testing
 
 @testable import Photo_Export
@@ -35,6 +36,19 @@ import Testing
         // A declaration keeps the probe out of ViewBuilder's view expressions.
         // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("timeline-records:\(store.mutationCounter)")
+        Color.clear.frame(width: 1, height: 1)
+      }
+    }
+
+    @Observable
+    final class RenderTick { var value = 0 }
+
+    private struct TickProbe: View {
+      let tick: RenderTick
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("root-barrier:\(tick.value)")
         Color.clear.frame(width: 1, height: 1)
       }
     }
@@ -86,6 +100,7 @@ import Testing
       let autoSync = AutoSyncManager()
       let whatsNew: WhatsNewState
       let counter = BodyInvalidationCounter()
+      let tick = RenderTick()
       var window: NSWindow?
       var folder: URL { root.appendingPathComponent("Backup") }
       var windowRootBodyKey: String { "main-window-root" }
@@ -150,6 +165,7 @@ import Testing
           .overlay(alignment: .bottomLeading) {
             CollectionRecordsProbe(store: collections, counter: counter)
           }
+          .overlay { TickProbe(tick: tick, counter: counter) }
           .environment(library).environment(timeline).environment(collections)
           .environment(manager).environment(manager.progressState)
           .environmentObject(destination).environmentObject(autoSync).environment(whatsNew)
@@ -173,6 +189,13 @@ import Testing
           for task in pending { _ = await finished(task) }
         }
         window?.contentView?.layoutSubtreeIfNeeded()
+      }
+
+      func barrier() async throws {
+        tick.value += 1
+        let key = "root-barrier:\(tick.value)"
+        try #require(await observe(in: window) { counter.count(for: key) > 0 })
+        await quiesce()
       }
 
       /// Records an export for a month the library view does not show, then waits until the
@@ -388,6 +411,39 @@ import Testing
         try #require(await observe(in: f.window) { f.counter.count(for: key) > 0 })
         await f.quiesce()
         #expect(f.counter.count(for: "library-root") == bodies)
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test func libraryRootSkipsCollectionRecordsWhileAlbumIsSelected() async throws {
+      let f = try Fixture()
+      try await withCleanup {
+        f.service.collectionTree = [
+          PhotoCollectionDescriptor(
+            id: "album:family", localIdentifier: "family", title: "Family", kind: .album,
+            pathComponents: [], children: [])
+        ]
+        f.show(.library, screenshotSurfaceKey: "collections-album-family")
+        try #require(
+          await observe(in: f.window) {
+            f.counter.count(for: "title:Family") > 0
+              && f.counter.renderedText["collection-summary"] != nil
+          })
+        try await f.barrier()
+        let bodies = f.counter.count(for: "library-root")
+        let placement = ExportPlacement.favorites()
+        f.collections.upsertPlacement(placement)
+        f.collections.markVariantExported(
+          assetId: "unrelated", placement: placement, variant: .original,
+          filename: "OTHER.JPG", exportedAt: Date())
+        f.collections.flushPendingNotifications()
+        let key = "collection-records:\(f.collections.mutationCounter)"
+        try #require(await observe(in: f.window) { f.counter.count(for: key) > 0 })
+        try await f.barrier()
+        withKnownIssue("The album detail placement lookup currently observes global records") {
+          #expect(f.counter.count(for: "library-root") == bodies)
+        }
       } cleanup: {
         await f.close()
       }

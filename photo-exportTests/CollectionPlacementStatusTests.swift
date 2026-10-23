@@ -1,14 +1,18 @@
 import AppKit
 import SwiftUI
+import Observation
 import Testing
 
 @testable import Photo_Export
 
 #if DEBUG
   @MainActor
-  @Suite(.serialized)
+  @Suite(.serialized, .timeLimit(.minutes(2)))
   struct CollectionPlacementStatusTests {
     enum Change: CaseIterable { case rename, ancestorRename, move, sharedRename }
+
+    @Observable
+    final class RenderTick { var value = 0 }
 
     @MainActor
     private struct Host: View {
@@ -18,6 +22,9 @@ import Testing
       let folderId: String?
       var showsSidebar = true
       var showsFolderPane = true
+      let tick: RenderTick
+      let records: CollectionExportRecordStore
+      let counter: BodyInvalidationCounter
       @State private var selectedAsset: AssetDescriptor?
       @State private var sidebarSelection: Set<LibrarySelection> = []
       @State private var folderSelection: LibrarySelection?
@@ -40,6 +47,20 @@ import Testing
             ).frame(width: 350)
           }
         }
+        .overlay { PublicationProbe(tick: tick, records: records, counter: counter) }
+      }
+    }
+
+    private struct PublicationProbe: View {
+      let tick: RenderTick
+      let records: CollectionExportRecordStore
+      let counter: BodyInvalidationCounter
+      var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("collection-barrier:\(tick.value)")
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = counter.record("sidebar-publication:\(records.mutationCounter)")
+        Color.clear.frame(width: 1, height: 1)
       }
     }
 
@@ -53,6 +74,7 @@ import Testing
       let fakeDestination = FakeExportDestination()
       // Preserve rendered snapshots while mounted; unchanged children may skip body evaluation.
       let counter = BodyInvalidationCounter()
+      let tick = RenderTick()
       let asset = TestAssetFactory.makeAsset(id: "changed-asset")
       let unchangedAsset = TestAssetFactory.makeAsset(id: "unchanged-asset")
       let root = TestScratch.directory("CollectionPlacementStatus")
@@ -67,10 +89,11 @@ import Testing
       let sidebarFolderId: String?
       var window: NSWindow?
 
-      init(change: Change) throws {
+      init(change: Change, notificationClock: (any AutoSyncClock)? = nil) throws {
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root)
-        records = CollectionExportRecordStore(baseDirectoryURL: root)
+        records = CollectionExportRecordStore(
+          baseDirectoryURL: root, notificationClock: notificationClock ?? SystemAutoSyncClock())
         defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline.configure(for: "A")
         records.configure(for: "A")
@@ -157,12 +180,13 @@ import Testing
           rootView:
             Host(
               service: service, manager: manager, selection: selectionOverride ?? selection,
-              folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane
+              folderId: folderId, showsSidebar: sidebar, showsFolderPane: folderPane,
+              tick: tick, records: records, counter: counter
             )
             .environment(library).environment(timeline).environment(records)
             .environment(manager)
             .environmentObject(ExportDestinationManager(skipRestore: true, userDefaults: defaults))
-            .environment(\.bodyInvalidationCounter, counter))
+            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults))
         let hostWindow = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 1000, height: 800),
           styleMask: [.borderless], backing: .buffered, defer: false)
@@ -187,6 +211,19 @@ import Testing
         }
       }
 
+      func barrier() async throws {
+        tick.value += 1
+        let key = "collection-barrier:\(tick.value)"
+        try #require(await observe(in: window) { counter.count(for: key) > 0 })
+        var awaited = 0
+        while awaited < counter.tasks.count {
+          let pending = Array(counter.tasks.dropFirst(awaited))
+          awaited = counter.tasks.count
+          for task in pending { _ = await finished(task) }
+        }
+        window?.contentView?.layoutSubtreeIfNeeded()
+      }
+
       func close() {
         window?.orderOut(nil)
         window?.contentView = nil
@@ -199,6 +236,49 @@ import Testing
         fakeDestination.cleanup()
         try? FileManager.default.removeItem(at: root)
       }
+    }
+
+    @Test(arguments: [false, true])
+    func sidebarUpdatesOnlyAffectedBadge(folder: Bool) async throws {
+      let f = try Fixture(
+        change: folder ? .ancestorRename : .rename, notificationClock: TestClock())
+      defer { f.close() }
+      let other = PhotoCollectionDescriptor(
+        id: "album:other", localIdentifier: "other", title: "Other", kind: .album,
+        pathComponents: [], children: [])
+      f.service.collectionTree = f.currentTree + [other]
+      f.service.assetsByAlbumLocalId["other"] = [TestAssetFactory.makeAsset(id: "other")]
+      let otherPlacement = try ExportPlacementResolver().placement(
+        for: .album(collectionId: "other"), collections: [other], existingPlacements: [])
+      f.set(f.current, .inProgress)
+      f.set(otherPlacement, .inProgress, assetId: "other")
+      if let stable = f.unchanged { f.set(stable, .done, assetId: "unchanged-asset") }
+      f.records.flushPendingNotifications()
+      f.show(folderPane: false)
+      let changedKey = folder ? "folder-sidebar:folder:folder" : "collection-sidebar:album:target"
+      try #require(
+        await observe(in: f.window) {
+          f.counter.renderedText["collection-sidebar:album:other"] == ["notStarted(total: 1)"]
+            && f.counter.renderedText[changedKey] != nil
+        })
+      try await f.barrier()
+      let otherBodies = f.counter.count(for: "collection-row-body:album:other")
+      let changedBodyKey =
+        folder ? "folder-row-body:folder:folder" : "collection-row-body:album:target"
+      let changedBodies = f.counter.count(for: changedBodyKey)
+      f.set(f.current, .done)
+      f.records.flushPendingNotifications()
+      let revisionKey = "sidebar-publication:\(f.records.mutationCounter)"
+      try #require(
+        await observe(in: f.window) {
+          f.counter.renderedText[changedKey] == ["complete"]
+            && f.counter.count(for: revisionKey) > 0
+        })
+      try await f.barrier()
+      withKnownIssue("Unrelated collection rows currently observe the global record revision") {
+        #expect(f.counter.count(for: "collection-row-body:album:other") == otherBodies)
+      }
+      #expect(f.counter.count(for: changedBodyKey) - changedBodies <= 1)
     }
 
     private func loaded(_ f: Fixture) async throws {

@@ -111,7 +111,7 @@ import Testing
     }
 
     private enum Layout: String, CaseIterable {
-      case noUI, sidebar, progressBar, fullWindow
+      case noUI, sidebar, progressBar, grid, fullWindow
     }
 
     @Observable
@@ -133,6 +133,22 @@ import Testing
       var body: some View {
         TimelineSidebarView(selectionSet: $selection, photoLibraryService: service)
           .frame(width: 260)
+      }
+    }
+
+    private struct GridHost: View {
+      let library: PhotoLibraryManager
+      let year: Int
+      let month: Int
+      @State private var selection = AssetSelectionModel()
+      var body: some View {
+        MonthContentView(
+          year: year, month: month, versionSelection: .edited, livePhotosPaired: false,
+          onExportMonth: {},
+          selectedAsset: Binding(
+            get: { selection.asset }, set: { selection.asset = $0 }),
+          photoLibraryService: library, assetSelection: selection
+        ).equatable().frame(width: 520)
       }
     }
 
@@ -220,6 +236,7 @@ import Testing
           case .sidebar:
             SidebarHost(service: service, selection: [.timelineMonth(year: year, month: month)])
           case .progressBar: ExportProgressBar()
+          case .grid: GridHost(library: library, year: year, month: month)
           case .fullWindow:
             MainWindowRoot(destinationManager: destinationManager, recordStore: timeline)
           }
@@ -238,8 +255,12 @@ import Testing
             await observe(in: window) {
               counter.count(for: "timeline-month-body:\(year)-\(month)") > 0
             })
-        } else if layout == .fullWindow {
-          try #require(await observe(in: window) { counter.renderedText["month-summary"] != nil })
+        } else if layout == .grid || layout == .fullWindow {
+          try #require(
+            await observe(in: window) {
+              counter.renderedText["grid-assets"] == ["60"]
+                && counter.renderedText["month-summary"] == ["0/60 exported"]
+            })
         }
         var awaited = 0
         while awaited < counter.tasks.count {

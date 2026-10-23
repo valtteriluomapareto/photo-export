@@ -5,6 +5,7 @@ import Testing
 @testable import Photo_Export
 
 @MainActor
+@Suite(.timeLimit(.minutes(2)))
 struct CollectionExportRecordStoreTests {
 
   // MARK: - Fixtures
@@ -58,6 +59,103 @@ struct CollectionExportRecordStoreTests {
       duration: 0,
       hasAdjustments: false
     )
+  }
+
+  @Test func legacySummariesMatchSeededIndependentScan() throws {
+    let dir = TestScratch.directory("CollectionCounterGolden")
+    let store = CollectionExportRecordStore(baseDirectoryURL: dir, notificationClock: TestClock())
+    defer {
+      store.drainSynchronously()
+      try? FileManager.default.removeItem(at: dir)
+    }
+    let destination = dir.appendingPathComponent("golden")
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    let snapshot = CollectionExportRecordStore.Snapshot(
+      version: CollectionExportRecordStore.Constants.snapshotVersion,
+      placements: [favoritesPlacement().id: favoritesPlacement()],
+      records: [
+        favoritesPlacement().id: [
+          "empty": .init(variants: [:]),
+          "future": .init(variants: [
+            "future-variant": ExportVariantRecord(
+              filename: "FUTURE.JPG", status: .done, exportDate: nil, lastError: nil)
+          ]),
+        ]
+      ])
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    try encoder.encode(snapshot).write(
+      to: destination.appendingPathComponent(
+        CollectionExportRecordStore.Constants.snapshotFileName))
+    store.configure(for: "golden")
+    #expect(store.summary(for: favoritesPlacement()).totalCount == 2)
+    #expect(store.summary(for: favoritesPlacement()).exportedCount == 1)
+    let placements = [favoritesPlacement(), albumPlacement(), sharedAlbumPlacement()]
+    var seed: UInt64 = 0x450A
+    for step in 0..<240 {
+      seed = seed &* 6364136223846793005 &+ 1
+      let placement = placements[Int(seed >> 32) % placements.count]
+      let asset = "asset-\(Int(seed >> 16) % 13)"
+      switch seed % 7 {
+      case 0: store.remove(assetId: asset, placement: placement)
+      case 1: store.deletePlacement(id: placement.id)
+      case 2: store.removeVariant(assetId: asset, placement: placement, variant: .original)
+      default:
+        store.upsertPlacement(placement)
+        store.upsert(
+          ScopedExportRecord(
+            placement: placement, assetId: asset,
+            variants: seed % 11 == 0
+              ? [:]
+              : [
+                .original: ExportVariantRecord(
+                  filename: "\(asset).JPG", status: seed % 3 == 0 ? .done : .inProgress,
+                  exportDate: nil, lastError: nil)
+              ]))
+      }
+      if step == 80 {
+        store.bulkImportRecords([
+          .init(
+            placement: placement,
+            records: [
+              "imported": [
+                .original: ExportVariantRecord(
+                  filename: "IMPORT.JPG", status: .done,
+                  exportDate: nil, lastError: nil),
+                .edited: ExportVariantRecord(
+                  filename: "IMPORT-E.JPG", status: .done,
+                  exportDate: nil, lastError: nil),
+              ]
+            ])
+        ])
+      }
+      if step == 160 {
+        let broken = dir.appendingPathComponent("broken")
+        try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
+        try Data("broken".utf8).write(
+          to: broken.appendingPathComponent(
+            CollectionExportRecordStore.Constants.snapshotFileName))
+        store.configure(for: "broken")
+        try #require(store.state == .failed)
+        store.resetToEmpty()
+        #expect(placements.allSatisfy { store.summary(for: $0).totalCount == 0 })
+        store.configure(for: "golden")
+      }
+      if step == 120 {
+        store.drainSynchronously()
+        store.configure(for: nil)
+        store.configure(for: "golden")
+      }
+      for candidate in placements {
+        let bodies = store.recordBodies[candidate.id] ?? [:]
+        let done = bodies.values.filter { body in
+          body.variants.values.contains { $0.status == .done }
+        }.count
+        let summary = store.summary(for: candidate)
+        #expect(summary.totalCount == bodies.count, "seed 0x450A step \(step)")
+        #expect(summary.exportedCount == done, "seed 0x450A step \(step)")
+      }
+    }
   }
 
   // MARK: - Empty / first-launch behavior
