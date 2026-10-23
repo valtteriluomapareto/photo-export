@@ -22,9 +22,28 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   }
   private var _existsHook: (@Sendable (String) -> Void)?
 
+  private var liveDirectoryHandles = 0
+  private var _directoryHandleLimit: Int?
+  /// Simulates descriptor pressure without changing the process-wide file limit.
+  var directoryHandleLimit: Int? {
+    get { lock.withLock { _directoryHandleLimit } }
+    set { lock.withLock { _directoryHandleLimit = newValue } }
+  }
+
   func openDirectory(at url: URL) throws -> any FileDirectoryHandle {
     record("openDirectory")
-    return try real.openDirectory(at: url)
+    let handle = try real.openDirectory(at: url)
+    let admitted = lock.withLock {
+      if let limit = _directoryHandleLimit, liveDirectoryHandles >= limit { return false }
+      liveDirectoryHandles += 1
+      return true
+    }
+    guard admitted else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(EMFILE)) }
+    return RecordingDirectoryHandle(real: handle, owner: self)
+  }
+
+  fileprivate func releasedDirectory() {
+    lock.withLock { liveDirectoryHandles -= 1 }
   }
 
   func directoryPhysicalPath(_ handle: any FileDirectoryHandle) throws -> URL {
@@ -257,4 +276,16 @@ private final class RecordingReadHandle: FileReadHandle, @unchecked Sendable {
     owner.recordClose(url)
     real.close()
   }
+}
+
+private final class RecordingDirectoryHandle: FileDirectoryHandle, @unchecked Sendable {
+  let real: any FileDirectoryHandle
+  let owner: FakeFileSystem
+  init(real: any FileDirectoryHandle, owner: FakeFileSystem) {
+    self.real = real
+    self.owner = owner
+  }
+  deinit { owner.releasedDirectory() }
+  var identity: FileItemIdentity { real.identity }
+  func physicalPath() throws -> URL { try real.physicalPath() }
 }

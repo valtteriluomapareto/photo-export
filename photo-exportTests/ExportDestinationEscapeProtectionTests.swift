@@ -124,6 +124,38 @@ struct ExportDestinationEscapeProtectionTests {
     }
   }
 
+  enum EarlierDirectoryChange: CaseIterable { case deletion, leafReparent, ancestorReparent }
+
+  @Test(arguments: EarlierDirectoryChange.allCases)
+  func earlierDirectoryStaysProtectedAfterCacheEviction(change: EarlierDirectoryChange) throws {
+    let files = FakeFileSystem()
+    files.directoryHandleLimit = 32
+    let (manager, _) = try makeManagerAndRoot(fileSystem: files)
+    let directory = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
+    // More paths than the injected descriptor supply must still resolve. Previously
+    // visited paths retain their safety checks after their live handles are evicted.
+    for index in 0..<40 {
+      _ = try manager.urlForRelativeDirectory("cache-\(index)/", createIfNeeded: true)
+    }
+    switch change {
+    case .deletion:
+      try FileManager.default.removeItem(at: directory)
+    case .leafReparent, .ancestorReparent:
+      let source = change == .ancestorReparent ? directory.deletingLastPathComponent() : directory
+      let moved = TestScratch.directory("EvictedReparent")
+      let original = try FileIOService().directoryIdentity(at: directory)
+      try FileManager.default.moveItem(at: source, to: moved)
+      try FileManager.default.createSymbolicLink(at: source, withDestinationURL: moved)
+      #expect(try FileIOService().directoryIdentity(at: directory) == original)
+    }
+    #expect(throws: (any Error).self) {
+      _ = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
+    }
+    if change == .deletion {
+      #expect(!FileManager.default.fileExists(atPath: directory.path))
+    }
+  }
+
   /// Keeps resolution on the real manager while scratch URLs need no security bookmark.
   private final class ScratchDestination: ExportDestination {
     let manager: ExportDestinationManager
