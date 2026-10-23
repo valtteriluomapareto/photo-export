@@ -208,6 +208,7 @@ struct LibraryRootView: View {
       minWidth: Self.minimumWindowSize.width, minHeight: Self.minimumWindowSize.height
     )
     .background(Color(.windowBackgroundColor))
+    .modifier(LibraryTreeLoading())
   }
 
   private var detailPlacement: ExportPlacement? {
@@ -218,7 +219,7 @@ struct LibraryRootView: View {
     case .favorites:
       return collectionExportRecordStore.currentPlacement(for: focusedSelection, collections: [])
     case .album, .sharedAlbum:
-      guard let tree = try? photoLibraryManager.fetchCollectionTree() else { return nil }
+      guard let tree = photoLibraryManager.libraryRefresh.tree else { return nil }
       return collectionExportRecordStore.currentPlacement(for: focusedSelection, collections: tree)
     case .timelineYear, .folder:
       return nil
@@ -486,7 +487,7 @@ struct LibraryRootView: View {
   /// hidden-button host that lived in `TimelineSidebarView`; moved up here so the
   /// Edit menu can drive it without a private sidebar API.
   private func selectAllTimelineYears() {
-    let years = (try? photoLibraryManager.availableYears()) ?? []
+    let years = photoLibraryManager.libraryRefresh.years.map(\.year)
     let yearItems = Set(years.map { LibrarySelection.timelineYear(year: $0) })
     let preserved = selectionSet.filter { !$0.isTimeline }
     selectionSet = yearItems.union(preserved)
@@ -497,7 +498,7 @@ struct LibraryRootView: View {
   /// folders — matches Finder's "select all" scope, which doesn't reach into
   /// closed disclosure groups.
   private func selectAllVisibleCollections() {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     var picked: Set<LibrarySelection> = [.favorites]
     for descriptor in tree {
       guard let localId = descriptor.localIdentifier else { continue }
@@ -516,17 +517,17 @@ struct LibraryRootView: View {
   /// "Album" when the tree hasn't been built yet — the next sidebar fetch will populate
   /// the title via the placement metadata anyway.
   private func albumTitle(forCollectionId id: String) -> String {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     return findTitle(kind: .album, id: id, in: tree) ?? "Album"
   }
 
   private func folderTitle(forCollectionId id: String) -> String {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     return findTitle(kind: .folder, id: id, in: tree) ?? "Folder"
   }
 
   private func sharedAlbumTitle(forCollectionId id: String) -> String {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     return findTitle(kind: .sharedAlbum, id: id, in: tree) ?? "Shared Album"
   }
 

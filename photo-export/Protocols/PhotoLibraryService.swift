@@ -27,6 +27,10 @@ protocol PhotoLibraryService: AnyObject {
   func availableYears() throws -> [Int]
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)]
 
+  /// UI inventory scans return values without enumerating Photos on the main actor.
+  nonisolated func loadYearsWithCounts() async throws -> [PhotoLibraryYearCount]
+  nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor]
+
   // MARK: - Collections
 
   /// Fetches the user's Photos collection tree: a synthetic Favorites entry first, then

@@ -44,6 +44,7 @@ struct ExportToolbarView: ToolbarContent {
 
     ToolbarItem(placement: .primaryAction) {
       primaryActions
+        .modifier(LibraryTreeLoading())
     }
   }
 
@@ -271,7 +272,7 @@ struct ExportToolbarView: ToolbarContent {
       let collectionItems = selectionSet.filter(\.isCollection)
       if collectionItems.count >= 2 {
         let buckets = CollectionsSelectionBuckets.normalize(collectionItems) { folderId in
-          let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+          let tree = photoLibraryManager.libraryRefresh.tree ?? []
           guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
           else { return [] }
           return PhotoCollectionDescriptor.albumLocalIds(under: folder)
@@ -303,7 +304,7 @@ struct ExportToolbarView: ToolbarContent {
   /// the current Photos tree; shared albums use a separate reduced-fidelity export
   /// action and are excluded from the global albums action.
   private func allButSharedBuckets() -> CollectionsSelectionBuckets {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
     return CollectionsSelectionBuckets(
       includesFavorites: true, albumIds: albumIds, sharedAlbumIds: [])

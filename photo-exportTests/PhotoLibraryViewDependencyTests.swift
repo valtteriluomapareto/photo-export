@@ -102,6 +102,7 @@ import Testing
           TestAssetFactory.makeAsset(id: "second", creationDate: date))
         f.service.yearCounts = [(2026, 2)]
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         #expect(
           await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["2 photos"] })
       } cleanup: {

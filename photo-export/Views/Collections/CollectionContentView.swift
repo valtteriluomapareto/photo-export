@@ -107,10 +107,25 @@ struct CollectionContentView: View, Equatable {
     }
     .padding(.horizontal)
     .overlay(overlayViews)
+    .modifier(LibraryTreeLoading())
     .task(id: scopeTaskId) {
-      await viewModel.loadAssets(for: scope)
+      let query = PhotoLibraryQuery(scope: scope)
+      let source = photoLibraryManager.libraryRefresh.sourceRevision(for: query)
+      await viewModel.loadAssets(
+        for: scope,
+        isCurrent: {
+          photoLibraryManager.libraryRefresh.sourceRevision(for: query) == source
+        })
     }
-    .onDisappear { viewModel.deactivate() }
+    .onAppear { photoLibraryManager.beginObservingQuery(PhotoLibraryQuery(scope: scope)) }
+    .onChange(of: PhotoLibraryQuery(scope: scope)) { old, new in
+      photoLibraryManager.endObservingQuery(old)
+      photoLibraryManager.beginObservingQuery(new)
+    }
+    .onDisappear {
+      photoLibraryManager.endObservingQuery(PhotoLibraryQuery(scope: scope))
+      viewModel.deactivate()
+    }
     .onReceive(viewModel.selectionUpdates) { _ in
       // The model emits after an owned commit. Derive from the live binding
       // and write synchronously, so no queued pane can undo newer navigation.
@@ -123,13 +138,19 @@ struct CollectionContentView: View, Equatable {
         viewModel.select(assetId: update.asset?.id)
       }
     }
-    // Same iCloud-sync / Photos.app-edit refresh path as `MonthContentView`. The
-    // earlier note about `libraryRevision` blanking this grid no longer applies — the
-    // view model's `refresh(for:)` updates `assets` in place rather than clearing
-    // first, so adding the observer here is now safe.
-    .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
+    // Query-specific refreshes merge in place instead of blanking the visible collection.
+    .onChange(
+      of: photoLibraryManager.libraryRefresh.queryRefresh(for: PhotoLibraryQuery(scope: scope))
+    ) { old, new in
+      guard old.query == new.query else { return }
       Task {
-        await viewModel.refresh(for: scope)
+        let query = PhotoLibraryQuery(scope: scope)
+        let source = photoLibraryManager.libraryRefresh.sourceRevision(for: query)
+        await viewModel.refresh(
+          for: scope,
+          isCurrent: {
+            photoLibraryManager.libraryRefresh.sourceRevision(for: query) == source
+          })
         #if DEBUG
           bodyCounter?.record("grid-refresh-finished")
         #endif
@@ -257,7 +278,7 @@ struct CollectionContentView: View, Equatable {
     if selection == .favorites {
       tree = []
     } else {
-      guard let current = try? photoLibraryManager.fetchCollectionTree() else { return nil }
+      guard let current = photoLibraryManager.libraryRefresh.tree else { return nil }
       tree = current
     }
     return collectionExportRecordStore.currentGridPlacement(for: selection, collections: tree)

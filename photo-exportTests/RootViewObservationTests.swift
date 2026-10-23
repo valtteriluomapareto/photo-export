@@ -502,6 +502,7 @@ import Testing
         await f.quiesce()
         f.service.collectionTree = [familyAlbum("Renamed Family")]
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        f.library.libraryRefresh.flush()
         #expect(await observe(in: f.window) { f.counter.count(for: "title:Renamed Family") > 0 })
       } cleanup: {
         await f.close()
@@ -533,6 +534,7 @@ import Testing
         await f.quiesce()
         let before = f.counter.count(for: key)
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         try #require(await observe(in: f.window) { f.counter.count(for: "library-probe:1:3") > 0 })
         await f.quiesce()
         let delta = f.counter.count(for: key) - before

@@ -61,23 +61,48 @@ struct LibraryRefreshTests {
     #expect(clock.pendingCount == 0)
   }
 
-  @Test func obsoleteInventoryCannotInstallAfterANewerSourceRevision() async {
+  @Test(arguments: [false, true])
+  func obsoleteInventoryCannotInstallAfterANewerSourceRevision(tree: Bool) async {
     let clock = TestClock()
     let service = FakePhotoLibraryService()
     let library = PhotoLibraryManager(overrideService: service, refreshClock: clock)
     let gate = AsyncCheckpoint()
     service.yearCounts = [(2025, 1)]
+    service.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "old", localIdentifier: "old", title: "Old", kind: .album, pathComponents: [],
+        children: [])
+    ]
     service.inventoryCheckpoint = gate
-    let old = Task { await library.libraryRefresh.loadYears() }
+    let old = Task {
+      if tree {
+        await library.libraryRefresh.loadTree()
+      } else {
+        await library.libraryRefresh.loadYears()
+      }
+    }
     await gate.waitForEnter(count: 1)
     service.inventoryCheckpoint = nil
     service.yearCounts = [(2026, 2)]
+    service.collectionTree = [
+      PhotoCollectionDescriptor(
+        id: "new", localIdentifier: "new", title: "New", kind: .album, pathComponents: [],
+        children: [])
+    ]
     library.invalidateCache(changedThumbnailAssetIDs: [])
     library.libraryRefresh.flush()
-    await library.libraryRefresh.loadYears()
+    if tree {
+      await library.libraryRefresh.loadTree()
+    } else {
+      await library.libraryRefresh.loadYears()
+    }
     await gate.releaseAll()
     await old.value
-    #expect(library.libraryRefresh.years == [PhotoLibraryYearCount(year: 2026, count: 2)])
+    if tree {
+      #expect(library.libraryRefresh.tree?.map(\.title) == ["New"])
+    } else {
+      #expect(library.libraryRefresh.years == [PhotoLibraryYearCount(year: 2026, count: 2)])
+    }
   }
 
   @Test func queryRegistrationRejectsLateResultsAndBalancesMultipleConsumers() {
@@ -106,14 +131,22 @@ struct LibraryRefreshTests {
     library.beginObservingQuery(first)
     let source = library.libraryRefresh.sourceRevision(for: first)
     let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
-    service.progressiveStreamOverride = { _ in stream.stream }
+    let started = AsyncStream<Void>.makeStream()
+    service.progressiveStreamOverride = { _ in
+      started.continuation.yield(())
+      return stream.stream
+    }
     let model = MonthViewModel(photoLibraryService: service)
     let load = Task {
-      await model.loadAssets(for: first.scope, isCurrent: {
-        library.libraryRefresh.sourceRevision(for: first) == source
-      })
+      await model.loadAssets(
+        for: first.scope,
+        isCurrent: {
+          library.libraryRefresh.sourceRevision(for: first) == source
+        })
     }
-    await Task.yield()
+    var startedIterator = started.stream.makeAsyncIterator()
+    _ = await startedIterator.next()
+    started.continuation.finish()
     library.invalidateCache(changedThumbnailAssetIDs: [], queryChanges: [first: affected])
     let asset = TestAssetFactory.makeAsset(id: "late")
     stream.continuation.yield([asset])

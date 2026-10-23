@@ -263,7 +263,9 @@ final class ImportCoordinator: ObservableObject {
         var collectionsSkipped = false
         if collectionFilesScanned > 0 {
           if collectionStore.state == .ready {
-            let tree = try host.photoLibraryService.fetchCollectionTree()
+            let tree = try await host.photoLibraryService.loadCollectionTree()
+            try Task.checkCancellation()
+            guard self.isCurrentImport(operationID, generation: importGen) else { return }
             collectionPlan = try await BackupScanner.matchCollectionFolders(
               scan.collections, collections: tree,
               existingPlacements: Array(collectionStore.placements.values),

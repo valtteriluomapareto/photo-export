@@ -1320,13 +1320,16 @@ final class ExportManager {
         let albumIds: [String]
         switch source {
         case .allAlbums:
-          let tree = try self.photoLibraryService.fetchCollectionTree()
+          let tree = try await self.photoLibraryService.loadCollectionTree()
+          try self.throwIfCancelledOrStale(gen)
           albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
         case .allSharedAlbums:
-          let tree = try self.photoLibraryService.fetchCollectionTree()
+          let tree = try await self.photoLibraryService.loadCollectionTree()
+          try self.throwIfCancelledOrStale(gen)
           albumIds = PhotoCollectionDescriptor.sharedAlbumLocalIds(in: tree)
         case .folder(let folderId):
-          let tree = try self.photoLibraryService.fetchCollectionTree()
+          let tree = try await self.photoLibraryService.loadCollectionTree()
+          try self.throwIfCancelledOrStale(gen)
           guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree) else {
             // Folder vanished between guard-pass and lookup. Surface the
             // dedicated message and signal the helper to skip its empty/done
@@ -1440,7 +1443,8 @@ final class ExportManager {
     let collections: [PhotoCollectionDescriptor]
     switch selection {
     case .album, .sharedAlbum:
-      collections = try photoLibraryService.fetchCollectionTree()
+      collections = try await photoLibraryService.loadCollectionTree()
+      try throwIfCancelledOrStale(gen)
     default:
       collections = []
     }

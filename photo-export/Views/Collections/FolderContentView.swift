@@ -81,7 +81,10 @@ struct FolderContentView: View {
     .padding(.horizontal)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(keyboardShortcutsHost)
-    .task(id: folderId + "|\(photoLibraryManager.libraryRevision)") {
+    .task(id: folderId + "|\(photoLibraryManager.libraryRefresh.revision)") {
+      let source = photoLibraryManager.libraryRevision
+      await photoLibraryManager.libraryRefresh.loadTree()
+      guard source == photoLibraryManager.libraryRevision, !Task.isCancelled else { return }
       folder = findFolder(folderId: folderId)
       // A library change refreshes in place and keeps the selection, minus children that
       // left the folder. Each album or folder has a single parent in PhotoKit, so child ids
@@ -466,7 +469,7 @@ struct FolderContentView: View {
   // MARK: - Tree + counts
 
   private func findFolder(folderId: String) -> PhotoCollectionDescriptor? {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+    let tree = photoLibraryManager.libraryRefresh.tree ?? []
     return PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
   }
 
@@ -480,11 +483,12 @@ struct FolderContentView: View {
       return
     }
     isLoadingCounts = true
+    let source = photoLibraryManager.libraryRevision
     let counts = await collectCounts(in: folder.children)
     // A newer library change or folder switch restarted the load. This load's results are
     // stale (cancelled fetches read as zero), so leave the counts and `isLoadingCounts` to
     // the newer load, which clears the flag when it finishes.
-    guard !Task.isCancelled else {
+    guard source == photoLibraryManager.libraryRevision, !Task.isCancelled else {
       #if DEBUG
         bodyCounter?.record("folder-counts-superseded")
       #endif

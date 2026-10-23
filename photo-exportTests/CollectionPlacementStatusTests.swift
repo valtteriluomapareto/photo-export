@@ -370,6 +370,7 @@ import Testing
       try #require(initial)
       f.service.collectionTree = f.currentTree
       f.library.invalidateCache(changedThumbnailAssetIDs: [])
+      f.library.libraryRefresh.flush()
       await expectStatus(f, exported: false, currentExists: false)
       try await verifyUnchangedHistory(f, mutations: mutations)
       f.set(f.current, .done)
@@ -381,6 +382,7 @@ import Testing
         f.service.collectionTree = []
         f.service.collectionTreeError = fails ? CocoaError(.fileReadUnknown) : nil
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        f.library.libraryRefresh.flush()
         let missing = await observe {
           f.counter.renderedText["collection-summary"] == ["0/1"]
             && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["false"]
@@ -390,6 +392,7 @@ import Testing
         f.service.collectionTreeError = nil
         f.service.collectionTree = f.currentTree
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        f.library.libraryRefresh.flush()
         await expectStatus(f, exported: true)
       }
       try await verifyUnchangedHistory(f, mutations: currentMutations)
@@ -459,6 +462,7 @@ import Testing
 
       f.service.assetsByAlbumLocalId["stable"]?.append(TestAssetFactory.makeAsset(id: "added"))
       f.library.invalidateCache()
+      f.library.libraryRefresh.flush()
       let refreshed = await observe { f.counter.renderedText["folder-summary"] == ["0/3"] }
       try #require(refreshed)
       #expect(f.counter.renderedText["folder-selection"] == both)
@@ -471,6 +475,7 @@ import Testing
           children: folder.children.filter { $0.id != "album:target" })
       ]
       f.library.invalidateCache()
+      f.library.libraryRefresh.flush()
       let pruned = await observe { f.counter.renderedText["folder-summary"] == ["0/2"] }
       try #require(pruned)
       #expect(f.counter.renderedText["folder-selection"] == ["album:stable"])
@@ -522,9 +527,11 @@ import Testing
           return try await Fixture.liveCount(service, scope, adjusted: adjusted)
         }
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         let olderStarted = await older.waitForEnter(count: 1)
         try #require(olderStarted)
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         let newerStarted = await newer.waitForEnter(count: 1)
         try #require(newerStarted, "A newer library change must restart the folder count load")
         await newer.release()

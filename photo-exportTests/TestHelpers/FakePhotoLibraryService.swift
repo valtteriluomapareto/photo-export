@@ -180,6 +180,35 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     return yearCounts
   }
 
+  var inventoryCheckpoint: AsyncCheckpoint?
+
+  nonisolated func loadYearsWithCounts() async throws -> [PhotoLibraryYearCount] {
+    let (values, error, gate) = await MainActor.run {
+      (
+        self.yearCounts.map { PhotoLibraryYearCount(year: $0.year, count: $0.count) },
+        self.availableYearsError, self.inventoryCheckpoint
+      )
+    }
+    return try await runDetached {
+      self.inventoryThreads.mutate { $0["years", default: []].append(Thread.isMainThread) }
+      if let gate { await gate.enter() }
+      if let error { throw error }
+      return values
+    }
+  }
+
+  nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor] {
+    let (values, error, gate) = await MainActor.run {
+      (self.collectionTree, self.collectionTreeError, self.inventoryCheckpoint)
+    }
+    return try await runDetached {
+      self.inventoryThreads.mutate { $0["tree", default: []].append(Thread.isMainThread) }
+      if let gate { await gate.enter() }
+      if let error { throw error }
+      return values
+    }
+  }
+
   // MARK: - Phase 2: Collections
 
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {

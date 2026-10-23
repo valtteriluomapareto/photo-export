@@ -246,10 +246,11 @@ import Testing
     func initialInventoryScansRunOffMain() async throws {
       let f = Fixture(includeAlbum: true)
       try await withCleanup {
-        try #require(await observe(in: f.window) {
-          f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
-            && f.counter.renderedText["collection-sidebar:album:family"] == ["count:2"]
-        })
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+              && f.counter.renderedText["collection-sidebar:album:family"] == ["count:2"]
+          })
         await f.quiesce()
         for key in ["years", "tree"] {
           let scans = f.service.inventoryThreads.value[key] ?? []
@@ -276,6 +277,7 @@ import Testing
         f.service.favoritesAssets.append(extra)
         f.service.assetsByAlbumLocalId["family", default: []].append(extra)
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        f.library.libraryRefresh.flush()
         #expect(
           await observe(in: f.window) {
             f.counter.renderedText["collection-sidebar:favorites"]
@@ -328,6 +330,7 @@ import Testing
           })
         f.service.yearCounts = [(2027, 3), (2026, 2)]
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         #expect(
           await observe {
             f.counter.renderedText["timeline-sidebar-years"] == ["2027:3", "2026:2"]
@@ -380,6 +383,7 @@ import Testing
           f.counter.count(for: "collections-sidebar") == sidebarBodies,
           "Changes since baseline: \(f.changes(since: baseline))")
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         #expect(await observe { f.counter.count(for: "collections-sidebar") > sidebarBodies })
       } cleanup: {
         await f.close()

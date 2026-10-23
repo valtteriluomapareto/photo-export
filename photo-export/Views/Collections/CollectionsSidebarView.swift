@@ -120,10 +120,8 @@ private struct SharedAlbumsHintSection: View {
 /// user's albums and folders. Selection is bridged out as a `LibrarySelection` so the
 /// content area can observe it.
 ///
-/// The tree is fetched lazily through `PhotoLibraryService.fetchCollectionTree()` and
-/// re-fetched whenever `PhotoLibraryManager.libraryRevision` bumps. Per-collection
-/// counts come from `cachedCountAssets(in:)` so concurrent sidebar reads share one
-/// fetch and the cache is cleared on the same change observer.
+/// Tree scans run asynchronously after a coalesced library refresh. Counts land as one
+/// coherent batch so the recursive row tree does not rebuild for each arriving album.
 struct CollectionsSidebarView: View {
   @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
@@ -156,15 +154,17 @@ struct CollectionsSidebarView: View {
           count: countsById[favoritesDescriptor.id]
         )
         .tag(LibrarySelection.favorites)
-        .task(id: photoLibraryManager.libraryRevision) {
-          await loadCount(for: .favorites, descriptorId: favoritesDescriptor.id)
-        }
+
       }
 
       if !userCollections.isEmpty {
         Section("Albums") {
           ForEach(userCollections, id: \.id) { node in
-            descriptorRows(node, depth: 0)
+            CollectionTreeNode(
+              descriptor: node, depth: 0, counts: countsById,
+              expandedFolders: $expandedFolders, selectedItems: selectionSet,
+              multiSelectionCount: multiSelectionCount,
+              runMultiExport: runCurrentCollectionsMultiSelectExport)
           }
         }
       }
@@ -181,7 +181,11 @@ struct CollectionsSidebarView: View {
       if !sharedAlbums.isEmpty {
         Section("Shared Albums") {
           ForEach(sharedAlbums, id: \.id) { node in
-            descriptorRows(node, depth: 0)
+            CollectionTreeNode(
+              descriptor: node, depth: 0, counts: countsById,
+              expandedFolders: $expandedFolders, selectedItems: selectionSet,
+              multiSelectionCount: multiSelectionCount,
+              runMultiExport: runCurrentCollectionsMultiSelectExport)
           }
         }
       } else {
@@ -189,77 +193,13 @@ struct CollectionsSidebarView: View {
       }
     }
     .navigationTitle("Photo Export")
-    .task(id: photoLibraryManager.libraryRevision) {
-      reloadTree()
-    }
-  }
-
-  // MARK: - Tree rendering
-
-  /// Recursive — must return `AnyView`. Without the type-erasure SwiftUI's opaque
-  /// return type ends up referencing itself, which the compiler rejects.
-  private func descriptorRows(_ descriptor: PhotoCollectionDescriptor, depth: Int)
-    -> AnyView
-  {
-    switch descriptor.kind {
-    case .album:
-      let row = CollectionRow(
-        descriptor: descriptor, count: countsById[descriptor.id], depth: depth
-      )
-      .tag(LibrarySelection.album(collectionId: descriptor.localIdentifier ?? ""))
-      .task(id: descriptor.id + "|\(photoLibraryManager.libraryRevision)") {
-        if let id = descriptor.localIdentifier {
-          await loadCount(for: .album(collectionId: id), descriptorId: descriptor.id)
-        }
-      }
-      return AnyView(row)
-    case .sharedAlbum:
-      let row = CollectionRow(
-        descriptor: descriptor, count: countsById[descriptor.id], depth: depth
-      )
-      .tag(LibrarySelection.sharedAlbum(collectionId: descriptor.localIdentifier ?? ""))
-      .task(id: descriptor.id + "|\(photoLibraryManager.libraryRevision)") {
-        if let id = descriptor.localIdentifier {
-          await loadCount(
-            for: .sharedAlbum(collectionId: id), descriptorId: descriptor.id)
-        }
-      }
-      return AnyView(row)
-    case .folder:
-      let group = DisclosureGroup(
-        isExpanded: Binding(
-          get: { expandedFolders.contains(descriptor.id) },
-          set: { newValue in
-            if newValue {
-              expandedFolders.insert(descriptor.id)
-            } else {
-              expandedFolders.remove(descriptor.id)
-            }
-          }
-        )
-      ) {
-        ForEach(descriptor.children, id: \.id) { child in
-          descriptorRows(child, depth: depth + 1)
-        }
-      } label: {
-        FolderRow(
-          descriptor: descriptor, depth: depth,
-          albumCount: folderAlbumCount(descriptor),
-          photoCount: countsById[descriptor.id],
-          isInMultiSelection: isFolderInMultiSelection(descriptor),
-          multiSelectionCount: multiSelectionCount,
-          runMultiExport: runCurrentCollectionsMultiSelectExport
-        )
-        .tag(LibrarySelection.folder(collectionId: descriptor.localIdentifier ?? ""))
-        .task(id: descriptor.id + "|\(photoLibraryManager.libraryRevision)") {
-          await loadFolderCount(descriptor: descriptor)
-        }
-      }
-      return AnyView(group)
-    case .favorites:
-      // Favorites is rendered as its own section above; never appears in the user
-      // collection list. This case is unreachable in practice.
-      return AnyView(EmptyView())
+    .task(id: photoLibraryManager.libraryRefresh.revision) {
+      let source = photoLibraryManager.libraryRevision
+      await photoLibraryManager.libraryRefresh.loadTree()
+      guard !Task.isCancelled, source == photoLibraryManager.libraryRevision else { return }
+      let freshTree = photoLibraryManager.libraryRefresh.tree ?? []
+      if tree != freshTree { tree = freshTree }
+      await loadCountBatch(source: source)
     }
   }
 
@@ -314,14 +254,6 @@ struct CollectionsSidebarView: View {
     tree.filter { $0.kind == .sharedAlbum }
   }
 
-  private func reloadTree() {
-    do {
-      tree = try photoLibraryManager.fetchCollectionTree()
-    } catch {
-      tree = []
-    }
-  }
-
   // MARK: - Multi-select context menu plumbing
 
   /// Number of collection-shaped items in the current selection. Drives the context-menu
@@ -332,22 +264,13 @@ struct CollectionsSidebarView: View {
     selectionSet.filter(\.isCollection).count
   }
 
-  /// True iff the given folder descriptor is part of a multi-selection (≥2 items),
-  /// itself included. Single-selection on this exact folder falls back to the
-  /// per-row "Export Folder" action because that's the unambiguous case.
-  fileprivate func isFolderInMultiSelection(_ descriptor: PhotoCollectionDescriptor) -> Bool {
-    guard multiSelectionCount >= 2 else { return false }
-    guard let id = descriptor.localIdentifier else { return false }
-    return selectionSet.contains(.folder(collectionId: id))
-  }
-
   /// Triggered from a folder row's context menu when the row is part of a multi-
   /// selection. Mirrors the toolbar's collections-branch dispatch: normalize the set
   /// (expanding folders, deduping, partitioning) and hand to `ExportManager`.
   fileprivate func runCurrentCollectionsMultiSelectExport() {
     let items = selectionSet.filter(\.isCollection)
     let buckets = CollectionsSelectionBuckets.normalize(items) { folderId in
-      let currentTree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
+      let currentTree = photoLibraryManager.libraryRefresh.tree ?? []
       guard
         let folder = PhotoCollectionDescriptor.findFolder(
           id: folderId, in: currentTree)
@@ -357,44 +280,114 @@ struct CollectionsSidebarView: View {
     exportManager.startExportCollectionsSelection(buckets)
   }
 
-  private func loadCount(for scope: PhotoFetchScope, descriptorId: String) async {
-    do {
-      let n = try await photoLibraryManager.cachedCountAssets(in: scope)
-      await MainActor.run { countsById[descriptorId] = n }
-    } catch {
-      // Leave the count as-is on error; the row will render without a count badge.
-    }
-  }
-
-  /// Recursively sums photo counts for every album descended from `descriptor`. Each
-  /// album lookup hits `cachedCountAssets`, which deduplicates concurrent identical
-  /// fetches inside `CollectionCountCache`, so re-rendering the sidebar after expand
-  /// or revision bump is cheap on the second pass.
-  private func loadFolderCount(descriptor: PhotoCollectionDescriptor) async {
-    let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: descriptor.children)
-    var total = 0
-    for id in albumIds {
-      do {
-        total += try await photoLibraryManager.cachedCountAssets(
-          in: .album(collectionId: id))
-      } catch {
-        // Skip unreachable albums; the badge will render the partial sum we have.
+  private func loadCountBatch(source: Int) async {
+    var requests: [(String, PhotoFetchScope)] = [(favoritesDescriptor.id, .favorites)]
+    func append(_ nodes: [PhotoCollectionDescriptor]) {
+      for node in nodes {
+        switch node.kind {
+        case .album:
+          if let id = node.localIdentifier { requests.append((node.id, .album(collectionId: id))) }
+        case .sharedAlbum:
+          if let id = node.localIdentifier {
+            requests.append((node.id, .sharedAlbum(collectionId: id)))
+          }
+        case .folder: append(node.children)
+        case .favorites: break
+        }
       }
     }
-    // A newer library change restarted the load, and cancelled fetches were skipped above;
-    // leave the badge to the newer load rather than publish a stale or partial sum.
-    guard !Task.isCancelled else {
+    append(tree)
+    let service = photoLibraryManager
+    let loaded = await withTaskGroup(of: (String, Int?).self) { group in
+      var iterator = requests.makeIterator()
+      // Bound concurrent PhotoKit count requests even for a very wide album tree.
+      for _ in 0..<8 {
+        if let request = iterator.next() {
+          group.addTask { (request.0, try? await service.cachedCountAssets(in: request.1)) }
+        }
+      }
+      var values: [String: Int] = [:]
+      for await (id, value) in group {
+        #if DEBUG
+          bodyCounter?.record("collection-count-result")
+        #endif
+        if let value { values[id] = value }
+        if let request = iterator.next(), !Task.isCancelled {
+          group.addTask { (request.0, try? await service.cachedCountAssets(in: request.1)) }
+        }
+      }
+      return values
+    }
+    guard !Task.isCancelled, source == photoLibraryManager.libraryRevision else {
       #if DEBUG
         bodyCounter?.record("sidebar-folder-count-superseded")
       #endif
       return
     }
-    await MainActor.run { countsById[descriptor.id] = total }
+    var fresh: [String: Int] = [:]
+    for (id, _) in requests { fresh[id] = loaded[id] ?? countsById[id] }
+    func rollUp(_ nodes: [PhotoCollectionDescriptor]) {
+      for node in nodes where node.kind == .folder {
+        rollUp(node.children)
+        fresh[node.id] = PhotoCollectionDescriptor.albumLocalIds(under: node)
+          .reduce(0) { $0 + (fresh["album:\($1)"] ?? 0) }
+      }
+    }
+    rollUp(tree)
+    if countsById != fresh { countsById = fresh }
   }
 
-  /// Number of `.album` descriptors in this folder's subtree. Pure tree walk — no async.
-  private func folderAlbumCount(_ descriptor: PhotoCollectionDescriptor) -> Int {
-    PhotoCollectionDescriptor.albumLocalIds(in: descriptor.children).count
+}
+
+/// Nominal recursion keeps the row identity and avoids rebuilding a type-erased tree.
+private struct CollectionTreeNode: View {
+  let descriptor: PhotoCollectionDescriptor
+  let depth: Int
+  let counts: [String: Int]
+  @Binding var expandedFolders: Set<String>
+  let selectedItems: Set<LibrarySelection>
+  let multiSelectionCount: Int
+  let runMultiExport: () -> Void
+
+  @ViewBuilder var body: some View {
+    switch descriptor.kind {
+    case .album:
+      CollectionRow(descriptor: descriptor, count: counts[descriptor.id], depth: depth)
+        .tag(LibrarySelection.album(collectionId: descriptor.localIdentifier ?? ""))
+    case .sharedAlbum:
+      CollectionRow(descriptor: descriptor, count: counts[descriptor.id], depth: depth)
+        .tag(LibrarySelection.sharedAlbum(collectionId: descriptor.localIdentifier ?? ""))
+    case .folder:
+      DisclosureGroup(
+        isExpanded: Binding(
+          get: { expandedFolders.contains(descriptor.id) },
+          set: { expanded in
+            if expanded {
+              expandedFolders.insert(descriptor.id)
+            } else {
+              expandedFolders.remove(descriptor.id)
+            }
+          })
+      ) {
+        ForEach(descriptor.children) { child in
+          CollectionTreeNode(
+            descriptor: child, depth: depth + 1, counts: counts,
+            expandedFolders: $expandedFolders, selectedItems: selectedItems,
+            multiSelectionCount: multiSelectionCount, runMultiExport: runMultiExport)
+        }
+      } label: {
+        FolderRow(
+          descriptor: descriptor, depth: depth,
+          albumCount: PhotoCollectionDescriptor.albumLocalIds(in: descriptor.children).count,
+          photoCount: counts[descriptor.id],
+          isInMultiSelection: multiSelectionCount >= 2
+            && selectedItems.contains(.folder(collectionId: descriptor.localIdentifier ?? "")),
+          multiSelectionCount: multiSelectionCount, runMultiExport: runMultiExport
+        )
+        .tag(LibrarySelection.folder(collectionId: descriptor.localIdentifier ?? ""))
+      }
+    case .favorites: EmptyView()
+    }
   }
 }
 

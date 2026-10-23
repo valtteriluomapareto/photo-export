@@ -55,7 +55,26 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   /// stale data until manually re-selecting. The counter doesn't carry payload; its sole
   /// purpose is to signal that dependent views should refresh. Sidebar count tasks
   /// restart with the revision; asset grids use `.onChange` to refresh in place.
-  var libraryRevision: Int = 0
+  var libraryRevision: Int = 0 {
+    didSet { libraryRefresh.invalidate(changes: invalidatingQueryChanges) }
+  }
+  @ObservationIgnored private var invalidatingQueryChanges: [PhotoLibraryQuery: Bool]?
+  @ObservationIgnored private var refreshClock: any AutoSyncClock = SystemAutoSyncClock()
+  @ObservationIgnored private(set) lazy var libraryRefresh = LibraryRefreshState(
+    service: self, clock: refreshClock)
+  @ObservationIgnored private let queryObservations = PhotoLibraryQueryObservations<
+    PHFetchResult<PHAsset>
+  >()
+
+  func beginObservingQuery(_ query: PhotoLibraryQuery) {
+    queryObservations.begin(query)
+    libraryRefresh.begin(query)
+  }
+
+  func endObservingQuery(_ query: PhotoLibraryQuery) {
+    queryObservations.end(query)
+    if !queryObservations.isObserved(query) { libraryRefresh.end(query) }
+  }
 
   /// When the user turns on "Export Live Photos as paired image + video",
   /// `descriptor(from:)` enables a `PHAssetResource`-enumeration fallback to catch
@@ -219,6 +238,11 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     setupDecodedThumbnailCache()
   }
 
+  convenience init(refreshClock: any AutoSyncClock) {
+    self.init()
+    self.refreshClock = refreshClock
+  }
+
   #if DEBUG
     /// The production PhotoKit paths with a stubbed status reader, for tests of the live
     /// authorization guards. A method whose guard the stub passes reads the real library,
@@ -238,12 +262,14 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   init(
     overrideService: any PhotoLibraryService,
     countInvalidationOverride: (@Sendable () async -> Void)? = nil,
-    countInvalidationWaitObserver: (@MainActor () -> Void)? = nil
+    countInvalidationWaitObserver: (@MainActor () -> Void)? = nil,
+    refreshClock: (any AutoSyncClock)? = nil
   ) {
     self.overrideService = overrideService
     self.liveAuthorizationStatus = Self.systemAuthorizationStatus
     self.countInvalidationOverride = countInvalidationOverride
     self.countInvalidationWaitObserver = countInvalidationWaitObserver
+    self.refreshClock = refreshClock ?? SystemAutoSyncClock()
     super.init()
     // Sync the UI-facing auth state from the injected service so the onboarding
     // gate (`ContentView`) sees the right gating value. Explicit authorization
@@ -556,6 +582,10 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
           self.livePhotoDetectionFallbackEnabled
         }
 
+        let query = PhotoLibraryQuery(scope: scope, mediaType: mediaType)
+        let ticket = await MainActor.run {
+          self.queryObservations.ticket(for: query, revision: self.libraryRevision)
+        }
         let result: PHFetchResult<PHAsset>
         switch scope {
         case .timeline, .favorites:
@@ -575,6 +605,11 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
           result = PHAsset.fetchAssets(in: collection, options: opts)
         }
 
+        if let ticket {
+          await MainActor.run {
+            self.queryObservations.install(result, for: ticket, revision: self.libraryRevision)
+          }
+        }
         let count = result.count
         let chunk = max(1, batchSize)
         var index = 0
@@ -807,6 +842,17 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     if let s = overrideService { return try s.availableYearsWithCounts() }
     try requireLiveAuthorization()
 
+    return try Self.scanYearsWithCounts().map { ($0.year, $0.count) }
+  }
+
+  nonisolated func loadYearsWithCounts() async throws -> [PhotoLibraryYearCount] {
+    if let service = overrideService { return try await service.loadYearsWithCounts() }
+    try await requireLiveAuthorizationAsync()
+    return try await runDetached(priority: .userInitiated) { try Self.scanYearsWithCounts() }
+  }
+
+  nonisolated private static func scanYearsWithCounts() throws -> [PhotoLibraryYearCount] {
+    try Task.checkCancellation()
     let opts = PHFetchOptions()
     opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
     let result = PHAsset.fetchAssets(with: opts)
@@ -824,13 +870,15 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     let endYear = calendar.component(.year, from: lastDate)
     guard startYear <= endYear else { return [] }
 
-    var yearCounts: [(year: Int, count: Int)] = []
+    var yearCounts: [PhotoLibraryYearCount] = []
     for year in stride(from: endYear, through: startYear, by: -1) {
-      let c = (try? self.countAssets(year: year)) ?? 0
+      let c = PHAsset.fetchAssets(with: Self.fetchOptions(for: .timeline(year: year, month: nil)))
+        .count
       if c > 0 {
-        yearCounts.append((year, c))
+        yearCounts.append(PhotoLibraryYearCount(year: year, count: c))
       }
     }
+    try Task.checkCancellation()
     return yearCounts
   }
 
@@ -1120,7 +1168,12 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   /// Invalidates library metadata and optionally known changed thumbnail
   /// content. A no-argument call is the conservative path used when a
   /// persistent-change catch-up has no PhotoKit object details.
-  func invalidateCache(changedThumbnailAssetIDs: Set<String>? = nil) {
+  func invalidateCache(
+    changedThumbnailAssetIDs: Set<String>? = nil,
+    queryChanges: [PhotoLibraryQuery: Bool]? = nil
+  ) {
+    invalidatingQueryChanges = queryChanges
+    defer { invalidatingQueryChanges = nil }
     phAssetCache.removeAll()
     adjustedCountByYearMonth.removeAll()
     cachedCollectionTree = nil
@@ -1289,6 +1342,30 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     // Every collection scan still meets the live check in `fetchAssetsProgressive`.
     if let cached = cachedCollectionTree { return cached }
     try requireLiveAuthorization()
+    let tree = try Self.scanCollectionTree(logger: logger)
+    cachedCollectionTree = tree
+    return tree
+  }
+
+  nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor] {
+    if let service = overrideService { return try await service.loadCollectionTree() }
+    if let cached = await MainActor.run(body: { self.cachedCollectionTree }) { return cached }
+    try await requireLiveAuthorizationAsync()
+    let captured = await libraryRevision
+    let logger = self.logger
+    let tree = try await runDetached(priority: .userInitiated) {
+      try Self.scanCollectionTree(logger: logger)
+    }
+    await MainActor.run {
+      if self.libraryRevision == captured { self.cachedCollectionTree = tree }
+    }
+    return tree
+  }
+
+  nonisolated private static func scanCollectionTree(logger: Logger) throws
+    -> [PhotoCollectionDescriptor]
+  {
+    try Task.checkCancellation()
     var tree: [PhotoCollectionDescriptor] = []
     tree.append(
       PhotoCollectionDescriptor(
@@ -1329,12 +1406,12 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
       let subtypeRaw = collection.assetCollectionSubtype.rawValue
       let descriptor = Self.descriptor(from: collection, parentPath: [])
       if let descriptor {
-        self.logger.info(
+        logger.info(
           "fetchCollectionTree: shared-album surfaced title=\(title, privacy: .public) subtype=\(subtypeRaw) kind=\(descriptor.kind.rawValue, privacy: .public)"
         )
         sharedAlbumResults.append(descriptor)
       } else {
-        self.logger.info(
+        logger.info(
           "fetchCollectionTree: shared-album dropped title=\(title, privacy: .public) subtype=\(subtypeRaw) — descriptor builder returned nil"
         )
       }
@@ -1366,7 +1443,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
       )
     }
 
-    cachedCollectionTree = tree
+    try Task.checkCancellation()
     return tree
   }
 
@@ -1411,7 +1488,9 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   /// `fetchTopLevelUserCollections` enumeration as regular albums but the issue calls for
   /// them to live in a flat top-level group. The tree-builder partitions them after
   /// construction.
-  fileprivate static func descriptor(from collection: PHCollection, parentPath: [String])
+  nonisolated fileprivate static func descriptor(
+    from collection: PHCollection, parentPath: [String]
+  )
     -> PhotoCollectionDescriptor?
   {
     let title = collection.localizedTitle ?? ""
@@ -1597,7 +1676,18 @@ extension PhotoLibraryManager: PHPhotoLibraryChangeObserver {
   nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
     Task { @MainActor in
       let changedIDs = self.changedThumbnailAssetIDs(in: changeInstance)
-      self.invalidateCache(changedThumbnailAssetIDs: changedIDs)
+      let queries = self.queryObservations.changes { result in
+        guard let details = changeInstance.changeDetails(for: result) else {
+          return (result, false)
+        }
+        let affected =
+          !details.hasIncrementalChanges || details.hasMoves
+          || !(details.insertedIndexes?.isEmpty ?? true)
+          || !(details.removedIndexes?.isEmpty ?? true)
+          || !(details.changedIndexes?.isEmpty ?? true)
+        return (details.fetchResultAfterChanges, affected)
+      }
+      self.invalidateCache(changedThumbnailAssetIDs: changedIDs, queryChanges: queries)
     }
   }
 }

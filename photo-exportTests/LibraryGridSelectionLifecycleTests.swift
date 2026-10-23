@@ -395,6 +395,7 @@ struct LibraryGridSelectionLifecycleTests {
     let expected: AssetDescriptor? =
       mutation == .metadata ? revised : mutation == .removal ? c : nil
     fixture.library.invalidateCache(changedThumbnailAssetIDs: [])
+    fixture.library.libraryRefresh.flush()
     let refreshed = await observe { fixture.selection.asset == expected }
     #expect(requests == 2)
     #expect(refreshed, "The actual grid must reconcile its parent detail after refresh")
@@ -426,6 +427,7 @@ struct LibraryGridSelectionLifecycleTests {
     let loaded = await observe { fixture.selection.asset == a }
     try #require(loaded)
     fixture.library.invalidateCache(changedThumbnailAssetIDs: [])
+    fixture.library.libraryRefresh.flush()
     let began = await observe { requests == 2 }
     try #require(began)
     #expect(fixture.selection.asset == a, "An in-flight refresh retains the displayed snapshot")
@@ -494,6 +496,7 @@ struct LibraryGridSelectionLifecycleTests {
     let loaded = await observe { fixture.selection.asset == old }
     try #require(loaded)
     fixture.library.invalidateCache(changedThumbnailAssetIDs: [])
+    fixture.library.libraryRefresh.flush()
     let began = await observe { requests == 2 }
     try #require(began)
     fixture.selection.switchScope(to: 1)

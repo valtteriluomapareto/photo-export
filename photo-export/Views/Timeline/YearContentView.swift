@@ -78,11 +78,15 @@ struct YearContentView: View {
 
       Spacer(minLength: 0)
     }
+    .task(id: year) { selectedAsset = nil }
     .padding(.horizontal)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .task(id: "\(year)|\(photoLibraryManager.libraryRevision)") {
-      totalCount = (try? photoLibraryManager.countAssets(year: year))
-      selectedAsset = nil
+    .task(id: "\(year)|\(photoLibraryManager.libraryRefresh.revision)") {
+      let source = photoLibraryManager.libraryRevision
+      let fresh = try? await photoLibraryManager.countAssets(
+        in: .timeline(year: year, month: nil))
+      guard source == photoLibraryManager.libraryRevision, !Task.isCancelled else { return }
+      totalCount = fresh
       await counts.loadCounts(forYears: [year])
     }
   }

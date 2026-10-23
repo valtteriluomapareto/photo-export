@@ -79,25 +79,16 @@ struct TimelineSidebarView: View {
       }
     }
     .navigationTitle("Photo Export")
-    .onAppear { handleAppear() }
-    .onChange(of: photoLibraryManager.isAuthorized) { _, new in
-      if new {
-        handleAppear()
+    .task(id: "\(photoLibraryManager.isAuthorized)|\(photoLibraryManager.libraryRefresh.revision)")
+    {
+      if photoLibraryManager.isAuthorized {
+        await handleAppear()
       } else {
         years = []
         expandedYears.removeAll()
         assetCountsByYear.removeAll()
         counts.reset()
       }
-    }
-    // Self-heal after Photos.app mutations. `libraryRevision` bumps in
-    // `PhotoLibraryManager.invalidateCache()` after every `photoLibraryDidChange`;
-    // the underlying `CollectionCountCache` is invalidated at the same time, so
-    // re-running `handleAppear` triggers fresh fetches that bypass stale cache
-    // entries. Without this, a user adding/removing photos in Photos.app while
-    // the sidebar is open would see stale badges until the next app launch.
-    .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
-      handleAppear()
     }
   }
 
@@ -126,9 +117,18 @@ struct TimelineSidebarView: View {
 
   // MARK: - Helpers
 
-  private func handleAppear() {
+  private func handleAppear() async {
     guard photoLibraryManager.isAuthorized else { return }
-    loadYears()
+    let source = photoLibraryManager.libraryRevision
+    await photoLibraryManager.libraryRefresh.loadYears()
+    guard source == photoLibraryManager.libraryRevision, !Task.isCancelled,
+      photoLibraryManager.isAuthorized
+    else { return }
+    let inventory = photoLibraryManager.libraryRefresh.years
+    let freshYears = inventory.map(\.year)
+    let freshCounts = Dictionary(uniqueKeysWithValues: inventory.map { ($0.year, $0.count) })
+    if years != freshYears { years = freshYears }
+    if assetCountsByYear != freshCounts { assetCountsByYear = freshCounts }
     var preferredYear: Int?
     if let monthSel = selectionSet.first(where: {
       if case .timelineMonth = $0 { return true } else { return false }
@@ -150,14 +150,6 @@ struct TimelineSidebarView: View {
     #if DEBUG
       bodyCounter?.recordTask(task)
     #endif
-  }
-
-  private func loadYears() {
-    let yearCounts = (try? photoLibraryManager.availableYearsWithCounts()) ?? []
-    years = yearCounts.map(\.year)
-    for (year, count) in yearCounts {
-      assetCountsByYear[year] = count
-    }
   }
 
   private func monthTotals(for year: Int) -> [Int: Int] {
