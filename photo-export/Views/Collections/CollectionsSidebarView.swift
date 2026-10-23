@@ -123,6 +123,7 @@ private struct SharedAlbumsHintSection: View {
 /// Tree scans run asynchronously after a coalesced library refresh. Counts land as one
 /// coherent batch so the recursive row tree does not rebuild for each arriving album.
 struct CollectionsSidebarView: View {
+  @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   @Environment(PhotoLibraryManager.self) private var photoLibraryManager
 
   #if DEBUG
@@ -201,6 +202,7 @@ struct CollectionsSidebarView: View {
       await photoLibraryManager.libraryRefresh.loadTree()
       guard !Task.isCancelled, source == photoLibraryManager.libraryRevision else { return }
       let freshTree = photoLibraryManager.libraryRefresh.tree ?? []
+      collectionExportRecordStore.updateSidebarCollections([favoritesDescriptor] + freshTree)
       if tree != freshTree { tree = freshTree }
       await loadCountBatch(source: source)
     }
@@ -421,15 +423,15 @@ private struct CollectionRow: View {
 
   @ViewBuilder
   private var countBadge: some View {
-    if let count, count > 0, let placement = matchingPlacement() {
-      let summary = collectionExportRecordStore.summary(for: placement)
+    let snapshot = collectionExportRecordStore.sidebarStatus(for: descriptor).value
+    if let count, count > 0, snapshot.hasPlacement {
       // Note: this still treats "any variant done" as "asset exported",
       // so it does not catch the case where a user exported with Include
       // originals off and later toggled it on. Surfacing that gap
       // requires the asset list + version selection in the sidebar;
       // tracked as a separate follow-up.
       let state = CollectionSidebarBadge.state(
-        liveCount: count, exportedRecords: summary.exportedCount)
+        liveCount: count, exportedRecords: snapshot.exportedCount)
       #if DEBUG
         // swiftlint:disable:next redundant_discardable_let
         let _ = bodyCounter?.recordText(
@@ -452,23 +454,6 @@ private struct CollectionRow: View {
       #endif
       Text("\(count)").foregroundColor(.secondary).font(.caption)
     }
-  }
-
-  /// Read the current descriptor/path slot; historical renamed/moved paths
-  /// remain intact but do not describe the next export target.
-  private func matchingPlacement() -> ExportPlacement? {
-    let selection: LibrarySelection
-    switch descriptor.kind {
-    case .favorites: selection = .favorites
-    case .album:
-      guard let id = descriptor.localIdentifier else { return nil }
-      selection = .album(collectionId: id)
-    case .sharedAlbum:
-      guard let id = descriptor.localIdentifier else { return nil }
-      selection = .sharedAlbum(collectionId: id)
-    case .folder: return nil
-    }
-    return collectionExportRecordStore.currentPlacement(for: selection, collections: [descriptor])
   }
 
   private var tooltip: String {
@@ -554,7 +539,9 @@ private struct FolderRow: View {
   private var countBadge: some View {
     if let photoCount, photoCount > 0, albumCount > 0 {
       let state = CollectionSidebarBadge.state(
-        liveCount: photoCount, exportedRecords: aggregateExportedCount())
+        liveCount: photoCount,
+        exportedRecords: collectionExportRecordStore.sidebarStatus(for: descriptor).value
+          .exportedCount)
       #if DEBUG
         // swiftlint:disable:next redundant_discardable_let
         let _ = bodyCounter?.recordText(
@@ -572,23 +559,6 @@ private struct FolderRow: View {
     } else if let photoCount {
       Text("\(photoCount)").foregroundColor(.secondary).font(.caption)
     }
-  }
-
-  /// Sum of `summary.exportedCount` across every descendant album's placement. Not
-  /// per-album-clamped — the higher-level `CollectionSidebarBadge.state` clamps the
-  /// final sum against the folder's live total, which catches the
-  /// "stale-records-after-deletion" case at the aggregate level.
-  private func aggregateExportedCount() -> Int {
-    let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: descriptor.children)
-    var sum = 0
-    for id in albumIds {
-      if let placement = collectionExportRecordStore.currentPlacement(
-        for: .album(collectionId: id), collections: [descriptor])
-      {
-        sum += collectionExportRecordStore.summary(for: placement).exportedCount
-      }
-    }
-    return sum
   }
 
   private var tooltip: String {

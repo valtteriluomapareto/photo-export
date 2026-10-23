@@ -355,10 +355,7 @@ final class CollectionExportRecordStore {
       replayCommitsLandedWhileLoading(for: departingId)
     }
 
-    placements = [:]
-    recordBodies = [:]
-    invalidatesAllTiles = true
-    filenameClaims = nil
+    installHistory(placements: [:], records: [:])
 
     guard let destinationId else {
       currentStoreDirURL = nil
@@ -391,10 +388,7 @@ final class CollectionExportRecordStore {
     }
 
     if let retained = pendingRecovery[destinationId] {
-      placements = retained.placements
-      recordBodies = retained.records
-      invalidatesAllTiles = true
-      filenameClaims = nil
+      installHistory(placements: retained.placements, records: retained.records)
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
       setState(.persistenceFailed)
@@ -421,9 +415,7 @@ final class CollectionExportRecordStore {
     filenameClaims = nil
     if let id = configuredDestinationId, let retained = pendingRecovery[id] {
       // A final commit's write failure was parked while the load ran; its history wins.
-      placements = retained.placements
-      recordBodies = retained.records
-      invalidatesAllTiles = true
+      installHistory(placements: retained.placements, records: retained.records)
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
       setState(.persistenceFailed)
@@ -438,9 +430,8 @@ final class CollectionExportRecordStore {
         )
         setState(.failed)
       case .loaded(let prepared):
-        placements = prepared.placements
-        recordBodies = prepared.recordBodies
-        invalidatesAllTiles = true
+        installHistory(
+          placements: prepared.placements, records: prepared.recordBodies, counts: prepared.counts)
         setState(.ready)
       }
     }
@@ -462,10 +453,184 @@ final class CollectionExportRecordStore {
     for waiter in waiters.values { waiter.resume() }
   }
 
+  struct PlacementCounts: Sendable {
+    var total = 0
+    var done = 0
+  }
+
+  private struct CollectionKey: Hashable {
+    let kind: ExportPlacement.Kind
+    let identifier: String?
+    init(_ placement: ExportPlacement) {
+      kind = placement.kind
+      identifier = placement.collectionLocalIdentifier
+    }
+    init(kind: ExportPlacement.Kind, identifier: String?) {
+      self.kind = kind
+      self.identifier = identifier
+    }
+  }
+
+  @ObservationIgnored private var placementCounts: [String: PlacementCounts] = [:]
+  @ObservationIgnored private var placementCandidates: [CollectionKey: [String: ExportPlacement]] =
+    [:]
+  @ObservationIgnored private var sidebarDescriptors: [String: PhotoCollectionDescriptor] = [:]
+  @ObservationIgnored private var sidebarStatuses: [String: SidebarStatus] = [:]
+  @ObservationIgnored private var isPublishingSidebarChanges = false
+
+  /// A row observes one committed badge value, independently of record revisions.
+  @Observable @MainActor
+  final class SidebarStatus {
+    struct Value: Equatable {
+      let hasPlacement: Bool
+      let exportedCount: Int
+    }
+    @ObservationIgnored private var committed: Value
+    @ObservationIgnored fileprivate var needsPublication = false
+    var value: Value {
+      access(keyPath: \.value)
+      return committed
+    }
+    fileprivate init(_ value: Value) { committed = value }
+    fileprivate func stage(_ value: Value) {
+      guard committed != value else { return }
+      committed = value
+      needsPublication = true
+    }
+    fileprivate func publishIfNeeded() {
+      guard needsPublication else { return }
+      // A synchronous observer can stage another value that still needs delivery.
+      needsPublication = false
+      withMutation(keyPath: \.value) {}
+    }
+  }
+
+  func sidebarStatus(for descriptor: PhotoCollectionDescriptor) -> SidebarStatus {
+    if let status = sidebarStatuses[descriptor.id] { return status }
+    let status = SidebarStatus(sidebarValue(for: descriptor))
+    sidebarDescriptors[descriptor.id] = descriptor
+    sidebarStatuses[descriptor.id] = status
+    return status
+  }
+
+  /// The tree owner replaces metadata and releases badges for collections that disappeared.
+  func updateSidebarCollections(_ collections: [PhotoCollectionDescriptor]) {
+    var current: [String: PhotoCollectionDescriptor] = [:]
+    func append(_ descriptors: [PhotoCollectionDescriptor]) {
+      for descriptor in descriptors {
+        current[descriptor.id] = descriptor
+        append(descriptor.children)
+      }
+    }
+    append(collections)
+    sidebarDescriptors = current
+    sidebarStatuses = sidebarStatuses.filter { current[$0.key] != nil }
+    publishSidebarChanges()
+  }
+
+  private func sidebarValue(for descriptor: PhotoCollectionDescriptor) -> SidebarStatus.Value {
+    let selection: LibrarySelection
+    switch descriptor.kind {
+    case .favorites: selection = .favorites
+    case .album:
+      guard let id = descriptor.localIdentifier else {
+        return .init(hasPlacement: false, exportedCount: 0)
+      }
+      selection = .album(collectionId: id)
+    case .sharedAlbum:
+      guard let id = descriptor.localIdentifier else {
+        return .init(hasPlacement: false, exportedCount: 0)
+      }
+      selection = .sharedAlbum(collectionId: id)
+    case .folder:
+      return .init(hasPlacement: true, exportedCount: sidebarAlbumCount(in: descriptor.children))
+    }
+    let placement = indexedPlacement(for: selection, collections: [descriptor])
+    return .init(
+      hasPlacement: placement != nil,
+      exportedCount: placement.flatMap { placementCounts[$0.id]?.done } ?? 0)
+  }
+
+  private func sidebarAlbumCount(in descriptors: [PhotoCollectionDescriptor]) -> Int {
+    descriptors.reduce(0) { sum, descriptor in
+      switch descriptor.kind {
+      case .folder: return sum + sidebarAlbumCount(in: descriptor.children)
+      case .album:
+        guard let id = descriptor.localIdentifier,
+          let placement = indexedPlacement(for: .album(collectionId: id), collections: [descriptor])
+        else { return sum }
+        return sum + (placementCounts[placement.id]?.done ?? 0)
+      case .favorites, .sharedAlbum: return sum
+      }
+    }
+  }
+
+  private func publishSidebarChanges() {
+    // Stage the entire committed projection before invoking synchronous observers.
+    for (id, status) in sidebarStatuses {
+      guard let descriptor = sidebarDescriptors[id] else { continue }
+      status.stage(sidebarValue(for: descriptor))
+    }
+    guard !isPublishingSidebarChanges else { return }
+    isPublishingSidebarChanges = true
+    defer { isPublishingSidebarChanges = false }
+    while true {
+      let pending = sidebarStatuses.compactMap { id, status in
+        status.needsPublication ? (id, status) : nil
+      }
+      guard !pending.isEmpty else { return }
+      for (id, status) in pending where sidebarStatuses[id] === status {
+        status.publishIfNeeded()
+      }
+    }
+  }
+
+  private func indexedPlacement(
+    for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
+  ) -> ExportPlacement? {
+    let key: CollectionKey
+    switch selection {
+    case .favorites: key = CollectionKey(kind: .favorites, identifier: nil)
+    case .album(let id): key = CollectionKey(kind: .album, identifier: id)
+    case .sharedAlbum(let id): key = CollectionKey(kind: .sharedAlbum, identifier: id)
+    case .timelineMonth, .timelineYear, .folder: return nil
+    }
+    let candidates = placementCandidates[key].map { Array($0.values) } ?? []
+    return ExportPlacementResolver().existingCollectionPlacement(
+      for: selection, collections: collections, existingPlacements: candidates)
+  }
+
+  nonisolated private static func countRecords(
+    _ records: [String: [String: RecordBody]]
+  ) -> [String: PlacementCounts] {
+    records.mapValues { bodies in
+      PlacementCounts(
+        total: bodies.count,
+        done: bodies.values.filter { $0.variants.values.contains { $0.status == .done } }.count)
+    }
+  }
+
+  /// Replaces active history and its derived query indexes as one owned transaction.
+  private func installHistory(
+    placements: [String: ExportPlacement], records: [String: [String: RecordBody]],
+    counts: [String: PlacementCounts]? = nil
+  ) {
+    self.placements = placements
+    recordBodies = records
+    placementCounts = counts ?? Self.countRecords(records)
+    placementCandidates = [:]
+    for (id, placement) in placements {
+      placementCandidates[CollectionKey(placement), default: [:]][id] = placement
+    }
+    invalidatesAllTiles = true
+    filenameClaims = nil
+  }
+
   /// The placements and records a successful load installs.
   struct PreparedLoad: Sendable {
     let placements: [String: ExportPlacement]
     let recordBodies: [String: [String: RecordBody]]
+    let counts: [String: PlacementCounts]
   }
 
   /// How a load ends. A failed read outranks a corrupt snapshot, as in `ExportRecordStore`.
@@ -513,7 +678,9 @@ final class CollectionExportRecordStore {
           logger: logger)
       }
       recoverInProgressVariants(in: &recordBodies)
-      return .loaded(PreparedLoad(placements: placements, recordBodies: recordBodies))
+      return .loaded(
+        PreparedLoad(
+          placements: placements, recordBodies: recordBodies, counts: countRecords(recordBodies)))
     }
   }
 
@@ -564,10 +731,7 @@ final class CollectionExportRecordStore {
     guard let jsonl else { return }
     do {
       try jsonl.resetToEmpty(emptySnapshot: Snapshot.empty)
-      placements = [:]
-      recordBodies = [:]
-      invalidatesAllTiles = true
-      filenameClaims = nil
+      installHistory(placements: [:], records: [:])
       setState(.ready)
       replayFinalCompletions()
       changeNotifier.notifyNow()
@@ -607,8 +771,7 @@ final class CollectionExportRecordStore {
     for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
   ) -> ExportPlacement? {
     trackRecords()
-    return ExportPlacementResolver().existingCollectionPlacement(
-      for: selection, collections: collections, existingPlacements: Array(placements.values))
+    return indexedPlacement(for: selection, collections: collections)
   }
 
   /// Grid placement lookup follows metadata changes, independently of individual record writes.
@@ -616,8 +779,7 @@ final class CollectionExportRecordStore {
     for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
   ) -> ExportPlacement? {
     _ = gridPlacementsRevision
-    return ExportPlacementResolver().existingCollectionPlacement(
-      for: selection, collections: collections, existingPlacements: Array(placements.values))
+    return indexedPlacement(for: selection, collections: collections)
   }
 
   func placement(id: String) -> ExportPlacement? {
@@ -1124,13 +1286,9 @@ final class CollectionExportRecordStore {
       return PlacementSummary(
         placementId: placement.id, exportedCount: 0, totalCount: 0, status: .notExported)
     }
-    let bodies = recordBodies[placement.id] ?? [:]
-    let total = bodies.count
-    var done = 0
-    for (_, body) in bodies
-    where body.variants.values.contains(where: { $0.status == .done }) {
-      done += 1
-    }
+    let counts = placementCounts[placement.id] ?? PlacementCounts()
+    let total = counts.total
+    let done = counts.done
     let status: MonthExportStatus
     if total == 0 {
       status = .notExported
@@ -1285,10 +1443,7 @@ final class CollectionExportRecordStore {
     if state == .persistenceFailed && !hasUnsavedChanges {
       // The known pre-switch history is intact in the parked owner, even
       // when its later reload was unreadable. Retry must retain the new file.
-      placements = context.snapshot.placements
-      recordBodies = context.snapshot.records
-      invalidatesAllTiles = true
-      filenameClaims = nil
+      installHistory(placements: context.snapshot.placements, records: context.snapshot.records)
       hasUnsavedChanges = true
     }
     applyCompletion(filename)
@@ -1387,6 +1542,17 @@ final class CollectionExportRecordStore {
   }
 
   private func apply(_ op: LogOp) {
+    let recordKey: TileRecordKey?
+    let oldPlacement: ExportPlacement?
+    switch op {
+    case .upsertRecord(let id, let asset, _), .deleteRecord(let id, let asset):
+      recordKey = TileRecordKey(placementId: id, assetId: asset)
+      oldPlacement = nil
+    case .upsertPlacement(let id, _), .deletePlacement(let id):
+      recordKey = nil
+      oldPlacement = placements[id]
+    }
+    let oldBody = recordKey.flatMap { recordBodies[$0.placementId]?[$0.assetId] }
     switch op {
     case .upsertRecord(let placementId, let assetId, _),
       .deleteRecord(let placementId, let assetId):
@@ -1400,6 +1566,37 @@ final class CollectionExportRecordStore {
     Self.apply(
       op, placements: &placements, recordBodies: &recordBodies, claims: &filenameClaims,
       logger: logger)
+    if let key = recordKey {
+      let newBody = recordBodies[key.placementId]?[key.assetId]
+      var counts = placementCounts[key.placementId] ?? PlacementCounts()
+      counts.total += (newBody == nil ? 0 : 1) - (oldBody == nil ? 0 : 1)
+      counts.done += Self.doneContribution(newBody) - Self.doneContribution(oldBody)
+      if counts.total == 0 {
+        placementCounts.removeValue(forKey: key.placementId)
+      } else {
+        placementCounts[key.placementId] = counts
+      }
+    } else {
+      switch op {
+      case .upsertPlacement(let id, _), .deletePlacement(let id):
+        if let oldPlacement {
+          placementCandidates[CollectionKey(oldPlacement)]?.removeValue(forKey: id)
+        }
+      case .upsertRecord, .deleteRecord: break
+      }
+      switch op {
+      case .upsertPlacement(let id, _):
+        if let placement = placements[id] {
+          placementCandidates[CollectionKey(placement), default: [:]][id] = placement
+        }
+      case .deletePlacement(let id): placementCounts.removeValue(forKey: id)
+      case .upsertRecord, .deleteRecord: break
+      }
+    }
+  }
+
+  nonisolated private static func doneContribution(_ body: RecordBody?) -> Int {
+    body?.variants.values.contains { $0.status == .done } == true ? 1 : 0
   }
 
   /// Applies one log operation to `placements` and `recordBodies`, keeping `claims` current
@@ -1569,6 +1766,7 @@ final class CollectionExportRecordStore {
       }
     }
     if allTiles || metadataChanged { gridPlacementsRevision &+= 1 }
+    publishSidebarChanges()
   }
 
   private func scheduleCoalescedNotify() {
