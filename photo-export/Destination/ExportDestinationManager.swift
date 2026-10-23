@@ -52,8 +52,10 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     let handle: any FileDirectoryHandle
     let physicalRoot: String
   }
+  private static let maximumDirectoryHandles = 16
   private var directoryResolutions: [String: ResolvedDirectory] = [:]
-  private var missingDirectories: Set<String> = []
+  /// Survives handle eviction so a missing, previously resolved path is never recreated.
+  private var previouslyResolvedDirectories: Set<String> = []
 
   private func inspectDirectory(at url: URL) throws -> FileItemIdentity? {
     do { return try fileSystem.directoryIdentity(at: url) } catch let error as NSError
@@ -65,7 +67,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private func clearDirectoryResolutions() {
     directoryResolutions.removeAll()
-    missingDirectories.removeAll()
+    previouslyResolvedDirectories.removeAll()
   }
 
   func resetDirectoryResolution() { clearDirectoryResolutions() }
@@ -79,7 +81,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   func revalidateDirectory(_ relativePath: String) throws {
     let key = relativePath.hasSuffix("/") ? String(relativePath.dropLast()) : relativePath
     directoryResolutions.removeValue(forKey: key)
-    missingDirectories.insert(key)
+    previouslyResolvedDirectories.insert(key)
     _ = try urlForRelativeDirectory(relativePath, createIfNeeded: false)
   }
 
@@ -516,14 +518,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         let physicalPath = try fileSystem.directoryPhysicalPath(cached.handle).path
         guard Self.contains(physicalPath, under: cached.physicalRoot) else {
           directoryResolutions.removeValue(forKey: trimmed)
-          missingDirectories.insert(trimmed)
+          previouslyResolvedDirectories.insert(trimmed)
           throw ExportDestinationError.invalidRelativePath(
             "path resolves outside the export root: \(relativePath)")
         }
         return cached.url
       }
       directoryResolutions.removeValue(forKey: trimmed)
-      missingDirectories.insert(trimmed)
+      previouslyResolvedDirectories.insert(trimmed)
     }
 
     // Build the target URL by appending components.
@@ -562,7 +564,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
 
     var identity = try inspectDirectory(at: target)
-    if identity == nil, missingDirectories.contains(trimmed) {
+    if identity == nil, previouslyResolvedDirectories.contains(trimmed) {
       throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))
     }
     if createIfNeeded, identity == nil {
@@ -570,6 +572,10 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       identity = try inspectDirectory(at: target)
     }
     if identity != nil {
+      // Bound retained descriptors independently of the number of folders in a run.
+      if directoryResolutions.count >= Self.maximumDirectoryHandles {
+        directoryResolutions.removeAll(keepingCapacity: true)
+      }
       // Obtain both physical spellings from the kernel. Foundation can shorten
       // system aliases such as /private/var even after resolving their symlinks.
       let rootHandle = try fileSystem.openDirectory(at: root)
@@ -582,7 +588,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       }
       directoryResolutions[trimmed] = ResolvedDirectory(
         url: target, handle: handle, physicalRoot: physicalRoot)
-      missingDirectories.remove(trimmed)
+      previouslyResolvedDirectories.insert(trimmed)
     }
 
     return target
