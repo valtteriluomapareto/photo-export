@@ -243,7 +243,7 @@ struct ExportPreparationTests {
       probe.gate.release()
       f.cleanup()
     }
-    f.manager.pause()
+    f.manager.queueCoordinator.pause()
     f.manager.startExportMonth(year: 2025, month: 4)
     try #require(await eventually("job queued behind pause") { f.manager.pendingJobs.count == 1 })
     let identity = f.destination.manager.identity

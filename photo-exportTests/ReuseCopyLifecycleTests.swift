@@ -150,8 +150,7 @@ struct ReuseCopyLifecycleTests {
         let newScope = try #require(fixture.destination.selectedFolderURL)
         fixture.destination.endScopedAccess(for: newScope)
       }
-      let directory = try fixture.destination.urlForRelativeDirectory(
-        "Collections/Favorites/", createIfNeeded: false)
+      let directory = fixture.destination.rootURL.appendingPathComponent("Collections/Favorites/")
       #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
     } cleanup: {
       gate.release()
