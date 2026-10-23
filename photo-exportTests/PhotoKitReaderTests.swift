@@ -118,6 +118,7 @@ struct PhotoKitReaderTests {
       }
       gate.release()
       await old.value
+      #expect(h.dest.beginScopedAccessCount == 0)
       #expect(h.writer.writeCalls.isEmpty)
       #expect(h.fileSystem.calls.isEmpty)
       #expect(h.store.exportInfo(assetId: asset.id) == nil)
@@ -220,10 +221,16 @@ struct PhotoKitReaderTests {
   }
 
   @Test func resourceSizeMappingPreservesKnownPositiveAndUnknownValues() {
-    #expect(ProductionPhotoKitReader.positiveFileSize(Int64(12)) == 12)
-    #expect(ProductionPhotoKitReader.positiveFileSize(NSNumber(value: 19)) == 19)
-    for unknown: Any? in [nil, Int64(0), Int64(-1), "12"] {
-      #expect(ProductionPhotoKitReader.positiveFileSize(unknown) == nil)
+    func resource(_ value: Any?) -> ResourceDescriptor {
+      ProductionPhotoKitReader.resourceDescriptor(
+        type: .pairedVideo, filename: "motion.MOV", uniformTypeIdentifier: "public.movie",
+        sizeValue: value)
     }
+    #expect(resource(Int64(12)).fileSize == 12)
+    #expect(resource(NSNumber(value: 19)).fileSize == 19)
+    for unknown: Any? in [nil, Int64(0), Int64(-1), "12"] {
+      #expect(resource(unknown).fileSize == nil)
+    }
+    #expect(resource(Int64(12)).uniformTypeIdentifier == "public.movie")
   }
 }
