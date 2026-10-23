@@ -559,7 +559,9 @@ final class ExportRecordStore {
       let id = configuredDestinationId
     else { return false }
     if pendingRecovery[id] != nil { return true }
-    if case .ioFailure = outcome { return commitsLandedWhileLoading[id]?.isEmpty == false }
+    if case .ioFailure = outcome {
+      return commitsLandedWhileLoading[id]?.contains { !$0.context.needsCorruptionRecovery } == true
+    }
     return false
   }
 
@@ -570,7 +572,10 @@ final class ExportRecordStore {
       let id = configuredDestinationId
     else { return nil }
     if pendingRecovery[id] != nil { return RecordValueTransfer(pendingRecovery[id]!) }
-    if case .ioFailure = outcome, let held = commitsLandedWhileLoading[id]?.first {
+    if case .ioFailure = outcome,
+      let held = commitsLandedWhileLoading[id]?.first(where: { !$0.context.needsCorruptionRecovery }
+      )
+    {
       return RecordValueTransfer(held.context.snapshot)
     }
     return nil
@@ -1597,11 +1602,8 @@ final class ExportRecordStore {
         #endif
         try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
         let landing: FinalCommitLanding? = mutationAdmission.perform {
-          // A replacement load can finish unreadably while preparation for its predecessor waits.
-          guard
-            configurationPending || configuredDestinationId != context.destinationId
-              || state != .persistenceFailed || hasUnsavedChanges
-          else { return nil }
+          // Loading and known corruption keep their hold/defer precedence after every wait.
+          guard !needsFinalCommitRecovery(context) else { return nil }
           return landFinalCommit(
             filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked)
         }
@@ -1617,23 +1619,26 @@ final class ExportRecordStore {
     }
   }
 
+  private func needsFinalCommitRecovery(
+    _ context: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>
+  ) -> Bool {
+    !configurationPending && configuredDestinationId == context.destinationId
+      && currentState == .persistenceFailed && !hasUnsavedChanges
+      && !context.needsCorruptionRecovery
+  }
+
   private func prepareFinalCommitRecovery(
     _ context: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>
   ) async {
     try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
-    guard !configurationPending, configuredDestinationId == context.destinationId,
-      state == .persistenceFailed, !hasUnsavedChanges
-    else { return }
+    guard needsFinalCommitRecovery(context) else { return }
     let ticket = mutationTicket
     let operation = mutationAdmission.requestCheckpoint { [weak self] in
       guard let self else { return }
       try? await context.file.flush()
-      guard mutationTicket == ticket, !configurationPending,
-        configuredDestinationId == context.destinationId,
-        state == .persistenceFailed, !hasUnsavedChanges
-      else { return }
+      guard mutationTicket == ticket, needsFinalCommitRecovery(context) else { return }
       let prepared = await prepareRetainedHistory(RecordValueTransfer(context.snapshot))
-      guard mutationTicket == ticket, !configurationPending else { return }
+      guard mutationTicket == ticket, needsFinalCommitRecovery(context) else { return }
       mutationAdmission.installAfterMaintenance {
         self.installHistory(prepared.take())
         self.hasUnsavedChanges = true
