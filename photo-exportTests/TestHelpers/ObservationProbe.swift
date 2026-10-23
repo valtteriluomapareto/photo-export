@@ -12,10 +12,15 @@ import Observation
 final class ObservationProbe {
   private(set) var changeCount = 0
   private let read: @MainActor () -> Void
+  private let onChange: @MainActor () -> Void
   private var isActive = true
 
-  init(_ read: @escaping @MainActor () -> Void) {
+  init(
+    _ read: @escaping @MainActor () -> Void,
+    onChange: @escaping @MainActor () -> Void = {}
+  ) {
     self.read = read
+    self.onChange = onChange
     register()
   }
 
@@ -30,6 +35,7 @@ final class ObservationProbe {
         guard let self, self.isActive else { return }
         self.changeCount += 1
         self.register()
+        self.onChange()
       }
     }
   }

@@ -22,21 +22,12 @@ import Testing
       let root = TestScratch.directory("ManualExportFeedbackView")
       let suite = TestScratch.suiteName("ManualFeedbackView")
       let defaults: UserDefaults
-      let timeline: ExportRecordStore
-      let collections: CollectionExportRecordStore
-      let manager: ExportManager
-      let destination = FakeExportDestination()
-      let destinationManager: ExportDestinationManager
-      let autoSync = AutoSyncManager()
-      let library = PhotoLibraryManager(overrideService: FakePhotoLibraryService())
-      let lifecycle = AppLifecycleCoordinator(
-        cancelActiveWork: {}, interruptForDestinationUnavailable: {},
-        configureRecordStores: { _ in .success })
-      let scopeStore: UserDefaultsAutoExportScopeStore
+      let core: AppCore
+      var timeline: ExportRecordStore { core.exportRecordStore }
+      var collections: CollectionExportRecordStore { core.collectionExportRecordStore }
+      var manager: ExportManager { core.exportManager }
       let loginService = LoginService()
-      let loginItem: LoginItemController
-      let safetyMonitor: DestinationSafetyMonitor
-      let photoChangeAdapter: PhotoLibraryPersistentChangeAdapter
+      var loginItem: LoginItemController { core.loginItemController }
       let counter = BodyInvalidationCounter()
       var window: NSWindow?
       var hosted: NSView?
@@ -46,27 +37,14 @@ import Testing
       init() {
         defaults = TestScratch.defaults(suiteName: suite)
         defaults.set(SettingsTab.advanced.rawValue, forKey: SettingsTab.storageKey)
-        loginItem = LoginItemController(service: loginService)
-        timeline = ExportRecordStore(baseDirectoryURL: root)
-        collections = CollectionExportRecordStore(baseDirectoryURL: root)
+        var composition = AppCoreTestHarness.makeTestComposition(label: "ManualFeedbackCore")
+        composition.defaults = defaults
+        composition.appStateRoot = root
+        composition.loginItemService = loginService
+        core = AppCoreTestHarness.makeCore(composition)
+        core.exportDestinationManager.configureForScreenshotMode()
         timeline.configure(for: "A")
         collections.configure(for: "A")
-        manager = ExportManager(
-          photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
-          exportRecordStore: timeline, collectionExportRecordStore: collections,
-          assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
-          userDefaults: defaults)
-        destinationManager = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
-        destinationManager.configureForScreenshotMode()
-        scopeStore = UserDefaultsAutoExportScopeStore(userDefaults: defaults)
-        safetyMonitor = DestinationSafetyMonitor(
-          identityPublisher: destinationManager.identityPublisher,
-          exportRecordStore: timeline, collectionExportRecordStore: collections,
-          confirmationStore: InMemoryDestinationSafetyConfirmationStore(), scanDirectory: { false })
-        photoChangeAdapter = PhotoLibraryPersistentChangeAdapter(
-          tokenStore: GlobalPhotoChangeTokenStore(
-            fileURL: root.appendingPathComponent("token.data")),
-          clock: TestClock())
         manager.progressState.totalJobsEnqueued = 3
         manager.progressState.totalJobsCompleted = 3
       }
@@ -98,14 +76,8 @@ import Testing
       func showSettings() {
         let hosted = NSHostingView(
           rootView: SettingsRootView()
-            .environment(library)
-            .environment(manager).environmentObject(autoSync).environmentObject(
-              destinationManager
-            )
-            .environment(timeline).environment(collections)
-            .environmentObject(lifecycle).environmentObject(scopeStore).environment(loginItem)
-            .environmentObject(safetyMonitor).environmentObject(photoChangeAdapter)
-            .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
+            .photoExportEnvironment(core)
+            .environment(\.bodyInvalidationCounter, counter)
             .onAppear { [counter] in counter.record("settings-root-visible") })
         let owned = NSWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 600, height: 620),
@@ -117,7 +89,7 @@ import Testing
       }
 
       func close() {
-        photoChangeAdapter.stop()
+        core.autoSyncPhotoChangeAdapter.stop()
         window?.contentView = nil
         window?.close()
         hosted = nil
@@ -127,7 +99,6 @@ import Testing
         manager.cancelAndClear()
         timeline.drainSynchronously()
         collections.drainSynchronously()
-        destination.cleanup()
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
       }
@@ -244,6 +215,20 @@ import Testing
       issues()
       #expect(f.selectedAtOpen == nil, "A retained action must not reopen a dismissed summary")
     }
+    @Test func settingsSharedEnvironmentSupportsAllTabs() async throws {
+      let f = Fixture()
+      defer { f.close() }
+      f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
+      f.showSettings()
+      for title in ["Auto Export", "Export Issues", "Advanced"] {
+        let tab: SettingsTab = title == "Auto Export" ? .autoExport : title == "Export Issues" ? .exportIssues : .advanced
+        f.defaults.set(tab.rawValue, forKey: SettingsTab.storageKey)
+        try #require(await observe(in: f.settingsWindow) {
+          f.counter.renderedText["settings-visible-tab"] == [title]
+        })
+      }
+    }
+
     /// The Auto Export tab's login toggle and footer read the controller's status, so a
     /// refresh that finds a new status must re-render them.
     @Test func autoExportTabFollowsLoginItemStatus() async throws {

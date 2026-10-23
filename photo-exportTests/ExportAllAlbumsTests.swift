@@ -375,16 +375,12 @@ struct ExportAllAlbumsTests {
       assetId: "d1", placement: placement, variant: .original,
       filename: "d1.HEIC", exportedAt: Date())
 
-    var messages: [String] = []
-    let subscription = h.manager.progressState.emptyRunMessagePublisher
-      .compactMap { $0 }
-      .sink { messages.append($0) }
-    defer { subscription.cancel() }
+    let subscription = ObservedValues { h.manager.progressState.emptyRunMessage }
     h.manager.startExportAllAlbums()
     await h.manager.waitForQueueDrained()
 
     #expect(
-      messages == ["All albums in this destination are already exported."])
+      subscription.values.compactMap { $0 } == ["All albums in this destination are already exported."])
     #expect(h.manager.totalJobsEnqueued == 0)
     #expect(h.manager.totalJobsCompleted == 0)
     #expect(h.writer.writeCalls.isEmpty)

@@ -6,6 +6,7 @@ import Testing
 /// placement, and `ExportProgressBar` reads the counters, filename, render activity and
 /// messages.
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct ExportProgressStateTests {
   @Test func monthRowReadsAreNotNotifiedByPerAssetProgress() {
     let progress = ExportProgressState()
@@ -51,23 +52,17 @@ struct ExportProgressStateTests {
     #expect(bar.changeCount == 8)
   }
 
-  /// The message is cleared on every new export, usually while already empty; that write is
-  /// still delivered to Combine subscribers but must not re-render the progress bar.
-  @Test func clearingAnEmptyMessageIsDeliveredButNotObserved() {
+  /// Clearing feedback that is already empty leaves progress readers quiet.
+  @Test func clearingAnEmptyMessageIsNotObserved() {
     let progress = ExportProgressState()
     let bar = ObservationProbe { _ = progress.emptyRunMessage }
-    var delivered: [String?] = []
-    let subscription = progress.emptyRunMessagePublisher.dropFirst().sink { delivered.append($0) }
     progress.emptyRunMessage = nil
-    #expect(delivered == [nil])
     #expect(bar.changeCount == 0)
     progress.emptyRunMessage = "Nothing new to export."
     #expect(bar.changeCount == 1)
-    subscription.cancel()
   }
 
-  /// `emptyRunMessage` is written by hand around its bridge, so a wrong key path would notify
-  /// another field's readers instead of its own.
+  /// Feedback changes notify only the readers that display the message.
   @Test func emptyRunMessageWriteNotifiesOnlyItsOwnReaders() {
     let progress = ExportProgressState()
     let message = ObservationProbe { _ = progress.emptyRunMessage }

@@ -27,11 +27,6 @@ struct RecordStoreNotificationTests {
     }
 
     var counter: Int { collection ? collections.mutationCounter : timeline.mutationCounter }
-    var publisher: AnyPublisher<Int, Never> {
-      collection
-        ? collections.mutationCounterPublisher
-        : timeline.mutationCounterPublisher
-    }
 
     func write(_ id: String) {
       if collection {
@@ -72,12 +67,14 @@ struct RecordStoreNotificationTests {
     var latestID = ""
     var delivered: [(Date, String)] = []
     var oldestPending: Date?
-    let observation = f.publisher.dropFirst().sink { _ in
-      #expect(f.record(latestID)?.status == .inProgress)
-      #expect(oldestPending.map { f.clock.now().timeIntervalSince($0) <= 0.201 } == true)
-      oldestPending = nil
-      delivered.append((f.clock.now(), latestID))
-    }
+    let observation = ObservationProbe(
+      { _ = f.counter },
+      onChange: {
+        #expect(f.record(latestID)?.status == .inProgress)
+        #expect(oldestPending.map { f.clock.now().timeIntervalSince($0) <= 0.201 } == true)
+        oldestPending = nil
+        delivered.append((f.clock.now(), latestID))
+      })
     let start = f.clock.now()
     for index in 0..<20 {
       latestID = "asset-\(index)"
@@ -120,10 +117,12 @@ struct RecordStoreNotificationTests {
     let f = Fixture(collection: collection)
     let baseline = f.counter
     var delivered = 0
-    let observation = f.publisher.dropFirst().sink { _ in
-      delivered += 1
-      if delivered == 1 { f.write("reentrant") }
-    }
+    let observation = ObservationProbe(
+      { _ = f.counter },
+      onChange: {
+        delivered += 1
+        if delivered == 1 { f.write("reentrant") }
+      })
     f.write("first")
     f.clock.advance(by: 0.201)
     #expect(f.counter == baseline + 1)
@@ -152,10 +151,12 @@ struct RecordStoreNotificationTests {
     let f = Fixture(collection: collection)
     let baseline = f.counter
     var delivered = 0
-    let observation = f.publisher.dropFirst().sink { _ in
-      delivered += 1
-      if delivered == 1 { f.write("reentrant") }
-    }
+    let observation = ObservationProbe(
+      { _ = f.counter },
+      onChange: {
+        delivered += 1
+        if delivered == 1 { f.write("reentrant") }
+      })
     f.flushNotifications()
     #expect(f.counter == baseline)
     f.write("first")
@@ -284,10 +285,12 @@ struct RecordStoreNotificationTests {
     var physical: Task<Void, Never>?
     var failure: Error?
     var notifications = 0
-    let observation = f.publisher.dropFirst().sink { _ in
-      notifications += 1
-      #expect(f.record("held") == nil)
-    }
+    let observation = ObservationProbe(
+      { _ = f.counter },
+      onChange: {
+        notifications += 1
+        #expect(f.record("held") == nil)
+      })
     if collection {
       manager.startExportFavorites()
     } else {
@@ -331,11 +334,13 @@ struct RecordStoreNotificationTests {
       assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
       userDefaults: TestScratch.defaults(suiteName: suite))
     var replaced = false
-    let observation = f.publisher.dropFirst().sink { _ in
-      guard !replaced else { return }
-      replaced = true
-      manager.startExportMonth(year: 2026, month: 9)
-    }
+    let observation = ObservationProbe(
+      { _ = f.counter },
+      onChange: {
+        guard !replaced else { return }
+        replaced = true
+        manager.startExportMonth(year: 2026, month: 9)
+      })
     f.write("pending")
     manager.startExportMonth(year: 2025, month: 1)
     let oldPreparation = manager.currentPreparationTasks
@@ -377,14 +382,16 @@ struct RecordStoreNotificationTests {
     let gate = AsyncCheckpoint()
     var replacement: Task<Void, Never>?
     var replaced = false
-    let observation = f.publisher.dropFirst().sink { _ in
-      guard !replaced else { return }
-      replaced = true
-      manager.cancelImport()
-      photos.fetchAssetsCheckpointByYear[2026] = gate
-      manager.startImport()
-      replacement = manager.importTask
-    }
+    let observation = ObservationProbe(
+      { _ = f.counter },
+      onChange: {
+        guard !replaced else { return }
+        replaced = true
+        manager.cancelImport()
+        photos.fetchAssetsCheckpointByYear[2026] = gate
+        manager.startImport()
+        replacement = manager.importTask
+      })
     f.write("pending")
     manager.startImport()
     let original = manager.importTask

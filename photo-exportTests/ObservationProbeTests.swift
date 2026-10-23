@@ -12,7 +12,30 @@ private final class ObservationProbeModel {
 }
 
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct ObservationProbeTests {
+  @Test func observedValuesKeepTransientChangesAndIgnoreEqualWrites() {
+    let model = ObservationProbeModel()
+    let values = ObservedValues { model.value }
+    #expect(values.values.isEmpty)
+    model.value = 1
+    model.value = 1
+    model.other = 9
+    #expect(values.values == [1])
+    model.value = 0
+    #expect(values.values == [1, 0])
+  }
+
+  @Test func changeCallbackCanMutateAnotherObservedField() {
+    let model = ObservationProbeModel()
+    let other = ObservationProbe { _ = model.other }
+    let value = ObservationProbe({ _ = model.value }, onChange: { model.other += 1 })
+    model.value = 1
+    #expect(value.changeCount == 1)
+    #expect(other.changeCount == 1)
+    #expect(model.other == 1)
+  }
+
   @Test func countsAChangeBeforeTheSetterReturns() {
     let model = ObservationProbeModel()
     let probe = ObservationProbe { _ = model.value }

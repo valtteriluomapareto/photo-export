@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import Testing
 
@@ -160,9 +159,6 @@ struct RecordStoreObservationTests {
         await timeline.waitUntilSettled()
       }
     }
-    func statePublisher(_ collection: Bool) -> AnyPublisher<RecordStoreState, Never> {
-      collection ? collections.statePublisher : timeline.statePublisher
-    }
     func readRecord(_ collection: Bool) {
       if collection {
         _ = collections.exportInfo(assetId: "seed", placement: placement)
@@ -269,22 +265,25 @@ struct RecordStoreObservationTests {
     }
   }
 
-  /// Combine and waiter ordering already pass; Observation must precede delivery and waiter resumption.
+  /// State invalidation precedes waiter resumption, and equal state writes stay silent.
   @Test(arguments: [false, true])
   func stateNotifiesForLoadingAndSettling(collection: Bool) async throws {
     let io = HeldReadIO()
     let f = Fixture(io: io)
     try await withCleanup {
-      let probe = ObservationProbe { _ = f.state(collection) }
-      var states: [RecordStoreState] = []
+      let states = ObservedValues { f.state(collection) }
+      var notifications = 0
       var readyProbeCount: Int?
-      let subscription = f.statePublisher(collection).dropFirst().sink { state in
-        states.append(state)
-        if state == .ready {
-          #expect(f.waiters(collection) == 1)
-          readyProbeCount = probe.changeCount
-        }
-      }
+      let probe = ObservationProbe(
+        { _ = f.state(collection) },
+        onChange: {
+          notifications += 1
+          // Observation delivers during willSet, before the loading state becomes ready.
+          if f.state(collection) == .loading {
+            #expect(f.waiters(collection) == 1)
+            readyProbeCount = notifications
+          }
+        })
       let filename =
         collection
         ? CollectionExportRecordStore.Constants.snapshotFileName
@@ -308,8 +307,7 @@ struct RecordStoreObservationTests {
       let afterNil = probe.changeCount
       f.configure(nil, collection: collection)
       #expect(probe.changeCount == afterNil)
-      #expect(states == [.loading, .ready, .unconfigured, .unconfigured])
-      withExtendedLifetime(subscription) {}
+      #expect(states.values == [.loading, .ready, .unconfigured])
     } cleanup: {
       io.releaseAll()
       await f.close()

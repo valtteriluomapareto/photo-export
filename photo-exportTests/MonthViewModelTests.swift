@@ -422,9 +422,11 @@ struct MonthViewModelTests {
     try await withCleanup {
       let vm = MonthViewModel(photoLibraryService: svc)
       let firstVisible = AsyncCheckpoint()
-      let subscription = vm.selectedAssetIdPublisher.sink { id in
-        if id == "first" { Task { await firstVisible.enter() } }
-      }
+      let subscription = ObservationProbe({ _ = vm.selectedAssetId }, onChange: {
+        Task { @MainActor in
+          if vm.selectedAssetId == "first" { await firstVisible.enter() }
+        }
+      })
       try await withCleanup {
         let load = Task { await vm.loadAssets(for: .favorites) }
         await streams.started.waitForEnter(count: 1)
@@ -448,7 +450,7 @@ struct MonthViewModelTests {
         #expect(!vm.isLoading)
         #expect(svc.startCachingCalls.last?.map(\.id) == ["first", "fresh"])
       } cleanup: {
-        subscription.cancel()
+        subscription.stop()
         await firstVisible.releaseAll()
       }
     } cleanup: {

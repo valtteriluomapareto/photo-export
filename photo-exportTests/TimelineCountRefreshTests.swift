@@ -80,9 +80,12 @@ struct TimelineCountRefreshTests {
       responses.continuation.yield(adjusted)
       return adjusted ? 1 : 2
     }
-    var observed: [String] = []
-    let subscription = loader.countsByYearMonthPublisher.sink { snapshot in
-      observed.append("\(snapshot["2025-1"]?.total ?? -1):\(snapshot["2025-1"]?.adjusted ?? -1)")
+    let initial = loader.countsByYearMonth
+    let subscription = ObservedValues { loader.countsByYearMonth }
+    func observed() -> [String] {
+      ([initial] + subscription.values).map {
+        "\($0["2025-1"]?.total ?? -1):\($0["2025-1"]?.adjusted ?? -1)"
+      }
     }
     let refresh = Task { await loader.loadCounts(forYears: [2025]) }
     var failure: Error?
@@ -98,14 +101,14 @@ struct TimelineCountRefreshTests {
       #expect(await iterator.next() == !totalFirst)
       #expect(loader.assetCountsByYearMonth["2025-1"] == 1)
       #expect(loader.adjustedCountsByYearMonth["2025-1"] == 0)
-      #expect(observed == ["1:0"])
+      #expect(observed() == ["1:0"])
     } catch { failure = error }
     await totalGate.releaseAll()
     await adjustedGate.releaseAll()
     await refresh.value
     #expect(loader.assetCountsByYearMonth["2025-1"] == 2)
     #expect(loader.adjustedCountsByYearMonth["2025-1"] == 1)
-    #expect(observed == ["1:0", "2:1"])
+    #expect(observed() == ["1:0", "2:1"])
     withExtendedLifetime(subscription) {}
     if let failure { throw failure }
   }
@@ -119,13 +122,8 @@ struct TimelineCountRefreshTests {
       _ = loader.countsByYearMonth
       _ = loader.lastError
     }
-    var snapshots = 0
-    let countSubscription = loader.countsByYearMonthPublisher.dropFirst()
-      .sink { _ in snapshots += 1 }
     await loader.loadCounts(forYears: [2025])
     #expect(probe.changeCount == 0)
-    #expect(snapshots == 0)
-    withExtendedLifetime(countSubscription) {}
   }
 
   @Test(arguments: [true, false])

@@ -1760,14 +1760,11 @@ struct ExportManagerRunExportTests {
 
       // Capture the real message publication so its normal expiry cannot race the assertion.
       harness.manager.videoLayout = .subfolder
-      var messages: [String] = []
-      let observation = harness.manager.progressState.emptyRunMessagePublisher
-        .compactMap { $0 }
-        .sink { messages.append($0) }
+      let observation = ObservedValues { harness.manager.progressState.emptyRunMessage }
       harness.manager.startExportMonth(year: 2026, month: 3)
       await harness.manager.waitForQueueDrained()
       withExtendedLifetime(observation) {
-        #expect(messages == ["This month is already exported."])
+        #expect(observation.values.compactMap { $0 } == ["This month is already exported."])
       }
 
       // No second file, no second write call, no record mutation.
