@@ -236,13 +236,13 @@ struct JSONLRecordFileTests {
 
   // MARK: - Compaction trigger
 
-  /// Crossing the mutation-count threshold writes a snapshot and truncates the log so the
+  /// An explicit checkpoint writes a snapshot and truncates the log so the
   /// next load returns the snapshot alone (no log replay).
-  @Test func compactionWritesSnapshotAndTruncatesLog() throws {
+  @Test func compactionWritesSnapshotAndTruncatesLog() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
-    // Stuff `compactEveryNMutations` ops through. The last one triggers compaction.
+    // Accumulate independently durable operations before maintenance.
     let n = JSONLRecordFile<Snapshot, Operation>.Constants.compactEveryNMutations
     var rolling: [String: String] = [:]
     for i in 0..<n {
@@ -251,7 +251,7 @@ struct JSONLRecordFileTests {
       let captured = rolling
       file.append(op, currentSnapshot: { Snapshot(records: captured) })
     }
-    file.drainSynchronously()
+    try await file.checkpoint(Snapshot(records: rolling))
 
     let result = file.load()
     #expect(result.snapshot == Snapshot(records: rolling))

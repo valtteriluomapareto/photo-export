@@ -57,7 +57,7 @@ struct FilenameClaims<Folder: Hashable> {
   }
 
   /// An index filled by `add`, with a debug log of how long that took for `recordCount`
-  /// records. Each store builds its index on the main actor.
+  /// records. Store history preparation builds the index before its main-actor install.
   static func build(
     recordCount: Int, logger: Logger, _ add: (inout FilenameClaims) -> Void
   ) -> FilenameClaims {
@@ -104,3 +104,4 @@ struct FilenameClaimSnapshot: Sendable {
     return (counts[key] ?? 0) > (excluded[key] ?? 0)
   }
 }
+extension FilenameClaims: Sendable where Folder: Sendable {}

@@ -271,8 +271,8 @@ final class AppCore {
     collectionStore: CollectionExportRecordStore
   ) -> ConfigureRecordStoresResult {
     guard let newId else {
-      timelineStore.configure(for: nil)
-      collectionStore.configure(for: nil)
+      timelineStore.beginConfigure(for: nil)
+      collectionStore.beginConfigure(for: nil)
       return .success
     }
     let coordinator = ExportRecordsDirectoryCoordinator(
@@ -307,8 +307,8 @@ final class AppCore {
       // create `<newId>/` and trip the conflict-detection branch on every subsequent
       // launch, permanently stranding the legacy records. Leave both stores unconfigured;
       // next launch (or the next destinationId change) retries the rename.
-      timelineStore.configure(for: nil)
-      collectionStore.configure(for: nil)
+      timelineStore.beginConfigure(for: nil)
+      collectionStore.beginConfigure(for: nil)
       return .migrationFailed(message: message)
     }
   }

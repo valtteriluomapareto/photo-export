@@ -61,8 +61,8 @@ struct JSONLRecordFileAtomicReplacementTests {
 
   @Test(arguments: Interruption.allCases, [false, true])
   func interruptedReplacementPreservesCompactedHistory(
-    interruption: Interruption, automaticCompaction: Bool
-  ) throws {
+    interruption: Interruption, asyncCheckpoint: Bool
+  ) async throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let oldSnapshot = ["old": "done", "removed": "done", "updated": "original"]
@@ -70,7 +70,7 @@ struct JSONLRecordFileAtomicReplacementTests {
 
     let store = makeStore(
       in: directory, fileReplacer: InterruptingReplacer(interruption: interruption))
-    let count = automaticCompaction ? Store.Constants.compactEveryNMutations : 3
+    let count = asyncCheckpoint ? Store.Constants.compactEveryNMutations : 3
     var snapshot = oldSnapshot
     for index in 0..<count {
       let mutation: Mutation
@@ -85,7 +85,9 @@ struct JSONLRecordFileAtomicReplacementTests {
     }
     store.drainSynchronously()
 
-    if !automaticCompaction {
+    if asyncCheckpoint {
+      await #expect(throws: (any Error).self) { try await store.checkpoint(snapshot) }
+    } else {
       #expect(throws: (any Error).self) { try store.writeSnapshot(snapshot) }
     }
 

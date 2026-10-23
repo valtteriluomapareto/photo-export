@@ -519,18 +519,7 @@ in-progress, pending and failed, and so do the asset's other variants: an edit o
 inherited stem must not adopt, or write into, the name its own original is recorded under.
 Only the variant being written is excluded, or, for a group stem, all of the asset's own
 variants in the placement. An edited fallback's
-`edited` record names no file, on every completion path. Each store builds its index from
-its in-memory records on its first claim query, synchronously on the main actor: in practice
-at the first provisional mark or group-stem allocation of a session's first export to that
-store (about 0.4 s and 50–70 MB for 500k records in an optimized build, so it is not paid at
-load or by a session that exports nothing; measuring it at that size is #359). Each build logs its record count and elapsed
-milliseconds at debug level ("Built filename claims for … records in … ms"). The index is
-maintained in each store's `apply` after that, so log replay, import, prune and reset follow
-it; a normal commit costs three claim lookups and one main-actor hop. It is dropped, to be
-built again on the next query, wherever the in-memory records are replaced wholesale (when a
-load finishes, for every outcome, since a query while the store is `.loading` builds it from
-the empty records; retained recovery, the corrupt-reset path and the parked-snapshot restore
-after an unreadable reload). Claim queries do not answer "claimed" while a store loads: the
+`edited` record names no file, on every completion path. Each store prepares its complete claim index off main with the recovered records and counters. One installer advances the records epoch and installs those matching values; incremental mutations update that index in the same synchronous batch as the records. Empty/loading history has an empty ready index, so a first query never scans the library. Normal load, retained recovery, reset and parked-history restoration all use the installer. Production writers await store-owned maintenance admission, then recheck destination/load ownership before their bounded synchronous mutation. A live claim check and its in-progress mark share that admitted turn. Claim queries do not answer "claimed" while a store loads: the
 resolver walks suffixes while a name is claimed, and only a stale job from the previous
 destination can ask then, and its generation check drops the result. A timeline placement
 without a year and month has no claim folder; an export of one fails at once (with an

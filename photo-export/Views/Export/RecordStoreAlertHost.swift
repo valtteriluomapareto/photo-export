@@ -19,10 +19,10 @@ struct RecordStoreAlertHost: ViewModifier {
         isPresented: collectionAlertBinding,
         actions: {
           if collectionExportRecordStore.state == .persistenceFailed {
-            Button("Retry") { collectionExportRecordStore.retryPersistence() }
+            Button("Retry") { Task { await collectionExportRecordStore.retryHistoryPersistence() } }
           } else {
             Button("Reset Records", role: .destructive) {
-              collectionExportRecordStore.resetToEmpty()
+              Task { await collectionExportRecordStore.resetHistory() }
             }
           }
           Button("Quit") { NSApplication.shared.terminate(nil) }
@@ -47,11 +47,13 @@ struct RecordStoreAlertHost: ViewModifier {
         isPresented: timelineAlertBinding,
         actions: {
           if exportRecordStore.state == .persistenceFailed {
-            Button("Retry") { exportRecordStore.retryPersistence() }
+            Button("Retry") { Task { await exportRecordStore.retryHistoryPersistence() } }
           } else {
             Button("Reset and Rebuild from Folder…", action: resetAndRebuild)
               .disabled(!canRebuild)
-            Button("Reset Records", role: .destructive) { exportRecordStore.resetToEmpty() }
+            Button("Reset Records", role: .destructive) {
+              Task { await exportRecordStore.resetHistory() }
+            }
           }
           Button("Quit") { NSApplication.shared.terminate(nil) }
         },
@@ -95,13 +97,14 @@ struct RecordStoreAlertHost: ViewModifier {
 
   private func resetAndRebuild() {
     guard exportRecordStore.state == .failed, canRebuild else { return }
-    exportRecordStore.resetToEmpty()
-    guard exportRecordStore.state == .ready, canRebuild else { return }
-    // Claim import synchronously: an empty, ready store must not be exposed to
-    // Auto Export while waiting for the recovery sheet to appear.
-    exportManager.startImport()
-    guard exportManager.isImporting else { return }
-    isShowingRecoveryImport = true
+    Task {
+      await exportRecordStore.resetHistory {
+        guard canRebuild else { return }
+        // Claim import in the same turn that recovery publishes an empty ready history.
+        exportManager.startImport()
+        if exportManager.isImporting { isShowingRecoveryImport = true }
+      }
+    }
   }
 
   private func storageFailureMessage(_ detail: String?) -> String {

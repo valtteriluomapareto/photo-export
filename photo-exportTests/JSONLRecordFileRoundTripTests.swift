@@ -89,6 +89,16 @@ struct JSONLRecordFileRoundTripTests {
     #expect(reconstructed == replica.records, "round-trip reproduction must match replica")
   }
 
+  private func driveWithCheckpoints(
+    file: JSONLRecordFile<Snapshot, Operation>, replica: Replica, ops: [Operation], every: Int
+  ) async throws {
+    for offset in stride(from: 0, to: ops.count, by: every) {
+      let end = min(offset + every, ops.count)
+      driveAndVerify(file: file, replica: replica, ops: Array(ops[offset..<end]))
+      if end % every == 0 { try await file.checkpoint(replica.snapshot) }
+    }
+  }
+
   // MARK: - Heavy churn round-trip
 
   /// 50 keys × 5 mutations each (upsert → update → update → delete → upsert), no
@@ -117,79 +127,33 @@ struct JSONLRecordFileRoundTripTests {
 
   // MARK: - Off-main-actor encode (threading invariant)
 
-  /// `append` must return promptly even when crossing the compaction threshold with a
-  /// large snapshot. The encode used to run synchronously on the calling actor, which
-  /// stalled the main actor for seconds at scale (~150 MB JSON for a 500k-record store).
-  /// The current implementation captures the snapshot synchronously (cheap CoW) and
-  /// dispatches the encode + write to `ioQueue`, so the calling-actor wall-time of the
-  /// threshold-crossing append is bounded by the cheap-capture cost, not by the encode
-  /// cost.
-  ///
-  /// Test approach: **suspend the IO queue** before the threshold-crossing append so the
-  /// dispatched encode + write cannot run, then assert the snapshot file is absent
-  /// immediately after `append` returns. Without the suspend the test relies on the
-  /// main actor winning a race against `ioQueue` — usually true on a developer machine
-  /// (the encode + write takes milliseconds; the next test instruction is microseconds
-  /// away) but a fast SSD plus a busy main actor could in principle invert the order.
-  /// Suspending makes the assertion deterministic.
-  @Test func appendReturnsBeforeSnapshotIsWrittenAtThresholdCrossing() throws {
+  /// Appending never freezes a history; explicit maintenance owns snapshot encoding.
+  @Test func appendReturnsBeforeSnapshotIsWrittenAtThresholdCrossing() async throws {
     let (dir, file, queue) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
-
     let snapshotURL = dir.appendingPathComponent("snapshot.json")
-    let n = JSONLRecordFile<Snapshot, Operation>.Constants.compactEveryNMutations
-
-    // Drive (n - 1) ops without crossing the threshold so we can isolate the
-    // threshold-crossing call.
-    var rolling: [String: String] = [:]
-    for i in 0..<(n - 1) {
-      let op = Operation(kind: .upsert, key: "k\(i)", value: "v\(i)")
-      rolling["k\(i)"] = "v\(i)"
-      let captured = rolling
-      file.append(op, currentSnapshot: { Snapshot(records: captured) })
-    }
-    // Drain the ioQueue so the n-1 log lines are durable; snapshot still absent.
-    file.drainSynchronously()
-    #expect(!FileManager.default.fileExists(atPath: snapshotURL.path))
-
-    // Build a heavy snapshot to amplify the encode cost (~1 MB of JSON).
-    var heavy: [String: String] = rolling
-    for i in 0..<1000 {
-      heavy["heavy-k\(i)"] = String(repeating: "x", count: 1000)
-    }
-    heavy["k\(n - 1)"] = "v"
-
-    // Suspend the ioQueue. Anything dispatched onto it from this point on is queued but
-    // not executed until we resume. This makes the "snapshot must not be on disk"
-    // assertion deterministic — without the suspend, we'd be racing the queue.
-    // (Swift Testing's `#expect(boolExpr)` records issues without throwing, so the
-    // function flows linearly and a failed assertion does not leak a suspended queue.)
+    var captured = false
     queue.suspend()
-
-    let crossing = Operation(kind: .upsert, key: "k\(n - 1)", value: "v")
-    file.append(crossing, currentSnapshot: { Snapshot(records: heavy) })
-
-    // The append-log + encode + snapshot-write all run on the suspended queue, so
-    // nothing should have landed.
-    #expect(
-      !FileManager.default.fileExists(atPath: snapshotURL.path),
-      "snapshot must NOT be on disk synchronously — encode + write run on ioQueue"
-    )
-
-    // Resume + drain confirms the snapshot eventually lands and reflects the frozen
-    // `heavy` capture.
+    file.append(
+      Operation(kind: .upsert, key: "new", value: "v"),
+      currentSnapshot: {
+        captured = true
+        return Snapshot(records: ["new": "v"])
+      })
+    #expect(!captured)
+    #expect(!FileManager.default.fileExists(atPath: snapshotURL.path))
     queue.resume()
-    file.drainSynchronously()
-    #expect(FileManager.default.fileExists(atPath: snapshotURL.path))
-    let loaded = file.load()
-    #expect(loaded.snapshot?.records.count == heavy.count)
+    try await file.flush()
+    #expect(!FileManager.default.fileExists(atPath: snapshotURL.path))
+    try await file.checkpoint(Snapshot(records: ["new": "v"]))
+    #expect(file.load().snapshot?.records == ["new": "v"])
   }
 
   // MARK: - Cross-threshold compaction
 
   /// Crossing the threshold once + a few more appends afterward: load must produce the
   /// snapshot **plus** the post-compaction log lines, and overlay them in order.
-  @Test func compactionWithPostCompactionAppendsRoundTrip() throws {
+  @Test func compactionWithPostCompactionAppendsRoundTrip() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
@@ -203,7 +167,7 @@ struct JSONLRecordFileRoundTripTests {
     for i in 0..<5 {
       ops.append(Operation(kind: .upsert, key: "post-\(i)", value: "p\(i)"))
     }
-    driveAndVerify(file: file, replica: replica, ops: ops)
+    try await driveWithCheckpoints(file: file, replica: replica, ops: ops, every: n)
 
     let loaded = file.load()
     #expect(loaded.snapshot != nil, "compaction must have written a snapshot")
@@ -225,7 +189,7 @@ struct JSONLRecordFileRoundTripTests {
   /// Run through the threshold three times (3 × N ops). Final load must yield a single
   /// snapshot reflecting the full post-state and an empty log (last batch ended exactly
   /// on a threshold).
-  @Test func multipleCompactionsRoundTrip() throws {
+  @Test func multipleCompactionsRoundTrip() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
@@ -237,7 +201,7 @@ struct JSONLRecordFileRoundTripTests {
         ops.append(Operation(kind: .upsert, key: "k-\(batch)-\(i)", value: "v"))
       }
     }
-    driveAndVerify(file: file, replica: replica, ops: ops)
+    try await driveWithCheckpoints(file: file, replica: replica, ops: ops, every: n)
 
     let loaded = file.load()
     #expect(loaded.snapshot != nil)
@@ -248,7 +212,7 @@ struct JSONLRecordFileRoundTripTests {
   // MARK: - Compaction interleaved with deletes
 
   /// A delete crossing the threshold must produce a snapshot that omits the deleted key.
-  @Test func compactionAfterDeletesProducesAccurateSnapshot() throws {
+  @Test func compactionAfterDeletesProducesAccurateSnapshot() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
@@ -266,7 +230,7 @@ struct JSONLRecordFileRoundTripTests {
     for i in 0..<100 {
       ops.append(Operation(kind: .upsert, key: "post-\(i)", value: "p\(i)"))
     }
-    driveAndVerify(file: file, replica: replica, ops: ops)
+    try await driveWithCheckpoints(file: file, replica: replica, ops: ops, every: n)
 
     let loaded = file.load()
     #expect(loaded.snapshot != nil)
@@ -300,17 +264,9 @@ struct JSONLRecordFileRoundTripTests {
     driveAndVerify(file: file, replica: replica, ops: ops)
   }
 
-  // MARK: - Fresh instance after restart preserves the mutation-count budget
+  // MARK: - Reopening does not itself capture a history snapshot
 
-  /// Production semantics: each `configure(for:)` call on the composing store
-  /// instantiates a fresh `JSONLRecordFile` pointing at the on-disk paths. The fresh
-  /// instance's mutation counter starts at 0 — the (n-1) lines already on disk do not
-  /// count against the next compaction threshold. Without this, an app that always
-  /// quits at exactly (n-1) mutations would compact on every launch's very first
-  /// append, churning IO unnecessarily.
-  ///
-  /// This test simulates the restart by constructing a second `JSONLRecordFile` against
-  /// the same URLs and verifying the next append doesn't trigger compaction.
+  /// Loading adopts replay pressure; the composing store owns the next maintenance boundary.
   @Test func freshInstanceAfterRestartDoesNotInheritOldCounter() throws {
     let (dir, file, queue) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -337,8 +293,7 @@ struct JSONLRecordFileRoundTripTests {
     #expect(loaded.snapshot == nil)
     #expect(loaded.ops.count == n - 1)
 
-    // First append on the fresh instance must NOT compact — its counter starts at 0,
-    // not at (n-1).
+    // An append remains independent; only explicit maintenance replaces the snapshot.
     let firstAfterRestart = Operation(kind: .upsert, key: "post-0", value: "v")
     replica.apply(firstAfterRestart)
     let captured = replica.snapshot

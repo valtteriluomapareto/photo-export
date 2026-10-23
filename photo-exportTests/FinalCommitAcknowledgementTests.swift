@@ -189,6 +189,29 @@ struct FinalCommitAcknowledgementTests {
     #expect(f.isClaimed(Self.committed))
   }
 
+  /// The captured acknowledgement remains outstanding through the newer destination history.
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func lateAcknowledgementPreservesNewerRoundTripHistory(collection: Bool) async throws {
+    let f = Fixture(collection: collection)
+    defer { f.cleanup() }
+    try await f.seed("old", filename: "OLD.JPG")
+    let acknowledge = try f.capture()
+    f.select("B")
+    try await f.seed("B-only", filename: "B.JPG")
+    f.select("A")
+    try await f.seed("newer-A", filename: "NEW.JPG")
+    f.select("B")
+    #expect(f.filename() == nil)
+    await acknowledge(Self.committed)
+    f.select("A")
+    #expect(f.filename() == Self.committed)
+    #expect(f.filename("newer-A") == "NEW.JPG")
+    #expect(f.isClaimed("NEW.JPG"))
+    f.select("B")
+    #expect(f.filename("B-only") == "B.JPG")
+    #expect(f.filename() == nil)
+  }
+
   /// An edited fallback records the edit as backed up by the original without naming a
   /// file, whether the store was active or parked when the commit was acknowledged, so the
   /// original's file is claimed only by the original.

@@ -4,15 +4,8 @@ import os
 
 @testable import Photo_Export
 
-/// Covers snapshot encode-failure rollback and the failed-append recovery latch.
-/// Neither path is exercised by happy-path round-trip tests: losing the rollback
-/// delays compaction, while retrying appends after a missing log op could discard
-/// state that only the composing store still holds in memory.
-///
-/// The compaction rollback runs via `Task { @MainActor }` inside `ioQueue.async`,
-/// so observing it from a `@MainActor` test requires
-/// (a) `drainSynchronously()` to drain the queue and (b) an `await Task.yield()`
-/// to let the queued main-actor Task run.
+/// Covers explicit snapshot encode failure and the failed-append recovery latch.
+/// A failed encoding preserves the durable log and can be retried without another append.
 @MainActor
 struct JSONLRecordFileRollbackTests {
 
@@ -81,81 +74,27 @@ struct JSONLRecordFileRollbackTests {
     await Task.yield()
   }
 
-  // MARK: - Snapshot encode-failure rollback
-
-  /// Drive (n - 1) ops with non-throwing snapshots, then op n with a throwing
-  /// snapshot (threshold-crossing → encode → throws → rollback). After the
-  /// rollback lands, `mutationCountSinceCompact == compactEveryNMutations - 1`,
-  /// so the next single append re-triggers compaction. The observable
-  /// distinction:
-  /// - **With** the rollback intact: snapshot file lands after one more append.
-  /// - **Without** the rollback: counter stays at 0 (the synchronous reset
-  ///   that ran before the failed encode), and the next append doesn't compact.
-  ///
-  /// We assert the post-rollback retry compacts successfully — that's the
-  /// observable proof the rollback fired.
-  @Test func snapshotEncodeFailureRollbackAllowsNextAppendToRetryCompaction() async throws {
+  @Test func snapshotEncodeFailureAllowsExplicitCheckpointRetry() async throws {
     let dir = TestScratch.directory("JSONLRollback")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
-
     let (file, _) = makeStore(at: dir)
-    let n = JSONLRecordFile<ConditionalSnapshot, Operation>.Constants.compactEveryNMutations
-    let snapshotURL = dir.appendingPathComponent("snapshot.json")
-
-    // Drive (n - 1) ops with non-throwing snapshots.
-    var rolling: [String: String] = [:]
-    for i in 0..<(n - 1) {
-      let op = Operation(key: "k\(i)", value: "v\(i)")
-      rolling["k\(i)"] = "v\(i)"
-      let frozen = rolling
-      file.append(op, currentSnapshot: { ConditionalSnapshot(records: frozen) })
-    }
-    await drainIOAndRollbacks(file)
-    #expect(!FileManager.default.fileExists(atPath: snapshotURL.path))
-
-    // Threshold-crossing append with a throwing snapshot. The encode fails on
-    // ioQueue; rollback dispatches back to MainActor and sets the counter to
-    // compactEveryNMutations - 1.
-    let crossing = Operation(key: "crossing", value: "v")
-    rolling["crossing"] = "v"
-    let frozenCrossing = rolling
-    file.append(
-      crossing,
-      currentSnapshot: { ConditionalSnapshot(records: frozenCrossing, shouldThrow: true) })
-    await drainIOAndRollbacks(file)
-
-    // Snapshot must NOT exist (the encode threw before the file write was reached).
+    file.append(Operation(key: "crossing", value: "v"), currentSnapshot: { ConditionalSnapshot() })
+    try await file.flush()
+    let logURL = dir.appendingPathComponent("log.jsonl")
+    let durableLog = try Data(contentsOf: logURL)
+    do {
+      try await file.checkpoint(ConditionalSnapshot(records: ["crossing": "v"], shouldThrow: true))
+      Issue.record("Encoding should fail")
+    } catch {}
     #expect(
-      !FileManager.default.fileExists(atPath: snapshotURL.path),
-      "encode-failure path must not produce a snapshot file")
-
-    // Log has n lines (the crossing op's log line was written before the encode
-    // attempt; only the snapshot/truncate step failed).
-    let loadedAfterFailure = file.load()
-    #expect(loadedAfterFailure.snapshot == nil)
-    #expect(loadedAfterFailure.ops.count == n)
-
-    // One more append with a non-throwing snapshot. If the rollback fired, the
-    // counter is at compactEveryNMutations - 1, so this single append re-crosses
-    // the threshold and compacts successfully.
-    let retry = Operation(key: "retry", value: "v")
-    rolling["retry"] = "v"
-    let frozenRetry = rolling
-    file.append(retry, currentSnapshot: { ConditionalSnapshot(records: frozenRetry) })
-    await drainIOAndRollbacks(file)
-
-    #expect(
-      FileManager.default.fileExists(atPath: snapshotURL.path),
-      "post-rollback retry must compact successfully — proves rollback fired")
-
-    // Loaded state: snapshot reflects the full pre-retry state plus the retry op
-    // (retry op crosses the threshold and is included in the captured snapshot
-    // because contribution happens before the closure freezes; log is empty.
-    let loadedAfterRetry = file.load()
-    #expect(loadedAfterRetry.snapshot != nil)
-    #expect(loadedAfterRetry.snapshot?.records["retry"] == "v")
-    #expect(loadedAfterRetry.ops.isEmpty, "log truncated after successful compaction")
+      !FileManager.default.fileExists(atPath: dir.appendingPathComponent("snapshot.json").path))
+    #expect(try Data(contentsOf: logURL) == durableLog)
+    #expect(file.hasReplayWork)
+    try await file.checkpoint(ConditionalSnapshot(records: ["crossing": "v"]))
+    let loaded = file.load()
+    #expect(loaded.snapshot?.records == ["crossing": "v"])
+    #expect(loaded.ops.isEmpty)
   }
 
   // MARK: - Log-write-failure rollback

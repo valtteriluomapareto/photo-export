@@ -38,17 +38,34 @@ private final class JSONLIOFailureState: @unchecked Sendable {
   }
 }
 
+/// Moves the frozen history to one worker; the box is empty before completion is resumed.
+final class RecordValueTransfer<Value: Sendable>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: Value?
+  init(_ value: consuming Value) { self.value = consume value }
+  func discard() {
+    lock.lock()
+    value = nil
+    lock.unlock()
+  }
+  func take() -> Value {
+    lock.lock()
+    defer { lock.unlock() }
+    defer { value = nil }
+    return value!
+  }
+}
+
 /// Reusable persistence component that backs both the timeline `ExportRecordStore` and the
 /// new `CollectionExportRecordStore`. Owns the JSONL+snapshot machinery (atomic writes, log
-/// replay with malformed-line skip, compaction at a mutation-count threshold) and leaves the
+/// replay with malformed-line skip, explicit maintenance checkpoints) and leaves the
 /// record shape and apply-log-op dispatch to the composing store.
 ///
 /// Boundaries:
 /// - **Generic owns:** snapshot read/write (atomic via `.tmp` + rename + parent-dir fsync),
-///   log append (with `fsync(handle)`), log replay (with malformed-line skip), compaction
-///   trigger at the mutation-count threshold, snapshot/log file-rename rotation.
+///   log append (with `fsync(handle)`), log replay (with malformed-line skip), checkpoint execution, snapshot/log file-rename rotation.
 /// - **Composing store owns:** the in-memory record dictionary, the apply-log-op dispatch
-///   on each loaded op, the in-flight recovery pass, the `@Published` `mutationCounter`,
+///   on each loaded op, the in-flight recovery pass, the observed `mutationCounter`,
 ///   and the `RecordStoreState` machine.
 ///
 /// Both stores share the same commit order: synchronize the replacement snapshot,
@@ -57,11 +74,11 @@ private final class JSONLIOFailureState: @unchecked Sendable {
 ///
 /// `@MainActor` isolates the calling-actor side: every entry point (`load`, `append`,
 /// `writeSnapshot`, `resetToEmpty`, `clearOnDiskState`, `drainSynchronously`) and every
-/// mutable property (`mutationCountSinceCompact`) must be touched from the main actor.
+/// mutable property (including `submittedRevision` and the replay budget) must be touched from the main actor.
 /// Both production composing stores (`ExportRecordStore`,
 /// `CollectionExportRecordStore`) are themselves `@MainActor`, so this matches how the
-/// type is actually used. Off-actor work — the encode + write inside `append`'s
-/// `ioQueue.async` block — happens on the dispatch queue and only reads `Sendable`
+/// type is actually used. Off-actor work — log writes and snapshot encoding/replacement —
+/// happens on the dispatch queue and only reads `Sendable`
 /// locals captured from the calling actor, never reaching back into `self` for
 /// non-Sendable state. `load()` is composed of the `nonisolated` static `readFiles` and
 /// `decode`, which take everything they need as arguments and can run on any thread.
@@ -90,7 +107,10 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
 
   // MARK: - Mutation-count state
 
-  private var mutationCountSinceCompact: Int = 0
+  private var replayBudget = RecordReplayBudget()
+  var needsMaintenance: Bool { replayBudget.needsCheckpoint }
+  var needsIdleMaintenance: Bool { replayBudget.needsIdleCheckpoint }
+  var hasReplayWork: Bool { replayBudget.hasWork }
   private var submittedRevision = 0
   private var flushedRevision = 0
   /// A recovered complete or partial final line must not absorb the next operation.
@@ -151,6 +171,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     /// Whether the log ends in a line with no final LF, so the next append must start a
     /// new line. `nil` when the log read failed: the file keeps what it knew before.
     let needsLogSeparator: Bool?
+    var replayBytes: Int = 0
+    var replayNanoseconds: UInt64 = 0
   }
 
   /// The snapshot and log bytes as read, before any decoding. A missing file has neither
@@ -170,6 +192,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let inputs = readInputs
     let result = inputs.decode(inputs.read())
     adoptLogSeparator(result.needsLogSeparator)
+    adoptReplayBudget(result)
     return result
   }
 
@@ -203,6 +226,14 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// means the log could not be read, so the file keeps what it knew before.
   func adoptLogSeparator(_ separator: Bool?) {
     if let separator { needsLogSeparator = separator }
+  }
+
+  func adoptReplayBudget(_ budget: RecordReplayBudget) { replayBudget = budget }
+
+  func adoptReplayBudget(_ loaded: LoadResult) {
+    replayBudget.adopt(
+      operationCount: loaded.ops.count, encodedBytes: loaded.replayBytes,
+      measuredNanoseconds: loaded.replayNanoseconds)
   }
 
   /// Reads the snapshot, then the log. File IO only: nothing is decoded or logged, so the
@@ -257,6 +288,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
       }
     }
 
+    let replayStart = DispatchTime.now().uptimeNanoseconds
     var ops: [LogOp] = []
     var malformedLineCount = 0
     let needsLogSeparator: Bool?
@@ -296,7 +328,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     return LoadResult(
       snapshot: snapshot, snapshotStatus: snapshotStatus, ops: ops,
       malformedLineCount: malformedLineCount, ioFailure: ioFailure,
-      needsLogSeparator: needsLogSeparator)
+      needsLogSeparator: needsLogSeparator, replayBytes: raw.logData?.count ?? 0,
+      replayNanoseconds: DispatchTime.now().uptimeNanoseconds - replayStart)
   }
 
   /// Renames the corrupt snapshot to `<name>.broken-<ISO8601>` and writes a fresh empty
@@ -304,63 +337,25 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   /// destructive Reset action in RecordStoreAlertHost. Until that explicit recovery,
   /// the store remains failed and the corrupt file is preserved.
   func resetToEmpty(emptySnapshot: Snapshot) throws {
-    // Filename-safe timestamp: ISO8601 basic-format date+time with no separators,
-    // e.g. `20260430T123456Z`. The default ISO8601 (`.withInternetDateTime`) includes
-    // colons (`:`), which are illegal on exFAT/NTFS — destinations users commonly pick
-    // for backups. Without this, `moveItem` would throw, the catch below would fall
-    // through to `writeSnapshot`, and the corrupt snapshot would be silently overwritten,
-    // defeating the deferred-rename rule's forensic-preservation purpose.
-    let isoFormatter = ISO8601DateFormatter()
-    isoFormatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime]
-    let timestamp = isoFormatter.string(from: Date())
-    if fileManager.fileExists(atPath: snapshotURL.path) {
-      let brokenURL =
-        snapshotURL
-        .deletingPathExtension()
-        .appendingPathExtension("broken-\(timestamp)")
-      do {
-        try fileManager.moveItem(at: snapshotURL, to: brokenURL)
-        logger.info(
-          "Reset corrupt snapshot to \(brokenURL.lastPathComponent, privacy: .public)")
-      } catch {
-        // Bail with the rename error rather than silently overwriting the corrupt file
-        // by falling through to `writeSnapshot`. The corrupt bytes are the only forensic
-        // trail; preserve them. The composing store catches this throw and stays
-        // `.failed`, so the user can retry later.
-        logger.error(
-          "Failed to rename corrupt snapshot \(self.snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
-        )
-        throw error
-      }
-    }
+    try Self.preserveCorruptSnapshot(at: snapshotURL)
     try writeSnapshot(emptySnapshot)
+  }
+
+  nonisolated private static func preserveCorruptSnapshot(at snapshotURL: URL) throws {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime]
+    let timestamp = formatter.string(from: Date())
+    let manager = FileManager.default
+    if manager.fileExists(atPath: snapshotURL.path) {
+      let broken = snapshotURL.deletingPathExtension().appendingPathExtension("broken-\(timestamp)")
+      try manager.moveItem(at: snapshotURL, to: broken)
+    }
   }
 
   // MARK: - Append + compaction
 
-  /// Persists `op` to the JSONL log. When the mutation count crosses
-  /// `compactEveryNMutations`, the calling actor's `currentSnapshot` closure is invoked
-  /// synchronously to capture the in-memory state, and a compaction (atomic snapshot
-  /// write + log truncation) is dispatched on the IO queue after the log write.
-  ///
-  /// Threading split:
-  /// - The op is encoded synchronously on the calling actor. JSON-encoded ops are small
-  ///   (a few hundred bytes); encoding inline keeps the failure mode simple — if the op
-  ///   itself fails to encode, no log line is written and the mutation count is not
-  ///   advanced.
-  /// - The compaction snapshot is **captured** synchronously on the calling actor (Swift
-  ///   dictionaries are CoW; the capture is cheap and freezes the in-memory state at
-  ///   threshold-crossing time, so newer mutations cannot slip into the same snapshot)
-  ///   but **encoded** off-main on `ioQueue`. At ~150 MB JSON for a 500k-record library
-  ///   the encode itself was the dominant main-actor stall during compaction; moving it
-  ///   off-main is the entire point of this split.
-  /// - On log-write failure, further queued appends are skipped until a complete
-  ///   snapshot of the owner's retained in-memory state succeeds. This prevents a
-  ///   later compaction from crossing an operation absent from the durable log.
-  /// - On compaction encode-or-write failure, the count is rolled back to one shy of the
-  ///   threshold so the next append re-triggers compaction. The log line itself is
-  ///   already on disk in this case (encode runs *after* a successful log append) — the
-  ///   store is durable, the snapshot is just stale until the next compaction lands.
+  /// Appends and synchronizes each operation independently. The owner closes mutation
+  /// admission before requesting a checkpoint; appends never capture a history snapshot.
   func append(_ op: LogOp, currentSnapshot: () -> Snapshot) {
     submittedRevision += 1
     let encoder = JSONEncoder()
@@ -377,25 +372,10 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
       return
     }
 
-    let nextMutationCount = mutationCountSinceCompact + 1
-    let frozenSnapshot: Snapshot?
-    if nextMutationCount >= Constants.compactEveryNMutations {
-      // Cheap CoW capture; the expensive `encoder.encode(snapshot)` runs off-main below.
-      frozenSnapshot = currentSnapshot()
-      mutationCountSinceCompact = 0
-    } else {
-      frozenSnapshot = nil
-      mutationCountSinceCompact = nextMutationCount
-    }
+    replayBudget.record(encodedBytes: opData.count)
 
-    // Capture everything the closure needs as locals so the dispatch isn't reaching back
-    // into `self` for read-only fields (keeps the closure self-contained and avoids any
-    // suggestion of cross-actor dependency on `self`).
     let logURL = self.logURL
-    let snapshotURL = self.snapshotURL
     let logger = self.logger
-    let dateEncodingStrategy = self.dateEncodingStrategy
-    let fileReplacer = self.fileReplacer
     let logIO = self.logIO
     let ioFailureState = self.ioFailureState
     var payload = Data()
@@ -421,50 +401,78 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
         return
       }
 
-      guard let frozenSnapshot else { return }
-
-      // Off-main snapshot encode. This used to run synchronously on the calling actor
-      // before the dispatch; the change keeps the encoded bytes identical (the captured
-      // snapshot value is frozen) but unblocks the main actor for other UI work.
-      let snapshotEncoder = JSONEncoder()
-      snapshotEncoder.dateEncodingStrategy = dateEncodingStrategy
-      let snapshotData: Data
-      do {
-        snapshotData = try snapshotEncoder.encode(frozenSnapshot)
-      } catch {
-        logger.error(
-          "Failed to encode compaction snapshot for \(snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
-        )
-        // Log line already landed on disk; only the snapshot is missing. Roll back the
-        // counter so the next append re-triggers compaction.
-        Task { @MainActor [weak self] in
-          self?.rollbackMutationCount(to: Constants.compactEveryNMutations - 1)
-        }
-        return
-      }
-
-      do {
-        try Self.writeSnapshotAndTruncate(
-          snapshotData: snapshotData, snapshotURL: snapshotURL, logURL: logURL,
-          fileReplacer: fileReplacer)
-      } catch {
-        logger.error(
-          "Failed to compact \(snapshotURL.path, privacy: .public): \(String(describing: error), privacy: .public)"
-        )
-        ioFailureState.fail(error)
-        Task { @MainActor [weak self] in
-          self?.deliverPendingFailure()
-        }
-      }
     }
     // IO failure keeps later queued appends blocked until full-snapshot recovery.
     needsLogSeparator = false
   }
 
+  /// Encodes and replaces a complete snapshot after the composing store has closed admission.
+  /// Cancellation never resumes before the physical replacement and required synchronization.
+  func checkpoint(
+    _ snapshot: consuming Snapshot, recovering: Bool = false, resetCorrupt: Bool = false
+  )
+    async throws
+  {
+    let transfer = RecordValueTransfer(consume snapshot)
+    let revision = submittedRevision
+    let snapshotURL = snapshotURL
+    let logURL = logURL
+    let dateEncodingStrategy = dateEncodingStrategy
+    let fileReplacer = fileReplacer
+    let failureState = ioFailureState
+    let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+      ioQueue.async {
+        if !recovering, let failure = failureState.currentFailure() {
+          transfer.discard()
+          continuation.resume(returning: .failure(failure))
+          return
+        }
+        do {
+          try Self.writeTransferredSnapshot(
+            transfer, snapshotURL: snapshotURL, logURL: logURL,
+            dateEncodingStrategy: dateEncodingStrategy, fileReplacer: fileReplacer,
+            resetCorrupt: resetCorrupt)
+          if recovering { failureState.clear() }
+          continuation.resume(returning: .success(()))
+        } catch SnapshotEncodingFailure.failed(let error) {
+          continuation.resume(returning: .failure(error))
+        } catch {
+          failureState.fail(error)
+          continuation.resume(returning: .failure(error))
+        }
+      }
+    }
+    deliverPendingFailure()
+    try result.get()
+    replayBudget.didCheckpoint()
+    flushedRevision = max(flushedRevision, revision)
+    needsLogSeparator = false
+  }
+
+  private enum SnapshotEncodingFailure: Error { case failed(any Error) }
+
+  /// The worker frame releases its history before the caller resumes any admitted writer.
+  nonisolated private static func writeTransferredSnapshot(
+    _ transfer: RecordValueTransfer<Snapshot>, snapshotURL: URL, logURL: URL,
+    dateEncodingStrategy: JSONEncoder.DateEncodingStrategy,
+    fileReplacer: any AtomicFileReplacing, resetCorrupt: Bool
+  ) throws {
+    let snapshot = transfer.take()
+    let data: Data
+    do {
+      let encoder = JSONEncoder()
+      encoder.dateEncodingStrategy = dateEncodingStrategy
+      data = try encoder.encode(snapshot)
+    } catch { throw SnapshotEncodingFailure.failed(error) }
+    if resetCorrupt { try preserveCorruptSnapshot(at: snapshotURL) }
+    try writeSnapshotAndTruncate(
+      snapshotData: data, snapshotURL: snapshotURL, logURL: logURL, fileReplacer: fileReplacer)
+  }
+
   // MARK: - Manual snapshot
 
   /// Synchronously writes a snapshot and truncates the log. Used by `resetToEmpty()` paths
-  /// and by tests; production compaction goes through `append(_:currentSnapshot:)`.
+  /// and by tests; production recovery and maintenance await `checkpoint`.
   func writeSnapshot(_ snapshot: Snapshot) throws {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = dateEncodingStrategy
@@ -480,7 +488,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
         fileReplacer: fileReplacer)
       ioFailureState.clear()
     }
-    mutationCountSinceCompact = 0
+    replayBudget.didCheckpoint()
     flushedRevision = submittedRevision
     needsLogSeparator = false
   }
@@ -517,7 +525,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
         )
       }
     }
-    mutationCountSinceCompact = 0
   }
 
   // MARK: - Synchronous IO drain
@@ -531,10 +538,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   }
 
   // MARK: - Internal helpers
-
-  private func rollbackMutationCount(to value: Int) {
-    mutationCountSinceCompact = max(mutationCountSinceCompact, value)
-  }
 
   private func deliverPendingFailure() {
     if let failure = ioFailureState.takeUnnotifiedFailure() {

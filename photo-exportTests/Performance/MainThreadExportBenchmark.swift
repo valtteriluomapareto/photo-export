@@ -48,7 +48,19 @@ import Testing
 
     private func median(_ samples: [Double]) -> Double { samples.sorted()[samples.count / 2] }
 
-    @Test func microCosts() throws {
+    private func frozenDictionaryCopy(_ store: ExportRecordStore) -> Double {
+      var records = store.recordsById
+      let frozen = records
+      let elapsed = withExtendedLifetime(frozen) {
+        benchTime {
+          records["new"] = ExportRecord(id: "new", year: 2024, month: 1, relPath: "2024/01/")
+        }
+      }
+      #expect(records.count == 500_001)
+      return elapsed
+    }
+
+    @Test func microCosts() async throws {
       let placement = ExportPlacement.timeline(year: 2024, month: 6)
       var dequeueSamples: [Double] = []
       for _ in 0..<Self.sampleCount {
@@ -70,25 +82,36 @@ import Testing
       var copySamples: [Double] = []
       var claimSamples: [Double] = []
       var summarySamples: [Double] = []
+      var loadedMutationSamples: [Double] = []
+      var checkpointMutationSamples: [Double] = []
       for _ in 0..<Self.sampleCount {
         let root = TestScratch.directory("MainThreadBenchRecords")
         try seedTimelineSnapshot(root: root, destinationId: "D", count: 500_000)
         let store = ExportRecordStore(baseDirectoryURL: root, notificationClock: TestClock())
         store.configure(for: "D")
         defer { store.drainSynchronously() }
-        var records = store.recordsById
-        let frozen = records
-        withExtendedLifetime(frozen) {
-          copySamples.append(
-            benchTime {
-              records["new"] = ExportRecord(id: "new", year: 2024, month: 1, relPath: "2024/01/")
-            })
-        }
-        #expect(records.count == 500_001)
+        copySamples.append(frozenDictionaryCopy(store))
         claimSamples.append(
           benchTime {
             _ = store.isFilenameClaimed(
               "IMG_1.HEIC", year: 2005, month: 3, subfolder: nil, exceptAsset: "x")
+          })
+        loadedMutationSamples.append(
+          try await store.withMutationAdmission {
+            benchTime {
+              store.markVariantInProgress(
+                assetId: "new-load", variant: .original,
+                year: 2024, month: 1, relPath: "2024/01/", filename: "new-load.JPG")
+            }
+          })
+        try await store.checkpointHistory()
+        checkpointMutationSamples.append(
+          try await store.withMutationAdmission {
+            benchTime {
+              store.markVariantInProgress(
+                assetId: "new-checkpoint", variant: .original,
+                year: 2024, month: 1, relPath: "2024/01/", filename: "new-checkpoint.JPG")
+            }
           })
         let assets = (0..<50_000).map { TestAssetFactory.makeAsset(id: "hist-\($0)/L0/001") }
         summarySamples.append(
@@ -104,6 +127,14 @@ import Testing
         String(
           format: "BENCH claimBuild n=500000 median=%.3fms samples=%ld",
           median(claimSamples), Self.sampleCount))
+      print(
+        String(
+          format: "BENCH productionMutationAfterLoad n=500000 median=%.3fms samples=%ld",
+          median(loadedMutationSamples), Self.sampleCount))
+      print(
+        String(
+          format: "BENCH productionMutationAfterCheckpoint n=500000 median=%.3fms samples=%ld",
+          median(checkpointMutationSamples), Self.sampleCount))
       print(
         String(
           format: "BENCH monthSummary assets=50000 median=%.3fms samples=%ld",
