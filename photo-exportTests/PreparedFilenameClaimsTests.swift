@@ -94,13 +94,16 @@ struct PreparedFilenameClaimsTests {
     await collections.waitUntilSettled()
     for name in names {
       let wanted = expected.contains { id, value in
-        id != "asset-0" && value.precomposedStringWithCanonicalMapping.lowercased()
-          == name.precomposedStringWithCanonicalMapping.lowercased()
+        id != "asset-0"
+          && value.precomposedStringWithCanonicalMapping.lowercased()
+            == name.precomposedStringWithCanonicalMapping.lowercased()
       }
-      #expect(timeline.isFilenameClaimed(
-        name, year: 2026, month: 10, subfolder: nil, exceptAsset: "asset-0") == wanted)
-      #expect(collections.isFilenameClaimed(
-        name, placement: placement, subfolder: nil, exceptAsset: "asset-0") == wanted)
+      #expect(
+        timeline.isFilenameClaimed(
+          name, year: 2026, month: 10, subfolder: nil, exceptAsset: "asset-0") == wanted)
+      #expect(
+        collections.isFilenameClaimed(
+          name, placement: placement, subfolder: nil, exceptAsset: "asset-0") == wanted)
     }
     #expect(timeline.claimsEpoch == timeline.recordsEpoch)
     #expect(collections.claimsEpoch == collections.recordsEpoch)
@@ -110,7 +113,9 @@ struct PreparedFilenameClaimsTests {
   }
 
   @Test(arguments: [false, true], [false, true])
-  func preparedIndexLoadsOffMainAndCannotOutliveNewHistory(collection: Bool, supersede: Bool) async throws {
+  func preparedIndexLoadsOffMainAndCannotOutliveNewHistory(collection: Bool, supersede: Bool)
+    async throws
+  {
     let root = TestScratch.directory("PreparedClaimsOwnership")
     let gate = AsyncCheckpoint()
     let threads = LockedBox<[Bool]>([])
@@ -148,22 +153,30 @@ struct PreparedFilenameClaimsTests {
     }
     await gate.waitForEnter(count: 1)
     #expect((collection ? collections.state : timeline.state) == .loading)
-    #expect(collection
-      ? !collections.isFilenameClaimed("seed.JPG", placement: placement, subfolder: nil, exceptAsset: "probe")
-      : !timeline.isFilenameClaimed("seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe"))
+    #expect(
+      collection
+        ? !collections.isFilenameClaimed(
+          "seed.JPG", placement: placement, subfolder: nil, exceptAsset: "probe")
+        : !timeline.isFilenameClaimed(
+          "seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe"))
     if supersede {
       if collection { collections.configure(for: nil) } else { timeline.configure(for: nil) }
     }
     await gate.releaseAll()
     try #require(
       await eventually("obsolete preparation discarded") {
-        collection ? collections.finishedLoadCount > finished : timeline.finishedLoadCount > finished
+        collection
+          ? collections.finishedLoadCount > finished : timeline.finishedLoadCount > finished
       })
     #expect(threads.value == [false])
-    #expect((collection ? collections.state : timeline.state) == (supersede ? .unconfigured : .ready))
-    #expect(collection
-      ? collections.isFilenameClaimed("seed.JPG", placement: placement, subfolder: nil, exceptAsset: "probe") == !supersede
-      : timeline.isFilenameClaimed("seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe") == !supersede)
+    #expect(
+      (collection ? collections.state : timeline.state) == (supersede ? .unconfigured : .ready))
+    #expect(
+      collection
+        ? collections.isFilenameClaimed(
+          "seed.JPG", placement: placement, subfolder: nil, exceptAsset: "probe") == !supersede
+        : timeline.isFilenameClaimed(
+          "seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe") == !supersede)
     #expect(
       collection
         ? collections.claimsEpoch == collections.recordsEpoch

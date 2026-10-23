@@ -239,7 +239,7 @@ struct RecordStoreMaintenanceTests {
       #expect(f.checkpointError != nil)
       #expect(!f.has("import"))
       #expect(try Data(contentsOf: path) == previous)
-      #expect((collection ? f.collections.state : f.timeline.state) == .persistenceFailed)
+      try #require((collection ? f.collections.state : f.timeline.state) == .persistenceFailed)
       f.replacement.arm()
       let retry = Task {
         if collection {
@@ -280,6 +280,15 @@ struct RecordStoreMaintenanceTests {
         f.timeline.beginConfigure(for: "B")
       }
       #expect((collection ? f.collections.state : f.timeline.state) == .loading)
+      #expect(!f.has("seed"))
+      if collection {
+        #expect(f.collections.recordBodies.isEmpty)
+        #expect(f.collections.placements.isEmpty)
+        #expect(f.collections.summary(for: f.placement).totalCount == 0)
+      } else {
+        #expect(f.timeline.recordsById.isEmpty)
+        #expect(f.timeline.yearExportedCount(year: 2026) == 0)
+      }
       #expect(f.closed)
       f.replacement.release()
       await maintenance.value
@@ -343,7 +352,11 @@ struct RecordStoreMaintenanceTests {
       #expect(manager.queueCount == 0 && !manager.isRunning && !manager.isEnqueueingAll)
       writer.checkpoint = nil
       start()
-      try #require(await eventually("old record cleanup waits at maintenance") { f.waiters > 0 })
+      try #require(
+        await eventually("old record cleanup waits at maintenance") {
+          f.waiters > 0 || !manager.hasActiveExportWork
+        })
+      #expect(f.closed)
       f.replacement.release()
       await maintenance.value
       await manager.waitForQueueDrained()
@@ -381,6 +394,7 @@ struct RecordStoreMaintenanceTests {
     f.replacement.arm()
     let maintenance = Task { await f.checkpoint() }
     var writer: Task<Void, Never>?
+    let writerFinished = LockedBox(false)
     func parkedContainsCommit() -> Bool {
       collection
         ? f.collections.retainedFinalCommitContains(assetId: "commit", placement: f.placement)
@@ -389,11 +403,15 @@ struct RecordStoreMaintenanceTests {
     try await withCleanup {
       await f.replacement.entered.waitForEnter(count: 1)
       let before = f.log.writes.value
-      writer = Task { await acknowledge("parked.JPG") }
+      writer = Task {
+        defer { writerFinished.mutate { $0 = true } }
+        await acknowledge("parked.JPG")
+      }
       try #require(
         await eventually("parked completion reaches admission") {
-          f.waiters > 0 || parkedContainsCommit()
+          f.waiters > 0 || writerFinished.value
         })
+      #expect(f.closed)
       #expect(!parkedContainsCommit())
       #expect(f.log.writes.value == before)
       f.replacement.release()
@@ -485,9 +503,9 @@ struct RecordStoreMaintenanceTests {
       logger: Logger(subsystem: TestLogging.subsystem, category: "CheckpointOwnership"),
       fileReplacer: replacement)
     replacement.arm(fail: fail)
+    #expect(!released.value)
     let checkpoint = Task { try await file.checkpoint(LifetimeSnapshot(released)) }
     await replacement.entered.waitForEnter(count: 1)
-    #expect(!released.value)
     replacement.release()
     do {
       try await checkpoint.value

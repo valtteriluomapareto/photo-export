@@ -223,8 +223,9 @@ import Testing
       let button = try await rebuildButton(f)
       #expect(button.isEnabled)
       button.performClick(nil)
-      #expect(f.timeline.state == .ready)
-      #expect(f.manager.isImporting, "Reset must claim import before returning to the run loop")
+      try #require(await observe { f.timeline.state == .ready })
+      #expect(
+        f.manager.isImporting, "Reset must claim import in the turn that publishes ready history")
       await f.manager.waitForImportCompletion()
       #expect(f.manager.importResult?.matchedCount == 1)
       #expect(f.timeline.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
@@ -263,7 +264,7 @@ import Testing
       #expect(!buttons.contains { $0.title.contains("Rebuild") })
       let reset = try #require(buttons.first { $0.title == "Reset Records" })
       reset.performClick(nil)
-      #expect(f.collections.state == .ready)
+      try #require(await observe { f.collections.state == .ready })
       #expect(f.timeline.exportInfo(assetId: "keep") == before)
       #expect(!f.manager.isImporting)
     }
@@ -410,10 +411,14 @@ import Testing
       ) { _ in MainActor.assumeIsolated { f.counter.record(ended) } }
       defer { NotificationCenter.default.removeObserver(token) }
       let readsBeforeRetry = io.readCount
+      let loadsBeforeRetry =
+        collection ? f.collections.finishedLoadCount : f.timeline.finishedLoadCount
       if let retrySnapshot { #expect(!FileManager.default.fileExists(atPath: retrySnapshot.path)) }
       button.performClick(nil)
       if let retrySnapshot {
-        let attemptedSnapshot = FileManager.default.fileExists(atPath: retrySnapshot.path)
+        let attemptedSnapshot = await observe {
+          FileManager.default.fileExists(atPath: retrySnapshot.path)
+        }
         #expect(attemptedSnapshot, "Retry must prepare a new snapshot before replacement fails")
         if attemptedSnapshot {
           let data = try Data(contentsOf: retrySnapshot)
@@ -431,9 +436,14 @@ import Testing
         }
       } else {
         #expect(
-          io.readCount > readsBeforeRetry, "Retry must attempt to read the failed store again")
+          await observe {
+            io.readCount > readsBeforeRetry
+              && (collection ? f.collections.finishedLoadCount : f.timeline.finishedLoadCount)
+                > loadsBeforeRetry
+          },
+          "Retry must attempt to read the failed store again")
       }
-      #expect(f.state(collection) == .persistenceFailed)
+      try #require(await observe { f.state(collection) == .persistenceFailed })
       #expect(f.error(collection) == originalError)
       try #require(await observe(in: f.window) { f.counter.count(for: ended) > 0 })
       try await f.barrier()
