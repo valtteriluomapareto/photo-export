@@ -69,7 +69,8 @@ final class AppCore {
     let ers = ExportRecordStore(baseDirectoryURL: composition.recordsRoot)
     let cers = CollectionExportRecordStore(baseDirectoryURL: composition.recordsRoot)
     let em = ExportManager(
-      photoLibraryService: plm, exportDestination: edm, exportRecordStore: ers,
+      photoLibraryService: plm, photoKitReader: composition.photoKitReader,
+      exportDestination: edm, exportRecordStore: ers,
       collectionExportRecordStore: cers,
       assetResourceWriter: composition.assetResourceWriter,
       fileSystem: composition.fileSystem,
