@@ -728,6 +728,70 @@ struct RecordStoreMaintenanceTests {
     }
   }
 
+  @Test(arguments: [false, true])
+  func idleCheckpointEligibilityPreservesSmallLogsAndStillBoundsReplay(collection: Bool)
+    async throws
+  {
+    let f = Fixture(collection: collection)
+    defer { f.close() }
+    try await f.seed()
+    let log = f.root.appendingPathComponent("A").appendingPathComponent(
+      collection
+        ? CollectionExportRecordStore.Constants.logFileName
+        : ExportRecordStore.Constants.logFileName)
+    let small =
+      collection
+      ? f.collections.requestHistoryCheckpoint() : f.timeline.requestHistoryCheckpoint()
+    #expect(small == nil, "Idle maintenance must retain a small durable log")
+    await small?.value
+    #expect(!(try Data(contentsOf: log)).isEmpty)
+    await f.checkpoint()
+    #expect(f.checkpointError == nil)
+    #expect((try Data(contentsOf: log)).isEmpty, "Explicit maintenance forces small histories")
+
+    func append(_ count: Int, filename: String) async throws {
+      let write = {
+        for index in 0..<count {
+          if collection {
+            f.collections.markVariantInProgress(
+              assetId: "pending-\(index)", placement: f.placement, variant: .original,
+              filename: filename)
+          } else {
+            f.timeline.markVariantInProgress(
+              assetId: "pending-\(index)", variant: .original, year: 2026, month: 10,
+              relPath: "2026/10/", filename: filename)
+          }
+        }
+      }
+      if collection {
+        try await f.collections.withMutationAdmission(write)
+      } else {
+        try await f.timeline.withMutationAdmission(write)
+      }
+    }
+    try await append(1_000, filename: "pending.JPG")
+    let eligible =
+      collection
+      ? f.collections.requestHistoryCheckpoint() : f.timeline.requestHistoryCheckpoint()
+    #expect(eligible != nil, "Idle maintenance compacts worthwhile replay work")
+    await eligible?.value
+    #expect((try Data(contentsOf: log)).isEmpty)
+
+    // One large operation reaches replay pressure without reaching the idle operation threshold.
+    f.replacement.arm()
+    try await append(1, filename: String(repeating: "x", count: 3_100_000))
+    await f.replacement.entered.waitForEnter(count: 1)
+    #expect(f.closed, "Replay pressure closes admission at the mutation boundary")
+    f.replacement.release()
+    if collection {
+      try await f.collections.mutationAdmission.waitUntilOpen()
+    } else {
+      try await f.timeline.mutationAdmission.waitUntilOpen()
+    }
+    #expect((try Data(contentsOf: log)).isEmpty)
+    #expect(f.has("seed"))
+  }
+
   @Test func replayPressureUsesWorkUnitsRatherThanElapsedTestTime() {
     var budget = RecordReplayBudget(operationNanoseconds: 200_000_000, byteNanoseconds: 1)
     for _ in 0..<3 { budget.record(encodedBytes: 1) }
