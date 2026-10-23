@@ -51,7 +51,7 @@ struct ExportProgressStateTests {
     }
   }
 
-  @Test(arguments: ["enqueue", "completion", "pause"])
+  @Test(arguments: ["enqueue", "completion", "pause", "replacement"])
   func immediateBoundaryCancellationKeepsCoordinatorAndMirrorsCleared(boundary: String) async throws
   {
     let f = Fixture()
@@ -60,7 +60,7 @@ struct ExportProgressStateTests {
       let progress = f.manager.progressState
       let queue = f.manager.queueCoordinator!
       var held: Task<Void, Never>?
-      if boundary == "completion" {
+      if boundary == "completion" || boundary == "replacement" {
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         f.service.assetsByYearMonth["2026-9"] = [
           TestAssetFactory.makeAsset(id: "completing", creationDate: date)
@@ -88,15 +88,30 @@ struct ExportProgressStateTests {
           guard !cancelled else { return }
           cancelled = true
           f.manager.cancelAndClear()
+          if boundary == "replacement" { f.enqueue() }
         })
       switch boundary {
       case "enqueue": f.enqueue()
-      case "completion":
+      case "completion", "replacement":
         await gate.releaseAll()
         if let held { _ = await finished(held) }
       default: f.manager.pause()
       }
       #expect(cancelled)
+      if boundary == "replacement" {
+        #expect(queue.pendingJobs.count == 3)
+        #expect(queue.totalJobsEnqueued == 3)
+        #expect(queue.totalJobsCompleted == 0)
+        #expect(f.manager.totalJobsCompleted == 0)
+        #expect(!queue.isProcessing)
+        #expect(!queue.isRunning)
+        #expect(queue.currentTask == nil)
+        #expect(f.writer.writeCalls.count == 1)
+        bar.stop()
+        queue.processQueueIfNeeded()
+        #expect(queue.isProcessing)
+        return
+      }
       #expect(queue.totalJobsEnqueued == 0)
       #expect(queue.totalJobsCompleted == 0)
       #expect(f.manager.totalJobsEnqueued == 0)
