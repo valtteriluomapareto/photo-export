@@ -302,7 +302,7 @@ final class ExportQueueCoordinator: ObservableObject {
     host?.setCurrentJob(job)
     updateQueueCount()
     let currentGen = generation
-    currentTask = Task { [weak self, weak host] in
+    currentTask = Task(priority: .utility) { [weak self, weak host] in
       await host?.performExport(job: job, generation: currentGen)
       await MainActor.run { [weak self] in
         guard let self, self.isCurrent(currentGen) else { return }

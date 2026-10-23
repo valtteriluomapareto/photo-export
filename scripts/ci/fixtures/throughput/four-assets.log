@@ -1,0 +1,4 @@
+2026-10-23 09:00:00.000 Df Photo Export[234:123] [com.valtteriluoma.photo-export:VariantExporter] Exported A.JPG variant: edited -> /scratch asset: A
+2026-10-23 09:00:00.500 Df Photo Export[234:123] [com.valtteriluoma.photo-export:VariantExporter] Exported B.JPG variant: edited -> /scratch asset: B
+2026-10-23 09:00:01.000 Df Photo Export[234:123] [com.valtteriluoma.photo-export:VariantExporter] Exported C.JPG variant: edited -> /scratch asset: C
+2026-10-23 09:00:02.000 Df Photo Export[234:123] [com.valtteriluoma.photo-export:VariantExporter] Exported D.JPG variant: edited -> /scratch asset: D

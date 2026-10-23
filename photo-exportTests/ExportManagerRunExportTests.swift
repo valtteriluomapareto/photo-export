@@ -1913,4 +1913,189 @@ struct ExportManagerRunExportTests {
       await harness.cleanup()
     }
   }
+
+  @MainActor
+  private final class RunActivitySpy: ExportRunActivity {
+    private(set) var begins = 0
+    private(set) var ends = 0
+    func begin() { begins += 1 }
+    func end() { ends += 1 }
+  }
+
+  enum ActivityTermination: CaseIterable, Sendable {
+    case complete, cancel, failure, destinationLoss, supersede
+  }
+
+  @Test(arguments: ActivityTermination.allCases)
+  func exportActivityBalancesEveryTerminalPath(termination: ActivityTermination) async throws {
+    let activity = RunActivitySpy()
+    let h = ExportManagerHarness(label: "ExportActivity", runActivity: activity)
+    let gate = AsyncCheckpoint()
+    h.writer.checkpoint = gate
+    let asset = TestAssetFactory.makeAsset(id: "activity", creationDate: makeDate(2025, 1, 1))
+    h.photoLib.assetsByYearMonth["2025-1"] = [asset]
+    h.photoLib.resourcesByAssetId[asset.id] = [TestAssetFactory.makeResource()]
+    if termination == .failure { h.writer.writeError = CocoaError(.fileWriteUnknown) }
+    h.manager.startExportMonth(year: 2025, month: 1)
+    await gate.waitForEnter(count: 1)
+    #expect(activity.begins == 1)
+    #expect(activity.ends == 0)
+    let running = h.manager.currentTask
+    switch termination {
+    case .complete, .failure: break
+    case .cancel: h.manager.cancelAndClear()
+    case .destinationLoss: h.manager.interruptForDestinationUnavailable()
+    case .supersede: h.manager.supersedeForManualRun()
+    }
+    await gate.releaseAll()
+    if let running { await running.value }
+    await h.manager.waitForQueueDrained()
+    #expect(activity.begins == 1)
+    #expect(activity.ends == 1)
+    h.manager.cancelAndClear()
+    h.manager.interruptForDestinationUnavailable()
+    #expect(activity.ends == 1)
+    h.store.drainSynchronously()
+    h.collectionStore.drainSynchronously()
+    h.dest.cleanup()
+  }
+
+  @Test func exportActivitySurvivesPauseAndAppendedPreparation() async throws {
+    let activity = RunActivitySpy()
+    let h = ExportManagerHarness(label: "ExportActivityPause", runActivity: activity)
+    let gate = AsyncCheckpoint()
+    h.writer.checkpoint = gate
+    let assets = (1...3).map {
+      TestAssetFactory.makeAsset(id: "activity-\($0)", creationDate: makeDate(2025, 1, 1))
+    }
+    h.photoLib.assetsByYearMonth["2025-1"] = Array(assets.prefix(2))
+    for asset in assets {
+      h.photoLib.resourcesByAssetId[asset.id] = [TestAssetFactory.makeResource()]
+    }
+    h.manager.startExportMonth(year: 2025, month: 1)
+    await gate.waitForEnter(count: 1)
+    h.manager.pause()
+    await gate.release()
+    _ = await eventually("queue parks with pending work") {
+      !h.manager.isRunning && h.manager.queueCount > 0
+    }
+    #expect(activity.begins == 1)
+    #expect(activity.ends == 0)
+    h.photoLib.favoritesAssets = [assets[2]]
+    h.manager.startExportFavorites()
+    for preparation in h.manager.currentPreparationTasks { await preparation.value }
+    #expect(activity.begins == 1)
+    #expect(activity.ends == 0)
+    h.manager.resume()
+    await gate.releaseAll()
+    await h.manager.waitForQueueDrained()
+    #expect(activity.ends == 1)
+    h.manager.cancelAndClear()
+    h.store.drainSynchronously()
+    h.collectionStore.drainSynchronously()
+    h.dest.cleanup()
+  }
+
+  @Test func exportActivityCoversEmptyAndFailedPreparation() async {
+    for fails in [false, true] {
+      let activity = RunActivitySpy()
+      let h = ExportManagerHarness(label: "ExportActivityPreparation", runActivity: activity)
+      if fails { h.photoLib.availableYearsError = CocoaError(.fileReadUnknown) }
+      let preparation = h.manager.startExportAll()
+      #expect(activity.begins == 1)
+      #expect(activity.ends == 0)
+      await preparation?.value
+      #expect(activity.ends == 1)
+      h.manager.cancelAndClear()
+      #expect(activity.ends == 1)
+      h.store.drainSynchronously()
+      h.collectionStore.drainSynchronously()
+      h.dest.cleanup()
+    }
+  }
+
+  @Test func supersededPreparationCannotEndItsReplacementActivity() async {
+    let activity = RunActivitySpy()
+    let h = ExportManagerHarness(label: "ExportActivityReplacement", runActivity: activity)
+    let oldGate = AsyncCheckpoint()
+    let newGate = AsyncCheckpoint()
+    let asset = TestAssetFactory.makeAsset(id: "replacement", creationDate: makeDate(2025, 1, 1))
+    h.photoLib.assetsByYearMonth["2025-1"] = [asset]
+    h.photoLib.resourcesByAssetId[asset.id] = [TestAssetFactory.makeResource()]
+    h.photoLib.progressiveCheckpointByScopeKey["timeline:2025-1"] = oldGate
+    h.manager.startExportMonth(year: 2025, month: 1)
+    await oldGate.waitForEnter(count: 1)
+    let oldPreparation = h.manager.currentPreparationTasks.first
+    h.manager.supersedeForManualRun()
+    #expect(activity.begins == 1)
+    #expect(activity.ends == 1)
+    h.photoLib.progressiveCheckpointByScopeKey["timeline:2025-1"] = newGate
+    h.manager.startExportMonth(year: 2025, month: 1)
+    await newGate.waitForEnter(count: 1)
+    #expect(activity.begins == 2)
+    await oldGate.releaseAll()
+    await oldPreparation?.value
+    #expect(activity.ends == 1)
+    await newGate.releaseAll()
+    await h.manager.waitForQueueDrained()
+    #expect(activity.ends == 2)
+    h.manager.cancelAndClear()
+    h.store.drainSynchronously()
+    h.collectionStore.drainSynchronously()
+    h.dest.cleanup()
+  }
+
+  @Test func bulkPreparationStartsAtUtilityPriorityBeforeJoining() async {
+    let h = ExportManagerHarness(label: "ExportPreparationPriority")
+    let observed = AsyncStream<TaskPriority>.makeStream()
+    h.photoLib.availableYearsObserver = { observed.continuation.yield(Task.currentPriority) }
+    // The high-priority parent makes an inherited default task observably wrong.
+    let launcher = Task(priority: .userInitiated) { h.manager.startExportAll() }
+    let preparation = await launcher.value
+    var iterator = observed.stream.makeAsyncIterator()
+    let priority = await iterator.next()
+    #expect(priority == .utility)
+    await preparation?.value
+    observed.continuation.finish()
+    h.manager.cancelAndClear()
+    h.store.drainSynchronously()
+    h.collectionStore.drainSynchronously()
+    h.dest.cleanup()
+  }
+
+  @MainActor
+  private final class PriorityQueueHost: ExportQueueCoordinator.Host {
+    var isEnqueueingAll = false
+    let observed = AsyncStream<TaskPriority>.makeStream()
+    let gate = AsyncCheckpoint()
+    func performExport(job: ExportManager.ExportJob, generation: Int) async {
+      observed.continuation.yield(Task.currentPriority)
+      await gate.enter()
+    }
+    func didDrainQueue() {}
+    func queueContentsDidChange() {}
+    func setCurrentJob(_ job: ExportManager.ExportJob) {}
+    func clearCurrentJobIdentifiers() {}
+  }
+
+  @Test func queueJobStartsAtUtilityPriorityBeforeJoining() async {
+    let host = PriorityQueueHost()
+    let queue = ExportQueueCoordinator(host: host)
+    queue.enqueue([
+      ExportManager.ExportJob(
+        assetLocalIdentifier: "priority", placement: .timeline(year: 2025, month: 1),
+        selection: .edited)
+    ])
+    let launcher = Task(priority: .userInitiated) { queue.processQueueIfNeeded() }
+    await launcher.value
+    var iterator = host.observed.stream.makeAsyncIterator()
+    let priority = await iterator.next()
+    #expect(priority == .utility)
+    let job = queue.currentTask
+    await host.gate.releaseAll()
+    await job?.value
+    host.observed.continuation.finish()
+    queue.teardownQueue()
+  }
+
 }

@@ -412,7 +412,7 @@ final class VariantExporter {
       generation: gen)
     inFlight = nil
     logger.info(
-      "Exported \(committedName, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(destDir.path, privacy: .public)"
+      "Exported \(committedName, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(destDir.path, privacy: .public) asset: \(descriptor.id, privacy: .public)"
     )
     return slot.chosenStem(forFilename: committedName)
   }

@@ -62,6 +62,7 @@ RULES = [
     ("photo-export/Models/ExportPlacement.swift", ("collections", "import") + PERSISTENCE),
     # Export pipeline.
     ("photo-export/Export/ExportQueueCoordinator.swift", ("cancel", "autoexport")),
+    ("photo-export/Export/SystemExportRunActivity.swift", ("local", "cancel", "autoexport")),
     ("photo-export/Export/ExportJobPlanner.swift", ("local", "cancel", "autoexport")),
     ("photo-export/Export/ExportSettingsSnapshot.swift", ("local", "edited", "livephoto")),
     ("photo-export/Export/ResourceSelection.swift", ("local", "edited", "icloud", "livephoto")),
@@ -127,6 +128,7 @@ RULES = [
     ("photo-export/Protocols/DirectoryFsyncing.swift", PERSISTENCE),
     ("photo-export/Protocols/JSONLRecordLogIO.swift", PERSISTENCE),
     ("photo-export/Protocols/ExportDestination.swift", ("destination",)),
+    ("photo-export/Protocols/ExportRunActivity.swift", ("local", "cancel", "autoexport")),
     ("photo-export/Protocols/DestinationSafetyConfirmationStore.swift",
      ("destination", "autoexport")),
     ("photo-export/Protocols/ReconciliationFileChecking.swift", ("destination", "import")),
