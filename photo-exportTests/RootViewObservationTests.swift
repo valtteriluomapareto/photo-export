@@ -603,10 +603,11 @@ import Testing
       try await withCleanup {
         f.show(
           .mainWindow, screenshotSurfaceKey: section == .timeline ? nil : "collections-favorites")
-        try #require(await observe(in: f.window) {
-          f.counter.count(for: "main-window-root") > 0
-            && f.counter.renderedText["toolbar-export-control"]?.first == "true"
-        })
+        try #require(
+          await observe(in: f.window) {
+            f.counter.count(for: "main-window-root") > 0
+              && f.counter.renderedText["toolbar-export-control"]?.first == "true"
+          })
         await f.quiesce()
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         f.service.assetsByYearMonth["2026-9"] = [
