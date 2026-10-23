@@ -49,8 +49,12 @@ struct DestinationAsyncValidationTests {
       probe.release()
       manager.clearSelection()
     }
-    manager.setSelectedFolderForTesting(a)
-    manager.revalidate()
+    var publishedPaths: [String] = []
+    let sink = manager.identityPublisher.sink {
+      if let path = $0.fingerprint?.standardizedPath { publishedPaths.append(path) }
+    }
+    defer { sink.cancel() }
+    #expect(manager.applyFolderSelection(a, decision: .newDestination))
     try #require(await probe.entered.waitForEnter(count: 1))
     #expect(!manager.canExportNow)
     #expect(!manager.canImportNow)
@@ -63,6 +67,7 @@ struct DestinationAsyncValidationTests {
     #expect(manager.selectedFolderURL == b)
     #expect(manager.canExportNow)
     #expect(manager.identity.fingerprint?.standardizedPath == b.path)
+    #expect(publishedPaths == [b.path])
     #expect(probe.calls.value == [true, true])
     #expect(opened.value == closed.value)
   }

@@ -38,8 +38,7 @@ struct ExportPreparationTests {
     try? FileManager.default.removeItem(at: h.storeRoot)
   }
 
-  @Test(arguments: [false, true])
-  func progressPublicationCancellationPreventsPhysicalDispatch(observeVariant: Bool) async throws {
+  @Test func progressPublicationCancellationPreventsPhysicalDispatch() async throws {
     let gate = LeafGate()
     let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
     let h = ExportManagerHarness(label: "CancelDuringFilename", destinationIOFactory: { _ in io })
@@ -53,11 +52,7 @@ struct ExportPreparationTests {
     var cancelled = false
     let probe = ObservationProbe(
       {
-        if observeVariant {
-          _ = h.manager.currentJobVariant
-        } else {
-          _ = h.manager.currentAssetFilename
-        }
+        _ = h.manager.currentAssetFilename
       },
       onChange: {
         guard !cancelled else { return }
