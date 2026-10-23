@@ -314,6 +314,63 @@ import Testing
       #expect(stableProbe.changeCount > 0 && stableProbe.changeCount <= 1)
     }
 
+    enum BadgeReentry: CaseIterable { case identicalTree, firstBadgeFlush }
+
+    @Test(arguments: BadgeReentry.allCases)
+    func reentrantPublicationDeliversBothPendingBadges(reentry: BadgeReentry) throws {
+      let f = try Fixture(change: .ancestorRename, notificationClock: TestClock())
+      defer { f.close() }
+      let stable = try #require(f.unchanged)
+      let folder = try #require(f.currentTree.first)
+      let target = try #require(folder.children.first { $0.localIdentifier == "target" })
+      let unchanged = try #require(folder.children.first { $0.localIdentifier == "stable" })
+      f.set(f.current, .inProgress)
+      f.set(stable, .inProgress, assetId: "unchanged-asset")
+      f.records.flushPendingNotifications()
+      f.records.updateSidebarCollections(f.currentTree)
+      let targetStatus = f.records.sidebarStatus(for: target)
+      let stableStatus = f.records.sidebarStatus(for: unchanged)
+      var reentered = false
+      func reenter(placement: ExportPlacement, assetId: String) {
+        guard !reentered else { return }
+        reentered = true
+        switch reentry {
+        case .identicalTree: f.records.updateSidebarCollections(f.currentTree)
+        case .firstBadgeFlush:
+          // Changing another variant preserves this badge's any-done value.
+          f.records.markVariantInProgress(
+            assetId: assetId, placement: placement, variant: .edited, filename: "EDIT.JPG")
+          f.records.flushPendingNotifications()
+        }
+      }
+      let targetProbe = ObservationProbe(
+        { _ = targetStatus.value },
+        onChange: {
+          reenter(placement: f.current, assetId: "changed-asset")
+        })
+      let stableProbe = ObservationProbe(
+        { _ = stableStatus.value },
+        onChange: {
+          reenter(placement: stable, assetId: "unchanged-asset")
+        })
+      defer {
+        targetProbe.stop()
+        stableProbe.stop()
+      }
+      f.set(f.current, .done)
+      f.set(stable, .done, assetId: "unchanged-asset")
+      f.records.flushPendingNotifications()
+      #expect(reentered)
+      #expect(targetStatus.value.exportedCount == 1)
+      #expect(stableStatus.value.exportedCount == 1)
+      #expect(targetProbe.changeCount == 1)
+      #expect(stableProbe.changeCount == 1)
+      // An unchanged later publication cannot serve as a delayed delivery for either row.
+      f.records.updateSidebarCollections(f.currentTree)
+      #expect(targetProbe.changeCount == 1)
+      #expect(stableProbe.changeCount == 1)
+    }
+
     @Test func badgePublicationCannotRestoreHistoryAfterReentrantConfigure() throws {
       let f = try Fixture(change: .ancestorRename, notificationClock: TestClock())
       defer { f.close() }
