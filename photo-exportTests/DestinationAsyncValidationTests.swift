@@ -74,10 +74,9 @@ struct DestinationAsyncValidationTests {
     let closed = LockedBox(0)
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("ReentrantValidation"),
-      volumeNotificationCenter: NotificationCenter(),
+      bookmarkSaver: { _ in true }, volumeNotificationCenter: NotificationCenter(),
       validationScopeAcquirer: { _ in true },
       validationScopeReleaser: { _ in closed.mutate { $0 += 1 } }, validationProbe: probe)
-    manager.setSelectedFolderForTesting(root)
     var cleared = false
     let sink = manager.isAvailablePublisher.sink { available in
       guard available, !cleared else { return }
@@ -85,10 +84,7 @@ struct DestinationAsyncValidationTests {
       manager.clearSelection()
     }
     defer { sink.cancel() }
-    // Ignore the initial replay by installing the subscriber before an unavailable request.
-    cleared = false
-    manager.setSelectedFolderForTesting(root)
-    manager.revalidate()
+    #expect(manager.applyFolderSelection(root, decision: .newDestination))
     await manager.waitForValidation()
     #expect(cleared)
     #expect(manager.selectedFolderURL == nil)
