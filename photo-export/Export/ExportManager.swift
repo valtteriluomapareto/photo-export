@@ -1474,6 +1474,7 @@ final class ExportManager {
     // metadata append on the empty-queue completion path; real jobs flush it before IO.
     if !newJobs.isEmpty { collectionExportRecordStore.upsertPlacement(placement) }
     queueCoordinator.enqueue(newJobs)
+    try throwIfCancelledOrStale(gen)
     logger.info(
       "Enqueued \(newJobs.count) assets for export to \(placement.relativePath, privacy: .public)"
     )
@@ -1481,6 +1482,8 @@ final class ExportManager {
   }
 
   func cancelAndClear() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     logger.info("Cancelling current export and clearing queue due to destination change")
     importCoordinator.clearPreviousBackupMissing()
     teardownActiveWork()
@@ -1492,6 +1495,8 @@ final class ExportManager {
   /// re-evaluates after manual work drains.
   /// See docs/reference/auto-export-behavior.md#run-ownership-and-presentation.
   func supersedeForManualRun() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     logger.info("Superseding active auto-sync run for manual export")
     teardownActiveWork()
     finalizeActiveRun(result: .superseded, cancelReason: .supersededByManualRun)
@@ -1503,6 +1508,8 @@ final class ExportManager {
   /// after `supersedeForManualRun()` a manual export can already be active while the old
   /// fan-out task still exists, and `cancelAndClear()` would stop that manual export.
   func cancelAutoSyncRun() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     guard activeRunContext?.source == .autoSync else { return }
     logger.info("Auto Export turned off; cancelling the automatic run")
     teardownActiveWork()
@@ -1524,6 +1531,8 @@ final class ExportManager {
   /// complete or fail because there is no cancellation plumbing for that path — the
   /// in-flight write will surface as a transient failure on the next reconciliation.
   func interruptForDestinationUnavailable() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     logger.info("Interrupting current export — destination unavailable")
     let isIdle =
       activeRunContext == nil && !hasActiveExportWork && currentPreparationTasks.isEmpty
@@ -1625,6 +1634,8 @@ final class ExportManager {
   }
 
   func clearPending() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     if queueCoordinator.clearPending() > 0 {
       noteManualPreparationFailure("Pending exports were cleared before they finished.")
       finishManualFeedbackIfReady(generation: generation)
@@ -1674,6 +1685,7 @@ final class ExportManager {
     try throwIfCancelledOrStale(gen)
     activeRunBookkeeping?.skippedCount += skippedCount
     queueCoordinator.enqueue(newJobs)
+    try throwIfCancelledOrStale(gen)
     logger.info("Enqueued \(newJobs.count) assets for export for \(year)-\(month)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
@@ -1703,6 +1715,7 @@ final class ExportManager {
     try throwIfCancelledOrStale(gen)
     activeRunBookkeeping?.skippedCount += skippedCount
     queueCoordinator.enqueue(newJobs)
+    try throwIfCancelledOrStale(gen)
     logger.info("Enqueued \(newJobs.count) assets for export for year \(year)")
     return newJobs.isEmpty ? .alreadyComplete : .enqueued(newJobs.count)
   }
@@ -1888,6 +1901,8 @@ final class ExportManager {
   }
 
   private func resetProgressCounters() {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     progressState.manualSummary = nil
     if activeRunContext?.source == .autoSync {
       manualRunFeedback = nil
@@ -2422,6 +2437,9 @@ final class ExportManager {
 
   // `isEnqueueingAll` supplies the coordinator's preparation guard.
 
+  func beginProgressUpdates() { progressState.beginSourceUpdates() }
+  func endProgressUpdates() { progressState.endSourceUpdates() }
+
   func queueContentsDidChange() {
     queueMutationCounter &+= 1
   }
@@ -2453,6 +2471,8 @@ final class ExportManager {
         manualRunFeedback?.failedCount += 1
       }
     } catch {
+      progressState.beginSourceUpdates()
+      defer { progressState.endSourceUpdates() }
       guard isCurrent(gen) else { return }
       logger.error(
         "Stopping export because progress could not be saved: \(error.localizedDescription, privacy: .public)"
@@ -2475,6 +2495,8 @@ final class ExportManager {
   }
 
   private func stopForDestinationFailure(_ failure: ExportFailureSignal) {
+    progressState.beginSourceUpdates()
+    defer { progressState.endSourceUpdates() }
     let message = Self.destinationStopMessage(for: failure.category)
     // This job will not receive the coordinator's normal completion increment.
     let totals = (enqueued: totalJobsEnqueued, completed: totalJobsCompleted + 1)

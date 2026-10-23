@@ -61,14 +61,23 @@ final class ExportProgressState {
   @ObservationIgnored private var pendingPresentation: AutoSyncCancellable?
   @ObservationIgnored private var presentationGeneration = 0
   @ObservationIgnored private var isPublishing = false
+  @ObservationIgnored private var sourceUpdateDepth = 0
+  @ObservationIgnored private var deferredChange = false
+  @ObservationIgnored private var deferredFlush = false
 
   init(clock: (any AutoSyncClock)? = nil) {
     self.clock = clock ?? SystemAutoSyncClock()
   }
 
   private func changed(immediately: Bool = false) {
+    let flush = immediately || totalJobsEnqueued == 0 || totalJobsCompleted >= totalJobsEnqueued
+    if sourceUpdateDepth > 0 {
+      deferredChange = true
+      deferredFlush = deferredFlush || flush
+      return
+    }
     guard !isPublishing else { return }
-    if immediately || totalJobsEnqueued == 0 || totalJobsCompleted >= totalJobsEnqueued {
+    if flush {
       flushPresentation()
       return
     }
@@ -81,8 +90,26 @@ final class ExportProgressState {
     }
   }
 
+  /// Only presentation waits for an owning synchronous transition to finish. Exact source
+  /// fields and Combine mirrors continue delivering in their existing order.
+  func beginSourceUpdates() { sourceUpdateDepth += 1 }
+
+  func endSourceUpdates() {
+    sourceUpdateDepth -= 1
+    guard sourceUpdateDepth == 0 else { return }
+    let flush = deferredFlush
+    let dirty = deferredChange
+    deferredFlush = false
+    deferredChange = false
+    if flush { flushPresentation() } else if dirty { changed() }
+  }
+
   /// Publishes the latest sources immediately at run and feedback boundaries.
   func flushPresentation() {
+    if sourceUpdateDepth > 0 {
+      deferredFlush = true
+      return
+    }
     guard !isPublishing else { return }
     presentationGeneration &+= 1
     pendingPresentation?.cancel()
