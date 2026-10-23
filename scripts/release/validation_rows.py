@@ -198,6 +198,8 @@ CORE_ONLY = [
     "photo-export/Export/ExportRunWatchdog.swift",
     "photo-export/App/BodyInvalidationCounter.swift",
     "photo-export/Views/Shared/ExportControlProbe.swift",
+    "photo-export/Views/Shared/AssetGridTile.swift",
+    "photo-export/Views/Shared/AssetGridSummary.swift",
     "photo-export/App/WhatsNewState.swift",
     "photo-export/Views/Settings/AboutView.swift",
     "photo-export/Views/Settings/AdvancedSettingsView.swift",

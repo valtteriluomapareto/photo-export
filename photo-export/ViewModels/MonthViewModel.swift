@@ -47,7 +47,7 @@ final class MonthViewModel {
   @ObservationIgnored private var currentScope: PhotoFetchScope?
   @ObservationIgnored private var requestGeneration: UInt64 = 0
   // isLoading ends at the first batch; only a complete snapshot proves absence.
-  @ObservationIgnored private var hasCompleteSnapshot = false
+  private(set) var hasCompleteSnapshot = false
 
   struct SelectionUpdate {
     let asset: AssetDescriptor?
@@ -194,7 +194,7 @@ final class MonthViewModel {
     }
     cachedAssets = newCachingWindow
     hasCompleteSnapshot = true
-    assets = collected
+    if assets != collected { assets = collected }
     errorMessage = nil
     isLoading = false
     if !collected.contains(where: { $0.id == selectedAssetId }) {
@@ -232,4 +232,11 @@ final class MonthViewModel {
   func select(assetId: String?) {
     selectedAssetId = assetId
   }
+}
+
+/// Selection is read by tiles and details without invalidating the window's layout owner.
+@Observable
+@MainActor
+final class AssetSelectionModel {
+  var asset: AssetDescriptor?
 }

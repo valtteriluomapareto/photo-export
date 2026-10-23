@@ -24,8 +24,8 @@ struct CollectionContentView: View, Equatable {
   let versionSelection: ExportVersionSelection
   let livePhotosPaired: Bool
   let onExportCollection: () -> Void
-  // Capture the value at construction: comparing two live Binding getters would
-  // read the same current value after a parent selection mutation.
+  /// Binding-only callers retain selection equality; the shared owner lets the window omit that read.
+  private let selectionOwner: AssetSelectionModel?
   private let selectedAssetId: String?
   @Binding var selectedAsset: AssetDescriptor?
 
@@ -36,15 +36,17 @@ struct CollectionContentView: View, Equatable {
     livePhotosPaired: Bool,
     onExportCollection: @escaping () -> Void,
     selectedAsset: Binding<AssetDescriptor?>,
-    photoLibraryService: any PhotoLibraryService
+    photoLibraryService: any PhotoLibraryService,
+    assetSelection: AssetSelectionModel? = nil
   ) {
     self.selection = selection
     self.title = title
     self.versionSelection = versionSelection
     self.livePhotosPaired = livePhotosPaired
     self.onExportCollection = onExportCollection
-    self.selectedAssetId = selectedAsset.wrappedValue?.id
     self._selectedAsset = selectedAsset
+    self.selectionOwner = assetSelection
+    self.selectedAssetId = assetSelection == nil ? selectedAsset.wrappedValue?.id : nil
     _viewModel = State(wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
@@ -73,7 +75,12 @@ struct CollectionContentView: View, Equatable {
       }
 
       HStack {
-        exportSummaryView(placement: placement)
+        CollectionGridSummary(
+          assets: viewModel.assets, hasCompleteSnapshot: viewModel.hasCompleteSnapshot,
+          versionSelection: versionSelection, livePhotosPaired: livePhotosPaired,
+          placement: placement
+        )
+        .equatable()
         Spacer()
         AutoSyncAwareExportButton(exportButtonTitle) {
           onExportCollection()
@@ -89,16 +96,10 @@ struct CollectionContentView: View, Equatable {
         ]
         LazyVGrid(columns: columns, spacing: 10) {
           ForEach(viewModel.assets) { asset in
-            ThumbnailView(
-              asset: asset,
-              isSelected: asset.id == selectedAsset?.id,
-              isExported: isExported(asset: asset, placement: placement)
-            )
-            .frame(width: 120, height: 120)
-            .onTapGesture {
-              selectedAsset = asset
-              viewModel.select(assetId: asset.id)
-            }
+            CollectionAssetTile(
+              asset: asset, placement: placement, versionSelection: versionSelection,
+              livePhotosPaired: livePhotosPaired, selectedAsset: $selectedAsset,
+              onSelect: { viewModel.select(assetId: asset.id) })
           }
         }
         .padding(.top, 4)
@@ -139,9 +140,9 @@ struct CollectionContentView: View, Equatable {
   #if DEBUG
     private func recordRenderingInputs() {
       bodyCounter?.record("collectionBody")
+      bodyCounter?.recordText([String(viewModel.assets.count)], for: "grid-assets")
       bodyCounter?.record("scope:\(scopeTaskId)")
       bodyCounter?.recordAction("collectionExport", action: onExportCollection)
-      bodyCounter?.record("selected:\(selectedAsset?.id ?? "")")
       bodyCounter?.record("title:\(title)")
       bodyCounter?.record("banner:\(showsReducedQualityBanner)")
       bodyCounter?.record("canExport:\(canExport)")
@@ -259,59 +260,7 @@ struct CollectionContentView: View, Equatable {
       guard let current = try? photoLibraryManager.fetchCollectionTree() else { return nil }
       tree = current
     }
-    return collectionExportRecordStore.currentPlacement(for: selection, collections: tree)
-  }
-
-  private func isExported(asset: AssetDescriptor, placement: ExportPlacement?) -> Bool {
-    guard let placement else { return false }
-    return collectionExportRecordStore.isExported(
-      asset: asset, placement: placement, selection: versionSelection,
-      livePhotosPaired: livePhotosPaired)
-  }
-
-  // MARK: - Header summary
-
-  private func exportSummaryView(placement: ExportPlacement?) -> some View {
-    let summary = makeSummary(placement: placement)
-    #if DEBUG
-      bodyCounter?.record("summary:\(summary.exportedCount)/\(summary.totalCount)")
-      bodyCounter?.recordText(
-        ["\(summary.exportedCount)/\(summary.totalCount)"], for: "collection-summary")
-    #endif
-    return HStack(spacing: 8) {
-      switch summary.status {
-      case .complete:
-        Label(
-          "\(summary.exportedCount)/\(summary.totalCount) exported",
-          systemImage: "checkmark.circle.fill"
-        ).foregroundColor(.green)
-      case .partial:
-        Label(
-          "\(summary.exportedCount)/\(summary.totalCount) exported",
-          systemImage: "circle.lefthalf.filled"
-        ).foregroundColor(.orange)
-      case .notExported:
-        Label("0/\(summary.totalCount) exported", systemImage: "circle")
-          .foregroundColor(.secondary)
-      }
-      Spacer()
-    }
-    .font(.subheadline)
-  }
-
-  private func makeSummary(placement: ExportPlacement?) -> MonthStatusSummary {
-    if let placement {
-      #if DEBUG
-        bodyCounter?.record("summaryScan")
-      #endif
-      return collectionExportRecordStore.monthSummary(
-        assets: viewModel.assets, placement: placement,
-        selection: versionSelection,
-        livePhotosPaired: livePhotosPaired)
-    }
-    return MonthStatusSummary(
-      year: 0, month: 0, exportedCount: 0,
-      totalCount: viewModel.assets.count, status: .notExported)
+    return collectionExportRecordStore.currentGridPlacement(for: selection, collections: tree)
   }
 
   // MARK: - Export button
@@ -364,6 +313,7 @@ struct CollectionContentView: View, Equatable {
       && lhs.title == rhs.title
       && lhs.versionSelection == rhs.versionSelection
       && lhs.livePhotosPaired == rhs.livePhotosPaired
+      && lhs.selectionOwner === rhs.selectionOwner
       && lhs.selectedAssetId == rhs.selectedAssetId
   }
 

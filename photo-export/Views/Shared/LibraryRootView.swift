@@ -38,7 +38,11 @@ struct LibraryRootView: View {
   /// production launches it is `nil` and the defaults below apply (Timeline / current
   /// month). The mapping lives in `ScreenshotSurfaceResolver` so it's testable without
   /// instantiating SwiftUI views.
-  init(screenshotSurfaceKey: String?, timelineHistoryState: RecordStoreState) {
+  init(
+    screenshotSurfaceKey: String?, timelineHistoryState: RecordStoreState,
+    assetSelection: AssetSelectionModel? = nil
+  ) {
+    _assetSelection = State(initialValue: assetSelection ?? AssetSelectionModel())
     self.timelineHistoryState = timelineHistoryState
     let surface = ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
     let now = Date()
@@ -70,7 +74,7 @@ struct LibraryRootView: View {
     )
   }
 
-  @State private var selectedAsset: AssetDescriptor?
+  @State private var assetSelection: AssetSelectionModel
 
   /// Mirrors `ContentView`'s onboarding gate. The new home for it after the refactor.
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -114,7 +118,7 @@ struct LibraryRootView: View {
           }
       },
       detail: {
-        AssetDetailView(asset: selectedAsset, placement: detailPlacement)
+        SelectedAssetDetailPane(selection: assetSelection, placement: detailPlacement)
           .environment(photoLibraryManager)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
@@ -177,7 +181,7 @@ struct LibraryRootView: View {
       applySelectionChange(oldSet: oldSet, newSet: newSet)
     }
     .onChange(of: focusedSelection) { _, newValue in
-      selectedAsset = nil
+      assetSelection.asset = nil
       persistLastSelection()
       let kind: String
       switch newValue {
@@ -232,7 +236,7 @@ struct LibraryRootView: View {
     .frame(width: 220)
     .onChange(of: section) { _, newSection in
       restoreSelection(forSection: newSection)
-      selectedAsset = nil
+      assetSelection.asset = nil
     }
   }
 
@@ -332,22 +336,24 @@ struct LibraryRootView: View {
 
   @ViewBuilder
   private var contentArea: some View {
-    contentSwitch
-      // ~520pt fits ~4 thumbnail columns at the 100–160pt adaptive tile
-      // size. Min is just narrower than 3 columns so the grid never
-      // collapses to a single column; max caps so a wide window still
-      // leaves room for the detail pane.
-      .navigationSplitViewColumnWidth(min: Self.contentMinWidth, ideal: 520, max: 900)
+    AssetSelectionScope(selection: assetSelection) { binding in
+      contentSwitch(selectedAsset: binding)
+    }
+    // ~520pt fits ~4 thumbnail columns at the 100–160pt adaptive tile
+    // size. Min is just narrower than 3 columns so the grid never
+    // collapses to a single column; max caps so a wide window still
+    // leaves room for the detail pane.
+    .navigationSplitViewColumnWidth(min: Self.contentMinWidth, ideal: 520, max: 900)
   }
 
   @ViewBuilder
-  private var contentSwitch: some View {
+  private func contentSwitch(selectedAsset: Binding<AssetDescriptor?>) -> some View {
     switch focusedSelection {
     case .timelineYear(let year):
       YearContentView(
         year: year,
         selection: folderNavigationBinding,
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAsset,
         photoLibraryService: photoLibraryManager
       )
       .environment(photoLibraryManager)
@@ -361,8 +367,9 @@ struct LibraryRootView: View {
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
         onExportMonth: { exportManager.startExportMonth(year: year, month: month) },
-        selectedAsset: $selectedAsset,
-        photoLibraryService: photoLibraryManager
+        selectedAsset: selectedAsset,
+        photoLibraryService: photoLibraryManager,
+        assetSelection: assetSelection
       )
       .equatable()
       .environment(photoLibraryManager)
@@ -374,8 +381,9 @@ struct LibraryRootView: View {
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
         onExportCollection: { exportManager.startExport(selection: .favorites) },
-        selectedAsset: $selectedAsset,
-        photoLibraryService: photoLibraryManager
+        selectedAsset: selectedAsset,
+        photoLibraryService: photoLibraryManager,
+        assetSelection: assetSelection
       )
       .equatable()
       .environment(photoLibraryManager)
@@ -390,8 +398,9 @@ struct LibraryRootView: View {
         onExportCollection: {
           exportManager.startExport(selection: .album(collectionId: collectionId))
         },
-        selectedAsset: $selectedAsset,
-        photoLibraryService: photoLibraryManager
+        selectedAsset: selectedAsset,
+        photoLibraryService: photoLibraryManager,
+        assetSelection: assetSelection
       )
       .equatable()
       .environment(photoLibraryManager)
@@ -406,8 +415,9 @@ struct LibraryRootView: View {
         onExportCollection: {
           exportManager.startExport(selection: .sharedAlbum(collectionId: collectionId))
         },
-        selectedAsset: $selectedAsset,
-        photoLibraryService: photoLibraryManager
+        selectedAsset: selectedAsset,
+        photoLibraryService: photoLibraryManager,
+        assetSelection: assetSelection
       )
       .equatable()
       .environment(photoLibraryManager)
@@ -418,7 +428,7 @@ struct LibraryRootView: View {
         folderId: collectionId,
         title: folderTitle(forCollectionId: collectionId),
         selection: folderNavigationBinding,
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAsset,
         photoLibraryService: photoLibraryManager
       )
       .environment(photoLibraryManager)
@@ -535,4 +545,22 @@ struct LibraryRootView: View {
     return nil
   }
 
+}
+
+/// Reads selection beside the grid rather than in the split-view layout owner.
+private struct SelectedAssetDetailPane: View {
+  let selection: AssetSelectionModel
+  let placement: ExportPlacement?
+  var body: some View { AssetDetailView(asset: selection.asset, placement: placement) }
+}
+
+/// Binding construction reads the value eagerly; keep that read in the content's scope.
+private struct AssetSelectionScope<Content: View>: View {
+  let selection: AssetSelectionModel
+  let content: (Binding<AssetDescriptor?>) -> Content
+
+  var body: some View {
+    @Bindable var owner = selection
+    content($owner.asset)
+  }
 }

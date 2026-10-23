@@ -6,15 +6,8 @@ import SwiftUI
 /// settings as plain values and supplies the Export Month action as a closure.
 /// This keeps the grid's rendering inputs independent of the parent's other dependencies.
 ///
-/// **Equatable + `.equatable()` at the call site** is load-bearing. When another
-/// dependency rebuilds `LibraryRootView`, it constructs a new `MonthContentView`
-/// with a fresh `onExportMonth` closure.
-/// Without the explicit `Equatable` conformance below, SwiftUI's struct-diff would
-/// see the new closure as a "changed" property and re-evaluate this body anyway.
-/// The conformance compares only the value fields that actually affect rendering
-/// (`year`, `month`, `versionSelection`, `livePhotosPaired`, the bound asset id);
-/// the closure and the binding wrapper are excluded so SwiftUI short-circuits the
-/// LazyVGrid re-evaluation when those rendering inputs are unchanged.
+/// Equatable layout inputs filter fresh action closures from the parent. Selection and
+/// record status belong to child tiles, while the header owns aggregate status reads.
 struct MonthContentView: View, Equatable {
   @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
@@ -41,6 +34,8 @@ struct MonthContentView: View, Equatable {
   /// Closure that triggers the "Export Month" action. Owned by the parent so we can
   /// avoid touching `ExportManager` here.
   let onExportMonth: () -> Void
+  /// Binding-only callers retain selection equality; the shared owner lets the window omit that read.
+  private let selectionOwner: AssetSelectionModel?
   private let selectedAssetId: String?
   @Binding var selectedAsset: AssetDescriptor?
 
@@ -51,15 +46,17 @@ struct MonthContentView: View, Equatable {
     livePhotosPaired: Bool,
     onExportMonth: @escaping () -> Void,
     selectedAsset: Binding<AssetDescriptor?>,
-    photoLibraryService: any PhotoLibraryService
+    photoLibraryService: any PhotoLibraryService,
+    assetSelection: AssetSelectionModel? = nil
   ) {
     self.year = year
     self.month = month
     self.versionSelection = versionSelection
     self.livePhotosPaired = livePhotosPaired
     self.onExportMonth = onExportMonth
-    self.selectedAssetId = selectedAsset.wrappedValue?.id
     self._selectedAsset = selectedAsset
+    self.selectionOwner = assetSelection
+    self.selectedAssetId = assetSelection == nil ? selectedAsset.wrappedValue?.id : nil
     _viewModel = State(wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
@@ -77,7 +74,9 @@ struct MonthContentView: View, Equatable {
     #endif
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.record("selected:\(selectedAsset?.id ?? "")")
+      let _ = bodyCounter?.record("month-grid-body")
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([String(viewModel.assets.count)], for: "grid-assets")
     #endif
     VStack(alignment: .leading, spacing: 12) {
       // Header with Month and Year
@@ -88,7 +87,11 @@ struct MonthContentView: View, Equatable {
 
       // Export summary with action
       HStack {
-        exportSummaryView
+        TimelineGridSummary(
+          assets: viewModel.assets, hasCompleteSnapshot: viewModel.hasCompleteSnapshot,
+          versionSelection: versionSelection, livePhotosPaired: livePhotosPaired
+        )
+        .equatable()
         Spacer()
         AutoSyncAwareExportButton("Export Month") {
           onExportMonth()
@@ -105,18 +108,9 @@ struct MonthContentView: View, Equatable {
         ]
         LazyVGrid(columns: columns, spacing: 10) {
           ForEach(viewModel.assets) { asset in
-            ThumbnailView(
-              asset: asset,
-              isSelected: asset.id == selectedAsset?.id,
-              isExported: exportRecordStore.isExported(
-                asset: asset, selection: versionSelection,
-                livePhotosPaired: livePhotosPaired)
-            )
-            .frame(width: 120, height: 120)
-            .onTapGesture {
-              selectedAsset = asset
-              viewModel.select(assetId: asset.id)
-            }
+            TimelineAssetTile(
+              asset: asset, versionSelection: versionSelection, livePhotosPaired: livePhotosPaired,
+              selectedAsset: $selectedAsset, onSelect: { viewModel.select(assetId: asset.id) })
           }
         }
         .padding(.top, 4)
@@ -175,60 +169,13 @@ struct MonthContentView: View, Equatable {
     }
   }
 
-  private var exportSummaryView: some View {
-    // Until the history is loaded its in-memory records are empty, so counts would read 0.
-    let isLoadingHistory = exportRecordStore.state == .loading
-    let summary = exportRecordStore.monthSummary(
-      assets: viewModel.assets, selection: versionSelection,
-      livePhotosPaired: livePhotosPaired)
-    let exportedCount = summary.status == .notExported ? 0 : summary.exportedCount
-    let text =
-      isLoadingHistory
-      ? ManualExportAvailability.loadingHistoryText
-      : "\(exportedCount)/\(summary.totalCount) exported"
-    #if DEBUG
-      bodyCounter?.recordText([text], for: "month-summary")
-    #endif
-    return HStack(spacing: 8) {
-      if isLoadingHistory {
-        Label(text, systemImage: "clock")
-          .foregroundColor(.secondary)
-      } else {
-        switch summary.status {
-        case .complete:
-          // `seal.fill` is Apple vocabulary for verification, not generic task completion;
-          // `circle.fill` is the right glyph and matches the rest of the app.
-          Label(text, systemImage: "checkmark.circle.fill")
-            .foregroundColor(.green)
-        case .partial:
-          // `arrow.triangle.2.circlepath` reads as "syncing / refreshing"; for a static
-          // partial state use the half-filled circle so the glyph means "in between".
-          Label(text, systemImage: "circle.lefthalf.filled")
-            .foregroundColor(.orange)
-        case .notExported:
-          Label(text, systemImage: "circle")
-            .foregroundColor(.secondary)
-        }
-      }
-      Spacer()
-    }
-    .font(.subheadline)
-  }
-
-  // MARK: - Equatable
-
-  /// Compares only the value fields that affect rendering. Skips:
-  /// - `onExportMonth` — a freshly-allocated closure per parent render that's
-  ///   semantically identical (always `exportManager.startExportMonth(year:month:)`).
-  /// - `selectedAsset` wrapper itself — compare the construction-time asset id so a
-  ///   new `Binding<AssetDescriptor?>` instance per render doesn't defeat the diff.
-  /// - `photoLibraryService` — injected once at init; identity is stable per
-  ///   `LibraryRootView` lifetime.
+  /// Action closures and selection bindings are consumed by children, independently of layout.
   static func == (lhs: MonthContentView, rhs: MonthContentView) -> Bool {
     lhs.year == rhs.year
       && lhs.month == rhs.month
       && lhs.versionSelection == rhs.versionSelection
       && lhs.livePhotosPaired == rhs.livePhotosPaired
+      && lhs.selectionOwner === rhs.selectionOwner
       && lhs.selectedAssetId == rhs.selectedAssetId
   }
 }

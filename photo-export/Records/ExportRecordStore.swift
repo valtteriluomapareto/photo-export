@@ -28,6 +28,11 @@ final class ExportRecordStore {
   private let ioQueue = DispatchQueue(
     label: "com.valtteriluoma.photo-export.records-io", qos: .utility)
 
+  /// Tile readers observe a captured dictionary key, while aggregate readers keep the coalesced revision.
+  private var tileHistoryRevision = 0
+  @ObservationIgnored private var pendingTileAssets: Set<String> = []
+  @ObservationIgnored private var invalidatesAllTiles = false
+
   @ObservationIgnored private(set) var recordsById: [String: ExportRecord] = [:]
 
   /// Incrementally-maintained per-`(year, month)` counters that back the public count
@@ -146,7 +151,7 @@ final class ExportRecordStore {
     clock: notificationClock
   ) {
     [weak self] in
-    self?.mutationCounter &+= 1
+    self?.publishRecordChanges()
   }
 
   private let fileManager = FileManager.default
@@ -300,6 +305,7 @@ final class ExportRecordStore {
 
     // Reset in-memory state
     recordsById = [:]
+    invalidatesAllTiles = true
     monthCounters = [:]
     filenameClaims = nil
 
@@ -335,6 +341,7 @@ final class ExportRecordStore {
 
     if let retained = pendingRecovery[destinationId] {
       recordsById = retained
+      invalidatesAllTiles = true
       rebuildCountersFromRecords()
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
@@ -363,6 +370,7 @@ final class ExportRecordStore {
     if let id = configuredDestinationId, let retained = pendingRecovery[id] {
       // A final commit's write failure was parked while the load ran; its history wins.
       recordsById = retained
+      invalidatesAllTiles = true
       rebuildCountersFromRecords()
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
@@ -383,6 +391,7 @@ final class ExportRecordStore {
         setState(.failed)
       case .loaded(let prepared):
         recordsById = prepared.records
+        invalidatesAllTiles = true
         monthCounters = prepared.monthCounters
         setState(.ready)
       }
@@ -494,6 +503,7 @@ final class ExportRecordStore {
     do {
       try jsonl.resetToEmpty(emptySnapshot: [:])
       recordsById = [:]
+      invalidatesAllTiles = true
       monthCounters = [:]
       filenameClaims = nil
       setState(.ready)
@@ -652,6 +662,17 @@ final class ExportRecordStore {
     return isExportedUntracked(
       asset: asset, selection: selection, livePhotosPaired: livePhotosPaired,
       convertHEIC: convertHEIC)
+  }
+
+  /// Observes this tile's record without subscribing the grid to all record changes.
+  func isExportedForTile(
+    asset: AssetDescriptor, selection: ExportVersionSelection, livePhotosPaired: Bool
+  ) -> Bool {
+    _ = tileHistoryRevision
+    access(keyPath: \.recordsById[asset.id])
+    return isExportedUntracked(
+      asset: asset, selection: selection, livePhotosPaired: livePhotosPaired,
+      convertHEIC: convertHEICToJPEG)
   }
 
   private func isExportedUntracked(
@@ -1236,6 +1257,7 @@ final class ExportRecordStore {
       // The known pre-switch history is intact in the parked owner, even
       // when its later reload was unreadable. Retry must retain the new file.
       recordsById = context.snapshot
+      invalidatesAllTiles = true
       rebuildCountersFromRecords()
       hasUnsavedChanges = true
     }
@@ -1316,6 +1338,7 @@ final class ExportRecordStore {
   /// replays ops through `applyMutation` alone and counts once afterwards (see `prepare`).
   private func apply(_ mutation: ExportRecordMutation) {
     guard let change = Self.applyMutation(mutation, to: &recordsById) else { return }
+    pendingTileAssets.insert(mutation.id)
     adjustCounters(old: change.old, new: change.new)
   }
 
@@ -1426,6 +1449,19 @@ final class ExportRecordStore {
           "Failed to create store directory: \(String(describing: error), privacy: .public)"
         )
       }
+    }
+  }
+
+  private func publishRecordChanges() {
+    let allTiles = invalidatesAllTiles
+    let assets = pendingTileAssets
+    invalidatesAllTiles = false
+    pendingTileAssets = []
+    mutationCounter &+= 1
+    if allTiles {
+      tileHistoryRevision &+= 1
+    } else {
+      for assetId in assets { withMutation(keyPath: \.recordsById[assetId]) {} }
     }
   }
 
