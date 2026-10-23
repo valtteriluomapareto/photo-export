@@ -441,9 +441,7 @@ import Testing
         let key = "collection-records:\(f.collections.mutationCounter)"
         try #require(await observe(in: f.window) { f.counter.count(for: key) > 0 })
         try await f.barrier()
-        withKnownIssue("The album detail placement lookup currently observes global records") {
-          #expect(f.counter.count(for: "library-root") == bodies)
-        }
+        #expect(f.counter.count(for: "library-root") == bodies)
       } cleanup: {
         await f.close()
       }

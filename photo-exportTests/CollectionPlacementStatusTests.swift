@@ -275,10 +275,97 @@ import Testing
             && f.counter.count(for: revisionKey) > 0
         })
       try await f.barrier()
-      withKnownIssue("Unrelated collection rows currently observe the global record revision") {
-        #expect(f.counter.count(for: "collection-row-body:album:other") == otherBodies)
-      }
+      #expect(f.counter.count(for: "collection-row-body:album:other") == otherBodies)
       #expect(f.counter.count(for: changedBodyKey) - changedBodies <= 1)
+    }
+
+    @Test func coalescedChildChangesLeaveNetZeroFolderBadgeQuiet() throws {
+      let f = try Fixture(change: .ancestorRename, notificationClock: TestClock())
+      defer { f.close() }
+      let stable = try #require(f.unchanged)
+      let folder = try #require(f.currentTree.first)
+      let target = try #require(folder.children.first { $0.localIdentifier == "target" })
+      let unchanged = try #require(folder.children.first { $0.localIdentifier == "stable" })
+      f.set(f.current, .done)
+      f.set(stable, .inProgress, assetId: "unchanged-asset")
+      f.records.flushPendingNotifications()
+      let folderStatus = f.records.sidebarStatus(for: folder)
+      let targetStatus = f.records.sidebarStatus(for: target)
+      let stableStatus = f.records.sidebarStatus(for: unchanged)
+      let folderProbe = ObservationProbe { _ = folderStatus.value }
+      let targetProbe = ObservationProbe { _ = targetStatus.value }
+      let stableProbe = ObservationProbe { _ = stableStatus.value }
+      defer {
+        folderProbe.stop()
+        targetProbe.stop()
+        stableProbe.stop()
+      }
+      f.set(f.current, .inProgress)
+      f.set(stable, .done, assetId: "unchanged-asset")
+      #expect(targetStatus.value.exportedCount == 1)
+      #expect(stableStatus.value.exportedCount == 0)
+      f.records.flushPendingNotifications()
+      #expect(folderStatus.value.exportedCount == 1)
+      #expect(folderProbe.changeCount == 0)
+      #expect(targetStatus.value.exportedCount == 0)
+      #expect(stableStatus.value.exportedCount == 1)
+      // Each source publication replaces one equatable snapshot per changed row.
+      #expect(targetProbe.changeCount > 0 && targetProbe.changeCount <= 1)
+      #expect(stableProbe.changeCount > 0 && stableProbe.changeCount <= 1)
+    }
+
+    @Test func badgePublicationCannotRestoreHistoryAfterReentrantConfigure() throws {
+      let f = try Fixture(change: .ancestorRename, notificationClock: TestClock())
+      defer { f.close() }
+      let folder = try #require(f.currentTree.first)
+      let target = try #require(folder.children.first { $0.localIdentifier == "target" })
+      f.set(f.current, .inProgress)
+      f.records.flushPendingNotifications()
+      let folderStatus = f.records.sidebarStatus(for: folder)
+      let targetStatus = f.records.sidebarStatus(for: target)
+      var reconfigured = false
+      let probe = ObservationProbe(
+        {
+          _ = folderStatus.value
+          _ = targetStatus.value
+        },
+        onChange: {
+          guard !reconfigured else { return }
+          reconfigured = true
+          f.records.configure(for: "B")
+        })
+      defer { probe.stop() }
+      f.set(f.current, .done)
+      f.records.flushPendingNotifications()
+      #expect(reconfigured)
+      #expect(f.records.state == .ready)
+      #expect(f.records.recordBodies.isEmpty)
+      #expect(f.records.summary(for: f.current).totalCount == 0)
+      #expect(folderStatus.value.exportedCount == 0)
+      #expect(targetStatus.value.exportedCount == 0)
+      #expect(!targetStatus.value.hasPlacement)
+      #expect(f.records.currentGridPlacement(for: f.selection, collections: f.currentTree) == nil)
+    }
+
+    @Test func replacingSidebarTreeReleasesRemovedBadgesAndUpdatesCurrentPaths() throws {
+      let f = try Fixture(change: .rename, notificationClock: TestClock())
+      defer { f.close() }
+      let current = try #require(f.currentTree.first)
+      f.set(f.old, .done)
+      f.set(f.current, .inProgress)
+      f.records.flushPendingNotifications()
+      f.records.updateSidebarCollections([current])
+      var status: CollectionExportRecordStore.SidebarStatus? = f.records.sidebarStatus(for: current)
+      weak var released = status
+      let historical = PhotoCollectionDescriptor(
+        id: current.id, localIdentifier: current.localIdentifier, title: "Old", kind: .album,
+        pathComponents: [], children: [])
+      f.records.updateSidebarCollections([historical])
+      #expect(f.records.sidebarStatus(for: historical) === status)
+      #expect(status?.value.exportedCount == 1)
+      status = nil
+      f.records.updateSidebarCollections([])
+      #expect(released == nil)
     }
 
     private func loaded(_ f: Fixture) async throws {
