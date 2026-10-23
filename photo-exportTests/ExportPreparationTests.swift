@@ -38,7 +38,8 @@ struct ExportPreparationTests {
     try? FileManager.default.removeItem(at: h.storeRoot)
   }
 
-  @Test func filenamePublicationCancellationPreventsPhysicalDispatch() async throws {
+  @Test(arguments: [false, true])
+  func progressPublicationCancellationPreventsPhysicalDispatch(observeVariant: Bool) async throws {
     let gate = LeafGate()
     let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
     let h = ExportManagerHarness(label: "CancelDuringFilename", destinationIOFactory: { _ in io })
@@ -50,16 +51,27 @@ struct ExportPreparationTests {
     try #require(await gate.entered.waitForEnter(count: 1))
     let old = try #require(h.manager.currentTask)
     var cancelled = false
-    let probe = ObservationProbe({ _ = h.manager.currentAssetFilename }) {
-      guard !cancelled else { return }
-      cancelled = true
-      h.manager.cancelAndClear()
-    }
+    let probe = ObservationProbe(
+      {
+        if observeVariant {
+          _ = h.manager.currentJobVariant
+        } else {
+          _ = h.manager.currentAssetFilename
+        }
+      },
+      onChange: {
+        guard !cancelled else { return }
+        cancelled = true
+        h.manager.cancelAndClear()
+      })
     defer { probe.stop() }
     gate.release()
     await old.value
     #expect(cancelled)
     #expect(h.writer.writeCalls.isEmpty)
+    #expect(h.manager.currentAssetFilename == nil)
+    #expect(h.manager.currentJobVariant == nil)
+    #expect(h.manager.renderActivity == nil)
     #expect(h.fileSystem.moveCalls.isEmpty)
     #expect(h.store.exportInfo(assetId: "prepare") == nil)
     #expect(h.dest.beginScopedAccessCount == h.dest.endScopedAccessCount)
@@ -78,13 +90,15 @@ struct ExportPreparationTests {
     try #require(await gate.entered.waitForEnter(count: 1))
     var claimed = false
     let name = paired ? "IMG_orig.JPG" : "IMG.JPG"
-    let probe = ObservationProbe({ _ = h.manager.currentAssetFilename }) {
-      guard !claimed else { return }
-      claimed = true
-      h.store.markVariantExported(
-        assetId: "other", variant: .original, year: 2025, month: 4,
-        relPath: "2025/04/", filename: name, exportedAt: Date())
-    }
+    let probe = ObservationProbe(
+      { _ = h.manager.currentAssetFilename },
+      onChange: {
+        guard !claimed else { return }
+        claimed = true
+        h.store.markVariantExported(
+          assetId: "other", variant: .original, year: 2025, month: 4,
+          relPath: "2025/04/", filename: name, exportedAt: Date())
+      })
     defer { probe.stop() }
     gate.release()
     await h.manager.waitForQueueDrained()
@@ -107,13 +121,15 @@ struct ExportPreparationTests {
       let bytes = Data("planted-after-probe".utf8)
       try bytes.write(to: planted)
       var claimed = false
-      let probe = ObservationProbe({ _ = h.manager.currentAssetFilename }) {
-        guard !claimed else { return }
-        claimed = true
-        h.store.markVariantExported(
-          assetId: "other", variant: .original, year: 2025, month: 4,
-          relPath: "2025/04/", filename: "IMG (1).JPG", exportedAt: Date())
-      }
+      let probe = ObservationProbe(
+        { _ = h.manager.currentAssetFilename },
+        onChange: {
+          guard !claimed else { return }
+          claimed = true
+          h.store.markVariantExported(
+            assetId: "other", variant: .original, year: 2025, month: 4,
+            relPath: "2025/04/", filename: "IMG (1).JPG", exportedAt: Date())
+        })
       defer { probe.stop() }
       await written.releaseAll()
       await h.manager.waitForQueueDrained()
@@ -149,6 +165,9 @@ struct ExportPreparationTests {
       manager.prepareDirectoryResolution(generation: generation)
     }
     func revalidateDirectory(_ path: String) throws { try manager.revalidateDirectory(path) }
+    func captureDirectoryAccess(generation: Int) throws -> any ExportDirectoryResolving {
+      try manager.captureDirectoryAccess(generation: generation)
+    }
     func urlForRelativeDirectory(_ path: String, createIfNeeded: Bool) throws -> URL {
       try manager.urlForRelativeDirectory(path, createIfNeeded: createIfNeeded)
     }
@@ -157,6 +176,7 @@ struct ExportPreparationTests {
     }
   }
 
+  @MainActor
   private final class PreparationFixture {
     let root = TestScratch.directory("CapturedPreparation")
     let recordsRoot = TestScratch.directory("CapturedPreparationRecords")

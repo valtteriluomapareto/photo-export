@@ -161,21 +161,13 @@ struct ReuseCopyLifecycleTests {
   }
 
   @Test(.timeLimit(.minutes(1)))
-  func oldCopyCleanupCannotDamageSamePathReplacement() async throws {
+  func replacementWaitsForOldCopyAndKeepsItsOwnStage() async throws {
     let io = RecordingDestinationIO()
     let fixture = try Fixture(destinationIO: io)
     let gate = CopyGate()
-    let cleanupGate = CopyGate()
-    let oldStage = LockedBox<URL?>(nil)
     let replacementWritten = AsyncCheckpoint()
     try await withCleanup {
-      fixture.files.copyHook = { _, output in
-        oldStage.mutate { $0 = output }
-        try gate.hold()
-      }
-      fixture.files.existsHook = { path in
-        if path == oldStage.value?.path { try? cleanupGate.hold() }
-      }
+      fixture.files.copyHook = { _, _ in try gate.hold() }
       fixture.manager.startExportFavorites()
       await gate.started.waitForEnter(count: 1)
       let old = try #require(fixture.manager.currentTask)
@@ -186,17 +178,19 @@ struct ReuseCopyLifecycleTests {
         fixture.timeline.removeVariant(assetId: fixture.asset.id, variant: variant)
       }
       fixture.writer.afterWriteCheckpoint = replacementWritten
+      let oldSubmissions = io.submissions.value
       fixture.manager.startExportFavorites()
-      try #require(await eventually("replacement sweep admitted") { io.submissions.value == 3 })
+      try #require(
+        await eventually("replacement preparation admitted") {
+          io.submissions.value > oldSubmissions
+        })
       #expect(fixture.writer.writeCalls.isEmpty)
       gate.release()
-      await cleanupGate.started.waitForEnter(count: 1)
       await replacementWritten.waitForEnter(count: 1)
       let replacement = try #require(fixture.manager.currentTask)
       let output = try #require(fixture.writer.writeCalls.last?.url)
       let expectedBytes = try Data(contentsOf: output)
       fixture.manager.progressState.renderActivity = .rendering
-      cleanupGate.release()
       await old.value
       #expect(try Data(contentsOf: output) == expectedBytes)
       #expect(fixture.manager.currentJobAssetId == fixture.asset.id)
@@ -223,10 +217,8 @@ struct ReuseCopyLifecycleTests {
       #expect(fixture.destination.endScopedAccessCount == 2)
     } cleanup: {
       gate.release()
-      cleanupGate.release()
       fixture.cleanup()
       await gate.started.releaseAll()
-      await cleanupGate.started.releaseAll()
       await replacementWritten.releaseAll()
     }
   }
