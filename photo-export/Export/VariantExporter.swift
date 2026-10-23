@@ -265,6 +265,9 @@ final class VariantExporter {
     let finalURL = prepared.url
 
     if prepared.isInterrupted {
+      try requireUnclaimed(
+        finalURL.lastPathComponent, slot: slot, job: job, subfolder: subfolder,
+        variant: variant, descriptor: descriptor)
       _ = try await commitFile(
         .interrupted(finalURL), descriptor: descriptor, job: job,
         variant: variant, relPath: relPath, subfolder: subfolder,
