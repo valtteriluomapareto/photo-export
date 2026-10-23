@@ -53,6 +53,10 @@ protocol FileSystemService: Sendable {
   /// serves a whole comparison, so a network volume is not asked to open the file per read.
   /// `bypassingCache` keeps the bytes read out of the buffer cache where the volume allows.
   func openForReading(at url: URL, bypassingCache: Bool) throws -> any FileReadHandle
+  /// Export comparisons retain this context for every descriptor read.
+  func openForReading(
+    at url: URL, bypassingCache: Bool, destinationIO: any DestinationIOExecuting
+  ) throws -> any FileReadHandle
   func removeItem(at url: URL) throws
   /// Copies a file from `src` to `dst`. On APFS volumes (typical for the user's chosen
   /// destination), `FileManager.copyItem(at:to:)` performs copy-on-write at the
@@ -64,6 +68,13 @@ protocol FileSystemService: Sendable {
 }
 
 extension FileSystemService {
+  /// Compatibility for filesystem adapters that have not adopted contextual descriptor reads.
+  func openForReading(
+    at url: URL, bypassingCache: Bool, destinationIO: any DestinationIOExecuting
+  ) throws -> any FileReadHandle {
+    try openForReading(at: url, bypassingCache: bypassingCache)
+  }
+
   func openDirectory(at url: URL) throws -> any FileDirectoryHandle {
     try FileIOService().openDirectory(at: url)
   }

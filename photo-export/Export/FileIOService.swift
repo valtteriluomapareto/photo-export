@@ -283,6 +283,12 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
   }
 
   func openForReading(at url: URL, bypassingCache: Bool) throws -> any FileReadHandle {
+    try openForReading(at: url, bypassingCache: bypassingCache, destinationIO: DestinationIO())
+  }
+
+  func openForReading(
+    at url: URL, bypassingCache: Bool, destinationIO: any DestinationIOExecuting
+  ) throws -> any FileReadHandle {
     let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
       guard let path else {
         errno = EINVAL
@@ -293,28 +299,26 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     guard descriptor >= 0 else { throw Self.posixError(errno, url) }
     // Advisory: a volume that ignores it still reads correctly.
     if bypassingCache { _ = fcntl(descriptor, F_NOCACHE, 1) }
-    return DescriptorReadHandle(descriptor: descriptor, url: url)
+    return DescriptorReadHandle(descriptor: descriptor, url: url, destinationIO: destinationIO)
   }
 
   /// Reads with `pread` on a utility worker. The descriptor closes once.
   private final class DescriptorReadHandle: FileReadHandle, @unchecked Sendable {
     private let descriptor: Int32
     private let url: URL
+    private let destinationIO: any DestinationIOExecuting
     private let isClosed = OSAllocatedUnfairLock(initialState: false)
 
-    init(descriptor: Int32, url: URL) {
+    init(descriptor: Int32, url: URL, destinationIO: any DestinationIOExecuting) {
       self.descriptor = descriptor
       self.url = url
+      self.destinationIO = destinationIO
     }
 
     deinit { close() }
 
     func read(offset: Int64, length: Int) async throws -> Data {
-      try await withCheckedThrowingContinuation { continuation in
-        DispatchQueue.global(qos: .utility).async { [self] in
-          continuation.resume(with: Result { try readNow(offset: offset, length: length) })
-        }
-      }
+      try await destinationIO.run { [self] in try readNow(offset: offset, length: length) }
     }
 
     func close() {

@@ -55,6 +55,7 @@ RULES = [
       "autoexport")),
     ("photo-export/ContentView.swift", ("authorization", "destination")),
     ("photo-export/Export/VariantExporter.swift", PIPELINE),
+    ("photo-export/Export/DestinationIO.swift", PIPELINE + ("destination",)),
     ("photo-export/Records/*.swift", PERSISTENCE),
     ("photo-export/Protocols/PhotoLibraryService.swift", PIPELINE + ("preview", "authorization")),
     ("photo-export/Models/ExportRecord.swift", PERSISTENCE),

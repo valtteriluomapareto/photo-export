@@ -55,16 +55,24 @@ struct FinalNamePlanner: Sendable {
   /// nothing is adopted.
   func plan(
     slot: ExportDestinationResolver.Slot, stagedURL: URL, mayAdopt: Bool = true,
+    destinationIO: any DestinationIOExecuting = DestinationIO(),
     isClaimed: @Sendable (String) async -> Bool,
     shouldStop: @Sendable () async -> Bool
   ) async throws -> Plan {
     guard case .suffix = slot.policy else { return .move(slot.naturalURL) }
-    let stagedSize = try fileSystem.itemIdentity(at: stagedURL)?.size ?? 0
+    try Task.checkCancellation()
+    let stagedSize = try await destinationIO.run {
+      try fileSystem.itemIdentity(at: stagedURL)?.size ?? 0
+    }
     var index = 0
     while let candidate = slot.candidate(index) {
       try Task.checkCancellation()
-      guard let identity = try fileSystem.itemIdentity(at: candidate) else {
-        if await !isClaimed(candidate.lastPathComponent) { return .move(candidate) }
+      let identity = try await destinationIO.run { try fileSystem.itemIdentity(at: candidate) }
+      try Task.checkCancellation()
+      guard let identity else {
+        let claimed = await isClaimed(candidate.lastPathComponent)
+        try Task.checkCancellation()
+        if !claimed { return .move(candidate) }
         index += 1
         continue
       }
@@ -74,9 +82,11 @@ struct FinalNamePlanner: Sendable {
         identity.size == stagedSize,
         await !isClaimed(candidate.lastPathComponent),
         try await contentsEqual(
-          stagedURL, candidate, size: identity.size, shouldStop: shouldStop),
-        let storedName = storedName(of: candidate)
+          stagedURL, candidate, size: identity.size, destinationIO: destinationIO,
+          shouldStop: shouldStop),
+        let storedName = await destinationIO.run({ storedName(of: candidate) })
       {
+        try Task.checkCancellation()
         return .adopt(candidate, storedName: storedName, identity: identity)
       }
       index += 1
@@ -106,26 +116,49 @@ struct FinalNamePlanner: Sendable {
   /// per file. A failure to open or read either file means the candidate cannot be proven
   /// equal, so it is not adopted.
   func contentsEqual(
-    _ staged: URL, _ candidate: URL, size: Int64, shouldStop: @Sendable () async -> Bool
+    _ staged: URL, _ candidate: URL, size: Int64,
+    destinationIO: any DestinationIOExecuting = DestinationIO(),
+    shouldStop: @Sendable () async -> Bool
   ) async throws -> Bool {
-    let stagedFile: any FileReadHandle
-    let candidateFile: any FileReadHandle
+    try Task.checkCancellation()
+    let handles: (any FileReadHandle, any FileReadHandle)
     do {
-      stagedFile = try fileSystem.openForReading(at: staged, bypassingCache: false)
-      do {
-        candidateFile = try fileSystem.openForReading(at: candidate, bypassingCache: true)
-      } catch {
-        stagedFile.close()
-        throw error
+      handles = try await destinationIO.run {
+        let first = try fileSystem.openForReading(
+          at: staged, bypassingCache: false, destinationIO: destinationIO)
+        do {
+          return (
+            first,
+            try fileSystem.openForReading(
+              at: candidate, bypassingCache: true, destinationIO: destinationIO)
+          )
+        } catch {
+          first.close()
+          throw error
+        }
       }
     } catch {
       Self.logNotCompared(candidate, error)
       return false
     }
-    defer {
-      stagedFile.close()
-      candidateFile.close()
+    let result: Result<Bool, Error>
+    do {
+      result = .success(
+        try await compare(
+          handles.0, handles.1, candidate: candidate, size: size, shouldStop: shouldStop))
+    } catch { result = .failure(error) }
+    await destinationIO.run {
+      handles.0.close()
+      handles.1.close()
     }
+    try Task.checkCancellation()
+    return try result.get()
+  }
+
+  private func compare(
+    _ stagedFile: any FileReadHandle, _ candidateFile: any FileReadHandle,
+    candidate: URL, size: Int64, shouldStop: @Sendable () async -> Bool
+  ) async throws -> Bool {
     var sinceStopCheck = stopCheckInterval
     let ranges = Self.chunkRanges(size: size, edge: edgeChunkSize, middle: middleChunkSize)
     for range in ranges {
@@ -138,7 +171,9 @@ struct FinalNamePlanner: Sendable {
       let candidateBytes: Data
       do {
         stagedBytes = try await stagedFile.read(offset: range.offset, length: range.length)
+        try Task.checkCancellation()
         candidateBytes = try await candidateFile.read(offset: range.offset, length: range.length)
+        try Task.checkCancellation()
       } catch is CancellationError {
         throw CancellationError()
       } catch {

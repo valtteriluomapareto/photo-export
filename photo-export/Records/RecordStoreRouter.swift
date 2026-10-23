@@ -25,6 +25,14 @@ final class RecordStoreRouter {
     self.collectionStore = collectionStore
   }
 
+  /// The configured history identity owns queued physical IO even if selection changes.
+  func destinationId(for placement: ExportPlacement) -> String? {
+    switch placement.kind {
+    case .timeline: return timelineStore.destinationId
+    case .favorites, .album, .sharedAlbum: return collectionStore.destinationId
+    }
+  }
+
   // MARK: - Reads
 
   /// Proof retained by a previously interrupted original-side write, before a retry
