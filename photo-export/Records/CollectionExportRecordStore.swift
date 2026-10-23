@@ -476,7 +476,7 @@ final class CollectionExportRecordStore {
     [:]
   @ObservationIgnored private var sidebarDescriptors: [String: PhotoCollectionDescriptor] = [:]
   @ObservationIgnored private var sidebarStatuses: [String: SidebarStatus] = [:]
-  @ObservationIgnored private var sidebarPublication: UInt64 = 0
+  @ObservationIgnored private var isPublishingSidebarChanges = false
 
   /// A row observes one committed badge value, independently of record revisions.
   @Observable @MainActor
@@ -486,17 +486,23 @@ final class CollectionExportRecordStore {
       let exportedCount: Int
     }
     @ObservationIgnored private var committed: Value
+    @ObservationIgnored fileprivate var needsPublication = false
     var value: Value {
       access(keyPath: \.value)
       return committed
     }
     fileprivate init(_ value: Value) { committed = value }
-    fileprivate func stage(_ value: Value) -> Bool {
-      guard committed != value else { return false }
+    fileprivate func stage(_ value: Value) {
+      guard committed != value else { return }
       committed = value
-      return true
+      needsPublication = true
     }
-    fileprivate func publish() { withMutation(keyPath: \.value) {} }
+    fileprivate func publishIfNeeded() {
+      guard needsPublication else { return }
+      // A synchronous observer can stage another value that still needs delivery.
+      needsPublication = false
+      withMutation(keyPath: \.value) {}
+    }
   }
 
   func sidebarStatus(for descriptor: PhotoCollectionDescriptor) -> SidebarStatus {
@@ -560,16 +566,22 @@ final class CollectionExportRecordStore {
   }
 
   private func publishSidebarChanges() {
-    sidebarPublication &+= 1
-    let publication = sidebarPublication
     // Stage the entire committed projection before invoking synchronous observers.
-    let changed = sidebarStatuses.compactMap { id, status in
-      guard let descriptor = sidebarDescriptors[id] else { return nil as SidebarStatus? }
-      return status.stage(sidebarValue(for: descriptor)) ? status : nil
+    for (id, status) in sidebarStatuses {
+      guard let descriptor = sidebarDescriptors[id] else { continue }
+      status.stage(sidebarValue(for: descriptor))
     }
-    for status in changed {
-      guard publication == sidebarPublication else { return }
-      status.publish()
+    guard !isPublishingSidebarChanges else { return }
+    isPublishingSidebarChanges = true
+    defer { isPublishingSidebarChanges = false }
+    while true {
+      let pending = sidebarStatuses.compactMap { id, status in
+        status.needsPublication ? (id, status) : nil
+      }
+      guard !pending.isEmpty else { return }
+      for (id, status) in pending where sidebarStatuses[id] === status {
+        status.publishIfNeeded()
+      }
     }
   }
 
