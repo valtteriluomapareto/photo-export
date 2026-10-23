@@ -155,15 +155,16 @@ import Testing
       let f = Fixture()
       defer { f.close() }
       let clock = TestClock()
-      let progress = ExportProgressState()
+      let progress = ExportProgressState(clock: clock)
       progress.totalJobsEnqueued = 4
       progress.currentAssetFilename = "first.JPG"
       clock.advance(by: 0.2)
       f.show(progress: progress)
-      try #require(await observe(in: f.window) {
-        f.counter.renderedText["progress-message"] == ["0/4 assets"]
-          && f.counter.renderedText["progress-asset"]?.first == "first.JPG"
-      })
+      try #require(
+        await observe(in: f.window) {
+          f.counter.renderedText["progress-message"] == ["0/4 assets"]
+            && f.counter.renderedText["progress-asset"]?.first == "first.JPG"
+        })
       try await f.renderBarrier()
       let bodies = f.counter.count(for: "export-progress-body")
       progress.totalJobsCompleted = 1
@@ -178,10 +179,11 @@ import Testing
       #expect(f.counter.count(for: "export-progress-body") - bodies == 0)
       #expect(f.counter.renderedText["progress-message"] == ["0/4 assets"])
       clock.advance(by: 0.2)
-      try #require(await observe(in: f.window) {
-        f.counter.renderedText["progress-message"] == ["2/5 assets"]
-          && f.counter.renderedText["progress-asset"] == ["latest.JPG", "rendering"]
-      })
+      try #require(
+        await observe(in: f.window) {
+          f.counter.renderedText["progress-message"] == ["2/5 assets"]
+            && f.counter.renderedText["progress-asset"] == ["latest.JPG", "rendering"]
+        })
       #expect(f.counter.count(for: "export-progress-body") > bodies)
     }
 

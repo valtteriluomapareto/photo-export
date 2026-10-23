@@ -77,7 +77,7 @@ final class ExportManager {
 
   /// Per-asset progress has its own observable owner. Views track only the progress
   /// fields they read; the forwarders below preserve the manager's read surface.
-  let progressState = ExportProgressState()
+  let progressState: ExportProgressState
 
   /// Forwarders to `progressState`. Read-only at the manager surface so callers that
   /// always treated these as `private(set)` continue to compile; internal writes go
@@ -637,8 +637,10 @@ final class ExportManager {
     phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
     backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader(),
     runActivity: (any ExportRunActivity)? = nil,
+    progressClock: (any AutoSyncClock)? = nil,
     userDefaults: UserDefaults
   ) {
+    self.progressState = ExportProgressState(clock: progressClock)
     self.userDefaults = userDefaults
     self.runActivity = runActivity ?? SystemExportRunActivity()
     self.photoLibraryService = photoLibraryService
@@ -723,10 +725,14 @@ final class ExportManager {
         guard let self else { return }
         self.isRunning = running
         if !running { self.exportDestination.resetDirectoryResolution() }
+        self.progressState.flushPresentation()
       }
       .store(in: &queueCancellables)
     self.queueCoordinator.$isPaused
-      .sink { [weak self] in self?.isPaused = $0 }
+      .sink { [weak self] in
+        self?.isPaused = $0
+        self?.progressState.flushPresentation()
+      }
       .store(in: &queueCancellables)
     self.queueCoordinator.$queueCount
       .sink { [weak self] in self?.queueCount = $0 }
@@ -2533,7 +2539,7 @@ final class ExportManager {
       if currentJobPlacement != nil { currentJobPlacement = nil }
       queueCoordinator.setActivePlacement(nil)
     }
-    progressState.currentAssetFilename = nil
+    if !keepingPlacement { progressState.currentAssetFilename = nil }
   }
 
   // MARK: Record-mutation routing
