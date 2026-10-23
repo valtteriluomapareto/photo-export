@@ -13,6 +13,8 @@ struct ExportProgressStateTests {
     let root = TestScratch.directory("ProgressPresentation")
     let clock = TestClock()
     let destination = FakeExportDestination()
+    let service = FakePhotoLibraryService()
+    let writer = FakeAssetResourceWriter()
     let timeline: ExportRecordStore
     let collections: CollectionExportRecordStore
     let manager: ExportManager
@@ -23,9 +25,9 @@ struct ExportProgressStateTests {
       timeline.configure(for: "A")
       collections.configure(for: "A")
       manager = ExportManager(
-        photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
+        photoLibraryService: service, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+        assetResourceWriter: writer, fileSystem: FakeFileSystem(),
         progressClock: clock, userDefaults: TestScratch.defaults("ProgressPresentation"))
     }
 
@@ -46,6 +48,85 @@ struct ExportProgressStateTests {
       try? await collections.flush()
       destination.cleanup()
       try? FileManager.default.removeItem(at: root)
+    }
+  }
+
+  @Test(arguments: ["enqueue", "completion", "pause"])
+  func immediateBoundaryCancellationKeepsCoordinatorAndMirrorsCleared(boundary: String) async throws
+  {
+    let f = Fixture()
+    let gate = AsyncCheckpoint()
+    try await withCleanup {
+      let progress = f.manager.progressState
+      let queue = f.manager.queueCoordinator!
+      var held: Task<Void, Never>?
+      if boundary == "completion" {
+        let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
+        f.service.assetsByYearMonth["2026-9"] = [
+          TestAssetFactory.makeAsset(id: "completing", creationDate: date)
+        ]
+        f.service.resourcesByAssetId["completing"] = [
+          ResourceDescriptor(type: .photo, originalFilename: "complete.JPG")
+        ]
+        f.writer.checkpoint = gate
+        queue.enqueue([
+          .init(
+            assetLocalIdentifier: "completing",
+            placement: .timeline(year: 2026, month: 9), selection: .edited)
+        ])
+        queue.processQueueIfNeeded()
+        try #require(await gate.waitForEnter(count: 1))
+        held = queue.currentTask
+      } else if boundary == "pause" {
+        f.enqueue()
+        progress.currentAssetFilename = "waiting.JPG"
+      }
+      var cancelled = false
+      let bar = ObservationProbe(
+        { _ = progress.presentation },
+        onChange: {
+          guard !cancelled else { return }
+          cancelled = true
+          f.manager.cancelAndClear()
+        })
+      switch boundary {
+      case "enqueue": f.enqueue()
+      case "completion":
+        await gate.releaseAll()
+        if let held { _ = await finished(held) }
+      default: f.manager.pause()
+      }
+      #expect(cancelled)
+      #expect(queue.totalJobsEnqueued == 0)
+      #expect(queue.totalJobsCompleted == 0)
+      #expect(f.manager.totalJobsEnqueued == 0)
+      #expect(f.manager.totalJobsCompleted == 0)
+      #expect(!queue.isRunning)
+      #expect(!queue.isPaused)
+      #expect(!queue.isProcessing)
+      #expect(!f.manager.isRunning)
+      #expect(!f.manager.isPaused)
+      #expect(queue.queueCount == 0)
+      #expect(f.manager.queueCount == 0)
+      #expect(queue.pendingJobs.isEmpty)
+      #expect(queue.queuedCountsByPlacementId.isEmpty)
+      #expect(queue.currentTask == nil)
+      #expect(f.manager.currentJobAssetId == nil)
+      #expect(f.manager.currentJobPlacement == nil)
+      #expect(
+        queue.monthState(placementId: ExportPlacement.timeline(year: 2026, month: 9).id).snapshot
+          == .init())
+      #expect(progress.presentation == .init())
+      #expect(f.writer.writeCalls.count == (boundary == "completion" ? 1 : 0))
+      bar.stop()
+      f.enqueue()
+      queue.processQueueIfNeeded()
+      #expect(queue.isProcessing)
+      #expect(queue.isRunning)
+      #expect(queue.currentTask != nil)
+    } cleanup: {
+      await gate.releaseAll()
+      await f.close()
     }
   }
 
