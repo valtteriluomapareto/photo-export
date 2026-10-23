@@ -1,0 +1,220 @@
+import Foundation
+import Testing
+
+@testable import Photo_Export
+
+@Suite(.timeLimit(.minutes(2)))
+struct DestinationIOTests {
+  private final class Gate: @unchecked Sendable {
+    let entered = AsyncCheckpoint()
+    private let semaphore = DispatchSemaphore(value: 0)
+    func hold() {
+      Task { await entered.enter() }
+      semaphore.wait()
+    }
+    func release() {
+      semaphore.signal()
+      Task { await entered.releaseAll() }
+    }
+  }
+
+  @Test func serialLeavesFinishInOrderWhileOtherDestinationProgresses() async throws {
+    let first = DestinationIO()
+    let other = DestinationIO()
+    let gate = Gate()
+    let order = LockedBox<[Int]>([])
+    let held = Task {
+      await first.run {
+        order.mutate { $0.append(1) }
+        gate.hold()
+        order.mutate { $0.append(2) }
+      }
+    }
+    defer { gate.release() }
+    try #require(await gate.entered.waitForEnter(count: 1))
+    let pending = Task { await first.run { order.mutate { $0.append(3) } } }
+    let onWorker = await other.run { pthread_main_np() == 0 }
+    #expect(onWorker)
+    #expect(order.value == [1])
+    gate.release()
+    await held.value
+    await pending.value
+    #expect(order.value == [1, 2, 3])
+  }
+
+  @Test(arguments: [false, true])
+  func cancellationWaitsForPhysicalLeafCompletion(queued: Bool) async throws {
+    let io = RecordingDestinationIO()
+    let gate = Gate()
+    let physical = LockedBox(false)
+    let returned = LockedBox(false)
+    let predecessor: Task<Void, Never>?
+    if queued {
+      predecessor = Task { await io.run { gate.hold() } }
+      try #require(await gate.entered.waitForEnter(count: 1))
+    } else {
+      predecessor = nil
+    }
+    defer { gate.release() }
+    let task = Task {
+      await io.run {
+        if !queued { gate.hold() }
+        physical.mutate { $0 = true }
+      }
+      returned.mutate { $0 = true }
+    }
+    if !queued { try #require(await gate.entered.waitForEnter(count: 1)) }
+    try #require(await eventually("leaf admitted") { io.submissions.value == (queued ? 2 : 1) })
+    task.cancel()
+    await DestinationIO().run {}
+    #expect(!physical.value)
+    #expect(!returned.value)
+    gate.release()
+    await predecessor?.value
+    await task.value
+    #expect(physical.value)
+    #expect(returned.value)
+  }
+
+  @Test(arguments: [false, true])
+  func realAndFakeReadHandlesRetainContext(recordingFake: Bool) async throws {
+    let root = TestScratch.directory("DestinationReadContext")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let url = root.appendingPathComponent("file")
+    try Data([1, 2, 3, 4]).write(to: url)
+    let io = RecordingDestinationIO()
+    let files: any FileSystemService = recordingFake ? FakeFileSystem() : FileIOService()
+    let handle = try await io.run {
+      try files.openForReading(at: url, bypassingCache: false, destinationIO: io)
+    }
+    let before = io.submissions.value
+    #expect(try await handle.read(offset: 1, length: 2) == Data([2, 3]))
+    #expect(io.submissions.value == before + 1)
+    await io.run { handle.close() }
+    #expect(io.workerChecks.value.allSatisfy { $0 })
+    #expect(!io.workerChecks.value.isEmpty)
+  }
+
+  @Test func plannerUsesContextForProbesOpensReadsAndCloses() async throws {
+    let root = TestScratch.directory("PlannerDestinationContext")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let stage = root.appendingPathComponent("stage")
+    let candidate = root.appendingPathComponent("FILE.JPG")
+    try Data([1, 2, 3, 4]).write(to: stage)
+    try Data([1, 2, 3, 4]).write(to: candidate)
+    let io = RecordingDestinationIO()
+    let files = FakeFileSystem()
+    let plan = try await FinalNamePlanner(fileSystem: files).plan(
+      slot: .init(directory: root, filename: "FILE.JPG", policy: .suffix(base: "FILE", ext: "JPG")),
+      stagedURL: stage, destinationIO: io, isClaimed: { _ in false }, shouldStop: { false })
+    guard case .adopt = plan else {
+      Issue.record("Identical file should be adopted")
+      return
+    }
+    #expect(files.readOpens.count == 2)
+    #expect(files.readCloses.count == 2)
+    #expect(
+      files.calls.filter {
+        ["itemIdentity", "openForReading", "storedName"].contains($0.operation)
+      }
+      .allSatisfy { !$0.onMainThread })
+    #expect(files.calls.contains { !$0.onMainThread })
+    // One stage probe, candidate probe, open pair, two reads, close pair, stored name.
+    #expect(io.submissions.value == 7)
+    #expect(io.workerChecks.value.allSatisfy { $0 })
+  }
+  @Test func cancelledCompareClosesHandlesAfterTheHeldReadFinishes() async throws {
+    let root = TestScratch.directory("CancelledDestinationRead")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let stage = root.appendingPathComponent("stage")
+    let candidate = root.appendingPathComponent("FILE.JPG")
+    try Data([1, 2, 3, 4]).write(to: stage)
+    try Data([1, 2, 3, 4]).write(to: candidate)
+    let gate = Gate()
+    let io = RecordingDestinationIO(beforeLeaf: { number in if number == 4 { gate.hold() } })
+    let files = FakeFileSystem()
+    let returned = LockedBox(false)
+    let task = Task {
+      defer { returned.mutate { $0 = true } }
+      return try await FinalNamePlanner(fileSystem: files, edgeChunkSize: 1).plan(
+        slot: .init(
+          directory: root, filename: "FILE.JPG", policy: .suffix(base: "FILE", ext: "JPG")),
+        stagedURL: stage, destinationIO: io, isClaimed: { _ in false }, shouldStop: { false })
+    }
+    defer { gate.release() }
+    try #require(await gate.entered.waitForEnter(count: 1))
+    task.cancel()
+    await DestinationIO().run {}
+    #expect(!returned.value)
+    #expect(files.readCloses.isEmpty)
+    gate.release()
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(files.readCloses.count == 2)
+    #expect(Set(files.readCloses) == [stage, candidate])
+    #expect(io.workerChecks.value.allSatisfy { $0 })
+  }
+
+  @Test func failedSecondOpenClosesTheFirstHandleOnItsContext() async throws {
+    let root = TestScratch.directory("FailedDestinationOpen")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let stage = root.appendingPathComponent("stage")
+    let candidate = root.appendingPathComponent("FILE.JPG")
+    try Data([1, 2, 3, 4]).write(to: stage)
+    try Data([1, 2, 3, 4]).write(to: candidate)
+    let files = FakeFileSystem()
+    files.identityOverride = { url, identity in
+      if url == candidate { try? FileManager.default.removeItem(at: url) }
+      return identity
+    }
+    let io = RecordingDestinationIO()
+    let result = try await FinalNamePlanner(fileSystem: files).plan(
+      slot: .init(directory: root, filename: "FILE.JPG", policy: .suffix(base: "FILE", ext: "JPG")),
+      stagedURL: stage, destinationIO: io, isClaimed: { _ in false }, shouldStop: { false })
+    #expect(result == .move(root.appendingPathComponent("FILE (1).JPG")))
+    #expect(files.readOpens.count == 2)
+    #expect(files.readCloses == [stage])
+    #expect(io.workerChecks.value.allSatisfy { $0 })
+  }
+
+  @MainActor
+  @Test func logicalDestinationRoundTripReusesItsCapturedContext() async throws {
+    var created: [String?] = []
+    var contexts: [RecordingDestinationIO] = []
+    let h = ExportManagerHarness(
+      label: "DestinationContexts",
+      destinationIOFactory: { id in
+        created.append(id)
+        let io = RecordingDestinationIO()
+        contexts.append(io)
+        return io
+      })
+    defer {
+      h.store.drainSynchronously()
+      h.collectionStore.drainSynchronously()
+      h.dest.cleanup()
+      try? FileManager.default.removeItem(at: h.storeRoot)
+    }
+    for (index, id) in ["A", "B", "A"].enumerated() {
+      h.store.configure(for: id)
+      h.collectionStore.configure(for: id)
+      let asset = TestAssetFactory.makeAsset(id: "asset-\(index)")
+      h.photoLib.assetsByYearMonth["2025-4"] = [asset]
+      h.photoLib.resourcesByAssetId[asset.id] = [
+        .init(type: .photo, originalFilename: "FILE\(index).JPG", fileSize: 12)
+      ]
+      h.manager.startExportMonth(year: 2025, month: 4)
+      await h.manager.waitForQueueDrained()
+      #expect(h.store.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
+      h.dest.canExportNow = false
+      h.dest.canExportNow = true
+    }
+    #expect(created == ["A", "B"])
+    #expect(contexts.allSatisfy { $0.submissions.value > 0 })
+    #expect(contexts.flatMap { $0.workerChecks.value }.allSatisfy { $0 })
+  }
+
+}
