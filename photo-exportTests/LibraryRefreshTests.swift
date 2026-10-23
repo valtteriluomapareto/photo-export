@@ -1,0 +1,96 @@
+import Foundation
+import Testing
+
+@testable import Photo_Export
+
+@MainActor
+@Suite(.timeLimit(.minutes(2)))
+struct LibraryRefreshTests {
+  private let first = PhotoLibraryQuery(scope: .timeline(year: 2026, month: 9))
+  private let second = PhotoLibraryQuery(scope: .favorites)
+
+  @Test func burstsDebounceConsumersWithoutChangingSourceOrContentRevisions() {
+    let clock = TestClock()
+    let service = FakePhotoLibraryService()
+    let library = PhotoLibraryManager(overrideService: service, refreshClock: clock)
+    library.beginObservingQuery(first)
+    library.beginObservingQuery(second)
+    let source = ObservationProbe { _ = library.libraryRevision }
+    for _ in 0..<5 {
+      library.invalidateCache(changedThumbnailAssetIDs: [], queryChanges: [first: true, second: false])
+    }
+    #expect(library.libraryRevision == 5)
+    #expect(source.changeCount == 5)
+    #expect(library.thumbnailContentRevision(for: "A") == 0)
+    #expect(library.libraryRefresh.revision == 0)
+    clock.advance(by: 0.499)
+    #expect(library.libraryRefresh.revision == 0)
+    clock.advance(by: 0.001)
+    #expect(library.libraryRefresh.revision == 1)
+    #expect(library.libraryRefresh.queryRevision(for: first) == 1)
+    #expect(library.libraryRefresh.queryRevision(for: second) == 0)
+    library.endObservingQuery(first)
+    library.endObservingQuery(second)
+  }
+
+  @Test func queryChangesMergeConservativelyAndMediaFiltersRemainDistinct() {
+    let clock = TestClock()
+    let service = FakePhotoLibraryService()
+    let library = PhotoLibraryManager(overrideService: service, refreshClock: clock)
+    let imageQuery = PhotoLibraryQuery(scope: .favorites, mediaType: .image)
+    let videoQuery = PhotoLibraryQuery(scope: .favorites, mediaType: .video)
+    for query in [first, imageQuery, videoQuery] { library.beginObservingQuery(query) }
+    library.invalidateCache(changedThumbnailAssetIDs: [], queryChanges: [first: false, imageQuery: true, videoQuery: false])
+    library.invalidateCache(changedThumbnailAssetIDs: [], queryChanges: [first: false, imageQuery: false, videoQuery: false])
+    library.libraryRefresh.flush()
+    #expect(library.libraryRefresh.queryRevision(for: first) == 0)
+    #expect(library.libraryRefresh.queryRevision(for: imageQuery) == 1)
+    #expect(library.libraryRefresh.queryRevision(for: videoQuery) == 0)
+    library.invalidateCache(changedThumbnailAssetIDs: [], queryChanges: [first: false])
+    library.invalidateCache(changedThumbnailAssetIDs: [])
+    library.libraryRefresh.flush()
+    for query in [first, imageQuery, videoQuery] {
+      #expect(library.libraryRefresh.queryRevision(for: query) > 0)
+      library.endObservingQuery(query)
+    }
+    #expect(clock.pendingCount == 0)
+  }
+
+  @Test func obsoleteInventoryCannotInstallAfterANewerSourceRevision() async {
+    let clock = TestClock()
+    let service = FakePhotoLibraryService()
+    let library = PhotoLibraryManager(overrideService: service, refreshClock: clock)
+    let gate = AsyncCheckpoint()
+    service.yearCounts = [(2025, 1)]
+    service.inventoryCheckpoint = gate
+    let old = Task { await library.libraryRefresh.loadYears() }
+    await gate.waitForEnter(count: 1)
+    service.inventoryCheckpoint = nil
+    service.yearCounts = [(2026, 2)]
+    library.invalidateCache(changedThumbnailAssetIDs: [])
+    library.libraryRefresh.flush()
+    await library.libraryRefresh.loadYears()
+    await gate.releaseAll()
+    await old.value
+    #expect(library.libraryRefresh.years == [PhotoLibraryYearCount(year: 2026, count: 2)])
+  }
+
+  @Test func queryRegistrationRejectsLateResultsAndBalancesMultipleConsumers() {
+    let store = PhotoLibraryQueryObservations<String>()
+    store.begin(first)
+    store.begin(first)
+    let old = store.ticket(for: first, revision: 1)!
+    let current = store.ticket(for: first, revision: 1)!
+    #expect(!store.install("old", for: old, revision: 1))
+    #expect(store.install("new", for: current, revision: 1))
+    store.end(first)
+    #expect(store.snapshots[first] == "new")
+    store.end(first)
+    #expect(store.snapshots.isEmpty)
+    #expect(!store.install("late", for: current, revision: 1))
+    store.begin(first)
+    let stale = store.ticket(for: first, revision: 1)!
+    #expect(!store.install("stale-revision", for: stale, revision: 2))
+    store.end(first)
+  }
+}
