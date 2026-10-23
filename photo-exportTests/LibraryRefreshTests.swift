@@ -132,6 +132,49 @@ struct LibraryRefreshTests {
     }
   }
 
+  @Test func activeFolderExportRetriesChangedMembershipBeforeEnqueuing() async throws {
+    let h = ExportManagerHarness(label: "LibraryRefreshCoreScope")
+    let library = PhotoLibraryManager(overrideService: h.photoLib, refreshClock: TestClock())
+    let manager = ExportManager(
+      photoLibraryService: library, exportDestination: h.dest, exportRecordStore: h.store,
+      collectionExportRecordStore: h.collectionStore, assetResourceWriter: h.writer,
+      fileSystem: h.fileSystem, userDefaults: h.defaults)
+    func tree(_ member: String) -> [PhotoCollectionDescriptor] {
+      [
+        PhotoCollectionDescriptor(
+          id: "folder:F", localIdentifier: "F", title: "Folder", kind: .folder,
+          pathComponents: [],
+          children: [
+            PhotoCollectionDescriptor(
+              id: "album:\(member)", localIdentifier: member, title: member, kind: .album,
+              pathComponents: ["Folder"], children: [])
+          ])
+      ]
+    }
+    h.photoLib.collectionTree = tree("old")
+    h.photoLib.assetsByAlbumLocalId["current"] = [TestAssetFactory.makeAsset(id: "current")]
+    h.photoLib.resourcesByAssetId["current"] = [
+      ResourceDescriptor(type: .photo, originalFilename: "current.jpg")
+    ]
+    let gate = AsyncCheckpoint()
+    h.photoLib.inventoryCheckpoint = gate
+    manager.queueCoordinator.pause()
+    manager.startExportFolder(folderId: "F")
+    let preparations = manager.currentPreparationTasks
+    await gate.waitForEnter(count: 1)
+    h.photoLib.collectionTree = tree("current")
+    h.photoLib.inventoryCheckpoint = nil
+    library.invalidateCache(changedThumbnailAssetIDs: [])
+    await gate.releaseAll()
+    for task in preparations { await task.value }
+    #expect(manager.pendingJobs.map(\.assetLocalIdentifier) == ["current"])
+    manager.cancelAndClear()
+    h.store.drainSynchronously()
+    h.collectionStore.drainSynchronously()
+    h.dest.cleanup()
+    try? FileManager.default.removeItem(at: h.storeRoot)
+  }
+
   @Test func queryRegistrationRejectsLateResultsAndBalancesMultipleConsumers() {
     let store = PhotoLibraryQueryObservations<String>()
     store.begin(first)
