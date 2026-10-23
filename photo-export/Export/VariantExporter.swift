@@ -4,7 +4,7 @@ import OSLog
 /// Single-asset, single-variant file write path. Owns:
 /// - Resource selection per variant (original or edited).
 /// - Destination URL allocation (via `ExportDestinationResolver`) and `.tmp` setup.
-/// - Stale-`.tmp` cleanup before write; `defer`-based cleanup on every exit path.
+/// - Stale-`.tmp` cleanup before write; awaited stage cleanup on every exit path.
 /// - In-progress record marking + in-flight tracking handoff.
 /// - Reuse-source copy path (cross-placement clone of an existing `.done` write).
 /// - Byte production: static resources via `AssetResourceWriter`; rendered media via
@@ -256,9 +256,17 @@ final class VariantExporter {
     }
 
     let legacyTempURL = finalURL.appendingPathExtension("tmp")
-    if fileSystem.fileExists(atPath: legacyTempURL.path) {
-      try? fileSystem.removeItem(at: legacyTempURL)
+    // The legacy sweep also finishes within the caller's scoped access. It probes the
+    // network volume on utility, leaving the main thread's bounded path checks alone.
+    await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async { [fileSystem] in
+        if fileSystem.fileExists(atPath: legacyTempURL.path) {
+          try? fileSystem.removeItem(at: legacyTempURL)
+        }
+        continuation.resume()
+      }
     }
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
     // Any producer can finish after cancellation. Its stage belongs to this attempt,
     // including fallback and HEIC materialization, never a same-path replacement.
     let tempURL = destDir.appendingPathComponent(".photo-export-\(UUID().uuidString).tmp")
@@ -404,8 +412,8 @@ final class VariantExporter {
       }
       // Load-bearing: this checkpoint must run BEFORE the atomic move below so that a
       // cancel arriving during the render does not leak a partially-written file into the
-      // destination. Reordering this is a correctness regression — temp cleanup is handled
-      // by `defer`, but only if we throw before the move.
+      // destination. Owned-stage cleanup follows this operation on every exit, but it
+      // can prevent a partial final file only when cancellation is checked before the move.
       try queueCoordinator?.throwIfCancelledOrStale(gen)
 
       let committedName = try await commitStaged(

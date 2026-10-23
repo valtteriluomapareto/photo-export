@@ -145,6 +145,10 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
 
   // MARK: - FileSystemService protocol (instance methods)
 
+  func openDirectory(at url: URL) throws -> any FileDirectoryHandle {
+    try OpenDirectoryHandle(url: url)
+  }
+
   func directoryIdentity(at url: URL) throws -> FileItemIdentity? {
     var info = stat()
     guard stat(url.path, &info) == 0 else {
@@ -366,5 +370,39 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
         domain: NSPOSIXErrorDomain, code: Int(code),
         userInfo: [NSFilePathErrorKey: destination.path])
     }
+  }
+}
+
+/// An immutable descriptor keeps the same directory alive through renames. Each path
+/// check asks the kernel where it is now, including moves of any ancestor directory.
+private final class OpenDirectoryHandle: FileDirectoryHandle, @unchecked Sendable {
+  private let descriptor: Int32
+  let identity: FileItemIdentity
+
+  init(url: URL) throws {
+    let descriptor = open(url.path, O_EVTONLY | O_DIRECTORY | O_CLOEXEC)
+    guard descriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+    var info = stat()
+    guard fstat(descriptor, &info) == 0 else {
+      let code = errno
+      close(descriptor)
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+    }
+    self.descriptor = descriptor
+    identity = FileItemIdentity(
+      isRegularFile: false, linkCount: 0, device: Int64(info.st_dev),
+      inode: UInt64(info.st_ino), size: 0, modificationSeconds: 0, modificationNanoseconds: 0)
+  }
+
+  deinit { close(descriptor) }
+
+  func physicalPath() throws -> URL {
+    var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+    let result = buffer.withUnsafeMutableBufferPointer {
+      fcntl(descriptor, F_GETPATH, $0.baseAddress!)
+    }
+    guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+    let bytes = buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+    return URL(fileURLWithPath: String(decoding: bytes, as: UTF8.self), isDirectory: true)
   }
 }

@@ -22,6 +22,16 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   }
   private var _existsHook: (@Sendable (String) -> Void)?
 
+  func openDirectory(at url: URL) throws -> any FileDirectoryHandle {
+    record("openDirectory")
+    return try real.openDirectory(at: url)
+  }
+
+  func directoryPhysicalPath(_ handle: any FileDirectoryHandle) throws -> URL {
+    record("directoryPhysicalPath")
+    return try real.directoryPhysicalPath(handle)
+  }
+
   func directoryIdentity(at url: URL) throws -> FileItemIdentity? {
     record("directoryIdentity")
     return try real.directoryIdentity(at: url)

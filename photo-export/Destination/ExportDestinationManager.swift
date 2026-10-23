@@ -49,7 +49,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   private var directoryGeneration: Int?
   private struct ResolvedDirectory {
     let url: URL
-    let identity: FileItemIdentity
+    let handle: any FileDirectoryHandle
+    let physicalRoot: String
   }
   private var directoryResolutions: [String: ResolvedDirectory] = [:]
   private var missingDirectories: Set<String> = []
@@ -511,7 +512,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
 
     if let cached = directoryResolutions[trimmed] {
-      if try inspectDirectory(at: cached.url) == cached.identity {
+      if try inspectDirectory(at: cached.url) == cached.handle.identity {
+        let physicalPath = try fileSystem.directoryPhysicalPath(cached.handle).path
+        guard Self.contains(physicalPath, under: cached.physicalRoot) else {
+          directoryResolutions.removeValue(forKey: trimmed)
+          missingDirectories.insert(trimmed)
+          throw ExportDestinationError.invalidRelativePath(
+            "path resolves outside the export root: \(relativePath)")
+        }
         return cached.url
       }
       directoryResolutions.removeValue(forKey: trimmed)
@@ -561,12 +569,27 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       try ensureDirectoryExists(at: target)
       identity = try inspectDirectory(at: target)
     }
-    if let identity {
-      directoryResolutions[trimmed] = ResolvedDirectory(url: target, identity: identity)
+    if identity != nil {
+      // Obtain both physical spellings from the kernel. Foundation can shorten
+      // system aliases such as /private/var even after resolving their symlinks.
+      let rootHandle = try fileSystem.openDirectory(at: root)
+      let physicalRoot = try fileSystem.directoryPhysicalPath(rootHandle).path
+      let handle = try fileSystem.openDirectory(at: target)
+      guard Self.contains(try fileSystem.directoryPhysicalPath(handle).path, under: physicalRoot)
+      else {
+        throw ExportDestinationError.invalidRelativePath(
+          "path resolves outside the export root: \(relativePath)")
+      }
+      directoryResolutions[trimmed] = ResolvedDirectory(
+        url: target, handle: handle, physicalRoot: physicalRoot)
       missingDirectories.remove(trimmed)
     }
 
     return target
+  }
+
+  private static func contains(_ path: String, under root: String) -> Bool {
+    path == root || path.hasPrefix(root + "/")
   }
 
   /// Walks `url` upward until it finds an ancestor that exists on disk, then resolves

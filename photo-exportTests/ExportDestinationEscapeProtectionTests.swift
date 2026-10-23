@@ -61,7 +61,7 @@ struct ExportDestinationEscapeProtectionTests {
     let first = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
     let warm = files.calls.count
     #expect(try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true) == first)
-    #expect(files.calls.count - warm <= 1)
+    #expect(files.calls.count - warm <= 2)
     manager.prepareDirectoryResolution(generation: 2)
     let cold = files.calls.count
     _ = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
@@ -177,7 +177,7 @@ struct ExportDestinationEscapeProtectionTests {
     manager.startExportMonth(year: 2025, month: 2)
     await checkpoint.waitForEnter(count: 1)
     // The first asset warms the directory cache. Each next checkpoint brackets one
-    // commit/cleanup and the next asset's resolution, filename and legacy-temp probes.
+    // commit/cleanup and the next asset's identity, physical-path and filename probes.
     var start = files.calls.count
     for index in 2...3 {
       await checkpoint.release()
