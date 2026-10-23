@@ -486,6 +486,28 @@ final class ExportManager {
     collectionExportRecordStore.state == .ready
   }
 
+  @ObservationIgnored private let runActivity: any ExportRunActivity
+  @ObservationIgnored private var holdsRunActivity = false
+
+  private func beginRunActivityIfNeeded() {
+    guard !holdsRunActivity else { return }
+    holdsRunActivity = true
+    runActivity.begin()
+  }
+
+  private func endRunActivity() {
+    guard holdsRunActivity else { return }
+    holdsRunActivity = false
+    runActivity.end()
+  }
+
+  private func endRunActivityIfIdle() {
+    guard activeRunContext == nil, !hasActiveExportWork, currentPreparationTasks.isEmpty else {
+      return
+    }
+    endRunActivity()
+  }
+
   // Unpublished lifetime handles for deterministic preparation completion.
   // These do not participate in UI/AutoSync admission or publications.
   @ObservationIgnored private var preparationTasks:
@@ -496,13 +518,16 @@ final class ExportManager {
 
   @discardableResult
   private func trackPreparation(
-    generation gen: Int, operation: @escaping @MainActor () async -> Void
+    generation gen: Int, priority: TaskPriority? = nil,
+    operation: @escaping @MainActor () async -> Void
   ) -> Task<Void, Never> {
+    beginRunActivityIfNeeded()
     let id = UUID()
-    let task = Task { [weak self] in
+    let task = Task(priority: priority) { [weak self] in
       defer {
         self?.preparationTasks[id] = nil
         self?.finishManualFeedbackIfReady(generation: gen)
+        self?.endRunActivityIfIdle()
       }
       await operation()
     }
@@ -612,9 +637,11 @@ final class ExportManager {
     fileSystem: any FileSystemService = FileIOService(),
     phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
     backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader(),
+    runActivity: (any ExportRunActivity)? = nil,
     userDefaults: UserDefaults
   ) {
     self.userDefaults = userDefaults
+    self.runActivity = runActivity ?? SystemExportRunActivity()
     self.photoLibraryService = photoLibraryService
     self.exportDestination = exportDestination
     self.exportRecordStore = exportRecordStore
@@ -1141,7 +1168,7 @@ final class ExportManager {
     partialScanWarning: @escaping @MainActor () -> String,
     body: @escaping @MainActor () async throws -> BulkExportOutcome
   ) -> Task<Void, Never> {
-    trackPreparation(generation: gen) { [weak self] in
+    trackPreparation(generation: gen, priority: .utility) { [weak self] in
       guard let self, self.isCurrent(gen) else { return }
       do {
         let outcome = try await body()
@@ -1526,6 +1553,7 @@ final class ExportManager {
     clearRenderActivity()
     clearEmptyRunMessage()
     clearQueueWarningMessage()
+    endRunActivity()
     flushRecordNotifications()
   }
 
@@ -1591,6 +1619,7 @@ final class ExportManager {
     if queueCoordinator.clearPending() > 0 {
       noteManualPreparationFailure("Pending exports were cleared before they finished.")
       finishManualFeedbackIfReady(generation: generation)
+      endRunActivityIfIdle()
     }
   }
 
@@ -2480,6 +2509,7 @@ final class ExportManager {
     logger.info("Export queue drained")
     finalizeActiveRun(result: .completed, cancelReason: nil)
     finishManualFeedbackIfReady(generation: generation)
+    endRunActivityIfIdle()
   }
 
   /// Set placement before assetId so any cancellation

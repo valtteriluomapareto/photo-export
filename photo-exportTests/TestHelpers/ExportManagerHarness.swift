@@ -27,7 +27,7 @@ final class ExportManagerHarness {
     fileSystem: FakeFileSystem = FakeFileSystem(),
     mediaRenderer: (any MediaRenderer)? = nil,
     imageConverter: any ImageConverter = ProductionImageConverter(),
-    runActivity: any ExportRunActivity = SystemExportRunActivity()
+    runActivity: (any ExportRunActivity)? = nil
   ) {
     self.photoLib = photoLib ?? FakePhotoLibraryService()
     self.dest = dest ?? FakeExportDestination()
