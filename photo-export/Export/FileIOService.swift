@@ -403,6 +403,9 @@ private final class OpenDirectoryHandle: FileDirectoryHandle, @unchecked Sendabl
     }
     guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
     let bytes = buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
-    return URL(fileURLWithPath: String(decoding: bytes, as: UTF8.self), isDirectory: true)
+    guard let path = String(bytes: bytes, encoding: .utf8) else {
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(EILSEQ))
+    }
+    return URL(fileURLWithPath: path, isDirectory: true)
   }
 }
