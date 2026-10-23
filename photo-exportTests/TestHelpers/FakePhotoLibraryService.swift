@@ -40,6 +40,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// without Photos access, so access tests set both this and `isAuthorized`.
   var availableYearsError: Error?
   var availableYearsObserver: (@MainActor () -> Void)?
+  nonisolated let inventoryThreads = LockedBox<[String: [Bool]]>([:])
 
   // Call tracking
   var fetchAssetsCalls: [(year: Int, month: Int?, mediaType: PHAssetMediaType?)] = []
@@ -174,6 +175,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
+    inventoryThreads.mutate { $0["years", default: []].append(Thread.isMainThread) }
     if let error = availableYearsError { throw error }
     return yearCounts
   }
@@ -181,6 +183,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   // MARK: - Phase 2: Collections
 
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
+    inventoryThreads.mutate { $0["tree", default: []].append(Thread.isMainThread) }
     if let error = collectionTreeError { throw error }
     return collectionTree
   }

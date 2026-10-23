@@ -243,6 +243,25 @@ import Testing
 
     /// Already passes: Favorites and the recursive album row refresh their cached counts.
     @Test(.timeLimit(.minutes(1)))
+    func initialInventoryScansRunOffMain() async throws {
+      let f = Fixture(includeAlbum: true)
+      try await withCleanup {
+        try #require(await observe(in: f.window) {
+          f.counter.renderedText["timeline-sidebar-years"] == ["2026:2"]
+            && f.counter.renderedText["collection-sidebar:album:family"] == ["count:2"]
+        })
+        await f.quiesce()
+        for key in ["years", "tree"] {
+          let scans = f.service.inventoryThreads.value[key] ?? []
+          #expect(scans.filter { $0 }.count == 0, "\(key) scans must not run on main")
+          #expect(scans.filter { !$0 }.count > 0, "\(key) worker scans are the positive control")
+        }
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func collectionRowCountsReloadAfterALibraryChange() async throws {
       let f = Fixture(includeAlbum: true)
       try await withCleanup {
