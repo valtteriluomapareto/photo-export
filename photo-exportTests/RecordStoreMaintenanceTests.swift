@@ -153,6 +153,41 @@ struct RecordStoreMaintenanceTests {
     }
   }
 
+  @Test(arguments: [false, true])
+  func failedResetKeepsCorruptHistoryUnreadable(collection: Bool) async throws {
+    let f = Fixture(collection: collection)
+    defer { f.close() }
+    f.timeline.drainSynchronously()
+    f.collections.drainSynchronously()
+    let directory = f.root.appendingPathComponent("A")
+    let snapshot = directory.appendingPathComponent(
+      collection
+        ? CollectionExportRecordStore.Constants.snapshotFileName
+        : ExportRecordStore.Constants.snapshotFileName)
+    let corrupt = Data("corrupt history".utf8)
+    try corrupt.write(to: snapshot)
+    if collection { f.collections.configure(for: "A") } else { f.timeline.configure(for: "A") }
+    #expect((collection ? f.collections.state : f.timeline.state) == .failed)
+    let saved = f.root.appendingPathComponent("saved")
+    try FileManager.default.moveItem(at: directory, to: saved)
+    try Data("blocks reset".utf8).write(to: directory)
+    if collection { await f.collections.resetHistory() } else { await f.timeline.resetHistory() }
+    #expect((collection ? f.collections.state : f.timeline.state) == .failed)
+    try FileManager.default.removeItem(at: directory)
+    try FileManager.default.moveItem(at: saved, to: directory)
+    for id in ["B", "A"] {
+      if collection {
+        f.collections.beginConfigure(for: id)
+        await f.collections.waitUntilSettled()
+      } else {
+        f.timeline.beginConfigure(for: id)
+        await f.timeline.waitUntilSettled()
+      }
+    }
+    #expect((collection ? f.collections.state : f.timeline.state) == .failed)
+    #expect(try Data(contentsOf: snapshot) == corrupt)
+  }
+
   @Test(arguments: [false, true], [false, true])
   func heldCheckpointExcludesSecondWriterFromMemoryAndLog(collection: Bool, finalCommit: Bool)
     async throws
