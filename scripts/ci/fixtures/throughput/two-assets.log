@@ -1,0 +1,4 @@
+Timestamp                       Thread     Type        Activity             PID    TTL
+2026-10-23 12:00:00.000000+0300 0x123 Default 0x0 234 0 Photo Export: [com.valtteriluoma.photo-export:VariantExporter] Exported IMG_001.JPG variant: edited -> /scratch/2026/10 asset: A/L0/001
+2026-10-23 12:00:01.000000+0300 0x123 Default 0x0 234 0 Photo Export: [com.valtteriluoma.photo-export:VariantExporter] Exported IMG_001_orig.JPG variant: original -> /scratch/2026/10 asset: A/L0/001
+2026-10-23 12:00:02.000000+0300 0x123 Default 0x0 234 0 Photo Export: [com.valtteriluoma.photo-export:VariantExporter] Exported IMG_002.JPG variant: edited -> /scratch/2026/10 asset: B/L0/001

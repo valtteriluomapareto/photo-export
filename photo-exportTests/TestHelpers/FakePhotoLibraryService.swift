@@ -39,6 +39,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// Thrown by the year-listing calls. Production throws `authorizationDenied` there
   /// without Photos access, so access tests set both this and `isAuthorized`.
   var availableYearsError: Error?
+  var availableYearsObserver: (@MainActor () -> Void)?
 
   // Call tracking
   var fetchAssetsCalls: [(year: Int, month: Int?, mediaType: PHAssetMediaType?)] = []
@@ -167,6 +168,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   func availableYears() throws -> [Int] {
+    availableYearsObserver?()
     if let error = availableYearsError { throw error }
     return yearCounts.map(\.year)
   }
