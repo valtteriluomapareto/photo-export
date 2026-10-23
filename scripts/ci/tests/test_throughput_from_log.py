@@ -38,12 +38,22 @@ class ThroughputFromLogTests(unittest.TestCase):
             (first.replace("2026-10-23", "bad-date"), "invalid completion timestamp"),
             (first.rsplit(" asset:", 1)[0], "missing asset identifier"),
             (first.replace("A/L0/001", "<private>"), "private asset identifier"),
+            (first + "\n" + first.replace("12:00:00.000000+0300", "12:00:01.000000"),
+             "mixed offset-free and offset-aware timestamps"),
         ]:
             with self.subTest(error=error):
                 result = self.run_parser(text=text)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(error, result.stderr)
                 self.assertNotIn("median", result.stdout)
+
+    def test_offsets_are_normalized_across_completion_lines(self):
+        capture = (FIXTURES / "two-assets.log").read_text()
+        capture = capture.replace("12:00:01.000000+0300", "09:00:01.000000Z")
+        capture = capture.replace("12:00:02.000000+0300", "10:00:02.000000+01:00")
+        result = self.run_parser(text=capture)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("assets=2 seconds=2.000000 assets/sec=1.000000", result.stdout)
 
     def test_asset_suffix_ignores_markers_inside_destination_paths(self):
         lines = (FIXTURES / "two-assets.log").read_text().splitlines()
