@@ -93,6 +93,7 @@ import Testing
       let f = Fixture()
       let input = YearInput()
       let gate = AsyncCheckpoint()
+      let refreshGate = AsyncCheckpoint()
       f.service.countOverride = { scope in
         if scope == .timeline(year: 2027, month: nil) {
           await gate.enter()
@@ -112,7 +113,24 @@ import Testing
         await gate.releaseAll()
         #expect(
           await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["2 photos"] })
+        f.service.countOverride = { _ in
+          await refreshGate.enter()
+          return 3
+        }
+        let rendered = f.counter.count(for: "year-content-body:2027")
+        f.library.invalidateCache(changedThumbnailAssetIDs: [])
+        f.library.libraryRefresh.flush()
+        await refreshGate.waitForEnter(count: 1)
+        try #require(
+          await observe(in: f.window) {
+            f.counter.count(for: "year-content-body:2027") > rendered
+          })
+        #expect(f.counter.renderedText["year-summary"] == ["2 photos"])
+        await refreshGate.releaseAll()
+        #expect(
+          await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["3 photos"] })
       } cleanup: {
+        await refreshGate.releaseAll()
         await gate.releaseAll()
         await f.close()
       }

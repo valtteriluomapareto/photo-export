@@ -81,6 +81,7 @@ import Testing
         h.store.drainSynchronously()
         h.collectionStore.drainSynchronously()
         h.dest.cleanup()
+        try? FileManager.default.removeItem(at: h.storeRoot)
       }
     }
 
@@ -116,6 +117,27 @@ import Testing
       }
     }
 
+    @Test func failedScopeResolutionSurfacesFailureWithoutPartialDispatch() async throws {
+      let f = Fixture(action: .all)
+      try await withCleanup {
+        f.h.photoLib.collectionTree = f.tree("A")
+        f.h.photoLib.collectionTreeError = CocoaError(.fileReadCorruptFile)
+        f.h.photoLib.inventoryCheckpoint = f.gate
+        f.window.orderFront(nil)
+        try #require(
+          await observe(in: f.window) { f.counter.renderedActions["toolbar-export"] != nil })
+        f.counter.renderedActions["toolbar-export"]?()
+        let tasks = f.h.manager.currentPreparationTasks
+        await f.gate.releaseAll()
+        for task in tasks { await task.value }
+        #expect(f.h.manager.pendingJobs.isEmpty)
+        #expect(!f.h.manager.isEnqueueingAll)
+        #expect(f.h.manager.progressState.manualSummary?.failureMessage != nil)
+      } cleanup: {
+        await f.close()
+      }
+    }
+
     @Test func cancellingHeldScopeResolutionCannotDispatchIntoANewerRun() async throws {
       let f = Fixture(action: .all)
       try await withCleanup {
@@ -134,6 +156,7 @@ import Testing
         let oldTasks = f.h.manager.currentPreparationTasks
         f.h.manager.cancelAndClear()
         f.h.photoLib.inventoryCheckpoint = nil
+        f.h.manager.queueCoordinator.pause()
         f.h.manager.startExportCollectionsSelection(
           CollectionsSelectionBuckets(includesFavorites: false, albumIds: ["B"], sharedAlbumIds: [])
         )
