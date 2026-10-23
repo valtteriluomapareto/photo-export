@@ -227,7 +227,7 @@ struct ExportMonthResumeTests {
       f.manager.startExportMonth(year: 2025, month: 1)
       await f.prepared()
       #expect(f.manager.isPaused)
-      #expect(f.manager.pendingJobs == jobs)
+      #expect(Array(f.manager.pendingJobs) == jobs)
       #expect(f.manager.totalJobsEnqueued == 1 && f.manager.totalJobsCompleted == 0)
       #expect(f.manager.generation == generation)
       #expect(f.writer.writeCalls.isEmpty && f.library.fetchAssetsCalls.isEmpty)

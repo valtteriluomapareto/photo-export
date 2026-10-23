@@ -561,7 +561,7 @@ final class ExportManager {
   // test reads (`manager.pendingJobs`, `manager.currentTask`,
   // `manager.queuedCountsByPlacementId`) and the "fresh-start condition" check in the
   // `start*` methods (`!isProcessing`) don't have to thread through `queueCoordinator`.
-  var pendingJobs: [ExportJob] {
+  var pendingJobs: ArraySlice<ExportJob> {
     _ = queueMutationCounter
     return queueCoordinator.pendingJobs
   }
@@ -584,15 +584,14 @@ final class ExportManager {
   @ObservationIgnored private(set) var currentJobAssetId: String?
   @ObservationIgnored private(set) var currentJobVariant: ExportVariant?
   /// The placement of the job currently in flight. Set in `processNext()` *before*
-  /// `currentJobAssetId` and reset everywhere `currentJobAssetId` is reset, so any
+  /// `currentJobAssetId` and retained between adjacent jobs, so any
   /// cancellation cleanup that observes `currentJobAssetId` is guaranteed to see the
   /// matching placement. Used by both the `cancelAndClear` and run-loop catch-block
   /// cleanup paths to route the `removeVariant` call to the correct store via
   /// `placement.kind`.
   ///
-  /// The observable storage lives on `progressState`. The per-job mutation
-  /// (set on job start, cleared on job end) notifies the in-flight spinner's direct
-  /// `ExportProgressState` dependency. This forwarder keeps internal write sites in
+  /// The observable storage lives on `progressState`. Sidebar activity is published
+  /// through the coordinator's month-specific snapshots. This forwarder keeps write sites in
   /// the manager unchanged. `private(set)` preserves the pre-extraction surface —
   /// only the manager (and a `setCurrentJob` / `clearCurrentJobIdentifiers` it
   /// owns) may mutate the in-flight placement.
@@ -1874,7 +1873,6 @@ final class ExportManager {
   /// placement id and looking it up in the placement-keyed dict. Existing call sites use
   /// `(year, month)` and stay unchanged.
   func queuedCount(year: Int, month: Int) -> Int {
-    _ = queueMutationCounter
     let placementId = ExportPlacement.timeline(year: year, month: month).id
     return queueCoordinator.queuedCount(placementId: placementId)
   }
@@ -2517,15 +2515,19 @@ final class ExportManager {
   /// `currentJobPlacement`. Reset `currentJobVariant` because the variant write hasn't
   /// started yet.
   func setCurrentJob(_ job: ExportJob) {
-    currentJobPlacement = job.placement
+    if currentJobPlacement != job.placement { currentJobPlacement = job.placement }
     currentJobAssetId = job.assetLocalIdentifier
     currentJobVariant = nil
+    queueCoordinator.setActivePlacement(job.placement.id)
   }
 
-  func clearCurrentJobIdentifiers() {
+  func clearCurrentJobIdentifiers(keepingPlacement: Bool = false) {
     currentJobAssetId = nil
     currentJobVariant = nil
-    currentJobPlacement = nil
+    if !keepingPlacement {
+      if currentJobPlacement != nil { currentJobPlacement = nil }
+      queueCoordinator.setActivePlacement(nil)
+    }
     progressState.currentAssetFilename = nil
   }
 
