@@ -80,7 +80,10 @@ struct InterruptedPairRecoveryTests {
     let defaultsName: String
     var physicalTasks: [Task<Void, Never>] = []
 
-    init(root: URL, destination: Destination, collection: Bool, companion: Bool) {
+    init(
+      root: URL, destination: Destination, collection: Bool, companion: Bool,
+      destinationIO: (any DestinationIOExecuting)? = nil
+    ) {
       self.root = root
       self.destination = destination
       placement = collection ? .favorites() : .timeline(year: 2025, month: 1)
@@ -95,6 +98,7 @@ struct InterruptedPairRecoveryTests {
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, fileSystem: files,
+        destinationIOFactory: { _ in destinationIO ?? DestinationIO() },
         userDefaults: TestScratch.defaults(suiteName: defaultsName))
       let asset = TestAssetFactory.makeAsset(
         id: "asset",
@@ -161,7 +165,8 @@ struct InterruptedPairRecoveryTests {
   }
 
   private func makeFixture(
-    collection: Bool, companion: Bool = false, mismatch: Mismatch? = nil
+    collection: Bool, companion: Bool = false, mismatch: Mismatch? = nil,
+    destinationIO: (any DestinationIOExecuting)? = nil
   ) async throws -> Fixture {
     let root = TestScratch.directory("InterruptedPairRecovery")
     let destination = Destination()
@@ -224,7 +229,8 @@ struct InterruptedPairRecoveryTests {
       try bytes.write(to: candidate)
     }
     let fixture = Fixture(
-      root: root, destination: destination, collection: collection, companion: companion)
+      root: root, destination: destination, collection: collection, companion: companion,
+      destinationIO: destinationIO)
     if mismatch == .size {
       fixture.photos.resourcesByAssetId["asset"] = [
         .init(type: .photo, originalFilename: "FILE.JPG"),
@@ -256,6 +262,51 @@ struct InterruptedPairRecoveryTests {
       ).sorted()
         == ["FILE.JPG", fixture.filename].sorted())
     await fixture.cleanup()
+  }
+
+  @Test(arguments: [false, true], [false, true])
+  func interruptedAdoptionRefusesClaimCreatedDuringPreparation(
+    collection: Bool, companion: Bool
+  ) async throws {
+    let gate = Gate()
+    // Directory resolution and interrupted-file verification precede slot preparation.
+    let io = RecordingDestinationIO(beforeLeaf: { if $0 == 3 { gate.holdOnce() } })
+    let fixture = try await makeFixture(
+      collection: collection, companion: companion, destinationIO: io)
+    let before = try Data(contentsOf: fixture.finalURL)
+    try await withCleanup {
+      fixture.start()
+      try #require(await gate.entered.waitForEnter(count: 1))
+      if collection {
+        fixture.collections.markVariantExported(
+          assetId: "other", placement: fixture.placement, variant: fixture.variant,
+          filename: fixture.filename, exportedAt: Date())
+      } else {
+        fixture.timeline.markVariantExported(
+          assetId: "other", variant: fixture.variant, year: 2025, month: 1,
+          relPath: fixture.placement.relativePath, filename: fixture.filename, exportedAt: Date())
+      }
+      gate.release()
+      await fixture.manager.waitForQueueDrained()
+      #expect(fixture.variants()[fixture.variant]?.status == .failed)
+      #expect(try Data(contentsOf: fixture.finalURL) == before)
+      #expect(fixture.writer.writeCalls.isEmpty)
+      #expect(fixture.files.moveCalls.isEmpty)
+      #expect(fixture.files.copyCalls.isEmpty)
+      #expect(fixture.files.timestampCalls.isEmpty)
+      let foreign =
+        collection
+        ? fixture.collections.exportInfo(assetId: "other", placement: fixture.placement)?.variants[
+          fixture.variant]
+        : fixture.timeline.exportInfo(assetId: "other")?.variants[fixture.variant]
+      #expect(foreign?.status == .done)
+      #expect(foreign?.filename == fixture.filename)
+      #expect(fixture.destination.opened == fixture.destination.closed)
+    } cleanup: {
+      gate.release()
+      await fixture.cleanup()
+      await gate.entered.releaseAll()
+    }
   }
 
   @Test(arguments: [false, true], Mismatch.allCases)

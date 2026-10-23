@@ -136,8 +136,10 @@ struct LibraryRootView: View {
         guard choosesFolderAfterImportSheet else { return }
         choosesFolderAfterImportSheet = false
         // Cancelling the panel leaves the decision open, so show the sheet again.
-        if !exportDestinationManager.selectFolderKeepingHistory() {
-          exportManager.requestImportSheet()
+        Task { @MainActor in
+          if await !exportDestinationManager.selectFolderKeepingHistory() {
+            exportManager.requestImportSheet()
+          }
         }
       },
       content: {

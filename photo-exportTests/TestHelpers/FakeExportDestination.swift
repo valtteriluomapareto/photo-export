@@ -29,15 +29,34 @@ final class FakeExportDestination: ExportDestination {
     selectedFolderURL = rootURL
   }
 
-  var revalidationCount = 0
+  private let revalidations = LockedBox(0)
+  var revalidationCount: Int { revalidations.value }
+  func captureDirectoryAccess(generation: Int) throws -> any ExportDirectoryResolving {
+    if let error = urlForRelativeDirectoryError { throw error }
+    guard let root = selectedFolderURL else { throw ExportDestinationError.noSelection }
+    return CapturedDirectories(
+      access: DestinationDirectoryAccess(root: root), revalidations: revalidations)
+  }
+
+  private struct CapturedDirectories: ExportDirectoryResolving {
+    let access: DestinationDirectoryAccess
+    let revalidations: LockedBox<Int>
+    func urlForRelativeDirectory(_ path: String, createIfNeeded: Bool) throws -> URL {
+      try access.urlForRelativeDirectory(path, createIfNeeded: createIfNeeded)
+    }
+    func revalidateDirectory(_ path: String) throws {
+      revalidations.mutate { $0 += 1 }
+      try access.revalidateDirectory(path)
+    }
+  }
   func revalidateDirectory(_ relativePath: String) throws {
-    revalidationCount += 1
+    revalidations.mutate { $0 += 1 }
     _ = try urlForRelativeDirectory(relativePath, createIfNeeded: false)
   }
 
   func urlForRelativeDirectory(_ relativePath: String, createIfNeeded: Bool) throws -> URL {
     if let error = urlForRelativeDirectoryError { throw error }
-    let root = rootURL
+    guard let root = selectedFolderURL else { throw ExportDestinationError.noSelection }
     guard !relativePath.isEmpty else {
       throw ExportDestinationError.invalidRelativePath("path is empty")
     }

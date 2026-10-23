@@ -34,7 +34,8 @@ struct VariantExporterTests {
     var convertHEICToJPEG: Bool = false
 
     func setCurrentAssetFilename(_ name: String?) {}
-    func setCurrentJobVariant(_ variant: ExportVariant?) {}
+    var onSetVariant: (() -> Void)?
+    func setCurrentJobVariant(_ variant: ExportVariant?) { onSetVariant?() }
     func clearRenderActivity() {}
 
     func recordVariantFailed(
@@ -68,6 +69,7 @@ struct VariantExporterTests {
     let converter: FakeImageConverter
     let fileSystem: FakeFileSystem
     let queueCoordinator: ExportQueueCoordinator
+    let timeline: ExportRecordStore
     let destDir: URL
     let storeRoot: URL
 
@@ -108,7 +110,28 @@ struct VariantExporterTests {
     return Harness(
       exporter: exporter, host: host, writer: writer, renderer: renderer,
       converter: converter, fileSystem: fileSystem, queueCoordinator: queueCoordinator,
-      destDir: destDir, storeRoot: storeRoot)
+      timeline: timeline, destDir: destDir, storeRoot: storeRoot)
+  }
+
+  @Test(.timeLimit(.minutes(2)))
+  func synchronousVariantHostCancellationCannotMarkOrDispatch() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.host.onSetVariant = { h.queueCoordinator.bumpGeneration() }
+    let asset = TestAssetFactory.makeAsset(id: "cancel-variant")
+    let resources = [TestAssetFactory.makeResource(originalFilename: "IMG.JPG")]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+    await #expect(throws: CancellationError.self) {
+      _ = try await h.exporter.exportSingleVariant(
+        variant: .original, descriptor: asset, resources: resources,
+        destDir: h.destDir, relPath: "2025/07/",
+        job: ExportManager.ExportJob(
+          assetLocalIdentifier: asset.id,
+          placement: .timeline(year: 2025, month: 7), selection: .edited),
+        groupStem: nil, pairOriginalWithSuffix: false, generation: 0, inFlight: &inFlight)
+    }
+    #expect(h.writer.writeCalls.isEmpty)
+    #expect(h.timeline.exportInfo(assetId: asset.id) == nil)
   }
 
   // MARK: - Tests

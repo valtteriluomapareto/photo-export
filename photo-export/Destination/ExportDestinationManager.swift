@@ -47,28 +47,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   private let fileSystem: any FileSystemService
   private var directoryGeneration: Int?
-  private struct ResolvedDirectory {
-    let url: URL
-    let handle: any FileDirectoryHandle
-    let physicalRoot: String
-  }
-  private static let maximumDirectoryHandles = 16
-  private var directoryResolutions: [String: ResolvedDirectory] = [:]
-  /// Survives handle eviction so a missing, previously resolved path is never recreated.
-  private var previouslyResolvedDirectories: Set<String> = []
+  private var directoryAccess: DestinationDirectoryAccess?
 
-  private func inspectDirectory(at url: URL) throws -> FileItemIdentity? {
-    do { return try fileSystem.directoryIdentity(at: url) } catch let error as NSError
-      where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOTDIR)
-    {
-      throw ExportDestinationError.notDirectory(url)
-    }
-  }
-
-  private func clearDirectoryResolutions() {
-    directoryResolutions.removeAll()
-    previouslyResolvedDirectories.removeAll()
-  }
+  private func clearDirectoryResolutions() { directoryAccess = nil }
 
   func resetDirectoryResolution() { clearDirectoryResolutions() }
 
@@ -78,11 +59,23 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     clearDirectoryResolutions()
   }
 
+  func captureDirectoryAccess(generation: Int) throws -> any ExportDirectoryResolving {
+    prepareDirectoryResolution(generation: generation)
+    guard let root = selectedFolderURL else { throw ExportDestinationError.noSelection }
+    guard isAvailable else { throw ExportDestinationError.notAvailable }
+    guard isWritable else { throw ExportDestinationError.notWritable }
+    if let directoryAccess { return directoryAccess }
+    let access = DestinationDirectoryAccess(root: root, fileSystem: fileSystem)
+    directoryAccess = access
+    return access
+  }
+
   func revalidateDirectory(_ relativePath: String) throws {
-    let key = relativePath.hasSuffix("/") ? String(relativePath.dropLast()) : relativePath
-    directoryResolutions.removeValue(forKey: key)
-    previouslyResolvedDirectories.insert(key)
-    _ = try urlForRelativeDirectory(relativePath, createIfNeeded: false)
+    try currentDirectoryAccess().revalidateDirectory(relativePath)
+  }
+
+  private func currentDirectoryAccess() throws -> any ExportDirectoryResolving {
+    try captureDirectoryAccess(generation: directoryGeneration ?? 0)
   }
 
   // MARK: - Keys & Logger
@@ -99,6 +92,52 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   private let validationScopeAcquirer: ((URL) -> Bool)?
   private let validationScopeReleaser: ((URL) -> Void)?
 
+  private let validationProbe: any DestinationValidationProbing
+  private let validationIO = DestinationIO()
+  private var validationGeneration = 0
+  private var validationTask: Task<Void, Never>?
+  private var isValidating = false
+  private var desiredSelectedFolder: URL?
+  private struct ValidationPresentation {
+    let available: Bool
+    let writable: Bool
+    let status: ExportDestinationStatus
+    let identity: DestinationIdentity
+  }
+  private var validationPresentation = ValidationPresentation(
+    available: false, writable: false, status: .noSelection, identity: .unavailable)
+
+  private func invalidateValidation() {
+    validationGeneration += 1
+    validationTask?.cancel()
+    validationTask = nil
+  }
+
+  private func publishSelectedFolder(_ url: URL?) {
+    desiredSelectedFolder = url
+    selectedFolderURL = url
+    while selectedFolderURL != desiredSelectedFolder {
+      selectedFolderURL = desiredSelectedFolder
+    }
+  }
+
+  /// Reconcile synchronous subscriber reentry before leaving the owning main turn.
+  private func publishValidation(_ next: ValidationPresentation) {
+    validationPresentation = next
+    while true {
+      let generation = validationGeneration
+      let current = validationPresentation
+      isAvailable = current.available
+      if generation != validationGeneration { continue }
+      isWritable = current.writable
+      if generation != validationGeneration { continue }
+      status = current.status
+      if generation != validationGeneration { continue }
+      if identity != current.identity { identity = current.identity }
+      if generation == validationGeneration { return }
+    }
+  }
+
   /// The **persisted** stable id, kept privately across launches for reuse. Distinct from the
   /// published `identity.stableId` (the *active* id), which is `nil` while the destination is
   /// unavailable. Seeded on first successful validate of a destination that has none, reused
@@ -109,7 +148,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Computes the destination fingerprint for a URL. Injectable so the network-share remount
   /// repro is a pure unit test — feed a drifted low-confidence fingerprint for the same folder
   /// and assert the stable id holds. Defaults to the live `URLResourceValues`-backed derivation.
-  private let fingerprintProvider: (URL) -> DestinationFingerprint?
+  private let fingerprintProvider: ((URL) -> DestinationFingerprint?)?
 
   /// Gathers same-vs-different-folder evidence for an explicit pick by resolving the *stored*
   /// bookmark and comparing it against the freshly picked folder. Injectable so the
@@ -243,9 +282,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   // MARK: - Public Computed
-  var canExportNow: Bool { selectedFolderURL != nil && isAvailable && isWritable }
+  var canExportNow: Bool { !isValidating && selectedFolderURL != nil && isAvailable && isWritable }
   /// Import only reads the backup folder — it does not require write access.
-  var canImportNow: Bool { selectedFolderURL != nil && isAvailable }
+  var canImportNow: Bool { !isValidating && selectedFolderURL != nil && isAvailable }
 
   var exportUnavailableHelp: String { status.exportHelp }
 
@@ -263,9 +302,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     userDefaults: UserDefaults,
     bookmarkDefaultsKey: String = "ExportDestinationBookmark",
     stableIdDefaultsKey: String = "ExportDestinationStableId",
-    fingerprintProvider: @escaping (URL) -> DestinationFingerprint? = {
-      ExportDestinationManager.computeDestinationFingerprint(for: $0)
-    },
+    fingerprintProvider: ((URL) -> DestinationFingerprint?)? = nil,
     sameFolderEvidenceProvider: ((URL) -> SameFolderEvidence)? = nil,
     ambiguityResolver: ((URL) -> FolderSelectionDecision)? = nil,
     bookmarkSaver: ((URL) -> Bool)? = nil,
@@ -274,7 +311,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     volumeNotificationCenter: NotificationCenter? = nil,
     validationScopeAcquirer: ((URL) -> Bool)? = nil,
     validationScopeReleaser: ((URL) -> Void)? = nil,
-    fileSystem: any FileSystemService = FileIOService()
+    fileSystem: any FileSystemService = FileIOService(),
+    validationProbe: any DestinationValidationProbing = ProductionDestinationValidationProbe()
   ) {
     precondition(
       (validationScopeAcquirer == nil) == (validationScopeReleaser == nil),
@@ -284,6 +322,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     self.validationScopeAcquirer = validationScopeAcquirer
     self.validationScopeReleaser = validationScopeReleaser
     self.fileSystem = fileSystem
+    self.validationProbe = validationProbe
     self.userDefaults = userDefaults
     self.bookmarkDefaultsKey = bookmarkDefaultsKey
     self.stableIdDefaultsKey = stableIdDefaultsKey
@@ -325,10 +364,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     let url = URL(
       fileURLWithPath: "/private/var/photo-export-screenshot-mode/\(displayName)",
       isDirectory: true)
-    selectedFolderURL = url
-    isAvailable = true
-    isWritable = true
-    status = .ready
+    setSelectedFolderForTesting(url)
   }
 
   func selectFolder() {
@@ -343,9 +379,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Returns whether the check started: false when the user cancels the panel, or the pick
   /// couldn't be saved or isn't available.
   @discardableResult
-  func selectFolderKeepingHistory() -> Bool {
-    guard let url = runFolderPanel() else { return false }
-    return applySelection(url, decision: .sameDestination, checkHistory: true)
+  func selectFolderKeepingHistory() async -> Bool {
+    guard let url = runFolderPanel(),
+      applySelection(url, decision: .sameDestination, checkHistory: true)
+    else { return false }
+    let generation = validationGeneration
+    await waitForValidation()
+    return generation == validationGeneration && selectedFolderURL == url
+      && identity.stableId != nil
   }
 
   /// Outcome of `useSelectedFolderAsNewDestination()`.
@@ -360,10 +401,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   /// Starts a fresh history for the selected folder, leaving the previous history in place for
   /// its own folder.
-  func useSelectedFolderAsNewDestination() -> NewDestinationOutcome {
+  func useSelectedFolderAsNewDestination() async -> NewDestinationOutcome {
     guard let url = selectedFolderURL else { return .notSaved }
     let previous = identity.stableId
     guard applyFolderSelection(url, decision: .newDestination) else { return .notSaved }
+    let generation = validationGeneration
+    await waitForValidation()
+    guard generation == validationGeneration, selectedFolderURL == url else { return .notSaved }
     guard let current = identity.stableId, current != previous else { return .sameIdentity }
     return .newHistory
   }
@@ -383,7 +427,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Resolves the same-vs-different-folder decision for an explicitly picked folder, then
   /// applies it. Split out from `selectFolder()` (which owns the non-testable `NSOpenPanel`) so
   /// the re-selection rule can be unit-tested via the injected `sameFolderEvidenceProvider`.
-  private func processSelectedFolder(_ url: URL) {
+  private func processSelectedFolder(_ url: URL, synchronously: Bool = false) {
     let evidence = sameFolderEvidenceProvider?(url) ?? defaultSameFolderEvidence(forPicked: url)
     let decision: FolderSelectionDecision
     switch evidence {
@@ -396,7 +440,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
     applySelection(
       url, decision: decision,
-      checkHistory: evidence == .ambiguous && decision == .sameDestination)
+      checkHistory: evidence == .ambiguous && decision == .sameDestination,
+      synchronously: synchronously)
   }
 
   /// Applies a pick and, when `checkHistory`, asks the app to check the export history against
@@ -404,12 +449,17 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Returns whether the check was requested.
   @discardableResult
   private func applySelection(
-    _ url: URL, decision: FolderSelectionDecision, checkHistory: Bool
+    _ url: URL, decision: FolderSelectionDecision, checkHistory: Bool,
+    synchronously: Bool = false
   ) -> Bool {
-    let applied = applyFolderSelection(url, decision: decision)
-    guard checkHistory, applied, identity.stableId != nil else { return false }
-    onAmbiguousSameFolderChosen?()
-    return true
+    var checked = false
+    let applied = applyFolderSelection(url, decision: decision, synchronously: synchronously) {
+      [weak self] in
+      guard let self, checkHistory, self.identity.stableId != nil else { return }
+      checked = true
+      self.onAmbiguousSameFolderChosen?()
+    }
+    return synchronously ? checked : checkHistory && applied
   }
 
   /// The stored bookmark won't resolve, so we can't tell whether the user re-picked the same
@@ -432,17 +482,18 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   }
 
   func clearSelection() {
-    selectedFolderURL = nil
-    isAvailable = false
-    isWritable = false
-    status = .noSelection
-    publishUnavailableIdentity()
+    invalidateValidation()
+    let generation = validationGeneration
+    isValidating = false
     stashedLegacyDestinationId = nil
-    // Dropping the selection always drops the stable id — the next selection is a fresh
-    // destination as far as identity is concerned.
     persistedStableId = nil
     userDefaults.removeObject(forKey: stableIdDefaultsKey)
     userDefaults.removeObject(forKey: bookmarkDefaultsKey)
+    publishSelectedFolder(nil)
+    guard generation == validationGeneration else { return }
+    publishValidation(
+      ValidationPresentation(
+        available: false, writable: false, status: .noSelection, identity: .unavailable))
     logger.info("Cleared export destination selection")
   }
 
@@ -481,187 +532,41 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// caught by canonicalizing every parent that already exists on disk and asserting the
   /// canonical path still has the root as a prefix.
   func urlForRelativeDirectory(_ relativePath: String, createIfNeeded: Bool) throws -> URL {
-    guard let root = selectedFolderURL else { throw ExportDestinationError.noSelection }
-    guard isAvailable else { throw ExportDestinationError.notAvailable }
-    guard isWritable else { throw ExportDestinationError.notWritable }
-    guard !relativePath.isEmpty else {
-      throw ExportDestinationError.invalidRelativePath("path is empty")
-    }
-    guard !relativePath.hasPrefix("/") else {
-      throw ExportDestinationError.invalidRelativePath("absolute path: \(relativePath)")
-    }
-
-    // Split on forward slash. Trailing slash is allowed (collection placements include it
-    // by convention); empty interior components are not (would be a `//` segment).
-    let trimmed =
-      relativePath.hasSuffix("/")
-      ? String(relativePath.dropLast()) : relativePath
-    let components = trimmed.split(separator: "/", omittingEmptySubsequences: false).map(
-      String.init)
-    for component in components {
-      if component.isEmpty {
-        throw ExportDestinationError.invalidRelativePath(
-          "empty component in path: \(relativePath)")
-      }
-      if component == ".." {
-        throw ExportDestinationError.invalidRelativePath(
-          ".. segment in path: \(relativePath)")
-      }
-      if component == "." {
-        throw ExportDestinationError.invalidRelativePath(
-          ". segment in path: \(relativePath)")
-      }
-    }
-
-    if let cached = directoryResolutions[trimmed] {
-      if try inspectDirectory(at: cached.url) == cached.handle.identity {
-        let physicalPath = try fileSystem.directoryPhysicalPath(cached.handle).path
-        guard Self.contains(physicalPath, under: cached.physicalRoot) else {
-          directoryResolutions.removeValue(forKey: trimmed)
-          previouslyResolvedDirectories.insert(trimmed)
-          throw ExportDestinationError.invalidRelativePath(
-            "path resolves outside the export root: \(relativePath)")
-        }
-        return cached.url
-      }
-      directoryResolutions.removeValue(forKey: trimmed)
-      previouslyResolvedDirectories.insert(trimmed)
-    }
-
-    // Build the target URL by appending components.
-    var target = root
-    for component in components {
-      target = target.appendingPathComponent(component, isDirectory: true)
-    }
-
-    // Path-length guard (PATH_MAX is 1024 on macOS; reserve some headroom for the
-    // filename that will be appended later).
-    if target.path.utf8.count >= 1000 { throw ExportDestinationError.pathTooLong }
-
-    // Symlink-escape protection: resolve symlinks on the deepest existing prefix and
-    // verify it still lies under the root's canonical path. If the user has placed a
-    // symlink at `<root>/Collections/Albums/Trip` pointing outside the destination, the
-    // resolved path would not have the root as a prefix.
-    let rootCanonical = fileSystem.resolvingSymlinks(at: root).path
-    let targetCanonical = try canonicalizeExistingPrefix(of: target).path
-    // Boundary-safe prefix check: a bare `hasPrefix(rootCanonical)` would let
-    // `/tmp/Backup-old/Trip` slip past a root of `/tmp/Backup`. Accept either equal-to-
-    // root (zero-length tail) or root-followed-by-slash. `rootCanonical` itself never
-    // ends with `/` (FileManager's standardized paths drop the trailing slash) so we
-    // append it explicitly here.
-    let rootBoundary = rootCanonical + "/"
-    if targetCanonical != rootCanonical && !targetCanonical.hasPrefix(rootBoundary) {
-      throw ExportDestinationError.invalidRelativePath(
-        "path resolves outside the export root: \(relativePath)")
-    }
-
-    // Verify each existing intermediate component is a directory (or doesn't exist yet,
-    // in which case `ensureDirectoryExists` will create it).
-    var probe = root
-    for component in components {
-      probe = probe.appendingPathComponent(component, isDirectory: true)
-      if try inspectDirectory(at: probe) == nil { break }
-    }
-
-    var identity = try inspectDirectory(at: target)
-    if identity == nil, previouslyResolvedDirectories.contains(trimmed) {
-      throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))
-    }
-    if createIfNeeded, identity == nil {
-      try ensureDirectoryExists(at: target)
-      identity = try inspectDirectory(at: target)
-    }
-    if identity != nil {
-      // Bound retained descriptors independently of the number of folders in a run.
-      if directoryResolutions.count >= Self.maximumDirectoryHandles {
-        directoryResolutions.removeAll(keepingCapacity: true)
-      }
-      // Obtain both physical spellings from the kernel. Foundation can shorten
-      // system aliases such as /private/var even after resolving their symlinks.
-      let rootHandle = try fileSystem.openDirectory(at: root)
-      let physicalRoot = try fileSystem.directoryPhysicalPath(rootHandle).path
-      let handle = try fileSystem.openDirectory(at: target)
-      guard Self.contains(try fileSystem.directoryPhysicalPath(handle).path, under: physicalRoot)
-      else {
-        throw ExportDestinationError.invalidRelativePath(
-          "path resolves outside the export root: \(relativePath)")
-      }
-      directoryResolutions[trimmed] = ResolvedDirectory(
-        url: target, handle: handle, physicalRoot: physicalRoot)
-      previouslyResolvedDirectories.insert(trimmed)
-    }
-
-    return target
-  }
-
-  private static func contains(_ path: String, under root: String) -> Bool {
-    path == root || path.hasPrefix(root + "/")
-  }
-
-  /// Walks `url` upward until it finds an ancestor that exists on disk, then resolves
-  /// symlinks on that ancestor to get a canonical path. The non-existing tail is
-  /// re-appended so the result is still the requested URL — but with the symlink-resolved
-  /// existing prefix substituted in. Used by `urlForRelativeDirectory` to detect
-  /// symlink-escape attacks where a parent component is a symlink pointing outside the
-  /// root.
-  private func canonicalizeExistingPrefix(of url: URL) throws -> URL {
-    var components: [String] = []
-    var current = url
-    while try inspectDirectory(at: current) == nil {
-      components.insert(current.lastPathComponent, at: 0)
-      let parent = current.deletingLastPathComponent()
-      // Stop at the filesystem root to avoid infinite loops on malformed input.
-      if parent.path == current.path { break }
-      current = parent
-    }
-    var result = fileSystem.resolvingSymlinks(at: current)
-    for component in components {
-      result = result.appendingPathComponent(component, isDirectory: true)
-    }
-    return result
-  }
-
-  /// Ensures the directory exists at the given URL, creating with intermediates.
-  func ensureDirectoryExists(at url: URL) throws {
-    if try inspectDirectory(at: url) != nil { return }
-    do {
-      try fileSystem.createDirectory(at: url, withIntermediateDirectories: true)
-      logger.info("Ensured directory: \(url.path, privacy: .public)")
-    } catch {
-      logger.error(
-        "Failed to create directory: \(url.path, privacy: .public) error: \(String(describing: error), privacy: .public)"
-      )
-      throw ExportDestinationError.failedToCreateFolder(url, underlying: error)
-    }
+    try currentDirectoryAccess().urlForRelativeDirectory(
+      relativePath, createIfNeeded: createIfNeeded)
   }
 
   // MARK: - Testing Support
 
   /// Directly sets the folder URL for unit tests.
   func setSelectedFolderForTesting(_ url: URL) {
-    selectedFolderURL = url
-    isAvailable = true
-    isWritable = true
-    status = .ready
+    invalidateValidation()
+    isValidating = false
+    let generation = validationGeneration
+    publishSelectedFolder(url)
+    guard generation == validationGeneration else { return }
+    publishValidation(
+      ValidationPresentation(
+        available: true, writable: true, status: .ready, identity: identity))
   }
 
   /// Exercises the production bookmark save path for unit tests as a fresh selection
   /// (`.newDestination`), seeding a new stable id.
   func persistSelectedFolderForTesting(_ url: URL) {
-    applyFolderSelection(url, decision: .newDestination)
+    applyFolderSelection(url, decision: .newDestination, synchronously: true)
   }
 
   /// Drives the full selection flow (evidence → decision → apply) for unit tests, bypassing the
   /// `NSOpenPanel`. Pair with an injected `sameFolderEvidenceProvider` to exercise the
   /// re-selection rule.
   func selectFolderForTesting(_ url: URL) {
-    processSelectedFolder(url)
+    processSelectedFolder(url, synchronously: true)
   }
 
   /// `selectFolderKeepingHistory()` without the `NSOpenPanel`.
   @discardableResult
   func selectFolderKeepingHistoryForTesting(_ url: URL) -> Bool {
-    applySelection(url, decision: .sameDestination, checkHistory: true)
+    applySelection(url, decision: .sameDestination, checkHistory: true, synchronously: true)
   }
 
   /// Re-runs validation against the current selection, mirroring what the volume
@@ -670,7 +575,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// notification.
   func revalidateForTesting() {
     guard let url = selectedFolderURL else { return }
-    validate(url: url)
+    validate(url: url, synchronously: true)
   }
 
   // MARK: - Internal Helpers
@@ -681,6 +586,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Returns false when the bookmark couldn't be saved and nothing changed.
   @discardableResult
   func applyFolderSelection(_ url: URL, decision: FolderSelectionDecision) -> Bool {
+    applyFolderSelection(url, decision: decision, synchronously: false)
+  }
+
+  @discardableResult
+  private func applyFolderSelection(
+    _ url: URL, decision: FolderSelectionDecision, synchronously: Bool,
+    onValidated: @escaping @MainActor () -> Void = {}
+  ) -> Bool {
     logger.info(
       "User selected export folder: \(url.path, privacy: .public) (decision: \(String(describing: decision), privacy: .public))"
     )
@@ -710,8 +623,18 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       // `ExportRecords/<oldId>/` even though the bytes were just overwritten).
       break
     }
-    selectedFolderURL = url
-    validate(url: url)
+    invalidateValidation()
+    let generation = validationGeneration
+    isValidating = true
+    if !synchronously {
+      publishValidation(
+        ValidationPresentation(
+          available: false, writable: false, status: status, identity: .unavailable))
+    }
+    guard generation == validationGeneration else { return false }
+    publishSelectedFolder(url)
+    guard generation == validationGeneration else { return false }
+    validate(url: url, synchronously: synchronously, onValidated: onValidated)
     return true
   }
 
@@ -759,26 +682,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     if let stashed = stashedLegacyDestinationId { return stashed }
     guard let data = userDefaults.data(forKey: bookmarkDefaultsKey) else { return nil }
     return Self.legacyDestinationId(from: data)
-  }
-
-  /// Publishes the identity for a reachable destination, seeding the stable id from the
-  /// freshly computed fingerprint if one isn't persisted yet (the upgrade / first-selection
-  /// path), and reusing the persisted id verbatim otherwise (the line that fixes the
-  /// network-share remount re-export). A `nil` fingerprint — drive reachable but resource keys
-  /// unreadable — must not seed: defer to the next successful validate and publish unavailable.
-  private func publishAvailableIdentity(fingerprint: DestinationFingerprint?) {
-    guard let fingerprint else {
-      publishUnavailableIdentity()
-      return
-    }
-    if persistedStableId == nil {
-      let seed = fingerprint.id  // keying-id-ok: seeds a fresh stable id
-      persistedStableId = seed
-      userDefaults.set(seed, forKey: stableIdDefaultsKey)
-      logger.info("Seeded stable destination id: \(seed, privacy: .public)")
-    }
-    let next = DestinationIdentity(stableId: persistedStableId, fingerprint: fingerprint)
-    if identity != next { identity = next }
   }
 
   /// Publishes the unavailable identity (no active stable id, no fingerprint). The *persisted*
@@ -893,26 +796,28 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         relativeTo: nil,
         bookmarkDataIsStale: &isStale
       )
-      selectedFolderURL = url
-      validate(url: url)
+      publishSelectedFolder(url)
+      validate(url: url) { [weak self] in
+        guard let self, isStale, self.isAvailable else { return }
+        self.logger.info("Bookmark data is stale; refreshing now that destination validated")
+        _ = self.saveBookmark(for: url)
+      }
       // Refresh a stale bookmark only after `validate` confirms the URL is
       // actually accessible. The synchronous `url.bookmarkData(...)` call
       // inside `saveBookmark` blocks on kernel I/O when the underlying path
       // is unreachable or sandbox-denied, which can stall launch.
       // If the destination isn't usable, the user will be prompted
       // to re-select; the refresh happens naturally on their next selection.
-      if isStale && isAvailable {
-        logger.info("Bookmark data is stale; refreshing now that destination validated")
-        _ = saveBookmark(for: url)
-      }
+
     } catch {
       logger.error(
         "Failed to restore bookmark: \(String(describing: error), privacy: .public)")
-      status = .permissionRequired
-      selectedFolderURL = nil
-      isAvailable = false
-      isWritable = false
-      publishUnavailableIdentity()
+      invalidateValidation()
+      isValidating = false
+      publishSelectedFolder(nil)
+      publishValidation(
+        ValidationPresentation(
+          available: false, writable: false, status: .permissionRequired, identity: .unavailable))
       // Keep `stashedLegacyDestinationId` (set above from the *original* bytes). A failed
       // resolution is exactly when an upgrader will re-select the same folder; clearing the
       // stash here would make `currentLegacyDestinationId()` fall back to hashing the *new*
@@ -922,70 +827,94 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
   }
 
-  private func validate(url: URL) {
-    // Temporarily acquire access for validation
-    let didStart = validationScopeAcquirer?(url) ?? url.startAccessingSecurityScopedResource()
-    defer {
-      if didStart {
-        if let release = validationScopeReleaser {
-          release(url)
-        } else {
-          url.stopAccessingSecurityScopedResource()
-        }
-      }
-    }
+  func revalidate() {
+    guard let url = selectedFolderURL else { return }
+    validate(url: url)
+  }
 
-    // When scoped access can't be acquired — typically because the bookmark
-    // is stale, sandbox-denied, or the underlying volume is unreachable —
-    // every subsequent resource-key read and FileManager call on this URL
-    // would block on the kernel I/O timeout. Bail out instead: publish
-    // unavailable state and let the user re-select.
-    guard didStart else {
-      isAvailable = false
-      isWritable = false
-      status = .permissionRequired
-      publishUnavailableIdentity()
+  func waitForValidation() async {
+    while let task = validationTask {
+      let generation = validationGeneration
+      await task.value
+      if generation == validationGeneration { return }
+    }
+  }
+
+  private func validate(
+    url: URL, synchronously: Bool = false,
+    onValidated: @escaping @MainActor () -> Void = {}
+  ) {
+    invalidateValidation()
+    let generation = validationGeneration
+    // Keep public availability complete while queued work waits for current validation.
+    isValidating = true
+    let started = validationScopeAcquirer?(url) ?? url.startAccessingSecurityScopedResource()
+    guard generation == validationGeneration, selectedFolderURL == url else {
+      if started { releaseValidationScope(url) }
       return
     }
-
-    // Check reachability
-    var reachable = false
-    do {
-      reachable = try url.checkResourceIsReachable()
-    } catch {
-      reachable = false
+    guard started else {
+      isValidating = false
+      publishValidation(
+        ValidationPresentation(
+          available: false, writable: false, status: .permissionRequired, identity: .unavailable))
+      guard generation == validationGeneration, selectedFolderURL == url else { return }
+      onValidated()
+      return
     }
+    // Injected fingerprints are test values; the production resource reads stay inside the leaf.
+    let fingerprint = fingerprintProvider.map { $0(url) }
+    if synchronously {
+      let result = validationProbe.inspect(url)
+      releaseValidationScope(url)
+      finishValidation(
+        result, url: url, generation: generation, fingerprint: fingerprint,
+        onValidated: onValidated)
+      return
+    }
+    let probe = validationProbe
+    let io = validationIO
+    let release = validationScopeReleaser
+    validationTask = Task { [weak self] in
+      let result = await io.run { probe.inspect(url) }
+      if let release { release(url) } else { url.stopAccessingSecurityScopedResource() }
+      guard let self else { return }
+      guard !Task.isCancelled else { return }
+      self.finishValidation(
+        result, url: url, generation: generation, fingerprint: fingerprint,
+        onValidated: onValidated)
+      if self.validationGeneration == generation { self.validationTask = nil }
+    }
+  }
 
-    // Ensure it is a directory
-    let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey])
-    let isDirectory = resourceValues?.isDirectory == true
-
-    // Determine writability (best-effort)
-    let writable = FileManager.default.isWritableFile(atPath: url.path)
-
-    isAvailable = reachable && isDirectory
-    isWritable = isAvailable && writable
-
-    if !reachable {
-      status = .unreachable
-    } else if !isDirectory {
-      status = .notDirectory
-    } else if !writable {
-      status = .readOnly
+  private func releaseValidationScope(_ url: URL) {
+    if let validationScopeReleaser {
+      validationScopeReleaser(url)
     } else {
-      status = .ready
+      url.stopAccessingSecurityScopedResource()
     }
+  }
 
-    // Publish identity once availability is known. When reachable, seed-or-reuse the stable id
-    // and carry the freshly computed fingerprint (advisory). When unavailable, publish the
-    // unavailable identity — the persisted stable id is kept privately for reuse when the drive
-    // returns, but the *active* id goes nil so the lifecycle coordinator runs its
-    // destination-unavailable handling.
-    if isAvailable {
-      publishAvailableIdentity(fingerprint: fingerprintProvider(url))
-    } else {
-      publishUnavailableIdentity()
+  private func finishValidation(
+    _ result: DestinationValidationResult, url: URL, generation: Int,
+    fingerprint: DestinationFingerprint??, onValidated: @MainActor () -> Void
+  ) {
+    guard generation == validationGeneration, selectedFolderURL == url else { return }
+    var nextIdentity = DestinationIdentity.unavailable
+    if result.isAvailable, let fingerprint = fingerprint ?? result.fingerprint {
+      if persistedStableId == nil {
+        persistedStableId = fingerprint.id  // keying-id-ok: seeds a fresh stable id
+        userDefaults.set(persistedStableId, forKey: stableIdDefaultsKey)
+      }
+      nextIdentity = DestinationIdentity(stableId: persistedStableId, fingerprint: fingerprint)
     }
+    isValidating = false
+    publishValidation(
+      ValidationPresentation(
+        available: result.isAvailable, writable: result.isWritable, status: result.status,
+        identity: nextIdentity))
+    guard generation == validationGeneration, selectedFolderURL == url else { return }
+    onValidated()
   }
 
   private func observeVolumeChanges() {
@@ -997,8 +926,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     ) { [weak self] _ in
       guard let self else { return }
       Task { @MainActor in
-        guard let url = self.selectedFolderURL else { return }
-        self.validate(url: url)
+        self.revalidate()
       }
     }
     let unmountObs = center.addObserver(
@@ -1008,8 +936,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     ) { [weak self] _ in
       guard let self else { return }
       Task { @MainActor in
-        guard let url = self.selectedFolderURL else { return }
-        self.validate(url: url)
+        self.revalidate()
       }
     }
     volumeObservers = [mountObs, unmountObs]

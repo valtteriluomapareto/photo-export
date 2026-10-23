@@ -165,10 +165,12 @@ struct ImportView: View {
   private var previousBackupMissingView: some View {
     let folderName = exportDestinationManager.selectedFolderURL?.lastPathComponent ?? "this folder"
     let chooseAnother: () -> Void = { onChooseAnotherFolder?() }
-    let useAsNew = {
-      let outcome = exportDestinationManager.useSelectedFolderAsNewDestination()
-      newFolderError = exportManager.continueAfterUsingFolderAsNew(outcome)
-      if outcome == .newHistory { dismiss() }
+    let useAsNew: () -> Void = {
+      Task { @MainActor in
+        let outcome = await exportDestinationManager.useSelectedFolderAsNewDestination()
+        newFolderError = exportManager.continueAfterUsingFolderAsNew(outcome)
+        if outcome == .newHistory { dismiss() }
+      }
     }
     #if DEBUG
       bodyCounter?.recordText(["false"], for: "import-progress")

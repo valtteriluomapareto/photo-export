@@ -738,6 +738,24 @@ final class ExportRecordStore {
       excluding: { _ in true })
   }
 
+  /// Captures just this folder and the permitted own-record exclusions for worker naming.
+  func filenameClaimSnapshot(
+    year: Int, month: Int, subfolder: String?, exceptVariant variant: ExportVariant?,
+    of assetId: String
+  ) -> FilenameClaimSnapshot {
+    let own =
+      recordsById[assetId].map { record in
+        record.variants.filter { variant == nil || $0.key == variant }.values.map {
+          (
+            filename: $0.filename,
+            folder: ClaimFolder(year: record.year, month: record.month, subfolder: $0.subfolder)
+          )
+        }
+      } ?? []
+    return currentFilenameClaims().snapshot(
+      in: ClaimFolder(year: year, month: month, subfolder: subfolder), excluding: own)
+  }
+
   private func isFilenameClaimed(
     _ filename: String, year: Int, month: Int, subfolder: String?, assetId: String,
     excluding isOwn: (ExportVariant) -> Bool

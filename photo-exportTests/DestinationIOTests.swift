@@ -18,6 +18,23 @@ struct DestinationIOTests {
     }
   }
 
+  private final class Capture: @unchecked Sendable {}
+  private final class WeakCapture: @unchecked Sendable {
+    weak var value: Capture?
+  }
+
+  private func consumeCapture(on io: DestinationIO, weak: WeakCapture) async {
+    let capture = Capture()
+    weak.value = capture
+    await io.run { [capture] in withExtendedLifetime(capture) {} }
+  }
+
+  @Test func completedLeafReleasesPreparationCaptureBeforeReturning() async {
+    let weak = WeakCapture()
+    await consumeCapture(on: DestinationIO(), weak: weak)
+    #expect(weak.value == nil)
+  }
+
   @Test func serialLeavesFinishInOrderWhileOtherDestinationProgresses() async throws {
     let first = RecordingDestinationIO()
     let other = DestinationIO()

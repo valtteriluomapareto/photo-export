@@ -1612,7 +1612,7 @@ final class ExportManager {
     queueCoordinator.teardownQueue()
     queueCoordinator.resetProgressCounters()
     isEnqueueingAll = false
-    progressState.currentAssetFilename = nil
+    setCurrentAssetFilename(nil)
     clearRenderActivity()
     clearEmptyRunMessage()
     clearQueueWarningMessage()
@@ -1957,7 +1957,7 @@ final class ExportManager {
       manualRunFeedback = ManualRunFeedback(generation: generation)
     }
     queueCoordinator.resetProgressCounters()
-    progressState.currentAssetFilename = nil
+    setCurrentAssetFilename(nil)
   }
 
   /// Scan failure in a single-scope `start*` (month, year, Favorites, album, shared album).
@@ -2025,6 +2025,13 @@ final class ExportManager {
     var intendedVariant: ExportVariant = .original
     do {
       try throwIfCancelledOrStale(gen)
+      let root = exportDestination.selectedFolderURL
+      let destinationId = recordStoreRouter.destinationId(for: job.placement)
+      await exportDestination.waitForValidation()
+      try throwIfCancelledOrStale(gen)
+      guard exportDestination.selectedFolderURL == root,
+        recordStoreRouter.destinationId(for: job.placement) == destinationId
+      else { throw CancellationError() }
       // Claims are kept per month, so without one every name would read as claimed and
       // each walk would try all 10,000 suffixes before failing.
       if job.placement.kind == .timeline, job.placement.timelineYearMonth == nil {
@@ -2109,9 +2116,13 @@ final class ExportManager {
         for: descriptor.mediaType, layout: job.videoLayout)
       let effectiveRelPath = ExportMediaPathPolicy.relativePath(
         placement: job.placement, subfolder: subfolder)
-      exportDestination.prepareDirectoryResolution(generation: gen)
-      let destDir = try exportDestination.urlForRelativeDirectory(
-        effectiveRelPath, createIfNeeded: true)
+      let destinationContext = try variantExporter.captureDestinationContext(
+        placement: job.placement, generation: gen)
+      let destDir = try await destinationContext.io.run {
+        try destinationContext.directories.urlForRelativeDirectory(
+          effectiveRelPath, createIfNeeded: true)
+      }
+      try variantExporter.checkOwnership(destinationContext, placement: job.placement)
       let relPath = effectiveRelPath
 
       let resources = photoLibraryService.resources(for: descriptor.id)
@@ -2156,10 +2167,6 @@ final class ExportManager {
       // A stem chosen for the whole group skips names another asset's records hold, so no
       // member is later written at a name another record claims, or pushed alone onto
       // another stem.
-      let claimedByAnotherAsset = { [recordStoreRouter] (name: String) in
-        recordStoreRouter.isFilenameClaimed(
-          name, placement: job.placement, subfolder: subfolder, exceptAsset: descriptor.id)
-      }
 
       var groupStem = ExportDestinationResolver.inheritedGroupStem(
         from: existingRecord, descriptor: descriptor, resources: resources)
@@ -2214,14 +2221,15 @@ final class ExportManager {
             convertHEICToJPEG: convertHEICToJPEG)
           if let editedFilename = editedProducer.originalFilename {
             let editedExt = (editedFilename as NSString).pathExtension
-            groupStem = destinationResolver.allocatePairedGroupStem(
+            groupStem = try await variantExporter.allocatePairedGroupStem(
               baseStem: baseStem,
               imageExt: originalExt,
               editedExt: editedExt,
               destDir: destDir,
               pairOriginalWithSuffix: true,
               pairedVideoExt: pairedVideoExt,
-              isClaimed: claimedByAnotherAsset)
+              job: job, subfolder: subfolder, assetId: descriptor.id,
+              context: destinationContext)
           }
         } else if editedLivePhotoOnly {
           // 2-slot edited-only path: the only image side written is the edited variant.
@@ -2232,25 +2240,27 @@ final class ExportManager {
             convertHEICToJPEG: convertHEICToJPEG)
           if let editedFilename = editedProducer.originalFilename {
             let editedExt = (editedFilename as NSString).pathExtension
-            groupStem = destinationResolver.allocatePairedGroupStem(
+            groupStem = try await variantExporter.allocatePairedGroupStem(
               baseStem: baseStem,
               imageExt: editedExt,
               editedExt: nil,
               destDir: destDir,
               pairOriginalWithSuffix: false,
               pairedVideoExt: pairedVideoExt,
-              isClaimed: claimedByAnotherAsset)
+              job: job, subfolder: subfolder, assetId: descriptor.id,
+              context: destinationContext)
           }
         } else {
           // 2-slot unedited path: the only image side written is the original.
-          groupStem = destinationResolver.allocatePairedGroupStem(
+          groupStem = try await variantExporter.allocatePairedGroupStem(
             baseStem: baseStem,
             imageExt: originalExt,
             editedExt: nil,
             destDir: destDir,
             pairOriginalWithSuffix: false,
             pairedVideoExt: pairedVideoExt,
-            isClaimed: claimedByAnotherAsset)
+            job: job, subfolder: subfolder, assetId: descriptor.id,
+            context: destinationContext)
         }
       }
 
@@ -2275,7 +2285,8 @@ final class ExportManager {
             generation: gen,
             inFlight: &inFlight,
             subfolder: subfolder,
-            mayAdoptExisting: !Self.pairedVideoFollows(variant, in: orderedVariants)
+            mayAdoptExisting: !Self.pairedVideoFollows(variant, in: orderedVariants),
+            context: destinationContext
           )
           try throwIfCancelledOrStale(gen)
           if let nextGroupStem { groupStem = nextGroupStem }
@@ -2313,7 +2324,7 @@ final class ExportManager {
         return await runEditedFallbackOriginal(
           descriptor: descriptor, resources: resources, destDir: destDir,
           relPath: relPath, job: job, generation: gen, inFlight: &inFlight,
-          subfolder: subfolder)
+          subfolder: subfolder, context: destinationContext)
       }
     } catch is CancellationError {
       logger.info(
@@ -2376,7 +2387,7 @@ final class ExportManager {
     job: ExportJob,
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
-    subfolder: String? = nil
+    subfolder: String? = nil, context: ExportDestinationContext
   ) async -> ExportFailureSignal? {
     guard
       isAutoSyncVariantEligible(
@@ -2393,14 +2404,11 @@ final class ExportManager {
     }
     let baseStem = ExportDestinationResolver.splitFilename(originalRes.originalFilename).base
     let originalExt = (originalRes.originalFilename as NSString).pathExtension
-    let stem = destinationResolver.allocateUnusedOrigStem(
-      baseStem: baseStem, originalExt: originalExt, destDir: destDir
-    ) { [recordStoreRouter] name in
-      recordStoreRouter.isFilenameClaimed(
-        name, placement: job.placement, subfolder: subfolder, exceptAsset: descriptor.id)
-    }
     do {
-      try throwIfCancelledOrStale(gen)
+      let stem = try await variantExporter.allocateUnusedOrigStem(
+        baseStem: baseStem, originalExt: originalExt, destDir: destDir,
+        job: job, subfolder: subfolder, assetId: descriptor.id, context: context)
+      try variantExporter.checkOwnership(context, placement: job.placement)
       _ = try await variantExporter.exportSingleVariant(
         variant: .original,
         descriptor: descriptor,
@@ -2413,7 +2421,7 @@ final class ExportManager {
         generation: gen,
         inFlight: &inFlight,
         subfolder: subfolder,
-        acceptsEditedFallback: true
+        acceptsEditedFallback: true, context: context
       )
       try throwIfCancelledOrStale(gen)
       // Mark `.edited` with the explicit fallback sentinel so future runs
@@ -2464,8 +2472,15 @@ final class ExportManager {
   // The sentinel-message `recordVariantFailed` overload is declared above.
   // Cancellation goes directly through the exporter's queue coordinator.
 
+  @ObservationIgnored private var requestedAssetFilename: String?
+
   func setCurrentAssetFilename(_ name: String?) {
+    requestedAssetFilename = name
     progressState.currentAssetFilename = name
+    // A synchronous cancellation may replace the requested value before storage completes.
+    while progressState.currentAssetFilename != requestedAssetFilename {
+      progressState.currentAssetFilename = requestedAssetFilename
+    }
   }
 
   func setCurrentJobVariant(_ variant: ExportVariant?) {
@@ -2606,7 +2621,7 @@ final class ExportManager {
       if currentJobPlacement != nil { currentJobPlacement = nil }
       queueCoordinator.setActivePlacement(nil)
     }
-    if !keepingPlacement { progressState.currentAssetFilename = nil }
+    if !keepingPlacement { setCurrentAssetFilename(nil) }
   }
 
   // MARK: Record-mutation routing
