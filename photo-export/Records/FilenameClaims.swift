@@ -45,6 +45,17 @@ struct FilenameClaims<Folder: Hashable> {
     return max(0, remaining)
   }
 
+  /// A bounded folder view for one worker preparation, retaining the source counts by value.
+  func snapshot(
+    in folder: Folder, excluding own: some Sequence<(filename: String?, folder: Folder)>
+  ) -> FilenameClaimSnapshot {
+    var excluded: [String: Int] = [:]
+    for item in own where item.folder == folder {
+      if let filename = item.filename { excluded[FilenameKey.key(filename), default: 0] += 1 }
+    }
+    return FilenameClaimSnapshot(counts: counts[folder] ?? [:], excluded: excluded)
+  }
+
   /// An index filled by `add`, with a debug log of how long that took for `recordCount`
   /// records. Each store builds its index on the main actor.
   static func build(
@@ -81,5 +92,15 @@ struct FilenameClaims<Folder: Hashable> {
 
   mutating func removeAll() {
     counts = [:]
+  }
+}
+
+/// Immutable claims of one folder; own-record exclusions preserve the live query's rules.
+struct FilenameClaimSnapshot: Sendable {
+  let counts: [String: Int]
+  let excluded: [String: Int]
+  func isClaimed(_ filename: String) -> Bool {
+    let key = FilenameKey.key(filename)
+    return (counts[key] ?? 0) > (excluded[key] ?? 0)
   }
 }

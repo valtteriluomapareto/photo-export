@@ -69,7 +69,7 @@ struct DestinationAsyncValidationTests {
     #expect(manager.identity.fingerprint?.standardizedPath == b.path)
     #expect(publishedPaths == [b.path])
     #expect(probe.calls.value == [true, true])
-    #expect(opened.value == closed.value)
+    #expect(opened.value.map(\.path).sorted() == closed.value.map(\.path).sorted())
   }
 
   @Test func clearFromAvailabilitySubscriberCannotRestoreObsoleteResult() async throws {

@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 RUNNER = ROOT / 'scripts/ci/run-guards.sh'
 GUARDS = [
-    'test-guards.sh', 'check-read-only-photos.py', 'check-no-plan-refs.py',
+    'test-guards.sh', 'check-export-io-boundaries.py', 'check-read-only-photos.py', 'check-no-plan-refs.py',
     'check-test-waits.py', 'check-test-scratch.py', 'check-observation-ratchet.py',
     'check-persistence-doc.py',
     'check-version.py', 'check-regression-gates.sh', 'check-fingerprint-id-keying.sh',

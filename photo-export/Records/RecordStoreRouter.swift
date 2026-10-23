@@ -116,6 +116,24 @@ final class RecordStoreRouter {
     }
   }
 
+  /// Retained only until one naming preparation finishes; the mark uses the live query.
+  func filenameClaimSnapshot(
+    placement: ExportPlacement, subfolder: String?, exceptVariant variant: ExportVariant? = nil,
+    of assetId: String
+  ) -> FilenameClaimSnapshot {
+    switch placement.kind {
+    case .timeline:
+      guard let (year, month) = placement.timelineYearMonth else {
+        preconditionFailure("Timeline placement has no year and month")
+      }
+      return timelineStore.filenameClaimSnapshot(
+        year: year, month: month, subfolder: subfolder, exceptVariant: variant, of: assetId)
+    case .favorites, .album, .sharedAlbum:
+      return collectionStore.filenameClaimSnapshot(
+        placement: placement, subfolder: subfolder, exceptVariant: variant, of: assetId)
+    }
+  }
+
   /// Waits for preceding mutations in the affected store to become durable.
   func flush(placement: ExportPlacement) async throws {
     switch placement.kind {

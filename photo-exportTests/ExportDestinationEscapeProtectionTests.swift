@@ -165,11 +165,15 @@ struct ExportDestinationEscapeProtectionTests {
     var canImportNow: Bool { manager.canImportNow }
     func beginScopedAccess() -> URL? { selectedFolderURL }
     func endScopedAccess(for url: URL) {}
+    func waitForValidation() async { await manager.waitForValidation() }
     func resetDirectoryResolution() { manager.resetDirectoryResolution() }
     func prepareDirectoryResolution(generation: Int) {
       manager.prepareDirectoryResolution(generation: generation)
     }
     func revalidateDirectory(_ path: String) throws { try manager.revalidateDirectory(path) }
+    func captureDirectoryAccess(generation: Int) throws -> any ExportDirectoryResolving {
+      try manager.captureDirectoryAccess(generation: generation)
+    }
     func urlForRelativeDirectory(_ path: String, createIfNeeded: Bool) throws -> URL {
       try manager.urlForRelativeDirectory(path, createIfNeeded: createIfNeeded)
     }

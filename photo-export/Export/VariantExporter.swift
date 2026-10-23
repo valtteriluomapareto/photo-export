@@ -83,6 +83,28 @@ final class VariantExporter {
     destinationContexts[id] = context
     return context
   }
+  func captureDestinationContext(
+    placement: ExportPlacement, generation: Int
+  ) throws -> ExportDestinationContext {
+    try queueCoordinator?.throwIfCancelledOrStale(generation)
+    guard let root = exportDestination.selectedFolderURL else { throw CancellationError() }
+    let id = recordStoreRouter.destinationId(for: placement)
+    let directories = try exportDestination.captureDirectoryAccess(generation: generation)
+    try queueCoordinator?.throwIfCancelledOrStale(generation)
+    let context = ExportDestinationContext(
+      root: root, destinationId: id, generation: generation, io: destinationIO(for: id),
+      directories: directories)
+    try checkOwnership(context, placement: placement)
+    return context
+  }
+
+  func checkOwnership(_ context: ExportDestinationContext, placement: ExportPlacement) throws {
+    try queueCoordinator?.throwIfCancelledOrStale(context.generation)
+    guard exportDestination.selectedFolderURL == context.root,
+      recordStoreRouter.destinationId(for: placement) == context.destinationId
+    else { throw CancellationError() }
+  }
+
   // Physical final IO outlives queue teardown. Replacement jobs await its history barrier.
   private var finalCommitTask: Task<Result<CommitOutcome, Error>, Never>?
 
@@ -174,10 +196,16 @@ final class VariantExporter {
     inFlight: inout (assetId: String, variant: ExportVariant)?,
     subfolder: String? = nil,
     acceptsEditedFallback: Bool = false,
-    mayAdoptExisting: Bool = true
+    mayAdoptExisting: Bool = true,
+    context capturedContext: ExportDestinationContext? = nil
   ) async throws -> String? {
     try queueCoordinator?.throwIfCancelledOrStale(gen)
-    let destinationIO = destinationIO(for: recordStoreRouter.destinationId(for: job.placement))
+    let context =
+      try capturedContext
+      ?? captureDestinationContext(
+        placement: job.placement, generation: gen)
+    try checkOwnership(context, placement: job.placement)
+    let destinationIO = context.io
     // Renderer activity must always be cleared on the way out of this function —
     // including on throw — so a render failure or cancel does not leave the toolbar
     // showing `(rendering…)` forever.
@@ -225,29 +253,18 @@ final class VariantExporter {
       variant: variant, descriptor: descriptor, producer: producer, destDir: destDir,
       relPath: relPath, job: job, groupStem: groupStem, subfolder: subfolder, generation: gen,
       destinationIO: destinationIO)
+    try checkOwnership(context, placement: job.placement)
 
-    let slot = try destinationResolver.resolveSlot(
-      variant: variant,
-      descriptor: descriptor,
-      originalFilename: originalFilename,
-      resources: resources,
-      destDir: destDir,
-      groupStem: groupStem,
-      pairOriginalWithSuffix: pairOriginalWithSuffix,
-      interruptedFilename: interruptedFilename
-    ) { name in
-      isClaimed(name, job: job, subfolder: subfolder, variant: variant, of: descriptor)
-    }
-    // Provisional: the final name is planned against the staged bytes before the commit.
-    // Skipping claimed names keeps the in-progress mark off another record's name, so an
-    // interruption cannot leave two records naming it.
-    let finalURL = destinationResolver.firstFreeURL(in: slot) { name in
-      isClaimed(name, job: job, subfolder: subfolder, variant: variant, of: descriptor)
-    }
+    let prepared = try await prepareVariant(
+      variant: variant, descriptor: descriptor, originalFilename: originalFilename,
+      resources: resources, destDir: destDir, groupStem: groupStem,
+      pairOriginalWithSuffix: pairOriginalWithSuffix, interruptedFilename: interruptedFilename,
+      job: job, subfolder: subfolder, context: context)
+    try checkOwnership(context, placement: job.placement)
+    let slot = prepared.slot
+    let finalURL = prepared.url
 
-    if finalURL.lastPathComponent == interruptedFilename,
-      fileSystem.fileExists(atPath: finalURL.path)
-    {
+    if prepared.isInterrupted {
       _ = try await commitFile(
         .interrupted(finalURL), descriptor: descriptor, job: job,
         variant: variant, relPath: relPath, subfolder: subfolder,
@@ -258,7 +275,7 @@ final class VariantExporter {
     let reuseSource: (url: URL, relativePath: String)?
     if let reuse = recordStoreRouter.findReuseSource(
       assetId: descriptor.id, variant: variant, currentPlacement: job.placement),
-      let destinationRoot = exportDestination.selectedFolderURL
+      case let destinationRoot = context.root
     {
       let sourceRelPath = ExportMediaPathPolicy.relativePath(
         placement: reuse.placement, subfolder: reuse.subfolder)
@@ -278,18 +295,24 @@ final class VariantExporter {
         try? fileSystem.removeItem(at: legacyTempURL)
       }
     }
-    try queueCoordinator?.throwIfCancelledOrStale(gen)
+    try checkOwnership(context, placement: job.placement)
     // Any producer can finish after cancellation. Its stage belongs to this attempt,
     // including fallback and HEIC materialization, never a same-path replacement.
     let tempURL = destDir.appendingPathComponent(".photo-export-\(UUID().uuidString).tmp")
     @MainActor func writeAndCommit() async throws -> String? {
-      try queueCoordinator?.throwIfCancelledOrStale(gen)
+      try checkOwnership(context, placement: job.placement)
       host?.setCurrentAssetFilename(finalURL.lastPathComponent)
+      try checkOwnership(context, placement: job.placement)
       host?.setCurrentJobVariant(variant)
+      try checkOwnership(context, placement: job.placement)
+      try requireUnclaimed(
+        finalURL.lastPathComponent, slot: slot, job: job,
+        subfolder: subfolder, variant: variant, descriptor: descriptor)
       inFlight = (assetId: descriptor.id, variant: variant)
       recordStoreRouter.markVariantInProgress(
         assetId: descriptor.id, placement: job.placement, variant: variant,
         relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder)
+      try checkOwnership(context, placement: job.placement)
 
       // Reuse-source copy path: if `(asset, variant)` is already exported under another
       // placement, copy the existing file rather than re-fetching from PhotoKit. On APFS
@@ -315,20 +338,24 @@ final class VariantExporter {
           try await destinationIO.run { [fileSystem] in
             try fileSystem.copyItem(from: sourceURL, to: tempURL)
           }
-          try queueCoordinator?.throwIfCancelledOrStale(gen)
+          try checkOwnership(context, placement: job.placement)
           didCopyFromReuseSource = true
           logger.debug(
             "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(sourceRelPath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
           )
         } catch {
-          try queueCoordinator?.throwIfCancelledOrStale(gen)
+          try checkOwnership(context, placement: job.placement)
           if Self.isSourceSideCopyError(error) {
             if Self.isMissingDirectoryError(error) {
-              try exportDestination.revalidateDirectory(relPath)
+              try await destinationIO.run { try context.directories.revalidateDirectory(relPath) }
+              try checkOwnership(context, placement: job.placement)
             }
-            if fileSystem.fileExists(atPath: tempURL.path) {
-              try fileSystem.removeItem(at: tempURL)
+            try await destinationIO.run { [fileSystem] in
+              if fileSystem.fileExists(atPath: tempURL.path) {
+                try fileSystem.removeItem(at: tempURL)
+              }
             }
+            try checkOwnership(context, placement: job.placement)
             // Source missing/unreadable: prior `.done` record is stale. Fall through to
             // PhotoKit re-export. We do NOT mutate the stale record — that placement's
             // corruption surfaces on its next export run.
@@ -347,7 +374,7 @@ final class VariantExporter {
         do {
           switch producer {
           case .resource(let resource):
-            try await withDirectoryRetry(relPath, generation: gen) {
+            try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
               try await self.assetResourceWriter.writeResource(
                 resource, forAssetId: descriptor.id, to: tempURL)
             }
@@ -357,13 +384,13 @@ final class VariantExporter {
             // "no static resource" and "render attempted and failed" cases. The original
             // error survives in the log for diagnostics.
             do {
-              try await withDirectoryRetry(relPath, generation: gen) {
+              try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
                 try await self.mediaRenderer.render(request: request, to: tempURL)
               }
             } catch is CancellationError {
               throw CancellationError()
             } catch {
-              try queueCoordinator?.throwIfCancelledOrStale(gen)
+              try checkOwnership(context, placement: job.placement)
               if AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun {
                 throw error
               }
@@ -373,32 +400,31 @@ final class VariantExporter {
               throw EditedResourceUnavailableError()
             }
           case .convertHEIC(let request):
-            // Two-step: materialise the source HEIC/HEIF bytes to a sibling temp
-            // file via the existing PhotoKit resource writer, then re-encode as
-            // JPEG into `tempURL` via the image converter. The intermediate temp
-            // is cleaned up via `defer` so a converter failure or cancel doesn't
-            // leak it. Ordinary conversion errors translate to the same
-            // `editedResourceUnavailableMessage` sentinel; cancellation and hard
-            // destination failures retain their identity,
-            // so the existing "edited variant failed" recovery flow runs cleanly.
+            // The intermediate belongs to this attempt and is removed before scope release.
             let heicTempURL = tempURL.appendingPathExtension("heic-source")
-            defer {
+            let converted: Result<Void, Error>
+            do {
+              try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
+                try await self.assetResourceWriter.writeResource(
+                  request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
+              }
+              try checkOwnership(context, placement: job.placement)
+              try await imageConverter.convertHEIC(
+                at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
+              converted = .success(())
+            } catch {
+              converted = .failure(error)
+            }
+            await destinationIO.run { [fileSystem] in
               if fileSystem.fileExists(atPath: heicTempURL.path) {
                 try? fileSystem.removeItem(at: heicTempURL)
               }
             }
-            do {
-              try await withDirectoryRetry(relPath, generation: gen) {
-                try await self.assetResourceWriter.writeResource(
-                  request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
-              }
-              try queueCoordinator?.throwIfCancelledOrStale(gen)
-              try await imageConverter.convertHEIC(
-                at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
-            } catch is CancellationError {
+            try checkOwnership(context, placement: job.placement)
+            do { try converted.get() } catch is CancellationError {
               throw CancellationError()
             } catch {
-              try queueCoordinator?.throwIfCancelledOrStale(gen)
+              try checkOwnership(context, placement: job.placement)
               if AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun {
                 throw error
               }
@@ -414,7 +440,7 @@ final class VariantExporter {
         } catch {
           // A physical producer can fail after teardown, even after B committed.
           // Convert that stale error to cancellation before any caller records it.
-          try queueCoordinator?.throwIfCancelledOrStale(gen)
+          try checkOwnership(context, placement: job.placement)
           throw error
         }
       }
@@ -422,13 +448,13 @@ final class VariantExporter {
       // cancel arriving during the render does not leak a partially-written file into the
       // destination. Owned-stage cleanup follows this operation on every exit, but it
       // can prevent a partial final file only when cancellation is checked before the move.
-      try queueCoordinator?.throwIfCancelledOrStale(gen)
+      try checkOwnership(context, placement: job.placement)
 
       let committedName = try await commitStaged(
         tempURL, slot: slot, markedName: finalURL.lastPathComponent, descriptor: descriptor,
         job: job, variant: variant, relPath: relPath, subfolder: subfolder,
         acceptsEditedFallback: acceptsEditedFallback, mayAdoptExisting: mayAdoptExisting,
-        generation: gen, destinationIO: destinationIO)
+        context: context)
       inFlight = nil
       logger.info(
         "Exported \(committedName, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(destDir.path, privacy: .public) asset: \(descriptor.id, privacy: .public)"
@@ -448,24 +474,109 @@ final class VariantExporter {
         try? fileSystem.removeItem(at: tempURL)
       }
     }
-    try queueCoordinator?.throwIfCancelledOrStale(gen)
+    try checkOwnership(context, placement: job.placement)
     return try result.get()
+  }
+
+  func allocatePairedGroupStem(
+    baseStem: String, imageExt: String, editedExt: String?, destDir: URL,
+    pairOriginalWithSuffix: Bool, pairedVideoExt: String?, job: ExportManager.ExportJob,
+    subfolder: String?, assetId: String, context: ExportDestinationContext
+  ) async throws -> String {
+    let claims = recordStoreRouter.filenameClaimSnapshot(
+      placement: job.placement, subfolder: subfolder, of: assetId)
+    let resolver = destinationResolver
+    let stem = await context.io.run {
+      resolver.allocatePairedGroupStem(
+        baseStem: baseStem, imageExt: imageExt, editedExt: editedExt, destDir: destDir,
+        pairOriginalWithSuffix: pairOriginalWithSuffix, pairedVideoExt: pairedVideoExt,
+        isClaimed: claims.isClaimed)
+    }
+    try checkOwnership(context, placement: job.placement)
+    return stem
+  }
+
+  func allocateUnusedOrigStem(
+    baseStem: String, originalExt: String, destDir: URL, job: ExportManager.ExportJob,
+    subfolder: String?, assetId: String, context: ExportDestinationContext
+  ) async throws -> String {
+    let claims = recordStoreRouter.filenameClaimSnapshot(
+      placement: job.placement, subfolder: subfolder, of: assetId)
+    let resolver = destinationResolver
+    let stem = await context.io.run {
+      resolver.allocateUnusedOrigStem(
+        baseStem: baseStem, originalExt: originalExt,
+        destDir: destDir, isClaimed: claims.isClaimed)
+    }
+    try checkOwnership(context, placement: job.placement)
+    return stem
+  }
+
+  private struct PreparedVariant: Sendable {
+    let slot: ExportDestinationResolver.Slot
+    let url: URL
+    let isInterrupted: Bool
+  }
+
+  private func prepareVariant(
+    variant: ExportVariant, descriptor: AssetDescriptor, originalFilename: String,
+    resources: [ResourceDescriptor], destDir: URL, groupStem: String?,
+    pairOriginalWithSuffix: Bool, interruptedFilename: String?, job: ExportManager.ExportJob,
+    subfolder: String?, context: ExportDestinationContext
+  ) async throws -> PreparedVariant {
+    let claims = recordStoreRouter.filenameClaimSnapshot(
+      placement: job.placement, subfolder: subfolder, exceptVariant: variant, of: descriptor.id)
+    let resolver = destinationResolver
+    let files = fileSystem
+    return try await context.io.run {
+      let slot = try resolver.resolveSlot(
+        variant: variant, descriptor: descriptor, originalFilename: originalFilename,
+        resources: resources, destDir: destDir, groupStem: groupStem,
+        pairOriginalWithSuffix: pairOriginalWithSuffix, interruptedFilename: interruptedFilename,
+        isClaimed: claims.isClaimed)
+      let url = resolver.firstFreeURL(in: slot, isClaimed: claims.isClaimed)
+      return PreparedVariant(
+        slot: slot, url: url,
+        isInterrupted: url.lastPathComponent == interruptedFilename
+          && files.fileExists(atPath: url.path))
+    }
+  }
+
+  private func requireUnclaimed(
+    _ name: String, slot: ExportDestinationResolver.Slot, job: ExportManager.ExportJob,
+    subfolder: String?, variant: ExportVariant, descriptor: AssetDescriptor
+  ) throws {
+    guard isClaimed(name, job: job, subfolder: subfolder, variant: variant, of: descriptor) else {
+      return
+    }
+    if case .refuse = slot.policy {
+      throw NSError(
+        domain: "Export", code: ExportErrorCode.pairedOriginalFilenameConflict.rawValue,
+        userInfo: [
+          NSLocalizedDescriptionKey:
+            "Paired original filename is recorded for another exported file: \(name). "
+            + "If you deleted that file, run File > Import Existing Backup."
+        ])
+    }
+    throw FileIOService.destinationExistsError()
   }
 
   // MARK: - Helpers
 
   private func withDirectoryRetry(
-    _ relativePath: String, generation gen: Int,
+    _ relativePath: String, context: ExportDestinationContext, placement: ExportPlacement,
     operation: @MainActor () async throws -> Void
   ) async throws {
     do {
       try await operation()
+      try checkOwnership(context, placement: placement)
     } catch {
-      try queueCoordinator?.throwIfCancelledOrStale(gen)
+      try checkOwnership(context, placement: placement)
       guard Self.isMissingDirectoryError(error) else { throw error }
-      try exportDestination.revalidateDirectory(relativePath)
-      try queueCoordinator?.throwIfCancelledOrStale(gen)
+      try await context.io.run { try context.directories.revalidateDirectory(relativePath) }
+      try checkOwnership(context, placement: placement)
       try await operation()
+      try checkOwnership(context, placement: placement)
     }
   }
 
@@ -493,8 +604,10 @@ final class VariantExporter {
     _ stagedURL: URL, slot: ExportDestinationResolver.Slot, markedName: String,
     descriptor: AssetDescriptor, job: ExportManager.ExportJob, variant: ExportVariant,
     relPath: String, subfolder: String?, acceptsEditedFallback: Bool, mayAdoptExisting: Bool,
-    generation gen: Int, destinationIO: any DestinationIOExecuting
+    context: ExportDestinationContext
   ) async throws -> String {
+    let gen = context.generation
+    let destinationIO = context.io
     var markedName = markedName
     var collision: Error = FileIOService.destinationExistsError()
     for attempt in 1...Self.maxCommitAttempts {
@@ -502,36 +615,25 @@ final class VariantExporter {
         stagedURL, slot: slot, descriptor: descriptor, job: job, variant: variant,
         subfolder: subfolder, mayAdopt: mayAdoptExisting, generation: gen,
         destinationIO: destinationIO)
-      // Claims were read off the main actor while the bytes were compared. Ask again here,
-      // where no other record can change before the variant is marked under the name.
-      if case .adopt(_, let storedName, _) = commit,
-        isClaimed(storedName, job: job, subfolder: subfolder, variant: variant, of: descriptor)
-      {
-        collision = FileIOService.destinationExistsError()
-        logger.notice(
-          "\(storedName, privacy: .public) was claimed while it was compared (attempt \(attempt, privacy: .public)) for id: \(descriptor.id, privacy: .public)"
-        )
-        continue
+      try checkOwnership(context, placement: job.placement)
+      if commit.recordedName != markedName {
+        host?.setCurrentAssetFilename(commit.recordedName)
+        try checkOwnership(context, placement: job.placement)
       }
-      // Defensive and untested: claims change only on the main actor and exports run one
-      // at a time, so nothing can claim a planned free name before this point.
-      if case .move(_, let url) = commit, case .suffix = slot.policy,
-        isClaimed(
-          url.lastPathComponent, job: job, subfolder: subfolder, variant: variant,
-          of: descriptor)
+      if isClaimed(
+        commit.recordedName, job: job, subfolder: subfolder,
+        variant: variant, of: descriptor)
       {
         collision = FileIOService.destinationExistsError()
-        logger.notice(
-          "\(url.lastPathComponent, privacy: .public) was claimed after it was planned (attempt \(attempt, privacy: .public)) for id: \(descriptor.id, privacy: .public)"
-        )
+        guard case .suffix = slot.policy else { throw collision }
         continue
       }
       if commit.recordedName != markedName {
         markedName = commit.recordedName
-        host?.setCurrentAssetFilename(markedName)
         recordStoreRouter.markVariantInProgress(
           assetId: descriptor.id, placement: job.placement, variant: variant,
           relPath: relPath, filename: markedName, subfolder: subfolder)
+        try checkOwnership(context, placement: job.placement)
       }
       switch try await commitFile(
         commit, descriptor: descriptor, job: job, variant: variant,

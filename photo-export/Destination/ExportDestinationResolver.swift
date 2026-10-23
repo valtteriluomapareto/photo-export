@@ -13,8 +13,8 @@ import Foundation
 ///
 /// `Sendable` because all stored state is `Sendable` (`fileSystem` is the
 /// `Sendable`-bound `FileSystemService` protocol). The resolver carries no other state,
-/// so it is safe to call from any isolation domain — though in practice every call site
-/// is `@MainActor`.
+/// so physical naming probes can run on the captured destination worker while ownership
+/// and live record checks stay on the main actor.
 struct ExportDestinationResolver: Sendable {
 
   private let fileSystem: any FileSystemService

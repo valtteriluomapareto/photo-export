@@ -29,7 +29,7 @@ The structural guards also run locally without signing credentials:
 scripts/ci/run-guards.sh
 ```
 
-[`run-guards.sh`](ci/run-guards.sh) runs guard fixture self-tests, read-only Photos,
+[`run-guards.sh`](ci/run-guards.sh) runs guard fixture self-tests, export IO boundaries, read-only Photos,
 source-comment plan references, test waits, test scratch state, the observation ratchet,
 persistence value sets, project versions, regression-gate symbols/documentation,
 destination-identity keying and strict app-and-test formatting (using the pinned Swift tools described below).
@@ -47,6 +47,13 @@ passes through [`sanitize-release-log.py`](ci/sanitize-release-log.py) before `t
 keychain password exported by setup; multiline values and chunk boundaries are handled.
 Sanitization failures stop the archive step without a raw-output fallback. Artifacts
 include only the explicit log file, excluding setup output and credential files.
+
+`check-export-io-boundaries.py` rejects direct FileManager, URL filesystem probes and
+PHAsset fetches in export execution and destination preparation. Explicit filesystem,
+resource-writer/render, validation and import/history adapters retain their platform calls;
+folder-picker identity probes are exempt only inside their two named functions. The check
+is lexical and complements worker-thread tests; PhotoKit job metadata still uses the
+library-service seam until its dedicated reader lands.
 
 `check-test-waits.py` rejects wall-clock `< deadline` waits in `photo-exportTests/`
 (outside the allow-listed anti-hang backstops in `TestHelpers/`) and requires every

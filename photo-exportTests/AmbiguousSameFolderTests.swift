@@ -454,7 +454,7 @@ struct AmbiguousSameFolderTests {
   /// "Use as New Folder" reports what happened: a fresh history, a folder whose identity is the
   /// history's own (so no new history can start), or an unsaved bookmark that changed nothing.
   @Test(arguments: NewFolderCase.allCases)
-  func useAsNewFolderReportsWhetherAFreshHistoryStarted(_ newFolder: NewFolderCase) throws {
+  func useAsNewFolderReportsWhetherAFreshHistoryStarted(_ newFolder: NewFolderCase) async throws {
     var fingerprint = Self.lowConfidence("/Volumes/A/backup")
     var saves = true
     let (manager, dir, cleanup) = try makeSelectionManager(
@@ -468,7 +468,7 @@ struct AmbiguousSameFolderTests {
     case .sameIdentity: break
     case .notSaved: saves = false
     }
-    let outcome = manager.useSelectedFolderAsNewDestination()
+    let outcome = await manager.useSelectedFolderAsNewDestination()
 
     switch newFolder {
     case .differentIdentity:

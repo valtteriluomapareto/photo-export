@@ -279,7 +279,7 @@ struct HistoricalAuxiliaryStoreFixtureTests {
     }
   }
 
-  @Test func stableIdWrittenByReleasedManagerSurvivesFingerprintDriftAndReopen() throws {
+  @Test func stableIdWrittenByReleasedManagerSurvivesFingerprintDriftAndReopen() async throws {
     let fixture = try Fixture(tag: "v1.6.5")
     defer { fixture.cleanup() }
     let payload = try fixture.preferences()
@@ -300,6 +300,7 @@ struct HistoricalAuxiliaryStoreFixtureTests {
         volumeNotificationCenter: NotificationCenter(), validationScopeAcquirer: { _ in true },
         validationScopeReleaser: { _ in })
       #expect(manager.applyFolderSelection(folder, decision: .sameDestination))
+      await manager.waitForValidation()
       #expect(manager.isAvailable)
       #expect(manager.destinationId == expected)
       #expect(manager.destinationId != fingerprint.id)

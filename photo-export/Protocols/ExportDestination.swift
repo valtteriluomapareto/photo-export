@@ -25,6 +25,12 @@ protocol ExportDestination: AnyObject {
   /// `urlForRelativeDirectory` so timeline and collection paths share validation.
   func urlForMonth(year: Int, month: Int, createIfNeeded: Bool) throws -> URL
 
+  /// Waits for the current physical validation before queued work captures readiness.
+  func waitForValidation() async
+
+  /// Captures the root and cache before a worker hop; selection changes cannot retarget it.
+  func captureDirectoryAccess(generation: Int) throws -> any ExportDirectoryResolving
+
   /// Ends the current queue drain's cached directory resolutions.
   func resetDirectoryResolution()
   /// Starts a new cache lifetime when the queue generation changes.
@@ -36,7 +42,23 @@ protocol ExportDestination: AnyObject {
   func endScopedAccess(for url: URL)
 }
 
+/// Synchronous leaves used only under the caller's retained destination scope.
+protocol ExportDirectoryResolving: Sendable {
+  func urlForRelativeDirectory(_ relativePath: String, createIfNeeded: Bool) throws -> URL
+  func revalidateDirectory(_ relativePath: String) throws
+}
+
 extension ExportDestination {
+  func waitForValidation() async {}
+
+  func captureDirectoryAccess(generation: Int) throws -> any ExportDirectoryResolving {
+    guard let root = selectedFolderURL else {
+      throw ExportDestinationManager.ExportDestinationError.noSelection
+    }
+    guard canExportNow else { throw ExportDestinationManager.ExportDestinationError.notAvailable }
+    return DestinationDirectoryAccess(root: root)
+  }
+
   func resetDirectoryResolution() {}
   func prepareDirectoryResolution(generation: Int) {}
 
