@@ -2516,9 +2516,9 @@ final class ExportManager {
   /// started yet.
   func setCurrentJob(_ job: ExportJob) {
     if currentJobPlacement != job.placement { currentJobPlacement = job.placement }
-    queueCoordinator.setActivePlacement(job.placement.id)
     currentJobAssetId = job.assetLocalIdentifier
     currentJobVariant = nil
+    queueCoordinator.setActivePlacement(job.placement.id)
   }
 
   func clearCurrentJobIdentifiers(keepingPlacement: Bool = false) {

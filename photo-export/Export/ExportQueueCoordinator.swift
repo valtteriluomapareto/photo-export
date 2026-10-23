@@ -154,10 +154,15 @@ final class ExportQueueCoordinator: ObservableObject {
 
   private func refreshMonthState(_ id: String) {
     guard let state = monthStates[id] else { return }
-    let next = MonthQueueState.Snapshot(
-      queued: queuedCountsByPlacementId[id, default: 0],
-      isActive: activePlacementId == id)
-    if state.snapshot != next { state.snapshot = next }
+    // Observation callbacks run before storage and can synchronously cancel the run.
+    // Reconcile again after each write so an outer setter cannot restore stale activity.
+    while true {
+      let next = MonthQueueState.Snapshot(
+        queued: queuedCountsByPlacementId[id, default: 0],
+        isActive: activePlacementId == id)
+      guard state.snapshot != next else { return }
+      state.snapshot = next
+    }
   }
 
   private func removePendingJobs() {
@@ -347,6 +352,7 @@ final class ExportQueueCoordinator: ObservableObject {
       host?.didDrainQueue()
       return
     }
+    let currentGen = generation
     let job = jobStorage[jobHead]
     jobHead += 1
     if jobHead == jobStorage.count { removePendingJobs() }
@@ -357,9 +363,11 @@ final class ExportQueueCoordinator: ObservableObject {
       queuedCountsByPlacementId.removeValue(forKey: key)
     }
     host?.setCurrentJob(job)
+    guard isCurrent(currentGen) else { return }
     updateQueueCount()
-    let currentGen = generation
+    guard isCurrent(currentGen) else { return }
     currentTask = Task(priority: .utility) { [weak self, weak host] in
+      guard let self, self.isCurrent(currentGen) else { return }
       await host?.performExport(job: job, generation: currentGen)
       await MainActor.run { [weak self] in
         guard let self, self.isCurrent(currentGen) else { return }

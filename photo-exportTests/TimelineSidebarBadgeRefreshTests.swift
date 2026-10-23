@@ -378,16 +378,19 @@ import Testing
         ]
         let placement = ExportPlacement.timeline(year: 2026, month: 9)
         f.manager.queueCoordinator.enqueue([
-          .init(assetLocalIdentifier: "cancelled-before-dispatch", placement: placement,
+          .init(
+            assetLocalIdentifier: "cancelled-before-dispatch", placement: placement,
             selection: .edited)
         ])
         let state = f.manager.queueCoordinator.monthState(placementId: placement.id)
         var cancelled = false
-        let probe = ObservationProbe({ _ = f.manager.queuedCount(year: 2026, month: 9) }) {
-          guard !cancelled else { return }
-          cancelled = true
-          f.manager.cancelAndClear()
-        }
+        let probe = ObservationProbe(
+          { _ = f.manager.queuedCount(year: 2026, month: 9) },
+          onChange: {
+            guard !cancelled else { return }
+            cancelled = true
+            f.manager.cancelAndClear()
+          })
         f.manager.queueCoordinator.processQueueIfNeeded()
         let task = f.manager.currentTask
         #expect(cancelled)
@@ -405,7 +408,9 @@ import Testing
         #expect(f.manager.currentJobPlacement == nil)
         #expect(state.snapshot == .init())
         probe.stop()
-      } cleanup: { await f.close() }
+      } cleanup: {
+        await f.close()
+      }
     }
 
     @Test
