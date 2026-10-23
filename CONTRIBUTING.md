@@ -287,7 +287,29 @@ the same pull request.
 Agent-authored PRs follow this workflow unless the user explicitly requests a
 different flow. Keep PRs focused; an unrelated PR still needs its own review and
 current-head checks. If reviewer agents are unavailable, report the limitation
-instead of presenting self-review as three-agent review:
+instead of presenting self-review as the requested independent review.
+
+### Small count-gated performance PRs
+
+The following exception applies only when **all** of these are true:
+
+- The PR is size S.
+- Its sole purpose is performance; behavior is otherwise unchanged.
+- Count tests and existing regression gates guard it.
+- It changes no regression gate, existing parity row, persisted format, never-overwrite
+  rule, or filename-claim rule.
+
+Use one Pragmatic Developer reviewer for the implementation. Their brief is: Does it
+work? Do the gates and stated budgets pass? Is anything over-engineered or outside
+scope? The issue's recorded decisions serve as the plan, so no separate plan review
+is needed. Fill in missing scope, compatibility, or validation details on the issue
+before implementing. Meaningful tests before production changes, resolving actionable
+findings, recording review outcomes, and green CI on the current head remain required.
+Explicit issue-level reviewer or plan-first requirements take precedence.
+
+### Standard flow
+
+All other PRs use the following three-role flow:
 
 1. Post the implementation plan on the relevant GitHub issue, including scope, compatibility, and
    validation.
