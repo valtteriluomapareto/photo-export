@@ -78,6 +78,8 @@ struct MonthContentView: View, Equatable {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("selected:\(selectedAsset?.id ?? "")")
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordText([String(viewModel.assets.count)], for: "grid-assets")
     #endif
     VStack(alignment: .leading, spacing: 12) {
       // Header with Month and Year
@@ -178,6 +180,9 @@ struct MonthContentView: View, Equatable {
   private var exportSummaryView: some View {
     // Until the history is loaded its in-memory records are empty, so counts would read 0.
     let isLoadingHistory = exportRecordStore.state == .loading
+    #if DEBUG
+      bodyCounter?.record("summaryScan")
+    #endif
     let summary = exportRecordStore.monthSummary(
       assets: viewModel.assets, selection: versionSelection,
       livePhotosPaired: livePhotosPaired)

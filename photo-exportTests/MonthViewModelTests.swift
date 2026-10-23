@@ -494,6 +494,22 @@ struct MonthViewModelTests {
   /// watching a month grid as new photos land in the library. The newcomer
   /// must also be preheated for caching — only the added asset is started,
   /// survivors are not stopped.
+  @Test func identicalRefreshDoesNotPublishAnAssetArrayWrite() async {
+    let service = FakePhotoLibraryService()
+    let assets = [makeAsset(id: "first"), makeAsset(id: "second")]
+    service.assetsByYearMonth["2025-6"] = assets
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .timeline(year: 2025, month: 6))
+    let writes = ObservationProbe { _ = model.assets }
+    await model.refresh(for: .timeline(year: 2025, month: 6))
+    #expect(model.assets == assets)
+    withKnownIssue { #expect(writes.changeCount == 0) }
+    service.assetsByYearMonth["2025-6"] = assets.reversed()
+    await model.refresh(for: .timeline(year: 2025, month: 6))
+    #expect(writes.changeCount > 0)
+    #expect(model.assets == assets.reversed())
+  }
+
   @Test func refreshKeepsExistingAssetsAndAddsNewcomers() async throws {
     let svc = FakePhotoLibraryService()
     let original = (0..<3).map { makeAsset(id: "a\($0)") }

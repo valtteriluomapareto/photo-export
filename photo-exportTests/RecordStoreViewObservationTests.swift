@@ -8,11 +8,12 @@ import Testing
   @MainActor
   @Suite(.serialized, .timeLimit(.minutes(2)))
   struct RecordStoreViewObservationTests {
-    private enum Surface { case month, year, sidebars }
+    private enum Surface { case month, collection, year, sidebars }
 
     @MainActor
     private final class Tick: ObservableObject {
       @Published var value = 0
+      @Published var asset: AssetDescriptor?
     }
 
     private struct RenderProbe: View {
@@ -29,7 +30,7 @@ import Testing
       let surface: Surface
       let service: FakePhotoLibraryService
       let manager: ExportManager
-      @State private var selectedAsset: AssetDescriptor?
+      @ObservedObject var tick: Tick
       @State private var selection: LibrarySelection?
       @State private var collectionSelection: Set<LibrarySelection> = []
 
@@ -38,10 +39,19 @@ import Testing
         case .month:
           MonthContentView(
             year: 2026, month: 9, versionSelection: .edited, livePhotosPaired: false,
-            onExportMonth: {}, selectedAsset: $selectedAsset, photoLibraryService: service)
+            onExportMonth: {}, selectedAsset: $tick.asset, photoLibraryService: service
+          )
+          .equatable()
+        case .collection:
+          CollectionContentView(
+            selection: .favorites, title: "Favorites", versionSelection: .edited,
+            livePhotosPaired: false, onExportCollection: {}, selectedAsset: $tick.asset,
+            photoLibraryService: service
+          )
+          .equatable()
         case .year:
           YearContentView(
-            year: 2026, selection: $selection, selectedAsset: $selectedAsset,
+            year: 2026, selection: $selection, selectedAsset: $tick.asset,
             photoLibraryService: service)
         case .sidebars:
           HStack {
@@ -78,7 +88,10 @@ import Testing
       let window: NSWindow
       let album: ExportPlacement
 
-      init(_ surface: Surface) {
+      init(
+        _ surface: Surface,
+        stream: AsyncThrowingStream<[AssetDescriptor], any Error>? = nil
+      ) {
         defaults = TestScratch.defaults(suiteName: suite)
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         let assets = ["first", "second"].map {
@@ -104,6 +117,7 @@ import Testing
             pathComponents: [], children: [child])
         ]
         service.assetsByAlbumLocalId["trip"] = assets
+        if let stream { service.progressiveStreamOverride = { _ in stream } }
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
         collections = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
@@ -126,7 +140,7 @@ import Testing
           contentRect: NSRect(x: -10000, y: -10000, width: 800, height: 700),
           styleMask: [.borderless])
         // The deterministic stores need their own clock; the shared window factory still applies.
-        let content = Host(surface: surface, service: service, manager: manager)
+        let content = Host(surface: surface, service: service, manager: manager, tick: tick)
           .overlay(alignment: .topLeading) { RenderProbe(tick: tick, counter: counter) }
           .environment(library).environment(timeline).environment(collections)
           .environment(manager).environment(manager.progressState)
@@ -240,6 +254,104 @@ import Testing
         destination.cleanup()
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
+      }
+    }
+
+    @Test(arguments: [false, true])
+    func oneRecordPublicationLeavesGridAndSiblingTileQuiet(collection: Bool) async throws {
+      let f = Fixture(collection ? .collection : .month)
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["grid-assets"] == ["2"]
+              && ["first", "second"].allSatisfy {
+                f.counter.renderedText["thumbnail-exported:\($0)"] == ["false"]
+              }
+          })
+        // Finish real thumbnail work before attributing any body to the record publication.
+        try #require(await observe(in: f.window) { f.service.loadThumbnailCalls.count >= 2 })
+        f.timeline.flushPendingNotifications()
+        f.collections.flushPendingNotifications()
+        try await f.barrier()
+        let bodyKey = collection ? "collectionBody" : "MonthContentView"
+        let bodies = f.count(bodyKey)
+        let sibling = f.counter.count(for: "thumbnail-body:second")
+        f.write("first", collection: collection)
+        if collection {
+          f.collections.flushPendingNotifications()
+        } else {
+          f.timeline.flushPendingNotifications()
+        }
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["thumbnail-exported:first"] == ["true"]
+          })
+        try await f.barrier()
+        #expect(f.counter.renderedText["thumbnail-exported:second"] == ["false"])
+        withKnownIssue {
+          #expect(f.count(bodyKey) - bodies == 0)
+        }
+        withKnownIssue {
+          #expect(f.counter.count(for: "thumbnail-body:second") - sibling == 0)
+        }
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test(arguments: [false, true])
+    func selectingAssetDoesNotRescanHeader(collection: Bool) async throws {
+      let f = Fixture(collection ? .collection : .month)
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["grid-assets"] == ["2"] && f.tick.asset?.id == "first"
+          })
+        f.timeline.flushPendingNotifications()
+        f.collections.flushPendingNotifications()
+        try await f.barrier()
+        let scans = f.counter.count(for: "summaryScan")
+        f.tick.asset = f.service.favoritesAssets[1]
+        try await f.barrier()
+        #expect(f.tick.asset?.id == "second")
+        withKnownIssue {
+          #expect(f.counter.count(for: "summaryScan") - scans == 0)
+        }
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test(arguments: [false, true])
+    func progressiveLoadScansSummaryOnlyAfterTwoThousandAssetsFinish(collection: Bool) async throws
+    {
+      let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
+      let f = Fixture(collection ? .collection : .month, stream: stream.stream)
+      try await withCleanup {
+        try #require(await observe(in: f.window) { f.counter.renderedText["grid-assets"] == ["0"] })
+        for batch in 0..<10 {
+          stream.continuation.yield(
+            (0..<200).map {
+              TestAssetFactory.makeAsset(id: "progressive-\(batch * 200 + $0)")
+            })
+          let count = String((batch + 1) * 200)
+          try #require(
+            await observe(in: f.window) { f.counter.renderedText["grid-assets"] == [count] })
+          try await f.barrier()
+          withKnownIssue {
+            #expect(f.counter.count(for: "summaryScan") == 0)
+          }
+        }
+        stream.continuation.finish()
+        try #require(await observe(in: f.window) { !f.service.startCachingCalls.isEmpty })
+        try await f.barrier()
+        #expect(f.counter.count(for: "summaryScan") > 0)
+        withKnownIssue {
+          #expect(f.counter.count(for: "summaryScan") <= 1)
+        }
+      } cleanup: {
+        stream.continuation.finish()
+        await f.close()
       }
     }
 

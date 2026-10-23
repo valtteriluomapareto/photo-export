@@ -139,6 +139,7 @@ struct CollectionContentView: View, Equatable {
   #if DEBUG
     private func recordRenderingInputs() {
       bodyCounter?.record("collectionBody")
+      bodyCounter?.recordText([String(viewModel.assets.count)], for: "grid-assets")
       bodyCounter?.record("scope:\(scopeTaskId)")
       bodyCounter?.recordAction("collectionExport", action: onExportCollection)
       bodyCounter?.record("selected:\(selectedAsset?.id ?? "")")
