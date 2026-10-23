@@ -331,8 +331,7 @@ final class ExportManager {
   /// or summary and therefore do not emit through this publisher. Their terminal
   /// feedback is published separately through `ExportProgressState.manualSummary`.
   private let completedRunsSubject = PassthroughSubject<ExportRunSummary, Never>()
-  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
-  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
+  /// Terminal summaries are sent synchronously on the main actor.
   var completedRunsPublisher: AnyPublisher<ExportRunSummary, Never> {
     completedRunsSubject.eraseToAnyPublisher()
   }
