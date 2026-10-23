@@ -35,6 +35,8 @@ struct PhotoKitReaderTests {
     #expect(calls.value == [asset.id])
     #expect(!io.workerChecks.value.isEmpty)
     #expect(io.workerChecks.value.allSatisfy { $0 })
+    #expect(!h.fileSystem.calls.isEmpty)
+    #expect(h.fileSystem.calls.allSatisfy { !$0.onMainThread })
   }
 
   private func makeAsset() -> AssetDescriptor {
