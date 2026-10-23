@@ -231,7 +231,7 @@ struct ExportRecordStoreRecoveryTests {
     let store = ExportRecordStore(baseDirectoryURL: base)
     store.configure(for: dest)
 
-    // Write exactly the compaction threshold to trigger it
+    // Accumulate history, then request explicit idle maintenance.
     let threshold = ExportRecordStore.Constants.compactEveryNMutations
     for i in 1...threshold {
       store.markExported(
@@ -240,14 +240,8 @@ struct ExportRecordStoreRecoveryTests {
         filename: "IMG_\(i).JPG", exportedAt: Date())
     }
 
-    // Compaction is: ioQueue → Task @MainActor → ioQueue
-    // Poll for the snapshot file to appear.
+    try await store.checkpointHistory()
     let snapFile = snapshotURL(base: base, dest: dest)
-    _ = await eventually("compaction snapshot written") {
-      store.drainSynchronously()
-      return FileManager.default.fileExists(atPath: snapFile.path)
-    }
-
     #expect(FileManager.default.fileExists(atPath: snapFile.path))
 
     // Verify the snapshot is valid JSON and contains the expected records
@@ -265,7 +259,7 @@ struct ExportRecordStoreRecoveryTests {
     store.configure(for: dest)
 
     let threshold = ExportRecordStore.Constants.compactEveryNMutations
-    // Write threshold + 1 mutations — the extra one races with compaction
+    // Include the last mutation in the checkpoint before reopening.
     for i in 1...(threshold + 1) {
       store.markExported(
         assetId: "asset-\(i)", year: 2025, month: (i % 12) + 1,
@@ -273,11 +267,7 @@ struct ExportRecordStoreRecoveryTests {
         filename: "IMG_\(i).JPG", exportedAt: Date())
     }
 
-    let snapFile = snapshotURL(base: base, dest: dest)
-    _ = await eventually("compaction snapshot written") {
-      store.drainSynchronously()
-      return FileManager.default.fileExists(atPath: snapFile.path)
-    }
+    try await store.checkpointHistory()
 
     let store2 = ExportRecordStore(baseDirectoryURL: base)
     store2.configure(for: dest)
