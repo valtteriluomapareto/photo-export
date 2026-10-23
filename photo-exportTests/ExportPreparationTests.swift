@@ -18,14 +18,16 @@ struct ExportPreparationTests {
 
   private func admit(_ h: ExportManagerHarness, paired: Bool = false) {
     let asset = TestAssetFactory.makeAsset(
-      id: "prepare", hasAdjustments: paired,
-      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15)))
+      id: "prepare",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15)),
+      hasAdjustments: paired)
     h.photoLib.assetsByYearMonth["2025-4"] = [asset]
     h.photoLib.resourcesByAssetId[asset.id] =
       [
         .init(type: .photo, originalFilename: "IMG.JPG", fileSize: 12)
       ] + (paired ? [.init(type: .fullSizePhoto, originalFilename: "IMG.JPG", fileSize: 12)] : [])
-    h.manager.startExportMonth(year: 2025, month: 4, selectionOverride: paired ? .both : .original)
+    h.manager.versionSelection = paired ? .editedWithOriginals : .edited
+    h.manager.startExportMonth(year: 2025, month: 4)
   }
 
   private func cleanup(_ h: ExportManagerHarness) {
