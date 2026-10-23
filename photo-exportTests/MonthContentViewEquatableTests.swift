@@ -5,8 +5,16 @@ import Testing
 
 @testable import Photo_Export
 
-/// The grid compares its stable layout/settings inputs. Action closures and selection bindings
-/// belong to its children, so fresh wrappers and selection clicks leave the layout equal.
+/// `MonthContentView` is `Equatable` so SwiftUI's `.equatable()` modifier can
+/// short-circuit `body` re-evaluation when the rendering inputs haven't changed.
+/// `LibraryRootView` re-renders on every `ExportManager.objectWillChange` (manager
+/// fires per export job for `queueCount` / `activeRunContext`), so without this
+/// the `LazyVGrid` would re-evaluate on every fire and re-execute its ForEach.
+///
+/// These tests pin the equality rules — closures and `Binding` instances must be
+/// excluded so a freshly-allocated `onExportMonth` per render doesn't defeat the
+/// diff, and a new `Binding<AssetDescriptor?>` instance per render compares by
+/// the bound asset id rather than by wrapper identity.
 @MainActor
 struct MonthContentViewEquatableTests {
 
@@ -56,7 +64,9 @@ struct MonthContentViewEquatableTests {
     #expect(a == b)
   }
 
-  /// Fresh wrappers do not change the layout; tile binding reads remain live independently.
+  /// `Binding<AssetDescriptor?>` is non-`Equatable`; SwiftUI rebuilds the wrapper
+  /// per parent render. The equality check compares the *bound asset id*, not
+  /// the wrapper, so the same selection survives parent re-renders.
   @Test func equalWhenBindingWrappersDifferButBoundIdsMatch() {
     let asset = makeAsset(id: "a")
     let a = makeView(selected: asset)
@@ -79,7 +89,7 @@ struct MonthContentViewEquatableTests {
   }
 
   /// `livePhotosPaired` flips the asset-aware `isExported(asset:selection:livePhotosPaired:)`
-  /// call in each child badge, so a `false → true` flip MUST invalidate
+  /// call at the per-thumbnail badge (line 106), so a `false → true` flip MUST invalidate
   /// the cached equality and force the `LazyVGrid` to re-evaluate. Without this assertion
   /// a future refactor that drops `livePhotosPaired` from the `Equatable` comparison would
   /// silently freeze thumbnail badges at their pre-toggle state across runs.
@@ -89,18 +99,18 @@ struct MonthContentViewEquatableTests {
     #expect(a != b)
   }
 
-  @Test func equalOnSelectedAssetIdChange() {
+  @Test func notEqualOnSelectedAssetIdChange() {
     let a = makeView(selected: makeAsset(id: "a"))
     let b = makeView(selected: makeAsset(id: "b"))
-    #expect(a == b)
+    #expect(a != b)
   }
 
-  @Test func equalWhenOneHasSelectionAndOtherDoesNot() {
+  @Test func notEqualWhenOneHasSelectionAndOtherDoesNot() {
     let a = makeView(selected: makeAsset(id: "a"))
     let b = makeView(selected: nil)
-    #expect(a == b)
+    #expect(a != b)
   }
-  @Test func selectionChangeThroughTheSameBindingLeavesLayoutEqual() {
+  @Test func selectionChangeThroughTheSameBindingInvalidatesOldView() {
     var selected: AssetDescriptor? = makeAsset(id: "A")
     let binding = Binding(get: { selected }, set: { selected = $0 })
     func view() -> MonthContentView {
@@ -111,7 +121,7 @@ struct MonthContentViewEquatableTests {
     }
     let before = view()
     selected = makeAsset(id: "B")
-    #expect(before == view())
+    #expect(before != view())
   }
 
 }

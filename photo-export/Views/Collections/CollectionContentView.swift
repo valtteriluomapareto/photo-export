@@ -24,6 +24,9 @@ struct CollectionContentView: View, Equatable {
   let versionSelection: ExportVersionSelection
   let livePhotosPaired: Bool
   let onExportCollection: () -> Void
+  /// Binding-only callers retain selection equality; the shared owner lets the window omit that read.
+  private let selectionOwner: AssetSelectionModel?
+  private let selectedAssetId: String?
   @Binding var selectedAsset: AssetDescriptor?
 
   init(
@@ -33,7 +36,8 @@ struct CollectionContentView: View, Equatable {
     livePhotosPaired: Bool,
     onExportCollection: @escaping () -> Void,
     selectedAsset: Binding<AssetDescriptor?>,
-    photoLibraryService: any PhotoLibraryService
+    photoLibraryService: any PhotoLibraryService,
+    assetSelection: AssetSelectionModel? = nil
   ) {
     self.selection = selection
     self.title = title
@@ -41,6 +45,8 @@ struct CollectionContentView: View, Equatable {
     self.livePhotosPaired = livePhotosPaired
     self.onExportCollection = onExportCollection
     self._selectedAsset = selectedAsset
+    self.selectionOwner = assetSelection
+    self.selectedAssetId = assetSelection == nil ? selectedAsset.wrappedValue?.id : nil
     _viewModel = State(wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
@@ -307,6 +313,8 @@ struct CollectionContentView: View, Equatable {
       && lhs.title == rhs.title
       && lhs.versionSelection == rhs.versionSelection
       && lhs.livePhotosPaired == rhs.livePhotosPaired
+      && lhs.selectionOwner === rhs.selectionOwner
+      && lhs.selectedAssetId == rhs.selectedAssetId
   }
 
 }

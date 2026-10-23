@@ -180,7 +180,7 @@ struct RecordStoreObservationTests {
   func tileQueryTracksItsOwnRecordAndWholeHistoryReplacement(collection: Bool) async {
     let f = Fixture()
     await withCleanup {
-      func isExported() -> Bool {
+      @MainActor func isExported() -> Bool {
         if collection {
           return f.collections.isExportedForTile(
             asset: f.asset, placement: f.placement, selection: .edited, livePhotosPaired: false)

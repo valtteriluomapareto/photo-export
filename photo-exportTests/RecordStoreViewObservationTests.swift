@@ -105,7 +105,12 @@ import Testing
         stream: AsyncThrowingStream<[AssetDescriptor], any Error>? = nil
       ) {
         defaults = TestScratch.defaults(suiteName: suite)
-        let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
+        let date: Date =
+          if case .library = surface {
+            Date()
+          } else {
+            Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
+          }
         let assets = ["first", "second"].map {
           TestAssetFactory.makeAsset(id: $0, creationDate: date)
         }
@@ -133,7 +138,7 @@ import Testing
           let now = Date()
           let year = Calendar.current.component(.year, from: now)
           let month = Calendar.current.component(.month, from: now)
-          service.assetsByYearMonth["\(year)-\(month)"] = assets
+          service.assetsByYearMonth = ["\(year)-\(month)": assets]
           service.yearCounts = [(year, 2)]
         }
         if let stream { service.progressiveStreamOverride = { _ in stream } }
@@ -155,9 +160,10 @@ import Testing
           userDefaults: defaults)
         destinationManager = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
         destinationManager.configureForScreenshotMode()
+        let isLibrary: Bool = if case .library = surface { true } else { false }
         window = HostedViewHarness.makeWindow(
-          contentRect: NSRect(x: -10000, y: -10000, width: 800, height: 700),
-          styleMask: [.borderless])
+          contentRect: NSRect(x: -10000, y: -10000, width: isLibrary ? 1400 : 800, height: 800),
+          styleMask: isLibrary ? [.titled, .closable] : [.borderless])
         // The deterministic stores need their own clock; the shared window factory still applies.
         let whatsNew = WhatsNewState(userDefaults: defaults, currentVersion: "test", catalog: [])
         whatsNew.markAsSeen()
@@ -330,6 +336,7 @@ import Testing
         try #require(
           await observe(in: f.window) {
             f.counter.renderedText["grid-assets"] == ["2"] && f.navigation.asset?.id == "first"
+              && !f.service.startCachingCalls.isEmpty && f.counter.count(for: "summaryScan") > 0
           })
         f.timeline.flushPendingNotifications()
         f.collections.flushPendingNotifications()
@@ -349,9 +356,12 @@ import Testing
     @Test func assetSelectionLeavesLibraryLayoutAndSummaryQuiet() async throws {
       let f = Fixture(.library)
       try await withCleanup {
+        try #require(await observe(in: f.window) { f.count("library-root") > 0 })
+        try await f.barrier()
         try #require(
           await observe(in: f.window) {
             f.counter.renderedText["grid-assets"] == ["2"] && f.assetSelection.asset?.id == "first"
+              && !f.service.startCachingCalls.isEmpty && f.counter.count(for: "summaryScan") > 0
           })
         f.timeline.flushPendingNotifications()
         f.collections.flushPendingNotifications()

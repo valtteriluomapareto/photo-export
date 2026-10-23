@@ -34,6 +34,9 @@ struct MonthContentView: View, Equatable {
   /// Closure that triggers the "Export Month" action. Owned by the parent so we can
   /// avoid touching `ExportManager` here.
   let onExportMonth: () -> Void
+  /// Binding-only callers retain selection equality; the shared owner lets the window omit that read.
+  private let selectionOwner: AssetSelectionModel?
+  private let selectedAssetId: String?
   @Binding var selectedAsset: AssetDescriptor?
 
   init(
@@ -43,7 +46,8 @@ struct MonthContentView: View, Equatable {
     livePhotosPaired: Bool,
     onExportMonth: @escaping () -> Void,
     selectedAsset: Binding<AssetDescriptor?>,
-    photoLibraryService: any PhotoLibraryService
+    photoLibraryService: any PhotoLibraryService,
+    assetSelection: AssetSelectionModel? = nil
   ) {
     self.year = year
     self.month = month
@@ -51,6 +55,8 @@ struct MonthContentView: View, Equatable {
     self.livePhotosPaired = livePhotosPaired
     self.onExportMonth = onExportMonth
     self._selectedAsset = selectedAsset
+    self.selectionOwner = assetSelection
+    self.selectedAssetId = assetSelection == nil ? selectedAsset.wrappedValue?.id : nil
     _viewModel = State(wrappedValue: MonthViewModel(photoLibraryService: photoLibraryService))
   }
 
@@ -169,5 +175,7 @@ struct MonthContentView: View, Equatable {
       && lhs.month == rhs.month
       && lhs.versionSelection == rhs.versionSelection
       && lhs.livePhotosPaired == rhs.livePhotosPaired
+      && lhs.selectionOwner === rhs.selectionOwner
+      && lhs.selectedAssetId == rhs.selectedAssetId
   }
 }
