@@ -6,6 +6,32 @@ import Foundation
 final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   private let lock = NSLock()
 
+  struct Call: Sendable {
+    let operation: String
+    let onMainThread: Bool
+  }
+  private var recordedCalls: [Call] = []
+  var calls: [Call] { lock.withLock { recordedCalls } }
+  private func record(_ operation: String) {
+    let call = Call(operation: operation, onMainThread: pthread_main_np() != 0)
+    lock.withLock { recordedCalls.append(call) }
+  }
+  var existsHook: (@Sendable (String) -> Void)? {
+    get { lock.withLock { _existsHook } }
+    set { lock.withLock { _existsHook = newValue } }
+  }
+  private var _existsHook: (@Sendable (String) -> Void)?
+
+  func directoryIdentity(at url: URL) throws -> FileItemIdentity? {
+    record("directoryIdentity")
+    return try real.directoryIdentity(at: url)
+  }
+
+  func resolvingSymlinks(at url: URL) -> URL {
+    record("resolvingSymlinks")
+    return real.resolvingSymlinks(at: url)
+  }
+
   // Call tracking
   private var _moveCalls: [(from: URL, to: URL)] = []
   private var _timestampCalls: [(date: Date, url: URL)] = []
@@ -107,6 +133,7 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   }
 
   func moveItemAtomically(from src: URL, to dst: URL) throws {
+    record("moveItemAtomically")
     lock.lock()
     _moveCalls.append((from: src, to: dst))
     lock.unlock()
@@ -118,6 +145,7 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   }
 
   func applyTimestamps(creationDate: Date, to url: URL) {
+    record("applyTimestamps")
     lock.lock()
     _timestampCalls.append((date: creationDate, url: url))
     lock.unlock()
@@ -127,20 +155,25 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   }
 
   func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws {
+    record("createDirectory")
     try real.createDirectory(at: url, withIntermediateDirectories: withIntermediateDirectories)
   }
 
   func fileExists(atPath path: String) -> Bool {
-    real.fileExists(atPath: path)
+    record("fileExists")
+    existsHook?(path)
+    return real.fileExists(atPath: path)
   }
 
   func regularFileSize(at url: URL) throws -> Int64? {
+    record("regularFileSize")
     let size = try real.regularFileSize(at: url)
     try inspectionHook?(url)
     return size
   }
 
   func itemIdentity(at url: URL) throws -> FileItemIdentity? {
+    record("itemIdentity")
     try identityHook?(url)
     let identity = try real.itemIdentity(at: url)
     return identityOverride.map { $0(url, identity) } ?? identity
@@ -154,11 +187,13 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   private var _storedNameOverride: (@Sendable (URL) throws -> String)?
 
   func storedName(at url: URL) throws -> String {
+    record("storedName")
     if let override = storedNameOverride { return try override(url) }
     return try real.storedName(at: url)
   }
 
   func openForReading(at url: URL, bypassingCache: Bool) throws -> any FileReadHandle {
+    record("openForReading")
     lock.withLock { _readOpens.append((url: url, bypassingCache: bypassingCache)) }
     return RecordingReadHandle(
       real: try real.openForReading(at: url, bypassingCache: bypassingCache), url: url,
@@ -174,10 +209,12 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   }
 
   func removeItem(at url: URL) throws {
+    record("removeItem")
     try real.removeItem(at: url)
   }
 
   func copyItem(from src: URL, to dst: URL) throws {
+    record("copyItem")
     lock.lock()
     _copyCalls.append((from: src, to: dst))
     lock.unlock()

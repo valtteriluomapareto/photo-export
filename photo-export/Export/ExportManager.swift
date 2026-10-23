@@ -719,7 +719,11 @@ final class ExportManager {
     // `exportRunStatePublisher` keep emitting from the same source. Sinks fire
     // synchronously on the `@MainActor` since both objects are MainActor-bound.
     self.queueCoordinator.$isRunning
-      .sink { [weak self] in self?.isRunning = $0 }
+      .sink { [weak self] running in
+        guard let self else { return }
+        self.isRunning = running
+        if !running { self.exportDestination.resetDirectoryResolution() }
+      }
       .store(in: &queueCancellables)
     self.queueCoordinator.$isPaused
       .sink { [weak self] in self?.isPaused = $0 }
@@ -2039,6 +2043,7 @@ final class ExportManager {
         for: descriptor.mediaType, layout: job.videoLayout)
       let effectiveRelPath = ExportMediaPathPolicy.relativePath(
         placement: job.placement, subfolder: subfolder)
+      exportDestination.prepareDirectoryResolution(generation: gen)
       let destDir = try exportDestination.urlForRelativeDirectory(
         effectiveRelPath, createIfNeeded: true)
       let relPath = effectiveRelPath

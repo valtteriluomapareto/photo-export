@@ -8,8 +8,12 @@ import os
 @MainActor
 final class ExportDestinationManager: ObservableObject, ExportDestination {
   // MARK: - Published State
-  @Published private(set) var selectedFolderURL: URL?
-  @Published private(set) var isAvailable: Bool = false
+  @Published private(set) var selectedFolderURL: URL? {
+    didSet { if selectedFolderURL != oldValue { clearDirectoryResolutions() } }
+  }
+  @Published private(set) var isAvailable: Bool = false {
+    didSet { if !isAvailable { clearDirectoryResolutions() } }
+  }
   /// `$isAvailable` for subscribers outside this type: synchronous, delivered before the
   /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
   var isAvailablePublisher: AnyPublisher<Bool, Never> { $isAvailable.eraseToAnyPublisher() }
@@ -24,7 +28,11 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// per-destination state MUST read `identity.stableId`; the fingerprint is advisory
   /// (identity-confidence) only. See `DestinationIdentity` and
   /// `docs/reference/architecture-conventions.md` §Destination identity.
-  @Published private(set) var identity: DestinationIdentity = .unavailable
+  @Published private(set) var identity: DestinationIdentity = .unavailable {
+    didSet {
+      if identity.stableId != oldValue.stableId { clearDirectoryResolutions() }
+    }
+  }
   /// `$identity` for subscribers outside this type: synchronous, delivered before the
   /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
   var identityPublisher: AnyPublisher<DestinationIdentity, Never> {
@@ -36,6 +44,43 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// unavailable, even when a stable id is persisted for reuse — the published id follows the
   /// unavailable invariant (see `validate`).
   var destinationId: String? { identity.stableId }
+
+  private let fileSystem: any FileSystemService
+  private var directoryGeneration: Int?
+  private struct ResolvedDirectory {
+    let url: URL
+    let identity: FileItemIdentity
+  }
+  private var directoryResolutions: [String: ResolvedDirectory] = [:]
+  private var missingDirectories: Set<String> = []
+
+  private func inspectDirectory(at url: URL) throws -> FileItemIdentity? {
+    do { return try fileSystem.directoryIdentity(at: url) } catch let error as NSError
+      where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOTDIR)
+    {
+      throw ExportDestinationError.notDirectory(url)
+    }
+  }
+
+  private func clearDirectoryResolutions() {
+    directoryResolutions.removeAll()
+    missingDirectories.removeAll()
+  }
+
+  func resetDirectoryResolution() { clearDirectoryResolutions() }
+
+  func prepareDirectoryResolution(generation: Int) {
+    guard generation != directoryGeneration else { return }
+    directoryGeneration = generation
+    clearDirectoryResolutions()
+  }
+
+  func revalidateDirectory(_ relativePath: String) throws {
+    let key = relativePath.hasSuffix("/") ? String(relativePath.dropLast()) : relativePath
+    directoryResolutions.removeValue(forKey: key)
+    missingDirectories.insert(key)
+    _ = try urlForRelativeDirectory(relativePath, createIfNeeded: false)
+  }
 
   // MARK: - Keys & Logger
   private let userDefaults: UserDefaults
@@ -225,7 +270,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     fileIdentifierProvider: ((URL) -> (any NSObjectProtocol)?)? = nil,
     volumeNotificationCenter: NotificationCenter? = nil,
     validationScopeAcquirer: ((URL) -> Bool)? = nil,
-    validationScopeReleaser: ((URL) -> Void)? = nil
+    validationScopeReleaser: ((URL) -> Void)? = nil,
+    fileSystem: any FileSystemService = FileIOService()
   ) {
     precondition(
       (validationScopeAcquirer == nil) == (validationScopeReleaser == nil),
@@ -234,6 +280,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       volumeNotificationCenter ?? NSWorkspace.shared.notificationCenter
     self.validationScopeAcquirer = validationScopeAcquirer
     self.validationScopeReleaser = validationScopeReleaser
+    self.fileSystem = fileSystem
     self.userDefaults = userDefaults
     self.bookmarkDefaultsKey = bookmarkDefaultsKey
     self.stableIdDefaultsKey = stableIdDefaultsKey
@@ -463,6 +510,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
       }
     }
 
+    if let cached = directoryResolutions[trimmed] {
+      if try inspectDirectory(at: cached.url) == cached.identity {
+        return cached.url
+      }
+      directoryResolutions.removeValue(forKey: trimmed)
+      missingDirectories.insert(trimmed)
+    }
+
     // Build the target URL by appending components.
     var target = root
     for component in components {
@@ -477,8 +532,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     // verify it still lies under the root's canonical path. If the user has placed a
     // symlink at `<root>/Collections/Albums/Trip` pointing outside the destination, the
     // resolved path would not have the root as a prefix.
-    let rootCanonical = root.standardizedFileURL.resolvingSymlinksInPath().path
-    let targetCanonical = Self.canonicalizeExistingPrefix(of: target).path
+    let rootCanonical = fileSystem.resolvingSymlinks(at: root).path
+    let targetCanonical = try canonicalizeExistingPrefix(of: target).path
     // Boundary-safe prefix check: a bare `hasPrefix(rootCanonical)` would let
     // `/tmp/Backup-old/Trip` slip past a root of `/tmp/Backup`. Accept either equal-to-
     // root (zero-length tail) or root-followed-by-slash. `rootCanonical` itself never
@@ -492,28 +547,23 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
     // Verify each existing intermediate component is a directory (or doesn't exist yet,
     // in which case `ensureDirectoryExists` will create it).
-    let fileManager = FileManager.default
     var probe = root
     for component in components {
       probe = probe.appendingPathComponent(component, isDirectory: true)
-      var isDir: ObjCBool = false
-      if fileManager.fileExists(atPath: probe.path, isDirectory: &isDir) {
-        if !isDir.boolValue {
-          throw ExportDestinationError.notDirectory(probe)
-        }
-      } else {
-        // Stop probing; remaining segments don't exist yet.
-        break
-      }
+      if try inspectDirectory(at: probe) == nil { break }
     }
 
-    if createIfNeeded {
+    var identity = try inspectDirectory(at: target)
+    if identity == nil, missingDirectories.contains(trimmed) {
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))
+    }
+    if createIfNeeded, identity == nil {
       try ensureDirectoryExists(at: target)
-    } else {
-      var isDir: ObjCBool = false
-      if fileManager.fileExists(atPath: target.path, isDirectory: &isDir) {
-        if !isDir.boolValue { throw ExportDestinationError.notDirectory(target) }
-      }
+      identity = try inspectDirectory(at: target)
+    }
+    if let identity {
+      directoryResolutions[trimmed] = ResolvedDirectory(url: target, identity: identity)
+      missingDirectories.remove(trimmed)
     }
 
     return target
@@ -525,18 +575,17 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// existing prefix substituted in. Used by `urlForRelativeDirectory` to detect
   /// symlink-escape attacks where a parent component is a symlink pointing outside the
   /// root.
-  private static func canonicalizeExistingPrefix(of url: URL) -> URL {
-    let fileManager = FileManager.default
+  private func canonicalizeExistingPrefix(of url: URL) throws -> URL {
     var components: [String] = []
     var current = url
-    while !fileManager.fileExists(atPath: current.path) {
+    while try inspectDirectory(at: current) == nil {
       components.insert(current.lastPathComponent, at: 0)
       let parent = current.deletingLastPathComponent()
       // Stop at the filesystem root to avoid infinite loops on malformed input.
       if parent.path == current.path { break }
       current = parent
     }
-    var result = current.standardizedFileURL.resolvingSymlinksInPath()
+    var result = fileSystem.resolvingSymlinks(at: current)
     for component in components {
       result = result.appendingPathComponent(component, isDirectory: true)
     }
@@ -545,14 +594,9 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
 
   /// Ensures the directory exists at the given URL, creating with intermediates.
   func ensureDirectoryExists(at url: URL) throws {
-    var isDir: ObjCBool = false
-    let fm = FileManager.default
-    if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
-      if !isDir.boolValue { throw ExportDestinationError.notDirectory(url) }
-      return
-    }
+    if try inspectDirectory(at: url) != nil { return }
     do {
-      try fm.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+      try fileSystem.createDirectory(at: url, withIntermediateDirectories: true)
       logger.info("Ensured directory: \(url.path, privacy: .public)")
     } catch {
       logger.error(

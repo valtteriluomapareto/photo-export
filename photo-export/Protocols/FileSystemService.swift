@@ -25,6 +25,9 @@ protocol FileReadHandle: Sendable {
 /// Abstracts file system operations for testability.
 /// FileIOService conforms in production; tests inject a fake.
 protocol FileSystemService: Sendable {
+  /// Inspects a directory following links; nil means missing, and non-directories throw.
+  func directoryIdentity(at url: URL) throws -> FileItemIdentity?
+  func resolvingSymlinks(at url: URL) -> URL
   func moveItemAtomically(from src: URL, to dst: URL) throws
   func applyTimestamps(creationDate: Date, to url: URL)
   func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws
@@ -48,4 +51,14 @@ protocol FileSystemService: Sendable {
   /// `VariantExporter` invokes this synchronous primitive on an explicit utility
   /// worker and awaits physical completion before releasing destination access.
   func copyItem(from src: URL, to dst: URL) throws
+}
+
+extension FileSystemService {
+  func directoryIdentity(at url: URL) throws -> FileItemIdentity? {
+    try FileIOService().directoryIdentity(at: url)
+  }
+
+  func resolvingSymlinks(at url: URL) -> URL {
+    url.standardizedFileURL.resolvingSymlinksInPath()
+  }
 }

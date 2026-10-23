@@ -145,6 +145,21 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
 
   // MARK: - FileSystemService protocol (instance methods)
 
+  func directoryIdentity(at url: URL) throws -> FileItemIdentity? {
+    var info = stat()
+    guard stat(url.path, &info) == 0 else {
+      if errno == ENOENT { return nil }
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+    }
+    guard (info.st_mode & S_IFMT) == S_IFDIR else {
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTDIR))
+    }
+    // Directory contents change its size and timestamps; only the entry identity matters.
+    return FileItemIdentity(
+      isRegularFile: false, linkCount: 0, device: Int64(info.st_dev),
+      inode: UInt64(info.st_ino), size: 0, modificationSeconds: 0, modificationNanoseconds: 0)
+  }
+
   /// Commits a staged file at its final name and never replaces an existing file there.
   /// A volume that advertises an exclusive rename commits with `renamex_np(RENAME_EXCL)`,
   /// so the refusal and the move are one step. Elsewhere an existence check precedes
