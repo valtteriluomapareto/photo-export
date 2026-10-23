@@ -1076,9 +1076,29 @@ final class ExportManager {
   /// racing on the message slot. Partial-failure recovery and generation
   /// tracking match `enqueueBulkAlbumExport`.
   func startExportCollectionsSelection(_ buckets: CollectionsSelectionBuckets) {
+    startExportCollections(source: .buckets(buckets))
+  }
+
+  /// Resolves folder membership inside the owned preparation, independently of display caches.
+  func startExportCollectionsSelection(items: Set<LibrarySelection>) {
+    startExportCollections(source: .selection(items))
+  }
+
+  /// Includes Favorites and every current user album, leaving shared albums explicit.
+  func startExportAllUserCollections() {
+    startExportCollections(source: .allUserCollections)
+  }
+
+  private enum CollectionsExportSource {
+    case buckets(CollectionsSelectionBuckets)
+    case selection(Set<LibrarySelection>)
+    case allUserCollections
+  }
+
+  private func startExportCollections(source: CollectionsExportSource) {
     guard canStartExport(in: .collection, logTag: "startExportCollectionsSelection") else { return }
     guard !isEnqueueingAll else { return }
-    if buckets.isEmpty {
+    if case .buckets(let buckets) = source, buckets.isEmpty {
       setEmptyRunMessage("No collections selected.")
       return
     }
@@ -1092,6 +1112,24 @@ final class ExportManager {
       },
       body: { [weak self] in
         guard let self else { return .stale }
+        let buckets: CollectionsSelectionBuckets
+        switch source {
+        case .buckets(let resolved): buckets = resolved
+        case .selection(let items):
+          let tree = try await self.photoLibraryService.loadCollectionTree()
+          try self.throwIfCancelledOrStale(gen)
+          buckets = CollectionsSelectionBuckets.normalize(items) { folderId in
+            guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
+            else { return [] }
+            return PhotoCollectionDescriptor.albumLocalIds(under: folder)
+          }
+        case .allUserCollections:
+          let tree = try await self.photoLibraryService.loadCollectionTree()
+          try self.throwIfCancelledOrStale(gen)
+          buckets = CollectionsSelectionBuckets(
+            includesFavorites: true,
+            albumIds: PhotoCollectionDescriptor.albumLocalIds(in: tree), sharedAlbumIds: [])
+        }
         // Favorites — modelled as a 0-or-1 element pass so the helper handles
         // the cancellation check + outcome merge identically to the other passes.
         let favorites: [Bool] = buckets.includesFavorites ? [true] : []

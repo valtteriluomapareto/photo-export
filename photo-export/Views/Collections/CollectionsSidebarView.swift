@@ -272,15 +272,7 @@ struct CollectionsSidebarView: View {
   /// (expanding folders, deduping, partitioning) and hand to `ExportManager`.
   fileprivate func runCurrentCollectionsMultiSelectExport() {
     let items = selectionSet.filter(\.isCollection)
-    let buckets = CollectionsSelectionBuckets.normalize(items) { folderId in
-      let currentTree = photoLibraryManager.libraryRefresh.tree ?? []
-      guard
-        let folder = PhotoCollectionDescriptor.findFolder(
-          id: folderId, in: currentTree)
-      else { return [] }
-      return PhotoCollectionDescriptor.albumLocalIds(under: folder)
-    }
-    exportManager.startExportCollectionsSelection(buckets)
+    exportManager.startExportCollectionsSelection(items: items)
   }
 
   private func loadCountBatch(source: Int) async {

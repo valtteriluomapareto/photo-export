@@ -607,7 +607,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
 
         if let ticket {
           await MainActor.run {
-            self.queryObservations.install(result, for: ticket, revision: self.libraryRevision)
+            _ = self.queryObservations.install(result, for: ticket, revision: self.libraryRevision)
           }
         }
         let count = result.count
@@ -1348,18 +1348,34 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   }
 
   nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor] {
-    if let service = overrideService { return try await service.loadCollectionTree() }
-    if let cached = await MainActor.run(body: { self.cachedCollectionTree }) { return cached }
-    try await requireLiveAuthorizationAsync()
-    let captured = await libraryRevision
-    let logger = self.logger
-    let tree = try await runDetached(priority: .userInitiated) {
-      try Self.scanCollectionTree(logger: logger)
+    while true {
+      try Task.checkCancellation()
+      let (captured, cached) = await MainActor.run {
+        (self.libraryRevision, self.cachedCollectionTree)
+      }
+      if overrideService == nil, let cached {
+        try Task.checkCancellation()
+        return cached
+      }
+      let tree: [PhotoCollectionDescriptor]
+      if let service = overrideService {
+        tree = try await service.loadCollectionTree()
+      } else {
+        try await requireLiveAuthorizationAsync()
+        let logger = self.logger
+        tree = try await runDetached(priority: .userInitiated) {
+          try Self.scanCollectionTree(logger: logger)
+        }
+      }
+      try Task.checkCancellation()
+      let current = await MainActor.run {
+        guard self.libraryRevision == captured else { return false }
+        if self.overrideService == nil { self.cachedCollectionTree = tree }
+        return true
+      }
+      if current { return tree }
+      // A live operation retries changed membership instead of returning an obsolete snapshot.
     }
-    await MainActor.run {
-      if self.libraryRevision == captured { self.cachedCollectionTree = tree }
-    }
-    return tree
   }
 
   nonisolated private static func scanCollectionTree(logger: Logger) throws
