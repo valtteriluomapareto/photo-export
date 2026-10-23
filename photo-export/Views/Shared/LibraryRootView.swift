@@ -38,7 +38,11 @@ struct LibraryRootView: View {
   /// production launches it is `nil` and the defaults below apply (Timeline / current
   /// month). The mapping lives in `ScreenshotSurfaceResolver` so it's testable without
   /// instantiating SwiftUI views.
-  init(screenshotSurfaceKey: String?, timelineHistoryState: RecordStoreState) {
+  init(
+    screenshotSurfaceKey: String?, timelineHistoryState: RecordStoreState,
+    assetSelection: AssetSelectionModel? = nil
+  ) {
+    _assetSelection = State(initialValue: assetSelection ?? AssetSelectionModel())
     self.timelineHistoryState = timelineHistoryState
     let surface = ScreenshotSurfaceResolver.resolve(key: screenshotSurfaceKey)
     let now = Date()
@@ -70,7 +74,7 @@ struct LibraryRootView: View {
     )
   }
 
-  @State private var selectedAsset: AssetDescriptor?
+  @State private var assetSelection: AssetSelectionModel
 
   /// Mirrors `ContentView`'s onboarding gate. The new home for it after the refactor.
   @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding: Bool = false
@@ -114,7 +118,7 @@ struct LibraryRootView: View {
           }
       },
       detail: {
-        AssetDetailView(asset: selectedAsset, placement: detailPlacement)
+        SelectedAssetDetailPane(selection: assetSelection, placement: detailPlacement)
           .environment(photoLibraryManager)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
@@ -177,7 +181,7 @@ struct LibraryRootView: View {
       applySelectionChange(oldSet: oldSet, newSet: newSet)
     }
     .onChange(of: focusedSelection) { _, newValue in
-      selectedAsset = nil
+      assetSelection.asset = nil
       persistLastSelection()
       let kind: String
       switch newValue {
@@ -232,7 +236,7 @@ struct LibraryRootView: View {
     .frame(width: 220)
     .onChange(of: section) { _, newSection in
       restoreSelection(forSection: newSection)
-      selectedAsset = nil
+      assetSelection.asset = nil
     }
   }
 
@@ -347,7 +351,7 @@ struct LibraryRootView: View {
       YearContentView(
         year: year,
         selection: folderNavigationBinding,
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAssetBinding,
         photoLibraryService: photoLibraryManager
       )
       .environment(photoLibraryManager)
@@ -361,7 +365,7 @@ struct LibraryRootView: View {
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
         onExportMonth: { exportManager.startExportMonth(year: year, month: month) },
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAssetBinding,
         photoLibraryService: photoLibraryManager
       )
       .equatable()
@@ -374,7 +378,7 @@ struct LibraryRootView: View {
         versionSelection: exportManager.versionSelection,
         livePhotosPaired: exportManager.livePhotosPairedExport,
         onExportCollection: { exportManager.startExport(selection: .favorites) },
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAssetBinding,
         photoLibraryService: photoLibraryManager
       )
       .equatable()
@@ -390,7 +394,7 @@ struct LibraryRootView: View {
         onExportCollection: {
           exportManager.startExport(selection: .album(collectionId: collectionId))
         },
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAssetBinding,
         photoLibraryService: photoLibraryManager
       )
       .equatable()
@@ -406,7 +410,7 @@ struct LibraryRootView: View {
         onExportCollection: {
           exportManager.startExport(selection: .sharedAlbum(collectionId: collectionId))
         },
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAssetBinding,
         photoLibraryService: photoLibraryManager
       )
       .equatable()
@@ -418,7 +422,7 @@ struct LibraryRootView: View {
         folderId: collectionId,
         title: folderTitle(forCollectionId: collectionId),
         selection: folderNavigationBinding,
-        selectedAsset: $selectedAsset,
+        selectedAsset: selectedAssetBinding,
         photoLibraryService: photoLibraryManager
       )
       .environment(photoLibraryManager)
@@ -433,6 +437,10 @@ struct LibraryRootView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+  }
+
+  private var selectedAssetBinding: Binding<AssetDescriptor?> {
+    Binding(get: { assetSelection.asset }, set: { assetSelection.asset = $0 })
   }
 
   /// Single-selection bridge for `FolderContentView`. The folder pane writes through
@@ -535,4 +543,11 @@ struct LibraryRootView: View {
     return nil
   }
 
+}
+
+/// Reads selection beside the grid rather than in the split-view layout owner.
+private struct SelectedAssetDetailPane: View {
+  let selection: AssetSelectionModel
+  let placement: ExportPlacement?
+  var body: some View { AssetDetailView(asset: selection.asset, placement: placement) }
 }

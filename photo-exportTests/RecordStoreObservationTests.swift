@@ -176,6 +176,39 @@ struct RecordStoreObservationTests {
     }
   }
 
+  @Test(arguments: [false, true])
+  func tileQueryTracksItsOwnRecordAndWholeHistoryReplacement(collection: Bool) async {
+    let f = Fixture()
+    await withCleanup {
+      func isExported() -> Bool {
+        if collection {
+          return f.collections.isExportedForTile(
+            asset: f.asset, placement: f.placement, selection: .edited, livePhotosPaired: false)
+        }
+        return f.timeline.isExportedForTile(
+          asset: f.asset, selection: .edited, livePhotosPaired: false)
+      }
+      #expect(isExported())
+      let tile = ObservationProbe { _ = isExported() }
+      let global = ObservationProbe { _ = f.counter(collection) }
+      f.write("other", collection: collection)
+      f.flushNotifications(collection)
+      #expect(global.changeCount > 0)
+      #expect(tile.changeCount == 0)
+      f.write("seed", collection: collection)
+      #expect(tile.changeCount == 0)
+      f.flushNotifications(collection)
+      #expect(tile.changeCount > 0)
+      #expect(!isExported())
+      let before = tile.changeCount
+      f.configure("B", collection: collection)
+      #expect(tile.changeCount > before)
+      #expect(!isExported())
+    } cleanup: {
+      await f.close()
+    }
+  }
+
   /// Each query's notification fails before dependency tracking; writes before the flush stay silent.
   @Test(arguments: Query.allCases)
   func everyQueryRegistersThroughMutationCounter(query: Query) async {

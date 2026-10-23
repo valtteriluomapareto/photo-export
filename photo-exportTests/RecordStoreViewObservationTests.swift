@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 import Testing
 
@@ -8,12 +9,16 @@ import Testing
   @MainActor
   @Suite(.serialized, .timeLimit(.minutes(2)))
   struct RecordStoreViewObservationTests {
-    private enum Surface { case month, collection, year, sidebars }
+    private enum Surface { case month, collection, library, year, sidebars }
 
     @MainActor
     private final class Tick: ObservableObject {
       @Published var value = 0
-      @Published var asset: AssetDescriptor?
+    }
+
+    @Observable
+    final class GridSelection {
+      var asset: AssetDescriptor?
     }
 
     private struct RenderProbe: View {
@@ -30,7 +35,8 @@ import Testing
       let surface: Surface
       let service: FakePhotoLibraryService
       let manager: ExportManager
-      @ObservedObject var tick: Tick
+      @Bindable var navigation: GridSelection
+      let assetSelection: AssetSelectionModel
       @State private var selection: LibrarySelection?
       @State private var collectionSelection: Set<LibrarySelection> = []
 
@@ -39,19 +45,23 @@ import Testing
         case .month:
           MonthContentView(
             year: 2026, month: 9, versionSelection: .edited, livePhotosPaired: false,
-            onExportMonth: {}, selectedAsset: $tick.asset, photoLibraryService: service
+            onExportMonth: {}, selectedAsset: $navigation.asset, photoLibraryService: service
           )
           .equatable()
         case .collection:
           CollectionContentView(
             selection: .favorites, title: "Favorites", versionSelection: .edited,
-            livePhotosPaired: false, onExportCollection: {}, selectedAsset: $tick.asset,
+            livePhotosPaired: false, onExportCollection: {}, selectedAsset: $navigation.asset,
             photoLibraryService: service
           )
           .equatable()
+        case .library:
+          LibraryRootView(
+            screenshotSurfaceKey: "timeline", timelineHistoryState: .ready,
+            assetSelection: assetSelection)
         case .year:
           YearContentView(
-            year: 2026, selection: $selection, selectedAsset: $tick.asset,
+            year: 2026, selection: $selection, selectedAsset: $navigation.asset,
             photoLibraryService: service)
         case .sidebars:
           HStack {
@@ -85,6 +95,8 @@ import Testing
       let autoSync = AutoSyncManager()
       let counter = BodyInvalidationCounter()
       let tick = Tick()
+      let navigation = GridSelection()
+      let assetSelection = AssetSelectionModel()
       let window: NSWindow
       let album: ExportPlacement
 
@@ -117,6 +129,13 @@ import Testing
             pathComponents: [], children: [child])
         ]
         service.assetsByAlbumLocalId["trip"] = assets
+        if case .library = surface {
+          let now = Date()
+          let year = Calendar.current.component(.year, from: now)
+          let month = Calendar.current.component(.month, from: now)
+          service.assetsByYearMonth["\(year)-\(month)"] = assets
+          service.yearCounts = [(year, 2)]
+        }
         if let stream { service.progressiveStreamOverride = { _ in stream } }
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
@@ -140,12 +159,17 @@ import Testing
           contentRect: NSRect(x: -10000, y: -10000, width: 800, height: 700),
           styleMask: [.borderless])
         // The deterministic stores need their own clock; the shared window factory still applies.
-        let content = Host(surface: surface, service: service, manager: manager, tick: tick)
-          .overlay(alignment: .topLeading) { RenderProbe(tick: tick, counter: counter) }
-          .environment(library).environment(timeline).environment(collections)
-          .environment(manager).environment(manager.progressState)
-          .environmentObject(destinationManager).environmentObject(autoSync)
-          .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
+        let whatsNew = WhatsNewState(userDefaults: defaults, currentVersion: "test", catalog: [])
+        whatsNew.markAsSeen()
+        let content = Host(
+          surface: surface, service: service, manager: manager, navigation: navigation,
+          assetSelection: assetSelection
+        )
+        .overlay(alignment: .topLeading) { RenderProbe(tick: tick, counter: counter) }
+        .environment(library).environment(timeline).environment(collections)
+        .environment(manager).environment(manager.progressState).environment(whatsNew)
+        .environmentObject(destinationManager).environmentObject(autoSync)
+        .environment(\.bodyInvalidationCounter, counter).defaultAppStorage(defaults)
         window.contentView = NSHostingView(rootView: content)
         window.orderFront(nil)
       }
@@ -183,8 +207,7 @@ import Testing
 
       func count(_ key: String) -> Int {
         if key == "MonthContentView" {
-          // Selection changes the suffix; every body records exactly one of these local keys.
-          return counter.snapshot().filter { $0.key.hasPrefix("selected:") }.values.reduce(0, +)
+          return counter.count(for: "month-grid-body")
         }
         return counter.count(for: key)
       }
@@ -271,7 +294,7 @@ import Testing
         // Finish real thumbnail work before attributing any body to the record publication.
         try #require(
           await observe(in: f.window) {
-            !f.service.startCachingCalls.isEmpty && f.tick.asset?.id == "first"
+            !f.service.startCachingCalls.isEmpty && f.navigation.asset?.id == "first"
           })
         f.timeline.flushPendingNotifications()
         f.collections.flushPendingNotifications()
@@ -291,12 +314,10 @@ import Testing
           })
         try await f.barrier()
         #expect(f.counter.renderedText["thumbnail-exported:second"] == ["false"])
-        withKnownIssue {
-          #expect(f.count(bodyKey) - bodies == 0)
-        }
-        withKnownIssue {
-          #expect(f.counter.count(for: "asset-tile-body:second") - sibling == 0)
-        }
+        #expect(f.count(bodyKey) - bodies == PerformanceBudgets.gridBodiesPerRecordPublication)
+        #expect(
+          f.counter.count(for: "asset-tile-body:second") - sibling
+            == PerformanceBudgets.unrelatedTileBodiesPerRecordPublication)
       } cleanup: {
         await f.close()
       }
@@ -308,18 +329,42 @@ import Testing
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
-            f.counter.renderedText["grid-assets"] == ["2"] && f.tick.asset?.id == "first"
+            f.counter.renderedText["grid-assets"] == ["2"] && f.navigation.asset?.id == "first"
           })
         f.timeline.flushPendingNotifications()
         f.collections.flushPendingNotifications()
         try await f.barrier()
         let scans = f.counter.count(for: "summaryScan")
-        f.tick.asset = f.service.favoritesAssets[1]
+        f.navigation.asset = f.service.favoritesAssets[1]
         try await f.barrier()
-        #expect(f.tick.asset?.id == "second")
-        withKnownIssue {
-          #expect(f.counter.count(for: "summaryScan") - scans == 0)
-        }
+        #expect(f.navigation.asset?.id == "second")
+        #expect(
+          f.counter.count(for: "summaryScan") - scans == PerformanceBudgets.summaryScansPerSelection
+        )
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test func assetSelectionLeavesLibraryLayoutAndSummaryQuiet() async throws {
+      let f = Fixture(.library)
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["grid-assets"] == ["2"] && f.assetSelection.asset?.id == "first"
+          })
+        f.timeline.flushPendingNotifications()
+        f.collections.flushPendingNotifications()
+        try await f.barrier()
+        let bodies = f.count("library-root")
+        let scans = f.count("summaryScan")
+        let selected = f.count("selected:second")
+        f.assetSelection.asset = f.service.favoritesAssets[1]
+        try #require(await observe(in: f.window) { f.count("selected:second") > selected })
+        try await f.barrier()
+        #expect(
+          f.count("library-root") - bodies == PerformanceBudgets.libraryBodiesPerAssetSelection)
+        #expect(f.count("summaryScan") - scans == PerformanceBudgets.summaryScansPerSelection)
       } cleanup: {
         await f.close()
       }
@@ -341,17 +386,14 @@ import Testing
           try #require(
             await observe(in: f.window) { f.counter.renderedText["grid-assets"] == [count] })
           try await f.barrier()
-          withKnownIssue {
-            #expect(f.counter.count(for: "summaryScan") == 0)
-          }
+          #expect(f.counter.count(for: "summaryScan") == 0)
         }
         stream.continuation.finish()
         try #require(await observe(in: f.window) { !f.service.startCachingCalls.isEmpty })
         try await f.barrier()
         #expect(f.counter.count(for: "summaryScan") > 0)
-        withKnownIssue {
-          #expect(f.counter.count(for: "summaryScan") <= 1)
-        }
+        #expect(
+          f.counter.count(for: "summaryScan") <= PerformanceBudgets.summaryScansPerProgressiveLoad)
       } cleanup: {
         stream.continuation.finish()
         await f.close()

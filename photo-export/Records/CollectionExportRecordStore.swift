@@ -131,6 +131,16 @@ final class CollectionExportRecordStore {
   private let ioQueue = DispatchQueue(
     label: "com.valtteriluoma.photo-export.collection-records-io", qos: .utility)
 
+  private struct TileRecordKey: Hashable {
+    let placementId: String
+    let assetId: String
+  }
+  private var tileHistoryRevision = 0
+  private var gridPlacementsRevision = 0
+  @ObservationIgnored private var pendingTileRecords: Set<TileRecordKey> = []
+  @ObservationIgnored private var invalidatesAllTiles = false
+  @ObservationIgnored private var placementsChanged = false
+
   /// Raw storage: view readers use a query or register `mutationCounter`.
   /// Top-level placement metadata, keyed by placement id. Stale entries from deleted albums
   /// remain here intentionally — they are load-bearing for collision detection and rename
@@ -193,7 +203,7 @@ final class CollectionExportRecordStore {
     clock: notificationClock
   ) {
     [weak self] in
-    self?.mutationCounter &+= 1
+    self?.publishRecordChanges()
   }
 
   private let fileManager = FileManager.default
@@ -347,6 +357,7 @@ final class CollectionExportRecordStore {
 
     placements = [:]
     recordBodies = [:]
+    invalidatesAllTiles = true
     filenameClaims = nil
 
     guard let destinationId else {
@@ -382,6 +393,7 @@ final class CollectionExportRecordStore {
     if let retained = pendingRecovery[destinationId] {
       placements = retained.placements
       recordBodies = retained.records
+      invalidatesAllTiles = true
       filenameClaims = nil
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
@@ -411,6 +423,7 @@ final class CollectionExportRecordStore {
       // A final commit's write failure was parked while the load ran; its history wins.
       placements = retained.placements
       recordBodies = retained.records
+      invalidatesAllTiles = true
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
       setState(.persistenceFailed)
@@ -427,6 +440,7 @@ final class CollectionExportRecordStore {
       case .loaded(let prepared):
         placements = prepared.placements
         recordBodies = prepared.recordBodies
+        invalidatesAllTiles = true
         setState(.ready)
       }
     }
@@ -552,6 +566,7 @@ final class CollectionExportRecordStore {
       try jsonl.resetToEmpty(emptySnapshot: Snapshot.empty)
       placements = [:]
       recordBodies = [:]
+      invalidatesAllTiles = true
       filenameClaims = nil
       setState(.ready)
       replayFinalCompletions()
@@ -592,6 +607,15 @@ final class CollectionExportRecordStore {
     for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
   ) -> ExportPlacement? {
     trackRecords()
+    return ExportPlacementResolver().existingCollectionPlacement(
+      for: selection, collections: collections, existingPlacements: Array(placements.values))
+  }
+
+  /// Grid placement lookup follows metadata changes, independently of individual record writes.
+  func currentGridPlacement(
+    for selection: LibrarySelection, collections: [PhotoCollectionDescriptor]
+  ) -> ExportPlacement? {
+    _ = gridPlacementsRevision
     return ExportPlacementResolver().existingCollectionPlacement(
       for: selection, collections: collections, existingPlacements: Array(placements.values))
   }
@@ -1002,6 +1026,18 @@ final class CollectionExportRecordStore {
       livePhotosPaired: livePhotosPaired, convertHEIC: convertHEIC)
   }
 
+  /// Observes one asset within one placement; aggregate queries retain their shared revision.
+  func isExportedForTile(
+    asset: AssetDescriptor, placement: ExportPlacement,
+    selection: ExportVersionSelection, livePhotosPaired: Bool
+  ) -> Bool {
+    _ = tileHistoryRevision
+    access(keyPath: \.recordBodies[placement.id]?[asset.id])
+    return isExportedUntracked(
+      asset: asset, placement: placement, selection: selection,
+      livePhotosPaired: livePhotosPaired, convertHEIC: convertHEICToJPEG)
+  }
+
   private func isExportedUntracked(
     asset: AssetDescriptor, placement: ExportPlacement, selection: ExportVersionSelection,
     livePhotosPaired: Bool, convertHEIC: Bool
@@ -1251,6 +1287,7 @@ final class CollectionExportRecordStore {
       // when its later reload was unreadable. Retry must retain the new file.
       placements = context.snapshot.placements
       recordBodies = context.snapshot.records
+      invalidatesAllTiles = true
       filenameClaims = nil
       hasUnsavedChanges = true
     }
@@ -1350,6 +1387,16 @@ final class CollectionExportRecordStore {
   }
 
   private func apply(_ op: LogOp) {
+    switch op {
+    case .upsertRecord(let placementId, let assetId, _),
+      .deleteRecord(let placementId, let assetId):
+      pendingTileRecords.insert(TileRecordKey(placementId: placementId, assetId: assetId))
+    case .upsertPlacement(let id, let placement):
+      placementsChanged = placementsChanged || placements[id] != placement
+    case .deletePlacement:
+      placementsChanged = true
+      invalidatesAllTiles = true
+    }
     Self.apply(
       op, placements: &placements, recordBodies: &recordBodies, claims: &filenameClaims,
       logger: logger)
@@ -1504,6 +1551,24 @@ final class CollectionExportRecordStore {
         )
       }
     }
+  }
+
+  private func publishRecordChanges() {
+    let allTiles = invalidatesAllTiles
+    let records = pendingTileRecords
+    let metadataChanged = placementsChanged
+    invalidatesAllTiles = false
+    pendingTileRecords = []
+    placementsChanged = false
+    mutationCounter &+= 1
+    if allTiles {
+      tileHistoryRevision &+= 1
+    } else {
+      for key in records {
+        withMutation(keyPath: \.recordBodies[key.placementId]?[key.assetId]) {}
+      }
+    }
+    if allTiles || metadataChanged { gridPlacementsRevision &+= 1 }
   }
 
   private func scheduleCoalescedNotify() {
