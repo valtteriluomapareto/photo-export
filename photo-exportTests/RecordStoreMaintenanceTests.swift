@@ -145,6 +145,23 @@ struct RecordStoreMaintenanceTests {
         assetId: "commit", variant: .original, year: 2026, month: 10, relPath: "2026/10/",
         subfolder: nil, acceptsEditedFallback: false)
     }
+    func select(_ id: String) async {
+      if collection {
+        collections.beginConfigure(for: id)
+        await collections.waitUntilSettled()
+      } else {
+        timeline.beginConfigure(for: id)
+        await timeline.waitUntilSettled()
+      }
+    }
+    func retry() async {
+      if collection {
+        await collections.retryHistoryPersistence()
+      } else {
+        await timeline.retryHistoryPersistence()
+      }
+    }
+    var state: RecordStoreState { collection ? collections.state : timeline.state }
     func close() {
       replacement.release()
       timeline.drainSynchronously()
@@ -814,6 +831,107 @@ struct RecordStoreMaintenanceTests {
       }
       f.close()
     }
+  }
+
+  @Test(arguments: [false, true])
+  func acknowledgementDuringFailedRetryKeepsItsCapturedHistoryUntilLoadFinishes(collection: Bool)
+    async throws
+  {
+    let f = Fixture(collection: collection)
+    try await f.seed()
+    let acknowledge = try f.acknowledgement()
+    await f.select("B")
+    f.log.failReads.mutate { $0 = true }
+    await f.select("A")
+    let preparation = AsyncCheckpoint()
+    let preparations = LockedBox(0)
+    let checkpoint: @Sendable () async -> Void = {
+      var first = false
+      preparations.mutate { count in
+        count += 1
+        first = count == 1
+      }
+      if first { await preparation.enter() }
+    }
+    if collection {
+      f.collections.preparationCheckpoint = checkpoint
+    } else {
+      f.timeline.preparationCheckpoint = checkpoint
+    }
+    let retry = Task { await f.retry() }
+    var completion: Task<Void, Never>?
+    try await withCleanup {
+      try #require(await preparation.waitForEnter(count: 1))
+      #expect(f.state == .persistenceFailed, "Retry keeps the failure alert visible while loading")
+      completion = Task { await acknowledge("late.JPG") }
+      await completion?.value
+      #expect(preparations.value == 1, "The acknowledgement must wait for the actual retry load")
+      #expect(!f.has("seed") && !f.has("commit"))
+      await preparation.releaseAll()
+      await retry.value
+      #expect(f.has("seed") && f.has("commit"))
+      f.log.failReads.mutate { $0 = false }
+      await f.retry()
+      #expect(f.state == .ready)
+      await f.select("B")
+      await f.select("A")
+      #expect(f.has("seed") && f.has("commit"))
+    } cleanup: {
+      await preparation.releaseAll()
+      await completion?.value
+      await retry.value
+      f.close()
+    }
+  }
+
+  @Test(arguments: [false, true])
+  func capturedCorruptionRequiresResetAfterAnUnreadableRoundTrip(collection: Bool) async throws {
+    let f = Fixture(collection: collection)
+    defer { f.close() }
+    try await f.seed()
+    let acknowledge = try f.acknowledgement()
+    let directory = f.root.appendingPathComponent("A")
+    let snapshot = directory.appendingPathComponent(
+      collection
+        ? CollectionExportRecordStore.Constants.snapshotFileName
+        : ExportRecordStore.Constants.snapshotFileName)
+    let corrupt = Data("corrupt history requiring explicit reset".utf8)
+    try corrupt.write(to: snapshot)
+    await f.select("A")
+    #expect(f.state == .failed)
+    await f.select("B")
+    f.log.failReads.mutate { $0 = true }
+    await f.select("A")
+    #expect(f.state == .persistenceFailed)
+    let preparations = LockedBox(0)
+    let checkpoint: @Sendable () async -> Void = { preparations.mutate { $0 += 1 } }
+    if collection {
+      f.collections.preparationCheckpoint = checkpoint
+    } else {
+      f.timeline.preparationCheckpoint = checkpoint
+    }
+    await acknowledge("late.JPG")
+    #expect(preparations.value == 0, "Known corruption must defer without restoring its capture")
+    #expect(!f.has("seed") && !f.has("commit"))
+    await f.retry()
+    #expect(f.state == .persistenceFailed)
+    #expect(try Data(contentsOf: snapshot) == corrupt)
+    f.log.failReads.mutate { $0 = false }
+    await f.retry()
+    #expect(f.state == .failed)
+    #expect(!f.has("seed") && !f.has("commit"))
+    if collection { await f.collections.resetHistory() } else { await f.timeline.resetHistory() }
+    #expect(f.state == .ready)
+    #expect(!f.has("seed") && f.has("commit"), "Reset replays only the acknowledged delta")
+    let backups = try FileManager.default.contentsOfDirectory(
+      at: directory, includingPropertiesForKeys: nil
+    ).filter { $0.lastPathComponent.contains(".broken-") }
+    #expect(backups.count == 1)
+    #expect(try Data(contentsOf: #require(backups.first)) == corrupt)
+    if collection { try await f.collections.flush() } else { try await f.timeline.flush() }
+    await f.select("B")
+    await f.select("A")
+    #expect(!f.has("seed") && f.has("commit"))
   }
 
   @Test(arguments: [false, true])
