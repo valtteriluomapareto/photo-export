@@ -9,6 +9,7 @@ import Testing
 /// inputs include absolute paths, `..` segments, paths whose canonical resolution lands
 /// outside the export root, paths where a non-directory exists at an intermediate
 /// component, and paths exceeding the platform path length.
+@Suite(.timeLimit(.minutes(2)))
 @MainActor
 struct ExportDestinationEscapeProtectionTests {
 
@@ -33,6 +34,21 @@ struct ExportDestinationEscapeProtectionTests {
     var isDir: ObjCBool = false
     #expect(FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir))
     #expect(isDir.boolValue)
+  }
+
+  @Test(arguments: [false, true])
+  func disappearedDirectoryIsNotSilentlyRecreated(rename: Bool) throws {
+    let (manager, root) = try makeManagerAndRoot()
+    let directory = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
+    if rename {
+      try FileManager.default.moveItem(at: directory, to: root.appendingPathComponent("moved"))
+    } else {
+      try FileManager.default.removeItem(at: directory)
+    }
+    #expect(throws: (any Error).self) {
+      _ = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
+    }
+    #expect(!FileManager.default.fileExists(atPath: directory.path))
   }
 
   // MARK: - Rejected inputs
