@@ -76,6 +76,7 @@ struct DestinationIOTests {
     gate.release()
     await predecessor?.value
     await task.value
+    try await io.run { () throws -> Void in }
     #expect(physical.value)
     #expect(returned.value)
   }
