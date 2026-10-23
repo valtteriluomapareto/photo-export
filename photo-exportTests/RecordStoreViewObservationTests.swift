@@ -342,7 +342,10 @@ import Testing
         f.collections.flushPendingNotifications()
         try await f.barrier()
         let scans = f.counter.count(for: "summaryScan")
+        let selected = f.counter.count(for: "selected:second")
         f.navigation.asset = f.service.favoritesAssets[1]
+        try #require(
+          await observe(in: f.window) { f.counter.count(for: "selected:second") > selected })
         try await f.barrier()
         #expect(f.navigation.asset?.id == "second")
         #expect(
@@ -399,7 +402,12 @@ import Testing
           #expect(f.counter.count(for: "summaryScan") == 0)
         }
         stream.continuation.finish()
-        try #require(await observe(in: f.window) { !f.service.startCachingCalls.isEmpty })
+        let summaryKey = collection ? "collection-summary" : "month-summary"
+        let expected = collection ? "0/2000" : "0/2000 exported"
+        try #require(
+          await observe(in: f.window) {
+            !f.service.startCachingCalls.isEmpty && f.counter.renderedText[summaryKey] == [expected]
+          })
         try await f.barrier()
         #expect(f.counter.count(for: "summaryScan") > 0)
         #expect(
