@@ -45,6 +45,14 @@ class ThroughputFromLogTests(unittest.TestCase):
                 self.assertIn(error, result.stderr)
                 self.assertNotIn("median", result.stdout)
 
+    def test_asset_suffix_ignores_markers_inside_destination_paths(self):
+        lines = (FIXTURES / "two-assets.log").read_text().splitlines()
+        lines[1] = lines[1].replace("/scratch/", "/scratch asset: photos/")
+        lines[2] = lines[2].replace("/scratch/", "/scratch asset: originals/")
+        result = self.run_parser(text="\n".join(lines))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("assets=2 seconds=2.000000 assets/sec=1.000000", result.stdout)
+
     def test_help_describes_one_file_per_run_and_denominator(self):
         result = self.run_parser("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
