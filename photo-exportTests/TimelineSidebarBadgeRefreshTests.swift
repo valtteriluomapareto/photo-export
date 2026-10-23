@@ -366,6 +366,49 @@ import Testing
     }
 
     @Test
+    func cancellationFromMonthPublicationCannotDispatchOrRestoreTheOldJob() async throws {
+      let f = Fixture()
+      try await withCleanup {
+        let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
+        f.service.assetsByYearMonth["2026-9"] = [
+          TestAssetFactory.makeAsset(id: "cancelled-before-dispatch", creationDate: date)
+        ]
+        f.service.resourcesByAssetId["cancelled-before-dispatch"] = [
+          ResourceDescriptor(type: .photo, originalFilename: "cancelled.JPG")
+        ]
+        let placement = ExportPlacement.timeline(year: 2026, month: 9)
+        f.manager.queueCoordinator.enqueue([
+          .init(assetLocalIdentifier: "cancelled-before-dispatch", placement: placement,
+            selection: .edited)
+        ])
+        let state = f.manager.queueCoordinator.monthState(placementId: placement.id)
+        var cancelled = false
+        let probe = ObservationProbe({ _ = f.manager.queuedCount(year: 2026, month: 9) }) {
+          guard !cancelled else { return }
+          cancelled = true
+          f.manager.cancelAndClear()
+        }
+        f.manager.queueCoordinator.processQueueIfNeeded()
+        let task = f.manager.currentTask
+        #expect(cancelled)
+        #expect(task == nil)
+        #expect(f.manager.currentJobAssetId == nil)
+        #expect(f.manager.currentJobPlacement == nil)
+        #expect(state.snapshot == .init())
+        #expect(!f.manager.isRunning)
+        #expect(!f.manager.isProcessing)
+        #expect(f.manager.pendingJobs.isEmpty)
+        #expect(f.manager.queueCount == 0)
+        if let task { _ = await finished(task) }
+        #expect(f.writer.writeCalls.isEmpty)
+        #expect(f.manager.currentJobAssetId == nil)
+        #expect(f.manager.currentJobPlacement == nil)
+        #expect(state.snapshot == .init())
+        probe.stop()
+      } cleanup: { await f.close() }
+    }
+
+    @Test
     func recordPublicationOnlyInvalidatesChangedMonths() async throws {
       let f = Fixture(twoVisibleMonths: true)
       try await withCleanup {
