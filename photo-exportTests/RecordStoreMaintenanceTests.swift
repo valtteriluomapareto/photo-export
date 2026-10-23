@@ -42,8 +42,12 @@ struct RecordStoreMaintenanceTests {
   private final class Log: JSONLRecordLogIO, @unchecked Sendable {
     let writes = LockedBox(0)
     let failWrites = LockedBox(false)
+    let failReads = LockedBox(false)
     private let real = ProductionJSONLRecordLogIO()
-    func readIfPresent(at url: URL) throws -> Data? { try real.readIfPresent(at: url) }
+    func readIfPresent(at url: URL) throws -> Data? {
+      if failReads.value { throw CocoaError(.fileReadNoPermission) }
+      return try real.readIfPresent(at: url)
+    }
     func openForAppending(at url: URL) throws -> FileHandle { try real.openForAppending(at: url) }
     func write(_ data: Data, to handle: FileHandle) throws {
       writes.mutate { $0 += 1 }
@@ -587,6 +591,99 @@ struct RecordStoreMaintenanceTests {
           == (supersede ? .ready : .persistenceFailed))
     } cleanup: {
       await preparation.releaseAll()
+      if collection {
+        await f.collections.waitUntilSettled()
+      } else {
+        await f.timeline.waitUntilSettled()
+      }
+      f.close()
+    }
+  }
+
+  @Test(arguments: [false, true], [false, true])
+  func unreadableCompletionPreparationStaysResponsiveAndKeepsItsCapturedOwner(
+    collection: Bool, supersede: Bool
+  ) async throws {
+    let f = Fixture(collection: collection)
+    try await f.seed()
+    let acknowledge = try f.acknowledgement()
+    if collection {
+      f.collections.beginConfigure(for: "B")
+      await f.collections.waitUntilSettled()
+    } else {
+      f.timeline.beginConfigure(for: "B")
+      await f.timeline.waitUntilSettled()
+    }
+    f.log.failReads.mutate { $0 = true }
+    if collection {
+      f.collections.beginConfigure(for: "A")
+      await f.collections.waitUntilSettled()
+    } else {
+      f.timeline.beginConfigure(for: "A")
+      await f.timeline.waitUntilSettled()
+    }
+    f.log.failReads.mutate { $0 = false }
+    let preparation = AsyncCheckpoint()
+    let entered = LockedBox(false)
+    let completed = LockedBox(false)
+    let checkpoint: @Sendable () async -> Void = {
+      #expect(!Thread.isMainThread)
+      entered.mutate { $0 = true }
+      await preparation.enter()
+    }
+    if collection {
+      f.collections.preparationCheckpoint = checkpoint
+    } else {
+      f.timeline.preparationCheckpoint = checkpoint
+    }
+    let completion = Task {
+      defer { completed.mutate { $0 = true } }
+      await acknowledge("late.JPG")
+    }
+    try await withCleanup {
+      try #require(
+        await eventually("unreadable completion starts preparation or completes") {
+          entered.value || completed.value
+        })
+      try #require(
+        entered.value, "Unreadable completion must prepare retained history asynchronously")
+      #expect(!completed.value)
+      #expect(!f.has("seed"))
+      let heartbeat = Task { @MainActor in true }
+      #expect(await finished(heartbeat))
+      if supersede {
+        if collection {
+          f.collections.beginConfigure(for: "B")
+        } else {
+          f.timeline.beginConfigure(for: "B")
+        }
+      }
+      await preparation.releaseAll()
+      await completion.value
+      if collection {
+        await f.collections.waitUntilSettled()
+      } else {
+        await f.timeline.waitUntilSettled()
+      }
+      #expect(f.has("seed") == !supersede)
+      #expect(f.has("commit") == !supersede)
+      if supersede {
+        if collection {
+          f.collections.beginConfigure(for: "A")
+          await f.collections.waitUntilSettled()
+        } else {
+          f.timeline.beginConfigure(for: "A")
+          await f.timeline.waitUntilSettled()
+        }
+        #expect(f.has("seed"))
+        #expect(f.has("commit"))
+      }
+      #expect(
+        (collection ? f.collections.claimsEpoch : f.timeline.claimsEpoch)
+          == (collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch))
+    } cleanup: {
+      await preparation.releaseAll()
+      await completion.value
       if collection {
         await f.collections.waitUntilSettled()
       } else {
