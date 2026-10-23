@@ -111,6 +111,24 @@ struct AssetDetailImageLoaderTests {
     #expect(!loader.state.isLoading)
   }
 
+  @Test func cachedThumbnailIsVisibleWhilePreviewIsPending() async {
+    let loader = AssetDetailImageLoader()
+    let service = FakePhotoLibraryService()
+    let cached = NSImage(size: NSSize(width: 20, height: 20))
+    service.thumbnailsByAssetId["A"] = cached
+    let gate = AsyncCheckpoint()
+    service.fullImageRequestOverride = { _ in
+      await gate.enter()
+      return NSImage(size: NSSize(width: 40, height: 40))
+    }
+    let task = Task { await loader.load(for: "A", using: service) }
+    await gate.waitForEnter(count: 1)
+    #expect(loader.state.image != nil)
+    #expect(loader.state.isLoading)
+    await gate.releaseAll()
+    await task.value
+  }
+
   @Test func currentFailureIsVisibleButCancellationIsNot() async {
     let loader = AssetDetailImageLoader()
     let service = FakePhotoLibraryService()

@@ -159,6 +159,37 @@ import Testing
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func mountedPreviewUsesBoundedPanePixels() async throws {
+      let f = Fixture()
+      try await withCleanup {
+        await f.show(f.timelinePlacement)
+        let size = try #require(f.photos.previewPixelSizes.last)
+        #expect(size.width > 0 && size.height > 0)
+        #expect(size.width <= 2560 && size.height <= 2560)
+        #expect(size.width <= 1000, "The 500-point pane needs at most Retina width")
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func recordPublicationUpdatesStatusWithoutFetchingDetails() async {
+      let f = Fixture()
+      await withCleanup {
+        f.set(f.timelinePlacement, variants: [.original: record(.pending)])
+        await f.show(f.timelinePlacement)
+        await f.expectRows(["Original: Pending"])
+        let before = f.photos.detailsFetchCalls.count
+        f.set(f.timelinePlacement, variants: [.original: record(.done)])
+        f.timeline.flushPendingNotifications()
+        await f.expectRows(["Original: Exported"])
+        #expect(f.photos.detailsFetchCalls.count - before == 0)
+      } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func collectionOnlySuccessIsVisibleWithoutTimelineHistory() async {
       let f = Fixture()
       await withCleanup {

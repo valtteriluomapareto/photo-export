@@ -403,6 +403,18 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     return source.cgImage(forProposedRect: &rect, context: nil, hints: nil)
   }
 
+  var previewPixelSizes: [CGSize] = []
+  var previewOverride: (@MainActor (String, CGSize, @MainActor (NSImage) -> Void) async throws -> NSImage)?
+
+  func requestPreview(
+    for assetId: String, pixelSize: CGSize,
+    onDegraded: @escaping @MainActor @Sendable (NSImage) -> Void
+  ) async throws -> NSImage {
+    previewPixelSizes.append(pixelSize)
+    if let previewOverride { return try await previewOverride(assetId, pixelSize, onDegraded) }
+    return try await requestFullImage(for: assetId)
+  }
+
   func requestFullImage(for assetId: String) async throws -> NSImage {
     if let fullImageRequestOverride { return try await fullImageRequestOverride(assetId) }
     if let error = requestFullImageError { throw error }
