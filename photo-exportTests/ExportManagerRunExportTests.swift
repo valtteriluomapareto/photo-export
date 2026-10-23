@@ -2014,6 +2014,37 @@ struct ExportManagerRunExportTests {
     }
   }
 
+  @Test func supersededPreparationCannotEndItsReplacementActivity() async {
+    let activity = RunActivitySpy()
+    let h = ExportManagerHarness(label: "ExportActivityReplacement", runActivity: activity)
+    let oldGate = AsyncCheckpoint()
+    let newGate = AsyncCheckpoint()
+    let asset = TestAssetFactory.makeAsset(id: "replacement", creationDate: makeDate(2025, 1, 1))
+    h.photoLib.assetsByYearMonth["2025-1"] = [asset]
+    h.photoLib.resourcesByAssetId[asset.id] = [TestAssetFactory.makeResource()]
+    h.photoLib.progressiveCheckpointByScopeKey["timeline:2025-1"] = oldGate
+    h.manager.startExportMonth(year: 2025, month: 1)
+    await oldGate.waitForEnter(count: 1)
+    let oldPreparation = h.manager.currentPreparationTasks.first
+    h.manager.supersedeForManualRun()
+    #expect(activity.begins == 1)
+    #expect(activity.ends == 1)
+    h.photoLib.progressiveCheckpointByScopeKey["timeline:2025-1"] = newGate
+    h.manager.startExportMonth(year: 2025, month: 1)
+    await newGate.waitForEnter(count: 1)
+    #expect(activity.begins == 2)
+    await oldGate.releaseAll()
+    await oldPreparation?.value
+    #expect(activity.ends == 1)
+    await newGate.releaseAll()
+    await h.manager.waitForQueueDrained()
+    #expect(activity.ends == 2)
+    h.manager.cancelAndClear()
+    h.store.drainSynchronously()
+    h.collectionStore.drainSynchronously()
+    h.dest.cleanup()
+  }
+
   @Test func bulkPreparationStartsAtUtilityPriorityBeforeJoining() async {
     let h = ExportManagerHarness(label: "ExportPreparationPriority")
     let observed = AsyncStream<TaskPriority>.makeStream()
