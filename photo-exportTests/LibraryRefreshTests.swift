@@ -17,7 +17,8 @@ struct LibraryRefreshTests {
     library.beginObservingQuery(second)
     let source = ObservationProbe { _ = library.libraryRevision }
     for _ in 0..<5 {
-      library.invalidateCache(changedThumbnailAssetIDs: [], queryChanges: [first: true, second: false])
+      library.invalidateCache(
+        changedThumbnailAssetIDs: [], queryChanges: [first: true, second: false])
     }
     #expect(library.libraryRevision == 5)
     #expect(source.changeCount == 5)
@@ -40,8 +41,12 @@ struct LibraryRefreshTests {
     let imageQuery = PhotoLibraryQuery(scope: .favorites, mediaType: .image)
     let videoQuery = PhotoLibraryQuery(scope: .favorites, mediaType: .video)
     for query in [first, imageQuery, videoQuery] { library.beginObservingQuery(query) }
-    library.invalidateCache(changedThumbnailAssetIDs: [], queryChanges: [first: false, imageQuery: true, videoQuery: false])
-    library.invalidateCache(changedThumbnailAssetIDs: [], queryChanges: [first: false, imageQuery: false, videoQuery: false])
+    library.invalidateCache(
+      changedThumbnailAssetIDs: [],
+      queryChanges: [first: false, imageQuery: true, videoQuery: false])
+    library.invalidateCache(
+      changedThumbnailAssetIDs: [],
+      queryChanges: [first: false, imageQuery: false, videoQuery: false])
     library.libraryRefresh.flush()
     #expect(library.libraryRefresh.queryRevision(for: first) == 0)
     #expect(library.libraryRefresh.queryRevision(for: imageQuery) == 1)
@@ -93,4 +98,38 @@ struct LibraryRefreshTests {
     #expect(!store.install("stale-revision", for: stale, revision: 2))
     store.end(first)
   }
+  @Test(arguments: [false, true])
+  func heldQueryOnlyRejectsChangesThatAffectItsPredicate(affected: Bool) async {
+    let clock = TestClock()
+    let service = FakePhotoLibraryService()
+    let library = PhotoLibraryManager(overrideService: service, refreshClock: clock)
+    library.beginObservingQuery(first)
+    let source = library.libraryRefresh.sourceRevision(for: first)
+    let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
+    service.progressiveStreamOverride = { _ in stream.stream }
+    let model = MonthViewModel(photoLibraryService: service)
+    let load = Task {
+      await model.loadAssets(for: first.scope, isCurrent: {
+        library.libraryRefresh.sourceRevision(for: first) == source
+      })
+    }
+    await Task.yield()
+    library.invalidateCache(changedThumbnailAssetIDs: [], queryChanges: [first: affected])
+    let asset = TestAssetFactory.makeAsset(id: "late")
+    stream.continuation.yield([asset])
+    stream.continuation.finish()
+    await load.value
+    #expect(model.assets == (affected ? [] : [asset]))
+    #expect(model.hasCompleteSnapshot == !affected)
+    library.libraryRefresh.flush()
+    model.deactivate()
+    library.endObservingQuery(first)
+  }
+
+  @Test func screenshotInventoryAsyncSeamsReturnSyntheticValues() async throws {
+    let service = ScreenshotPhotoLibraryService()
+    #expect(try await !service.loadYearsWithCounts().isEmpty)
+    #expect(try await service.loadCollectionTree().contains { $0.kind == .favorites })
+  }
+
 }
