@@ -22,9 +22,22 @@ protocol FileReadHandle: Sendable {
   func close()
 }
 
+/// A retained directory entry. Its identity stays stable when its path is renamed.
+protocol FileDirectoryHandle: Sendable {
+  var identity: FileItemIdentity { get }
+  func physicalPath() throws -> URL
+}
+
 /// Abstracts file system operations for testability.
 /// FileIOService conforms in production; tests inject a fake.
 protocol FileSystemService: Sendable {
+  /// Inspects a directory following links; nil means missing, and non-directories throw.
+  func directoryIdentity(at url: URL) throws -> FileItemIdentity?
+  /// Opens and retains a directory; the descriptor closes when the handle is released.
+  func openDirectory(at url: URL) throws -> any FileDirectoryHandle
+  /// One descriptor-path query; it does not walk or canonicalize the URL's components.
+  func directoryPhysicalPath(_ handle: any FileDirectoryHandle) throws -> URL
+  func resolvingSymlinks(at url: URL) -> URL
   func moveItemAtomically(from src: URL, to dst: URL) throws
   func applyTimestamps(creationDate: Date, to url: URL)
   func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws
@@ -48,4 +61,22 @@ protocol FileSystemService: Sendable {
   /// `VariantExporter` invokes this synchronous primitive on an explicit utility
   /// worker and awaits physical completion before releasing destination access.
   func copyItem(from src: URL, to dst: URL) throws
+}
+
+extension FileSystemService {
+  func openDirectory(at url: URL) throws -> any FileDirectoryHandle {
+    try FileIOService().openDirectory(at: url)
+  }
+
+  func directoryPhysicalPath(_ handle: any FileDirectoryHandle) throws -> URL {
+    try handle.physicalPath()
+  }
+
+  func directoryIdentity(at url: URL) throws -> FileItemIdentity? {
+    try FileIOService().directoryIdentity(at: url)
+  }
+
+  func resolvingSymlinks(at url: URL) -> URL {
+    url.standardizedFileURL.resolvingSymlinksInPath()
+  }
 }

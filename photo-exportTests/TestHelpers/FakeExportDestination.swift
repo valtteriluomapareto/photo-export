@@ -29,6 +29,12 @@ final class FakeExportDestination: ExportDestination {
     selectedFolderURL = rootURL
   }
 
+  var revalidationCount = 0
+  func revalidateDirectory(_ relativePath: String) throws {
+    revalidationCount += 1
+    _ = try urlForRelativeDirectory(relativePath, createIfNeeded: false)
+  }
+
   func urlForRelativeDirectory(_ relativePath: String, createIfNeeded: Bool) throws -> URL {
     if let error = urlForRelativeDirectoryError { throw error }
     let root = rootURL

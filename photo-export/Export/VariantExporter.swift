@@ -4,7 +4,7 @@ import OSLog
 /// Single-asset, single-variant file write path. Owns:
 /// - Resource selection per variant (original or edited).
 /// - Destination URL allocation (via `ExportDestinationResolver`) and `.tmp` setup.
-/// - Stale-`.tmp` cleanup before write; `defer`-based cleanup on every exit path.
+/// - Stale-`.tmp` cleanup before write; awaited stage cleanup on every exit path.
 /// - In-progress record marking + in-flight tracking handoff.
 /// - Reuse-source copy path (cross-placement clone of an existing `.done` write).
 /// - Byte production: static resources via `AssetResourceWriter`; rendered media via
@@ -256,168 +256,229 @@ final class VariantExporter {
     }
 
     let legacyTempURL = finalURL.appendingPathExtension("tmp")
-    if fileSystem.fileExists(atPath: legacyTempURL.path) {
-      try? fileSystem.removeItem(at: legacyTempURL)
+    // The legacy sweep also finishes within the caller's scoped access. It probes the
+    // network volume on utility, leaving the main thread's bounded path checks alone.
+    await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async { [fileSystem] in
+        if fileSystem.fileExists(atPath: legacyTempURL.path) {
+          try? fileSystem.removeItem(at: legacyTempURL)
+        }
+        continuation.resume()
+      }
     }
+    try queueCoordinator?.throwIfCancelledOrStale(gen)
     // Any producer can finish after cancellation. Its stage belongs to this attempt,
     // including fallback and HEIC materialization, never a same-path replacement.
     let tempURL = destDir.appendingPathComponent(".photo-export-\(UUID().uuidString).tmp")
-    // The only owner of the stage: a move renames it away, and anything else leaves it here.
-    defer {
-      if fileSystem.fileExists(atPath: tempURL.path) {
-        try? fileSystem.removeItem(at: tempURL)
-      }
-    }
+    @MainActor func writeAndCommit() async throws -> String? {
+      try queueCoordinator?.throwIfCancelledOrStale(gen)
+      host?.setCurrentAssetFilename(finalURL.lastPathComponent)
+      host?.setCurrentJobVariant(variant)
+      inFlight = (assetId: descriptor.id, variant: variant)
+      recordStoreRouter.markVariantInProgress(
+        assetId: descriptor.id, placement: job.placement, variant: variant,
+        relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder)
 
-    try queueCoordinator?.throwIfCancelledOrStale(gen)
-    host?.setCurrentAssetFilename(finalURL.lastPathComponent)
-    host?.setCurrentJobVariant(variant)
-    inFlight = (assetId: descriptor.id, variant: variant)
-    recordStoreRouter.markVariantInProgress(
-      assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder)
-
-    // Reuse-source copy path: if `(asset, variant)` is already exported under another
-    // placement, copy the existing file rather than re-fetching from PhotoKit. On APFS
-    // the copy is a CoW clone (no extra disk usage); on non-APFS it's a real copy.
-    // PhotoKit fallback only on source-side errors (the prior `.done` record is stale);
-    // destination-side errors fail the variant directly because retrying via PhotoKit
-    // would hit the same destination problem. The copy works regardless of whether the
-    // byte source is a static resource or a rendered edit — once a placement has the
-    // file, all other placements just clone it.
-    var didCopyFromReuseSource = false
-    if let reuseSource {
-      // the source file lives at the placement path plus the *source
-      // variant's* persisted `subfolder` — NOT recomputed from the current
-      // `videoLayout` setting. A mid-life-toggle source could have been written
-      // under `.flat` (subfolder == nil) and now we're under `.subfolder`, or vice
-      // versa; reading the stored value pins the source to where the writer
-      // originally put it.
-      let sourceRelPath = reuseSource.relativePath
-      let sourceURL = reuseSource.url
-      do {
-        // Wait for physical IO even on cancellation. The surrounding export owns
-        // security-scoped access until this continuation finishes.
-        try await withCheckedThrowingContinuation {
-          (continuation: CheckedContinuation<Void, Error>) in
-          DispatchQueue.global(qos: .utility).async { [fileSystem] in
-            continuation.resume(
-              with: Result { try fileSystem.copyItem(from: sourceURL, to: tempURL) })
+      // Reuse-source copy path: if `(asset, variant)` is already exported under another
+      // placement, copy the existing file rather than re-fetching from PhotoKit. On APFS
+      // the copy is a CoW clone (no extra disk usage); on non-APFS it's a real copy.
+      // PhotoKit fallback only on source-side errors (the prior `.done` record is stale);
+      // destination-side errors fail the variant directly because retrying via PhotoKit
+      // would hit the same destination problem. The copy works regardless of whether the
+      // byte source is a static resource or a rendered edit — once a placement has the
+      // file, all other placements just clone it.
+      var didCopyFromReuseSource = false
+      if let reuseSource {
+        // the source file lives at the placement path plus the *source
+        // variant's* persisted `subfolder` — NOT recomputed from the current
+        // `videoLayout` setting. A mid-life-toggle source could have been written
+        // under `.flat` (subfolder == nil) and now we're under `.subfolder`, or vice
+        // versa; reading the stored value pins the source to where the writer
+        // originally put it.
+        let sourceRelPath = reuseSource.relativePath
+        let sourceURL = reuseSource.url
+        do {
+          // Wait for physical IO even on cancellation. The surrounding export owns
+          // security-scoped access until this continuation finishes.
+          try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .utility).async { [fileSystem] in
+              continuation.resume(
+                with: Result { try fileSystem.copyItem(from: sourceURL, to: tempURL) })
+            }
+          }
+          try queueCoordinator?.throwIfCancelledOrStale(gen)
+          didCopyFromReuseSource = true
+          logger.debug(
+            "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(sourceRelPath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
+          )
+        } catch {
+          try queueCoordinator?.throwIfCancelledOrStale(gen)
+          if Self.isSourceSideCopyError(error) {
+            if Self.isMissingDirectoryError(error) {
+              try exportDestination.revalidateDirectory(relPath)
+            }
+            if fileSystem.fileExists(atPath: tempURL.path) {
+              try fileSystem.removeItem(at: tempURL)
+            }
+            // Source missing/unreadable: prior `.done` record is stale. Fall through to
+            // PhotoKit re-export. We do NOT mutate the stale record — that placement's
+            // corruption surfaces on its next export run.
+            logger.warning(
+              "Reuse-source missing for id: \(descriptor.id, privacy: .public) (\(error.localizedDescription, privacy: .public)); falling back to PhotoKit"
+            )
+          } else {
+            // Destination-side error: out of space, permission denied, etc. Don't retry
+            // via PhotoKit — it would hit the same destination problem. Throw so the
+            // caller marks the variant `.failed`.
+            throw error
           }
         }
-        try queueCoordinator?.throwIfCancelledOrStale(gen)
-        didCopyFromReuseSource = true
-        logger.debug(
-          "Reused \(sourceURL.lastPathComponent, privacy: .public) from \(sourceRelPath, privacy: .public) for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public)"
-        )
-      } catch {
-        try queueCoordinator?.throwIfCancelledOrStale(gen)
-        if Self.isSourceSideCopyError(error) {
-          if fileSystem.fileExists(atPath: tempURL.path) {
-            try fileSystem.removeItem(at: tempURL)
+      }
+      if !didCopyFromReuseSource {
+        do {
+          switch producer {
+          case .resource(let resource):
+            try await withDirectoryRetry(relPath, generation: gen) {
+              try await self.assetResourceWriter.writeResource(
+                resource, forAssetId: descriptor.id, to: tempURL)
+            }
+          case .render(let request):
+            // Preserve cancellation and hard destination failures; translate ordinary
+            // renderer errors into the canonical recoverable failure, stable across both
+            // "no static resource" and "render attempted and failed" cases. The original
+            // error survives in the log for diagnostics.
+            do {
+              try await withDirectoryRetry(relPath, generation: gen) {
+                try await self.mediaRenderer.render(request: request, to: tempURL)
+              }
+            } catch is CancellationError {
+              throw CancellationError()
+            } catch {
+              try queueCoordinator?.throwIfCancelledOrStale(gen)
+              if AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun {
+                throw error
+              }
+              logger.error(
+                "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
+              )
+              throw EditedResourceUnavailableError()
+            }
+          case .convertHEIC(let request):
+            // Two-step: materialise the source HEIC/HEIF bytes to a sibling temp
+            // file via the existing PhotoKit resource writer, then re-encode as
+            // JPEG into `tempURL` via the image converter. The intermediate temp
+            // is cleaned up via `defer` so a converter failure or cancel doesn't
+            // leak it. Ordinary conversion errors translate to the same
+            // `editedResourceUnavailableMessage` sentinel; cancellation and hard
+            // destination failures retain their identity,
+            // so the existing "edited variant failed" recovery flow runs cleanly.
+            let heicTempURL = tempURL.appendingPathExtension("heic-source")
+            defer {
+              if fileSystem.fileExists(atPath: heicTempURL.path) {
+                try? fileSystem.removeItem(at: heicTempURL)
+              }
+            }
+            do {
+              try await withDirectoryRetry(relPath, generation: gen) {
+                try await self.assetResourceWriter.writeResource(
+                  request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
+              }
+              try queueCoordinator?.throwIfCancelledOrStale(gen)
+              try await imageConverter.convertHEIC(
+                at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
+            } catch is CancellationError {
+              throw CancellationError()
+            } catch {
+              try queueCoordinator?.throwIfCancelledOrStale(gen)
+              if AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun {
+                throw error
+              }
+              logger.error(
+                "HEIC→JPEG conversion failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
+              )
+              throw EditedResourceUnavailableError()
+            }
+          case .none:
+            // Guarded above by `producer.originalFilename` check.
+            preconditionFailure("EditedProducer.none reached the write step")
           }
-          // Source missing/unreadable: prior `.done` record is stale. Fall through to
-          // PhotoKit re-export. We do NOT mutate the stale record — that placement's
-          // corruption surfaces on its next export run.
-          logger.warning(
-            "Reuse-source missing for id: \(descriptor.id, privacy: .public) (\(error.localizedDescription, privacy: .public)); falling back to PhotoKit"
-          )
-        } else {
-          // Destination-side error: out of space, permission denied, etc. Don't retry
-          // via PhotoKit — it would hit the same destination problem. Throw so the
-          // caller marks the variant `.failed`.
+        } catch {
+          // A physical producer can fail after teardown, even after B committed.
+          // Convert that stale error to cancellation before any caller records it.
+          try queueCoordinator?.throwIfCancelledOrStale(gen)
           throw error
         }
       }
+      // Load-bearing: this checkpoint must run BEFORE the atomic move below so that a
+      // cancel arriving during the render does not leak a partially-written file into the
+      // destination. Owned-stage cleanup follows this operation on every exit, but it
+      // can prevent a partial final file only when cancellation is checked before the move.
+      try queueCoordinator?.throwIfCancelledOrStale(gen)
+
+      let committedName = try await commitStaged(
+        tempURL, slot: slot, markedName: finalURL.lastPathComponent, descriptor: descriptor,
+        job: job, variant: variant, relPath: relPath, subfolder: subfolder,
+        acceptsEditedFallback: acceptsEditedFallback, mayAdoptExisting: mayAdoptExisting,
+        generation: gen)
+      inFlight = nil
+      logger.info(
+        "Exported \(committedName, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(destDir.path, privacy: .public) asset: \(descriptor.id, privacy: .public)"
+      )
+      return slot.chosenStem(forFilename: committedName)
     }
-    if !didCopyFromReuseSource {
-      do {
-        switch producer {
-        case .resource(let resource):
-          try await assetResourceWriter.writeResource(
-            resource, forAssetId: descriptor.id, to: tempURL)
-        case .render(let request):
-          // Preserve cancellation and hard destination failures; translate ordinary
-          // renderer errors into the canonical recoverable failure, stable across both
-          // "no static resource" and "render attempted and failed" cases. The original
-          // error survives in the log for diagnostics.
-          do {
-            try await mediaRenderer.render(request: request, to: tempURL)
-          } catch is CancellationError {
-            throw CancellationError()
-          } catch {
-            try queueCoordinator?.throwIfCancelledOrStale(gen)
-            if AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun {
-              throw error
-            }
-            logger.error(
-              "Render failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
-            )
-            throw EditedResourceUnavailableError()
-          }
-        case .convertHEIC(let request):
-          // Two-step: materialise the source HEIC/HEIF bytes to a sibling temp
-          // file via the existing PhotoKit resource writer, then re-encode as
-          // JPEG into `tempURL` via the image converter. The intermediate temp
-          // is cleaned up via `defer` so a converter failure or cancel doesn't
-          // leak it. Ordinary conversion errors translate to the same
-          // `editedResourceUnavailableMessage` sentinel; cancellation and hard
-          // destination failures retain their identity,
-          // so the existing "edited variant failed" recovery flow runs cleanly.
-          let heicTempURL = tempURL.appendingPathExtension("heic-source")
-          defer {
-            if fileSystem.fileExists(atPath: heicTempURL.path) {
-              try? fileSystem.removeItem(at: heicTempURL)
-            }
-          }
-          do {
-            try await assetResourceWriter.writeResource(
-              request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
-            try queueCoordinator?.throwIfCancelledOrStale(gen)
-            try await imageConverter.convertHEIC(
-              at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
-          } catch is CancellationError {
-            throw CancellationError()
-          } catch {
-            try queueCoordinator?.throwIfCancelledOrStale(gen)
-            if AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun {
-              throw error
-            }
-            logger.error(
-              "HEIC→JPEG conversion failed for id: \(descriptor.id, privacy: .public) variant: \(variant.rawValue, privacy: .public) error: \(String(describing: error), privacy: .public)"
-            )
-            throw EditedResourceUnavailableError()
-          }
-        case .none:
-          // Guarded above by `producer.originalFilename` check.
-          preconditionFailure("EditedProducer.none reached the write step")
+    let result: Result<String?, Error>
+    do {
+      result = .success(try await writeAndCommit())
+    } catch {
+      result = .failure(error)
+    }
+    // Physical cleanup finishes while the caller still owns destination access, even
+    // when cancellation or an obsolete generation ended the producer.
+    await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async { [fileSystem] in
+        if fileSystem.fileExists(atPath: tempURL.path) {
+          try? fileSystem.removeItem(at: tempURL)
         }
-      } catch {
-        // A physical producer can fail after teardown, even after B committed.
-        // Convert that stale error to cancellation before any caller records it.
-        try queueCoordinator?.throwIfCancelledOrStale(gen)
-        throw error
+        continuation.resume()
       }
     }
-    // Load-bearing: this checkpoint must run BEFORE the atomic move below so that a
-    // cancel arriving during the render does not leak a partially-written file into the
-    // destination. Reordering this is a correctness regression — temp cleanup is handled
-    // by `defer`, but only if we throw before the move.
     try queueCoordinator?.throwIfCancelledOrStale(gen)
-
-    let committedName = try await commitStaged(
-      tempURL, slot: slot, markedName: finalURL.lastPathComponent, descriptor: descriptor,
-      job: job, variant: variant, relPath: relPath, subfolder: subfolder,
-      acceptsEditedFallback: acceptsEditedFallback, mayAdoptExisting: mayAdoptExisting,
-      generation: gen)
-    inFlight = nil
-    logger.info(
-      "Exported \(committedName, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(destDir.path, privacy: .public) asset: \(descriptor.id, privacy: .public)"
-    )
-    return slot.chosenStem(forFilename: committedName)
+    return try result.get()
   }
 
   // MARK: - Helpers
+
+  private func withDirectoryRetry(
+    _ relativePath: String, generation gen: Int,
+    operation: @MainActor () async throws -> Void
+  ) async throws {
+    do {
+      try await operation()
+    } catch {
+      try queueCoordinator?.throwIfCancelledOrStale(gen)
+      guard Self.isMissingDirectoryError(error) else { throw error }
+      try exportDestination.revalidateDirectory(relativePath)
+      try queueCoordinator?.throwIfCancelledOrStale(gen)
+      try await operation()
+    }
+  }
+
+  private static func isMissingDirectoryError(_ error: Error) -> Bool {
+    let error = error as NSError
+    if error.domain == NSPOSIXErrorDomain, error.code == Int(ENOENT) || error.code == Int(ENOTDIR) {
+      return true
+    }
+    if error.domain == NSCocoaErrorDomain,
+      error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError
+    {
+      return true
+    }
+    if let underlying = error.userInfo[NSUnderlyingErrorKey] as? Error {
+      return isMissingDirectoryError(underlying)
+    }
+    return false
+  }
 
   /// Plans the final name for the staged file and commits it. When another file takes the
   /// planned name first, or a file planned for adoption changes, a `.suffix` slot plans

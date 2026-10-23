@@ -20,6 +20,12 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
     return _writeCalls
   }
 
+  var writeHook: (@Sendable (URL) throws -> Void)? {
+    get { lock.withLock { _writeHook } }
+    set { lock.withLock { _writeHook = newValue } }
+  }
+  private var _writeHook: (@Sendable (URL) throws -> Void)?
+
   // Error injection
   var writeError: Error? {
     get { lock.withLock { _writeError } }
@@ -91,6 +97,7 @@ final class FakeAssetResourceWriter: AssetResourceWriter, @unchecked Sendable {
     if let checkpoint {
       await checkpoint.enter()
     }
+    try writeHook?(url)
     if let error = writeError { throw error }
     // The pipeline writes only to a fresh hidden staging file and moves it into place.
     // Refuse anything else so a write aimed at a final name, or over an existing file,

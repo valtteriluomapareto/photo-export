@@ -25,6 +25,22 @@ protocol ExportDestination: AnyObject {
   /// `urlForRelativeDirectory` so timeline and collection paths share validation.
   func urlForMonth(year: Int, month: Int, createIfNeeded: Bool) throws -> URL
 
+  /// Ends the current queue drain's cached directory resolutions.
+  func resetDirectoryResolution()
+  /// Starts a new cache lifetime when the queue generation changes.
+  func prepareDirectoryResolution(generation: Int)
+  /// Drops a failed staged write's resolution and verifies it again without creating a folder.
+  func revalidateDirectory(_ relativePath: String) throws
+
   func beginScopedAccess() -> URL?
   func endScopedAccess(for url: URL)
+}
+
+extension ExportDestination {
+  func resetDirectoryResolution() {}
+  func prepareDirectoryResolution(generation: Int) {}
+
+  func revalidateDirectory(_ relativePath: String) throws {
+    _ = try urlForRelativeDirectory(relativePath, createIfNeeded: false)
+  }
 }

@@ -145,6 +145,25 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
 
   // MARK: - FileSystemService protocol (instance methods)
 
+  func openDirectory(at url: URL) throws -> any FileDirectoryHandle {
+    try OpenDirectoryHandle(url: url)
+  }
+
+  func directoryIdentity(at url: URL) throws -> FileItemIdentity? {
+    var info = stat()
+    guard stat(url.path, &info) == 0 else {
+      if errno == ENOENT { return nil }
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+    }
+    guard (info.st_mode & S_IFMT) == S_IFDIR else {
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTDIR))
+    }
+    // Directory contents change its size and timestamps; only the entry identity matters.
+    return FileItemIdentity(
+      isRegularFile: false, linkCount: 0, device: Int64(info.st_dev),
+      inode: UInt64(info.st_ino), size: 0, modificationSeconds: 0, modificationNanoseconds: 0)
+  }
+
   /// Commits a staged file at its final name and never replaces an existing file there.
   /// A volume that advertises an exclusive rename commits with `renamex_np(RENAME_EXCL)`,
   /// so the refusal and the move are one step. Elsewhere an existence check precedes
@@ -351,5 +370,42 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
         domain: NSPOSIXErrorDomain, code: Int(code),
         userInfo: [NSFilePathErrorKey: destination.path])
     }
+  }
+}
+
+/// An immutable descriptor keeps the same directory alive through renames. Each path
+/// check asks the kernel where it is now, including moves of any ancestor directory.
+private final class OpenDirectoryHandle: FileDirectoryHandle, @unchecked Sendable {
+  private let descriptor: Int32
+  let identity: FileItemIdentity
+
+  init(url: URL) throws {
+    let descriptor = open(url.path, O_EVTONLY | O_DIRECTORY | O_CLOEXEC)
+    guard descriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+    var info = stat()
+    guard fstat(descriptor, &info) == 0 else {
+      let code = errno
+      close(descriptor)
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+    }
+    self.descriptor = descriptor
+    identity = FileItemIdentity(
+      isRegularFile: false, linkCount: 0, device: Int64(info.st_dev),
+      inode: UInt64(info.st_ino), size: 0, modificationSeconds: 0, modificationNanoseconds: 0)
+  }
+
+  deinit { close(descriptor) }
+
+  func physicalPath() throws -> URL {
+    var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+    let result = buffer.withUnsafeMutableBufferPointer {
+      fcntl(descriptor, F_GETPATH, $0.baseAddress!)
+    }
+    guard result == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+    let bytes = buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+    guard let path = String(bytes: bytes, encoding: .utf8) else {
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(EILSEQ))
+    }
+    return URL(fileURLWithPath: path, isDirectory: true)
   }
 }
