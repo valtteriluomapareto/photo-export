@@ -107,6 +107,10 @@ struct MonthContentView: View, Equatable {
         ]
         LazyVGrid(columns: columns, spacing: 10) {
           ForEach(viewModel.assets) { asset in
+            #if DEBUG
+              // swiftlint:disable:next redundant_discardable_let
+              let _ = bodyCounter?.record("asset-tile-body:\(asset.id)")
+            #endif
             ThumbnailView(
               asset: asset,
               isSelected: asset.id == selectedAsset?.id,

@@ -269,13 +269,16 @@ import Testing
               }
           })
         // Finish real thumbnail work before attributing any body to the record publication.
-        try #require(await observe(in: f.window) { f.service.loadThumbnailCalls.count >= 2 })
+        try #require(
+          await observe(in: f.window) {
+            !f.service.startCachingCalls.isEmpty && f.tick.asset?.id == "first"
+          })
         f.timeline.flushPendingNotifications()
         f.collections.flushPendingNotifications()
         try await f.barrier()
         let bodyKey = collection ? "collectionBody" : "MonthContentView"
         let bodies = f.count(bodyKey)
-        let sibling = f.counter.count(for: "thumbnail-body:second")
+        let sibling = f.counter.count(for: "asset-tile-body:second")
         f.write("first", collection: collection)
         if collection {
           f.collections.flushPendingNotifications()
@@ -292,7 +295,7 @@ import Testing
           #expect(f.count(bodyKey) - bodies == 0)
         }
         withKnownIssue {
-          #expect(f.counter.count(for: "thumbnail-body:second") - sibling == 0)
+          #expect(f.counter.count(for: "asset-tile-body:second") - sibling == 0)
         }
       } cleanup: {
         await f.close()

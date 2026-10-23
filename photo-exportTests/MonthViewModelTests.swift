@@ -503,7 +503,7 @@ struct MonthViewModelTests {
     let writes = ObservationProbe { _ = model.assets }
     await model.refresh(for: .timeline(year: 2025, month: 6))
     #expect(model.assets == assets)
-    withKnownIssue { #expect(writes.changeCount == 0) }
+    #expect(writes.changeCount == 0)
     service.assetsByYearMonth["2025-6"] = assets.reversed()
     await model.refresh(for: .timeline(year: 2025, month: 6))
     #expect(writes.changeCount > 0)
