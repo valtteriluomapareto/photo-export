@@ -1,11 +1,23 @@
 import Foundation
 import Testing
+import os
 
 @testable import Photo_Export
 
 @MainActor
 @Suite(.timeLimit(.minutes(2)))
 struct RecordStoreMaintenanceTests {
+  private final class LifetimeSnapshot: Codable, @unchecked Sendable {
+    let released: LockedBox<Bool>
+    init(_ released: LockedBox<Bool>) { self.released = released }
+    required init(from decoder: Decoder) throws { released = LockedBox(false) }
+    func encode(to encoder: Encoder) throws {
+      var container = encoder.singleValueContainer()
+      try container.encode("history")
+    }
+    deinit { released.mutate { $0 = true } }
+  }
+
   private final class Replacement: AtomicFileReplacing, @unchecked Sendable {
     let entered = AsyncCheckpoint()
     private let signal = DispatchSemaphore(value: 0)
@@ -458,6 +470,31 @@ struct RecordStoreMaintenanceTests {
       await reset.value
       f.close()
     }
+  }
+
+  @Test(arguments: [false, true])
+  func checkpointReleasesSnapshotBeforeResumingItsCaller(fail: Bool) async throws {
+    let root = TestScratch.directory("CheckpointOwnership")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let replacement = Replacement()
+    let released = LockedBox(false)
+    let file = JSONLRecordFile<LifetimeSnapshot, String>(
+      snapshotURL: root.appendingPathComponent("snapshot.json"),
+      logURL: root.appendingPathComponent("log.jsonl"),
+      ioQueue: DispatchQueue(label: "checkpoint-ownership"),
+      logger: Logger(subsystem: TestLogging.subsystem, category: "CheckpointOwnership"),
+      fileReplacer: replacement)
+    replacement.arm(fail: fail)
+    let checkpoint = Task { try await file.checkpoint(LifetimeSnapshot(released)) }
+    await replacement.entered.waitForEnter(count: 1)
+    #expect(!released.value)
+    replacement.release()
+    do {
+      try await checkpoint.value
+      #expect(!fail)
+    } catch { #expect(fail) }
+    #expect(released.value)
+    try FileManager.default.removeItem(at: root)
   }
 
   @Test func replayPressureUsesWorkUnitsRatherThanElapsedTestTime() {
