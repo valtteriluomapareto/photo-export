@@ -2052,7 +2052,8 @@ struct ExportManagerRunExportTests {
     let queue = ExportQueueCoordinator(host: host)
     queue.enqueue([
       ExportManager.ExportJob(
-        assetLocalIdentifier: "priority", year: 2025, month: 1, versionSelection: .edited)
+        assetLocalIdentifier: "priority", placement: .timeline(year: 2025, month: 1),
+        selection: .edited)
     ])
     let launcher = Task(priority: .userInitiated) { queue.processQueueIfNeeded() }
     await launcher.value
