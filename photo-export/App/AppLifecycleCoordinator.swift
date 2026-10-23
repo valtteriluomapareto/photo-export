@@ -83,6 +83,7 @@ final class AppLifecycleCoordinator: ObservableObject {
   @Published private(set) var currentDestination: DestinationIdentitySnapshot = .none
   /// `$currentDestination` for subscribers outside this type: synchronous, delivered before the
   /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  /// Test-only accessor for synchronous delivery characterization.
   var currentDestinationPublisher: AnyPublisher<DestinationIdentitySnapshot, Never> {
     $currentDestination.eraseToAnyPublisher()
   }

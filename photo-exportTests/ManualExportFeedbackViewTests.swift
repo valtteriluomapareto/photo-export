@@ -221,11 +221,14 @@ import Testing
       f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
       f.showSettings()
       for title in ["Auto Export", "Export Issues", "Advanced"] {
-        let tab: SettingsTab = title == "Auto Export" ? .autoExport : title == "Export Issues" ? .exportIssues : .advanced
+        let tab: SettingsTab =
+          title == "Auto Export"
+          ? .autoExport : title == "Export Issues" ? .exportIssues : .advanced
         f.defaults.set(tab.rawValue, forKey: SettingsTab.storageKey)
-        try #require(await observe(in: f.settingsWindow) {
-          f.counter.renderedText["settings-visible-tab"] == [title]
-        })
+        try #require(
+          await observe(in: f.settingsWindow) {
+            f.counter.renderedText["settings-visible-tab"] == [title]
+          })
       }
     }
 

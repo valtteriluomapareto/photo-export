@@ -347,7 +347,8 @@ import Testing
         f.show(.content)
         let key = "onboarding-export-control"
         try #require(await observe { f.counter.count(for: "onboarding-auto-skip-checked") > 0 })
-        let toggle = try #require(f.counter.renderedActions["onboarding-toggle-originals"])
+        let toggle = try #require(
+          f.counter.renderedActions["onboarding-export-control-toggle-originals"])
         toggle()
         try #require(await observe { f.counter.renderedText[key]?.last == "true" })
         try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
@@ -575,7 +576,8 @@ import Testing
       let counter = BodyInvalidationCounter()
       var fired: [String] = []
       let window = HostedViewHarness.makeWindow(
-        contentRect: NSRect(x: -10000, y: -10000, width: 100, height: 100), styleMask: [.borderless])
+        contentRect: NSRect(x: -10000, y: -10000, width: 100, height: 100), styleMask: [.borderless]
+      )
       defer {
         window.contentView = nil
         window.close()
@@ -599,18 +601,31 @@ import Testing
       let f = try Fixture()
       let gate = AsyncCheckpoint()
       try await withCleanup {
-        f.show(.mainWindow, screenshotSurfaceKey: section == .timeline ? nil : "collections-favorites")
-        try await settle(f, key: "main-window-root")
+        f.show(
+          .mainWindow, screenshotSurfaceKey: section == .timeline ? nil : "collections-favorites")
+        try #require(await observe(in: f.window) {
+          f.counter.count(for: "main-window-root") > 0
+            && f.counter.renderedText["toolbar-export-control"]?.first == "true"
+        })
+        await f.quiesce()
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
-        f.service.assetsByYearMonth["2026-9"] = [TestAssetFactory.makeAsset(id: "held", creationDate: date)]
-        f.service.resourcesByAssetId["held"] = [ResourceDescriptor(type: .photo, originalFilename: "HELD.JPG")]
+        f.service.assetsByYearMonth["2026-9"] = [
+          TestAssetFactory.makeAsset(id: "held", creationDate: date)
+        ]
+        f.service.resourcesByAssetId["held"] = [
+          ResourceDescriptor(type: .photo, originalFilename: "HELD.JPG")
+        ]
         f.writer.checkpoint = gate
         f.manager.queueCoordinator.enqueue([
-          .init(assetLocalIdentifier: "held", placement: .timeline(year: 2026, month: 9), selection: .edited)
+          .init(
+            assetLocalIdentifier: "held", placement: .timeline(year: 2026, month: 9),
+            selection: .edited)
         ])
         f.manager.queueCoordinator.processQueueIfNeeded()
         try #require(await gate.waitForEnter(count: 1))
-        try #require(await observe(in: f.window) { f.counter.renderedText["toolbar-pause-label"] == ["Pause"] })
+        try #require(
+          await observe(in: f.window) { f.counter.renderedText["toolbar-pause-label"] == ["Pause"] }
+        )
         f.timeline.flushPendingNotifications()
         f.collections.flushPendingNotifications()
         let tick = "timeline-records:\(f.timeline.mutationCounter)"
@@ -622,7 +637,8 @@ import Testing
         #expect(f.counter.count(for: "export-toolbar-actions") - before == 0)
         let placement = ExportPlacement.favorites()
         f.collections.upsertPlacement(placement)
-        f.collections.markVariantExported(assetId: "unrelated", placement: placement, variant: .original,
+        f.collections.markVariantExported(
+          assetId: "unrelated", placement: placement, variant: .original,
           filename: "OTHER.JPG", exportedAt: Date())
         f.collections.flushPendingNotifications()
         let collectionTick = "collection-records:\(f.collections.mutationCounter)"

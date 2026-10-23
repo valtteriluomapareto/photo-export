@@ -124,6 +124,8 @@ struct ExportToolbarView: ToolbarContent {
   private var primaryActions: some View {
     let exportHelp = primaryActionHelpText
     #if DEBUG
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.record("export-toolbar-actions")
       bodyCounter?.recordText([exportHelp], for: "toolbar-export-help")
     #endif
     // Internal spacing 12pt rather than 8pt — closer to macOS's default

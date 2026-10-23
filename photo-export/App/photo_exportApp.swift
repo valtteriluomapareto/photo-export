@@ -12,12 +12,8 @@ import SwiftUI
 /// scenes.
 struct PhotoExportApp: App {
   private let core: AppCore
-  // The core's `ObservableObject`s, held as `@StateObject`s. The `@Observable` objects need no
-  // wrapper: the core owns the library/export managers, login controller, What's New and both stores,
-  // while `ExportManager` owns `ExportProgressState`. `MainWindowRoot` observes timeline
-  // history readiness; `autoSyncManager` supplies the menu bar label. The remaining wrappers
-  // keep their instances alive alongside the core. Scenes get the same instances through
-  // `photoExportEnvironment(core)`.
+  // AppCore owns the shared graph. These wrappers retain its ObservableObject services;
+  // Observation owners are injected directly through photoExportEnvironment(core).
   @StateObject private var exportDestinationManager: ExportDestinationManager
   @StateObject private var lifecycleCoordinator: AppLifecycleCoordinator
   @StateObject private var autoSyncManager: AutoSyncManager

@@ -380,7 +380,9 @@ struct ExportAllAlbumsTests {
     await h.manager.waitForQueueDrained()
 
     #expect(
-      subscription.values.compactMap { $0 } == ["All albums in this destination are already exported."])
+      subscription.values.compactMap { $0 } == [
+        "All albums in this destination are already exported."
+      ])
     #expect(h.manager.totalJobsEnqueued == 0)
     #expect(h.manager.totalJobsCompleted == 0)
     #expect(h.writer.writeCalls.isEmpty)

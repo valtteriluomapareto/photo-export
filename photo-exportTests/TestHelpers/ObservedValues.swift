@@ -10,9 +10,11 @@ final class ObservedValues<Value> {
 
   init(_ read: @escaping @MainActor () -> Value) {
     self.read = read
-    probe = ObservationProbe({ _ = read() }, onChange: { [weak self] in
-      self?.previous.append(read())
-    })
+    probe = ObservationProbe(
+      { _ = read() },
+      onChange: { [weak self] in
+        self?.previous.append(read())
+      })
   }
 
   var values: [Value] {

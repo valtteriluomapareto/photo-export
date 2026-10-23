@@ -552,7 +552,8 @@ struct ExportFolderTests {
     for task in preparations { await task.value }
 
     withExtendedLifetime(observation) {
-      #expect(observation.values.compactMap { $0 } == ["All albums in this folder are already exported."])
+      #expect(
+        observation.values.compactMap { $0 } == ["All albums in this folder are already exported."])
     }
     #expect(h.manager.totalJobsEnqueued == 0)
   }

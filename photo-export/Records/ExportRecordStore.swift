@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import Observation
 import os
@@ -110,15 +109,7 @@ final class ExportRecordStore {
   @ObservationIgnored private var filenameClaims: FilenameClaims<ClaimFolder>?
 
   /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
-  private(set) var state: RecordStoreState {
-    get {
-      access(keyPath: \.state)
-      return stateBridge.value
-    }
-    set { stateBridge.write(newValue) { withMutation(keyPath: \.state, $0) } }
-  }
-  private let stateBridge = ObservableCombineBridge<RecordStoreState>(.unconfigured)
-  var statePublisher: AnyPublisher<RecordStoreState, Never> { stateBridge.publisher }
+  private(set) var state: RecordStoreState = .unconfigured
   private(set) var persistenceError: String?
   @ObservationIgnored private var hasUnsavedChanges = false
   // Immediate ownership token, separate from coalesced UI notifications. Any
@@ -144,16 +135,7 @@ final class ExportRecordStore {
   @ObservationIgnored private var settleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
   /// Coalesced revision registered by queries over the ignored record storage.
-  private(set) var mutationCounter: Int {
-    get {
-      access(keyPath: \.mutationCounter)
-      return mutationCounterBridge.value
-    }
-    set { mutationCounterBridge.write(newValue) { withMutation(keyPath: \.mutationCounter, $0) } }
-  }
-  private let mutationCounterBridge = ObservableCombineBridge(0)
-  /// Synchronous revision delivery before storage, replaying the current value to new subscribers.
-  var mutationCounterPublisher: AnyPublisher<Int, Never> { mutationCounterBridge.publisher }
+  private(set) var mutationCounter = 0
 
   /// Mirrors the manager's conversion setting at initialization and on each setting write.
   /// Queries register this flag so conversion changes refresh exported badges without waiting

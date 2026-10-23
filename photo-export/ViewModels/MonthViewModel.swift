@@ -16,21 +16,7 @@ final class MonthViewModel {
   var errorMessage: String?
 
   // Selection is tracked via id to avoid retaining assets strongly across updates
-  private let selectedAssetIdBridge = ObservableCombineBridge<String?>(nil)
-  var selectedAssetId: String? {
-    get {
-      access(keyPath: \.selectedAssetId)
-      return selectedAssetIdBridge.value
-    }
-    set {
-      selectedAssetIdBridge.write(newValue) { withMutation(keyPath: \.selectedAssetId, $0) }
-    }
-  }
-  /// `selectedAssetId` for Combine subscribers: synchronous, delivered before the value is
-  /// stored, and replaying the current value (pinned by `PublisherParityTests`).
-  var selectedAssetIdPublisher: AnyPublisher<String?, Never> {
-    selectedAssetIdBridge.publisher
-  }
+  var selectedAssetId: String?
 
   @ObservationIgnored private let photoLibraryService: any PhotoLibraryService
 
@@ -67,8 +53,7 @@ final class MonthViewModel {
     let asset: AssetDescriptor?
   }
 
-  // Emit after committing state, rather than relying on the willSet-timed
-  // `selectedAssetIdPublisher`.
+  // Emit after committing both selection and assets so consumers see a coherent snapshot.
   // The payloadless event is not another owner of selection or asset data.
   @ObservationIgnored private let selectionChanges = PassthroughSubject<Void, Never>()
   var selectionUpdates: AnyPublisher<Void, Never> { selectionChanges.eraseToAnyPublisher() }

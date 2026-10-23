@@ -422,11 +422,13 @@ struct MonthViewModelTests {
     try await withCleanup {
       let vm = MonthViewModel(photoLibraryService: svc)
       let firstVisible = AsyncCheckpoint()
-      let subscription = ObservationProbe({ _ = vm.selectedAssetId }, onChange: {
-        Task { @MainActor in
-          if vm.selectedAssetId == "first" { await firstVisible.enter() }
-        }
-      })
+      let subscription = ObservationProbe(
+        { _ = vm.selectedAssetId },
+        onChange: {
+          Task { @MainActor in
+            if vm.selectedAssetId == "first" { await firstVisible.enter() }
+          }
+        })
       try await withCleanup {
         let load = Task { await vm.loadAssets(for: .favorites) }
         await streams.started.waitForEnter(count: 1)
