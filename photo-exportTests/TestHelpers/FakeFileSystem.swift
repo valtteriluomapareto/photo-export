@@ -222,11 +222,18 @@ final class FakeFileSystem: FileSystemService, @unchecked Sendable {
   }
 
   func openForReading(at url: URL, bypassingCache: Bool) throws -> any FileReadHandle {
+    try openForReading(at: url, bypassingCache: bypassingCache, destinationIO: DestinationIO())
+  }
+
+  func openForReading(
+    at url: URL, bypassingCache: Bool, destinationIO: any DestinationIOExecuting
+  ) throws -> any FileReadHandle {
     record("openForReading")
     lock.withLock { _readOpens.append((url: url, bypassingCache: bypassingCache)) }
     return RecordingReadHandle(
-      real: try real.openForReading(at: url, bypassingCache: bypassingCache), url: url,
-      owner: self)
+      real: try real.openForReading(
+        at: url, bypassingCache: bypassingCache, destinationIO: destinationIO),
+      url: url, owner: self)
   }
 
   fileprivate func recordRead(_ url: URL, _ offset: Int64, _ length: Int) {

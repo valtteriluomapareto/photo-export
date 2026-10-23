@@ -437,6 +437,53 @@ struct EditedModeExportTests {
     #expect(rec?.variants[.original]?.filename == "IMG_0001 (1)_orig.HEIC")
   }
 
+  @Test(arguments: [false, true])
+  func collisionShiftedPairSharesStemAndPreservesClaimedMembers(livePhoto: Bool) async throws {
+    let (manager, library, destination, _, _, records) = makeTestHarness()
+    defer { destination.cleanup() }
+    manager.versionSelection = .editedWithOriginals
+    manager.livePhotosPairedExport = livePhoto
+    let month = try destination.urlForMonth(year: 2025, month: 4, createIfNeeded: true)
+    let originalBytes = Data("keep existing edited photo".utf8)
+    let existing = month.appendingPathComponent("PAIR.JPG")
+    try originalBytes.write(to: existing)
+    records.markVariantExported(
+      assetId: "claimed", variant: .original, year: 2025, month: 4, relPath: "2025/04/",
+      filename: "PAIR (1)_orig.HEIC", exportedAt: Date())
+    let asset = TestAssetFactory.makeAsset(
+      id: "pair",
+      creationDate: Calendar.current.date(
+        from: DateComponents(
+          year: 2025, month: 4, day: 15)), hasAdjustments: true, isLivePhoto: livePhoto)
+    library.assetsByYearMonth["2025-4"] = [asset]
+    library.resourcesByAssetId[asset.id] =
+      [
+        .init(type: .photo, originalFilename: "PAIR.HEIC", fileSize: 12),
+        .init(type: .fullSizePhoto, originalFilename: "RENDER.JPG", fileSize: 12),
+      ]
+      + (livePhoto
+        ? [
+          .init(type: .pairedVideo, originalFilename: "PAIR.MOV", fileSize: 12),
+          .init(type: .fullSizePairedVideo, originalFilename: "RENDER.MOV", fileSize: 12),
+        ] : [])
+    manager.startExportMonth(year: 2025, month: 4)
+    await manager.waitForQueueDrained()
+    let variants = try #require(records.exportInfo(assetId: asset.id)?.variants)
+    #expect(variants[.edited]?.filename == "PAIR (2).JPG")
+    #expect(variants[.original]?.filename == "PAIR (2)_orig.HEIC")
+    #expect(variants[.edited]?.status == .done)
+    #expect(variants[.original]?.status == .done)
+    if livePhoto {
+      #expect(variants[.editedPairedVideo]?.filename == "PAIR (2).MOV")
+      #expect(variants[.originalPairedVideo]?.filename == "PAIR (2)_orig.MOV")
+      #expect(variants[.editedPairedVideo]?.status == .done)
+      #expect(variants[.originalPairedVideo]?.status == .done)
+    }
+    #expect(try Data(contentsOf: existing) == originalBytes)
+    #expect(
+      records.exportInfo(assetId: "claimed")?.variants[.original]?.filename == "PAIR (1)_orig.HEIC")
+  }
+
   // MARK: - Sidebar summary accuracy
 
   @Test func sidebarSummaryForEditedWithOriginalsAdjustedOnlyOneVariantDone() async throws {

@@ -638,6 +638,9 @@ final class ExportManager {
     backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader(),
     runActivity: (any ExportRunActivity)? = nil,
     progressClock: (any AutoSyncClock)? = nil,
+    destinationIOFactory: @escaping @MainActor (String?) -> any DestinationIOExecuting = { _ in
+      DestinationIO()
+    },
     userDefaults: UserDefaults
   ) {
     self.progressState = ExportProgressState(clock: progressClock)
@@ -715,7 +718,7 @@ final class ExportManager {
       mediaRenderer: self.mediaRenderer,
       imageConverter: self.imageConverter,
       fileSystem: self.fileSystem,
-      exportDestination: self.exportDestination)
+      exportDestination: self.exportDestination, destinationIOFactory: destinationIOFactory)
     // Mirror the coordinator's published queue state onto ExportManager so existing
     // `manager.isRunning` / `.queueCount` / etc. readers and the AutoSync
     // `exportRunStatePublisher` keep emitting from the same source. Sinks fire

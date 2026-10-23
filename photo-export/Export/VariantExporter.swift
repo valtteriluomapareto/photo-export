@@ -74,6 +74,15 @@ final class VariantExporter {
   private let fileSystem: any FileSystemService
   private let finalNamePlanner: FinalNamePlanner
   private let exportDestination: any ExportDestination
+  private let destinationIOFactory: @MainActor (String?) -> any DestinationIOExecuting
+  private var destinationContexts: [String?: any DestinationIOExecuting] = [:]
+
+  private func destinationIO(for id: String?) -> any DestinationIOExecuting {
+    if let context = destinationContexts[id] { return context }
+    let context = destinationIOFactory(id)
+    destinationContexts[id] = context
+    return context
+  }
   // Physical final IO outlives queue teardown. Replacement jobs await its history barrier.
   private var finalCommitTask: Task<Result<CommitOutcome, Error>, Never>?
 
@@ -122,7 +131,10 @@ final class VariantExporter {
     imageConverter: any ImageConverter,
     fileSystem: any FileSystemService,
     exportDestination: any ExportDestination,
-    finalNamePlanner: FinalNamePlanner? = nil
+    finalNamePlanner: FinalNamePlanner? = nil,
+    destinationIOFactory: @escaping @MainActor (String?) -> any DestinationIOExecuting = { _ in
+      DestinationIO()
+    }
   ) {
     self.host = host
     self.queueCoordinator = queueCoordinator
@@ -134,6 +146,7 @@ final class VariantExporter {
     self.fileSystem = fileSystem
     self.finalNamePlanner = finalNamePlanner ?? FinalNamePlanner(fileSystem: fileSystem)
     self.exportDestination = exportDestination
+    self.destinationIOFactory = destinationIOFactory
   }
 
   // MARK: - Public API
@@ -164,6 +177,7 @@ final class VariantExporter {
     mayAdoptExisting: Bool = true
   ) async throws -> String? {
     try queueCoordinator?.throwIfCancelledOrStale(gen)
+    let destinationIO = destinationIO(for: recordStoreRouter.destinationId(for: job.placement))
     // Renderer activity must always be cleared on the way out of this function —
     // including on throw — so a render failure or cancel does not leave the toolbar
     // showing `(rendering…)` forever.
@@ -209,7 +223,8 @@ final class VariantExporter {
 
     let interruptedFilename = try await verifiedInterruptedFilename(
       variant: variant, descriptor: descriptor, producer: producer, destDir: destDir,
-      relPath: relPath, job: job, groupStem: groupStem, subfolder: subfolder, generation: gen)
+      relPath: relPath, job: job, groupStem: groupStem, subfolder: subfolder, generation: gen,
+      destinationIO: destinationIO)
 
     let slot = try destinationResolver.resolveSlot(
       variant: variant,
@@ -236,7 +251,7 @@ final class VariantExporter {
       _ = try await commitFile(
         .interrupted(finalURL), descriptor: descriptor, job: job,
         variant: variant, relPath: relPath, subfolder: subfolder,
-        acceptsEditedFallback: acceptsEditedFallback, generation: gen)
+        acceptsEditedFallback: acceptsEditedFallback, generation: gen, destinationIO: destinationIO)
       return slot.chosenStem(forFilename: finalURL.lastPathComponent)
     }
 
@@ -258,12 +273,9 @@ final class VariantExporter {
     let legacyTempURL = finalURL.appendingPathExtension("tmp")
     // The legacy sweep also finishes within the caller's scoped access. It probes the
     // network volume on utility, leaving the main thread's bounded path checks alone.
-    await withCheckedContinuation { continuation in
-      DispatchQueue.global(qos: .utility).async { [fileSystem] in
-        if fileSystem.fileExists(atPath: legacyTempURL.path) {
-          try? fileSystem.removeItem(at: legacyTempURL)
-        }
-        continuation.resume()
+    await destinationIO.run { [fileSystem] in
+      if fileSystem.fileExists(atPath: legacyTempURL.path) {
+        try? fileSystem.removeItem(at: legacyTempURL)
       }
     }
     try queueCoordinator?.throwIfCancelledOrStale(gen)
@@ -300,12 +312,8 @@ final class VariantExporter {
         do {
           // Wait for physical IO even on cancellation. The surrounding export owns
           // security-scoped access until this continuation finishes.
-          try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .utility).async { [fileSystem] in
-              continuation.resume(
-                with: Result { try fileSystem.copyItem(from: sourceURL, to: tempURL) })
-            }
+          try await destinationIO.run { [fileSystem] in
+            try fileSystem.copyItem(from: sourceURL, to: tempURL)
           }
           try queueCoordinator?.throwIfCancelledOrStale(gen)
           didCopyFromReuseSource = true
@@ -420,7 +428,7 @@ final class VariantExporter {
         tempURL, slot: slot, markedName: finalURL.lastPathComponent, descriptor: descriptor,
         job: job, variant: variant, relPath: relPath, subfolder: subfolder,
         acceptsEditedFallback: acceptsEditedFallback, mayAdoptExisting: mayAdoptExisting,
-        generation: gen)
+        generation: gen, destinationIO: destinationIO)
       inFlight = nil
       logger.info(
         "Exported \(committedName, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(destDir.path, privacy: .public) asset: \(descriptor.id, privacy: .public)"
@@ -435,12 +443,9 @@ final class VariantExporter {
     }
     // Physical cleanup finishes while the caller still owns destination access, even
     // when cancellation or an obsolete generation ended the producer.
-    await withCheckedContinuation { continuation in
-      DispatchQueue.global(qos: .utility).async { [fileSystem] in
-        if fileSystem.fileExists(atPath: tempURL.path) {
-          try? fileSystem.removeItem(at: tempURL)
-        }
-        continuation.resume()
+    await destinationIO.run { [fileSystem] in
+      if fileSystem.fileExists(atPath: tempURL.path) {
+        try? fileSystem.removeItem(at: tempURL)
       }
     }
     try queueCoordinator?.throwIfCancelledOrStale(gen)
@@ -488,14 +493,15 @@ final class VariantExporter {
     _ stagedURL: URL, slot: ExportDestinationResolver.Slot, markedName: String,
     descriptor: AssetDescriptor, job: ExportManager.ExportJob, variant: ExportVariant,
     relPath: String, subfolder: String?, acceptsEditedFallback: Bool, mayAdoptExisting: Bool,
-    generation gen: Int
+    generation gen: Int, destinationIO: any DestinationIOExecuting
   ) async throws -> String {
     var markedName = markedName
     var collision: Error = FileIOService.destinationExistsError()
     for attempt in 1...Self.maxCommitAttempts {
       let commit = try await planCommit(
         stagedURL, slot: slot, descriptor: descriptor, job: job, variant: variant,
-        subfolder: subfolder, mayAdopt: mayAdoptExisting, generation: gen)
+        subfolder: subfolder, mayAdopt: mayAdoptExisting, generation: gen,
+        destinationIO: destinationIO)
       // Claims were read off the main actor while the bytes were compared. Ask again here,
       // where no other record can change before the variant is marked under the name.
       if case .adopt(_, let storedName, _) = commit,
@@ -530,7 +536,7 @@ final class VariantExporter {
       switch try await commitFile(
         commit, descriptor: descriptor, job: job, variant: variant,
         relPath: relPath, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback,
-        generation: gen)
+        generation: gen, destinationIO: destinationIO)
       {
       case .committed(let filename):
         if case .adopt = commit {
@@ -565,7 +571,7 @@ final class VariantExporter {
   private func planCommit(
     _ stagedURL: URL, slot: ExportDestinationResolver.Slot, descriptor: AssetDescriptor,
     job: ExportManager.ExportJob, variant: ExportVariant, subfolder: String?, mayAdopt: Bool,
-    generation gen: Int
+    generation gen: Int, destinationIO: any DestinationIOExecuting
   ) async throws -> FinalCommit {
     // A `.refuse` slot has one name, so there is nothing to plan off the main actor.
     guard case .suffix = slot.policy else { return .move(from: stagedURL, to: slot.naturalURL) }
@@ -578,7 +584,7 @@ final class VariantExporter {
       do {
         return .success(
           try await planner.plan(
-            slot: slot, stagedURL: stagedURL, mayAdopt: mayAdopt,
+            slot: slot, stagedURL: stagedURL, mayAdopt: mayAdopt, destinationIO: destinationIO,
             isClaimed: { name in
               await router.isFilenameClaimed(
                 name, placement: placement, subfolder: subfolder, exceptVariant: variant,
@@ -604,7 +610,7 @@ final class VariantExporter {
   private func commitFile(
     _ commit: FinalCommit, descriptor: AssetDescriptor, job: ExportManager.ExportJob,
     variant: ExportVariant, relPath: String, subfolder: String?, acceptsEditedFallback: Bool,
-    generation gen: Int
+    generation gen: Int, destinationIO: any DestinationIOExecuting
   ) async throws -> CommitOutcome {
     try queueCoordinator?.throwIfCancelledOrStale(gen)
     let acknowledge = try recordStoreRouter.captureFinalCommit(
@@ -615,20 +621,14 @@ final class VariantExporter {
       do {
         switch commit {
         case .move(let stage, let url):
-          try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .utility).async {
-              continuation.resume(
-                with: Result { try fileSystem.moveItemAtomically(from: stage, to: url) })
-            }
+          try await destinationIO.run {
+            try fileSystem.moveItemAtomically(from: stage, to: url)
           }
         case .adopt(let url, _, let identity):
           // A lookup error counts as a change: the variant plans again, and the planning
           // walk's own lookup then reports the real error.
-          let current: FileItemIdentity? = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-              continuation.resume(returning: try? fileSystem.itemIdentity(at: url))
-            }
+          let current: FileItemIdentity? = await destinationIO.run {
+            try? fileSystem.itemIdentity(at: url)
           }
           guard current == identity else { throw FileIOService.destinationExistsError() }
         case .interrupted:
@@ -646,11 +646,8 @@ final class VariantExporter {
       switch commit {
       case .move(_, let url), .interrupted(let url):
         if let createdAt = descriptor.creationDate {
-          await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-              fileSystem.applyTimestamps(creationDate: createdAt, to: url)
-              continuation.resume()
-            }
+          await destinationIO.run {
+            fileSystem.applyTimestamps(creationDate: createdAt, to: url)
           }
         }
       case .adopt:
@@ -669,7 +666,7 @@ final class VariantExporter {
   private func verifiedInterruptedFilename(
     variant: ExportVariant, descriptor: AssetDescriptor, producer: EditedProducer,
     destDir: URL, relPath: String, job: ExportManager.ExportJob, groupStem: String?,
-    subfolder: String?, generation gen: Int
+    subfolder: String?, generation gen: Int, destinationIO: any DestinationIOExecuting
   ) async throws -> String? {
     guard groupStem != nil, variant == .original || variant == .originalPairedVideo,
       case .resource(let resource) = producer,
@@ -680,10 +677,8 @@ final class VariantExporter {
     let destination = exportDestination.selectedFolderURL
     let url = destDir.appendingPathComponent(filename)
     // Await physical inspection even if the run becomes stale, retaining scoped access.
-    let size: Int64? = await withCheckedContinuation { continuation in
-      DispatchQueue.global(qos: .utility).async { [fileSystem] in
-        continuation.resume(returning: try? fileSystem.regularFileSize(at: url))
-      }
+    let size: Int64? = await destinationIO.run { [fileSystem] in
+      try? fileSystem.regularFileSize(at: url)
     }
     try queueCoordinator?.throwIfCancelledOrStale(gen)
     guard exportDestination.selectedFolderURL == destination,
