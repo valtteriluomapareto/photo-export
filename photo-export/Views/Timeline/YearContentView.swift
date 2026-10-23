@@ -38,7 +38,7 @@ struct YearContentView: View {
     _counts = State(wrappedValue: TimelineSidebarCounts(service: photoLibraryService))
   }
 
-  @State private var totalCount: Int?
+  @State private var totalCount: PhotoLibraryYearCount?
 
   var body: some View {
     let availability = ManualExportAvailability(
@@ -78,11 +78,15 @@ struct YearContentView: View {
 
       Spacer(minLength: 0)
     }
+    .task(id: year) { selectedAsset = nil }
     .padding(.horizontal)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .task(id: "\(year)|\(photoLibraryManager.libraryRevision)") {
-      totalCount = (try? photoLibraryManager.countAssets(year: year))
-      selectedAsset = nil
+    .task(id: "\(year)|\(photoLibraryManager.libraryRefresh.revision)") {
+      let source = photoLibraryManager.libraryRevision
+      let fresh = try? await photoLibraryManager.countAssets(
+        in: .timeline(year: year, month: nil))
+      guard source == photoLibraryManager.libraryRevision, !Task.isCancelled else { return }
+      totalCount = fresh.map { PhotoLibraryYearCount(year: year, count: $0) }
       await counts.loadCounts(forYears: [year])
     }
   }
@@ -92,8 +96,8 @@ struct YearContentView: View {
     if exportRecordStore.state == .loading {
       // The month tiles' exported badges wait for the history too.
       text = ManualExportAvailability.loadingHistoryText
-    } else if let totalCount {
-      text = totalCount == 1 ? "1 photo" : "\(totalCount) photos"
+    } else if let totalCount, totalCount.year == year {
+      text = totalCount.count == 1 ? "1 photo" : "\(totalCount.count) photos"
     } else {
       text = "Counting\u{2026}"
     }

@@ -55,6 +55,16 @@ final class RecordingPhotoLibraryService: PhotoLibraryService {
     record("countAdjustedAssets(year:)")
     return 0
   }
+  nonisolated func loadYearsWithCounts() async throws -> [PhotoLibraryYearCount] {
+    record("loadYearsWithCounts()")
+    return []
+  }
+
+  nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor] {
+    record("loadCollectionTree()")
+    return []
+  }
+
   func availableYears() throws -> [Int] {
     record("availableYears()")
     return []

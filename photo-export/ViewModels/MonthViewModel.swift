@@ -46,6 +46,7 @@ final class MonthViewModel {
   /// two overlapping requests for the same scope, including A → B → A navigation.
   @ObservationIgnored private var currentScope: PhotoFetchScope?
   @ObservationIgnored private var requestGeneration: UInt64 = 0
+  @ObservationIgnored private var requestIsCurrent: @MainActor () -> Bool = { true }
   // isLoading ends at the first batch; only a complete snapshot proves absence.
   private(set) var hasCompleteSnapshot = false
 
@@ -60,6 +61,7 @@ final class MonthViewModel {
 
   private func ownsRequest(_ generation: UInt64, scope: PhotoFetchScope) -> Bool {
     !Task.isCancelled && requestGeneration == generation && currentScope == scope
+      && requestIsCurrent()
   }
 
   init(photoLibraryService: any PhotoLibraryService) {
@@ -83,15 +85,20 @@ final class MonthViewModel {
   }
 
   /// Timeline-scope wrapper kept for the existing `MonthContentView` call site.
-  func loadAssets(forYear year: Int, month: Int) async {
-    await loadAssets(for: .timeline(year: year, month: month))
+  func loadAssets(
+    forYear year: Int, month: Int, isCurrent: @escaping @MainActor () -> Bool = { true }
+  ) async {
+    await loadAssets(for: .timeline(year: year, month: month), isCurrent: isCurrent)
   }
 
   /// Scope-based loader used by both timeline and collection grids. A `nil` scope clears
   /// the view model (used when `LibrarySelection` is nil — e.g. before any collection is
   /// selected).
-  func loadAssets(for scope: PhotoFetchScope?) async {
-    guard !Task.isCancelled else { return }
+  func loadAssets(
+    for scope: PhotoFetchScope?, isCurrent: @escaping @MainActor () -> Bool = { true }
+  ) async {
+    guard !Task.isCancelled, isCurrent() else { return }
+    requestIsCurrent = isCurrent
     // Claim ownership before the first await, even when navigating back to a
     // scope whose older request is still in flight.
     requestGeneration &+= 1
@@ -155,8 +162,11 @@ final class MonthViewModel {
   /// in-flight batches if the user navigates away.
   ///
   /// `scope == nil` is a no-op.
-  func refresh(for scope: PhotoFetchScope?) async {
-    guard !Task.isCancelled, let scope, currentScope == scope else { return }
+  func refresh(for scope: PhotoFetchScope?, isCurrent: @escaping @MainActor () -> Bool = { true })
+    async
+  {
+    guard !Task.isCancelled, isCurrent(), let scope, currentScope == scope else { return }
+    requestIsCurrent = isCurrent
     requestGeneration &+= 1
     let generation = requestGeneration
     var collected: [AssetDescriptor] = []

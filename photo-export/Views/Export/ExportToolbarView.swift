@@ -22,8 +22,6 @@ struct ExportToolbarView: ToolbarContent {
   let focusedSelection: LibrarySelection?
   let historyState: RecordStoreState
 
-  @Environment(PhotoLibraryManager.self) private var photoLibraryManager
-
   /// macOS 14+ environment action for opening the `Settings` scene. Used by
   /// the toolbar cog button so users have an in-app affordance for Settings
   /// → Advanced (Format options) without having to remember Cmd+,.
@@ -44,6 +42,7 @@ struct ExportToolbarView: ToolbarContent {
 
     ToolbarItem(placement: .primaryAction) {
       primaryActions
+        .modifier(LibraryTreeLoading())
     }
   }
 
@@ -127,6 +126,7 @@ struct ExportToolbarView: ToolbarContent {
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("export-toolbar-actions")
       bodyCounter?.recordText([exportHelp], for: "toolbar-export-help")
+      bodyCounter?.recordAction("toolbar-export", action: handlePrimaryAction)
     #endif
     // Internal spacing 12pt rather than 8pt — closer to macOS's default
     // between-button spacing in system toolbars (Mail/Finder/Notes). 8pt
@@ -270,13 +270,7 @@ struct ExportToolbarView: ToolbarContent {
     case .collections:
       let collectionItems = selectionSet.filter(\.isCollection)
       if collectionItems.count >= 2 {
-        let buckets = CollectionsSelectionBuckets.normalize(collectionItems) { folderId in
-          let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
-          guard let folder = PhotoCollectionDescriptor.findFolder(id: folderId, in: tree)
-          else { return [] }
-          return PhotoCollectionDescriptor.albumLocalIds(under: folder)
-        }
-        exportManager.startExportCollectionsSelection(buckets)
+        exportManager.startExportCollectionsSelection(items: collectionItems)
         return
       }
       // Shared albums are the one single-select case that keeps its per-item
@@ -293,20 +287,8 @@ struct ExportToolbarView: ToolbarContent {
       // album, skipping shared albums. Per-pane buttons in
       // `CollectionContentView` / `FolderContentView` still expose the
       // single-item action.
-      exportManager.startExportCollectionsSelection(allButSharedBuckets())
+      exportManager.startExportAllUserCollections()
     }
-  }
-
-  /// Builds the synthesized `CollectionsSelectionBuckets` used by the
-  /// toolbar's "Export All Albums" dispatch when 0 or 1 collection items are
-  /// in the sidebar selection. Includes Favorites and every user album under
-  /// the current Photos tree; shared albums use a separate reduced-fidelity export
-  /// action and are excluded from the global albums action.
-  private func allButSharedBuckets() -> CollectionsSelectionBuckets {
-    let tree = (try? photoLibraryManager.fetchCollectionTree()) ?? []
-    let albumIds = PhotoCollectionDescriptor.albumLocalIds(in: tree)
-    return CollectionsSelectionBuckets(
-      includesFavorites: true, albumIds: albumIds, sharedAlbumIds: [])
   }
 
   private var primaryActionLabel: String {

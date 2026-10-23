@@ -62,8 +62,10 @@ final class AppCore {
     // With an override (the curated screenshot library, or a test fake) the manager forwards
     // every `PhotoLibraryService` method to it; without one it runs its PhotoKit code.
     let plm: PhotoLibraryManager =
-      composition.photoLibraryServiceOverride.map { PhotoLibraryManager(overrideService: $0) }
-      ?? PhotoLibraryManager()
+      composition.photoLibraryServiceOverride.map {
+        PhotoLibraryManager(overrideService: $0, refreshClock: composition.clock)
+      }
+      ?? PhotoLibraryManager(refreshClock: composition.clock)
     let ers = ExportRecordStore(baseDirectoryURL: composition.recordsRoot)
     let cers = CollectionExportRecordStore(baseDirectoryURL: composition.recordsRoot)
     let em = ExportManager(

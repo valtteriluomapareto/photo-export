@@ -204,6 +204,7 @@ import Testing
         let tasksBeforeRefresh = f.counter.tasks.count
         let completionsBeforeRefresh = f.counter.count(for: "timeline-counts-loaded")
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         let refreshStarted = await gate.waitForEnter(count: 2)
         try #require(refreshStarted)
         let refreshTasks = Array(f.counter.tasks.dropFirst(tasksBeforeRefresh))
@@ -237,6 +238,7 @@ import Testing
         }
         let completionsBeforeFailure = f.counter.count(for: "timeline-counts-loaded")
         f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
         let failedCoverageClears = await observe(in: f.window) {
           f.counter.count(for: "timeline-counts-loaded") > completionsBeforeFailure
             && f.counter.renderedText["timeline-month:2026-9"] == ["…"]

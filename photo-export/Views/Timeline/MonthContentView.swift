@@ -119,9 +119,27 @@ struct MonthContentView: View, Equatable {
     .padding(.horizontal)
     .overlay(overlayViews)
     .task(id: "\(year)-\(month)") {
-      await viewModel.loadAssets(forYear: year, month: month)
+      let query = PhotoLibraryQuery(scope: .timeline(year: year, month: month))
+      let source = photoLibraryManager.libraryRefresh.sourceRevision(for: query)
+      await viewModel.loadAssets(
+        for: .timeline(year: year, month: month),
+        isCurrent: {
+          photoLibraryManager.libraryRefresh.sourceRevision(for: query) == source
+        })
     }
-    .onDisappear { viewModel.deactivate() }
+    .onAppear {
+      photoLibraryManager.beginObservingQuery(
+        PhotoLibraryQuery(scope: .timeline(year: year, month: month)))
+    }
+    .onChange(of: PhotoLibraryQuery(scope: .timeline(year: year, month: month))) { old, new in
+      photoLibraryManager.endObservingQuery(old)
+      photoLibraryManager.beginObservingQuery(new)
+    }
+    .onDisappear {
+      photoLibraryManager.endObservingQuery(
+        PhotoLibraryQuery(scope: .timeline(year: year, month: month)))
+      viewModel.deactivate()
+    }
     .onReceive(viewModel.selectionUpdates) { _ in
       // The model emits after an owned commit. Derive from the live binding
       // and write synchronously, so no queued pane can undo newer navigation.
@@ -134,16 +152,20 @@ struct MonthContentView: View, Equatable {
         viewModel.select(assetId: update.asset?.id)
       }
     }
-    // Photos library mutations (most commonly iCloud sync landing newly synced assets,
-    // but also user edits in Photos.app) bump `libraryRevision`. Route them through the
-    // view model's in-place refresh so newly added assets appear without blanking the
-    // grid the user is currently looking at. The earlier "just observe `libraryRevision`
-    // in `.task(id:)`" approach blanked the grid on every unrelated edit; the refresh
-    // path re-fetches and diff-updates `assets` so still-present items keep their
-    // thumbnails.
-    .onChange(of: photoLibraryManager.libraryRevision) { _, _ in
+    // Refresh affected queries in place, retaining visible assets and selection while loading.
+    .onChange(
+      of: photoLibraryManager.libraryRefresh.queryRefresh(
+        for: PhotoLibraryQuery(scope: .timeline(year: year, month: month)))
+    ) { old, new in
+      guard old.query == new.query else { return }
       Task {
-        await viewModel.refresh(for: .timeline(year: year, month: month))
+        let query = PhotoLibraryQuery(scope: .timeline(year: year, month: month))
+        let source = photoLibraryManager.libraryRefresh.sourceRevision(for: query)
+        await viewModel.refresh(
+          for: .timeline(year: year, month: month),
+          isCurrent: {
+            photoLibraryManager.libraryRefresh.sourceRevision(for: query) == source
+          })
         #if DEBUG
           bodyCounter?.record("grid-refresh-finished")
         #endif

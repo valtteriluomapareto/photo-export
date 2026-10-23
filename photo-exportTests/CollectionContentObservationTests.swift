@@ -235,6 +235,7 @@ import Testing
       try #require(status)
       f.service.favoritesAssets.append(TestAssetFactory.makeAsset(id: "new-member"))
       f.library.libraryRevision += 1
+      f.library.libraryRefresh.flush()
       let refreshed = await observe(in: f.window) { f.counter.count(for: "summary:2/4") > 0 }
       try #require(refreshed)
       #expect(f.navigation.asset == live)
@@ -244,6 +245,7 @@ import Testing
         pathComponents: [], children: [])
       f.service.collectionTree.append(descriptor)
       f.library.invalidateCache(changedThumbnailAssetIDs: [])
+      f.library.libraryRefresh.flush()
       let shared = try ExportPlacementResolver().placement(
         for: .sharedAlbum(collectionId: "shared"), collections: [descriptor], existingPlacements: []
       )

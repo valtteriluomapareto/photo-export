@@ -221,6 +221,18 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
     return max(0, total / 4)
   }
 
+  nonisolated func loadYearsWithCounts() async throws -> [PhotoLibraryYearCount] {
+    try await MainActor.run {
+      try self.availableYearsWithCounts().map {
+        PhotoLibraryYearCount(year: $0.year, count: $0.count)
+      }
+    }
+  }
+
+  nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor] {
+    try await MainActor.run { try self.fetchCollectionTree() }
+  }
+
   func availableYears() throws -> [Int] {
     let years = Set(
       Self.timelineAssetsByMonth.keys.compactMap { Int($0.split(separator: "-").first ?? "") }

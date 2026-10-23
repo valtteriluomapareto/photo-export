@@ -40,6 +40,7 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   /// without Photos access, so access tests set both this and `isAuthorized`.
   var availableYearsError: Error?
   var availableYearsObserver: (@MainActor () -> Void)?
+  nonisolated let inventoryThreads = LockedBox<[String: [Bool]]>([:])
 
   // Call tracking
   var fetchAssetsCalls: [(year: Int, month: Int?, mediaType: PHAssetMediaType?)] = []
@@ -174,13 +175,44 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   func availableYearsWithCounts() throws -> [(year: Int, count: Int)] {
+    inventoryThreads.mutate { $0["years", default: []].append(Thread.isMainThread) }
     if let error = availableYearsError { throw error }
     return yearCounts
+  }
+
+  var inventoryCheckpoint: AsyncCheckpoint?
+
+  nonisolated func loadYearsWithCounts() async throws -> [PhotoLibraryYearCount] {
+    let (values, error, gate) = await MainActor.run {
+      (
+        self.yearCounts.map { PhotoLibraryYearCount(year: $0.year, count: $0.count) },
+        self.availableYearsError, self.inventoryCheckpoint
+      )
+    }
+    return try await runDetached {
+      self.inventoryThreads.mutate { $0["years", default: []].append(Thread.isMainThread) }
+      if let gate { await gate.enter() }
+      if let error { throw error }
+      return values
+    }
+  }
+
+  nonisolated func loadCollectionTree() async throws -> [PhotoCollectionDescriptor] {
+    let (values, error, gate) = await MainActor.run {
+      (self.collectionTree, self.collectionTreeError, self.inventoryCheckpoint)
+    }
+    return try await runDetached {
+      self.inventoryThreads.mutate { $0["tree", default: []].append(Thread.isMainThread) }
+      if let gate { await gate.enter() }
+      if let error { throw error }
+      return values
+    }
   }
 
   // MARK: - Phase 2: Collections
 
   func fetchCollectionTree() throws -> [PhotoCollectionDescriptor] {
+    inventoryThreads.mutate { $0["tree", default: []].append(Thread.isMainThread) }
     if let error = collectionTreeError { throw error }
     return collectionTree
   }
@@ -296,8 +328,11 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     }
   }
 
+  var countOverride: (@MainActor (PhotoFetchScope) async throws -> Int)?
+
   nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
-    await MainActor.run { self.cannedAssets(in: scope).count }
+    if let override = await countOverride { return try await override(scope) }
+    return await MainActor.run { self.cannedAssets(in: scope).count }
   }
 
   /// Phase 3 cache. Tests can read `collectionCountCache` to assert hit/miss behavior.
