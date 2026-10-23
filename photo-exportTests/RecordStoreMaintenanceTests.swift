@@ -729,6 +729,94 @@ struct RecordStoreMaintenanceTests {
   }
 
   @Test(arguments: [false, true])
+  func unreadableCompletionRetriesAfterSameDestinationReloadFails(collection: Bool) async throws {
+    let f = Fixture(collection: collection)
+    func select(_ id: String) async {
+      if collection {
+        f.collections.beginConfigure(for: id)
+        await f.collections.waitUntilSettled()
+      } else {
+        f.timeline.beginConfigure(for: id)
+        await f.timeline.waitUntilSettled()
+      }
+    }
+    try await f.seed()
+    let acknowledge = try f.acknowledgement()
+    await select("B")
+    f.log.failReads.mutate { $0 = true }
+    await select("A")
+    f.log.failReads.mutate { $0 = false }
+    let preparation = AsyncCheckpoint()
+    let landing = AsyncCheckpoint()
+    if collection {
+      f.collections.preparationCheckpoint = { await preparation.enter() }
+      f.collections.finalCommitLandingCheckpoint = { await landing.enter() }
+    } else {
+      f.timeline.preparationCheckpoint = { await preparation.enter() }
+      f.timeline.finalCommitLandingCheckpoint = { await landing.enter() }
+    }
+    let completion = Task { await acknowledge("late.JPG") }
+    try await withCleanup {
+      try #require(await preparation.waitForEnter(count: 1))
+      if collection {
+        f.collections.preparationCheckpoint = nil
+      } else {
+        f.timeline.preparationCheckpoint = nil
+      }
+      f.log.failReads.mutate { $0 = true }
+      if collection {
+        f.collections.beginConfigure(for: "A")
+      } else {
+        f.timeline.beginConfigure(for: "A")
+      }
+      await preparation.releaseAll()
+      try #require(await landing.waitForEnter(count: 1))
+      if collection {
+        await f.collections.waitUntilSettled()
+      } else {
+        await f.timeline.waitUntilSettled()
+      }
+      #expect((collection ? f.collections.state : f.timeline.state) == .persistenceFailed)
+      #expect(!f.has("seed") && !f.has("commit"))
+      await landing.releaseAll()
+      await completion.value
+      #expect(f.has("seed") && f.has("commit"))
+      #expect(
+        (collection ? f.collections.claimsEpoch : f.timeline.claimsEpoch)
+          == (collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch))
+      f.log.failReads.mutate { $0 = false }
+      if collection {
+        await f.collections.retryHistoryPersistence()
+      } else {
+        await f.timeline.retryHistoryPersistence()
+      }
+      #expect((collection ? f.collections.state : f.timeline.state) == .ready)
+      await select("B")
+      await select("A")
+      #expect(f.has("seed") && f.has("commit"))
+      if collection {
+        #expect(
+          f.collections.isFilenameClaimed(
+            "late.JPG", placement: f.placement, subfolder: nil, exceptAsset: "probe"))
+      } else {
+        #expect(
+          f.timeline.isFilenameClaimed(
+            "late.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe"))
+      }
+    } cleanup: {
+      await preparation.releaseAll()
+      await landing.releaseAll()
+      await completion.value
+      if collection {
+        await f.collections.waitUntilSettled()
+      } else {
+        await f.timeline.waitUntilSettled()
+      }
+      f.close()
+    }
+  }
+
+  @Test(arguments: [false, true])
   func idleCheckpointEligibilityPreservesSmallLogsAndStillBoundsReplay(collection: Bool)
     async throws
   {

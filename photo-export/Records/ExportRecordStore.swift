@@ -139,6 +139,7 @@ final class ExportRecordStore {
   @ObservationIgnored private(set) var claimsEpoch: UInt64 = 0
   #if DEBUG
     @ObservationIgnored var preparationCheckpoint: (@Sendable () async -> Void)?
+    @ObservationIgnored var finalCommitLandingCheckpoint: (@Sendable () async -> Void)?
   #endif
 
   /// Per-store health, surfaced by RecordStoreAlertHost with the appropriate recovery action.
@@ -1590,6 +1591,9 @@ final class ExportRecordStore {
       defer { if finalCommitContext === context { finalCommitContext = nil } }
       guard let filename = finalFilename else { return }
       await prepareFinalCommitRecovery(context)
+      #if DEBUG
+        await finalCommitLandingCheckpoint?()
+      #endif
       try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
       let landing = mutationAdmission.perform {
         landFinalCommit(

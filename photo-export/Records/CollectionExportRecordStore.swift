@@ -172,6 +172,7 @@ final class CollectionExportRecordStore {
   @ObservationIgnored private(set) var claimsEpoch: UInt64 = 0
   #if DEBUG
     @ObservationIgnored var preparationCheckpoint: (@Sendable () async -> Void)?
+    @ObservationIgnored var finalCommitLandingCheckpoint: (@Sendable () async -> Void)?
   #endif
 
   /// Per-store load state. See `RecordStoreState` for semantics.
@@ -1795,6 +1796,9 @@ final class CollectionExportRecordStore {
       defer { if finalCommitContext === context { finalCommitContext = nil } }
       guard let filename = finalFilename else { return }
       await prepareFinalCommitRecovery(context)
+      #if DEBUG
+        await finalCommitLandingCheckpoint?()
+      #endif
       try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
       let landing = mutationAdmission.perform {
         landFinalCommit(
