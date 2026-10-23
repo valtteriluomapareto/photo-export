@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Usage: throughput-from-log.sh [--verbose] [run.log ...]
 # Pass one file per export run; with no files, stdin is one run. Capture only that
-# run's Exported lines, for example with log show --style compact --info and a
+# run's Exported lines, for example with log show --style compact --timezone UTC --info and a
 # predicate for subsystem com.valtteriluoma.photo-export / category VariantExporter.
 # Use --start/--end to isolate the run. This requires the explicit asset identifiers
 # emitted by current builds; each asset counts once even if several variants commit.
 # The denominator is the first-to-last completion window, not total elapsed run time:
 # preparation and the first asset's download/write precede this window. Use the same
 # capture method and export selection when comparing runs. Two distinct timestamps
-# are required. Multiple files print each rate and the median across those runs.
+# are required. Compact timestamps omit offsets; capture with --timezone UTC to
+# avoid local clock changes. Multiple files print each rate and their median.
 set -euo pipefail
 python3 /dev/fd/3 "$@" 3<<'PY'
 import argparse
@@ -27,7 +28,7 @@ parser.add_argument("logs", nargs="*", help="one captured export run per file")
 args = parser.parse_args()
 
 completion = re.compile(r"\bExported .+ variant: \S+ -> .+")
-timestamp = re.compile(r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))")
+timestamp = re.compile(r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)(?=\s)")
 asset = re.compile(r".* asset: (.+)$")
 
 
@@ -41,7 +42,7 @@ def measure(label, lines):
         prefix = f"{label}:{number}"
         match = timestamp.match(line)
         if not match:
-            raise ValueError(f"{prefix}: invalid completion timestamp (include date and timezone)")
+            raise ValueError(f"{prefix}: invalid completion timestamp (include date and time)")
         try:
             stamp = datetime.datetime.fromisoformat(match[1].replace("Z", "+00:00"))
         except ValueError as error:
@@ -55,6 +56,8 @@ def measure(label, lines):
         identifiers.add(identity[1])
     if not stamps:
         raise ValueError(f"{label}: no Exported completion lines")
+    if len({stamp.utcoffset() is None for stamp in stamps}) > 1:
+        raise ValueError(f"{label}: mixed offset-free and offset-aware timestamps; use one log style per capture")
     duration = (max(stamps) - min(stamps)).total_seconds()
     if duration <= 0:
         raise ValueError(f"{label}: at least two distinct completion timestamps are required")
