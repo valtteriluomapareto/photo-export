@@ -16,9 +16,12 @@ struct ExportRunWatchdogTests {
 
   @Test func returnsOnlyIndividualLongTurns() {
     var turns = ExportRunWatchdog.TurnCounts()
-    #expect(!turns.record(milliseconds: 100))
-    #expect(turns.record(milliseconds: 100.001))
-    #expect(turns.record(milliseconds: 250))
+    let boundary = turns.record(milliseconds: 100)
+    let justOver = turns.record(milliseconds: 100.001)
+    let long = turns.record(milliseconds: 250)
+    #expect(!boundary)
+    #expect(justOver)
+    #expect(long)
     #expect(turns.over100 == 2)
   }
 
