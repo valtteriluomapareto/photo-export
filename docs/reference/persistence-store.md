@@ -257,7 +257,7 @@ Both stores follow the same lifecycle on their own files: `export-records.json` 
 3. On updates, the store:
    - Waits for store-owned maintenance admission, then rechecks destination and history ownership before applying one synchronous, bounded batch to memory
    - Appends a JSON line to its log (`export-records.jsonl` or `collection-records.jsonl`)
-   - Requests a checkpoint at idle/terminal boundaries, or before the conservative byte/operation replay estimate reaches one second. Admission closes before the history is captured, earlier writes drain, and the IO worker encodes, synchronizes and atomically replaces the snapshot before truncating the log. Admission reopens after physical IO completes, including failure or cancellation. Appends never capture whole-history snapshots.
+   - Requests a checkpoint at idle/terminal boundaries once at least 1,000 operations have accumulated, or sooner when the conservative byte/operation replay estimate approaches one second. Explicit maintenance can checkpoint smaller histories. Admission closes before the history is captured, earlier writes drain, and the IO worker encodes, synchronizes and atomically replaces the snapshot before truncating the log. Admission reopens after physical IO completes, including failure or cancellation. Appends never capture whole-history snapshots.
 4. The durable log is replayed at next launch if no successful checkpoint truncated it. Replay cost is calibrated off main, with conservative operation/byte fallbacks; the estimate is an admission policy, not a wall-clock guarantee.
 
 `drainSynchronously()` on the JSONL writer and both record stores blocks its caller

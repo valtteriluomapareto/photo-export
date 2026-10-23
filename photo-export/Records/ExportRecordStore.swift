@@ -161,7 +161,10 @@ final class ExportRecordStore {
   // the corruption alert or its explicit reset/forensic-backup path.
   @ObservationIgnored private var deferredFinalCompletions: [String: [() -> Void]] = [:]
   // Final commits acknowledged while their destination loaded, landed once it has finished.
-  @ObservationIgnored private var commitsLandedWhileLoading: [String: [() -> Void]] = [:]
+  private typealias HeldLanding = (
+    context: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>, replay: () -> Void
+  )
+  @ObservationIgnored private var commitsLandedWhileLoading: [String: [HeldLanding]] = [:]
   @ObservationIgnored private var configuredDestinationId: String?
   var destinationId: String? {
     trackRecords()
@@ -254,8 +257,10 @@ final class ExportRecordStore {
 
   /// Requests a physical checkpoint without changing queue mirrors or durability semantics.
   @discardableResult
-  func requestHistoryCheckpoint() -> Task<Void, Never>? {
-    guard let file = jsonl, file.hasReplayWork, state == .ready else { return nil }
+  func requestHistoryCheckpoint(force: Bool = false) -> Task<Void, Never>? {
+    guard let file = jsonl, state == .ready,
+      force ? file.hasReplayWork : file.needsIdleMaintenance
+    else { return nil }
     let generation = loadGeneration
     let epoch = recordsEpoch
     return mutationAdmission.requestCheckpoint { [weak self] in
@@ -270,7 +275,7 @@ final class ExportRecordStore {
   }
 
   func checkpointHistory() async throws {
-    if let task = requestHistoryCheckpoint() { await task.value }
+    if let task = requestHistoryCheckpoint(force: true) { await task.value }
     if let checkpointFailure { throw checkpointFailure }
   }
 
@@ -278,15 +283,17 @@ final class ExportRecordStore {
     precondition(!mutationAdmission.isClosed, "Use asynchronous configuration during maintenance")
     let signpost = AppDiagnostics.beginConfigure(label: "timeline")
     defer { signpost.end() }
-    guard let file = startConfiguring(for: destinationId) else { return }
+    guard let file = startConfiguring(for: destinationId, synchronousCompatibility: true) else {
+      return
+    }
     let inputs = file.readInputs
     let (outcome, separator) = RecordPreparationWorker.perform(on: ioQueue) {
       let decoded = inputs.decode(inputs.read())
       return (Self.prepare(decoded), decoded.needsLogSeparator)
     }
-    finishLoad(
+    finishCompatibilityLoad(
       LoadTicket(generation: loadGeneration, file: file, signpost: nil),
-      separator: separator, outcome: outcome)
+      separator: separator, outcome: consume outcome)
   }
 
   /// Points the store at a specific destination id and loads its history off the main actor.
@@ -295,7 +302,9 @@ final class ExportRecordStore {
   /// file read is queued behind the previous destination's writes on the IO queue; decoding
   /// and preparing run in a detached task.
   func beginConfigure(for destinationId: String?) {
-    let hasRetained = destinationId.flatMap { self.pendingRecovery[$0] } != nil
+    let hasRetained =
+      destinationId.flatMap { self.pendingRecovery[$0] } != nil
+      || (destinationId == configuredDestinationId && hasUnsavedChanges)
     if !mutationAdmission.isClosed, cancellationCleanups.isEmpty,
       jsonl?.hasUnflushedChanges != true, finalCommitContext?.file.hasUnflushedChanges != true,
       !hasRetained, pendingConfiguration == nil
@@ -323,17 +332,12 @@ final class ExportRecordStore {
       guard request == configurationRequest else { return }
       let transition = mutationAdmission.requestCheckpoint { [weak self] in
         guard let self, request == configurationRequest else { return }
-        let retained = destinationId.flatMap { self.pendingRecovery[$0] }
-        let prepared: PreparedLoad?
-        if let retained {
-          prepared = await Task.detached(priority: .utility) {
-            var counters: [MonthKey: MonthCounters] = [:]
-            var claims: FilenameClaims<ClaimFolder>? = FilenameClaims()
-            for record in retained.values {
-              Self.contribute(record, sign: 1, counters: &counters, claims: &claims)
-            }
-            return PreparedLoad(records: retained, monthCounters: counters, claims: claims!)
-          }.value
+        if hasUnsavedChanges, let id = configuredDestinationId {
+          pendingRecovery[id] = storedRecords
+        }
+        let prepared: RecordValueTransfer<PreparedLoad>?
+        if let id = destinationId, pendingRecovery[id] != nil {
+          prepared = await prepareRetainedHistory(RecordValueTransfer(pendingRecovery[id]!))
         } else {
           prepared = nil
         }
@@ -341,7 +345,9 @@ final class ExportRecordStore {
         mutationAdmission.installAfterMaintenance {
           self.configurationPending = false
           self.pendingConfiguration = nil
-          self.beginConfigureImmediately(for: destinationId, drained: true, retained: prepared)
+          let history = prepared?.take()
+          self.beginConfigureImmediately(
+            for: destinationId, drained: true, retained: consume history)
         }
       }
       await transition?.value
@@ -356,10 +362,11 @@ final class ExportRecordStore {
   }
 
   private func beginConfigureImmediately(
-    for destinationId: String?, drained: Bool = false, retained: PreparedLoad? = nil
+    for destinationId: String?, drained: Bool = false, retained: consuming PreparedLoad? = nil
   ) {
     let signpost = AppDiagnostics.beginConfigure(label: "timeline")
-    guard let file = startConfiguring(for: destinationId, drained: drained, retained: retained)
+    guard
+      let file = startConfiguring(for: destinationId, drained: drained, retained: consume retained)
     else {
       signpost.end()
       return
@@ -413,6 +420,9 @@ final class ExportRecordStore {
 
   /// Loads that finished, applied or discarded. Exists for tests, to wait on progress.
   @ObservationIgnored private(set) var finishedLoadCount = 0
+  #if DEBUG
+    @ObservationIgnored private(set) var finishedResetCount = 0
+  #endif
 
   /// Tasks waiting in `waitUntilSettled()`. Exists for tests, to wait on progress.
   var pendingSettleWaiterCount: Int { settleWaiters.count }
@@ -434,7 +444,7 @@ final class ExportRecordStore {
   /// write. Returns the new destination's file when its history still has to be read.
   private func startConfiguring(
     for destinationId: String?, drained: Bool = false,
-    retained preparedRetained: PreparedLoad? = nil
+    retained preparedRetained: consuming PreparedLoad? = nil, synchronousCompatibility: Bool = false
   ) -> RecordFile? {
     reconciliationRevision &+= 1
     loadGeneration &+= 1
@@ -468,8 +478,7 @@ final class ExportRecordStore {
     }
 
     // Reset in-memory state
-    installHistory(
-      records: [:], counters: [:], claims: FilenameClaims(), releaseRetainedOwners: false)
+    installHistory(.empty, releaseRetainedOwners: false)
 
     guard let destinationId else {
       currentStoreDirURL = nil
@@ -493,6 +502,8 @@ final class ExportRecordStore {
     jsonl = file
     file.onPersistenceFailure = { [weak self, weak file] error in
       guard let self, let file else { return }
+      // A failed reset leaves corrupt history unreadable; its IO failure remains latched.
+      guard self.jsonl !== file || self.currentState != .failed else { return }
       if let context = self.finalCommitContext, context.file === file {
         self.retainFinalCommitFailure(error, context: context)
       }
@@ -502,10 +513,19 @@ final class ExportRecordStore {
       self.setState(.persistenceFailed)
     }
 
-    if let retained = pendingRecovery[destinationId] {
-      installHistory(
-        records: retained, counters: preparedRetained?.monthCounters,
-        claims: preparedRetained?.claims)
+    if pendingRecovery[destinationId] != nil {
+      let prepared: PreparedLoad
+      if let retained = consume preparedRetained {
+        prepared = consume retained
+      } else {
+        precondition(
+          synchronousCompatibility, "Asynchronous configuration requires prepared retained history")
+        let snapshot = RecordValueTransfer(pendingRecovery[destinationId]!)
+        prepared = RecordPreparationWorker.perform(on: ioQueue) {
+          Self.prepareRetained(snapshot.take())
+        }
+      }
+      installHistory(consume prepared)
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
       setState(.persistenceFailed)
@@ -518,56 +538,120 @@ final class ExportRecordStore {
     return file
   }
 
+  private func prepareRetainedHistory(_ snapshot: RecordValueTransfer<[String: ExportRecord]>) async
+    -> RecordValueTransfer<PreparedLoad>
+  {
+    #if DEBUG
+      let checkpoint = preparationCheckpoint
+    #endif
+
+    return await Task.detached(priority: .utility) {
+      #if DEBUG
+        await checkpoint?()
+      #endif
+      return RecordValueTransfer(Self.prepareRetained(snapshot.take()))
+    }.value
+  }
+
+  private func needsRetainedPreparation(for ticket: LoadTicket, outcome: LoadOutcome?) -> Bool {
+    guard ticket.generation == loadGeneration, ticket.file === jsonl,
+      let id = configuredDestinationId
+    else { return false }
+    if pendingRecovery[id] != nil { return true }
+    if case .ioFailure = outcome { return commitsLandedWhileLoading[id]?.isEmpty == false }
+    return false
+  }
+
+  private func retainedInput(for ticket: LoadTicket, outcome: LoadOutcome?) -> RecordValueTransfer<
+    [String: ExportRecord]
+  >? {
+    guard ticket.generation == loadGeneration, ticket.file === jsonl,
+      let id = configuredDestinationId
+    else { return nil }
+    if pendingRecovery[id] != nil { return RecordValueTransfer(pendingRecovery[id]!) }
+    if case .ioFailure = outcome, let held = commitsLandedWhileLoading[id]?.first {
+      return RecordValueTransfer(held.context.snapshot)
+    }
+    return nil
+  }
+
   private func finishTransferredLoad(
     _ ticket: LoadTicket, separator: Bool?, transfer: RecordValueTransfer<LoadOutcome?>
+  ) async {
+    try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
+    let outcome = transfer.take()
+    guard needsRetainedPreparation(for: ticket, outcome: outcome) else {
+      finishPreparedLoad(ticket, separator: separator, outcome: consume outcome)
+      return
+    }
+    let input = RecordValueTransfer(consume outcome)
+    let operation = mutationAdmission.requestCheckpoint { [weak self] in
+      guard let self else { return }
+      try? await ticket.file.flush()
+      let decoded = input.take()
+      guard let snapshot = retainedInput(for: ticket, outcome: decoded) else {
+        let discarded = RecordValueTransfer(consume decoded)
+        mutationAdmission.installAfterMaintenance {
+          self.finishPreparedLoad(ticket, separator: separator, outcome: discarded.take())
+        }
+        return
+      }
+      let prepared = await prepareRetainedHistory(snapshot)
+      mutationAdmission.installAfterMaintenance {
+        let outcome: LoadOutcome? = .retained(prepared.take())
+        self.finishPreparedLoad(ticket, separator: separator, outcome: consume outcome)
+      }
+    }
+    await operation?.value
+  }
+
+  private func finishCompatibilityLoad(
+    _ ticket: LoadTicket, separator: Bool?, outcome: consuming LoadOutcome?
   ) {
-    finishLoad(ticket, separator: separator, outcome: transfer.take())
+    var result = consume outcome
+    if let snapshot = retainedInput(for: ticket, outcome: result) {
+      result = .retained(
+        RecordPreparationWorker.perform(on: ioQueue) { Self.prepareRetained(snapshot.take()) })
+    }
+    finishPreparedLoad(ticket, separator: separator, outcome: consume result)
   }
 
   /// Installs a finished load in one main-actor turn, unless a newer configure replaced it.
   /// `outcome` is nil when the load skipped decoding because it was already replaced.
-  private func finishLoad(_ ticket: LoadTicket, separator: Bool?, outcome: LoadOutcome?) {
-    if mutationAdmission.isClosed {
-      Task { [weak self] in
-        guard let self else { return }
-        try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
-        finishLoad(ticket, separator: separator, outcome: outcome)
-      }
-      return
-    }
+  private func finishPreparedLoad(
+    _ ticket: LoadTicket, separator: Bool?, outcome: consuming LoadOutcome?
+  ) {
     defer { ticket.signpost?.end() }
     finishedLoadCount += 1
-    guard ticket.generation == loadGeneration, ticket.file === jsonl, let outcome else {
+    guard ticket.generation == loadGeneration, ticket.file === jsonl, let outcome = consume outcome
+    else {
       logger.debug("Discarded a timeline history load that a newer configure replaced")
       return
     }
     ticket.file.adoptLogSeparator(separator)
-    if let id = configuredDestinationId, let retained = pendingRecovery[id] {
-      // A final commit's write failure was parked while the load ran; its history wins.
-      installHistory(records: retained)
+    switch consume outcome {
+    case .retained(let prepared):
+      installHistory(consume prepared)
       hasUnsavedChanges = true
       persistenceError = Self.retainedProgressMessage
       setState(.persistenceFailed)
-    } else {
-      switch outcome {
-      case .ioFailure(let error):
-        persistenceError = error.localizedDescription
-        setState(.persistenceFailed)
-      case .corrupt:
-        // Deferred-rename rule: leave the corrupt snapshot at its original path on disk so
-        // a Quit-and-relaunch reproduces this `.failed` state instead of silently
-        // initializing empty. `resetToEmpty()` is the only path that renames the file out
-        // of the way after the user chooses recovery in RecordStoreAlertHost.
-        logger.error(
-          "Timeline records snapshot at \(ticket.file.snapshotURL.path, privacy: .public) failed to decode; store transitioning to .failed."
-        )
-        setState(.failed)
-      case .loaded(let prepared):
-        installHistory(
-          records: prepared.records, counters: prepared.monthCounters, claims: prepared.claims)
-        ticket.file.adoptReplayBudget(prepared.replayBudget)
-        setState(.ready)
-      }
+
+    case .ioFailure(let error):
+      persistenceError = error.localizedDescription
+      setState(.persistenceFailed)
+    case .corrupt:
+      // Deferred-rename rule: leave the corrupt snapshot at its original path on disk so
+      // a Quit-and-relaunch reproduces this `.failed` state instead of silently
+      // initializing empty. `resetToEmpty()` is the only path that renames the file out
+      // of the way after the user chooses recovery in RecordStoreAlertHost.
+      logger.error(
+        "Timeline records snapshot at \(ticket.file.snapshotURL.path, privacy: .public) failed to decode; store transitioning to .failed."
+      )
+      setState(.failed)
+    case .loaded(let prepared):
+      ticket.file.adoptReplayBudget(prepared.replayBudget)
+      installHistory(consume prepared)
+      setState(.ready)
     }
     if state == .failed, finalCommitContext?.destinationId == configuredDestinationId {
       finalCommitContext?.needsCorruptionRecovery = true
@@ -592,10 +676,11 @@ final class ExportRecordStore {
 
   /// The records and counters a successful load installs.
   struct PreparedLoad: Sendable {
-    let records: [String: ExportRecord]
-    let monthCounters: [MonthKey: MonthCounters]
-    let claims: FilenameClaims<ClaimFolder>
+    var records: [String: ExportRecord]
+    var monthCounters: [MonthKey: MonthCounters]
+    var claims: FilenameClaims<ClaimFolder>
     var replayBudget: RecordReplayBudget = RecordReplayBudget()
+    static var empty: Self { .init(records: [:], monthCounters: [:], claims: FilenameClaims()) }
   }
 
   /// How a load ends. A failed read outranks a corrupt snapshot, so the user is asked to
@@ -604,6 +689,7 @@ final class ExportRecordStore {
     case ioFailure(any Error)
     case corrupt
     case loaded(PreparedLoad)
+    case retained(PreparedLoad)
   }
 
   /// Builds what `configure(for:)` installs from a decoded load: the snapshot, the log
@@ -626,15 +712,20 @@ final class ExportRecordStore {
         applyMutation(op, to: &records)
       }
       recoverInProgressVariants(in: &records)
-      var counters: [MonthKey: MonthCounters] = [:]
-      var claims: FilenameClaims<ClaimFolder>? = FilenameClaims()
-      for record in records.values {
-        contribute(record, sign: +1, counters: &counters, claims: &claims)
-      }
-      return .loaded(
-        PreparedLoad(
-          records: records, monthCounters: counters, claims: claims!, replayBudget: replayBudget))
+      var prepared = prepareRetained(records)
+      prepared.replayBudget = replayBudget
+      return .loaded(prepared)
     }
+  }
+
+  nonisolated private static func prepareRetained(_ records: [String: ExportRecord]) -> PreparedLoad
+  {
+    var counters: [MonthKey: MonthCounters] = [:]
+    var claims: FilenameClaims<ClaimFolder>? = FilenameClaims()
+    for record in records.values {
+      contribute(record, sign: 1, counters: &counters, claims: &claims)
+    }
+    return PreparedLoad(records: records, monthCounters: counters, claims: claims!)
   }
 
   /// Retry storage access without resetting export history. After an append failure,
@@ -698,6 +789,9 @@ final class ExportRecordStore {
     await waitForCancellationCleanup()
     try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
     guard state == .failed, let file = jsonl else { return }
+    #if DEBUG
+      defer { finishedResetCount += 1 }
+    #endif
     let ticket = mutationTicket
     let operation = mutationAdmission.requestCheckpoint { [weak self] in
       guard let self, mutationTicket == ticket else { return }
@@ -706,7 +800,7 @@ final class ExportRecordStore {
         guard mutationTicket == ticket else { return }
         mutationAdmission.installAfterMaintenance {
           self.reconciliationRevision &+= 1
-          self.installHistory(records: [:], counters: [:], claims: FilenameClaims())
+          self.installHistory(.empty)
           self.setState(.ready)
           self.replayFinalCompletions()
           afterReset()
@@ -745,7 +839,7 @@ final class ExportRecordStore {
     guard let jsonl else { return }
     do {
       try jsonl.resetToEmpty(emptySnapshot: [:])
-      installHistory(records: [:], counters: [:], claims: FilenameClaims())
+      installHistory(.empty)
       setState(.ready)
       replayFinalCompletions()
       changeNotifier.notifyNow()
@@ -1303,7 +1397,7 @@ final class ExportRecordStore {
       } catch { return .failure(error) }
     }
 
-    try await prepareForMutation()
+    do { try await prepareForMutation() } catch is CancellationError { return .zero }
     guard isCurrent(), !Task.isCancelled, state == .ready,
       reconciliationRevision == revision
     else { return .zero }
@@ -1311,7 +1405,7 @@ final class ExportRecordStore {
     var prunedVariants = 0
     var prunedRecords = 0
     for offset in stride(from: 0, to: toPrune.count, by: 64) {
-      try await prepareForMutation()
+      do { try await prepareForMutation() } catch is CancellationError { return .zero }
       guard isCurrent(), !Task.isCancelled, state == .ready,
         reconciliationRevision == revision
       else { return .zero }
@@ -1495,6 +1589,7 @@ final class ExportRecordStore {
     return { [self] finalFilename in
       defer { if finalCommitContext === context { finalCommitContext = nil } }
       guard let filename = finalFilename else { return }
+      await prepareFinalCommitRecovery(context)
       try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
       let landing = mutationAdmission.perform {
         landFinalCommit(
@@ -1507,6 +1602,31 @@ final class ExportRecordStore {
         retainFinalCommitFailure(error, context: context)
       }
     }
+  }
+
+  private func prepareFinalCommitRecovery(
+    _ context: FinalCommitContext<[String: ExportRecord], ExportRecordMutation>
+  ) async {
+    try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
+    guard !configurationPending, configuredDestinationId == context.destinationId,
+      state == .persistenceFailed, !hasUnsavedChanges
+    else { return }
+    let ticket = mutationTicket
+    let operation = mutationAdmission.requestCheckpoint { [weak self] in
+      guard let self else { return }
+      try? await context.file.flush()
+      guard mutationTicket == ticket, !configurationPending,
+        configuredDestinationId == context.destinationId,
+        state == .persistenceFailed, !hasUnsavedChanges
+      else { return }
+      let prepared = await prepareRetainedHistory(RecordValueTransfer(context.snapshot))
+      guard mutationTicket == ticket, !configurationPending else { return }
+      mutationAdmission.installAfterMaintenance {
+        self.installHistory(prepared.take())
+        self.hasUnsavedChanges = true
+      }
+    }
+    await operation?.value
   }
 
   /// Lands an acknowledged final commit where its destination now stands: deferred behind a
@@ -1532,18 +1652,23 @@ final class ExportRecordStore {
     }
     guard currentState != .loading, !configurationPending else {
       // Land against whatever the load ends in, as if the commit had arrived just after.
-      commitsLandedWhileLoading[destinationId, default: []].append { [weak self] in
-        guard let self else { return }
-        let landing = self.landFinalCommit(
-          filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked)
-        guard landing == .parked else { return }
-        // Nobody awaits this commit any more. Finish its write before the store moves on, so a
-        // failure is retained for Retry like any parked commit's.
-        context.file.drainSynchronously()
-        if context.file.hasUnflushedChanges {
-          self.retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
-        }
-      }
+      commitsLandedWhileLoading[destinationId, default: []].append(
+        (
+          context: context,
+          replay: { [weak self] in
+            guard let self else { return }
+            let landing = self.landFinalCommit(
+              filename, context: context, applyCompletion: applyCompletion, writeParked: writeParked
+            )
+            guard landing == .parked else { return }
+            // Nobody awaits this commit any more. Finish its write before the store moves on, so a
+            // failure is retained for Retry like any parked commit's.
+            context.file.drainSynchronously()
+            if context.file.hasUnflushedChanges {
+              self.retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
+            }
+          }
+        ))
       return .held
     }
     return landOnActiveDestination(filename, context: context, applyCompletion: applyCompletion)
@@ -1565,12 +1690,9 @@ final class ExportRecordStore {
       }
       return false
     }
-    if state == .persistenceFailed && !hasUnsavedChanges {
-      // The known pre-switch history is intact in the parked owner, even
-      // when its later reload was unreadable. Retry must retain the new file.
-      installHistory(records: context.snapshot)
-      hasUnsavedChanges = true
-    }
+    precondition(
+      state != .persistenceFailed || hasUnsavedChanges,
+      "Unreadable history must be prepared before final acknowledgement")
     applyCompletion(filename)
     if state == .persistenceFailed {
       retainFinalCommitFailure(RecordPersistenceUnavailable(), context: context)
@@ -1585,7 +1707,7 @@ final class ExportRecordStore {
   private func replayCommitsLandedWhileLoading(for destinationId: String? = nil) {
     guard let id = destinationId ?? configuredDestinationId else { return }
     let landings = commitsLandedWhileLoading.removeValue(forKey: id) ?? []
-    for land in landings { land() }
+    for land in landings { land.replay() }
   }
 
   private func replayFinalCompletions() {
@@ -1744,34 +1866,23 @@ final class ExportRecordStore {
   }
 
   /// Installs matching records, counters and claims under one new history epoch.
-  private func installHistory(
-    records: [String: ExportRecord], counters: [MonthKey: MonthCounters]? = nil,
-    claims: FilenameClaims<ClaimFolder>? = nil, releaseRetainedOwners: Bool = true
-  ) {
-    let prepared = RecordPreparationWorker.perform(on: ioQueue) {
-      var derivedCounters = counters ?? [:]
-      var derivedClaims: FilenameClaims<ClaimFolder>? = claims ?? FilenameClaims()
-      if counters == nil || claims == nil {
-        derivedCounters = [:]
-        derivedClaims = FilenameClaims()
-        for record in records.values {
-          Self.contribute(record, sign: +1, counters: &derivedCounters, claims: &derivedClaims)
-        }
-      }
-      return (derivedCounters, derivedClaims)
-    }
+  private func installHistory(_ history: consuming PreparedLoad, releaseRetainedOwners: Bool = true)
+  {
+    var prepared = consume history
     recordsEpoch &+= 1
-    storedRecords = records
-    monthCounters = prepared.0
-    filenameClaims = prepared.1
+    storedRecords = prepared.records
+    prepared.records = [:]
+    monthCounters = prepared.monthCounters
+    prepared.monthCounters = [:]
+    filenameClaims = prepared.claims
+    prepared.claims = FilenameClaims()
     claimsEpoch = recordsEpoch
+    invalidatesAllTiles = true
     if releaseRetainedOwners, let id = configuredDestinationId {
       pendingRecovery.removeValue(forKey: id)
-      if finalCommitContext?.destinationId == id {
-        finalCommitContext?.snapshot = [:]
-      }
+      if finalCommitContext?.destinationId == id { finalCommitContext?.snapshot = [:] }
+      for landing in commitsLandedWhileLoading[id] ?? [] { landing.context.snapshot = [:] }
     }
-    invalidatesAllTiles = true
   }
 
   private func createDirectoryIfNeeded(_ url: URL) {

@@ -109,6 +109,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
 
   private var replayBudget = RecordReplayBudget()
   var needsMaintenance: Bool { replayBudget.needsCheckpoint }
+  var needsIdleMaintenance: Bool { replayBudget.needsIdleCheckpoint }
   var hasReplayWork: Bool { replayBudget.hasWork }
   private var submittedRevision = 0
   private var flushedRevision = 0

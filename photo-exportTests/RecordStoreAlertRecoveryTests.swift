@@ -313,7 +313,9 @@ import Testing
       let directory = f.root.appendingPathComponent("A")
       try FileManager.default.moveItem(at: directory, to: f.root.appendingPathComponent("saved"))
       try Data("blocks record directory".utf8).write(to: directory)
+      let completedResets = f.timeline.finishedResetCount
       button.performClick(nil)
+      try #require(await observe { f.timeline.finishedResetCount > completedResets })
       #expect(f.timeline.state == .failed)
       #expect(!f.manager.isImporting && f.manager.importTask == nil)
       #expect(f.counter.renderedText["import-title"] == nil)

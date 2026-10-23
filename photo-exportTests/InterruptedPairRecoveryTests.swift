@@ -134,14 +134,20 @@ struct InterruptedPairRecoveryTests {
       return timeline.exportInfo(assetId: "asset")?.variants ?? [:]
     }
 
-    func select(_ id: String) {
+    func select(_ id: String) async {
       destination.selectedFolderURL = destination.base.appendingPathComponent(id)
-      timeline.configure(for: id)
-      collections.configure(for: id)
-      if placement.kind == .favorites { collections.upsertPlacement(placement) }
+      timeline.beginConfigure(for: id)
+      collections.beginConfigure(for: id)
+      await timeline.waitUntilSettled()
+      await collections.waitUntilSettled()
+      if placement.kind == .favorites {
+        try? await collections.withMutationAdmission { collections.upsertPlacement(placement) }
+      }
     }
 
     func reloadVariants() async throws -> [ExportVariant: ExportVariantRecord] {
+      try await timeline.checkpointHistory()
+      try await collections.checkpointHistory()
       try await timeline.flush()
       try await collections.flush()
       if placement.kind == .favorites {
@@ -157,6 +163,8 @@ struct InterruptedPairRecoveryTests {
     func cleanup() async {
       manager.cancelAndClear()
       for task in physicalTasks { await task.value }
+      try? await timeline.checkpointHistory()
+      try? await collections.checkpointHistory()
       try? await timeline.flush()
       try? await collections.flush()
       destination.cleanup()
@@ -399,7 +407,7 @@ struct InterruptedPairRecoveryTests {
       #expect(old != nil)
       #expect(f.destination.closed.isEmpty)
       f.manager.cancelAndClear()
-      f.select("B")
+      await f.select("B")
       f.writer.checkpoint = replacement
       f.start()
       try #require(await reached { await replacement.enteredSoFar > 0 })
@@ -437,7 +445,7 @@ struct InterruptedPairRecoveryTests {
       let old = f.manager.currentTask
       #expect(old != nil)
       f.manager.cancelAndClear()
-      f.select("B")
+      await f.select("B")
       f.manager.finalCommitWaitObserver = { didWaitForCommit = true }
       f.writer.checkpoint = replacement
       f.start()

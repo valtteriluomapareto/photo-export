@@ -15,6 +15,7 @@ struct RecordReplayBudget: Sendable {
 
   var hasWork: Bool { operationWork > 0 || byteWork > 0 }
   var needsCheckpoint: Bool { max(operationWork, byteWork) >= 750_000_000 }
+  var needsIdleCheckpoint: Bool { operationCount >= 1_000 || needsCheckpoint }
 
   mutating func record(encodedBytes: Int) {
     operationCount += 1
