@@ -62,7 +62,15 @@ wiring; hosted tests build their own objects without launching production startu
 The main data paths are:
 
 1. Photos → `PhotoLibraryManager` → app-owned descriptors for views and export planning.
-   Thumbnail caching and progressive grid loading stay behind the library service.
+   Thumbnail caching and progressive grid loading stay behind the library service. At job
+   execution, the injected `PhotoKitReading` reader refreshes one descriptor/resource snapshot
+   on its own serial utility queue. Framework objects stay inside that read; cancellation,
+   destination and history ownership are checked before its values can authorize export IO.
+   Shipping composition selects `ProductionPhotoKitReader`, and screenshot composition selects
+   `ScreenshotPhotoKitReader` backed by the same curated library as the UI. Public resource UTIs
+   identify the original format. The optional resource-local `fileSize` KVC read preserves
+   known-size interrupted-file verification; its undocumented thread safety remains an explicit
+   limitation, with access confined to the serial reader.
 2. A manual action or AutoSync run → `ExportManager` → job planning and
    `ExportQueueCoordinator` → `VariantExporter`. Resource, render and conversion
    producers write an attempt-owned stage through the injected service seams.

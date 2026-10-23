@@ -21,6 +21,7 @@ enum AppCoreTestHarness {
       photoLibraryServiceOverride: FakePhotoLibraryService(),
       persistentChangeSource: FakePersistentChangeSource(),
       assetResourceWriter: FakeAssetResourceWriter(),
+      photoKitReader: FakePhotoKitReader(),
       phAssetCacheControl: { $0 },
       fileSystem: FakeFileSystem(),
       clock: TestClock(),

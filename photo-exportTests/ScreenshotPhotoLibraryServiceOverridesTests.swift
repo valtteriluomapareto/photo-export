@@ -225,4 +225,27 @@ struct ScreenshotPhotoLibraryServiceOverridesTests {
       wrapped.authorizationStatus == .authorized,
       "wrapped manager mirrors the override's auth status")
   }
+
+  @Test(arguments: ["family-1", "synthetic-unlisted"])
+  func exportReaderReturnsOnlyCuratedValues(id: String) async throws {
+    let reader = ScreenshotPhotoKitReader(service: ScreenshotPhotoLibraryService())
+    let value = try #require(await reader.readAsset(id: id, livePhotosPaired: true))
+    #expect(value.descriptor.id == id)
+    #expect(value.descriptor.originalUTI == "public.jpeg")
+    #expect(value.descriptor.mediaType == .image)
+    #expect(!value.descriptor.isLivePhoto)
+    #expect(value.resources.count == 1)
+    #expect(value.resources.first?.originalFilename == "\(id).HEIC")
+    #expect(value.resources.first?.fileSize == 2_400_000)
+  }
+
+  @Test func screenshotCompositionSelectsSyntheticExportReader() async throws {
+    // test-scratch: allow inspects shipping composition without building a core or starting IO
+    let composition = AppComposition.screenshot(windowSize: nil)
+    #expect(composition.photoKitReader is ScreenshotPhotoKitReader)
+    let value = try #require(
+      await composition.photoKitReader.readAsset(id: "family-1", livePhotosPaired: false))
+    #expect(value.descriptor.id == "family-1")
+    #expect(value.resources.first?.originalFilename == "family-1.HEIC")
+  }
 }
