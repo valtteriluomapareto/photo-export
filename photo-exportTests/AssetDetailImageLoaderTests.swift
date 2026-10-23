@@ -111,10 +111,82 @@ struct AssetDetailImageLoaderTests {
     #expect(!loader.state.isLoading)
   }
 
+  @Test func degradedPreviewIsDisplayedBeforeFinalAndLateCallbacksAreIgnored() async {
+    let loader = AssetDetailImageLoader()
+    let service = FakePhotoLibraryService()
+    let gate = AsyncCheckpoint()
+    let degraded = NSImage(size: NSSize(width: 20, height: 20))
+    let final = NSImage(size: NSSize(width: 40, height: 40))
+    var callback: (@MainActor (NSImage) -> Void)?
+    service.previewOverride = { _, _, onDegraded in
+      callback = onDegraded
+      onDegraded(degraded)
+      await gate.enter()
+      return final
+    }
+    let task = Task { await loader.load(for: "A", using: service) }
+    await gate.waitForEnter(count: 1)
+    #expect(loader.state.image === degraded)
+    #expect(loader.state.isLoading)
+    await gate.releaseAll()
+    await task.value
+    callback?(degraded)
+    #expect(loader.state.image === final)
+    #expect(!loader.state.isLoading)
+  }
+
+  @Test(arguments: [false, true])
+  func cancelledOrRevisedDegradedCallbackCannotPublish(revised: Bool) async {
+    let loader = AssetDetailImageLoader()
+    let service = FakePhotoLibraryService()
+    let gate = AsyncCheckpoint()
+    let late = NSImage(size: NSSize(width: 20, height: 20))
+    var callback: (@MainActor (NSImage) -> Void)?
+    service.previewOverride = { _, _, onDegraded in
+      callback = onDegraded
+      await gate.enter()
+      return late
+    }
+    var revision = 0
+    let task = Task { await loader.load(for: "A", using: service, isCurrent: { revision == 0 }) }
+    await gate.waitForEnter(count: 1)
+    let probe = ObservationProbe { _ = loader.state }
+    if revised { revision += 1 } else { task.cancel() }
+    callback?(late)
+    #expect(probe.changeCount == 0)
+    #expect(loader.state.image == nil)
+    loader.clear()
+    callback?(late)
+    #expect(loader.state.image == nil)
+    await gate.releaseAll()
+    await task.value
+  }
+
+  @Test(arguments: [CGSize(width: 8000, height: 6000), CGSize(width: 300, height: 600)])
+  func previewSizePreservesPaneAspectAndCapsLongestEdge(points: CGSize) {
+    let size = AssetDetailView.previewPixelSize(points: points, scale: 2)
+    #expect(max(size.width, size.height) <= 2560)
+    #expect(abs(size.width / size.height - points.width / points.height) < 0.002)
+    if points.width < 1000 { #expect(size == CGSize(width: 600, height: 1200)) }
+  }
+
+  @Test func screenshotPreviewReturnsSyntheticPixelsAtRequestedSize() async throws {
+    let service = ScreenshotPhotoLibraryService()
+    let size = CGSize(width: 400, height: 300)
+    let image = try await service.requestPreview(
+      for: "detail-preview-placeholder", pixelSize: size, onDegraded: { _ in })
+    #expect(image.size == size)
+    #expect(image.cgImage(forProposedRect: nil, context: nil, hints: nil) != nil)
+  }
+
   @Test func cachedThumbnailIsVisibleWhilePreviewIsPending() async {
     let loader = AssetDetailImageLoader()
     let service = FakePhotoLibraryService()
-    let cached = NSImage(size: NSSize(width: 20, height: 20))
+    let cached = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { rect in
+      NSColor.red.setFill()
+      rect.fill()
+      return true
+    }
     service.thumbnailsByAssetId["A"] = cached
     let gate = AsyncCheckpoint()
     service.fullImageRequestOverride = { _ in

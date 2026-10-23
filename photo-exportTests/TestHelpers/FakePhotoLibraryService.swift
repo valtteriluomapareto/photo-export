@@ -404,7 +404,11 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   }
 
   var previewPixelSizes: [CGSize] = []
-  var previewOverride: (@MainActor (String, CGSize, @MainActor (NSImage) -> Void) async throws -> NSImage)?
+  var previewOverride:
+    (
+      @MainActor (String, CGSize, @escaping @MainActor @Sendable (NSImage) -> Void) async throws ->
+        NSImage
+    )?
 
   func requestPreview(
     for assetId: String, pixelSize: CGSize,

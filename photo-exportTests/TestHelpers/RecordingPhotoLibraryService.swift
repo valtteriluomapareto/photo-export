@@ -123,6 +123,14 @@ final class RecordingPhotoLibraryService: PhotoLibraryService {
     record("cachedDecodedThumbnail(for:quantizedSize:deliveryMode:)")
     return nil
   }
+  func requestPreview(
+    for assetId: String, pixelSize: CGSize,
+    onDegraded: @escaping @MainActor @Sendable (NSImage) -> Void
+  ) async throws -> NSImage {
+    record("requestPreview(for:pixelSize:onDegraded:)")
+    return NSImage(size: pixelSize)
+  }
+
   func requestFullImage(for assetId: String) async throws -> NSImage {
     record("requestFullImage(for:)")
     return NSImage()

@@ -971,45 +971,53 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     }
   }
 
-  /// Request a full-size image for an asset
+  func requestPreview(
+    for assetId: String, pixelSize: CGSize,
+    onDegraded: @escaping @MainActor @Sendable (NSImage) -> Void
+  ) async throws -> NSImage {
+    if let service = overrideService {
+      return try await service.requestPreview(
+        for: assetId, pixelSize: pixelSize, onDegraded: onDegraded)
+    }
+    return try await requestImage(
+      for: assetId, targetSize: pixelSize, deliveryMode: .opportunistic,
+      onDegraded: onDegraded)
+  }
+
+  /// Original-size requests remain available to consumers that need source pixels.
   func requestFullImage(for assetId: String) async throws -> NSImage {
-    if let s = overrideService { return try await s.requestFullImage(for: assetId) }
+    if let service = overrideService { return try await service.requestFullImage(for: assetId) }
+    return try await requestImage(
+      for: assetId, targetSize: PHImageManagerMaximumSize, deliveryMode: .highQualityFormat,
+      onDegraded: { _ in })
+  }
+
+  private func requestImage(
+    for assetId: String, targetSize: CGSize, deliveryMode: PHImageRequestOptionsDeliveryMode,
+    onDegraded: @escaping @MainActor @Sendable (NSImage) -> Void
+  ) async throws -> NSImage {
     try Task.checkCancellation()
     guard let asset = cachedOrFetchPHAsset(id: assetId) else {
       throw PhotoLibraryError.assetUnavailable
     }
     let options = PHImageRequestOptions()
-    options.deliveryMode = .highQualityFormat
+    options.deliveryMode = deliveryMode
     options.isNetworkAccessAllowed = true
     options.isSynchronous = false
-
-    logger.debug(
-      "requestFullImage start id: \(assetId, privacy: .public) size: \(asset.pixelWidth)x\(asset.pixelHeight)"
-    )
-    let logger = self.logger
     let missingImageError: Error = PhotoLibraryError.assetUnavailable
     let bridge = FullImageRequestBridge { requestID in
       PHImageManager.default().cancelImageRequest(requestID)
     }
     return try await bridge.request { callback in
       PHImageManager.default().requestImage(
-        for: asset,
-        targetSize: PHImageManagerMaximumSize,
-        contentMode: .aspectFit,
-        options: options
+        for: asset, targetSize: targetSize, contentMode: .aspectFit, options: options
       ) { image, info in
-        let isDegraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue ?? false
-        let isInCloud = (info?[PHImageResultIsInCloudKey] as? NSNumber)?.boolValue ?? false
-        let isCancelled = (info?[PHImageCancelledKey] as? NSNumber)?.boolValue ?? false
-        let requestID = (info?[PHImageResultRequestIDKey] as? NSNumber)?.intValue ?? 0
-        let error = info?[PHImageErrorKey] as? NSError
-        logger.debug(
-          "requestFullImage callback id: \(assetId, privacy: .public) requestID: \(requestID) degraded: \(isDegraded) inCloud: \(isInCloud) cancelled: \(isCancelled) imageNil: \((image == nil)) error: \(String(describing: error?.localizedDescription), privacy: .public)"
-        )
-
-        callback(
-          FullImageRequestBridge.response(
-            image: image, info: info, missingImageError: missingImageError))
+        let response = FullImageRequestBridge.response(
+          image: image, info: info, missingImageError: missingImageError)
+        if response == nil, let image {
+          Task { @MainActor in onDegraded(image) }
+        }
+        callback(response)
       }
     }
   }

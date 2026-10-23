@@ -350,6 +350,14 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
     }
   }
 
+  func requestPreview(
+    for assetId: String, pixelSize: CGSize,
+    onDegraded: @escaping @MainActor @Sendable (NSImage) -> Void
+  ) async throws -> NSImage {
+    if let image = image(for: assetId, size: pixelSize) { return image }
+    throw PhotoLibraryManager.PhotoLibraryError.assetUnavailable
+  }
+
   func requestFullImage(for assetId: String) async throws -> NSImage {
     if let img = image(for: assetId, size: CGSize(width: 2048, height: 2048)) {
       return img
