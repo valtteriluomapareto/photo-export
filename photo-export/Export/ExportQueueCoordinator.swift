@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import OSLog
+import Observation
 import os
 
 /// Owns pending jobs, the drain loop, pause/resume/clear, per-placement queue counts,
@@ -43,10 +44,9 @@ final class ExportQueueCoordinator: ObservableObject {
     /// observes `currentJobAssetId` must also see the matching `currentJobPlacement`.
     func setCurrentJob(_ job: ExportManager.ExportJob)
 
-    /// Resets `currentJobAssetId`, `currentJobVariant`, `currentJobPlacement`, and
-    /// `currentAssetFilename` to nil. The coordinator can't write these directly because
-    /// they're the manager's UI-state mirrors.
-    func clearCurrentJobIdentifiers()
+    /// Clears completed-job identifiers, retaining placement only between adjacent jobs.
+    /// Pause, drain and teardown clear placement so its activity indicator stops.
+    func clearCurrentJobIdentifiers(keepingPlacement: Bool)
   }
 
   // MARK: - Published queue state (mirrored on ExportManager)
@@ -117,7 +117,53 @@ final class ExportQueueCoordinator: ObservableObject {
 
   // MARK: - Internal queue state
 
-  private(set) var pendingJobs: [ExportManager.ExportJob] = []
+  private var jobStorage: [ExportManager.ExportJob] = []
+  private var jobHead = 0
+  var pendingJobs: ArraySlice<ExportManager.ExportJob> { jobStorage[jobHead...] }
+
+  /// A month observes only its own queued and active state, published atomically.
+  @Observable
+  final class MonthQueueState {
+    struct Snapshot: Equatable {
+      var queued = 0
+      var isActive = false
+    }
+    var snapshot = Snapshot()
+  }
+  private var monthStates: [String: MonthQueueState] = [:]
+  private var activePlacementId: String?
+  private var placementRevision = 0
+
+  func monthState(placementId: String) -> MonthQueueState {
+    if let state = monthStates[placementId] { return state }
+    let state = MonthQueueState()
+    state.snapshot = .init(
+      queued: queuedCountsByPlacementId[placementId, default: 0],
+      isActive: activePlacementId == placementId)
+    monthStates[placementId] = state
+    return state
+  }
+
+  func setActivePlacement(_ placementId: String?) {
+    guard activePlacementId != placementId else { return }
+    let old = activePlacementId
+    activePlacementId = placementId
+    if let old { refreshMonthState(old) }
+    if let placementId { refreshMonthState(placementId) }
+  }
+
+  private func refreshMonthState(_ id: String) {
+    guard let state = monthStates[id] else { return }
+    let next = MonthQueueState.Snapshot(
+      queued: queuedCountsByPlacementId[id, default: 0],
+      isActive: activePlacementId == id)
+    if state.snapshot != next { state.snapshot = next }
+  }
+
+  private func removePendingJobs() {
+    jobStorage.removeAll(keepingCapacity: true)
+    jobHead = 0
+  }
   /// `true` while the drain loop is actively pulling jobs off the queue. Distinct from
   /// `isRunning` (which is the published mirror): isRunning is the user-facing flag,
   /// isProcessing is the internal "loop is owning the next-job dispatch" gate that
@@ -128,22 +174,24 @@ final class ExportQueueCoordinator: ObservableObject {
   private(set) var currentTask: Task<Void, Never>?
   private(set) var queuedCountsByPlacementId: [String: Int] = [:]
 
-  /// Compares the pending count, processing task and per-placement queue totals.
+  /// Compares the pending count, processing task and per-placement revision without
+  /// retaining the dictionary across its next mutation.
   private struct QueueFingerprint: Equatable {
     let pendingJobCount: Int
     let isProcessing: Bool
     let currentTask: Task<Void, Never>?
-    let queuedCountsByPlacementId: [String: Int]
+    let placementRevision: Int
   }
 
   private var queueFingerprint: QueueFingerprint {
     QueueFingerprint(
       pendingJobCount: pendingJobs.count, isProcessing: isProcessing, currentTask: currentTask,
-      queuedCountsByPlacementId: queuedCountsByPlacementId)
+      placementRevision: placementRevision)
   }
 
   private func notifyQueueContentsChanged(since previous: QueueFingerprint) {
     guard queueFingerprint != previous else { return }
+    for id in monthStates.keys { refreshMonthState(id) }
     host?.queueContentsDidChange()
   }
 
@@ -182,7 +230,8 @@ final class ExportQueueCoordinator: ObservableObject {
   /// bulk-album run).
   func enqueue(_ jobs: [ExportManager.ExportJob]) {
     let previous = queueFingerprint
-    pendingJobs.append(contentsOf: jobs)
+    jobStorage.append(contentsOf: jobs)
+    if !jobs.isEmpty { placementRevision &+= 1 }
     totalJobsEnqueued += jobs.count
     for job in jobs {
       queuedCountsByPlacementId[job.placement.id, default: 0] += 1
@@ -194,7 +243,7 @@ final class ExportQueueCoordinator: ObservableObject {
   /// Reads the per-placement queue depth. Existing callers query `(year, month)` via the
   /// timeline placement id.
   func queuedCount(placementId: String) -> Int {
-    queuedCountsByPlacementId[placementId, default: 0]
+    monthState(placementId: placementId).snapshot.queued
   }
 
   // MARK: - Clear
@@ -205,7 +254,8 @@ final class ExportQueueCoordinator: ObservableObject {
   func clearPending() -> Int {
     let previous = queueFingerprint
     let removed = pendingJobs.count
-    pendingJobs.removeAll()
+    removePendingJobs()
+    if !queuedCountsByPlacementId.isEmpty { placementRevision &+= 1 }
     queuedCountsByPlacementId.removeAll()
     totalJobsEnqueued = max(0, totalJobsEnqueued - removed)
     updateQueueCount()
@@ -226,11 +276,13 @@ final class ExportQueueCoordinator: ObservableObject {
     let previous = queueFingerprint
     currentTask?.cancel()
     currentTask = nil
-    pendingJobs.removeAll()
+    removePendingJobs()
+    if !queuedCountsByPlacementId.isEmpty { placementRevision &+= 1 }
     queuedCountsByPlacementId.removeAll()
     isProcessing = false
     isRunning = false
     isPaused = false
+    setActivePlacement(nil)
     queueCount = 0
     notifyQueueContentsChanged(since: previous)
   }
@@ -241,6 +293,7 @@ final class ExportQueueCoordinator: ObservableObject {
     let previous = queueFingerprint
     totalJobsEnqueued = 0
     totalJobsCompleted = 0
+    if !queuedCountsByPlacementId.isEmpty { placementRevision &+= 1 }
     queuedCountsByPlacementId.removeAll()
     notifyQueueContentsChanged(since: previous)
   }
@@ -278,6 +331,7 @@ final class ExportQueueCoordinator: ObservableObject {
     if isPaused {
       isProcessing = false
       isRunning = false
+      host?.clearCurrentJobIdentifiers(keepingPlacement: false)
       updateQueueCount()
       notifyQueueContentsChanged(since: previous)
       logger.info("Queue paused; not starting next job")
@@ -286,14 +340,17 @@ final class ExportQueueCoordinator: ObservableObject {
     guard !pendingJobs.isEmpty else {
       isProcessing = false
       isRunning = false
-      host?.clearCurrentJobIdentifiers()
+      host?.clearCurrentJobIdentifiers(keepingPlacement: false)
       updateQueueCount()
       notifyQueueContentsChanged(since: previous)
       logger.info("Export queue drained")
       host?.didDrainQueue()
       return
     }
-    let job = pendingJobs.removeFirst()
+    let job = jobStorage[jobHead]
+    jobHead += 1
+    if jobHead == jobStorage.count { removePendingJobs() }
+    placementRevision &+= 1
     let key = job.placement.id
     queuedCountsByPlacementId[key, default: 1] -= 1
     if queuedCountsByPlacementId[key, default: 0] <= 0 {
@@ -306,7 +363,7 @@ final class ExportQueueCoordinator: ObservableObject {
       await host?.performExport(job: job, generation: currentGen)
       await MainActor.run { [weak self] in
         guard let self, self.isCurrent(currentGen) else { return }
-        host?.clearCurrentJobIdentifiers()
+        host?.clearCurrentJobIdentifiers(keepingPlacement: true)
         self.totalJobsCompleted += 1
         self.processNext()
       }

@@ -50,7 +50,7 @@ final class ExportRecordStore {
     let year: Int
     let month: Int
   }
-  struct MonthCounters: Sendable {
+  struct MonthCounters: Sendable, Equatable {
     /// Per-variant, per-status occurrence count.
     var variantStatus: [ExportVariant: [ExportStatus: Int]] = [:]
     /// Records where both `.original` and `.edited` variants are `.done`.
@@ -94,6 +94,29 @@ final class ExportRecordStore {
     static let zero = MonthCounters()
   }
   @ObservationIgnored private(set) var monthCounters: [MonthKey: MonthCounters] = [:]
+
+  /// Main-actor snapshots isolate sidebar reads from unrelated months' publications.
+  @Observable
+  final class SidebarMonthState {
+    var counters = MonthCounters.zero
+  }
+  @ObservationIgnored private var sidebarMonths: [MonthKey: SidebarMonthState] = [:]
+
+  private func sidebarMonth(year: Int, month: Int) -> SidebarMonthState {
+    let key = MonthKey(year: year, month: month)
+    if let state = sidebarMonths[key] { return state }
+    let state = SidebarMonthState()
+    state.counters = monthCounters[key] ?? .zero
+    sidebarMonths[key] = state
+    return state
+  }
+
+  private func publishSidebarMonths() {
+    for (key, state) in sidebarMonths {
+      let next = monthCounters[key] ?? .zero
+      if state.counters != next { state.counters = next }
+    }
+  }
 
   /// A variant's folder: its month plus the subfolder it was written into.
   struct ClaimFolder: Hashable, Sendable {
@@ -881,16 +904,26 @@ final class ExportRecordStore {
     selection: ExportVersionSelection,
     livePhotosPaired: Bool
   ) -> MonthStatusSummary? {
-    trackRecords()
+    _ = sidebarMonth(year: year, month: month).counters
+    return sidebarSummaryUntracked(
+      year: year, month: month, totalCount: totalCount,
+      adjustedCount: adjustedCount, selection: selection, livePhotosPaired: livePhotosPaired)
+  }
+
+  private func sidebarSummaryUntracked(
+    year: Int, month: Int, totalCount: Int, adjustedCount: Int?,
+    selection: ExportVersionSelection, livePhotosPaired: Bool
+  ) -> MonthStatusSummary? {
+    let counters = monthCounters[MonthKey(year: year, month: month)] ?? .zero
     guard let adjustedCount else { return nil }
     let uneditedCount = max(0, totalCount - adjustedCount)
-    let origOnlyAtStem = recordCountOriginalDoneAtNaturalStem(year: year, month: month)
+    let origOnlyAtStem = counters.originalDoneAtNaturalStem
     let pairedIncomplete =
-      livePhotosPaired ? recordCountPairedVideoIncomplete(year: year, month: month) : 0
+      livePhotosPaired ? counters.pairedVideoIncomplete : 0
     switch selection {
     case .edited:
-      let editedDone = recordCountEditedDone(year: year, month: month)
-      let fallbackCovered = recordCountEditedFallback(year: year, month: month)
+      let editedDone = counters.variantStatus[.edited]?[.done] ?? 0
+      let fallbackCovered = counters.editedFallbackCovered
       let legacy = editedDone + min(origOnlyAtStem, uneditedCount) + fallbackCovered
       let exported = max(0, legacy - pairedIncomplete)
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
@@ -900,7 +933,7 @@ final class ExportRecordStore {
       // asset-aware `isExported(asset:selection:)` keeps re-queueing fallback
       // records under `.editedWithOriginals`. The sidebar must agree, or a
       // year that's actually 0% covered would advertise as 100%.
-      let bothDone = recordCountBothVariantsDone(year: year, month: month)
+      let bothDone = counters.bothVariantsDone
       let legacy = bothDone + min(origOnlyAtStem, uneditedCount)
       let exported = max(0, legacy - pairedIncomplete)
       return makeSummary(year: year, month: month, exported: exported, total: totalCount)
@@ -925,7 +958,7 @@ final class ExportRecordStore {
       if monthTotal == 0 { continue }
       let monthAdjusted = adjustedCountsByMonth[month].flatMap { $0 }
       guard
-        let summary = sidebarSummary(
+        let summary = sidebarSummaryUntracked(
           year: year, month: month, totalCount: monthTotal,
           adjustedCount: monthAdjusted, selection: selection,
           livePhotosPaired: livePhotosPaired)
@@ -1457,6 +1490,7 @@ final class ExportRecordStore {
     let assets = pendingTileAssets
     invalidatesAllTiles = false
     pendingTileAssets = []
+    publishSidebarMonths()
     mutationCounter &+= 1
     if allTiles {
       tileHistoryRevision &+= 1

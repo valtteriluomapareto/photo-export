@@ -16,6 +16,7 @@ import Testing
       let tick: RenderTick
       let counter: BodyInvalidationCounter
       var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
         let _ = counter.record("sidebar-barrier:\(tick.value)")
         Color.clear.frame(width: 1, height: 1)
       }
@@ -277,7 +278,10 @@ import Testing
         #expect(
           f.counter.count(for: key) == rows,
           "Per-asset progress re-rendered the month row: \(rows) → \(f.counter.count(for: key))")
-        progress.currentJobPlacement = .timeline(year: 2026, month: 9)
+        f.manager.setCurrentJob(
+          .init(
+            assetLocalIdentifier: "active",
+            placement: .timeline(year: 2026, month: 9), selection: .edited))
         #expect(await observe(in: f.window) { f.counter.count(for: key) > rows })
       } cleanup: {
         await f.close()
@@ -289,10 +293,11 @@ import Testing
       let f = Fixture(twoVisibleMonths: true)
       let gate = AsyncCheckpoint()
       try await withCleanup {
-        try #require(await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
-            && f.counter.renderedText["timeline-month:2026-8"] == ["2"]
-        })
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
+              && f.counter.renderedText["timeline-month:2026-8"] == ["2"]
+          })
         for task in f.counter.tasks { _ = await finished(task) }
         f.store.flushPendingNotifications()
         try await f.barrier()
@@ -309,29 +314,46 @@ import Testing
         f.writer.checkpoint = gate
         let unrelated = ObservationProbe { _ = f.manager.queuedCount(year: 2026, month: 8) }
         let before = f.counter.count(for: "timeline-month-body:2026-8")
-        f.manager.queueCoordinator.enqueue(ids.map {
-          .init(assetLocalIdentifier: $0, placement: .timeline(year: 2026, month: 9), selection: .edited)
-        })
-        try #require(await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["3 left"]
-        })
+        f.manager.queueCoordinator.enqueue(
+          ids.map {
+            .init(
+              assetLocalIdentifier: $0, placement: .timeline(year: 2026, month: 9),
+              selection: .edited)
+          })
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["3 left"]
+          })
         try await f.barrier()
         #expect(f.counter.count(for: "timeline-month-body:2026-8") - before == 0)
         #expect(unrelated.changeCount == 0)
+        let placement = ObservationProbe { _ = f.manager.progressState.currentJobPlacement }
         for step in 1...2 {
           let before = f.counter.count(for: "timeline-month-body:2026-8")
           let writes = unrelated.changeCount
-          if step == 1 { f.manager.queueCoordinator.processQueueIfNeeded() }
-          else { await gate.release() }
+          if step == 1 {
+            f.manager.queueCoordinator.processQueueIfNeeded()
+          } else {
+            await gate.release()
+          }
           try #require(await gate.waitForEnter(count: step))
-          try #require(await observe(in: f.window) {
-            f.counter.renderedText["timeline-month:2026-9"] == ["\(3 - step) left"]
-          })
+          try #require(
+            await observe(in: f.window) {
+              f.counter.renderedText["timeline-month:2026-9"] == ["\(3 - step) left"]
+            })
           f.store.flushPendingNotifications()
           try await f.barrier()
           #expect(f.counter.count(for: "timeline-month-body:2026-8") - before == 0)
           #expect(unrelated.changeCount - writes == 0)
+          #expect(placement.changeCount == 1)
         }
+        f.manager.pause()
+        await gate.release()
+        try #require(await observe(in: f.window) { !f.manager.isRunning })
+        try await f.barrier()
+        #expect(f.manager.currentJobPlacement == nil)
+        #expect(placement.changeCount == 2)
+        placement.stop()
         unrelated.stop()
       } cleanup: {
         let held = f.manager.currentTask
@@ -347,29 +369,35 @@ import Testing
     func recordPublicationOnlyInvalidatesChangedMonths() async throws {
       let f = Fixture(twoVisibleMonths: true)
       try await withCleanup {
-        try #require(await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
-            && f.counter.renderedText["timeline-month:2026-8"] == ["2"]
-        })
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["1/2"]
+              && f.counter.renderedText["timeline-month:2026-8"] == ["2"]
+          })
         for task in f.counter.tasks { _ = await finished(task) }
         f.store.flushPendingNotifications()
         try await f.barrier()
         let a = ObservationProbe {
-          _ = f.store.sidebarSummary(year: 2026, month: 9, totalCount: 2, adjustedCount: 0,
+          _ = f.store.sidebarSummary(
+            year: 2026, month: 9, totalCount: 2, adjustedCount: 0,
             selection: .edited, livePhotosPaired: false)
         }
         let b = ObservationProbe {
-          _ = f.store.sidebarSummary(year: 2026, month: 8, totalCount: 2, adjustedCount: 0,
+          _ = f.store.sidebarSummary(
+            year: 2026, month: 8, totalCount: 2, adjustedCount: 0,
             selection: .edited, livePhotosPaired: false)
         }
         let bodiesA = f.counter.count(for: "timeline-month-body:2026-9")
         let bodiesB = f.counter.count(for: "timeline-month-body:2026-8")
-        f.store.markVariantExported(assetId: "publication-a", variant: .original,
-          year: 2026, month: 9, relPath: "2026/09/", filename: "publication.jpg", exportedAt: f.clock.now())
+        f.store.markVariantExported(
+          assetId: "publication-a", variant: .original,
+          year: 2026, month: 9, relPath: "2026/09/", filename: "publication.jpg",
+          exportedAt: f.clock.now())
         f.store.flushPendingNotifications()
-        try #require(await observe(in: f.window) {
-          f.counter.renderedText["timeline-month:2026-9"] == ["complete"]
-        })
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-month:2026-9"] == ["complete"]
+          })
         try await f.barrier()
         #expect(a.changeCount == 1)
         #expect(b.changeCount == 0)
@@ -378,7 +406,9 @@ import Testing
         #expect(f.counter.count(for: "timeline-month-body:2026-8") - bodiesB == 0)
         a.stop()
         b.stop()
-      } cleanup: { await f.close() }
+      } cleanup: {
+        await f.close()
+      }
     }
 
     @Test(.timeLimit(.minutes(1)))

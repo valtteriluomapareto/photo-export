@@ -249,9 +249,6 @@ struct MonthRow: View {
   #endif
   @Environment(ExportManager.self) private var exportManager
   @Environment(ExportRecordStore.self) private var exportRecordStore
-  /// Reads the in-flight placement directly from its progress owner. The row separately
-  /// tracks the manager's version selection, Live Photo setting and queue-count query.
-  @Environment(ExportProgressState.self) private var progressState
 
   let year: Int
   let month: Int
@@ -264,17 +261,11 @@ struct MonthRow: View {
       year: year, month: month, totalCount: total, adjustedCount: adjusted,
       selection: selection,
       livePhotosPaired: exportManager.livePhotosPairedExport)
-    // `queuedCount(year:month:)` reads the queue coordinator's unpublished per-month counts.
-    // Its tracked contents counter updates the "N left" badge even when a first dequeue
-    // leaves the total queue depth unchanged.
-    let queued = exportManager.queuedCount(year: year, month: month)
-    // Only the row owning the currently-in-flight job spins. Other rows with queued work
-    // show just the "N left" text — a spinner on every queued row of a Year export reads
-    // as visual clutter (macOS Finder / Mail sidebars use a single global indicator plus
-    // quiet per-item status), and the global progress bar already advertises that work
-    // is happening.
-    let inFlight = progressState.currentJobPlacement?.timelineYearMonth
-    let isActive = inFlight?.year == year && inFlight?.month == month
+    let queue = exportManager.queueCoordinator.monthState(
+      placementId: ExportPlacement.timeline(year: year, month: month).id
+    ).snapshot
+    let queued = queue.queued
+    let isActive = queue.isActive
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("timeline-month-body:\(year)-\(month)")

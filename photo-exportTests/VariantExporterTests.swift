@@ -53,7 +53,7 @@ struct VariantExporterTests {
     func didDrainQueue() {}
     func queueContentsDidChange() {}
     func setCurrentJob(_ job: ExportManager.ExportJob) {}
-    func clearCurrentJobIdentifiers() {}
+    func clearCurrentJobIdentifiers(keepingPlacement: Bool) {}
   }
 
   // MARK: - Harness
