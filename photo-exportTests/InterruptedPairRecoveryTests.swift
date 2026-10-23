@@ -317,6 +317,69 @@ struct InterruptedPairRecoveryTests {
     }
   }
 
+  @Test(arguments: [false, true], [false, true])
+  func interruptedAdoptionRechecksClaimsAfterMaintenanceAdmission(
+    collection: Bool, companion: Bool
+  ) async throws {
+    let gate = Gate()
+    let maintenance = AsyncCheckpoint()
+    let io = RecordingDestinationIO(beforeLeaf: { if $0 == 3 { gate.holdOnce() } })
+    let fixture = try await makeFixture(
+      collection: collection, companion: companion, destinationIO: io)
+    let before = try Data(contentsOf: fixture.finalURL)
+    let admission =
+      collection
+      ? fixture.collections.mutationAdmission : fixture.timeline.mutationAdmission
+    var operation: Task<Void, Never>?
+    try await withCleanup {
+      fixture.start()
+      try #require(await gate.entered.waitForEnter(count: 1))
+      operation = admission.requestCheckpoint {
+        await maintenance.enter()
+        admission.installAfterMaintenance {
+          if collection {
+            fixture.collections.markVariantExported(
+              assetId: "other", placement: fixture.placement, variant: fixture.variant,
+              filename: fixture.filename, exportedAt: Date())
+          } else {
+            fixture.timeline.markVariantExported(
+              assetId: "other", variant: fixture.variant, year: 2025, month: 1,
+              relPath: fixture.placement.relativePath, filename: fixture.filename,
+              exportedAt: Date())
+          }
+        }
+      }
+      try #require(await maintenance.waitForEnter(count: 1))
+      gate.release()
+      try #require(
+        await eventually("interrupted completion seeks admission") {
+          admission.pendingWaiterCount > 0
+        })
+      #expect(fixture.files.timestampCalls.isEmpty)
+      await maintenance.releaseAll()
+      await operation?.value
+      await fixture.manager.waitForQueueDrained()
+      #expect(fixture.variants()[fixture.variant]?.status == .failed)
+      #expect(try Data(contentsOf: fixture.finalURL) == before)
+      #expect(fixture.files.timestampCalls.isEmpty)
+      #expect(fixture.writer.writeCalls.isEmpty)
+      #expect(fixture.files.moveCalls.isEmpty && fixture.files.copyCalls.isEmpty)
+      let foreign =
+        collection
+        ? fixture.collections.exportInfo(assetId: "other", placement: fixture.placement)?.variants[
+          fixture.variant]
+        : fixture.timeline.exportInfo(assetId: "other")?.variants[fixture.variant]
+      #expect(foreign?.status == .done && foreign?.filename == fixture.filename)
+      #expect(fixture.destination.opened == fixture.destination.closed)
+    } cleanup: {
+      gate.release()
+      await maintenance.releaseAll()
+      await operation?.value
+      await fixture.cleanup()
+      await gate.entered.releaseAll()
+    }
+  }
+
   @Test(arguments: [false, true], Mismatch.allCases)
   func unrelatedOrInvalidFilesAreNeverAdopted(collection: Bool, mismatch: Mismatch) async throws {
     let fixture = try await makeFixture(collection: collection, mismatch: mismatch)
