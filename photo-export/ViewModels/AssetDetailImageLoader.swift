@@ -34,17 +34,40 @@ final class AssetDetailImageLoader {
   /// task. UUID ownership still rejects overlapping requests for the same revision.
   func load(
     for assetId: String?, using service: any PhotoLibraryService,
-    isCurrent: @MainActor () -> Bool = { true }
+    pixelSize: CGSize = CGSize(width: 2560, height: 2560),
+    isCurrent: @escaping @MainActor () -> Bool = { true }
   ) async {
     guard !Task.isCancelled, isCurrent() else { return }
     let request = UUID()
     activeRequest = request
-    let retainedImage = state.assetId == assetId ? state.image : nil
+    var retainedImage = state.assetId == assetId ? state.image : nil
+    if retainedImage == nil, let assetId {
+      // Match the grid's decoded thumbnail bucket without starting another fetch.
+      let thumbnailSize = CGSize(width: 256, height: 256)
+      if let cached = service.cachedDecodedThumbnail(
+        for: assetId, quantizedSize: thumbnailSize, deliveryMode: .highQuality)
+        ?? service.cachedDecodedThumbnail(
+          for: assetId, quantizedSize: thumbnailSize, deliveryMode: .fast)
+      {
+        retainedImage = NSImage(cgImage: cached, size: .zero)
+      }
+    }
     state = State(assetId: assetId, image: retainedImage, isLoading: assetId != nil)
     guard let assetId else { return }
     Self.logger.debug("Preview start id: \(assetId, privacy: .public)")
     do {
-      let image = try await service.requestFullImage(for: assetId)
+      let cancelled = OSAllocatedUnfairLock(initialState: false)
+      let image = try await withTaskCancellationHandler {
+        try await service.requestPreview(for: assetId, pixelSize: pixelSize) {
+          [weak self] image in
+          guard let self, !cancelled.withLock({ $0 }), self.activeRequest == request,
+            isCurrent(), self.state.isLoading
+          else { return }
+          self.state = State(assetId: assetId, image: image, isLoading: true)
+        }
+      } onCancel: {
+        cancelled.withLock { $0 = true }
+      }
       guard activeRequest == request, isCurrent() else { return }
       guard !Task.isCancelled else {
         state = State(assetId: assetId)

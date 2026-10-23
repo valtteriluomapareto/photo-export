@@ -98,6 +98,12 @@ protocol PhotoLibraryService: AnyObject {
     for assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
   ) -> CGImage?
 
+  /// Bounded detail preview. A degraded image may arrive before the final result.
+  func requestPreview(
+    for assetId: String, pixelSize: CGSize,
+    onDegraded: @escaping @MainActor @Sendable (NSImage) -> Void
+  ) async throws -> NSImage
+
   func requestFullImage(for assetId: String) async throws -> NSImage
 
   func resources(for assetId: String) -> [ResourceDescriptor]
