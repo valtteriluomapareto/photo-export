@@ -58,7 +58,9 @@ final class ExportQueueCoordinator: ObservableObject {
       guard isRunning != oldValue else { return }
       if isRunning {
         runInterval = Self.signposter.beginInterval("ExportRun")
+        runWatchdog.begin()
       } else if let state = runInterval {
+        runWatchdog.end()
         Self.signposter.endInterval("ExportRun", state)
         runInterval = nil
       }
@@ -78,6 +80,7 @@ final class ExportQueueCoordinator: ObservableObject {
     subsystem: Logger.appSubsystem,
     category: "Export.Run")
   private var runInterval: OSSignpostIntervalState?
+  private let runWatchdog: ExportRunWatchdog
 
   // MARK: - Cooperative cancellation
 
@@ -149,8 +152,9 @@ final class ExportQueueCoordinator: ObservableObject {
   private let logger = Logger.app(.exportQueueCoordinator)
   private weak var host: Host?
 
-  init(host: Host) {
+  init(host: Host, watchdogEnabled: Bool = false) {
     self.host = host
+    self.runWatchdog = ExportRunWatchdog(enabled: watchdogEnabled)
   }
 
   // MARK: - Pause / resume

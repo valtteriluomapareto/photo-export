@@ -650,7 +650,11 @@ final class ExportManager {
     // and ImportCoordinator. Both reach the cancellation seam (generation /
     // isCurrent / throwIfCancelledOrStale) through this reference rather than
     // through their Host protocols.
-    self.queueCoordinator = ExportQueueCoordinator(host: self)
+    self.queueCoordinator = ExportQueueCoordinator(
+      host: self,
+      watchdogEnabled: ExportRunWatchdog.isEnabled(
+        arguments: ProcessInfo.processInfo.arguments,
+        preferenceEnabled: userDefaults.bool(forKey: "exportWatchdogEnabled")))
     self.variantExporter = VariantExporter(
       host: self,
       queueCoordinator: self.queueCoordinator,
