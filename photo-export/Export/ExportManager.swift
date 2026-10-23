@@ -1517,7 +1517,13 @@ final class ExportManager {
     activeRunBookkeeping?.skippedCount += skippedCount
     // Placement metadata is needed only when writing records. Avoid an unacknowledged
     // metadata append on the empty-queue completion path; real jobs flush it before IO.
-    if !newJobs.isEmpty { collectionExportRecordStore.upsertPlacement(placement) }
+    if !newJobs.isEmpty {
+      try await collectionExportRecordStore.withMutationAdmission {
+        try throwIfCancelledOrStale(gen)
+        collectionExportRecordStore.upsertPlacement(placement)
+      }
+      try throwIfCancelledOrStale(gen)
+    }
     queueCoordinator.enqueue(newJobs)
     try throwIfCancelledOrStale(gen)
     logger.info(
@@ -1873,6 +1879,8 @@ final class ExportManager {
     jobTotals: (enqueued: Int, completed: Int)? = nil,
     stoppedBy: AutoSyncFailureCategory? = nil
   ) {
+    exportRecordStore.requestHistoryCheckpoint()
+    collectionExportRecordStore.requestHistoryCheckpoint()
     flushRecordNotifications()
     guard let context = activeRunContext, let bookkeeping = activeRunBookkeeping else {
       return
@@ -2044,7 +2052,7 @@ final class ExportManager {
       guard let descriptor = photoLibraryService.fetchAssetDescriptor(for: job.assetLocalIdentifier)
       else {
         try throwIfCancelledOrStale(gen)
-        recordVariantFailed(
+        await recordVariantFailed(
           assetId: job.assetLocalIdentifier, placement: job.placement, variant: .original,
           sentinelMessage: "Asset not found", reason: nil, category: .assetMissing, at: Date())
         logger.error(
@@ -2297,7 +2305,7 @@ final class ExportManager {
           logger.error(
             "Variant \(variant.rawValue, privacy: .public) failed for id: \(descriptor.id, privacy: .public) error: \(String(describing: error), privacy: .public)"
           )
-          let failure = recordVariantFailed(
+          let failure = await recordVariantFailed(
             assetId: descriptor.id, placement: job.placement, variant: variant,
             error: error, at: Date())
           inFlight = nil
@@ -2342,7 +2350,7 @@ final class ExportManager {
       // byte production; attribute those to the intended required variant rather
       // than inventing original history for an edited-only job.
       let failedVariant = inFlight?.variant ?? intendedVariant
-      let failure = recordVariantFailed(
+      let failure = await recordVariantFailed(
         assetId: job.assetLocalIdentifier, placement: job.placement, variant: failedVariant,
         error: error, at: Date())
       if failure.category.stopsCurrentExportRun { return failure }
@@ -2428,7 +2436,7 @@ final class ExportManager {
       // recognise the asset as covered without relying on the ambiguous
       // `_orig` filename shape. Overwrites the generic
       // `editedResourceUnavailableMessage` the variant loop recorded.
-      recordVariantFailed(
+      await recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .edited,
         sentinelMessage: ExportVariantRecovery.editedUnavailableOriginalBackedUpMessage,
         reason: .editedUnavailableOriginalBackedUp,
@@ -2452,7 +2460,7 @@ final class ExportManager {
       // rewrites it to `.failed`. Record the failure here so the
       // store reflects what actually happened. The asset is still re-queued
       // on the next run because `.original` is now `.failed` (not `.done`).
-      let failure = recordVariantFailed(
+      let failure = await recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: .original,
         error: error, at: Date())
       inFlight = nil
@@ -2513,6 +2521,8 @@ final class ExportManager {
   func performExport(job: ExportJob, generation gen: Int) async {
     let failureSignalsBefore = manualRunFeedback?.failureSignals ?? 0
     do {
+      await recordStoreRouter.waitForCancellationCleanup()
+      try throwIfCancelledOrStale(gen)
       await variantExporter.waitForFinalCommit(onWait: finalCommitWaitObserver)
       try throwIfCancelledOrStale(gen)
       try await recordStoreRouter.flush(placement: job.placement)
@@ -2677,22 +2687,28 @@ final class ExportManager {
   private func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     failure: ExportFailureSignal, reason: ExportVariantReason? = nil, at date: Date
-  ) {
-    recordStoreRouter.markVariantFailed(
-      assetId: assetId, placement: placement, variant: variant,
-      error: failure.localizedDescription, reason: reason, at: date)
-    if manualRunFeedback?.generation == generation { manualRunFeedback?.failureSignals += 1 }
-    activeRunBookkeeping?.failedCount += 1
-    activeRunBookkeeping?.failures.append(
-      ExportRunFailureDetail(
-        assetId: assetId,
-        placement: placement,
-        variant: variant,
-        category: failure.category,
-        errorSignature: failure.errorSignature,
-        localizedDescription: failure.localizedDescription,
-        failedAt: date
-      ))
+  ) async {
+    let owner = generation
+    do {
+      try await recordStoreRouter.withMutationAdmission(placement: placement) {
+        try throwIfCancelledOrStale(owner)
+        recordStoreRouter.markVariantFailed(
+          assetId: assetId, placement: placement, variant: variant,
+          error: failure.localizedDescription, reason: reason, at: date)
+        if manualRunFeedback?.generation == generation { manualRunFeedback?.failureSignals += 1 }
+        activeRunBookkeeping?.failedCount += 1
+        activeRunBookkeeping?.failures.append(
+          ExportRunFailureDetail(
+            assetId: assetId,
+            placement: placement,
+            variant: variant,
+            category: failure.category,
+            errorSignature: failure.errorSignature,
+            localizedDescription: failure.localizedDescription,
+            failedAt: date
+          ))
+      }
+    } catch { return }
   }
 
   /// Backwards-compatible overload — call sites that already have an
@@ -2702,9 +2718,9 @@ final class ExportManager {
   private func recordVariantFailed(
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     error: Error, at date: Date
-  ) -> ExportFailureSignal {
+  ) async -> ExportFailureSignal {
     let failure = AutoSyncFailureCategory.classify(error)
-    recordVariantFailed(
+    await recordVariantFailed(
       assetId: assetId, placement: placement, variant: variant, failure: failure,
       reason: error is EditedResourceUnavailableError ? .editedResourceUnavailable : nil, at: date)
     return failure
@@ -2723,8 +2739,8 @@ final class ExportManager {
     assetId: String, placement: ExportPlacement, variant: ExportVariant,
     sentinelMessage: String, reason: ExportVariantReason?, category: AutoSyncFailureCategory,
     at date: Date
-  ) {
-    recordVariantFailed(
+  ) async {
+    await recordVariantFailed(
       assetId: assetId, placement: placement, variant: variant,
       failure: AutoSyncFailureCategory.sentinel(
         category: category, signature: reason?.legacySignature ?? sentinelMessage,

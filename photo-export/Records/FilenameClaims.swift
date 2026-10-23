@@ -104,3 +104,4 @@ struct FilenameClaimSnapshot: Sendable {
     return (counts[key] ?? 0) > (excluded[key] ?? 0)
   }
 }
+extension FilenameClaims: Sendable where Folder: Sendable {}

@@ -253,15 +253,12 @@ Both stores follow the same lifecycle on their own files: `export-records.json` 
 `collection-records.jsonl` for the collection store.
 
 1. On first run, the store creates its directory.
-2. On launch and on every destination change, the store loads its snapshot (if present), then applies each log line in order to reconstruct the latest state. The app does this off the main actor: the files are read on the store's IO queue, after any writes still queued for the previous destination, and decoded in a detached task. The store is `.loading` until the result is installed in one main-actor turn; meanwhile its records read as empty and it accepts no mutations. A load that a newer configure replaced is discarded. The blocking `configure(for:)` runs the same steps on the main actor without publishing `.loading` (tests and the read-failure Retry use it; clearing the destination reads nothing).
+2. On launch and on every destination change, the store loads its snapshot (if present), then applies each log line in order to reconstruct the latest state. The app does this off the main actor: the files are read on the store's IO queue, after any writes still queued for the previous destination, and decoded in a detached task, together with the counters and filename claims installed for that history epoch. The store is `.loading` until the result is installed in one main-actor turn; meanwhile its records read as empty and it accepts no mutations. A load that a newer configure replaced is discarded. The compatibility `configure(for:)` prepares on the IO worker without publishing `.loading`; production configuration and Retry use the asynchronous path. A transition waits for previous maintenance and writes before replacing their owner.
 3. On updates, the store:
-   - Applies the mutation to in-memory state immediately
+   - Waits for store-owned maintenance admission, then rechecks destination and history ownership before applying one synchronous, bounded batch to memory
    - Appends a JSON line to its log (`export-records.jsonl` or `collection-records.jsonl`)
-   - Compacts every 1,000 mutations:
-     - Writes a full snapshot to a temp file
-     - Atomically replaces the snapshot (`export-records.json` or `collection-records.json`)
-     - Truncates the log
-4. On quit, any pending compaction can run; otherwise the log is replayed at next launch.
+   - Requests a checkpoint at idle/terminal boundaries, or before the conservative byte/operation replay estimate reaches one second. Admission closes before the history is captured, earlier writes drain, and the IO worker encodes, synchronizes and atomically replaces the snapshot before truncating the log. Admission reopens after physical IO completes, including failure or cancellation. Appends never capture whole-history snapshots.
+4. The durable log is replayed at next launch if no successful checkpoint truncated it. Replay cost is calibrated off main, with conservative operation/byte fallbacks; the estimate is an admission policy, not a wall-clock guarantee.
 
 `drainSynchronously()` on the JSONL writer and both record stores blocks its caller
 until queued IO finishes and delivers any pending persistence failure. It must never

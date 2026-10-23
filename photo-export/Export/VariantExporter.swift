@@ -47,7 +47,7 @@ final class VariantExporter {
     func recordVariantFailed(
       assetId: String, placement: ExportPlacement, variant: ExportVariant,
       sentinelMessage: String, reason: ExportVariantReason?, category: AutoSyncFailureCategory,
-      at: Date)
+      at: Date) async
   }
 
   // MARK: - Dependencies
@@ -240,7 +240,7 @@ final class VariantExporter {
         errMsg = ExportVariantRecovery.editedResourceUnavailableMessage
         reason = .editedResourceUnavailable
       }
-      host?.recordVariantFailed(
+      await host?.recordVariantFailed(
         assetId: descriptor.id, placement: job.placement, variant: variant,
         sentinelMessage: errMsg, reason: reason, category: .resourceMissing, at: Date())
       logger.error(
@@ -308,13 +308,16 @@ final class VariantExporter {
       try checkOwnership(context, placement: job.placement)
       host?.setCurrentJobVariant(variant)
       try checkOwnership(context, placement: job.placement)
-      try requireUnclaimed(
-        finalURL.lastPathComponent, slot: slot, job: job,
-        subfolder: subfolder, variant: variant, descriptor: descriptor)
       inFlight = (assetId: descriptor.id, variant: variant)
-      recordStoreRouter.markVariantInProgress(
-        assetId: descriptor.id, placement: job.placement, variant: variant,
-        relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder)
+      try await recordStoreRouter.withMutationAdmission(placement: job.placement) {
+        try checkOwnership(context, placement: job.placement)
+        try requireUnclaimed(
+          finalURL.lastPathComponent, slot: slot, job: job,
+          subfolder: subfolder, variant: variant, descriptor: descriptor)
+        recordStoreRouter.markVariantInProgress(
+          assetId: descriptor.id, placement: job.placement, variant: variant,
+          relPath: relPath, filename: finalURL.lastPathComponent, subfolder: subfolder)
+      }
       try checkOwnership(context, placement: job.placement)
 
       // Reuse-source copy path: if `(asset, variant)` is already exported under another
@@ -623,20 +626,27 @@ final class VariantExporter {
         host?.setCurrentAssetFilename(commit.recordedName)
         try checkOwnership(context, placement: job.placement)
       }
-      if isClaimed(
-        commit.recordedName, job: job, subfolder: subfolder,
-        variant: variant, of: descriptor)
-      {
-        collision = FileIOService.destinationExistsError()
-        guard case .suffix = slot.policy else { throw collision }
-        continue
-      }
-      if commit.recordedName != markedName {
-        markedName = commit.recordedName
-        recordStoreRouter.markVariantInProgress(
-          assetId: descriptor.id, placement: job.placement, variant: variant,
-          relPath: relPath, filename: markedName, subfolder: subfolder)
+      let accepted = try await recordStoreRouter.withMutationAdmission(placement: job.placement) {
         try checkOwnership(context, placement: job.placement)
+        if isClaimed(
+          commit.recordedName, job: job, subfolder: subfolder,
+          variant: variant, of: descriptor)
+        {
+          guard case .suffix = slot.policy else { throw FileIOService.destinationExistsError() }
+          return false
+        }
+        if commit.recordedName != markedName {
+          markedName = commit.recordedName
+          recordStoreRouter.markVariantInProgress(
+            assetId: descriptor.id, placement: job.placement, variant: variant,
+            relPath: relPath, filename: markedName, subfolder: subfolder)
+          try checkOwnership(context, placement: job.placement)
+        }
+        return true
+      }
+      guard accepted else {
+        collision = FileIOService.destinationExistsError()
+        continue
       }
       switch try await commitFile(
         commit, descriptor: descriptor, job: job, variant: variant,

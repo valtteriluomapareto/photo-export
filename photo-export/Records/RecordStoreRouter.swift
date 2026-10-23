@@ -169,6 +169,46 @@ final class RecordStoreRouter {
         == .done
   }
 
+  func withMutationAdmission<T>(placement: ExportPlacement, _ body: () throws -> T) async throws
+    -> T
+  {
+    switch placement.kind {
+    case .timeline: return try await timelineStore.withMutationAdmission(body)
+    case .favorites, .album, .sharedAlbum:
+      return try await collectionStore.withMutationAdmission(body)
+    }
+  }
+
+  func waitForCancellationCleanup() async {
+    await timelineStore.waitForCancellationCleanup()
+    await collectionStore.waitForCancellationCleanup()
+  }
+
+  static func withImportMutationAdmission<T>(
+    timeline: ExportRecordStore, collections: CollectionExportRecordStore?, _ body: () throws -> T
+  ) async throws -> T {
+    let timelineTicket = timeline.mutationTicket
+    let collectionTicket = collections?.mutationTicket
+    while true {
+      try await timeline.prepareForMutation()
+      if let collections { try await collections.prepareForMutation() }
+      guard timeline.mutationTicket == timelineTicket, timeline.state == .ready,
+        collections?.mutationTicket == collectionTicket,
+        collections == nil || collections?.state == .ready
+      else { throw CancellationError() }
+      guard !timeline.mutationAdmission.isClosed,
+        collections?.mutationAdmission.isClosed != true
+      else { continue }
+      let result = try timeline.mutationAdmission.perform {
+        if let collections { return try collections.mutationAdmission.perform(body) }
+        return try body()
+      }
+      timeline.requestCheckpointIfPressured()
+      collections?.requestCheckpointIfPressured()
+      return result
+    }
+  }
+
   // MARK: - Writes
 
   func markVariantInProgress(
@@ -237,9 +277,9 @@ final class RecordStoreRouter {
     guard current[variant]?.status == .inProgress else { return }
     switch placement.kind {
     case .timeline:
-      timelineStore.removeVariant(assetId: assetId, variant: variant)
+      timelineStore.removeInProgressAfterAdmission(assetId: assetId, variant: variant)
     case .favorites, .album, .sharedAlbum:
-      collectionStore.removeVariant(
+      collectionStore.removeInProgressAfterAdmission(
         assetId: assetId, placement: placement, variant: variant)
     }
   }
