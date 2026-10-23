@@ -373,7 +373,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func restoredManagerReusesPersistedStableIdUnderDriftedFingerprint() throws {
+  func restoredManagerReusesPersistedStableIdUnderDriftedFingerprint() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -392,6 +392,7 @@ struct StableDestinationIdentityTests {
     let restored = ExportDestinationManager(
       userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey, stableIdDefaultsKey: stableKey,
       fingerprintProvider: { _ in self.lowConfidence("/Volumes/mount-B/backup") })
+    await restored.waitForValidation()
 
     #expect(restored.destinationId == seeded)  // reused, not re-derived from the drifted fp
   }

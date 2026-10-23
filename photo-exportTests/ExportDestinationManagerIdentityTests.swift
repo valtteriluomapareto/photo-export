@@ -109,7 +109,7 @@ struct ExportDestinationManagerIdentityTests {
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner returns true (per Apple's docs) so this runs there."
     ))
-  func destinationIdSurvivesBookmarkRefresh() throws {
+  func destinationIdSurvivesBookmarkRefresh() async throws {
     let dir = TestScratch.directory("DestId-BookmarkRefresh")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -132,6 +132,7 @@ struct ExportDestinationManagerIdentityTests {
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey
     )
+    await restored.waitForValidation()
     let secondId = restored.destinationId
 
     #expect(firstId != nil)
