@@ -35,9 +35,12 @@ class ExportSeamStressSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / 'Snapshot.swift').write_text('func other() {}')
-            with self.assertRaises(ValueError):
-                stress.select([('Snapshot.swift', 'gate',
-                    'func ExportQueueStateSnapshotTests.missing')], root)
+            with self.assertRaisesRegex(ValueError, 'Cannot derive the test selector'):
+                stress.select([
+                    ('Seam.swift', 'gate', 'struct AutoSyncSeamCharacterizationTests'),
+                    ('Parity.swift', 'gate', 'struct PublisherParityTests'),
+                    ('Snapshot.swift', 'gate', 'func ExportQueueStateSnapshotTests.missing'),
+                ], root)
 
     def test_real_manifest_selection_has_only_required_gate_families(self):
         root = SCRIPT.parents[2]

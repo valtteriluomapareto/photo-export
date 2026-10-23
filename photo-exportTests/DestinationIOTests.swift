@@ -42,6 +42,7 @@ struct DestinationIOTests {
     await held.value
     await pending.value
     #expect(order.value == [1, 2, 3])
+    #expect(first.workerChecks.value.allSatisfy { $0 })
   }
 
   @Test(arguments: [false, true])
@@ -128,7 +129,8 @@ struct DestinationIOTests {
     #expect(io.submissions.value == 7)
     #expect(io.workerChecks.value.allSatisfy { $0 })
   }
-  @Test func cancelledCompareClosesHandlesAfterTheHeldReadFinishes() async throws {
+  @Test(arguments: [false, true])
+  func cancelledCompareClosesHandlesAfterPhysicalWork(holdClose: Bool) async throws {
     let root = TestScratch.directory("CancelledDestinationRead")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -137,15 +139,16 @@ struct DestinationIOTests {
     try Data([1, 2, 3, 4]).write(to: stage)
     try Data([1, 2, 3, 4]).write(to: candidate)
     let gate = Gate()
-    let io = RecordingDestinationIO(beforeLeaf: { number in if number == 4 { gate.hold() } })
+    // Open pair, eight one-byte reads, then one physical close of the pair.
+    let io = RecordingDestinationIO(beforeLeaf: { number in
+      if number == (holdClose ? 10 : 2) { gate.hold() }
+    })
     let files = FakeFileSystem()
     let returned = LockedBox(false)
     let task = Task {
       defer { returned.mutate { $0 = true } }
-      return try await FinalNamePlanner(fileSystem: files, edgeChunkSize: 1).plan(
-        slot: .init(
-          directory: root, filename: "FILE.JPG", policy: .suffix(base: "FILE", ext: "JPG")),
-        stagedURL: stage, destinationIO: io, isClaimed: { _ in false }, shouldStop: { false })
+      return try await FinalNamePlanner(fileSystem: files, edgeChunkSize: 1, middleChunkSize: 1)
+        .contentsEqual(stage, candidate, size: 4, destinationIO: io, shouldStop: { false })
     }
     defer { gate.release() }
     try #require(await gate.entered.waitForEnter(count: 1))
@@ -156,6 +159,7 @@ struct DestinationIOTests {
     #expect(files.readCloses.isEmpty)
     gate.release()
     await #expect(throws: CancellationError.self) { try await task.value }
+    await io.run {}
     #expect(files.readCloses.count == 2)
     #expect(Set(files.readCloses) == [stage, candidate])
     #expect(io.workerChecks.value.allSatisfy { $0 })
@@ -222,7 +226,9 @@ struct DestinationIOTests {
       }
     }
     func admit(_ id: String) {
-      let asset = TestAssetFactory.makeAsset(id: id)
+      let asset = TestAssetFactory.makeAsset(
+        id: id,
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15)))
       h.photoLib.assetsByYearMonth["2025-4"] = [asset]
       h.photoLib.resourcesByAssetId[id] = [
         .init(type: .photo, originalFilename: "\(id).JPG", fileSize: 12)
@@ -267,7 +273,9 @@ struct DestinationIOTests {
     for (index, id) in ["A", "B", "A"].enumerated() {
       h.store.configure(for: id)
       h.collectionStore.configure(for: id)
-      let asset = TestAssetFactory.makeAsset(id: "asset-\(index)")
+      let asset = TestAssetFactory.makeAsset(
+        id: "asset-\(index)",
+        creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15)))
       h.photoLib.assetsByYearMonth["2025-4"] = [asset]
       h.photoLib.resourcesByAssetId[asset.id] = [
         .init(type: .photo, originalFilename: "FILE\(index).JPG", fileSize: 12)
