@@ -41,11 +41,13 @@ struct RecordStoreMaintenanceTests {
 
   private final class Log: JSONLRecordLogIO, @unchecked Sendable {
     let writes = LockedBox(0)
+    let failWrites = LockedBox(false)
     private let real = ProductionJSONLRecordLogIO()
     func readIfPresent(at url: URL) throws -> Data? { try real.readIfPresent(at: url) }
     func openForAppending(at url: URL) throws -> FileHandle { try real.openForAppending(at: url) }
     func write(_ data: Data, to handle: FileHandle) throws {
       writes.mutate { $0 += 1 }
+      if failWrites.value { throw CocoaError(.fileWriteOutOfSpace) }
       try real.write(data, to: handle)
     }
     func synchronize(_ handle: FileHandle) throws { try real.synchronize(handle) }
@@ -514,6 +516,84 @@ struct RecordStoreMaintenanceTests {
     } catch { #expect(fail) }
     #expect(released.value)
     try FileManager.default.removeItem(at: root)
+  }
+
+  @Test(arguments: [false, true], [false, true])
+  func retainedPreparationKeepsMainActorResponsiveAndRejectsSupersededHistory(
+    collection: Bool, supersede: Bool
+  ) async throws {
+    let f = Fixture(collection: collection)
+    f.log.failWrites.mutate { $0 = true }
+    do {
+      try await f.seed()
+      Issue.record("Expected retained write failure")
+    } catch {}
+    f.log.failWrites.mutate { $0 = false }
+    if collection {
+      f.collections.beginConfigure(for: "B")
+      await f.collections.waitUntilSettled()
+    } else {
+      f.timeline.beginConfigure(for: "B")
+      await f.timeline.waitUntilSettled()
+    }
+    let preparation = AsyncCheckpoint()
+    let entered = LockedBox(false)
+    let onMain = LockedBox(false)
+    let checkpoint: @Sendable () async -> Void = {
+      onMain.mutate { $0 = Thread.isMainThread }
+      entered.mutate { $0 = true }
+      await preparation.enter()
+    }
+    if collection {
+      f.collections.preparationCheckpoint = checkpoint
+    } else {
+      f.timeline.preparationCheckpoint = checkpoint
+    }
+    try await withCleanup {
+      if collection {
+        f.collections.beginConfigure(for: "A")
+      } else {
+        f.timeline.beginConfigure(for: "A")
+      }
+      try #require(
+        await eventually("retained preparation starts or settles") {
+          entered.value || (collection ? f.collections.state : f.timeline.state) != .loading
+        })
+      try #require(entered.value, "Retained history must use suspended asynchronous preparation")
+      #expect(!onMain.value)
+      #expect((collection ? f.collections.state : f.timeline.state) == .loading)
+      #expect(!f.has("seed"))
+      let heartbeat = Task { @MainActor in true }
+      #expect(await finished(heartbeat))
+      if supersede {
+        if collection {
+          f.collections.beginConfigure(for: "B")
+        } else {
+          f.timeline.beginConfigure(for: "B")
+        }
+      }
+      await preparation.releaseAll()
+      if collection {
+        await f.collections.waitUntilSettled()
+      } else {
+        await f.timeline.waitUntilSettled()
+      }
+      #expect(f.has("seed") == !supersede)
+      #expect(
+        (collection ? f.collections.claimsEpoch : f.timeline.claimsEpoch)
+          == (collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch))
+      #expect(
+        (collection ? f.collections.state : f.timeline.state)
+          == (supersede ? .ready : .persistenceFailed))
+    } cleanup: {
+      await preparation.releaseAll()
+      if collection {
+        await f.collections.waitUntilSettled()
+      } else {
+        await f.timeline.waitUntilSettled()
+      }
+      f.close()
+    }
   }
 
   @Test func replayPressureUsesWorkUnitsRatherThanElapsedTestTime() {

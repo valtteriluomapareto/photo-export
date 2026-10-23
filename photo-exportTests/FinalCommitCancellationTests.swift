@@ -606,8 +606,8 @@ struct FinalCommitCancellationTests {
       io.arm()
       f.gate.release()
       await io.gate.entered.waitForEnter(count: 1)
-      // No MainActor suspension between release and reconfiguration: the parked
-      // writer may finish physically, but its acknowledgement cannot resume yet.
+      // The parked append entered before this round trip; the owner-level test
+      // separately holds acknowledgement until the newer history has been installed.
       io.gate.release()
       await f.select("A")
       try await f.sentinel("newer-A")
