@@ -81,8 +81,20 @@ the user explicitly requests a different flow. It covers the issue plan, the thr
 reviewer roles, tests before production changes, the same reviewers' implementation
 review, and merging only after CI passes for the current head. That workflow authorizes
 the merge; do not ask for another confirmation unless an applicable approval rule
-requires it. If reviewer agents are unavailable, report that limitation instead of
-presenting self-review as the requested three-agent review.
+requires it.
+
+A size-S PR whose sole purpose is performance, with behavior otherwise unchanged,
+may use one Pragmatic Developer reviewer if count tests and existing regression gates
+guard it and it changes no regression gate, existing parity row, persisted format,
+never-overwrite rule, or filename-claim rule. That reviewer checks whether it works,
+whether the gates and stated budgets pass, and whether it adds unnecessary complexity
+or scope. The issue's recorded decisions serve as the plan; no separate plan review
+is needed. Meaningful tests before production changes, resolved findings, recorded
+review outcomes, and current-head green CI still apply. Explicit issue-level reviewer
+or plan-first requirements take precedence. All other PRs retain the three-role flow.
+
+If reviewer agents are unavailable, report that limitation instead of presenting
+self-review as the requested independent review.
 
 For releases, follow the [release process](docs/project/release-process.md) and its
 candidate Photos validation requirements before creating and pushing a tag.
