@@ -146,6 +146,7 @@ struct ExportPreparationTests {
     let manager: ExportDestinationManager
     var opened: [URL] = []
     var closed: [URL] = []
+    var validationWaits = 0
     init(_ manager: ExportDestinationManager) { self.manager = manager }
     var selectedFolderURL: URL? { manager.selectedFolderURL }
     var canExportNow: Bool { manager.canExportNow }
@@ -155,6 +156,10 @@ struct ExportPreparationTests {
       return selectedFolderURL
     }
     func endScopedAccess(for url: URL) { closed.append(url) }
+    func waitForValidation() async {
+      validationWaits += 1
+      await manager.waitForValidation()
+    }
     func resetDirectoryResolution() { manager.resetDirectoryResolution() }
     func prepareDirectoryResolution(generation: Int) {
       manager.prepareDirectoryResolution(generation: generation)
@@ -182,12 +187,16 @@ struct ExportPreparationTests {
     let collections: CollectionExportRecordStore
     let destination: ScratchDestination
     let manager: ExportManager
-    init(io: any DestinationIOExecuting) throws {
+    init(
+      io: any DestinationIOExecuting,
+      validationProbe: any DestinationValidationProbing = ProductionDestinationValidationProbe()
+    ) throws {
       let first = root.appendingPathComponent("A")
       try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
       let realDestination = ExportDestinationManager(
         skipRestore: true, userDefaults: TestScratch.defaults("CapturedPreparationDestination"),
-        fileSystem: files)
+        validationScopeAcquirer: { _ in true }, validationScopeReleaser: { _ in },
+        fileSystem: files, validationProbe: validationProbe)
       realDestination.setSelectedFolderForTesting(first)
       destination = ScratchDestination(realDestination)
       timeline = ExportRecordStore(baseDirectoryURL: recordsRoot)
@@ -213,6 +222,49 @@ struct ExportPreparationTests {
       try? FileManager.default.removeItem(at: root)
       try? FileManager.default.removeItem(at: recordsRoot)
     }
+  }
+
+  private final class HeldValidation: DestinationValidationProbing {
+    let gate = LeafGate()
+    func inspect(_ url: URL) -> DestinationValidationResult {
+      gate.hold()
+      return DestinationValidationResult(
+        isAvailable: true, isWritable: true, status: .ready,
+        fingerprint: .makeLow(
+          volumeRootPath: nil,
+          relativePathFromVolumeRoot: url.path, standardizedPath: url.path))
+    }
+  }
+
+  @Test func queuedJobWaitsForCurrentValidationWithoutReportingDestinationFailure() async throws {
+    let probe = HeldValidation()
+    let f = try PreparationFixture(io: RecordingDestinationIO(), validationProbe: probe)
+    defer {
+      probe.gate.release()
+      f.cleanup()
+    }
+    f.manager.pause()
+    f.manager.startExportMonth(year: 2025, month: 4)
+    try #require(await eventually("job queued behind pause") { f.manager.pendingJobs.count == 1 })
+    let identity = f.destination.manager.identity
+    f.destination.manager.revalidate()
+    try #require(await probe.gate.entered.waitForEnter(count: 1))
+    #expect(f.destination.manager.isAvailable)
+    #expect(f.destination.manager.identity == identity)
+    #expect(!f.destination.manager.canExportNow)
+    f.manager.resume()
+    try #require(
+      await eventually("queued job reached validation") {
+        f.destination.validationWaits > 0 || !f.manager.isProcessing
+      })
+    #expect(f.destination.validationWaits == 1)
+    #expect(f.writer.writeCalls.isEmpty)
+    #expect(f.files.calls.isEmpty)
+    #expect(f.destination.opened.isEmpty)
+    probe.gate.release()
+    await f.manager.waitForQueueDrained()
+    #expect(f.timeline.exportInfo(assetId: "prepare")?.variants[.original]?.status == .done)
+    #expect(f.destination.opened == f.destination.closed)
   }
 
   @Test func preparationFilesystemCallsUseCapturedWorker() async throws {
