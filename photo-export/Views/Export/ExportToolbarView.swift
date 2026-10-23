@@ -128,6 +128,7 @@ struct ExportToolbarView: ToolbarContent {
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("export-toolbar-actions")
       bodyCounter?.recordText([exportHelp], for: "toolbar-export-help")
+      bodyCounter?.recordAction("toolbar-export", action: handlePrimaryAction)
     #endif
     // Internal spacing 12pt rather than 8pt — closer to macOS's default
     // between-button spacing in system toolbars (Mail/Finder/Notes). 8pt

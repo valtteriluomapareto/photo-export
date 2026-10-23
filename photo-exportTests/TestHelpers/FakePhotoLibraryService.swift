@@ -328,8 +328,11 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     }
   }
 
+  var countOverride: (@MainActor (PhotoFetchScope) async throws -> Int)?
+
   nonisolated func countAssets(in scope: PhotoFetchScope) async throws -> Int {
-    await MainActor.run { self.cannedAssets(in: scope).count }
+    if let override = await countOverride { return try await override(scope) }
+    return await MainActor.run { self.cannedAssets(in: scope).count }
   }
 
   /// Phase 3 cache. Tests can read `collectionCountCache` to assert hit/miss behavior.

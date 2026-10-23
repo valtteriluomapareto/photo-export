@@ -146,6 +146,9 @@ struct CollectionsSidebarView: View {
     #if DEBUG
       // swiftlint:disable:next redundant_discardable_let
       let _ = bodyCounter?.record("collections-sidebar")
+      // swiftlint:disable:next redundant_discardable_let
+      let _ = bodyCounter?.recordAction(
+        "sidebar-export-selection", action: runCurrentCollectionsMultiSelectExport)
     #endif
     List(selection: collectionSelection) {
       Section("Favorites") {

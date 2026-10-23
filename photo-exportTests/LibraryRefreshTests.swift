@@ -105,6 +105,33 @@ struct LibraryRefreshTests {
     }
   }
 
+  @Test(arguments: [false, true])
+  func authoritativeTreeRejectsObsoleteSourceAndHonorsCancellation(cancel: Bool) async throws {
+    let service = FakePhotoLibraryService()
+    let library = PhotoLibraryManager(overrideService: service, refreshClock: TestClock())
+    func album(_ id: String) -> PhotoCollectionDescriptor {
+      PhotoCollectionDescriptor(
+        id: id, localIdentifier: id, title: id, kind: .album, pathComponents: [], children: [])
+    }
+    service.collectionTree = [album("old")]
+    let gate = AsyncCheckpoint()
+    service.inventoryCheckpoint = gate
+    let load = Task { try await library.loadCollectionTree() }
+    await gate.waitForEnter(count: 1)
+    service.inventoryCheckpoint = nil
+    service.collectionTree = [album("current")]
+    library.invalidateCache(changedThumbnailAssetIDs: [])
+    if cancel { load.cancel() }
+    await gate.releaseAll()
+    do {
+      let tree = try await load.value
+      #expect(!cancel)
+      #expect(tree.map(\.title) == ["current"])
+    } catch {
+      #expect(cancel && error is CancellationError)
+    }
+  }
+
   @Test func queryRegistrationRejectsLateResultsAndBalancesMultipleConsumers() {
     let store = PhotoLibraryQueryObservations<String>()
     store.begin(first)

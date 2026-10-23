@@ -8,13 +8,16 @@ import Testing
   @MainActor
   @Suite(.serialized, .timeLimit(.minutes(2)))
   struct PhotoLibraryViewDependencyTests {
+    @Observable @MainActor final class YearInput { var year = 2026 }
+
     private struct YearHost: View {
+      var input = YearInput()
       let service: FakePhotoLibraryService
       @State private var selection: LibrarySelection?
       @State private var selectedAsset: AssetDescriptor?
       var body: some View {
         YearContentView(
-          year: 2026, selection: $selection, selectedAsset: $selectedAsset,
+          year: input.year, selection: $selection, selectedAsset: $selectedAsset,
           photoLibraryService: service)
       }
     }
@@ -82,6 +85,35 @@ import Testing
         f.library.invalidateCache(changedThumbnailAssetIDs: [])
         #expect(await observe(in: f.window) { f.service.detailsFetchCalls.count > before })
       } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test func yearSummaryNeverShowsThePreviousYearsHeldCount() async throws {
+      let f = Fixture()
+      let input = YearInput()
+      let gate = AsyncCheckpoint()
+      f.service.countOverride = { scope in
+        if scope == .timeline(year: 2027, month: nil) {
+          await gate.enter()
+          return 2
+        }
+        return 1
+      }
+      try await withCleanup {
+        f.show(YearHost(input: input, service: f.service))
+        try #require(
+          await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["1 photo"] })
+        input.year = 2027
+        await gate.waitForEnter(count: 1)
+        try #require(
+          await observe(in: f.window) { f.counter.count(for: "year-content-body:2027") > 0 })
+        #expect(f.counter.renderedText["year-summary"] == ["Counting…"])
+        await gate.releaseAll()
+        #expect(
+          await observe(in: f.window) { f.counter.renderedText["year-summary"] == ["2 photos"] })
+      } cleanup: {
+        await gate.releaseAll()
         await f.close()
       }
     }
