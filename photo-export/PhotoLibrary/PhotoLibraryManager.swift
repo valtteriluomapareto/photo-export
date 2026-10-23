@@ -39,10 +39,14 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   private let isAuthorizedBridge = ObservableCombineBridge(false)
 
   /// Synchronous, delivered before storage, and replaying the current value.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var authorizationStatusPublisher: AnyPublisher<PHAuthorizationStatus, Never> {
     authorizationStatusBridge.publisher
   }
   /// Synchronous, delivered before storage, and replaying the current value.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var isAuthorizedPublisher: AnyPublisher<Bool, Never> { isAuthorizedBridge.publisher }
 
   /// Bumps on every `photoLibraryDidChange`. Sidebar/grid views that depend on the

@@ -228,6 +228,8 @@ final class ExportManager {
   /// during the window between `isEnqueueingAll = true` and the first
   /// `pendingJobs.append`, and race to start its own background run on top of a
   /// user-initiated bulk export.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var exportRunStatePublisher: AnyPublisher<ExportRunState, Never> {
     Publishers.CombineLatest4(
       activeRunContextBridge.publisher, isRunningBridge.publisher,
@@ -249,6 +251,8 @@ final class ExportManager {
   /// Combine publisher for `versionSelection` so AutoSync can subscribe to user
   /// changes (Include Originals toggle). Without this, the reducer would default
   /// to `.edited` regardless of the user's actual setting.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var versionSelectionPublisher: AnyPublisher<ExportVersionSelection, Never> {
     versionSelectionBridge.publisher
   }
@@ -257,6 +261,8 @@ final class ExportManager {
   /// so flipping the toggle re-triggers a debounced evaluation — HEIC assets
   /// previously skipped as "already exported" become eligible once
   /// `requiredVariants` widens to include `.edited`.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var convertHEICToJPEGPublisher: AnyPublisher<Bool, Never> {
     convertHEICToJPEGBridge.publisher
   }
@@ -264,11 +270,15 @@ final class ExportManager {
   /// Combine publisher for `livePhotosPairedExport`. `PhotoLibraryManager`
   /// subscribes via `bindLivePhotoDetectionFallback(to:)` so the resource-enumeration
   /// fallback runs only when the user has the toggle on.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var livePhotosPairedExportPublisher: AnyPublisher<Bool, Never> {
     livePhotosPairedExportBridge.publisher
   }
 
   /// Combine publisher for the import flag.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var isImportingPublisher: AnyPublisher<Bool, Never> {
     // A "previous backup missing" result holds AutoSync like a running import until the user
     // decides, so nothing is exported into the folder they were just told is wrong.
@@ -284,21 +294,33 @@ final class ExportManager {
 
   /// The import activity flag alone. `isImportingPublisher` is AutoSync's hold, which also covers a
   /// missing previous backup and drops repeats.
+  /// Test-only accessor for synchronous delivery characterization.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var isImportingFlagOnlyPublisher: AnyPublisher<Bool, Never> {
     isImportingBridge.publisher
   }
 
   /// `$importStage`.
+  /// Test-only accessor for synchronous delivery characterization.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var importStagePublisher: AnyPublisher<BackupScanner.ImportStage?, Never> {
     importStageBridge.publisher
   }
 
   /// `activeRunContext`, from its bridge.
+  /// Test-only accessor for synchronous delivery characterization.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var activeRunContextPublisher: AnyPublisher<ExportRunContext?, Never> {
     activeRunContextBridge.publisher
   }
 
   /// `isEnqueueingAll`, from its bridge.
+  /// Test-only accessor for synchronous delivery characterization.
+  /// Subscribe and request demand on the main actor; off-main adapters such as `.values`
+  /// or `flatMap` can otherwise trap in the actor-isolated bridge.
   var isEnqueueingAllPublisher: AnyPublisher<Bool, Never> {
     isEnqueueingAllBridge.publisher
   }
@@ -309,6 +331,7 @@ final class ExportManager {
   /// or summary and therefore do not emit through this publisher. Their terminal
   /// feedback is published separately through `ExportProgressState.manualSummary`.
   private let completedRunsSubject = PassthroughSubject<ExportRunSummary, Never>()
+  /// Terminal summaries are sent synchronously on the main actor.
   var completedRunsPublisher: AnyPublisher<ExportRunSummary, Never> {
     completedRunsSubject.eraseToAnyPublisher()
   }

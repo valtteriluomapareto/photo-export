@@ -279,10 +279,10 @@ of either coordinator must bridge its mirrored publisher properties before chang
 
 `ExportRecordStore` and `CollectionExportRecordStore` are `@Observable @MainActor` stores.
 Their ignored dictionaries, filename claims and load/persistence machinery do not notify views
-directly. Every public record query registers the bridged `mutationCounter`, preserving the coalesced
-notification window. The conversion setting and persistence error are tracked stored values.
-`statePublisher` and `mutationCounterPublisher` retain synchronous replay/every-write/pre-store
-delivery through their bridges; the unchanged state funnel resumes waiters after storage.
+directly. Every public record query registers the tracked `mutationCounter`, preserving the coalesced
+notification window. State, the counter, conversion setting and persistence error are plain tracked
+values; the state funnel resumes waiters after storage. Record state and revision have no production
+Combine subscribers, so their tests use Observation directly.
 `LibraryRootView` reads collection readiness only for the visible collection section, so
 collection record publications leave the timeline root alone.
 

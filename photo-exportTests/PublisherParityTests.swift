@@ -5,10 +5,8 @@ import Testing
 
 @testable import Photo_Export
 
-/// Characterizes every named publisher accessor on the current `ObservableObject` types with
-/// `assertPublishedParity`. These pass against `@Published` storage today and must keep passing
-/// unchanged when a type's storage moves to Observation, so subscribers (AutoSync, the
-/// destination adapter, the lifecycle and safety monitors) see the same deliveries.
+/// Pins the synchronous Combine delivery contracts used by subscribers, including the
+/// adapters and monitors that still use Published storage and managers backed by Observation.
 @MainActor
 @Suite(.timeLimit(.minutes(2)))
 struct PublisherParityTests {
@@ -335,16 +333,6 @@ struct PublisherParityTests {
     }
   }
 
-  // MARK: - ExportProgressState
-
-  @Test func progressEmptyRunMessage() async {
-    let progress = ExportProgressState()
-    await assertPublishedParity(
-      progress, \.emptyRunMessage, { $0.emptyRunMessagePublisher },
-      change: { progress.emptyRunMessage = "Everything is already exported." },
-      unchangedWrite: .before { progress.emptyRunMessage = progress.emptyRunMessage })
-  }
-
   // MARK: - UserDefaultsAutoExportScopeStore
 
   @Test func scopeSelection() async {
@@ -354,31 +342,6 @@ struct PublisherParityTests {
       store, \.selection, { $0.scopeSelectionPublisher },
       change: { store.setSelection(AutoExportScopeSelection(timeline: true)) },
       unchangedWrite: .before { store.setSelection(store.selection) })
-  }
-
-  // MARK: - MonthViewModel
-
-  @Test func monthSelectedAssetId() async {
-    let model = MonthViewModel(photoLibraryService: FakePhotoLibraryService())
-    await assertPublishedParity(
-      model, \.selectedAssetId, { $0.selectedAssetIdPublisher },
-      change: { model.selectedAssetId = "asset" },
-      unchangedWrite: .before { model.selectedAssetId = model.selectedAssetId })
-  }
-
-  // MARK: - TimelineSidebarCounts
-
-  @Test func sidebarCountsByYearMonth() async {
-    let service = FakePhotoLibraryService()
-    service.cachedCountOverride = { _, adjusted in adjusted ? 0 : 1 }
-    let counts = TimelineSidebarCounts(service: service)
-    await assertPublishedParity(
-      counts, \.countsByYearMonth, { $0.countsByYearMonthPublisher },
-      change: { await counts.loadCounts(forYears: [2025]) },
-      // An identical refresh: month updates skip equal counts.
-      unchangedWrite: .after { await counts.loadCounts(forYears: [2025]) },
-      unchangedWriteDelivery: .isDropped)
-    #expect(counts.assetCountsByYearMonth["2025-1"] == 1)
   }
 
   // MARK: - AutoSyncManager
@@ -407,90 +370,6 @@ struct PublisherParityTests {
       unchangedWrite: .after { builder.destination.subject.send(other) },
       unchangedWriteDelivery: .isDropped)
     #expect(manager.lastRunSummary == summary)
-  }
-
-  // MARK: - Record stores
-
-  /// Already passes: state delivery includes equal writes and retains Published ordering.
-  @Test func timelineState() async {
-    let root = TestScratch.directory("ParityTimelineState")
-    let store = ExportRecordStore(baseDirectoryURL: root, notificationClock: TestClock())
-    store.configure(for: "A")
-    await withCleanup {
-      await assertPublishedParity(
-        store, \.state, { $0.statePublisher },
-        change: { store.configure(for: nil) },
-        unchangedWrite: .after { store.configure(for: nil) },
-        unchangedWriteDelivery: .emits)
-    } cleanup: {
-      try? await store.flush()
-      try? FileManager.default.removeItem(at: root)
-    }
-  }
-
-  /// Already passes: the collection load state has the same delivery contract as the timeline.
-  @Test func collectionState() async {
-    let root = TestScratch.directory("ParityCollectionState")
-    let store = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: TestClock())
-    store.configure(for: "A")
-    await withCleanup {
-      await assertPublishedParity(
-        store, \.state, { $0.statePublisher },
-        change: { store.configure(for: nil) },
-        unchangedWrite: .after { store.configure(for: nil) },
-        unchangedWriteDelivery: .emits)
-    } cleanup: {
-      try? await store.flush()
-      try? FileManager.default.removeItem(at: root)
-    }
-  }
-
-  @Test func timelineMutationCounter() async {
-    let root = TestScratch.directory("ParityTimelineCounter")
-    let store = ExportRecordStore(baseDirectoryURL: root, notificationClock: TestClock())
-    store.configure(for: "A")
-    await withCleanup {
-      await assertPublishedParity(
-        store, \.mutationCounter, { $0.mutationCounterPublisher },
-        change: {
-          store.markVariantExported(
-            assetId: "parity", variant: .original, year: 2026, month: 1, relPath: "2026/01/",
-            filename: "PARITY.JPG", exportedAt: Date())
-          store.flushPendingNotifications()
-        },
-        // A counter, so no write stores an equal value. This pins the guard against an empty
-        // flush (nothing pending publishes nothing), not delivery of an equal write.
-        unchangedWrite: .after { store.flushPendingNotifications() },
-        unchangedWriteDelivery: .isDropped)
-    } cleanup: {
-      try? await store.flush()
-      try? FileManager.default.removeItem(at: root)
-    }
-  }
-
-  @Test func collectionMutationCounter() async {
-    let root = TestScratch.directory("ParityCollectionCounter")
-    let store = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: TestClock())
-    store.configure(for: "A")
-    let placement = ExportPlacement.favorites()
-    store.upsertPlacement(placement)
-    store.flushPendingNotifications()
-    await withCleanup {
-      await assertPublishedParity(
-        store, \.mutationCounter, { $0.mutationCounterPublisher },
-        change: {
-          store.markVariantInProgress(
-            assetId: "parity", placement: placement, variant: .original, filename: "PARITY.JPG")
-          store.flushPendingNotifications()
-        },
-        // A counter, so no write stores an equal value. This pins the guard against an empty
-        // flush (nothing pending publishes nothing), not delivery of an equal write.
-        unchangedWrite: .after { store.flushPendingNotifications() },
-        unchangedWriteDelivery: .isDropped)
-    } cleanup: {
-      try? await store.flush()
-      try? FileManager.default.removeItem(at: root)
-    }
   }
 
   // MARK: - DestinationSnapshotAdapter

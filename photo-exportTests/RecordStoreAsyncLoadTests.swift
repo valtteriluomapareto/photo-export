@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import Testing
 import os
@@ -39,9 +38,6 @@ struct RecordStoreAsyncLoadTests {
     }
     var mutationCounter: Int {
       collection ? collections.mutationCounter : timeline.mutationCounter
-    }
-    var statePublisher: AnyPublisher<RecordStoreState, Never> {
-      collection ? collections.statePublisher : timeline.statePublisher
     }
 
     func configure(_ id: String?) {
@@ -606,19 +602,17 @@ struct RecordStoreAsyncLoadTests {
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
     f.configure(nil)
-    var states: [RecordStoreState] = []
-    let sink = f.statePublisher.dropFirst().sink { states.append($0) }
-    defer { sink.cancel() }
+    let states = ObservedValues { f.state }
     let snapshot = f.url("A", snapshot: true)
     f.io.hold(snapshot)
 
     f.begin("A")
-    #expect(states == [.loading])
+    #expect(states.values == [.loading])
     let whileLoading = f.mutationCounter
     f.io.release(snapshot)
     await f.settle()
 
-    #expect(states == [.loading, .ready])
+    #expect(states.values == [.loading, .ready])
     #expect(f.mutationCounter == whileLoading + 1, "finishing the load did not notify")
   }
 
@@ -629,14 +623,12 @@ struct RecordStoreAsyncLoadTests {
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
     f.configure(nil)
-    var states: [RecordStoreState] = []
-    let sink = f.statePublisher.dropFirst().sink { states.append($0) }
-    defer { sink.cancel() }
+    let states = ObservedValues { f.state }
     let before = f.mutationCounter
 
     f.configure("A")
 
-    #expect(states == [.ready])
+    #expect(states.values == [.ready])
     #expect(f.mutationCounter == before + 1)
     #expect(f.filename("a1") == "A1.JPG")
   }

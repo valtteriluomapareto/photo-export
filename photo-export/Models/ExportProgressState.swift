@@ -1,27 +1,9 @@
-import Combine
 import Foundation
 import Observation
 
-/// Per-job and per-variant state with its own observable owner. Both this state and
-/// `ExportManager` track fields separately, so a view re-renders only for values it reads.
-///
-/// Why this exists: during a typical run, `currentAssetFilename`, `renderActivity`,
-/// `totalJobsCompleted`, and `currentJobPlacement` all change several times per
-/// asset. When they lived on `ExportManager`, every change fired the manager's
-/// `objectWillChange`, which propagated to every observing view —
-/// `LibraryRootView`, `TimelineSidebarView` (and its `MonthRow`s), `YearContentView`
-/// (with its `isMonthFullyExported` per-tile computation), `MonthContentView`. The
-/// per-view body re-evaluation was cheap individually but added up while the user
-/// was scrolling the asset grid: ~5 cascades per asset turned into visible jank.
-///
-/// The fields here are read only by `ExportProgressBar` (counters / filename /
-/// render activity / messages) and `MonthRow` (`currentJobPlacement` for the
-/// in-flight spinner). AutoSync's seam is preserved — it subscribes to
-/// `ExportManager.exportRunStatePublisher` (the run context, running flag, queue
-/// count and bulk-enqueue flag), none of which move here.
-///
-/// Tests that read `manager.totalJobsEnqueued` etc. continue to compile because
-/// `ExportManager` keeps read-only computed forwarders.
+/// Per-job feedback and counters with field-specific Observation dependencies.
+/// Progress readers follow filenames, counters and messages; sidebar rows follow only the
+/// current placement. Run ownership and AutoSync's Combine contract stay on ExportManager.
 @Observable
 @MainActor
 final class ExportProgressState {
@@ -35,24 +17,10 @@ final class ExportProgressState {
   /// whenever no render is active (the default for static-resource writes).
   var renderActivity: RenderActivity?
 
-  private let emptyRunMessageBridge = ObservableCombineBridge<String?>(nil)
   /// Transient toolbar/progress-bar feedback for "you clicked Export but there
   /// was nothing new to do." Cleared on any new `startExport*`, version-selection
   /// change, `cancelAndClear`, or after the timeout managed by `ExportManager`.
-  var emptyRunMessage: String? {
-    get {
-      access(keyPath: \.emptyRunMessage)
-      return emptyRunMessageBridge.value
-    }
-    set {
-      emptyRunMessageBridge.write(newValue) { withMutation(keyPath: \.emptyRunMessage, $0) }
-    }
-  }
-  /// `emptyRunMessage` for Combine subscribers: synchronous, delivered before the value is
-  /// stored, and replaying the current value (pinned by `PublisherParityTests`).
-  var emptyRunMessagePublisher: AnyPublisher<String?, Never> {
-    emptyRunMessageBridge.publisher
-  }
+  var emptyRunMessage: String?
 
   /// Persistent warning attached to active queue work — e.g. "couldn't list every
   /// album, continuing with what was queued." Rendered alongside the progress

@@ -545,17 +545,15 @@ struct ExportFolderTests {
       assetId: "d1", placement: placement, variant: .original,
       filename: "d1.HEIC", exportedAt: Date())
 
-    var messages: [String] = []
-    let observation = h.manager.progressState.emptyRunMessagePublisher.compactMap { $0 }.sink {
-      messages.append($0)
-    }
+    let observation = ObservedValues { h.manager.progressState.emptyRunMessage }
     h.manager.startExportFolder(folderId: "F")
     let preparations = h.manager.currentPreparationTasks
     try #require(!preparations.isEmpty)
     for task in preparations { await task.value }
 
     withExtendedLifetime(observation) {
-      #expect(messages == ["All albums in this folder are already exported."])
+      #expect(
+        observation.values.compactMap { $0 } == ["All albums in this folder are already exported."])
     }
     #expect(h.manager.totalJobsEnqueued == 0)
   }
@@ -648,17 +646,14 @@ struct ExportFolderTests {
       assetId: "d1", placement: placement, variant: .original,
       filename: "d1.HEIC", exportedAt: Date())
 
-    var messages: [String] = []
-    let observation = h.manager.progressState.emptyRunMessagePublisher.compactMap { $0 }.sink {
-      messages.append($0)
-    }
+    let observation = ObservedValues { h.manager.progressState.emptyRunMessage }
     h.manager.startExportAlbums(collectionIds: ["done"])
     let preparations = h.manager.currentPreparationTasks
     try #require(!preparations.isEmpty)
     for task in preparations { await task.value }
 
     withExtendedLifetime(observation) {
-      #expect(messages == ["All selected albums are already exported."])
+      #expect(observation.values.compactMap { $0 } == ["All selected albums are already exported."])
     }
     #expect(h.manager.totalJobsEnqueued == 0)
   }

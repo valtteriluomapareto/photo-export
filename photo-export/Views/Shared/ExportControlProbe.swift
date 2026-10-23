@@ -15,7 +15,7 @@ import SwiftUI
       if let includesOriginals { values.append(String(includesOriginals)) }
       counter?.recordText(values, for: key)
       if let toggleOriginals {
-        counter?.recordAction("onboarding-toggle-originals", action: toggleOriginals)
+        counter?.recordAction("\(key)-toggle-originals", action: toggleOriginals)
       }
       return Color.clear.frame(width: 0, height: 0)
     }

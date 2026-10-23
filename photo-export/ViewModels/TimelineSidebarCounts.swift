@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import Observation
 
@@ -30,19 +29,7 @@ final class TimelineSidebarCounts {
     let adjusted: Int?
   }
 
-  private let countsBridge = ObservableCombineBridge<[String: MonthCounts]>([:])
-  private(set) var countsByYearMonth: [String: MonthCounts] {
-    get {
-      access(keyPath: \.countsByYearMonth)
-      return countsBridge.value
-    }
-    set { countsBridge.write(newValue) { withMutation(keyPath: \.countsByYearMonth, $0) } }
-  }
-  /// `countsByYearMonth` for Combine subscribers: synchronous, delivered before the value is
-  /// stored, and replaying the current value (pinned by `PublisherParityTests`).
-  var countsByYearMonthPublisher: AnyPublisher<[String: MonthCounts], Never> {
-    countsBridge.publisher
-  }
+  private(set) var countsByYearMonth: [String: MonthCounts] = [:]
   /// Last error encountered while fetching counts. Surfaces once so a future
   /// view-side banner can mention "couldn't load progress" without us having
   /// to thread Result types throughout the loader.

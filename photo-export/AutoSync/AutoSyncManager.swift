@@ -19,6 +19,7 @@ final class AutoSyncManager: ObservableObject {
   @Published private(set) var lastRunSummary: ExportRunSummary?
   /// `$lastRunSummary` for subscribers outside this type: synchronous, delivered before the
   /// value is stored, and replaying the current value (pinned by `PublisherParityTests`).
+  /// Test-only accessor for synchronous delivery characterization.
   var lastRunSummaryPublisher: AnyPublisher<ExportRunSummary?, Never> {
     $lastRunSummary.eraseToAnyPublisher()
   }
