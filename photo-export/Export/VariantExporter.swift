@@ -265,14 +265,16 @@ final class VariantExporter {
     let finalURL = prepared.url
 
     if prepared.isInterrupted {
-      try requireUnclaimed(
-        finalURL.lastPathComponent, slot: slot, job: job, subfolder: subfolder,
-        variant: variant, descriptor: descriptor)
-      _ = try await commitFile(
-        .interrupted(finalURL), descriptor: descriptor, job: job,
+      switch try await commitFile(
+        .interrupted(finalURL), slot: slot, descriptor: descriptor, job: job,
         variant: variant, relPath: relPath, subfolder: subfolder,
-        acceptsEditedFallback: acceptsEditedFallback, generation: gen, destinationIO: destinationIO)
-      return slot.chosenStem(forFilename: finalURL.lastPathComponent)
+        acceptsEditedFallback: acceptsEditedFallback, context: context)
+      {
+      case .committed:
+        return slot.chosenStem(forFilename: finalURL.lastPathComponent)
+      case .collision(let error):
+        throw error
+      }
     }
 
     let reuseSource: (url: URL, relativePath: String)?
@@ -649,9 +651,9 @@ final class VariantExporter {
         continue
       }
       switch try await commitFile(
-        commit, descriptor: descriptor, job: job, variant: variant,
+        commit, slot: slot, descriptor: descriptor, job: job, variant: variant,
         relPath: relPath, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback,
-        generation: gen, destinationIO: destinationIO)
+        context: context)
       {
       case .committed(let filename):
         if case .adopt = commit {
@@ -723,58 +725,76 @@ final class VariantExporter {
   /// captured-destination barrier as a newly moved file. An adopted file is acknowledged
   /// once `lstat` shows it unchanged since its bytes were compared; it gets no timestamps.
   private func commitFile(
-    _ commit: FinalCommit, descriptor: AssetDescriptor, job: ExportManager.ExportJob,
-    variant: ExportVariant, relPath: String, subfolder: String?, acceptsEditedFallback: Bool,
-    generation gen: Int, destinationIO: any DestinationIOExecuting
+    _ commit: FinalCommit, slot: ExportDestinationResolver.Slot, descriptor: AssetDescriptor,
+    job: ExportManager.ExportJob, variant: ExportVariant, relPath: String, subfolder: String?,
+    acceptsEditedFallback: Bool, context: ExportDestinationContext
   ) async throws -> CommitOutcome {
-    try queueCoordinator?.throwIfCancelledOrStale(gen)
-    let acknowledge = try recordStoreRouter.captureFinalCommit(
-      assetId: descriptor.id, placement: job.placement, variant: variant,
-      relPath: relPath, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback)
-    let task = Task { [fileSystem] () -> Result<CommitOutcome, Error> in
-      defer { finalCommitTask = nil }
-      do {
-        switch commit {
-        case .move(let stage, let url):
-          try await destinationIO.run {
-            try fileSystem.moveItemAtomically(from: stage, to: url)
-          }
-        case .adopt(let url, _, let identity):
-          // A lookup error counts as a change: the variant plans again, and the planning
-          // walk's own lookup then reports the real error.
-          let current: FileItemIdentity? = await destinationIO.run {
-            try? fileSystem.itemIdentity(at: url)
-          }
-          guard current == identity else { throw FileIOService.destinationExistsError() }
-        case .interrupted:
-          break
+    let destinationIO = context.io
+    let task: Task<Result<CommitOutcome, Error>, Never>
+    do {
+      task = try await recordStoreRouter.withMutationAdmission(placement: job.placement) {
+        try checkOwnership(context, placement: job.placement)
+        if case .interrupted = commit {
+          try requireUnclaimed(
+            commit.recordedName, slot: slot, job: job, subfolder: subfolder,
+            variant: variant, descriptor: descriptor)
+        } else if isClaimed(
+          commit.recordedName, job: job, subfolder: subfolder, variant: variant, of: descriptor)
+        {
+          throw FileIOService.destinationExistsError()
         }
-      } catch let error where FileIOService.isDestinationExists(error) {
-        await acknowledge(nil)
-        return .success(.collision(error))
-      } catch {
-        await acknowledge(nil)
-        return .failure(error)
-      }
-      // The file is now committed. Finish this bounded acknowledgement even when
-      // its run was cancelled or its store switched destinations during physical IO.
-      switch commit {
-      case .move(_, let url), .interrupted(let url):
-        if let createdAt = descriptor.creationDate {
-          await destinationIO.run {
-            fileSystem.applyTimestamps(creationDate: createdAt, to: url)
+        let acknowledge = try recordStoreRouter.captureFinalCommit(
+          assetId: descriptor.id, placement: job.placement, variant: variant,
+          relPath: relPath, subfolder: subfolder, acceptsEditedFallback: acceptsEditedFallback)
+        let task = Task { [fileSystem] () -> Result<CommitOutcome, Error> in
+          defer { finalCommitTask = nil }
+          do {
+            switch commit {
+            case .move(let stage, let url):
+              try await destinationIO.run {
+                try fileSystem.moveItemAtomically(from: stage, to: url)
+              }
+            case .adopt(let url, _, let identity):
+              // A lookup error counts as a change: the variant plans again, and the planning
+              // walk's own lookup then reports the real error.
+              let current: FileItemIdentity? = await destinationIO.run {
+                try? fileSystem.itemIdentity(at: url)
+              }
+              guard current == identity else { throw FileIOService.destinationExistsError() }
+            case .interrupted:
+              break
+            }
+          } catch let error where FileIOService.isDestinationExists(error) {
+            await acknowledge(nil)
+            return .success(.collision(error))
+          } catch {
+            await acknowledge(nil)
+            return .failure(error)
           }
+          // The file is now committed. Finish this bounded acknowledgement even when
+          // its run was cancelled or its store switched destinations during physical IO.
+          switch commit {
+          case .move(_, let url), .interrupted(let url):
+            if let createdAt = descriptor.creationDate {
+              await destinationIO.run {
+                fileSystem.applyTimestamps(creationDate: createdAt, to: url)
+              }
+            }
+          case .adopt:
+            break
+          }
+          await acknowledge(commit.recordedName)
+          return .success(.committed(filename: commit.recordedName))
         }
-      case .adopt:
-        break
+        finalCommitTask = task
+        return task
       }
-      await acknowledge(commit.recordedName)
-      return .success(.committed(filename: commit.recordedName))
+    } catch let error where FileIOService.isDestinationExists(error) {
+      return .collision(error)
     }
-    finalCommitTask = task
     let result = await task.value
     // Stale errors and successes cannot reach replacement bookkeeping or UI.
-    try queueCoordinator?.throwIfCancelledOrStale(gen)
+    try checkOwnership(context, placement: job.placement)
     return try result.get()
   }
 
