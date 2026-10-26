@@ -135,9 +135,9 @@ enum RecordPreparationWorker {
       result.withLock { $0 = value }
     }
     func take() -> Value {
-      result.withLock {
-        defer { $0 = nil }
-        return $0!
+      result.withLock { stored in
+        defer { stored = nil }
+        return stored!
       }
     }
   }

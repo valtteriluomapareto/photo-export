@@ -42,9 +42,9 @@ final class RecordValueTransfer<Value: Sendable>: Sendable {
     value.withLock { $0 = nil }
   }
   func take() -> Value {
-    value.withLock {
-      defer { $0 = nil }
-      return $0!
+    value.withLock { stored in
+      defer { stored = nil }
+      return stored!
     }
   }
 }
