@@ -236,6 +236,49 @@ struct MonthViewModelTests {
     #expect(svc.stopCachingCalls.last?.map(\.id) == ["a", "b"])
   }
 
+  @Test func visiblePreheatWindowMovesBeyondFirstFiveHundredUsingOnlyDeltas() async throws {
+    let service = FakePhotoLibraryService()
+    service.favoritesAssets = (0..<1200).map { makeAsset(id: "visible-\($0)") }
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .favorites)
+    await model.updateVisibleAssetIDs((800...805).map { "visible-\($0)" })
+    #expect(service.startCachingCalls.last?.map(\.id) == (776...829).map { "visible-\($0)" })
+    #expect(service.stopCachingCalls.last?.count == 500)
+    await model.updateVisibleAssetIDs((801...806).map { "visible-\($0)" })
+    #expect(service.startCachingCalls.last?.map(\.id) == ["visible-830"])
+    #expect(service.stopCachingCalls.last?.map(\.id) == ["visible-776"])
+    await model.deactivate().value
+    #expect(service.stopCachingCalls.last?.count == 54)
+  }
+
+  @Test func obsoleteThumbnailResolutionCannotRepopulateNewScope() async throws {
+    let service = FakePhotoLibraryService()
+    let gate = AsyncCheckpoint()
+    let old = makeAsset(id: "same")
+    let fresh = makeAsset(id: "fresh")
+    service.thumbnailResolveOverride = { _ in
+      await gate.enter()
+      return [.synthetic(old)]
+    }
+    let map = GridThumbnailAssets(service: service)
+    let pending = Task { await map.handle(for: "same", revision: 0, isCurrent: { true }) }
+    try await withCleanup {
+      try #require(await gate.waitForEnter(count: 1))
+      map.reset()
+      service.thumbnailResolveOverride = { _ in [.synthetic(fresh)] }
+      await map.updateWindow([fresh])
+      await gate.releaseAll()
+      #expect(await pending.value == nil)
+      let calls = service.thumbnailResolveCalls.count
+      #expect(await map.handle(for: "fresh", revision: 0, isCurrent: { true })?.descriptor.id == "fresh")
+      #expect(service.thumbnailResolveCalls.count == calls)
+    } cleanup: {
+      await gate.releaseAll()
+      _ = await pending.value
+      await map.deactivate().value
+    }
+  }
+
   // MARK: - Error path
 
   @Test func fetchErrorSurfacesViaErrorMessage() async throws {

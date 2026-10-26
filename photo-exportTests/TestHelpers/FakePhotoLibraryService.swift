@@ -9,6 +9,15 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   var isAuthorized: Bool = true
   var authorizationStatus: PHAuthorizationStatus = .authorized
 
+  var thumbnailResolveOverride: (@MainActor ([String]) async -> [ThumbnailAsset])?
+  var thumbnailResolveCalls: [[String]] = []
+
+  func resolveThumbnailAssets(ids: [String]) async -> [ThumbnailAsset] {
+    thumbnailResolveCalls.append(ids)
+    if let thumbnailResolveOverride { return await thumbnailResolveOverride(ids) }
+    return ids.compactMap { fetchAssetDescriptor(for: $0) }.map(ThumbnailAsset.synthetic)
+  }
+
   var cachedCountOverride: (@MainActor (PhotoFetchScope, Bool) async throws -> Int)?
 
   // Canned data
