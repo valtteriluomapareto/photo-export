@@ -22,6 +22,7 @@ final class ExportManagerHarness {
     storeRootURL: URL? = nil,
     userDefaults: UserDefaults? = nil,
     photoLib: FakePhotoLibraryService? = nil,
+    photoKitReader: (any PhotoKitReading)? = nil,
     dest: FakeExportDestination? = nil,
     writer: FakeAssetResourceWriter = FakeAssetResourceWriter(),
     fileSystem: FakeFileSystem = FakeFileSystem(),
@@ -44,6 +45,7 @@ final class ExportManagerHarness {
     defaults = userDefaults ?? TestScratch.defaults(label)
     manager = ExportManager(
       photoLibraryService: self.photoLib,
+      photoKitReader: photoKitReader,
       exportDestination: self.dest,
       exportRecordStore: store,
       collectionExportRecordStore: collectionStore,

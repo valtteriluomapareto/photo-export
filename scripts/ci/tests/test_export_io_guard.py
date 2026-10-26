@@ -23,7 +23,10 @@ class ExportIOGuardTests(unittest.TestCase):
         for expression in ['FileManager.default.fileExists(atPath: p)',
                            'url.resourceValues(forKeys: [.fileSizeKey])',
                            'url.checkResourceIsReachable()',
-                           'PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)']:
+                           'PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)',
+                           'PHAssetResource.assetResources(for: asset)',
+                           'photoLibraryService.fetchAssetDescriptor(for: id)',
+                           'photoLibraryService.resources(for: id)']:
             with self.subTest(expression=expression):
                 result = self.run_guard({'Export/NewPlanner.swift': expression})
                 self.assertEqual(result.returncode, 1, result.stderr)
@@ -34,6 +37,7 @@ class ExportIOGuardTests(unittest.TestCase):
             'Export/FileIOService.swift': 'FileManager.default.removeItem(at: url)',
             'Export/ProductionAssetResourceWriter.swift': 'PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)',
             'Destination/DestinationValidationProbe.swift': 'url.resourceValues(forKeys: [])',
+            'Export/ProductionPhotoKitReader.swift': 'PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)\nPHAssetResource.assetResources(for: asset)',
         }
         self.assertEqual(self.run_guard(allowed).returncode, 0)
         allowed['Export/ProductionAssetResourceWriter.swift'] += '\nFileManager.default.removeItem(at: url)'

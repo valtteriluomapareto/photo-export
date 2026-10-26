@@ -236,8 +236,17 @@ import Testing
       timeline.configure(for: "A")
       collections.configure(for: "A")
       let destination = FakeExportDestination()
+      let snapshots = Dictionary(
+        uniqueKeysWithValues: service.assetsByYearMonth.values.flatMap { $0 }.map { asset in
+          (
+            asset.id,
+            PhotoKitAssetSnapshot(
+              descriptor: asset, resources: service.resourcesByAssetId[asset.id] ?? [])
+          )
+        })
+      let reader = ProductionPhotoKitReader { id, _ in snapshots[id] }
       let manager = ExportManager(
-        photoLibraryService: service, exportDestination: destination,
+        photoLibraryService: service, photoKitReader: reader, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: PacedWriter(), fileSystem: FakeFileSystem(), userDefaults: defaults)
       let destinationManager = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
