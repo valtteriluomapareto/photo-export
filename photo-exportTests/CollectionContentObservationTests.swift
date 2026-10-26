@@ -146,7 +146,11 @@ import Testing
       let f = Fixture(preselectFirstAsset: true)
       defer { f.close() }
       f.show()
-      try #require(await observe(in: f.window) { !f.service.startCachingCalls.isEmpty })
+      try #require(
+        await observe(in: f.window) {
+          f.counter.count(for: "grid-load-finished") > 0
+            && f.counter.count(for: "summary:0/10000") > 0
+        })
       try await f.renderBarrier()
       let beyondInitialWindow = Set(f.service.favoritesAssets.dropFirst(500).map(\.id))
       f.navigation.scrollTargetID = f.service.favoritesAssets[800].id

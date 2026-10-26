@@ -131,6 +131,9 @@ struct MonthContentView: View, Equatable {
         isCurrent: {
           photoLibraryManager.libraryRefresh.sourceRevision(for: query) == source
         })
+      #if DEBUG
+        bodyCounter?.record("grid-load-finished")
+      #endif
     }
     .onAppear {
       photoLibraryManager.beginObservingQuery(
@@ -144,6 +147,9 @@ struct MonthContentView: View, Equatable {
       photoLibraryManager.endObservingQuery(
         PhotoLibraryQuery(scope: .timeline(year: year, month: month)))
       viewModel.deactivate()
+      #if DEBUG
+        bodyCounter?.record("grid-disappeared")
+      #endif
     }
     .onReceive(viewModel.selectionUpdates) { _ in
       // The model emits after an owned commit. Derive from the live binding

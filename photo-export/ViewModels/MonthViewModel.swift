@@ -154,7 +154,7 @@ final class MonthViewModel {
     hasCompleteSnapshot = true
     isLoading = false
 
-    // Preheat the windowed prefix once the full asset list has settled.
+    // Preheat the current visible window once the full asset list has settled.
     let window = cachingWindow(in: assets, indices: assetIndices)
     await thumbnailAssets.updateWindow(window)
     guard ownsRequest(generation, scope: scope) else { return }

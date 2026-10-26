@@ -121,6 +121,9 @@ struct CollectionContentView: View, Equatable {
         isCurrent: {
           photoLibraryManager.libraryRefresh.sourceRevision(for: query) == source
         })
+      #if DEBUG
+        bodyCounter?.record("grid-load-finished")
+      #endif
     }
     .onAppear { photoLibraryManager.beginObservingQuery(PhotoLibraryQuery(scope: scope)) }
     .onChange(of: PhotoLibraryQuery(scope: scope)) { old, new in
@@ -130,6 +133,9 @@ struct CollectionContentView: View, Equatable {
     .onDisappear {
       photoLibraryManager.endObservingQuery(PhotoLibraryQuery(scope: scope))
       viewModel.deactivate()
+      #if DEBUG
+        bodyCounter?.record("grid-disappeared")
+      #endif
     }
     .onReceive(viewModel.selectionUpdates) { _ in
       // The model emits after an owned commit. Derive from the live binding

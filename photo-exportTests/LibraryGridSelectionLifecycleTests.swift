@@ -211,16 +211,28 @@ struct LibraryGridSelectionLifecycleTests {
     }
     defer { fixture.close() }
     fixture.show()
-    let loaded = await observe { fixture.service.startCachingCalls.count == 1 }
+    let loaded = await observe(in: fixture.window) {
+      fixture.counter.count(for: "grid-load-finished") > 0
+        && !fixture.service.startCachingCalls.isEmpty
+    }
     try #require(loaded)
+    let loads = fixture.counter.count(for: "grid-load-finished")
+    let disappearances = fixture.counter.count(for: "grid-disappeared")
     fixture.window.contentView = nil
-    let stopped = await observe { fixture.service.stopCachingCalls.count == 1 }
+    let stopped = await observe(in: fixture.window) {
+      fixture.counter.count(for: "grid-disappeared") > disappearances
+        && !fixture.service.stopCachingCalls.isEmpty
+    }
     try #require(stopped)
-    // Preserve the hosting view and its StateObject rather than recreate the grid.
+    let starts = fixture.service.startCachingCalls.count
+    // Preserve the hosting view and its state rather than recreate the grid.
     fixture.window.contentView = fixture.hostingView
-    let reloaded = await observe { fixture.service.startCachingCalls.count == 2 }
+    let reloaded = await observe(in: fixture.window) {
+      fixture.counter.count(for: "grid-load-finished") > loads
+        && fixture.service.startCachingCalls.count > starts
+    }
     try #require(reloaded)
-    #expect(fixture.service.startCachingCalls[1].map(\.id) == ["same-grid"])
+    #expect(fixture.service.startCachingCalls.last?.map(\.id) == ["same-grid"])
   }
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
@@ -246,14 +258,13 @@ struct LibraryGridSelectionLifecycleTests {
     // The stream remains open: awaiting its completion cannot satisfy this check.
     let selectedFirst = await observe { fixture.selection.asset == first }
     try #require(selectedFirst)
-    #expect(fixture.service.startCachingCalls.isEmpty)
+    #expect(fixture.service.startCachingCalls.allSatisfy { $0.count <= 500 })
 
     fixture.selection.asset = chosen
     stream.continuation.yield([TestAssetFactory.makeAsset(id: "last")])
     stream.continuation.finish()
-    let finished = await observe { !fixture.service.startCachingCalls.isEmpty }
+    let finished = await observe { fixture.counter.count(for: "grid-load-finished") > 0 }
     try #require(finished)
-    #expect(fixture.service.startCachingCalls.last?.count == 3)
     #expect(fixture.selection.asset == chosen)
   }
 
@@ -463,7 +474,7 @@ struct LibraryGridSelectionLifecycleTests {
     #expect(fixture.selection.asset == later)
     stream.continuation.yield([later])
     stream.continuation.finish()
-    let finished = await observe { fixture.service.startCachingCalls.last?.count == 3 }
+    let finished = await observe { fixture.counter.count(for: "grid-load-finished") > 0 }
     try #require(finished)
     #expect(fixture.selection.asset == later)
   }

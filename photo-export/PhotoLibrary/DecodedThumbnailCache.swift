@@ -39,7 +39,10 @@ final class DecodedThumbnailCache {
   }
 
   nonisolated static func memoryBudget(physicalMemory: UInt64) -> Int {
-    Int(min(256 * 1024 * 1024, max(32 * 1024 * 1024, physicalMemory / 64)))
+    let minimum: UInt64 = 32 * 1024 * 1024
+    let maximum: UInt64 = 256 * 1024 * 1024
+    let proportional = physicalMemory / 64
+    return Int(min(maximum, max(minimum, proportional)))
   }
 
   private func highQualityKey(for key: Key) -> Key {
