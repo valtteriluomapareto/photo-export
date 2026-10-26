@@ -32,7 +32,7 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
   guide](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
 - Open thumbnails and full-size previews while the first batch loads. Details show the current collection’s export history. [Preview
   details](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
-- Photos edits refresh the grid and previews in place while keeping surviving selections. [Refresh
+- Photos edits refresh the grid and previews in place while keeping surviving selections. Timeline progress badges retain their last counts when an outdated count request is canceled. [Refresh
   behavior](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
 - Export a month, year or queued batch while skipping completed files and protecting existing copies. [File naming and
   reuse](https://valtteriluomapareto.github.io/photo-export/features/#files-already-at-the-destination).
