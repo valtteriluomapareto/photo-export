@@ -25,24 +25,43 @@ final class DecodedThumbnailCache {
     }
   }
 
-  typealias Decode = @MainActor (Key) async -> CGImage?
+  typealias Decode = @Sendable (Key) async -> CGImage?
 
   init(
     decode: @escaping Decode,
-    totalCostLimit: Int = 64 * 1024 * 1024,
-    countLimit: Int = 512
+    totalCostLimit: Int = memoryBudget(physicalMemory: ProcessInfo.processInfo.physicalMemory),
+    countLimit: Int? = nil
   ) {
     self.decode = decode
     self.storage = NSCache<KeyBox, ImageBox>()
     self.storage.totalCostLimit = totalCostLimit
-    self.storage.countLimit = countLimit
+    self.storage.countLimit = countLimit ?? max(1, totalCostLimit / (256 * 256 * 4))
+  }
+
+  nonisolated static func memoryBudget(physicalMemory: UInt64) -> Int {
+    Int(min(256 * 1024 * 1024, max(32 * 1024 * 1024, physicalMemory / 64)))
+  }
+
+  private func highQualityKey(for key: Key) -> Key {
+    Key(
+      assetId: key.assetId, quantizedSize: key.quantizedSize,
+      deliveryMode: .highQuality, contentRevision: key.contentRevision)
+  }
+
+  private func fastKey(for key: Key) -> Key {
+    Key(
+      assetId: key.assetId, quantizedSize: key.quantizedSize,
+      deliveryMode: .fast, contentRevision: key.contentRevision)
   }
 
   func cached(for key: Key) -> CGImage? {
     storage.object(forKey: KeyBox(key))?.image
   }
 
-  func image(for key: Key) async -> CGImage? {
+  func image(for key: Key, decode: Decode? = nil) async -> CGImage? {
+    if key.deliveryMode == .fast, let highQuality = cached(for: highQualityKey(for: key)) {
+      return highQuality
+    }
     if let existing = cached(for: key) { return existing }
 
     let task: Task<CGImage?, Never>
@@ -56,12 +75,24 @@ final class DecodedThumbnailCache {
       nextEntryId &+= 1
       entryId = nextEntryId
       let gen = generation
+      let provider = decode ?? self.decode
       task = Task<CGImage?, Never> { [weak self] in
         guard let self else { return nil }
-        let result = await self.decode(key)
-        if let result, self.generation == gen {
-          let box = ImageBox(image: result)
-          self.storage.setObject(box, forKey: KeyBox(key), cost: box.cost)
+        var result = await provider(key)
+        if self.generation == gen, !Task.isCancelled,
+          self.inFlight[key]?.entryId == entryId
+        {
+          if key.deliveryMode == .fast,
+            let highQuality = self.cached(for: self.highQualityKey(for: key))
+          {
+            result = highQuality
+          } else if let result {
+            let box = ImageBox(image: result)
+            self.storage.setObject(box, forKey: KeyBox(key), cost: box.cost)
+            if key.deliveryMode == .highQuality {
+              self.storage.removeObject(forKey: KeyBox(self.fastKey(for: key)))
+            }
+          }
         }
         // Only retire the slot if it's still ours. A cancel-hop scheduled
         // earlier may have already cancelled-and-removed this entry, in
