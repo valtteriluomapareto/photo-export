@@ -1,21 +1,24 @@
 import Foundation
 import os
+import Synchronization
 
 /// Retains one root and its physical directory cache while admitted IO owns that scope.
-final class DestinationDirectoryAccess: ExportDirectoryResolving, @unchecked Sendable {
+final class DestinationDirectoryAccess: ExportDirectoryResolving, Sendable {
   private typealias ExportDestinationError = ExportDestinationManager.ExportDestinationError
   private let root: URL
   private let fileSystem: any FileSystemService
-  private let lock = NSLock()
   private let logger = Logger.app(.exportDestination)
-  private struct ResolvedDirectory {
+  private struct ResolvedDirectory: Sendable {
     let url: URL
     let handle: any FileDirectoryHandle
     let physicalRoot: String
   }
   private static let maximumDirectoryHandles = 16
-  private var directoryResolutions: [String: ResolvedDirectory] = [:]
-  private var previouslyResolvedDirectories: Set<String> = []
+  private struct State: Sendable {
+    var directoryResolutions: [String: ResolvedDirectory] = [:]
+    var previouslyResolvedDirectories: Set<String> = []
+  }
+  private let state = Mutex(State())
 
   init(root: URL, fileSystem: any FileSystemService = FileIOService()) {
     self.root = root
@@ -31,19 +34,23 @@ final class DestinationDirectoryAccess: ExportDirectoryResolving, @unchecked Sen
   }
 
   func revalidateDirectory(_ relativePath: String) throws {
-    try lock.withLock {
+    try state.withLock { state in
       let key = relativePath.hasSuffix("/") ? String(relativePath.dropLast()) : relativePath
-      directoryResolutions.removeValue(forKey: key)
-      previouslyResolvedDirectories.insert(key)
-      _ = try resolve(relativePath, createIfNeeded: false)
+      state.directoryResolutions.removeValue(forKey: key)
+      state.previouslyResolvedDirectories.insert(key)
+      _ = try resolve(relativePath, createIfNeeded: false, state: &state)
     }
   }
 
   func urlForRelativeDirectory(_ relativePath: String, createIfNeeded: Bool) throws -> URL {
-    try lock.withLock { try resolve(relativePath, createIfNeeded: createIfNeeded) }
+    try state.withLock { state in
+      try resolve(relativePath, createIfNeeded: createIfNeeded, state: &state)
+    }
   }
 
-  private func resolve(_ relativePath: String, createIfNeeded: Bool) throws -> URL {
+  private func resolve(_ relativePath: String, createIfNeeded: Bool, state: inout State) throws
+    -> URL
+  {
     guard !relativePath.isEmpty else {
       throw ExportDestinationError.invalidRelativePath("path is empty")
     }
@@ -73,19 +80,19 @@ final class DestinationDirectoryAccess: ExportDirectoryResolving, @unchecked Sen
       }
     }
 
-    if let cached = directoryResolutions[trimmed] {
+    if let cached = state.directoryResolutions[trimmed] {
       if try inspectDirectory(at: cached.url) == cached.handle.identity {
         let physicalPath = try fileSystem.directoryPhysicalPath(cached.handle).path
         guard Self.contains(physicalPath, under: cached.physicalRoot) else {
-          directoryResolutions.removeValue(forKey: trimmed)
-          previouslyResolvedDirectories.insert(trimmed)
+          state.directoryResolutions.removeValue(forKey: trimmed)
+          state.previouslyResolvedDirectories.insert(trimmed)
           throw ExportDestinationError.invalidRelativePath(
             "path resolves outside the export root: \(relativePath)")
         }
         return cached.url
       }
-      directoryResolutions.removeValue(forKey: trimmed)
-      previouslyResolvedDirectories.insert(trimmed)
+      state.directoryResolutions.removeValue(forKey: trimmed)
+      state.previouslyResolvedDirectories.insert(trimmed)
     }
 
     // Build the target URL by appending components.
@@ -124,7 +131,7 @@ final class DestinationDirectoryAccess: ExportDirectoryResolving, @unchecked Sen
     }
 
     var identity = try inspectDirectory(at: target)
-    if identity == nil, previouslyResolvedDirectories.contains(trimmed) {
+    if identity == nil, state.previouslyResolvedDirectories.contains(trimmed) {
       throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))
     }
     if createIfNeeded, identity == nil {
@@ -133,8 +140,8 @@ final class DestinationDirectoryAccess: ExportDirectoryResolving, @unchecked Sen
     }
     if identity != nil {
       // Bound retained descriptors independently of the number of folders in a run.
-      if directoryResolutions.count >= Self.maximumDirectoryHandles {
-        directoryResolutions.removeAll(keepingCapacity: true)
+      if state.directoryResolutions.count >= Self.maximumDirectoryHandles {
+        state.directoryResolutions.removeAll(keepingCapacity: true)
       }
       // Obtain both physical spellings from the kernel. Foundation can shorten
       // system aliases such as /private/var even after resolving their symlinks.
@@ -146,9 +153,9 @@ final class DestinationDirectoryAccess: ExportDirectoryResolving, @unchecked Sen
         throw ExportDestinationError.invalidRelativePath(
           "path resolves outside the export root: \(relativePath)")
       }
-      directoryResolutions[trimmed] = ResolvedDirectory(
+      state.directoryResolutions[trimmed] = ResolvedDirectory(
         url: target, handle: handle, physicalRoot: physicalRoot)
-      previouslyResolvedDirectories.insert(trimmed)
+      state.previouslyResolvedDirectories.insert(trimmed)
     }
 
     return target

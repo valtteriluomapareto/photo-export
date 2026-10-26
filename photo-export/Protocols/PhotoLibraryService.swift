@@ -4,7 +4,7 @@ import Photos
 /// Abstracts access to the Photos library for testability.
 /// PhotoLibraryManager conforms in production; tests inject a fake.
 @MainActor
-protocol PhotoLibraryService: AnyObject {
+protocol PhotoLibraryService: AnyObject, Sendable {
   var isAuthorized: Bool { get }
   var authorizationStatus: PHAuthorizationStatus { get }
 

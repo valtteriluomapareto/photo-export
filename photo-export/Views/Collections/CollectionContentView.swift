@@ -329,7 +329,7 @@ struct CollectionContentView: View, Equatable {
     }
   }
 
-  static func == (lhs: Self, rhs: Self) -> Bool {
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
     lhs.selection == rhs.selection
       && lhs.title == rhs.title
       && lhs.versionSelection == rhs.versionSelection

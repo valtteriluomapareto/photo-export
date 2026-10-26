@@ -1,58 +1,51 @@
 import Darwin
 import Foundation
 import os
+import Synchronization
 
 /// Shared only with the serial IO queue. A failure stays latched until a complete snapshot
 /// succeeds, because appending later operations across a missing log line would make a
 /// subsequent compaction discard history that exists only in memory.
-private final class JSONLIOFailureState: @unchecked Sendable {
-  private let lock = NSLock()
-  private var failure: (any Error)?
-  private var notified = false
+private final class JSONLIOFailureState: Sendable {
+  private struct State: Sendable {
+    var failure: (any Error)?
+    var notified = false
+  }
+  private let state = Mutex(State())
 
   func currentFailure() -> (any Error)? {
-    lock.lock()
-    defer { lock.unlock() }
-    return failure
+    state.withLock { $0.failure }
   }
 
   func fail(_ error: any Error) {
-    lock.lock()
-    defer { lock.unlock() }
-    if failure == nil { failure = error }
+    state.withLock { if $0.failure == nil { $0.failure = error } }
   }
 
   func takeUnnotifiedFailure() -> (any Error)? {
-    lock.lock()
-    defer { lock.unlock() }
-    guard !notified, let failure else { return nil }
-    notified = true
-    return failure
+    state.withLock {
+      guard !$0.notified, let failure = $0.failure else { return nil }
+      $0.notified = true
+      return failure
+    }
   }
 
   func clear() {
-    lock.lock()
-    defer { lock.unlock() }
-    failure = nil
-    notified = false
+    state.withLock { $0 = State() }
   }
 }
 
 /// Moves the frozen history to one worker; the box is empty before completion is resumed.
-final class RecordValueTransfer<Value: Sendable>: @unchecked Sendable {
-  private let lock = NSLock()
-  private var value: Value?
-  init(_ value: consuming Value) { self.value = consume value }
+final class RecordValueTransfer<Value: Sendable>: Sendable {
+  private let value: Mutex<Value?>
+  init(_ value: consuming Value) { self.value = Mutex(consume value) }
   func discard() {
-    lock.lock()
-    value = nil
-    lock.unlock()
+    value.withLock { $0 = nil }
   }
   func take() -> Value {
-    lock.lock()
-    defer { lock.unlock() }
-    defer { value = nil }
-    return value!
+    value.withLock { stored in
+      defer { stored = nil }
+      return stored!
+    }
   }
 }
 

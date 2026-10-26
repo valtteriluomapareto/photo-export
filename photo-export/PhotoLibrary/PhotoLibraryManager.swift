@@ -160,12 +160,8 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   /// screenshot run injects `ScreenshotPhotoLibraryService` here so its curated content
   /// reaches the UI through composition. `nil` for the production app launch.
   ///
-  /// `nonisolated(unsafe)` so the `nonisolated` PhotoLibraryService methods
-  /// (`countAssets(in:)`, `countAdjustedAssets(in:)`, `cachedCountAssets(in:)`,
-  /// `cachedCountAdjustedAssets(in:)`) can read it without hopping to MainActor.
-  /// Safe in practice: the property is `let` (immutable), assigned once in init, and
-  /// the value is a class reference whose own methods enforce their own isolation.
-  nonisolated(unsafe) private let overrideService: (any PhotoLibraryService)?
+  /// The Sendable reference also serves nonisolated count and inventory reads.
+  nonisolated private let overrideService: (any PhotoLibraryService)?
 
   nonisolated static func isAuthorizationSufficient(_ status: PHAuthorizationStatus) -> Bool {
     status == .authorized || status == .limited

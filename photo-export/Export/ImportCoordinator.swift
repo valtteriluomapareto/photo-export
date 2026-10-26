@@ -193,7 +193,7 @@ final class ImportCoordinator: ObservableObject {
         defer { host.exportDestination.endScopedAccess(for: scopedURL) }
 
         if requiringPreviousBackup {
-          let isCurrent: @MainActor () -> Bool = { [weak self] in
+          let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
             self?.queueCoordinator?.isCurrent(importGen) == true
           }
           let timelineHas = try await host.exportRecordStore.containsCompletedFile(
@@ -240,7 +240,8 @@ final class ImportCoordinator: ObservableObject {
         // call below is a no-op for an empty matched list.
 
         self.importStage = .readingPhotosLibrary
-        let progress: @MainActor (BackupScanner.ImportStage) -> Void = { [weak self] stage in
+        let progress: @MainActor @Sendable (BackupScanner.ImportStage) -> Void = {
+          [weak self] stage in
           guard let self, self.isCurrentImport(operationID, generation: importGen) else { return }
           self.importStage = stage
         }

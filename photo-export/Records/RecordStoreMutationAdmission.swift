@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Conservatively estimates replay work; the checkpoint boundary leaves headroom for one batch.
 struct RecordReplayBudget: Sendable {
@@ -128,19 +129,16 @@ final class RecordStoreMutationAdmission {
 /// Compatibility callers block while the actual preparation runs on its serial worker.
 /// DispatchQueue.sync may execute on the caller's thread, so it cannot establish this boundary.
 enum RecordPreparationWorker {
-  private final class ResultBox<Value: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var result: Value?
+  private final class ResultBox<Value: Sendable>: Sendable {
+    private let result = Mutex<Value?>(nil)
     func put(_ value: Value) {
-      lock.lock()
-      result = value
-      lock.unlock()
+      result.withLock { $0 = value }
     }
     func take() -> Value {
-      lock.lock()
-      defer { lock.unlock() }
-      defer { result = nil }
-      return result!
+      result.withLock { stored in
+        defer { stored = nil }
+        return stored!
+      }
     }
   }
 
