@@ -104,6 +104,58 @@ struct DecodedThumbnailCacheTests {
     #expect(decodedRevisions == [0, 1], "A warm edited revision should not decode again")
   }
 
+  @Test func cacheProviderRunsOffMain() async {
+    let image = Self.makeCGImage()
+    let threads = DecodeThreadRecorder()
+    let cache = DecodedThumbnailCache { _ in
+      let isMainThread = Thread.isMainThread
+      await threads.record(isMainThread)
+      return image
+    }
+    #expect(await cache.image(for: key()) === image)
+    #expect(await threads.values == [false])
+  }
+
+  @Test func highQualityReplacesMatchingFastEntry() async {
+    let fast = Self.makeCGImage(gray: 32)
+    let highQuality = Self.makeCGImage(gray: 224)
+    let keys = DecodedKeysRecorder()
+    let cache = DecodedThumbnailCache { key in
+      await keys.append(key)
+      return key.deliveryMode == .fast ? fast : highQuality
+    }
+    #expect(await cache.image(for: key()) === fast)
+    #expect(await cache.image(for: key(delivery: .highQuality)) === highQuality)
+    #expect(cache.cached(for: key()) == nil)
+    #expect(await cache.image(for: key()) === highQuality)
+    #expect(await keys.values.count == 2)
+  }
+
+  @Test func lateFastCompletionCannotRestoreEntryAfterHighQuality() async throws {
+    let fast = Self.makeCGImage(gray: 32)
+    let highQuality = Self.makeCGImage(gray: 224)
+    let gate = AsyncCheckpoint()
+    let cache = DecodedThumbnailCache { key in
+      if key.deliveryMode == .fast {
+        await gate.enter()
+        return fast
+      }
+      return highQuality
+    }
+    let pending = Task { await cache.image(for: key()) }
+    try await withCleanup {
+      try #require(await gate.waitForEnter(count: 1))
+      #expect(await cache.image(for: key(delivery: .highQuality)) === highQuality)
+      await gate.releaseAll()
+      _ = await pending.value
+      #expect(cache.cached(for: key()) == nil)
+      #expect(await cache.image(for: key()) === highQuality)
+    } cleanup: {
+      await gate.releaseAll()
+      _ = await pending.value
+    }
+  }
+
   // MARK: - Clear behavior
 
   @Test func clearForcesReDecodeOnNextRequest() async {
@@ -335,4 +387,9 @@ private actor DecodedKeysRecorder {
 private actor CancellationFlag {
   private(set) var value: Bool = false
   func set() { value = true }
+}
+
+private actor DecodeThreadRecorder {
+  private(set) var values: [Bool] = []
+  func record(_ isMainThread: Bool) { values.append(isMainThread) }
 }
