@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Photos
+import SwiftUI
 import Testing
 
 @testable import Photo_Export
@@ -316,6 +317,16 @@ struct PhotoKitReaderTests {
       backend.resolveOverride.mutate { $0 = nil }
       let fresh = try #require(await manager.resolveThumbnailAssets(ids: [asset.id]).first)
       #expect(fresh.contentRevision == manager.thumbnailContentRevision(for: asset.id))
+      let stale = ThumbnailAsset.synthetic(asset)
+      #expect(
+        await manager.decodedThumbnail(
+          for: stale, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+          == nil)
+      #expect(registered.isEmpty)
+      #expect(
+        await manager.decodedThumbnail(
+          for: fresh, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+          != nil)
       #expect(registered.count == 1)
       #expect(registered.first === fresh)
     } cleanup: {
@@ -366,6 +377,49 @@ struct PhotoKitReaderTests {
           for: handle,
           spec: .init(size: ThumbnailRequestSpec.gridSize, delivery: .highQuality)) != nil)
     }
+  }
+
+  @Test func mountedMonthAndAlbumCoversUseLimitedQueriesAndDecodedTargets() async throws {
+    let assets = (0..<10).map { TestAssetFactory.makeAsset(id: "tile-cover-\($0)") }
+    let backend = FakeThumbnailBackend(assets: assets)
+    let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let library = PhotoLibraryManager(
+      overrideService: FakePhotoLibraryService(), photoKitReader: reader)
+    let album = PhotoCollectionDescriptor(
+      id: "album", localIdentifier: "album", title: "Album", kind: .album,
+      pathComponents: [], children: [])
+    let content = HStack {
+      MonthTileView(
+        year: 2025, month: 4, photoCount: 10, isFullyExported: false,
+        photoLibraryService: library)
+      FolderTileView(
+        descriptor: album, photoCount: 10, albumCount: 0,
+        isFullyExported: false, isSelected: false, photoLibraryService: library)
+    }.environment(\.displayScale, 2)
+    let window = HostedViewHarness.makeWindow(
+      contentRect: NSRect(x: -10_000, y: -10_000, width: 500, height: 350), styleMask: [.borderless]
+    )
+    window.contentView = NSHostingView(rootView: content)
+    defer {
+      window.orderOut(nil)
+      window.contentView = nil
+      window.close()
+    }
+    window.orderFront(nil)
+    try #require(
+      await observe(in: window) {
+        backend.queries.value.count == 2
+          && backend.calls.value.filter { $0.action == "request" }.count == 8
+      })
+    #expect(backend.queries.value.allSatisfy { $0.limit == 4 && !$0.onMain })
+    let requests = backend.calls.value.filter { $0.action == "request" }
+    #expect(requests.filter { $0.options.size == CGSize(width: 360, height: 360) }.count == 4)
+    #expect(requests.filter { $0.options.size == CGSize(width: 288, height: 288) }.count == 4)
+    #expect(
+      requests.allSatisfy {
+        $0.options.delivery == .highQualityFormat && $0.options.resize == .exact
+          && $0.options.network
+      })
   }
 
 }
