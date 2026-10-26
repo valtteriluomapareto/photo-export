@@ -95,8 +95,8 @@ struct MonthViewModelTests {
     svc.favoritesAssets = assets
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .favorites)
-    vm.deactivate()
-    vm.deactivate()
+    await vm.deactivate().value
+    await vm.deactivate().value
     #expect(svc.stopCachingCalls.map { $0.map(\.id) } == [["A", "B"]])
     #expect(vm.selectedAsset(for: .favorites) == nil)
     var requests = 0
@@ -113,7 +113,7 @@ struct MonthViewModelTests {
     await vm.loadAssets(for: .favorites)
     #expect(requests == 1)
     #expect(svc.startCachingCalls.map { $0.map(\.id) } == [["A", "B"], ["A", "B"]])
-    vm.deactivate()
+    await vm.deactivate().value
     #expect(svc.stopCachingCalls.count == 2)
   }
 
@@ -141,7 +141,7 @@ struct MonthViewModelTests {
         }
       }
       await streams.started.waitForEnter(count: 1)
-      vm.deactivate()
+      await vm.deactivate().value
       svc.progressiveStreamOverride = nil
       svc.favoritesAssets = [makeAsset(id: "current")]
       if reactivateBeforeResponse { await vm.loadAssets(for: .favorites) }
@@ -164,7 +164,7 @@ struct MonthViewModelTests {
       #expect(svc.startCachingCalls.last?.map(\.id) == ["current"])
     } cleanup: {
       streams.finishAll()
-      vm.deactivate()
+      await vm.deactivate().value
       await streams.started.releaseAll()
     }
   }
@@ -270,7 +270,8 @@ struct MonthViewModelTests {
       await gate.releaseAll()
       #expect(await pending.value == nil)
       let calls = service.thumbnailResolveCalls.count
-      #expect(await map.handle(for: "fresh", revision: 0, isCurrent: { true })?.descriptor.id == "fresh")
+      #expect(
+        await map.handle(for: "fresh", revision: 0, isCurrent: { true })?.descriptor.id == "fresh")
       #expect(service.thumbnailResolveCalls.count == calls)
     } cleanup: {
       await gate.releaseAll()
@@ -738,12 +739,14 @@ struct MonthViewModelTests {
     service.favoritesAssets = [asset]
     let model = MonthViewModel(photoLibraryService: service)
     var events = 0
+    var stopped: Task<Void, Never>?
     let subscription = model.selectionUpdates.sink {
       events += 1
-      if events == 2 { model.deactivate() }
+      if events == 2 { stopped = model.deactivate() }
     }
     defer { subscription.cancel() }
     await model.loadAssets(for: .favorites)
+    await stopped?.value
     #expect(events == 2)
     #expect(model.selectedAsset(for: .favorites) == nil)
     #expect(service.startCachingCalls == [[asset]])

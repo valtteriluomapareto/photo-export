@@ -15,7 +15,9 @@ final class FakePhotoLibraryService: PhotoLibraryService {
   func resolveThumbnailAssets(ids: [String]) async -> [ThumbnailAsset] {
     thumbnailResolveCalls.append(ids)
     if let thumbnailResolveOverride { return await thumbnailResolveOverride(ids) }
-    return ids.compactMap { fetchAssetDescriptor(for: $0) }.map(ThumbnailAsset.synthetic)
+    return ids.map { id in
+      ThumbnailAsset.synthetic(fetchAssetDescriptor(for: id) ?? TestAssetFactory.makeAsset(id: id))
+    }
   }
 
   var cachedCountOverride: (@MainActor (PhotoFetchScope, Bool) async throws -> Int)?

@@ -241,10 +241,15 @@ struct PhotoKitReaderTests {
     let handle = try #require(handles.first)
     await reader.preheat(start: handles, stop: [])
     for mode in [ThumbnailDeliveryMode.fast, .highQuality] {
-      let image = await reader.image(for: handle, spec: .init(size: CGSize(width: 256, height: 256), delivery: mode))
+      let image = await reader.image(
+        for: handle, spec: .init(size: CGSize(width: 256, height: 256), delivery: mode))
       #expect(image?.width == 256)
       #expect(image?.height == 256)
       #expect(image?.colorSpace?.name == CGColorSpace.sRGB)
+      let pixels = try #require(image?.dataProvider?.data)
+      let bytes = try #require(CFDataGetBytePtr(pixels))
+      let offset = 128 * (try #require(image).bytesPerRow) + 128 * 4
+      #expect(Array(UnsafeBufferPointer(start: bytes + offset, count: 4)) == [255, 0, 0, 255])
     }
     await reader.preheat(start: [], stop: handles)
     let calls = backend.calls.value
@@ -284,6 +289,83 @@ struct PhotoKitReaderTests {
     let album = try await reader.coverAssets(in: .album(collectionId: "album"), limit: 4)
     #expect(album.count == 4)
     #expect(backend.queries.value.count == 2)
+  }
+
+  @Test func obsoleteHandleResolutionCannotRegisterOldChangeSnapshots() async throws {
+    let asset = makeAsset()
+    let backend = FakeThumbnailBackend(assets: [asset])
+    let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let service = FakePhotoLibraryService()
+    let manager = PhotoLibraryManager(overrideService: service, photoKitReader: reader)
+    let gate = Gate()
+    backend.resolveOverride.mutate { value in
+      value = { _ in
+        gate.hold()
+        return [.synthetic(asset)]
+      }
+    }
+    var registered: [ThumbnailAsset] = []
+    manager.thumbnailRegistrationObserver = { registered.append($0) }
+    let pending = Task { await manager.resolveThumbnailAssets(ids: [asset.id]) }
+    try await withCleanup {
+      try #require(await gate.entered.waitForEnter(count: 1))
+      manager.invalidateCache(changedThumbnailAssetIDs: [asset.id])
+      gate.release()
+      #expect(await pending.value.isEmpty)
+      #expect(registered.isEmpty)
+      backend.resolveOverride.mutate { $0 = nil }
+      let fresh = try #require(await manager.resolveThumbnailAssets(ids: [asset.id]).first)
+      #expect(fresh.contentRevision == manager.thumbnailContentRevision(for: asset.id))
+      #expect(registered.count == 1)
+      #expect(registered.first === fresh)
+    } cleanup: {
+      gate.release()
+      _ = await pending.value
+      await gate.entered.releaseAll()
+    }
+  }
+
+  @Test func gridHandlesRemainWarmAfterExportDiscardsLegacyAssetCache() async throws {
+    let asset = makeAsset()
+    let backend = FakeThumbnailBackend(assets: [asset])
+    let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let manager = PhotoLibraryManager(
+      overrideService: FakePhotoLibraryService(), photoKitReader: reader)
+    let map = GridThumbnailAssets(service: manager)
+    await map.updateWindow([asset])
+    let first = try #require(await map.handle(for: asset.id, revision: 0, isCurrent: { true }))
+    let resolves = backend.resolveCalls.value.count
+    manager.forgetPHAssetCache()
+    let retained = await map.handle(for: asset.id, revision: 0, isCurrent: { true })
+    #expect(retained === first)
+    #expect(backend.resolveCalls.value.count == resolves)
+    #expect(
+      await manager.decodedThumbnail(
+        for: first, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality) != nil
+    )
+    await map.deactivate().value
+  }
+
+  @Test func screenshotThumbnailReaderStaysSyntheticForUnknownIdentifiers() async throws {
+    let service = ScreenshotPhotoLibraryService()
+    let year = try #require(try service.availableYears().first)
+    let asset = try #require(
+      try await service.fetchAssets(year: year, month: nil, mediaType: nil).first)
+    let reader = try #require(await ScreenshotPhotoKitReader(service: service).thumbnailReader)
+    let handle = try #require(await reader.resolveAssets(ids: [asset.id]).first)
+    #expect(handle.photoKitAsset == nil)
+    #expect(
+      await reader.image(
+        for: handle, spec: .init(size: ThumbnailRequestSpec.gridSize, delivery: .highQuality))
+        != nil)
+    let unknown = await reader.resolveAssets(ids: ["unknown-synthetic-id"])
+    #expect(unknown.allSatisfy { $0.photoKitAsset == nil })
+    if let handle = unknown.first {
+      #expect(
+        await reader.image(
+          for: handle,
+          spec: .init(size: ThumbnailRequestSpec.gridSize, delivery: .highQuality)) != nil)
+    }
   }
 
 }

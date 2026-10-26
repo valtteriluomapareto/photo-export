@@ -174,6 +174,78 @@ struct DecodedThumbnailCacheTests {
     }
   }
 
+  @Test(arguments: ["asset", "revision", "size"])
+  func highQualityKeepsOtherFastKeysIndependent(difference: String) async {
+    let image = Self.makeCGImage()
+    let cache = DecodedThumbnailCache { _ in image }
+    let other = DecodedThumbnailCache.Key(
+      assetId: difference == "asset" ? "other" : "a",
+      quantizedSize: difference == "size"
+        ? CGSize(width: 320, height: 320) : CGSize(width: 200, height: 200),
+      deliveryMode: .fast, contentRevision: difference == "revision" ? 1 : 0)
+    _ = await cache.image(for: other)
+    _ = await cache.image(for: key(delivery: .highQuality))
+    #expect(cache.cached(for: other) === image)
+  }
+
+  #if DEBUG
+    @Test func endingFirstGridKeepsTheOtherThumbnailWaiterAlive() async throws {
+      let service = FakePhotoLibraryService()
+      let asset = TestAssetFactory.makeAsset(id: "shared-grid-image")
+      service.favoritesAssets = [asset]
+      let image = Self.makeCGImage()
+      let gate = AsyncCheckpoint()
+      let cancelled = LockedBox(false)
+      service.decodedThumbnailOverride = { _, _, _ in
+        await withTaskCancellationHandler {
+          await gate.enter()
+          return image
+        } onCancel: {
+          cancelled.mutate { $0 = true }
+        }
+      }
+      let library = PhotoLibraryManager(overrideService: service)
+      let firstMap = GridThumbnailAssets(service: library)
+      let secondMap = GridThumbnailAssets(service: library)
+      await firstMap.updateWindow([asset])
+      await secondMap.updateWindow([asset])
+      let source = try #require(
+        await firstMap.handle(for: asset.id, revision: 0, isCurrent: { true }))
+      let other = try #require(
+        await secondMap.handle(for: asset.id, revision: 0, isCurrent: { true }))
+      let cacheKey = DecodedThumbnailCache.Key(
+        assetId: asset.id, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+      let first = Task {
+        await library.decodedThumbnail(
+          for: source, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+      }
+      let second = Task {
+        await library.decodedThumbnail(
+          for: other, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+      }
+      try await withCleanup {
+        try #require(await gate.waitForEnter(count: 1))
+        try #require(
+          await observe { library.decodedThumbnailCache.waiterCount(for: cacheKey) == 2 })
+        first.cancel()
+        await firstMap.deactivate().value
+        try #require(
+          await observe { library.decodedThumbnailCache.waiterCount(for: cacheKey) == 1 })
+        #expect(!cancelled.value)
+        await gate.releaseAll()
+        #expect(await first.value == nil)
+        #expect(await second.value === image)
+        #expect(service.decodedThumbnailCalls.count == 1)
+      } cleanup: {
+        await gate.releaseAll()
+        _ = await first.value
+        _ = await second.value
+        await firstMap.deactivate().value
+        await secondMap.deactivate().value
+      }
+    }
+  #endif
+
   // MARK: - Clear behavior
 
   @Test func clearForcesReDecodeOnNextRequest() async {
