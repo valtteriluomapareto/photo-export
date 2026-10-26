@@ -11,7 +11,9 @@ struct DecodedThumbnailCacheTests {
   // MARK: - Test helpers
 
   /// Synthesizes a deterministic `CGImage` of `size` pixels filled with `gray`.
-  private static func makeCGImage(width: Int = 16, height: Int = 16, gray: UInt8 = 128) -> CGImage {
+  nonisolated private static func makeCGImage(width: Int = 16, height: Int = 16, gray: UInt8 = 128)
+    -> CGImage
+  {
     let bytesPerPixel = 4
     let bytesPerRow = width * bytesPerPixel
     var bytes = [UInt8](repeating: gray, count: width * height * bytesPerPixel)
@@ -28,6 +30,8 @@ struct DecodedThumbnailCacheTests {
       return context.makeImage()!
     }
   }
+
+  nonisolated private static func currentThreadIsMain() -> Bool { Thread.isMainThread }
 
   private func key(
     id: String = "a",
@@ -64,7 +68,7 @@ struct DecodedThumbnailCacheTests {
 
   // MARK: - Delivery-mode separation
 
-  @Test func fastAndHighQualityEntriesStaySeparate() async {
+  @Test func bothDeliveryModesDecodeOnceThenReuseHighQuality() async {
     let decodedKeys = DecodedKeysRecorder()
     let cache = DecodedThumbnailCache(decode: { key in
       await decodedKeys.append(key)
@@ -84,9 +88,9 @@ struct DecodedThumbnailCacheTests {
   }
 
   @Test func contentRevisionsKeepSameAssetDecodesSeparate() async {
-    var decodedRevisions: [Int] = []
+    let decodedKeys = DecodedKeysRecorder()
     let cache = DecodedThumbnailCache(decode: { key in
-      decodedRevisions.append(key.contentRevision)
+      await decodedKeys.append(key)
       return Self.makeCGImage(gray: key.contentRevision == 0 ? 32 : 224)
     })
     let original = key()
@@ -97,12 +101,150 @@ struct DecodedThumbnailCacheTests {
     let newImage = await cache.image(for: edited)
 
     #expect(original.contentRevision == 0)
-    #expect(decodedRevisions == [0, 1])
+    #expect(await decodedKeys.values.map(\.contentRevision) == [0, 1])
     #expect(oldImage !== newImage)
     #expect(cache.cached(for: edited) === newImage)
     #expect(await cache.image(for: edited) === newImage)
-    #expect(decodedRevisions == [0, 1], "A warm edited revision should not decode again")
+    #expect(
+      await decodedKeys.values.map(\.contentRevision) == [0, 1],
+      "A warm edited revision should not decode again")
   }
+
+  @Test func cacheProviderRunsOffMain() async {
+    let image = Self.makeCGImage()
+    let threads = DecodeThreadRecorder()
+    let cache = DecodedThumbnailCache { _ in
+      let isMainThread = Self.currentThreadIsMain()
+      await threads.record(isMainThread)
+      return image
+    }
+    #expect(await cache.image(for: key()) === image)
+    #expect(await threads.values == [false])
+  }
+
+  @Test func highQualityReplacesMatchingFastEntry() async {
+    let fast = Self.makeCGImage(gray: 32)
+    let highQuality = Self.makeCGImage(gray: 224)
+    let keys = DecodedKeysRecorder()
+    let cache = DecodedThumbnailCache { key in
+      await keys.append(key)
+      return key.deliveryMode == .fast ? fast : highQuality
+    }
+    #expect(await cache.image(for: key()) === fast)
+    #expect(await cache.image(for: key(delivery: .highQuality)) === highQuality)
+    #expect(cache.cached(for: key()) == nil)
+    #expect(await cache.image(for: key()) === highQuality)
+    #expect(await keys.values.count == 2)
+  }
+
+  @Test func lateFastCompletionCannotRestoreEntryAfterHighQuality() async throws {
+    let fast = Self.makeCGImage(gray: 32)
+    let highQuality = Self.makeCGImage(gray: 224)
+    let gate = AsyncCheckpoint()
+    let cache = DecodedThumbnailCache { key in
+      if key.deliveryMode == .fast {
+        await gate.enter()
+        return fast
+      }
+      return highQuality
+    }
+    let pending = Task { await cache.image(for: key()) }
+    try await withCleanup {
+      try #require(await gate.waitForEnter(count: 1))
+      #expect(await cache.image(for: key(delivery: .highQuality)) === highQuality)
+      await gate.releaseAll()
+      _ = await pending.value
+      #expect(cache.cached(for: key()) == nil)
+      #expect(await cache.image(for: key()) === highQuality)
+    } cleanup: {
+      await gate.releaseAll()
+      _ = await pending.value
+    }
+  }
+
+  @Test func memoryBudgetStaysBounded() {
+    let gibibyte: UInt64 = 1024 * 1024 * 1024
+    let cases: [(UInt64, Int)] = [
+      (0, 32), (2 * gibibyte, 32), (8 * gibibyte, 128), (64 * gibibyte, 256),
+    ]
+    for (physicalMemory, expectedMiB) in cases {
+      #expect(
+        DecodedThumbnailCache.memoryBudget(physicalMemory: physicalMemory)
+          == expectedMiB * 1024 * 1024)
+    }
+  }
+
+  @Test(arguments: ["asset", "revision", "size"])
+  func highQualityKeepsOtherFastKeysIndependent(difference: String) async {
+    let image = Self.makeCGImage()
+    let cache = DecodedThumbnailCache { _ in image }
+    let other = DecodedThumbnailCache.Key(
+      assetId: difference == "asset" ? "other" : "a",
+      quantizedSize: difference == "size"
+        ? CGSize(width: 320, height: 320) : CGSize(width: 200, height: 200),
+      deliveryMode: .fast, contentRevision: difference == "revision" ? 1 : 0)
+    _ = await cache.image(for: other)
+    _ = await cache.image(for: key(delivery: .highQuality))
+    #expect(cache.cached(for: other) === image)
+  }
+
+  #if DEBUG
+    @Test func endingFirstGridKeepsTheOtherThumbnailWaiterAlive() async throws {
+      let service = FakePhotoLibraryService()
+      let asset = TestAssetFactory.makeAsset(id: "shared-grid-image")
+      service.favoritesAssets = [asset]
+      let image = Self.makeCGImage()
+      let gate = AsyncCheckpoint()
+      let cancelled = LockedBox(false)
+      service.decodedThumbnailOverride = { _, _, _ in
+        await withTaskCancellationHandler {
+          await gate.enter()
+          return image
+        } onCancel: {
+          cancelled.mutate { $0 = true }
+        }
+      }
+      let library = PhotoLibraryManager(overrideService: service)
+      let firstMap = GridThumbnailAssets(service: library)
+      let secondMap = GridThumbnailAssets(service: library)
+      await firstMap.updateWindow([asset])
+      await secondMap.updateWindow([asset])
+      let source = try #require(
+        await firstMap.handle(for: asset.id, revision: 0, isCurrent: { true }))
+      let other = try #require(
+        await secondMap.handle(for: asset.id, revision: 0, isCurrent: { true }))
+      let cacheKey = DecodedThumbnailCache.Key(
+        assetId: asset.id, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+      let first = Task {
+        await library.decodedThumbnail(
+          for: source, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+      }
+      let second = Task {
+        await library.decodedThumbnail(
+          for: other, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+      }
+      try await withCleanup {
+        try #require(await gate.waitForEnter(count: 1))
+        try #require(
+          await observe { library.decodedThumbnailCache.waiterCount(for: cacheKey) == 2 })
+        first.cancel()
+        await firstMap.deactivate().value
+        try #require(
+          await observe { library.decodedThumbnailCache.waiterCount(for: cacheKey) == 1 })
+        #expect(!cancelled.value)
+        await gate.releaseAll()
+        #expect(await first.value == nil)
+        #expect(await second.value === image)
+        #expect(service.decodedThumbnailCalls.count == 1)
+      } cleanup: {
+        await gate.releaseAll()
+        _ = await first.value
+        _ = await second.value
+        await firstMap.deactivate().value
+        await secondMap.deactivate().value
+      }
+    }
+  #endif
 
   // MARK: - Clear behavior
 
@@ -199,27 +341,29 @@ struct DecodedThumbnailCacheTests {
 
   // MARK: - Cancellation propagation
 
-  @Test func cancellingOnlyWaiterCancelsTheUnderlyingDecode() async {
+  @Test func cancellingOnlyWaiterCancelsTheUnderlyingDecode() async throws {
     let decodeEntered = AsyncCheckpoint()
-    let decodeWasCancelled = CancellationFlag()
+    let cancelled = AsyncStream<Void>.makeStream()
+    var cancellation = cancelled.stream.makeAsyncIterator()
     let cache = DecodedThumbnailCache(decode: { _ in
       await withTaskCancellationHandler {
         await decodeEntered.enter()
         return Self.makeCGImage()
       } onCancel: {
-        Task { await decodeWasCancelled.set() }
+        cancelled.continuation.yield(())
       }
     })
-
-    let task = Task { @MainActor in
-      _ = await cache.image(for: key())
+    let task = Task { await cache.image(for: key()) }
+    try await withCleanup {
+      try #require(await decodeEntered.waitForEnter(count: 1))
+      task.cancel()
+      // Keep physical work held until the last-waiter cancellation reaches its provider.
+      try #require(await cancellation.next() != nil)
+    } cleanup: {
+      await decodeEntered.releaseAll()
+      _ = await task.value
+      cancelled.continuation.finish()
     }
-    // Wait deterministically until the decode is suspended on the gate.
-    await decodeEntered.waitForEnter(count: 1)
-    task.cancel()
-    await decodeEntered.releaseAll()
-    _ = await task.value
-    #expect(await decodeWasCancelled.value)
   }
 
   @Test func cancellingOneOfTwoWaitersDoesNotCancelDecode() async {
@@ -335,4 +479,9 @@ private actor DecodedKeysRecorder {
 private actor CancellationFlag {
   private(set) var value: Bool = false
   func set() { value = true }
+}
+
+private actor DecodeThreadRecorder {
+  private(set) var values: [Bool] = []
+  func record(_ isMainThread: Bool) { values.append(isMainThread) }
 }

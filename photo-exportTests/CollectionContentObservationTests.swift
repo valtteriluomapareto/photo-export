@@ -14,6 +14,7 @@ import Testing
       @Published var title = "Favorites"
       @Published var asset: AssetDescriptor?
       @Published var renderPhase = 0
+      @Published var scrollTargetID: String?
     }
 
     @MainActor
@@ -43,11 +44,16 @@ import Testing
           },
           selectedAsset: $navigation.asset, photoLibraryService: service
         )
-        pane.equatable()
-          .overlay {
-            Color.clear.frame(width: 1, height: 1)
-              .task(id: phase) { counter.record("render-phase:\(phase)") }
-          }
+        ScrollViewReader { proxy in
+          pane.equatable()
+            .onChange(of: navigation.scrollTargetID) { _, id in
+              if let id { proxy.scrollTo(id, anchor: .top) }
+            }
+            .overlay {
+              Color.clear.frame(width: 1, height: 1)
+                .task(id: phase) { counter.record("render-phase:\(phase)") }
+            }
+        }
       }
     }
 
@@ -133,6 +139,34 @@ import Testing
           + "bodies=\(counter.count(for: "collectionBody")), "
           + "preheatStarts=\(service.startCachingCalls.count)"
       }
+    }
+
+    @Test(.timeLimit(.minutes(2)))
+    func mountedGridScrollingPreheatsAssetsBeyondInitialWindow() async throws {
+      let f = Fixture(preselectFirstAsset: true)
+      defer { f.close() }
+      f.show()
+      try #require(
+        await observe(in: f.window) {
+          f.counter.count(for: "grid-load-finished") > 0
+            && f.counter.count(for: "summary:0/10000") > 0
+        })
+      try await f.renderBarrier()
+      let beyondInitialWindow = Set(f.service.favoritesAssets.dropFirst(500).map(\.id))
+      f.navigation.scrollTargetID = f.service.favoritesAssets[800].id
+      try #require(
+        await observe(in: f.window) {
+          f.service.decodedThumbnailCalls.contains { beyondInitialWindow.contains($0.assetId) }
+        })
+      try await f.renderBarrier()
+      try #require(
+        await observe(in: f.window) {
+          f.service.startCachingCalls.contains { batch in
+            batch.contains { beyondInitialWindow.contains($0.id) }
+          }
+        })
+      #expect(f.service.startCachingCalls.allSatisfy { $0.count <= 500 })
+      #expect(!f.service.stopCachingCalls.isEmpty)
     }
 
     /// Unrelated queue publications must not re-render the pane, through either its inputs (the

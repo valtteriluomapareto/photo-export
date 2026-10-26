@@ -146,9 +146,12 @@ struct ThumbnailViewLifecycleTests {
         await oldObserver.value == nil,
         "An obsolete decode must not return image bytes to its waiters")
       #expect(fixture.shows(.blue))
+      let cached = fixture.manager.cachedDecodedThumbnail(
+        for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: oldDelivery)
+      #expect(oldDelivery == .fast ? cached == nil : cached === blue)
       #expect(
         fixture.manager.cachedDecodedThumbnail(
-          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: oldDelivery) === blue)
+          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: .highQuality) === blue)
     } cleanup: {
       fixture.close()
       await oldDecode.releaseAll()
@@ -231,9 +234,9 @@ struct ThumbnailViewLifecycleTests {
     fixture.manager.invalidateCache(changedThumbnailAssetIDs: ["asset-B"])
     #expect(fixture.manager.thumbnailContentRevision(for: "asset-A") == oldRevision)
     for delivery in [ThumbnailDeliveryMode.fast, .highQuality] {
-      #expect(
-        fixture.manager.cachedDecodedThumbnail(
-          for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: delivery) === red)
+      let cached = fixture.manager.cachedDecodedThumbnail(
+        for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: delivery)
+      #expect(delivery == .fast ? cached == nil : cached === red)
       let warm = await fixture.manager.decodedThumbnail(
         for: "asset-A", quantizedSize: Self.targetSize, deliveryMode: delivery)
       #expect(warm === red)

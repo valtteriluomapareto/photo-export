@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Photos
+import SwiftUI
 import Testing
 
 @testable import Photo_Export
@@ -233,4 +235,191 @@ struct PhotoKitReaderTests {
     }
     #expect(resource(Int64(12)).uniformTypeIdentifier == "public.movie")
   }
+  @Test func thumbnailPreheatAndRequestsUseTheSameOptionsOffMain() async throws {
+    let backend = FakeThumbnailBackend(assets: [makeAsset()])
+    let reader = ProductionThumbnailReader(backend: backend)
+    let handles = await reader.resolveAssets(ids: ["reader-asset"])
+    let handle = try #require(handles.first)
+    await reader.preheat(start: handles, stop: [])
+    for mode in [ThumbnailDeliveryMode.fast, .highQuality] {
+      let image = await reader.image(
+        for: handle, spec: .init(size: CGSize(width: 256, height: 256), delivery: mode))
+      #expect(image?.width == 256)
+      #expect(image?.height == 256)
+      #expect(image?.colorSpace?.name == CGColorSpace.sRGB)
+      let pixels = try #require(image?.dataProvider?.data)
+      let bytes = try #require(CFDataGetBytePtr(pixels))
+      let offset = 128 * (try #require(image).bytesPerRow) + 128 * 4
+      #expect(Array(UnsafeBufferPointer(start: bytes + offset, count: 4)) == [255, 0, 0, 255])
+    }
+    await reader.preheat(start: [], stop: handles)
+    let calls = backend.calls.value
+    for action in ["start", "request", "stop"] {
+      let options = calls.filter { $0.action == action }.map(\.options)
+      #expect(options.count == 2)
+      #expect(options == calls.filter { $0.action == "request" }.map(\.options))
+    }
+    #expect(!calls.isEmpty && calls.allSatisfy { !$0.onMain })
+  }
+
+  @Test func overlappingThumbnailWindowsKeepTheirOwnRegistrations() async throws {
+    let backend = FakeThumbnailBackend(assets: [makeAsset()])
+    let reader = ProductionThumbnailReader(backend: backend)
+    let handles = await reader.resolveAssets(ids: ["reader-asset"])
+    try #require(!handles.isEmpty)
+    await reader.preheat(start: handles, stop: [])
+    await reader.preheat(start: handles, stop: [])
+    #expect(backend.calls.value.filter { $0.action == "start" }.count == 2)
+    await reader.preheat(start: [], stop: handles)
+    #expect(backend.calls.value.filter { $0.action == "stop" }.isEmpty)
+    await reader.preheat(start: [], stop: handles)
+    #expect(backend.calls.value.filter { $0.action == "stop" }.count == 2)
+  }
+
+  @Test func coverQuerySetsLimitBeforeBackgroundFetchAndPreservesOrder() async throws {
+    let assets = (0..<10).map { TestAssetFactory.makeAsset(id: "cover-\($0)") }
+    let backend = FakeThumbnailBackend(assets: assets)
+    let reader = ProductionThumbnailReader(backend: backend)
+    let covers = try await reader.coverAssets(in: .timeline(year: 2025, month: 4), limit: 4)
+    #expect(covers.map(\.descriptor.id) == Array(assets.prefix(4)).map(\.id))
+    let query = try #require(backend.queries.value.first)
+    #expect(query.limit == 4)
+    #expect(query.hasPredicate)
+    #expect(query.sortKeys == ["creationDate"])
+    #expect(!query.onMain)
+    let album = try await reader.coverAssets(in: .album(collectionId: "album"), limit: 4)
+    #expect(album.count == 4)
+    #expect(backend.queries.value.count == 2)
+  }
+
+  @Test func obsoleteHandleResolutionCannotRegisterOldChangeSnapshots() async throws {
+    let asset = makeAsset()
+    let backend = FakeThumbnailBackend(assets: [asset])
+    let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let service = FakePhotoLibraryService()
+    let manager = PhotoLibraryManager(overrideService: service, photoKitReader: reader)
+    let gate = Gate()
+    backend.resolveOverride.mutate { value in
+      value = { _ in
+        gate.hold()
+        return [.synthetic(asset)]
+      }
+    }
+    var registered: [ThumbnailAsset] = []
+    manager.thumbnailRegistrationObserver = { registered.append($0) }
+    let pending = Task { await manager.resolveThumbnailAssets(ids: [asset.id]) }
+    try await withCleanup {
+      try #require(await gate.entered.waitForEnter(count: 1))
+      manager.invalidateCache(changedThumbnailAssetIDs: [asset.id])
+      gate.release()
+      #expect(await pending.value.isEmpty)
+      #expect(registered.isEmpty)
+      backend.resolveOverride.mutate { $0 = nil }
+      let fresh = try #require(await manager.resolveThumbnailAssets(ids: [asset.id]).first)
+      #expect(fresh.contentRevision == manager.thumbnailContentRevision(for: asset.id))
+      let stale = ThumbnailAsset.synthetic(asset)
+      #expect(
+        await manager.decodedThumbnail(
+          for: stale, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+          == nil)
+      #expect(registered.isEmpty)
+      #expect(
+        await manager.decodedThumbnail(
+          for: fresh, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+          != nil)
+      #expect(registered.count == 1)
+      #expect(registered.first === fresh)
+    } cleanup: {
+      gate.release()
+      _ = await pending.value
+      await gate.entered.releaseAll()
+    }
+  }
+
+  @Test func gridHandlesRemainWarmAfterExportDiscardsLegacyAssetCache() async throws {
+    let asset = makeAsset()
+    let backend = FakeThumbnailBackend(assets: [asset])
+    let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let manager = PhotoLibraryManager(
+      overrideService: FakePhotoLibraryService(), photoKitReader: reader)
+    let map = GridThumbnailAssets(service: manager)
+    await map.updateWindow([asset])
+    let first = try #require(await map.handle(for: asset.id, revision: 0, isCurrent: { true }))
+    let resolves = backend.resolveCalls.value.count
+    manager.forgetPHAssetCache()
+    let retained = await map.handle(for: asset.id, revision: 0, isCurrent: { true })
+    #expect(retained === first)
+    #expect(backend.resolveCalls.value.count == resolves)
+    #expect(
+      await manager.decodedThumbnail(
+        for: first, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality) != nil
+    )
+    await map.deactivate().value
+  }
+
+  @Test func screenshotThumbnailReaderStaysSyntheticForUnknownIdentifiers() async throws {
+    let service = ScreenshotPhotoLibraryService()
+    let year = try #require(try service.availableYears().first)
+    let asset = try #require(
+      try await service.fetchAssets(year: year, month: nil, mediaType: nil).first)
+    let reader = try #require(await ScreenshotPhotoKitReader(service: service).thumbnailReader)
+    let handle = try #require(await reader.resolveAssets(ids: [asset.id]).first)
+    #expect(handle.photoKitAsset == nil)
+    #expect(
+      await reader.image(
+        for: handle, spec: .init(size: ThumbnailRequestSpec.gridSize, delivery: .highQuality))
+        != nil)
+    let unknown = await reader.resolveAssets(ids: ["unknown-synthetic-id"])
+    #expect(unknown.allSatisfy { $0.photoKitAsset == nil })
+    if let handle = unknown.first {
+      #expect(
+        await reader.image(
+          for: handle,
+          spec: .init(size: ThumbnailRequestSpec.gridSize, delivery: .highQuality)) != nil)
+    }
+  }
+
+  @Test func mountedMonthAndAlbumCoversUseLimitedQueriesAndDecodedTargets() async throws {
+    let assets = (0..<10).map { TestAssetFactory.makeAsset(id: "tile-cover-\($0)") }
+    let backend = FakeThumbnailBackend(assets: assets)
+    let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let library = PhotoLibraryManager(
+      overrideService: FakePhotoLibraryService(), photoKitReader: reader)
+    let album = PhotoCollectionDescriptor(
+      id: "album", localIdentifier: "album", title: "Album", kind: .album,
+      pathComponents: [], children: [])
+    let content = HStack {
+      MonthTileView(
+        year: 2025, month: 4, photoCount: 10, isFullyExported: false,
+        photoLibraryService: library)
+      FolderTileView(
+        descriptor: album, photoCount: 10, albumCount: 0,
+        isFullyExported: false, isSelected: false, photoLibraryService: library)
+    }.environment(\.displayScale, 2)
+    let window = HostedViewHarness.makeWindow(
+      contentRect: NSRect(x: -10_000, y: -10_000, width: 500, height: 350), styleMask: [.borderless]
+    )
+    window.contentView = NSHostingView(rootView: content)
+    defer {
+      window.orderOut(nil)
+      window.contentView = nil
+      window.close()
+    }
+    window.orderFront(nil)
+    try #require(
+      await observe(in: window) {
+        backend.queries.value.count == 2
+          && backend.calls.value.filter { $0.action == "request" }.count == 8
+      })
+    #expect(backend.queries.value.allSatisfy { $0.limit == 4 && !$0.onMain })
+    let requests = backend.calls.value.filter { $0.action == "request" }
+    #expect(requests.filter { $0.options.size == CGSize(width: 360, height: 360) }.count == 4)
+    #expect(requests.filter { $0.options.size == CGSize(width: 288, height: 288) }.count == 4)
+    #expect(
+      requests.allSatisfy {
+        $0.options.delivery == .highQualityFormat && $0.options.resize == .exact
+          && $0.options.network
+      })
+  }
+
 }

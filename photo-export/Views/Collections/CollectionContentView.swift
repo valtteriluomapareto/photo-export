@@ -102,7 +102,12 @@ struct CollectionContentView: View, Equatable {
               onSelect: { viewModel.select(assetId: asset.id) })
           }
         }
+        .scrollTargetLayout()
         .padding(.top, 4)
+      }
+      .environment(\.gridThumbnailAssets, viewModel.thumbnailAssets)
+      .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+        Task { await viewModel.updateVisibleAssetIDs(ids) }
       }
     }
     .padding(.horizontal)
@@ -116,6 +121,9 @@ struct CollectionContentView: View, Equatable {
         isCurrent: {
           photoLibraryManager.libraryRefresh.sourceRevision(for: query) == source
         })
+      #if DEBUG
+        bodyCounter?.record("grid-load-finished")
+      #endif
     }
     .onAppear { photoLibraryManager.beginObservingQuery(PhotoLibraryQuery(scope: scope)) }
     .onChange(of: PhotoLibraryQuery(scope: scope)) { old, new in
@@ -125,6 +133,9 @@ struct CollectionContentView: View, Equatable {
     .onDisappear {
       photoLibraryManager.endObservingQuery(PhotoLibraryQuery(scope: scope))
       viewModel.deactivate()
+      #if DEBUG
+        bodyCounter?.record("grid-disappeared")
+      #endif
     }
     .onReceive(viewModel.selectionUpdates) { _ in
       // The model emits after an owned commit. Derive from the live binding

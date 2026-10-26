@@ -52,6 +52,23 @@ import Testing
     try await body()
   }
 
+  @Test func libraryThumbnailsUseTheComposedReader() async throws {
+    var composition = makeTestComposition(label: "app-core-thumbnail-reader")
+    defer { try? FileManager.default.removeItem(at: composition.appStateRoot) }
+    let asset = TestAssetFactory.makeAsset(id: "composed-thumbnail")
+    let backend = FakeThumbnailBackend(assets: [asset])
+    composition.photoKitReader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let core = makeCore(composition)
+    let handle = try #require(
+      await core.photoLibraryManager.resolveThumbnailAssets(ids: [asset.id]).first)
+    #expect(
+      await core.photoLibraryManager.decodedThumbnail(
+        for: handle, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality)
+        != nil)
+    #expect(backend.resolveCalls.value == [[asset.id]])
+    #expect(backend.calls.value.contains { $0.action == "request" && !$0.onMain })
+  }
+
   // MARK: - Startup
 
   @Test func startAttachesEachServiceOnceInLaunchOrder() async throws {

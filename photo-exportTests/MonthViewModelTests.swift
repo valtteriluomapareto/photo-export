@@ -95,8 +95,8 @@ struct MonthViewModelTests {
     svc.favoritesAssets = assets
     let vm = MonthViewModel(photoLibraryService: svc)
     await vm.loadAssets(for: .favorites)
-    vm.deactivate()
-    vm.deactivate()
+    await vm.deactivate().value
+    await vm.deactivate().value
     #expect(svc.stopCachingCalls.map { $0.map(\.id) } == [["A", "B"]])
     #expect(vm.selectedAsset(for: .favorites) == nil)
     var requests = 0
@@ -113,7 +113,7 @@ struct MonthViewModelTests {
     await vm.loadAssets(for: .favorites)
     #expect(requests == 1)
     #expect(svc.startCachingCalls.map { $0.map(\.id) } == [["A", "B"], ["A", "B"]])
-    vm.deactivate()
+    await vm.deactivate().value
     #expect(svc.stopCachingCalls.count == 2)
   }
 
@@ -141,7 +141,7 @@ struct MonthViewModelTests {
         }
       }
       await streams.started.waitForEnter(count: 1)
-      vm.deactivate()
+      await vm.deactivate().value
       svc.progressiveStreamOverride = nil
       svc.favoritesAssets = [makeAsset(id: "current")]
       if reactivateBeforeResponse { await vm.loadAssets(for: .favorites) }
@@ -164,7 +164,7 @@ struct MonthViewModelTests {
       #expect(svc.startCachingCalls.last?.map(\.id) == ["current"])
     } cleanup: {
       streams.finishAll()
-      vm.deactivate()
+      await vm.deactivate().value
       await streams.started.releaseAll()
     }
   }
@@ -234,6 +234,50 @@ struct MonthViewModelTests {
     #expect(vm.selectedAssetId == nil)
     #expect(!vm.isLoading)
     #expect(svc.stopCachingCalls.last?.map(\.id) == ["a", "b"])
+  }
+
+  @Test func visiblePreheatWindowMovesBeyondFirstFiveHundredUsingOnlyDeltas() async throws {
+    let service = FakePhotoLibraryService()
+    service.favoritesAssets = (0..<1200).map { makeAsset(id: "visible-\($0)") }
+    let model = MonthViewModel(photoLibraryService: service)
+    await model.loadAssets(for: .favorites)
+    await model.updateVisibleAssetIDs((800...805).map { "visible-\($0)" })
+    #expect(service.startCachingCalls.last?.map(\.id) == (776...829).map { "visible-\($0)" })
+    #expect(service.stopCachingCalls.last?.count == 500)
+    await model.updateVisibleAssetIDs((801...806).map { "visible-\($0)" })
+    #expect(service.startCachingCalls.last?.map(\.id) == ["visible-830"])
+    #expect(service.stopCachingCalls.last?.map(\.id) == ["visible-776"])
+    await model.deactivate().value
+    #expect(service.stopCachingCalls.last?.count == 54)
+  }
+
+  @Test func obsoleteThumbnailResolutionCannotRepopulateNewScope() async throws {
+    let service = FakePhotoLibraryService()
+    let gate = AsyncCheckpoint()
+    let old = makeAsset(id: "same")
+    let fresh = makeAsset(id: "fresh")
+    service.thumbnailResolveOverride = { _ in
+      await gate.enter()
+      return [.synthetic(old)]
+    }
+    let map = GridThumbnailAssets(service: service)
+    let pending = Task { await map.handle(for: "same", revision: 0, isCurrent: { true }) }
+    try await withCleanup {
+      try #require(await gate.waitForEnter(count: 1))
+      map.reset()
+      service.thumbnailResolveOverride = { _ in [.synthetic(fresh)] }
+      await map.updateWindow([fresh])
+      await gate.releaseAll()
+      #expect(await pending.value == nil)
+      let calls = service.thumbnailResolveCalls.count
+      #expect(
+        await map.handle(for: "fresh", revision: 0, isCurrent: { true })?.descriptor.id == "fresh")
+      #expect(service.thumbnailResolveCalls.count == calls)
+    } cleanup: {
+      await gate.releaseAll()
+      _ = await pending.value
+      await map.deactivate().value
+    }
   }
 
   // MARK: - Error path
@@ -695,12 +739,14 @@ struct MonthViewModelTests {
     service.favoritesAssets = [asset]
     let model = MonthViewModel(photoLibraryService: service)
     var events = 0
+    var stopped: Task<Void, Never>?
     let subscription = model.selectionUpdates.sink {
       events += 1
-      if events == 2 { model.deactivate() }
+      if events == 2 { stopped = model.deactivate() }
     }
     defer { subscription.cancel() }
     await model.loadAssets(for: .favorites)
+    await stopped?.value
     #expect(events == 2)
     #expect(model.selectedAsset(for: .favorites) == nil)
     #expect(service.startCachingCalls == [[asset]])

@@ -9,9 +9,7 @@ import SwiftUI
 ///
 /// Covers are loaded lazily via `.task` so a year with 12 months only fetches covers for
 /// the tiles that scroll into view (`LazyVGrid` semantics). Each tile requests the four
-/// chronologically earliest assets in its month — fetched through
-/// `PhotoLibraryService.fetchAssets(year:month:)`, which is the same API the year/month
-/// content panes use.
+/// chronologically earliest assets through a limited background query.
 struct MonthTileView: View {
   /// Side length of the tile's image area. Larger than `FolderTileView.tileSide` (144)
   /// because the year overview has a fixed cardinality of 12 children — there's
@@ -31,7 +29,7 @@ struct MonthTileView: View {
 
   @Environment(\.displayScale) private var displayScale
 
-  @State private var covers: [NSImage] = []
+  @State private var covers: [CGImage] = []
   @State private var coverState: CoverState = .idle
   @State private var isHovering: Bool = false
 
@@ -85,7 +83,7 @@ struct MonthTileView: View {
       case .loaded:
         coverGrid
       case .loading, .idle:
-        ProgressView().controlSize(.small).accessibilityHidden(true)
+        Rectangle().fill(Color.gray.opacity(0.2)).accessibilityLabel("Loading cover")
       case .empty:
         Image(systemName: "photo.on.rectangle.angled")
           .font(.system(size: 36))
@@ -104,7 +102,7 @@ struct MonthTileView: View {
     let displayed = Array(covers.prefix(4))
     if displayed.count <= 1 {
       if let single = displayed.first {
-        Image(nsImage: single)
+        Image(decorative: single, scale: 1)
           .resizable()
           .scaledToFill()
           .frame(width: Self.tileSide, height: Self.tileSide)
@@ -125,10 +123,10 @@ struct MonthTileView: View {
   }
 
   @ViewBuilder
-  private func coverCell(at index: Int, of covers: [NSImage]) -> some View {
+  private func coverCell(at index: Int, of covers: [CGImage]) -> some View {
     let cellSide = (Self.tileSide - 1) / 2
     if index < covers.count {
-      Image(nsImage: covers[index])
+      Image(decorative: covers[index], scale: 1)
         .resizable()
         .scaledToFill()
         .frame(width: cellSide, height: cellSide)
@@ -180,18 +178,7 @@ struct MonthTileView: View {
 
   // MARK: - Cover loading
 
-  /// Loads up to four cover thumbnails for the month. Renders 1-up if the month has a
-  /// single asset, 4-up otherwise. Thumbnail fetches dispatch into a `TaskGroup`; the
-  /// underlying `loadThumbnail` is `@MainActor`-isolated so the calls serialise on the
-  /// main actor, but each await yields the runloop and PhotoKit can prefetch in the
-  /// background — fast enough in practice that the simpler structure beats threading a
-  /// detached fetch through the service seam.
-  ///
-  /// `fetchAssets(in: .timeline(year:month:))` materialises the full month list, which is
-  /// acceptable for v1 — the tile only builds when the year view is shown, and a typical
-  /// month holds tens to hundreds of photos. A `firstAssets(in:limit:)` fast path on
-  /// `PhotoLibraryService` is the natural follow-up if this proves a bottleneck on very
-  /// large months.
+  /// Loads a bounded cover query and reuses target-sized decoded images.
   private func loadCovers() async {
     // Reset state on every run: the .task id changes when the user flips
     // years, but SwiftUI keeps each month-tile's @State alive across that
@@ -201,8 +188,8 @@ struct MonthTileView: View {
     covers = []
     coverState = .loading
     do {
-      let assets = try await photoLibraryService.fetchAssets(
-        in: .timeline(year: year, month: month), mediaType: nil)
+      let assets = try await photoLibraryService.coverAssets(
+        in: .timeline(year: year, month: month), limit: 4)
       // The previous task (different year/month) may have already been cancelled by
       // SwiftUI's .task(id:) lifecycle, but its `await` could still resume and write
       // state for a tile that's no longer visible. Bail before publishing.
@@ -220,17 +207,17 @@ struct MonthTileView: View {
       // also calls into this method, so both surfaces now match).
       let pixelSide = Self.tileSide * max(displayScale, 1)
       let target = CGSize(width: pixelSide, height: pixelSide)
-      let loaded = await withTaskGroup(of: (Int, NSImage?).self) { group in
+      let loaded = await withTaskGroup(of: (Int, CGImage?).self) { group in
         for (index, id) in coverIds.enumerated() {
           group.addTask {
             (
               index,
-              await photoLibraryService.loadThumbnailHighQuality(
-                for: id, pixelSize: target, allowNetwork: true)
+              await photoLibraryService.decodedThumbnail(
+                for: id, quantizedSize: target, deliveryMode: .highQuality)
             )
           }
         }
-        var pairs: [(Int, NSImage)] = []
+        var pairs: [(Int, CGImage)] = []
         for await (index, image) in group {
           if let image { pairs.append((index, image)) }
         }
