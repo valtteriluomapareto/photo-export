@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Photos
 import Testing
@@ -233,4 +234,56 @@ struct PhotoKitReaderTests {
     }
     #expect(resource(Int64(12)).uniformTypeIdentifier == "public.movie")
   }
+  @Test func thumbnailPreheatAndRequestsUseTheSameOptionsOffMain() async throws {
+    let backend = FakeThumbnailBackend(assets: [makeAsset()])
+    let reader = ProductionThumbnailReader(backend: backend)
+    let handles = await reader.resolveAssets(ids: ["reader-asset"])
+    let handle = try #require(handles.first)
+    await reader.preheat(start: handles, stop: [])
+    for mode in [ThumbnailDeliveryMode.fast, .highQuality] {
+      let image = await reader.image(for: handle, spec: .init(size: CGSize(width: 256, height: 256), delivery: mode))
+      #expect(image?.width == 256)
+      #expect(image?.height == 256)
+      #expect(image?.colorSpace?.name == CGColorSpace.sRGB)
+    }
+    await reader.preheat(start: [], stop: handles)
+    let calls = backend.calls.value
+    for action in ["start", "request", "stop"] {
+      let options = calls.filter { $0.action == action }.map(\.options)
+      #expect(options.count == 2)
+      #expect(options == calls.filter { $0.action == "request" }.map(\.options))
+    }
+    #expect(!calls.isEmpty && calls.allSatisfy { !$0.onMain })
+  }
+
+  @Test func overlappingThumbnailWindowsKeepTheirOwnRegistrations() async throws {
+    let backend = FakeThumbnailBackend(assets: [makeAsset()])
+    let reader = ProductionThumbnailReader(backend: backend)
+    let handles = await reader.resolveAssets(ids: ["reader-asset"])
+    try #require(!handles.isEmpty)
+    await reader.preheat(start: handles, stop: [])
+    await reader.preheat(start: handles, stop: [])
+    #expect(backend.calls.value.filter { $0.action == "start" }.count == 2)
+    await reader.preheat(start: [], stop: handles)
+    #expect(backend.calls.value.filter { $0.action == "stop" }.isEmpty)
+    await reader.preheat(start: [], stop: handles)
+    #expect(backend.calls.value.filter { $0.action == "stop" }.count == 2)
+  }
+
+  @Test func coverQuerySetsLimitBeforeBackgroundFetchAndPreservesOrder() async throws {
+    let assets = (0..<10).map { TestAssetFactory.makeAsset(id: "cover-\($0)") }
+    let backend = FakeThumbnailBackend(assets: assets)
+    let reader = ProductionThumbnailReader(backend: backend)
+    let covers = try await reader.coverAssets(in: .timeline(year: 2025, month: 4), limit: 4)
+    #expect(covers.map(\.descriptor.id) == Array(assets.prefix(4)).map(\.id))
+    let query = try #require(backend.queries.value.first)
+    #expect(query.limit == 4)
+    #expect(query.hasPredicate)
+    #expect(query.sortKeys == ["creationDate"])
+    #expect(!query.onMain)
+    let album = try await reader.coverAssets(in: .album(collectionId: "album"), limit: 4)
+    #expect(album.count == 4)
+    #expect(backend.queries.value.count == 2)
+  }
+
 }
