@@ -99,6 +99,9 @@ jobs:
           python3 scripts/ci/check-read-only-photos.py
           python3 -B scripts/ci/check-export-io-boundaries.py
 
+      - name: Check concurrency executor settings
+        run: python3 -B scripts/ci/check-concurrency-settings.py
+
       - name: Check current source-comment reasons
         run: |
           echo "::group::Source-comment reference guard"

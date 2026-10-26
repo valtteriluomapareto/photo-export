@@ -81,7 +81,7 @@ extension ContentView: Equatable {
   /// The `@AppStorage` property otherwise makes SwiftUI re-run this body every time
   /// `App.body` rebuilds the view. Its preferences and tracked environment reads still
   /// invalidate the body. History-readiness value changes also reach the active child.
-  static func == (lhs: ContentView, rhs: ContentView) -> Bool {
+  nonisolated static func == (lhs: ContentView, rhs: ContentView) -> Bool {
     lhs.destinationManager === rhs.destinationManager && lhs.recordStore === rhs.recordStore
       && lhs.timelineHistoryState == rhs.timelineHistoryState
   }

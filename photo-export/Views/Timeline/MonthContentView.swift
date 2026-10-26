@@ -192,7 +192,7 @@ struct MonthContentView: View, Equatable {
   }
 
   /// Action closures and selection bindings are consumed by children, independently of layout.
-  static func == (lhs: MonthContentView, rhs: MonthContentView) -> Bool {
+  nonisolated static func == (lhs: MonthContentView, rhs: MonthContentView) -> Bool {
     lhs.year == rhs.year
       && lhs.month == rhs.month
       && lhs.versionSelection == rhs.versionSelection

@@ -11,6 +11,7 @@ on:
   pull_request:
     paths:
       - .xcode-version
+      - photo-export.xcodeproj/project.pbxproj
       - scripts/ci/select-xcode.sh
       - scripts/ci/build-app.sh
       - scripts/ci/run-unit-tests.sh

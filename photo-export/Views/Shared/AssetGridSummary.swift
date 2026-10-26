@@ -36,7 +36,7 @@ struct TimelineGridSummary: View, Equatable {
     }
   }
 
-  static func == (lhs: Self, rhs: Self) -> Bool {
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
     lhs.assets == rhs.assets && lhs.hasCompleteSnapshot == rhs.hasCompleteSnapshot
       && lhs.versionSelection == rhs.versionSelection
       && lhs.livePhotosPaired == rhs.livePhotosPaired
@@ -83,7 +83,7 @@ struct CollectionGridSummary: View, Equatable {
       livePhotosPaired: livePhotosPaired)
   }
 
-  static func == (lhs: Self, rhs: Self) -> Bool {
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
     lhs.assets == rhs.assets && lhs.hasCompleteSnapshot == rhs.hasCompleteSnapshot
       && lhs.versionSelection == rhs.versionSelection
       && lhs.livePhotosPaired == rhs.livePhotosPaired

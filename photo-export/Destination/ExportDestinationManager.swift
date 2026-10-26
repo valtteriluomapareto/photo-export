@@ -339,7 +339,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     observeVolumeChanges()
   }
 
-  deinit {
+  isolated deinit {
     for observer in volumeObservers {
       volumeNotificationCenter.removeObserver(observer)
     }

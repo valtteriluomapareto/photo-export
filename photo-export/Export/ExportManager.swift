@@ -1272,7 +1272,7 @@ final class ExportManager {
     items: [Item],
     generation gen: Int,
     startingFrom seed: BulkExportTotals = .init(),
-    enqueue: (Item) async throws -> EnqueueOutcome
+    enqueue: @MainActor (Item) async throws -> EnqueueOutcome
   ) async throws -> (totals: BulkExportTotals, completed: Bool) {
     var totals = seed
     for item in items {

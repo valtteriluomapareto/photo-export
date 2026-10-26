@@ -18,6 +18,7 @@ run_guard() {
 }
 
 run_guard test-guards.sh bash scripts/ci/test-guards.sh
+run_guard check-concurrency-settings.py python3 -B scripts/ci/check-concurrency-settings.py
 run_guard check-export-io-boundaries.py python3 -B scripts/ci/check-export-io-boundaries.py
 run_guard check-read-only-photos.py python3 -B scripts/ci/check-read-only-photos.py
 run_guard check-record-mutation-admission.py python3 -B scripts/ci/check-record-mutation-admission.py

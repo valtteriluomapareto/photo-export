@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Photos
 import os
+import Synchronization
 
 /// Maps an original-side filename to the `AVFileType` we hand
 /// `AVAssetExportSession`. The on-disk extension is always preserved
@@ -129,33 +130,25 @@ final class LiveVideoExportExecutor: VideoExportExecutor {
     // PhotoKit may invoke the handler more than once during iCloud download
     // (e.g. with a degraded result). Resume the continuation exactly once
     // by tracking it in a small lock-guarded box and ignoring later calls.
-    final class Box: @unchecked Sendable {
-      private let lock = NSLock()
-      private var resumed = false
+    final class Box: Sendable {
+      private let resumed = Mutex(false)
       func tryResume(_ block: () -> Void) {
-        lock.lock()
-        let shouldRun = !resumed
-        resumed = true
-        lock.unlock()
+        let shouldRun = resumed.withLock {
+          let shouldRun = !$0
+          $0 = true
+          return shouldRun
+        }
         if shouldRun { block() }
       }
     }
-    // Stores the PhotoKit request id once the call returns. The cancel
-    // handler reads it to forward cancellation; the body checks it
-    // immediately after the request returns to handle the case where
-    // cancellation arrived during the call itself.
-    final class RequestIDBox: @unchecked Sendable {
-      private let lock = NSLock()
-      private var _id: PHImageRequestID = PHInvalidImageRequestID
+    // Stores the request id so cancellation during registration is forwarded once known.
+    final class RequestIDBox: Sendable {
+      private let id = Mutex(PHInvalidImageRequestID)
       func set(_ id: PHImageRequestID) {
-        lock.lock()
-        _id = id
-        lock.unlock()
+        self.id.withLock { $0 = id }
       }
       func get() -> PHImageRequestID {
-        lock.lock()
-        defer { lock.unlock() }
-        return _id
+        id.withLock { $0 }
       }
     }
     let box = Box()

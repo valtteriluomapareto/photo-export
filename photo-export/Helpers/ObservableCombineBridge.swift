@@ -57,7 +57,9 @@ private struct BridgePublisher<Value: Equatable>: Publisher {
   let bridge: ObservableCombineBridge<Value>
 
   func receive<S: Subscriber>(subscriber: S) where S.Input == Value, S.Failure == Never {
-    MainActor.assumeIsolated { bridge.attach(subscriber) }
+    // Combine does not mark subscribers Sendable; attachment stays synchronous and checks its actor.
+    nonisolated(unsafe) let mainActorSubscriber = subscriber
+    MainActor.assumeIsolated { bridge.attach(mainActorSubscriber) }
   }
 }
 

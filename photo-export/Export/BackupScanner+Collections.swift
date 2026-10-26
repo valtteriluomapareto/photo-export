@@ -154,8 +154,8 @@ extension BackupScanner {
     existingPlacements: [ExportPlacement],
     photoLibraryService: any PhotoLibraryService,
     fingerprintCache: FingerprintCache,
-    isCurrent: @MainActor () -> Bool = { true },
-    progress: @MainActor (ImportStage) -> Void
+    isCurrent: @MainActor @Sendable () -> Bool = { true },
+    progress: @MainActor @Sendable (ImportStage) -> Void
   ) async throws -> CollectionBackupPlanner.Plan {
     let directories = scanned.directories
     let candidates = CollectionBackupPlanner.candidates(

@@ -381,11 +381,11 @@ struct BackupScanner {
     _ scannedFiles: [ScannedFile],
     photoLibraryService: any PhotoLibraryService,
     fingerprintCache: FingerprintCache? = nil,
-    progress: @MainActor (ImportStage) -> Void
+    progress: @MainActor @Sendable (ImportStage) -> Void
   ) async throws -> MatchResult {
     var result = MatchResult()
     let cache: FingerprintCache
-    if let fingerprintCache { cache = fingerprintCache } else { cache = await FingerprintCache() }
+    if let fingerprintCache { cache = fingerprintCache } else { cache = FingerprintCache() }
 
     // Group scanned files by year-month for batch fetching
     var filesByYearMonth: [String: [ScannedFile]] = [:]
