@@ -89,6 +89,14 @@ protocol PhotoLibraryService: AnyObject, Sendable {
     for assetId: String, pixelSize: CGSize?, allowNetwork: Bool
   ) async -> NSImage?
 
+  func resolveThumbnailAssets(ids: [String]) async -> [ThumbnailAsset]
+  func preheatThumbnailAssets(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async
+  func thumbnailContentRevision(for assetId: String) -> Int
+  func coverAssets(in scope: PhotoFetchScope, limit: Int) async throws -> [AssetDescriptor]
+  func decodedThumbnail(
+    for asset: ThumbnailAsset, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
+  ) async -> CGImage?
+
   // MARK: - Decoded thumbnail cache
 
   /// Async load through the decoded-thumbnail cache. `quantizedSize` is
@@ -115,6 +123,29 @@ protocol PhotoLibraryService: AnyObject, Sendable {
 }
 
 extension PhotoLibraryService {
+  func resolveThumbnailAssets(ids: [String]) async -> [ThumbnailAsset] {
+    ids.compactMap { fetchAssetDescriptor(for: $0) }.map(ThumbnailAsset.synthetic)
+  }
+
+  func preheatThumbnailAssets(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async {
+    if !stop.isEmpty { stopCachingThumbnails(for: stop.map(\.descriptor)) }
+    if !start.isEmpty { startCachingThumbnails(for: start.map(\.descriptor)) }
+  }
+
+  func thumbnailContentRevision(for assetId: String) -> Int { 0 }
+
+  func coverAssets(in scope: PhotoFetchScope, limit: Int) async throws -> [AssetDescriptor] {
+    let assets = try await fetchAssets(in: scope, mediaType: nil)
+    return Array(assets.prefix(max(0, min(limit, 4))))
+  }
+
+  func decodedThumbnail(
+    for asset: ThumbnailAsset, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
+  ) async -> CGImage? {
+    await decodedThumbnail(
+      for: asset.descriptor.id, quantizedSize: quantizedSize, deliveryMode: deliveryMode)
+  }
+
   func fetchAssets(year: Int, month: Int?) async throws -> [AssetDescriptor] {
     try await fetchAssets(year: year, month: month, mediaType: nil)
   }

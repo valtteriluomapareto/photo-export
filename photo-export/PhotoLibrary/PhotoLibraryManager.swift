@@ -234,9 +234,10 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     setupDecodedThumbnailCache()
   }
 
-  convenience init(refreshClock: any AutoSyncClock) {
+  convenience init(refreshClock: any AutoSyncClock, photoKitReader: (any PhotoKitReading)? = nil) {
     self.init()
     self.refreshClock = refreshClock
+    if let photoKitReader { thumbnailReaderFactory = photoKitReader }
   }
 
   #if DEBUG
@@ -259,12 +260,15 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     overrideService: any PhotoLibraryService,
     countInvalidationOverride: (@Sendable () async -> Void)? = nil,
     countInvalidationWaitObserver: (@MainActor () -> Void)? = nil,
-    refreshClock: (any AutoSyncClock)? = nil
+    refreshClock: (any AutoSyncClock)? = nil,
+    photoKitReader: (any PhotoKitReading)? = nil
   ) {
     self.overrideService = overrideService
     self.liveAuthorizationStatus = Self.systemAuthorizationStatus
     self.countInvalidationOverride = countInvalidationOverride
     self.countInvalidationWaitObserver = countInvalidationWaitObserver
+    self.thumbnailReaderFactory =
+      photoKitReader ?? PhotoLibraryServiceReader(service: overrideService)
     self.refreshClock = refreshClock ?? SystemAutoSyncClock()
     super.init()
     // Sync the UI-facing auth state from the injected service so the onboarding
@@ -275,6 +279,23 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     setupDecodedThumbnailCache()
   }
 
+  @ObservationIgnored private var thumbnailReaderFactory: any PhotoKitReading =
+    ProductionPhotoKitReader()
+  private struct ResolvedThumbnail {
+    let handle: ThumbnailAsset
+    let revision: Int
+  }
+  @ObservationIgnored private var defaultThumbnailAssets: [String: ResolvedThumbnail] = [:]
+  #if DEBUG
+    @ObservationIgnored var thumbnailRegistrationObserver: (@MainActor (ThumbnailAsset) -> Void)?
+  #endif
+
+  private func thumbnailReader() async -> any ThumbnailReading {
+    if let reader = await thumbnailReaderFactory.thumbnailReader { return reader }
+    if let service = overrideService { return ServiceThumbnailReader(service: service) }
+    return UnavailableThumbnailReader()
+  }
+
   private func setupDecodedThumbnailCache() {
     decodedThumbnailCache = DecodedThumbnailCache { [weak self] key in
       guard let self else { return nil }
@@ -283,59 +304,110 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   }
 
   private func decodeThumbnail(for key: DecodedThumbnailCache.Key) async -> CGImage? {
-    if let s = overrideService {
-      return await s.decodedThumbnail(
-        for: key.assetId, quantizedSize: key.quantizedSize, deliveryMode: key.deliveryMode)
+    let handle: ThumbnailAsset
+    if let cached = defaultThumbnailAssets[key.assetId], cached.revision == key.contentRevision {
+      handle = cached.handle
+    } else {
+      let resolved = await resolveThumbnailAssets(ids: [key.assetId])
+      guard let first = resolved.first, !Task.isCancelled,
+        key.contentRevision == thumbnailContentRevision(for: key.assetId)
+      else { return nil }
+      handle = first
+      if defaultThumbnailAssets.count >= 64, let oldest = defaultThumbnailAssets.keys.first {
+        defaultThumbnailAssets.removeValue(forKey: oldest)
+      }
+      defaultThumbnailAssets[key.assetId] = ResolvedThumbnail(
+        handle: first, revision: key.contentRevision)
     }
-    guard let asset = cachedOrFetchPHAsset(id: key.assetId) else {
-      thumbnailTrackingIncomplete = true
-      return nil
-    }
-    observeThumbnailAsset(asset)
-    let options = PHImageRequestOptions()
-    switch key.deliveryMode {
-    case .fast:
-      options.deliveryMode = .fastFormat
-      options.resizeMode = .fast
-    case .highQuality:
-      options.deliveryMode = .highQualityFormat
-      options.resizeMode = .exact
-    }
-    options.isNetworkAccessAllowed = true
+    let reader = await thumbnailReader()
+    guard key.contentRevision == thumbnailContentRevision(for: key.assetId), !Task.isCancelled
+    else { return nil }
+    registerDisplayedThumbnail(handle)
+    return await reader.image(
+      for: handle, spec: .init(size: key.quantizedSize, delivery: key.deliveryMode))
+  }
 
-    let requestIDLock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
-    let nsImage: NSImage? = await withTaskCancellationHandler {
-      if Task.isCancelled { return nil }
-      return await withCheckedContinuation { continuation in
-        let resumed = OSAllocatedUnfairLock(initialState: false)
-        let requestID = Self.cachingImageManager.requestImage(
-          for: asset, targetSize: key.quantizedSize, contentMode: .aspectFill, options: options
-        ) { image, _ in
-          guard
-            resumed.withLock({
-              let was = $0
-              $0 = true
-              return !was
-            })
-          else { return }
-          continuation.resume(returning: image)
-        }
-        requestIDLock.withLock { $0 = requestID }
-        // If cancellation landed between the body starting and `requestID`
-        // being stored, the onCancel branch read nil and missed its window.
-        // Catch it here.
-        if Task.isCancelled {
-          Self.cachingImageManager.cancelImageRequest(requestID)
-        }
+  func resolveThumbnailAssets(ids: [String]) async -> [ThumbnailAsset] {
+    let revisions = Dictionary(
+      ids.map { ($0, thumbnailContentRevision(for: $0)) }, uniquingKeysWith: { first, _ in first })
+    let reader = await thumbnailReader()
+    let resolved = await reader.resolveAssets(ids: ids)
+    guard !Task.isCancelled else { return [] }
+    let handles = resolved.compactMap { handle -> ThumbnailAsset? in
+      let id = handle.descriptor.id
+      guard let revision = revisions[id], revision == thumbnailContentRevision(for: id) else {
+        return nil
       }
-    } onCancel: {
-      if let requestID = requestIDLock.withLock({ $0 }) {
-        Self.cachingImageManager.cancelImageRequest(requestID)
-      }
+      return handle.withRevision(revision)
     }
-    guard let nsImage else { return nil }
-    var rect = CGRect(origin: .zero, size: nsImage.size)
-    return nsImage.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    let resolvedIDs = Set(resolved.map { $0.descriptor.id })
+    if overrideService == nil,
+      ids.contains(where: {
+        revisions[$0] == thumbnailContentRevision(for: $0) && !resolvedIDs.contains($0)
+      })
+    {
+      thumbnailTrackingIncomplete = true
+    }
+    return handles
+  }
+
+  /// Preheat-only assets must not crowd out the bounded registry of displayed content.
+  private func registerDisplayedThumbnail(_ handle: ThumbnailAsset) {
+    if let asset = handle.photoKitAsset { observeThumbnailAsset(asset) }
+    #if DEBUG
+      thumbnailRegistrationObserver?(handle)
+    #endif
+  }
+
+  func preheatThumbnailAssets(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async {
+    let reader = await thumbnailReader()
+    await reader.preheat(start: start, stop: stop)
+  }
+
+  func coverAssets(in scope: PhotoFetchScope, limit: Int) async throws -> [AssetDescriptor] {
+    if overrideService == nil { try await requireLiveAuthorizationAsync() }
+    let source = libraryRevision
+    let reader = await thumbnailReader()
+    let handles = try await reader.coverAssets(in: scope, limit: limit)
+    try Task.checkCancellation()
+    // A changed query cannot seed current image keys with older framework snapshots.
+    guard source == libraryRevision else { return handles.map(\.descriptor) }
+    for rawHandle in handles {
+      let handle = rawHandle.withRevision(thumbnailContentRevision(for: rawHandle.descriptor.id))
+      let id = handle.descriptor.id
+      if defaultThumbnailAssets.count >= 64, let oldest = defaultThumbnailAssets.keys.first {
+        defaultThumbnailAssets.removeValue(forKey: oldest)
+      }
+      defaultThumbnailAssets[id] = ResolvedThumbnail(
+        handle: handle, revision: thumbnailContentRevision(for: id))
+      if let asset = handle.photoKitAsset { observeThumbnailAsset(asset) }
+      #if DEBUG
+        thumbnailRegistrationObserver?(handle)
+      #endif
+    }
+    return handles.map(\.descriptor)
+  }
+
+  func decodedThumbnail(
+    for asset: ThumbnailAsset, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
+  ) async -> CGImage? {
+    let id = asset.descriptor.id
+    let revision = thumbnailContentRevision(for: id)
+    let reader = await thumbnailReader()
+    guard revision == thumbnailContentRevision(for: id), asset.contentRevision == revision,
+      !Task.isCancelled
+    else { return nil }
+    registerDisplayedThumbnail(asset)
+    let image = await decodedThumbnailCache.image(
+      for: .init(
+        assetId: id, quantizedSize: quantizedSize, deliveryMode: deliveryMode,
+        contentRevision: revision),
+      decode: { key in
+        await reader.image(
+          for: asset, spec: .init(size: key.quantizedSize, delivery: key.deliveryMode))
+      })
+    guard revision == thumbnailContentRevision(for: id), !Task.isCancelled else { return nil }
+    return image
   }
 
   func decodedThumbnail(
@@ -890,13 +962,12 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
       self.phAssetCache[$0]
     }
     guard !phAssets.isEmpty else { return }
-    let options = PHImageRequestOptions()
-    options.deliveryMode = .opportunistic
-    options.isNetworkAccessAllowed = true
-    options.resizeMode = .fast
-    Self.cachingImageManager.startCachingImages(
-      for: phAssets, targetSize: CGSize(width: 200, height: 200),
-      contentMode: .aspectFill, options: options)
+    for delivery in [ThumbnailDeliveryMode.fast, .highQuality] {
+      let spec = ThumbnailRequestSpec(size: ThumbnailRequestSpec.gridSize, delivery: delivery)
+      Self.cachingImageManager.startCachingImages(
+        for: phAssets, targetSize: spec.size, contentMode: spec.contentMode, options: spec.options()
+      )
+    }
   }
 
   func stopCachingThumbnails(for assets: [AssetDescriptor]) {
@@ -906,13 +977,12 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     }
     let phAssets = Self.thumbnailPreheatRegistrations.release(assets.map(\.id))
     guard !phAssets.isEmpty else { return }
-    let options = PHImageRequestOptions()
-    options.deliveryMode = .opportunistic
-    options.isNetworkAccessAllowed = true
-    options.resizeMode = .fast
-    Self.cachingImageManager.stopCachingImages(
-      for: phAssets, targetSize: CGSize(width: 200, height: 200),
-      contentMode: .aspectFill, options: options)
+    for delivery in [ThumbnailDeliveryMode.fast, .highQuality] {
+      let spec = ThumbnailRequestSpec(size: ThumbnailRequestSpec.gridSize, delivery: delivery)
+      Self.cachingImageManager.stopCachingImages(
+        for: phAssets, targetSize: spec.size, contentMode: spec.contentMode, options: spec.options()
+      )
+    }
   }
 
   /// Load thumbnail for an asset (fast/degraded version only, for initial grid
@@ -1222,7 +1292,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   /// scope adds a `favorite == YES` predicate; the timeline scope adds a date-range
   /// predicate. Album scope's predicate is empty (the collection itself bounds the
   /// fetch).
-  nonisolated fileprivate static func fetchOptions(for scope: PhotoFetchScope) -> PHFetchOptions {
+  nonisolated static func fetchOptions(for scope: PhotoFetchScope) -> PHFetchOptions {
     let opts = PHFetchOptions()
     opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
     switch scope {
@@ -1253,7 +1323,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     return opts
   }
 
-  nonisolated fileprivate static func fetchAssetCollection(localIdentifier: String)
+  nonisolated static func fetchAssetCollection(localIdentifier: String)
     -> PHAssetCollection?
   {
     let result = PHAssetCollection.fetchAssetCollections(

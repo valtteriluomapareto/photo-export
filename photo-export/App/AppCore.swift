@@ -63,9 +63,12 @@ final class AppCore {
     // every `PhotoLibraryService` method to it; without one it runs its PhotoKit code.
     let plm: PhotoLibraryManager =
       composition.photoLibraryServiceOverride.map {
-        PhotoLibraryManager(overrideService: $0, refreshClock: composition.clock)
+        PhotoLibraryManager(
+          overrideService: $0, refreshClock: composition.clock,
+          photoKitReader: composition.photoKitReader)
       }
-      ?? PhotoLibraryManager(refreshClock: composition.clock)
+      ?? PhotoLibraryManager(
+        refreshClock: composition.clock, photoKitReader: composition.photoKitReader)
     let ers = ExportRecordStore(baseDirectoryURL: composition.recordsRoot)
     let cers = CollectionExportRecordStore(baseDirectoryURL: composition.recordsRoot)
     let em = ExportManager(

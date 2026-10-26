@@ -113,7 +113,12 @@ struct MonthContentView: View, Equatable {
               selectedAsset: $selectedAsset, onSelect: { viewModel.select(assetId: asset.id) })
           }
         }
+        .scrollTargetLayout()
         .padding(.top, 4)
+      }
+      .environment(\.gridThumbnailAssets, viewModel.thumbnailAssets)
+      .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+        Task { await viewModel.updateVisibleAssetIDs(ids) }
       }
     }
     .padding(.horizontal)

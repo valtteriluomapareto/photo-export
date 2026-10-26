@@ -19,28 +19,17 @@ final class MonthViewModel {
   var selectedAssetId: String?
 
   @ObservationIgnored private let photoLibraryService: any PhotoLibraryService
+  @ObservationIgnored let thumbnailAssets: GridThumbnailAssets
+  @ObservationIgnored private var visibleAssetIDs: [String]?
+  @ObservationIgnored private var assetIndices: [String: Int] = [:]
 
-  /// Upper bound on how many assets we hand to `PHCachingImageManager` at once.
-  /// `startCachingImages` is designed for the visible window (Apple's sample
-  /// code typically caches scores to low hundreds); passing the full scope —
-  /// e.g. a 37k-asset Favorites collection — choked the shared caching manager
-  /// and stalled every subsequent `requestImage`, so the grid sat on the
-  /// spinner forever. 500 covers any realistic visible row count
-  /// for the 144 pt tile grid with comfortable headroom.
+  /// Bounds initial warm-up and visible-window padding even in an unusually large viewport.
   private let cachingWindowSize: Int = 500
 
   /// Per-batch chunk handed to `fetchAssetsProgressive`. Bigger batches stutter
   /// the main actor on each commit; smaller batches add per-batch overhead
   /// without measurable UI benefit.
   private let progressiveBatchSize: Int = 200
-
-  /// Assets currently registered with `PHCachingImageManager`. After
-  /// `loadAssets`/`refresh` returns, this mirrors the prefix of the active
-  /// scope that we passed to `startCachingThumbnails`, capped at
-  /// `cachingWindowSize`. `refresh(for:)`'s diff (added/removed) is computed
-  /// against this windowed set, not the full scope, so the cache delta stays
-  /// bounded.
-  @ObservationIgnored private var cachedAssets: [AssetDescriptor] = []
 
   /// The displayed scope and its request owner. Scope alone cannot distinguish
   /// two overlapping requests for the same scope, including A → B → A navigation.
@@ -66,22 +55,42 @@ final class MonthViewModel {
 
   init(photoLibraryService: any PhotoLibraryService) {
     self.photoLibraryService = photoLibraryService
+    thumbnailAssets = GridThumbnailAssets(service: photoLibraryService)
   }
 
   /// A disappearing grid relinquishes both its requests and preheat registrations.
   /// Reloading on appearance activates the scope again; late responses stay stale.
-  func deactivate() {
+  @discardableResult
+  func deactivate() -> Task<Void, Never> {
     requestGeneration &+= 1
     currentScope = nil
     hasCompleteSnapshot = false
-    stopPreheating()
+    let stopped = stopPreheating()
     isLoading = false
+    return stopped
   }
 
-  private func stopPreheating() {
-    let previous = cachedAssets
-    cachedAssets = []
-    if !previous.isEmpty { photoLibraryService.stopCachingThumbnails(for: previous) }
+  @discardableResult
+  private func stopPreheating() -> Task<Void, Never> {
+    return thumbnailAssets.deactivate()
+  }
+
+  func updateVisibleAssetIDs(_ ids: [String]) async {
+    guard currentScope != nil else { return }
+    visibleAssetIDs = ids
+    let window = cachingWindow(in: assets, indices: assetIndices)
+    await thumbnailAssets.updateWindow(window)
+  }
+
+  private func cachingWindow(in assets: [AssetDescriptor], indices: [String: Int])
+    -> [AssetDescriptor]
+  {
+    guard let visibleAssetIDs else { return Array(assets.prefix(cachingWindowSize)) }
+    let visible = visibleAssetIDs.compactMap { indices[$0] }
+    guard let first = visible.min(), let last = visible.max() else { return [] }
+    let start = max(0, first - 24)
+    let end = min(assets.count, min(last + 25, start + cachingWindowSize))
+    return Array(assets[start..<end])
   }
 
   /// Timeline-scope wrapper kept for the existing `MonthContentView` call site.
@@ -108,10 +117,14 @@ final class MonthViewModel {
     isLoading = true
     errorMessage = nil
     stopPreheating()
+    thumbnailAssets.reset()
+    visibleAssetIDs = nil
+    assetIndices = [:]
     assets = []
     selectedAssetId = nil
 
     guard let scope else {
+      await thumbnailAssets.updateWindow([])
       isLoading = false
       return
     }
@@ -122,7 +135,9 @@ final class MonthViewModel {
       for try await batch in stream {
         guard ownsRequest(generation, scope: scope) else { return }
         let wasEmpty = assets.isEmpty
+        let start = assets.count
         assets.append(contentsOf: batch)
+        for index in start..<assets.count { assetIndices[assets[index].id] = index }
         if wasEmpty {
           isLoading = false
           if selectedAssetId == nil, let first = batch.first { selectedAssetId = first.id }
@@ -140,11 +155,9 @@ final class MonthViewModel {
     isLoading = false
 
     // Preheat the windowed prefix once the full asset list has settled.
-    let cachingWindow = Array(assets.prefix(cachingWindowSize))
-    if !cachingWindow.isEmpty {
-      photoLibraryService.startCachingThumbnails(for: cachingWindow)
-    }
-    cachedAssets = cachingWindow
+    let window = cachingWindow(in: assets, indices: assetIndices)
+    await thumbnailAssets.updateWindow(window)
+    guard ownsRequest(generation, scope: scope) else { return }
     selectionChanges.send()
   }
 
@@ -185,24 +198,12 @@ final class MonthViewModel {
     }
     guard ownsRequest(generation, scope: scope) else { return }
 
-    // Window the cache delta the same way `loadAssets` does — diff between
-    // the *windowed* prefix of new vs old, not the full scopes. Without this,
-    // refreshing a 37k-asset scope where everything is "new to the cache"
-    // would funnel the entire scope into `startCachingThumbnails` and
-    // re-trigger the choke we're guarding against.
-    let newCachingWindow = Array(collected.prefix(cachingWindowSize))
-    let newCachedIds = Set(newCachingWindow.map(\.id))
-    let oldCachedIds = Set(cachedAssets.map(\.id))
-    let added = newCachingWindow.filter { !oldCachedIds.contains($0.id) }
-    let removed = cachedAssets.filter { !newCachedIds.contains($0.id) }
-
-    if !removed.isEmpty {
-      photoLibraryService.stopCachingThumbnails(for: removed)
-    }
-    if !added.isEmpty {
-      photoLibraryService.startCachingThumbnails(for: added)
-    }
-    cachedAssets = newCachingWindow
+    let indices = Dictionary(
+      uniqueKeysWithValues: collected.enumerated().map { ($0.element.id, $0.offset) })
+    let window = cachingWindow(in: collected, indices: indices)
+    await thumbnailAssets.updateWindow(window)
+    guard ownsRequest(generation, scope: scope) else { return }
+    assetIndices = indices
     hasCompleteSnapshot = true
     if assets != collected { assets = collected }
     errorMessage = nil

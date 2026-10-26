@@ -30,7 +30,7 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
 
 - Browse your library by **Timeline** or **Collections**, including Favorites, albums and folders. [Browsing
   guide](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
-- Open thumbnails and full-size previews while the first batch loads. Details show the current collection’s export history. [Preview
+- Open thumbnails and full-size previews while the first batch loads. Thumbnail preheating follows scrolling, with static placeholders while images arrive. Details show the current collection’s export history. [Preview
   details](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).
 - Photos edits refresh the grid and previews in place while keeping surviving selections. Timeline progress badges retain their last counts when an outdated count request is canceled. [Refresh
   behavior](https://valtteriluomapareto.github.io/photo-export/features/#library-browsing).

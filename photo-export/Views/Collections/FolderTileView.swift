@@ -27,7 +27,7 @@ struct FolderTileView: View {
 
   @Environment(\.displayScale) private var displayScale
 
-  @State private var covers: [NSImage] = []
+  @State private var covers: [CGImage] = []
   @State private var coverState: CoverState = .idle
   @State private var isHovering: Bool = false
 
@@ -117,7 +117,7 @@ struct FolderTileView: View {
       case .loaded:
         coverGrid
       case .loading, .idle:
-        ProgressView().controlSize(.small).accessibilityHidden(true)
+        Rectangle().fill(Color.gray.opacity(0.2)).accessibilityLabel("Loading cover")
       case .empty:
         Image(systemName: "photo.on.rectangle.angled")
           .font(.system(size: 36))
@@ -140,7 +140,7 @@ struct FolderTileView: View {
     let displayed = Array(covers.prefix(4))
     if displayed.count <= 1 {
       if let single = displayed.first {
-        Image(nsImage: single)
+        Image(decorative: single, scale: 1)
           .resizable()
           .scaledToFill()
           .frame(width: Self.tileSide, height: Self.tileSide)
@@ -161,10 +161,10 @@ struct FolderTileView: View {
   }
 
   @ViewBuilder
-  private func coverCell(at index: Int, of covers: [NSImage]) -> some View {
+  private func coverCell(at index: Int, of covers: [CGImage]) -> some View {
     let cellSide = (Self.tileSide - 1) / 2
     if index < covers.count {
-      Image(nsImage: covers[index])
+      Image(decorative: covers[index], scale: 1)
         .resizable()
         .scaledToFill()
         .frame(width: cellSide, height: cellSide)
@@ -252,18 +252,7 @@ struct FolderTileView: View {
 
   // MARK: - Cover loading
 
-  /// Loads up to four cover thumbnails for an album tile. Renders 1-up if the album has
-  /// a single asset, 4-up otherwise. Thumbnail fetches dispatch into a `TaskGroup`; the
-  /// underlying `loadThumbnail` is `@MainActor`-isolated so the calls serialise on the
-  /// main actor, but each await yields the runloop and PhotoKit can prefetch in the
-  /// background — fast enough in practice that the simpler structure beats threading a
-  /// detached fetch through the service seam.
-  ///
-  /// `fetchAssets(in: .album(...))` materialises the full album list, which is
-  /// acceptable for v1 — the tile only builds when the album scrolls into view, and
-  /// the typical user album holds tens to hundreds of photos. A `firstAssets(in:limit:)`
-  /// fast path on `PhotoLibraryService` is the natural follow-up if this proves a
-  /// bottleneck on very large albums.
+  /// Fetches at most four ordered sources and reuses target-sized decoded images.
   private func loadCovers() async {
     guard let albumId = descriptor.localIdentifier else {
       coverState = .empty
@@ -271,8 +260,8 @@ struct FolderTileView: View {
     }
     coverState = .loading
     do {
-      let assets = try await photoLibraryService.fetchAssets(
-        in: .album(collectionId: albumId), mediaType: nil)
+      let assets = try await photoLibraryService.coverAssets(
+        in: .album(collectionId: albumId), limit: 4)
       try Task.checkCancellation()
       let coverIds = assets.prefix(4).map(\.id)
       if coverIds.isEmpty {
@@ -285,17 +274,17 @@ struct FolderTileView: View {
       // sharply; tiles now match.
       let pixelSide = Self.tileSide * max(displayScale, 1)
       let target = CGSize(width: pixelSide, height: pixelSide)
-      let loaded = await withTaskGroup(of: (Int, NSImage?).self) { group in
+      let loaded = await withTaskGroup(of: (Int, CGImage?).self) { group in
         for (index, id) in coverIds.enumerated() {
           group.addTask {
             (
               index,
-              await photoLibraryService.loadThumbnailHighQuality(
-                for: id, pixelSize: target, allowNetwork: true)
+              await photoLibraryService.decodedThumbnail(
+                for: id, quantizedSize: target, deliveryMode: .highQuality)
             )
           }
         }
-        var pairs: [(Int, NSImage)] = []
+        var pairs: [(Int, CGImage)] = []
         for await (index, image) in group {
           if let image { pairs.append((index, image)) }
         }

@@ -114,6 +114,10 @@ final class DecodedThumbnailCache {
     }
   }
 
+  #if DEBUG
+    func waiterCount(for key: Key) -> Int { inFlight[key]?.waiterCount ?? 0 }
+  #endif
+
   func clear() {
     storage.removeAllObjects()
     // Cancel and forget in-flight decodes so a caller arriving after `clear`

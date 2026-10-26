@@ -2,7 +2,12 @@ import Foundation
 
 /// Refreshes one export job's metadata without sharing PhotoKit objects with its caller.
 protocol PhotoKitReading: Sendable {
+  var thumbnailReader: (any ThumbnailReading)? { get async }
   func readAsset(id: String, livePhotosPaired: Bool) async -> PhotoKitAssetSnapshot?
+}
+
+extension PhotoKitReading {
+  var thumbnailReader: (any ThumbnailReading)? { get async { nil } }
 }
 
 struct PhotoKitAssetSnapshot: Sendable {
@@ -34,6 +39,8 @@ struct PhotoKitAssetSnapshot: Sendable {
 @MainActor
 struct PhotoLibraryServiceReader: PhotoKitReading {
   let service: any PhotoLibraryService
+
+  var thumbnailReader: (any ThumbnailReading)? { ServiceThumbnailReader(service: service) }
 
   func readAsset(id: String, livePhotosPaired: Bool) async -> PhotoKitAssetSnapshot? {
     guard let descriptor = service.fetchAssetDescriptor(for: id) else { return nil }
