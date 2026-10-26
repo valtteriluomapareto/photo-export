@@ -113,6 +113,49 @@ struct TimelineCountRefreshTests {
     if let failure { throw failure }
   }
 
+  @Test(arguments: [true, false])
+  func invalidatedCountWorkRetainsLoadedPairAndCanRecover(cancelAdjusted: Bool) async throws {
+    let service = FakePhotoLibraryService()
+    service.cachedCountOverride = { _, adjusted in adjusted ? 0 : 1 }
+    let loader = TimelineSidebarCounts(service: service)
+    await loader.loadCounts(forYears: [2025])
+    let initial = loader.countsByYearMonth
+    let subscription = ObservedValues { loader.countsByYearMonth }
+    let cache = CollectionCountCache()
+    let gate = AsyncCheckpoint()
+    service.cachedCountOverride = { scope, adjusted in
+      guard scope == .timeline(year: 2025, month: 1) else { return adjusted ? 0 : 1 }
+      if adjusted == cancelAdjusted {
+        return try await cache.count(for: "held") {
+          await gate.enter()
+          return adjusted ? 1 : 2
+        }
+      }
+      return adjusted ? 1 : 2
+    }
+    let refresh = Task { await loader.loadCounts(forYears: [2025]) }
+    try await withCleanup {
+      try #require(await gate.waitForEnter(count: 1))
+      await cache.invalidateAll()
+      await gate.releaseAll()
+      await refresh.value
+      #expect(loader.countsByYearMonth == initial)
+      #expect(subscription.values.isEmpty)
+      #expect(loader.lastError == nil)
+      service.cachedCountOverride = { scope, adjusted in
+        guard scope == .timeline(year: 2025, month: 1) else { return adjusted ? 0 : 1 }
+        return adjusted ? 1 : 2
+      }
+      await loader.loadCounts(forYears: [2025])
+      #expect(loader.countsByYearMonth["2025-1"] == .init(total: 2, adjusted: 1))
+      #expect(loader.lastError == nil)
+    } cleanup: {
+      await gate.releaseAll()
+      await refresh.value
+      withExtendedLifetime(subscription) {}
+    }
+  }
+
   @Test func identicalRefreshDoesNotPublish() async {
     let service = FakePhotoLibraryService()
     service.cachedCountOverride = { _, adjusted in adjusted ? 0 : 1 }

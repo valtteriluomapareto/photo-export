@@ -120,6 +120,7 @@ final class TimelineSidebarCounts {
 
   /// Refreshes a month's pair atomically. Initial totals can introduce a row
   /// before coverage is known; loaded pairs remain visible during refresh.
+  /// Canceled cache work leaves the previous pair intact until replacement work finishes.
   /// A current failure clears only this month's coverage, never pairing a
   /// retained total with a fresh adjusted count.
   private func loadMonth(year: Int, month: Int, generation: Int) async {
@@ -139,6 +140,8 @@ final class TimelineSidebarCounts {
       if countsByYearMonth[key] == nil {
         update(MonthCounts(total: total, adjusted: nil), for: key)
       }
+    } catch is CancellationError {
+      return
     } catch {
       guard isCurrent(generation) else { return }
       lastError = error
@@ -147,6 +150,8 @@ final class TimelineSidebarCounts {
       let adjusted = try await adjustedTask
       guard isCurrent(generation) else { return }
       freshAdjusted = adjusted
+    } catch is CancellationError {
+      return
     } catch {
       guard isCurrent(generation) else { return }
       lastError = error

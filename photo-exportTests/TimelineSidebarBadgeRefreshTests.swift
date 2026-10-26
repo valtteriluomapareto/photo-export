@@ -69,7 +69,7 @@ import Testing
       let clock = TestClock()
       let window: NSWindow
 
-      init(twoVisibleMonths: Bool = false) {
+      init(twoVisibleMonths: Bool = false, freezeRefresh: Bool = false) {
         defaults = TestScratch.defaults(suiteName: suite)
         service.yearCounts = [(2026, 2), (2025, 2)]
         service.cachedCountOverride = { scope, adjusted in
@@ -79,7 +79,8 @@ import Testing
           default: 0
           }
         }
-        library = PhotoLibraryManager(overrideService: service)
+        library = PhotoLibraryManager(
+          overrideService: service, refreshClock: freezeRefresh ? clock : nil)
         store = ExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
         store.configure(for: "A")
         for year in [2026, 2025] {
@@ -174,6 +175,74 @@ import Testing
         let layout = f.counter.count(for: key) - paused
         #expect(layout == 0)
       } cleanup: {
+        await f.close()
+      }
+    }
+
+    @Test
+    func invalidatedCountRefreshKeepsYearPercentageUntilReplacementArrives() async throws {
+      let f = Fixture(freezeRefresh: true)
+      let cache = CollectionCountCache()
+      let gate = AsyncCheckpoint()
+      try await withCleanup {
+        try #require(
+          await observe(in: f.window) {
+            f.counter.renderedText["timeline-year:2026"] == ["50%"]
+              && f.counter.renderedText["timeline-year:2025"] == ["50%"]
+          })
+        for task in f.counter.tasks { _ = await finished(task) }
+        f.service.cachedCountOverride = { scope, adjusted in
+          if scope == .timeline(year: 2026, month: 9) {
+            return try await cache.count(for: adjusted ? "adjusted" : "total") {
+              await gate.enter()
+              return adjusted ? 0 : 2
+            }
+          }
+          if case .timeline(_, 9) = scope { return adjusted ? 0 : 2 }
+          return 0
+        }
+        let before = f.counter.tasks.count
+        f.library.invalidateCache()
+        f.library.libraryRefresh.flush()
+        try #require(await gate.waitForEnter(count: 2))
+        // Invalidation precedes the clock's coalesced notification to the view.
+        f.library.invalidateCache()
+        await cache.invalidateAll()
+        await gate.releaseAll()
+        let refreshTasks = Array(f.counter.tasks.dropFirst(before))
+        try #require(!refreshTasks.isEmpty)
+        for task in refreshTasks { _ = await finished(task) }
+        let bodies = f.counter.count(for: "timeline-year-body:2026")
+        f.manager.versionSelection = .editedWithOriginals
+        try #require(
+          await observe(in: f.window) {
+            f.counter.count(for: "timeline-year-body:2026") > bodies
+          })
+        try await f.barrier()
+        #expect(f.counter.renderedText["timeline-year:2026"] == ["50%"])
+        #expect(f.counter.renderedText["timeline-month:2026-9"] == ["1/2"])
+        #expect(f.counter.renderedText["timeline-year:2025"] == ["50%"])
+        f.service.yearCounts = [(2026, 4), (2025, 2)]
+        f.service.cachedCountOverride = { scope, adjusted in
+          switch scope {
+          case .timeline(2026, 9): adjusted ? 0 : 4
+          case .timeline(2025, 9): adjusted ? 0 : 2
+          default: 0
+          }
+        }
+        let completions = f.counter.count(for: "timeline-counts-loaded")
+        f.library.libraryRefresh.flush()
+        try #require(
+          await observe(in: f.window) {
+            f.counter.count(for: "timeline-counts-loaded") > completions
+              && f.counter.renderedText["timeline-year:2026"] == ["25%"]
+              && f.counter.renderedText["timeline-month:2026-9"] == ["1/4"]
+          })
+        try await f.barrier()
+        #expect(f.counter.renderedText["timeline-year:2025"] == ["50%"])
+      } cleanup: {
+        await gate.releaseAll()
+        for task in f.counter.tasks { _ = await finished(task) }
         await f.close()
       }
     }
