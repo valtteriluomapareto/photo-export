@@ -8,6 +8,7 @@ final class GridThumbnailAssets {
   private var window: [ThumbnailAsset] = []
   private var isActive = true
   private var preheatTask: Task<Void, Never>?
+  private var pendingWindow: [AssetDescriptor]?
 
   init(service: any PhotoLibraryService) { self.service = service }
 
@@ -44,13 +45,17 @@ final class GridThumbnailAssets {
 
   /// Serial transfers balance registrations even when a lookup finishes after disappearance.
   private func scheduleWindow(_ assets: [AssetDescriptor]) -> Task<Void, Never> {
-    let previous = preheatTask
+    pendingWindow = assets
+    if let preheatTask { return preheatTask }
     let task = Task { [self] in
-      await previous?.value
-      let handles = await service.resolveThumbnailAssets(ids: assets.map(\.id))
-      let next = isActive ? handles : []
-      await service.preheatThumbnailAssets(start: next, stop: window)
-      window = next
+      while let assets = pendingWindow {
+        pendingWindow = nil
+        let handles = await service.resolveThumbnailAssets(ids: assets.map(\.id))
+        let next = isActive ? handles : []
+        await service.preheatThumbnailAssets(start: next, stop: window)
+        window = next
+      }
+      preheatTask = nil
     }
     preheatTask = task
     return task
