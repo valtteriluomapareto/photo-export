@@ -239,4 +239,70 @@ struct PhotoKitResourceSessionTests {
     }
   }
 
+  private struct HeldReader: PhotoKitReading {
+    let base: ProductionPhotoKitReader
+    let checkpoint: AsyncCheckpoint?
+    func readAsset(id: String, livePhotosPaired: Bool) async -> PhotoKitAssetSnapshot? {
+      let snapshot = await base.readAsset(id: id, livePhotosPaired: livePhotosPaired)
+      if let checkpoint { await checkpoint.enter() }
+      return snapshot
+    }
+  }
+
+  @MainActor
+  @Test(arguments: ["already-done", "stale-metadata", "write-failed"])
+  func terminalJobPathsReleaseResolvedHandles(route: String) async throws {
+    let released = LockedBox(0)
+    let writes = LockedBox(0)
+    let gate = AsyncCheckpoint()
+    let resource = descriptors()[0]
+    let asset = TestAssetFactory.makeAsset(id: "terminal-job")
+    let owner = ProductionPhotoKitResourceOwner(
+      backend: .init { _ in
+        let lifetime = Lifetime(released)
+        return .init(descriptor: asset) {
+          [
+            .init(descriptor: resource) { [lifetime] _, completion in
+              _ = lifetime
+              writes.mutate { $0 += 1 }
+              completion(NSError(domain: "test.resource", code: 9))
+            }
+          ]
+        }
+      })
+    let reader = HeldReader(
+      base: ProductionPhotoKitReader(resourceOwner: owner),
+      checkpoint: route == "stale-metadata" ? gate : nil)
+    let h = ExportManagerHarness(label: "ResourceSessionTerminal", photoKitReader: reader)
+    defer {
+      h.manager.cancelAndClear()
+      h.store.drainSynchronously()
+      h.collectionStore.drainSynchronously()
+      h.dest.cleanup()
+      try? FileManager.default.removeItem(at: h.storeRoot)
+    }
+    if route == "already-done" {
+      h.store.markVariantExported(
+        assetId: asset.id, variant: .original, year: 2026, month: 1, relPath: "2026/01/",
+        filename: "original.jpg", exportedAt: Date())
+    }
+    let generation = h.manager.generation
+    let job = ExportManager.ExportJob(
+      assetLocalIdentifier: asset.id, placement: .timeline(year: 2026, month: 1),
+      selection: .original)
+    let task = Task { await h.manager.performExport(job: job, generation: generation) }
+    if route == "stale-metadata" {
+      try #require(await gate.waitForEnter(count: 1))
+      h.manager.cancelAndClear()
+      await gate.releaseAll()
+    }
+    await task.value
+    #expect(released.value == 1)
+    #expect(writes.value == (route == "write-failed" ? 1 : 0))
+    #expect(h.writer.writeCalls.isEmpty)
+    #expect(h.fileSystem.moveCalls.isEmpty)
+    #expect(h.dest.beginScopedAccessCount == h.dest.endScopedAccessCount)
+    await gate.releaseAll()
+  }
+
 }
