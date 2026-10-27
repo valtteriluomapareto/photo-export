@@ -28,13 +28,14 @@ import Testing
     }
 
     @MainActor private final class Fixture {
-      let h = await ExportManagerHarness(label: "CollectionExportScope")
+      let h: ExportManagerHarness
       let library: PhotoLibraryManager
       let counter = BodyInvalidationCounter()
       let gate = AsyncCheckpoint()
       let window: NSWindow
 
-      init(action: Action) {
+      init(action: Action) async {
+        h = await ExportManagerHarness(label: "CollectionExportScope")
         library = PhotoLibraryManager(overrideService: h.photoLib, refreshClock: TestClock())
         let destination = ExportDestinationManager(skipRestore: true, userDefaults: h.defaults)
         destination.configureForScreenshotMode()
@@ -87,7 +88,7 @@ import Testing
 
     @Test(arguments: Action.allCases, [false, true])
     func exportActionsResolveColdAndStaleDisplayTrees(action: Action, stale: Bool) async throws {
-      let f = Fixture(action: action)
+      let f = await Fixture(action: action)
       try await withCleanup {
         if stale {
           f.h.photoLib.collectionTree = f.tree("old")
@@ -118,7 +119,7 @@ import Testing
     }
 
     @Test func failedScopeResolutionSurfacesFailureWithoutPartialDispatch() async throws {
-      let f = Fixture(action: .all)
+      let f = await Fixture(action: .all)
       try await withCleanup {
         f.h.photoLib.collectionTree = f.tree("A")
         f.h.photoLib.collectionTreeError = CocoaError(.fileReadCorruptFile)
@@ -139,7 +140,7 @@ import Testing
     }
 
     @Test func cancellingHeldScopeResolutionCannotDispatchIntoANewerRun() async throws {
-      let f = Fixture(action: .all)
+      let f = await Fixture(action: .all)
       try await withCleanup {
         f.h.photoLib.collectionTree = f.tree("A")
         f.h.photoLib.inventoryCheckpoint = f.gate

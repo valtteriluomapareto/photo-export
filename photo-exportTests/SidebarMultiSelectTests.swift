@@ -170,7 +170,7 @@ struct SidebarMultiSelectTests {
   /// enqueue helpers without losing the ordering or short-circuiting after the first
   /// iteration.
   @Test(.timeLimit(.minutes(1))) func timelineSelectionEnqueuesYearsAndMonths() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     // 2026 has two months; 2024 has one month seeded. The year enqueue path walks
@@ -200,7 +200,7 @@ struct SidebarMultiSelectTests {
   /// Empty buckets must not enqueue any work, must surface the "no items" message,
   /// and must not leave the manager in `isEnqueueingAll`.
   @Test func timelineSelectionEmptyBucketsSurfacesMessage() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     h.manager.startExportTimelineSelection(years: [], months: [])
@@ -214,7 +214,7 @@ struct SidebarMultiSelectTests {
   /// Mirrors `ExportAllAlbumsTests`'s checkpoint pattern: gate year B's fetch, let
   /// year A's jobs land, cancel, release the gate, assert the manager is idle.
   @Test func cancelMidTimelineSelectionLoopResetsState() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     h.photoLib.assetsByYearMonth["2026-3"] = [makeAsset(id: "a26", year: 2026, month: 3)]
@@ -249,7 +249,7 @@ struct SidebarMultiSelectTests {
   /// (b) drain year A's queued jobs, and (c) set `incompleteScan` so any
   /// scoped wrapper sees the partial state.
   @Test func timelineSelectionPartialFailureDrainsQueuedJobs() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let asset1 = makeAsset(id: "a26-1", year: 2026, month: 3)
@@ -374,7 +374,7 @@ struct SidebarMultiSelectTests {
   @Test(.timeLimit(.minutes(1))) func collectionsSelectionExpandsFoldersAndDedupesAlbums()
     async throws
   {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
@@ -412,7 +412,7 @@ struct SidebarMultiSelectTests {
   /// Empty buckets must not enqueue any work and must surface the empty-selection
   /// message.
   @Test func collectionsSelectionEmptyBucketsSurfacesMessage() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     h.manager.startExportCollectionsSelection(.empty)
@@ -430,7 +430,7 @@ struct SidebarMultiSelectTests {
   /// two buckets must reset `isEnqueueingAll`, leave the queue idle, and bump
   /// the generation so a re-dispatch can run cleanly.
   @Test func cancelMidCollectionsSelectionBetweenBucketsResetsState() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     // Favorites: one asset; album A: one asset. Gate album A's fetch so we can
@@ -490,7 +490,7 @@ struct SidebarMultiSelectTests {
   /// correct, and the assertion would not pin the contract. The routing
   /// check here is the strongest dispatcher-level property available.)
   @Test func multiSelectCollectionsDispatcherDelegatesPerBucketToEnqueueCollection() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     // One asset per bucket: favorites, a top-level album, a top-level shared
@@ -552,7 +552,7 @@ struct SidebarMultiSelectTests {
   /// jobs do flow through `ExportQueueCoordinator` (and so the mirror sinks
   /// fire as expected).
   @Test func multiSelectEnqueueRoutesThroughQueueCoordinator() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     h.photoLib.assetsByYearMonth["2026-3"] = [makeAsset(id: "a1", year: 2026, month: 3)]
@@ -599,8 +599,8 @@ struct SidebarMultiSelectTests {
     dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    Harness(label: "SidebarMultiSelect")
+  private func makeHarness() async -> Harness {
+    await Harness(label: "SidebarMultiSelect")
   }
 
   private func makeAsset(id: String, year: Int = 2024, month: Int = 1) -> AssetDescriptor {

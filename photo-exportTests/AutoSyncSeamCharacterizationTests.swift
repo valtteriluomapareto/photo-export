@@ -71,14 +71,14 @@ struct AutoSyncSeamCharacterizationTests {
     dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    Harness(label: "AutoSyncSeam")
+  private func makeHarness() async -> Harness {
+    await Harness(label: "AutoSyncSeam")
   }
 
   /// Runs `body` with a fresh harness and always awaits its cleanup, including when the
   /// body throws.
   private func withHarness(_ body: (Harness) async throws -> Void) async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     do {
       try await body(harness)
     } catch {

@@ -34,8 +34,8 @@ struct ExportQueueStateSnapshotTests {
     dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    Harness(label: "ExportQueueSnapshot")
+  private func makeHarness() async -> Harness {
+    await Harness(label: "ExportQueueSnapshot")
   }
 
   /// Canonical queue-state at a single instant. The Phase 4b extraction must preserve
@@ -80,7 +80,7 @@ struct ExportQueueStateSnapshotTests {
   /// pause again → cancel. The canonical transition sequence must end identically
   /// after the Phase 4b extraction.
   @Test func pauseResumeCancelStateSnapshot_canonicalTransitions() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let assets = (1...3).map {
@@ -158,7 +158,7 @@ struct ExportQueueStateSnapshotTests {
   /// today there's none — and the canonical-sequence test above would still pass.
   /// This test asserts synchronous propagation directly.
   @Test func teardownQueue_synchronouslyClearsManagerMirrors() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     // Force the coordinator into a running state cheaply by enqueueing one job and

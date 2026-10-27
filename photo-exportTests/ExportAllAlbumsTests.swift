@@ -110,8 +110,8 @@ struct ExportAllAlbumsTests {
     dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    Harness(label: "ExportAllAlbums")
+  private func makeHarness() async -> Harness {
+    await Harness(label: "ExportAllAlbums")
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {
@@ -153,7 +153,7 @@ struct ExportAllAlbumsTests {
   @Test(.timeLimit(.minutes(1))) func enqueuesEveryAlbumIncludingNestedAndExcludesFavorites()
     async throws
   {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let topAlbum = seedAlbum(h.photoLib, localId: "top-A", ids: ["a1", "a2"])
@@ -250,7 +250,7 @@ struct ExportAllAlbumsTests {
   }
 
   @Test func emptyAlbumTreeSetsNoAlbumsMessage() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     h.photoLib.collectionTree = [
@@ -272,7 +272,7 @@ struct ExportAllAlbumsTests {
   /// so the queue would resume processing as soon as the enqueue loop completed
   /// and called `processQueueIfNeeded()`.
   @Test func pauseHonoredDuringEnqueueWindow() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
@@ -318,7 +318,7 @@ struct ExportAllAlbumsTests {
   /// `pendingJobs` with no active processor. The catch path drains what was queued and
   /// surfaces the partial state via the empty-run message slot.
   @Test func partialEnqueueFailureDrainsTheJobsAlreadyQueued() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "album-A", ids: ["a1", "a2"])
@@ -355,7 +355,7 @@ struct ExportAllAlbumsTests {
 
   @Test(.timeLimit(.minutes(2))) func allAlbumsAlreadyExportedSetsAlreadyDoneMessage() async throws
   {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "done-album", ids: ["d1"])
@@ -394,7 +394,7 @@ struct ExportAllAlbumsTests {
   /// version selection regardless of the current UI toggle. The override must
   /// thread through to every queued `ExportJob.selection`, not just the first.
   @Test func selectionOverrideThreadsToEveryQueuedJob() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
@@ -432,7 +432,7 @@ struct ExportAllAlbumsTests {
   /// equal the same default value. Two opposite-direction tests isolate the
   /// parameter-threading from a coincidental match.
   @Test func selectionOverrideWinsOverToggleInBothDirections() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "A", ids: ["a1", "a2"])
