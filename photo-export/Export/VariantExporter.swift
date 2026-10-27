@@ -445,9 +445,7 @@ final class VariantExporter {
               throw CancellationError()
             } catch {
               try checkOwnership(context, placement: job.placement)
-              if error is LocalHEICStorage.Failure
-                || AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun
-              {
+              if AutoSyncFailureCategory.classify(error).category.stopsCurrentExportRun {
                 throw error
               }
               logger.error(
