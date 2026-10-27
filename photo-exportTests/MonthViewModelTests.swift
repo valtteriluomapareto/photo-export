@@ -896,6 +896,7 @@ struct MonthViewModelTests {
     // Second batch is now suspended; we should see the first 200 assets
     // visible and isLoading already cleared.
     await gate.waitForEnter(count: 2)
+    #expect(await eventually("the first streamed batch is installed") { !vm.assets.isEmpty })
     #expect(
       vm.assets.count == 200,
       "first batch must be visible while later batches are still suspended")
