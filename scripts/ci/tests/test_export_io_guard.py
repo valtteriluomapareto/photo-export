@@ -43,6 +43,13 @@ class ExportIOGuardTests(unittest.TestCase):
         allowed['Export/ProductionAssetResourceWriter.swift'] += '\nFileManager.default.removeItem(at: url)'
         self.assertEqual(self.run_guard(allowed).returncode, 1)
 
+    def test_local_scratch_boundary_permits_only_filesystem_operations(self):
+        files = {'Export/LocalHEICStorage.swift':
+                 'FileManager.default.removeItem(at: url)\nurl.resourceValues(forKeys: [])'}
+        self.assertEqual(self.run_guard(files).returncode, 0)
+        files['Export/LocalHEICStorage.swift'] += '\nPHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)'
+        self.assertEqual(self.run_guard(files).returncode, 1)
+
     def test_picker_adapter_is_function_scoped_and_comments_are_ignored(self):
         permitted = 'private static func fileResourceIdentifier(of url: URL) -> String { url.resourceValues(forKeys: []) }'
         result = self.run_guard({'Destination/ExportDestinationManager.swift': permitted,

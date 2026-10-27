@@ -80,6 +80,14 @@ struct LocalHEICStorageTests {
     let signal = AutoSyncFailureCategory.classify(local)
     #expect(signal.category == .unknown)
     #expect(signal.localizedDescription.contains("local temporary storage"))
+    for code in [ENOSPC, EPERM, ENOENT] {
+      let wrapped = NSError(
+        domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError,
+        userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(code))])
+      let signal = AutoSyncFailureCategory.classify(LocalHEICStorage.localizing(wrapped))
+      #expect(signal.category == .unknown)
+      #expect(signal.localizedDescription.contains("local temporary storage"))
+    }
     let cloud = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
     #expect(
       AutoSyncFailureCategory.classify(LocalHEICStorage.localizing(cloud)).category
