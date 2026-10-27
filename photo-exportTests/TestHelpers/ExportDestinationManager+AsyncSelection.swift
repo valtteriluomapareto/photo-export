@@ -14,10 +14,6 @@ extension ExportDestinationManager {
     await waitForValidation()
   }
 
-  func keepHistoryAndWait(_ url: URL) async -> Bool {
-    await selectFolderKeepingHistory(at: url)
-  }
-
   func revalidateAndWait() async {
     revalidate()
     await waitForValidation()

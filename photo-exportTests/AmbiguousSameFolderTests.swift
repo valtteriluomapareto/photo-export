@@ -402,7 +402,7 @@ struct AmbiguousSameFolderTests {
       var held: [Bool] = []
       let heldSink = exportManager.isImportingPublisher.sink { held.append($0) }
       defer { heldSink.cancel() }
-      #expect(await destinationManager.keepHistoryAndWait(pickedDir))
+      #expect(await destinationManager.selectFolderKeepingHistory(at: pickedDir))
       #expect(destinationManager.destinationId == stableId)
       #expect(exportManager.isImporting)
       #expect(held == [true])
