@@ -289,7 +289,7 @@ struct PhotoKitResourceSessionTests {
     let generation = h.manager.generation
     let job = ExportManager.ExportJob(
       assetLocalIdentifier: asset.id, placement: .timeline(year: 2026, month: 1),
-      selection: .original)
+      selection: .edited)
     let task = Task { await h.manager.performExport(job: job, generation: generation) }
     if route == "stale-metadata" {
       try #require(await gate.waitForEnter(count: 1))
