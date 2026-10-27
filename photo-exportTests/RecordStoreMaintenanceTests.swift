@@ -209,6 +209,65 @@ struct RecordStoreMaintenanceTests {
     #expect(try Data(contentsOf: snapshot) == corrupt)
   }
 
+  @Test(arguments: [false, true])
+  func failedResetDuringReconfigurationKeepsCorruptHistoryUnreadable(collection: Bool) async throws
+  {
+    let f = await Fixture(collection: collection)
+    f.timeline.drainSynchronously()
+    f.collections.drainSynchronously()
+    let directory = f.root.appendingPathComponent("A")
+    let snapshot = directory.appendingPathComponent(
+      collection
+        ? CollectionExportRecordStore.Constants.snapshotFileName
+        : ExportRecordStore.Constants.snapshotFileName)
+    let corrupt = Data("corrupt history".utf8)
+    try corrupt.write(to: snapshot)
+    await f.select("A")
+    #expect(f.state == .failed)
+    f.replacement.arm(fail: true)
+    let reset = Task {
+      if collection { await f.collections.resetHistory() } else { await f.timeline.resetHistory() }
+    }
+    try await withCleanup {
+      await f.replacement.entered.waitForEnter(count: 1)
+      if collection {
+        f.collections.beginConfigure(for: "B")
+      } else {
+        f.timeline.beginConfigure(for: "B")
+      }
+      #expect(f.state == .loading)
+      f.replacement.release()
+      await reset.value
+      if collection {
+        await f.collections.waitUntilSettled()
+      } else {
+        await f.timeline.waitUntilSettled()
+      }
+      let backups = try FileManager.default.contentsOfDirectory(
+        at: directory, includingPropertiesForKeys: nil
+      ).filter {
+        $0.lastPathComponent.hasPrefix(
+          snapshot.deletingPathExtension().lastPathComponent + ".broken-")
+      }
+      let backup = try #require(backups.first)
+      #expect(backups.count == 1)
+      #expect(try Data(contentsOf: backup) == corrupt)
+      // Restore the preserved corrupt file after failed Reset, as a storage repair might.
+      try FileManager.default.copyItem(at: backup, to: snapshot)
+      await f.select("A")
+      #expect(f.state == .failed)
+      await f.retry()
+      #expect(f.state == .failed)
+      #expect(try Data(contentsOf: snapshot) == corrupt)
+      #expect(try Data(contentsOf: backup) == corrupt)
+      #expect(!f.has("seed"))
+    } cleanup: {
+      f.replacement.release()
+      await reset.value
+      f.close()
+    }
+  }
+
   @Test(arguments: [false, true], [false, true])
   func heldCheckpointExcludesSecondWriterFromMemoryAndLog(collection: Bool, finalCommit: Bool)
     async throws
