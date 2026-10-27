@@ -5,30 +5,18 @@ import os
 /// Resolves export values and their private resource owner away from the main actor.
 final class ProductionPhotoKitReader: PhotoKitReading {
   let thumbnailReader: (any ThumbnailReading)?
-  private let io: any DestinationIOExecuting
-  private let lookup: (@Sendable (String, Bool) -> PhotoKitAssetSnapshot?)?
   private let resourceOwner: ProductionPhotoKitResourceOwner
 
   init(
-    io: any DestinationIOExecuting = DestinationIO(
-      queue: DispatchQueue(label: "photo-export.photokit-reader", qos: .utility)),
     thumbnailBackend: any PhotoKitThumbnailBackend = ProductionThumbnailBackend(),
-    resourceOwner: ProductionPhotoKitResourceOwner? = nil,
-    lookup: (@Sendable (String, Bool) -> PhotoKitAssetSnapshot?)? = nil
+    resourceOwner: ProductionPhotoKitResourceOwner = ProductionPhotoKitResourceOwner()
   ) {
     self.thumbnailReader = ProductionThumbnailReader(backend: thumbnailBackend)
-    self.io = io
-    self.lookup = lookup
-    self.resourceOwner = resourceOwner ?? ProductionPhotoKitResourceOwner()
+    self.resourceOwner = resourceOwner
   }
 
   func readAsset(id: String, livePhotosPaired: Bool) async -> PhotoKitAssetSnapshot? {
-    if let lookup {
-      return await io.run {
-        autoreleasepool { lookup(id, livePhotosPaired) }
-      }
-    }
-    return await resourceOwner.readAsset(id: id, livePhotosPaired: livePhotosPaired)
+    await resourceOwner.readAsset(id: id, livePhotosPaired: livePhotosPaired)
   }
 
   static func resourceDescriptor(
@@ -64,14 +52,12 @@ final class ProductionPhotoKitResourceOwner: @unchecked Sendable {
 
   private final class Session {
     let assetId: String
-    let asset: ResolvedAsset
     let resources: [Resource]
     var inFlight = 0
     var closed = false
 
-    init(assetId: String, asset: ResolvedAsset, resources: [Resource]) {
+    init(assetId: String, resources: [Resource]) {
       self.assetId = assetId
-      self.asset = asset
       self.resources = resources
     }
   }
@@ -110,7 +96,7 @@ final class ProductionPhotoKitResourceOwner: @unchecked Sendable {
           guard let asset = backend.fetchAsset(id) else { return nil }
           let resources = asset.enumerateResources()
           let sessionId = UUID()
-          sessions[sessionId] = Session(assetId: id, asset: asset, resources: resources)
+          sessions[sessionId] = Session(assetId: id, resources: resources)
           return PhotoKitAssetSnapshot.mapping(
             asset.descriptor, resources: resources.map(\.descriptor),
             livePhotosPaired: livePhotosPaired,

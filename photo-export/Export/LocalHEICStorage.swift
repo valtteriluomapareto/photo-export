@@ -57,7 +57,10 @@ final class LocalHEICStorage: Sendable {
           attributes: [.posixPermissions: 0o700])
         return directory.appendingPathComponent(".photo-export-\(UUID().uuidString).heic-source")
       }
-    } catch { throw Self.localizing(error) }
+    } catch {
+      if error is Failure || error is CancellationError { throw error }
+      throw Failure(detail: error.localizedDescription)
+    }
   }
 
   func remove(_ url: URL) async {
@@ -122,30 +125,4 @@ final class LocalHEICStorage: Sendable {
     }
   }
 
-  /// Local filesystem failures must not diagnose the user's export destination as full or missing.
-  static func localizing(_ error: Error) -> Error {
-    if error is Failure || error is CancellationError { return error }
-    let ns = error as NSError
-    let localCodes: [Int32] = [ENOSPC, EACCES, EPERM, EROFS, ENOENT, ENOTDIR, EIO]
-    let local: Bool
-    switch ns.domain {
-    case NSPOSIXErrorDomain:
-      local = localCodes.contains(Int32(ns.code))
-    case NSCocoaErrorDomain:
-      local =
-        [
-          NSFileWriteOutOfSpaceError, NSFileWriteNoPermissionError,
-          NSFileReadNoPermissionError, NSFileNoSuchFileError, NSFileReadNoSuchFileError,
-          NSFileWriteVolumeReadOnlyError,
-        ].contains(ns.code)
-        || {
-          guard let cause = ns.userInfo[NSUnderlyingErrorKey] as? NSError,
-            cause.domain == NSPOSIXErrorDomain
-          else { return false }
-          return localCodes.contains(Int32(cause.code))
-        }()
-    default: local = false
-    }
-    return local ? Failure(detail: ns.localizedDescription) : error
-  }
 }
