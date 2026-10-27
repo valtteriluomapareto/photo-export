@@ -256,14 +256,13 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     overrideService: any PhotoLibraryService,
     countInvalidationOverride: (@Sendable () async -> Void)? = nil,
     countInvalidationWaitObserver: (@MainActor () -> Void)? = nil,
-    refreshClock: (any AutoSyncClock)? = nil,
-    thumbnailReader: (any ThumbnailReading)? = nil
+    refreshClock: (any AutoSyncClock)? = nil
   ) {
     self.overrideService = overrideService
     self.liveAuthorizationStatus = Self.systemAuthorizationStatus
     self.countInvalidationOverride = countInvalidationOverride
     self.countInvalidationWaitObserver = countInvalidationWaitObserver
-    self.thumbnailReader = thumbnailReader ?? overrideService.thumbnailReader
+    self.thumbnailReader = overrideService.thumbnailReader
     self.refreshClock = refreshClock ?? SystemAutoSyncClock()
     super.init()
     // Sync the UI-facing auth state from the injected service so the onboarding
