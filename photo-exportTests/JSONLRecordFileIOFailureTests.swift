@@ -83,7 +83,7 @@ struct JSONLRecordFileIOFailureTests {
       logURL: directory.appendingPathComponent("log.jsonl"), ioQueue: queue,
       logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLFlushBoundary"))
     queue.suspend()
-    file.append(Mutation(key: "first", value: "1"), currentSnapshot: { Snapshot(values: [:]) })
+    file.append(Mutation(key: "first", value: "1"))
     var flushTask: Task<Void, Error>?
     await withCheckedContinuation { (started: CheckedContinuation<Void, Never>) in
       flushTask = Task { @MainActor in
@@ -92,7 +92,7 @@ struct JSONLRecordFileIOFailureTests {
         try await file.flush()
       }
     }
-    file.append(Mutation(key: "second", value: "2"), currentSnapshot: { Snapshot(values: [:]) })
+    file.append(Mutation(key: "second", value: "2"))
     queue.resume()
     try await flushTask?.value
     #expect(file.hasUnflushedChanges)
@@ -185,8 +185,8 @@ struct JSONLRecordFileIOFailureTests {
     // The composing store applies both changes before its asynchronous IO completes.
     // The second queued append must not jump past the first failed one.
     let retained = Snapshot(values: ["first": "1", "second": "2"])
-    file.append(Mutation(key: "first", value: "1"), currentSnapshot: { retained })
-    file.append(Mutation(key: "second", value: "2"), currentSnapshot: { retained })
+    file.append(Mutation(key: "first", value: "1"))
+    file.append(Mutation(key: "second", value: "2"))
     await #expect(throws: (any Error).self) { try await file.flush() }
     #expect(failures.count == 1)
     let beforeRetry = makeFile(at: directory).load()

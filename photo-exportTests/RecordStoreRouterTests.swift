@@ -31,12 +31,12 @@ struct RecordStoreRouterTests {
     }
   }
 
-  private func makeHarness() -> Harness {
+  private func makeHarness() async -> Harness {
     let root = TestScratch.directory("RecordStoreRouter")
     let timeline = ExportRecordStore(baseDirectoryURL: root)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: root)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let router = RecordStoreRouter(timelineStore: timeline, collectionStore: collection)
     return Harness(router: router, timeline: timeline, collection: collection, root: root)
   }
@@ -68,8 +68,8 @@ struct RecordStoreRouterTests {
 
   // MARK: - Reads
 
-  @Test func variants_timelinePlacement_readsFromTimelineStore() {
-    let h = makeHarness()
+  @Test func variants_timelinePlacement_readsFromTimelineStore() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     h.timeline.markVariantExported(
@@ -82,8 +82,8 @@ struct RecordStoreRouterTests {
     #expect(variants[.original]?.filename == "IMG_0001.HEIC")
   }
 
-  @Test func variants_collectionPlacement_readsFromCollectionStore() {
-    let h = makeHarness()
+  @Test func variants_collectionPlacement_readsFromCollectionStore() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let placement = favorites()
@@ -96,8 +96,8 @@ struct RecordStoreRouterTests {
     #expect(variants[.original]?.status == .done)
   }
 
-  @Test func variants_missingRecord_returnsEmptyDict() {
-    let h = makeHarness()
+  @Test func variants_missingRecord_returnsEmptyDict() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     #expect(h.router.variants(forAssetId: "missing", placement: timeline()).isEmpty)
     #expect(h.router.variants(forAssetId: "missing", placement: favorites()).isEmpty)
@@ -106,8 +106,8 @@ struct RecordStoreRouterTests {
   /// A timeline placement without a year and month has no claim folder, so every name reads
   /// as claimed, by either query, rather than free. Exports refuse such a placement before
   /// asking; that assertion is not tested.
-  @Test func isFilenameClaimed_timelineWithoutYearMonth_failsClosed() {
-    let h = makeHarness()
+  @Test func isFilenameClaimed_timelineWithoutYearMonth_failsClosed() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let malformed = ExportPlacement(
       kind: .timeline, id: "timeline:unknown", displayName: "Unknown",
@@ -130,7 +130,7 @@ struct RecordStoreRouterTests {
   // month onto the stored record, not the `(0,0)` fallback the router uses when
   // `timelineYearMonth` returns nil.
   @Test func captureFinalCommit_timelinePreservesYearMonthFromPlacement() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     let placement = timeline(year: 2019, month: 12)
     let commit = try h.router.captureFinalCommit(
@@ -139,7 +139,7 @@ struct RecordStoreRouterTests {
     await commit("X.HEIC")
 
     for reload in [false, true] {
-      if reload { h.timeline.configure(for: "test") }
+      if reload { await h.timeline.configureAndWait(for: "test") }
       let record = h.timeline.exportInfo(assetId: "a")
       #expect(record?.year == 2019)
       #expect(record?.month == 12)
@@ -151,7 +151,7 @@ struct RecordStoreRouterTests {
   }
 
   @Test func retryCompletionIsSpecificToScopeAndVariant() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     let placements = [timeline(), favorites(), album("one"), sharedAlbum("two")]
     for placement in placements {
@@ -176,8 +176,8 @@ struct RecordStoreRouterTests {
 
   // MARK: - Writes — dispatch coverage
 
-  @Test func markVariantInProgress_dispatchesByPlacementKind() {
-    let h = makeHarness()
+  @Test func markVariantInProgress_dispatchesByPlacementKind() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     // Timeline → timeline store.
@@ -199,7 +199,7 @@ struct RecordStoreRouterTests {
   }
 
   @Test func captureFinalCommit_dispatchesByPlacementKind() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let alb = album("vacation")
@@ -211,7 +211,7 @@ struct RecordStoreRouterTests {
     await commit("v.HEIC")
 
     for reload in [false, true] {
-      if reload { h.collection.configure(for: "test") }
+      if reload { await h.collection.configureAndWait(for: "test") }
       let body = h.collection.exportInfo(assetId: "a1", placement: alb)
       #expect(body?.variants[.edited]?.status == .done)
       #expect(body?.variants[.edited]?.filename == "v.HEIC")
@@ -223,8 +223,8 @@ struct RecordStoreRouterTests {
     }
   }
 
-  @Test func markVariantFailed_dispatchesByPlacementKind() {
-    let h = makeHarness()
+  @Test func markVariantFailed_dispatchesByPlacementKind() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let shared = sharedAlbum("vac-shared")
@@ -242,7 +242,7 @@ struct RecordStoreRouterTests {
   // MARK: - Cancellation cleanup
 
   @Test func removeInProgressVariant_removesOnlyInProgressVariants() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     // Timeline path: in-progress → removed.
@@ -264,7 +264,7 @@ struct RecordStoreRouterTests {
   }
 
   @Test func removeInProgressVariant_collectionStore_sameContract() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     let alb = album("a")
     h.collection.upsertPlacement(alb)
@@ -287,8 +287,8 @@ struct RecordStoreRouterTests {
         .variants[.original]?.status == .done)
   }
 
-  @Test func removeInProgressVariant_missingRecord_isNoOp() {
-    let h = makeHarness()
+  @Test func removeInProgressVariant_missingRecord_isNoOp() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.router.removeInProgressVariant(
       assetId: "ghost", placement: timeline(), variant: .original)
@@ -298,8 +298,8 @@ struct RecordStoreRouterTests {
   /// `.failed` variants must be preserved across cancellation cleanup. Only `.inProgress`
   /// gets removed — `.done` and `.failed` survive (existing failures carry retry context
   /// AutoSync needs and the variant-recovery UI renders).
-  @Test func removeInProgressVariant_preservesFailedVariants() {
-    let h = makeHarness()
+  @Test func removeInProgressVariant_preservesFailedVariants() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     // Timeline path
@@ -325,8 +325,8 @@ struct RecordStoreRouterTests {
 
   // MARK: - Reuse-source lookup
 
-  @Test func findReuseSource_findsTimelineDoneFromCollectionPlacement() {
-    let h = makeHarness()
+  @Test func findReuseSource_findsTimelineDoneFromCollectionPlacement() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let now = Date()
     h.timeline.markVariantExported(
@@ -345,8 +345,8 @@ struct RecordStoreRouterTests {
     }
   }
 
-  @Test func findReuseSource_skipsTimelineWhenCurrentIsTimeline() {
-    let h = makeHarness()
+  @Test func findReuseSource_skipsTimelineWhenCurrentIsTimeline() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.timeline.markVariantExported(
       assetId: "x", variant: .original,
@@ -357,8 +357,8 @@ struct RecordStoreRouterTests {
     #expect(reuse == nil, "timeline placement must not reuse from itself")
   }
 
-  @Test func findReuseSource_findsCollectionDoneFromTimelinePlacement() {
-    let h = makeHarness()
+  @Test func findReuseSource_findsCollectionDoneFromTimelinePlacement() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let alb = album("from-album")
     h.collection.upsertPlacement(alb)
@@ -371,8 +371,8 @@ struct RecordStoreRouterTests {
     #expect(reuse?.placement.kind == .album)
   }
 
-  @Test func findReuseSource_excludesCurrentCollectionPlacement() {
-    let h = makeHarness()
+  @Test func findReuseSource_excludesCurrentCollectionPlacement() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let alb = album("self")
     h.collection.upsertPlacement(alb)
@@ -384,17 +384,17 @@ struct RecordStoreRouterTests {
     #expect(reuse == nil, "current placement must be excluded from reuse search")
   }
 
-  @Test func findReuseSource_returnsNilWhenNoDoneRecord() {
-    let h = makeHarness()
+  @Test func findReuseSource_returnsNilWhenNoDoneRecord() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     #expect(
       h.router.findReuseSource(
         assetId: "nothing", variant: .original, currentPlacement: timeline()) == nil)
   }
 
-  @Test func findReuseSource_prefersTimelineOverCollection() {
+  @Test func findReuseSource_prefersTimelineOverCollection() async {
     // Plan: "Order: timeline first, then collection placements sorted by id."
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.timeline.markVariantExported(
       assetId: "z", variant: .original,
@@ -422,8 +422,8 @@ struct RecordStoreRouterTests {
   /// asking for one must yield that one's true on-disk location, or VariantExporter
   /// would build the wrong source URL when copying. Pins the per-variant read
   /// against a future refactor that mistakenly reads `variants.first?.subfolder`.
-  @Test func findReuseSource_returnsPerVariantSubfolder() {
-    let h = makeHarness()
+  @Test func findReuseSource_returnsPerVariantSubfolder() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     // Same asset, both variants written into the timeline store with different
     // `subfolder` values — the kind of split a mid-life toggle of `videoLayout`

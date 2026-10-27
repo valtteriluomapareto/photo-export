@@ -38,8 +38,6 @@ struct JSONLRecordFileTests {
     return (dir, file, queue)
   }
 
-  private func emptySnapshot() -> Snapshot { Snapshot(records: [:]) }
-
   // MARK: - Load (empty / missing)
 
   @Test func loadReturnsEmptyWhenNothingOnDisk() throws {
@@ -60,8 +58,8 @@ struct JSONLRecordFileTests {
 
     let op1 = Operation(kind: .upsert, key: "a", value: "1")
     let op2 = Operation(kind: .upsert, key: "b", value: "2")
-    file.append(op1, currentSnapshot: { Snapshot(records: ["a": "1"]) })
-    file.append(op2, currentSnapshot: { Snapshot(records: ["a": "1", "b": "2"]) })
+    file.append(op1)
+    file.append(op2)
     file.drainSynchronously()
 
     let result = file.load()
@@ -77,7 +75,7 @@ struct JSONLRecordFileTests {
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let op = Operation(kind: .upsert, key: "a", value: "1")
-    file.append(op, currentSnapshot: { Snapshot(records: ["a": "1"]) })
+    file.append(op)
     file.drainSynchronously()
 
     // Inject a malformed line into the log.
@@ -87,7 +85,7 @@ struct JSONLRecordFileTests {
     try logBytes.write(to: logURL)
     // Append another good line after the malformed one.
     let op2 = Operation(kind: .upsert, key: "b", value: "2")
-    file.append(op2, currentSnapshot: { Snapshot(records: ["a": "1", "b": "2"]) })
+    file.append(op2)
     file.drainSynchronously()
 
     let result = file.load()
@@ -102,7 +100,7 @@ struct JSONLRecordFileTests {
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let op = Operation(kind: .upsert, key: "a", value: "1")
-    file.append(op, currentSnapshot: { emptySnapshot() })
+    file.append(op)
     file.drainSynchronously()
 
     // Manual snapshot write should leave only the snapshot, no log content.
@@ -131,30 +129,6 @@ struct JSONLRecordFileTests {
     let contents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
     let tmpFiles = contents.filter { $0.hasSuffix(".tmp") }
     #expect(tmpFiles.isEmpty)
-  }
-
-  // MARK: - clearOnDiskState
-
-  @Test func clearOnDiskStateRemovesBothFiles() throws {
-    let (dir, file, _) = try makeStore()
-    defer { try? FileManager.default.removeItem(at: dir) }
-
-    let op = Operation(kind: .upsert, key: "a", value: "1")
-    file.append(op, currentSnapshot: { emptySnapshot() })
-    try file.writeSnapshot(Snapshot(records: ["a": "1"]))
-    file.drainSynchronously()
-
-    file.clearOnDiskState()
-
-    let snapshotPath = dir.appendingPathComponent("snapshot.json").path
-    let logPath = dir.appendingPathComponent("log.jsonl").path
-    #expect(!FileManager.default.fileExists(atPath: snapshotPath))
-    #expect(!FileManager.default.fileExists(atPath: logPath))
-
-    // Subsequent load returns empty.
-    let result = file.load()
-    #expect(result.snapshot == nil)
-    #expect(result.ops.isEmpty)
   }
 
   // MARK: - Bulk reader edge cases
@@ -248,8 +222,7 @@ struct JSONLRecordFileTests {
     for i in 0..<n {
       let op = Operation(kind: .upsert, key: "k\(i)", value: "v\(i)")
       rolling["k\(i)"] = "v\(i)"
-      let captured = rolling
-      file.append(op, currentSnapshot: { Snapshot(records: captured) })
+      file.append(op)
     }
     try await file.checkpoint(Snapshot(records: rolling))
 

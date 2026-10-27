@@ -17,12 +17,12 @@ struct DiagnosticReporterTests {
     let storeRoot: URL
   }
 
-  private func makeHarness() -> Harness {
+  private func makeHarness() async -> Harness {
     let storeRoot = TestScratch.directory("DiagnosticReporter")
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: "test")
+    await timelineStore.configureAndWait(for: "test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
+    await collectionStore.configureAndWait(for: "test")
     return Harness(
       timelineStore: timelineStore, collectionStore: collectionStore, storeRoot: storeRoot)
   }
@@ -40,8 +40,8 @@ struct DiagnosticReporterTests {
 
   // MARK: - Tests
 
-  @Test func reportHeaderContainsVersionAndDestination() {
-    let h = makeHarness()
+  @Test func reportHeaderContainsVersionAndDestination() async {
+    let h = await makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
 
     let report = makeReporter(h).makeReport()
@@ -51,8 +51,8 @@ struct DiagnosticReporterTests {
     #expect(report.contains("Destination ID: test-destination-id"))
   }
 
-  @Test func emptyStoresProduceCleanSummaryAndNoneSections() {
-    let h = makeHarness()
+  @Test func emptyStoresProduceCleanSummaryAndNoneSections() async {
+    let h = await makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
 
     let report = makeReporter(h).makeReport()
@@ -64,8 +64,8 @@ struct DiagnosticReporterTests {
     #expect(noneCount == 4)
   }
 
-  @Test func failedTimelineVariantAppearsWithErrorAndScope() {
-    let h = makeHarness()
+  @Test func failedTimelineVariantAppearsWithErrorAndScope() async {
+    let h = await makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
 
     h.timelineStore.markVariantInProgress(
@@ -85,8 +85,8 @@ struct DiagnosticReporterTests {
     #expect(report.contains("error: Asset bytes not available from iCloud"))
   }
 
-  @Test func inProgressTimelineVariantAppearsInItsOwnSection() {
-    let h = makeHarness()
+  @Test func inProgressTimelineVariantAppearsInItsOwnSection() async {
+    let h = await makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
 
     h.timelineStore.markVariantInProgress(
@@ -121,8 +121,8 @@ struct DiagnosticReporterTests {
   /// them, a refactor that returned `["Trigger:        ", ...]` from
   /// `previousRunSection()` when `previousRunJournal == nil` would slip
   /// through.
-  @Test func absentJournalOmitsTheSectionEntirely() {
-    let h = makeHarness()
+  @Test func absentJournalOmitsTheSectionEntirely() async {
+    let h = await makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
 
     let report = makeReporter(h).makeReport()
@@ -146,8 +146,8 @@ struct DiagnosticReporterTests {
   /// line is what tells a maintainer reading the .txt that the silent
   /// shutdown happened — without it the section reads like a status pill
   /// rather than a forensic signal.
-  @Test func populatedJournalRendersAllFieldsAndAbnormalExitStatus() {
-    let h = makeHarness()
+  @Test func populatedJournalRendersAllFieldsAndAbnormalExitStatus() async {
+    let h = await makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
 
     let journal = AutoSyncRunJournal(
@@ -188,8 +188,8 @@ struct DiagnosticReporterTests {
   /// iteration — the OS killed the fan-out task before the loop body ran.
   /// The section must say so explicitly rather than render a confusing
   /// empty `Current scope:` field.
-  @Test func journalWithNoCurrentScopeRendersExplicitMessage() {
-    let h = makeHarness()
+  @Test func journalWithNoCurrentScopeRendersExplicitMessage() async {
+    let h = await makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
 
     let journal = AutoSyncRunJournal(
@@ -216,8 +216,8 @@ struct DiagnosticReporterTests {
   /// not below. A maintainer reading the report top-to-bottom hits the
   /// abnormal-exit signal before the 80,000-record summary; this ordering
   /// is part of the slice's value proposition.
-  @Test func journalSectionAppearsAboveCatchUpAndSummary() {
-    let h = makeHarness()
+  @Test func journalSectionAppearsAboveCatchUpAndSummary() async {
+    let h = await makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
 
     let journal = AutoSyncRunJournal(
@@ -245,8 +245,8 @@ struct DiagnosticReporterTests {
     }
   }
 
-  @Test func failedCollectionVariantIncludesPlacementDisplayName() {
-    let h = makeHarness()
+  @Test func failedCollectionVariantIncludesPlacementDisplayName() async {
+    let h = await makeHarness()
     defer { try? FileManager.default.removeItem(at: h.storeRoot) }
 
     let placement = ExportPlacement(

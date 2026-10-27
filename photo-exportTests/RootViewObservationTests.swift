@@ -123,8 +123,8 @@ import Testing
         collections = CollectionExportRecordStore(
           baseDirectoryURL: root.appendingPathComponent("Records"), recordLogIO: io,
           notificationClock: TestClock())
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         manager = ExportManager(
           photoLibraryService: service, exportDestination: fakeDestination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,

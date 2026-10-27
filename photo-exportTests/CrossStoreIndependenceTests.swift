@@ -280,7 +280,7 @@ struct CrossStoreIndependenceTests {
     let snapshotURL = collectionDir.appendingPathComponent(
       CollectionExportRecordStore.Constants.snapshotFileName)
     try Data("not valid json".utf8).write(to: snapshotURL)
-    collectionStore.configure(for: "test")
+    await collectionStore.configureAndWait(for: "test")
     #expect(collectionStore.state == .failed)
     #expect(!manager.canExportCollection)
     #expect(manager.canExportTimeline, "timeline must remain exportable when collection is failed")
@@ -316,7 +316,7 @@ struct CrossStoreIndependenceTests {
     let snapshotURL = timelineDir.appendingPathComponent(
       ExportRecordStore.Constants.snapshotFileName)
     try Data("garbage".utf8).write(to: snapshotURL)
-    timelineStore.configure(for: "test")
+    await timelineStore.configureAndWait(for: "test")
     #expect(timelineStore.state == .failed)
     #expect(!manager.canExportTimeline)
     #expect(

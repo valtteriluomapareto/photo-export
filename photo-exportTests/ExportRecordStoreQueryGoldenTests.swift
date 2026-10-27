@@ -20,11 +20,11 @@ struct ExportRecordStoreQueryGoldenTests {
 
   // MARK: - Fixtures
 
-  private func makeStore() throws -> (URL, ExportRecordStore) {
+  private func makeStore() async throws -> (URL, ExportRecordStore) {
     let dir = TestScratch.directory("ExportRecordStoreQuery")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let store = ExportRecordStore(baseDirectoryURL: dir)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
     return (dir, store)
   }
 
@@ -49,8 +49,8 @@ struct ExportRecordStoreQueryGoldenTests {
 
   // MARK: - empty store
 
-  @Test func emptyStoreReturnsZeros() throws {
-    let (dir, store) = try makeStore()
+  @Test func emptyStoreReturnsZeros() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
     #expect(store.yearExportedCount(year: 2025) == 0)
@@ -83,8 +83,8 @@ struct ExportRecordStoreQueryGoldenTests {
 
   /// Fixture: 5 assets across 2025-06 and 2025-07, plus 2 assets in 2024-12 (out of scope).
   /// All have `.original.done`. Year 2025 yearExportedCount == 5; year 2024 == 2.
-  @Test func yearExportedCountCountsOnlyOriginalDoneInScope() throws {
-    let (dir, store) = try makeStore()
+  @Test func yearExportedCountCountsOnlyOriginalDoneInScope() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
 
@@ -127,8 +127,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// existing record's year/month, or defaults to 0/0 for brand-new asset ids. To plant
   /// failed records at year=2025/month=6 we first call `markVariantInProgress` (which
   /// does take year/month) and then transition to failed.
-  @Test func recordCountReturnsExactCellsByVariantAndStatus() throws {
-    let (dir, store) = try makeStore()
+  @Test func recordCountReturnsExactCellsByVariantAndStatus() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -175,8 +175,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// always calls `markVariantInProgress` before `markVariantFailed`), but the API
   /// allows it and tests should pin the behavior so a future refactor doesn't change
   /// it silently.
-  @Test func failedCallForNewAssetCreatesRecordAtZeroYearMonth() throws {
-    let (dir, store) = try makeStore()
+  @Test func failedCallForNewAssetCreatesRecordAtZeroYearMonth() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
 
     store.markVariantFailed(
@@ -201,8 +201,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// - original only: original.done             → 1 asset
   /// recordCountBothVariantsDone == 2
   /// recordCountEditedDone == 3 (the 2 "both" assets + the "edited only" asset)
-  @Test func bothVariantsDoneAndEditedDoneCountIndependentOfOtherVariant() throws {
-    let (dir, store) = try makeStore()
+  @Test func bothVariantsDoneAndEditedDoneCountIndependentOfOtherVariant() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -238,8 +238,8 @@ struct ExportRecordStoreQueryGoldenTests {
   ///   (filtered by `record.variants[.edited]?.status == .done` short-circuit).
   /// - "img-D": .original.done with filename = nil → does NOT count.
   /// Expected: count == 1 (only "img-A").
-  @Test func originalDoneAtNaturalStemFiltersCompanionsAndAccompaniedEdits() throws {
-    let (dir, store) = try makeStore()
+  @Test func originalDoneAtNaturalStemFiltersCompanionsAndAccompaniedEdits() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -274,8 +274,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// - 1 record:  original.done only at _orig companion (excluded from natural-stem count).
   /// .edited mode formula: editedDone + min(origOnlyAtStem, uneditedCount)
   ///                     = 2 + min(4, 7) = 6
-  @Test func sidebarSummaryEditedModeFormula() throws {
-    let (dir, store) = try makeStore()
+  @Test func sidebarSummaryEditedModeFormula() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -323,8 +323,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// Same setup as above, .editedWithOriginals formula:
   /// bothDone + min(origOnlyAtStem, uneditedCount) = 1 + min(4, 7) = 5.
   /// (Of the two edited records, only "ed-1" has both variants done; "ed-2" has edited only.)
-  @Test func sidebarSummaryEditedWithOriginalsModeFormula() throws {
-    let (dir, store) = try makeStore()
+  @Test func sidebarSummaryEditedWithOriginalsModeFormula() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -360,8 +360,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// at natural stem (i.e. records belonging to currently-adjusted assets that exist as
   /// natural-stem rows). The cap clamps to 10.
   /// .edited mode formula: 0 + min(12, 10) = 10.
-  @Test func sidebarSummaryNaturalStemCappedByUneditedCount() throws {
-    let (dir, store) = try makeStore()
+  @Test func sidebarSummaryNaturalStemCappedByUneditedCount() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -391,8 +391,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// - 07: total=5, adjusted=0, 2 .original.done at natural stem → 0 + min(2, 5) = 2.
   /// - 08: total=0, no data → 0.
   /// Year total under .edited = 6 + 2 + 0 = 8.
-  @Test func sidebarYearExportedCountSumsAcrossMonths() throws {
-    let (dir, store) = try makeStore()
+  @Test func sidebarYearExportedCountSumsAcrossMonths() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
 
@@ -446,8 +446,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// Counts records whose `.original` variant is `.done`. Adjusted-but-edited assets that
   /// have no `.original` variant don't show up here; this is the legacy flavor used by
   /// callers without descriptors.
-  @Test func legacyMonthSummaryCountsOriginalDoneOnly() throws {
-    let (dir, store) = try makeStore()
+  @Test func legacyMonthSummaryCountsOriginalDoneOnly() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -497,8 +497,8 @@ struct ExportRecordStoreQueryGoldenTests {
   ///
   /// .edited mode: u-1 ✓, u-2 ✗, a-1 ✓ (.edited.done is sufficient), a-2 ✓, a-3 ✗ → 3 / 5.
   /// .editedWithOriginals: u-1 ✓, u-2 ✗, a-1 ✗ (needs .original too), a-2 ✓, a-3 ✗ → 2 / 5.
-  @Test func selectionAwareMonthSummaryEvaluatesEachAsset() throws {
-    let (dir, store) = try makeStore()
+  @Test func selectionAwareMonthSummaryEvaluatesEachAsset() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -547,8 +547,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// `isExported(assetId:)` is the legacy-shaped helper that only checks `.original.done`.
   /// `isExported(asset:selection:)` uses requiredVariants based on the asset's
   /// `hasAdjustments`.
-  @Test func isExportedHelpersBehaveDifferentlyForAdjustedAssets() throws {
-    let (dir, store) = try makeStore()
+  @Test func isExportedHelpersBehaveDifferentlyForAdjustedAssets() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -601,8 +601,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// The golden-state tests above verify end-state correctness on hand-checked fixtures;
   /// this test verifies that the counter map stays consistent through arbitrary mutation
   /// sequences.
-  @Test func incrementalCountersStayConsistentUnderChurn() throws {
-    let (dir, store) = try makeStore()
+  @Test func incrementalCountersStayConsistentUnderChurn() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
 
@@ -763,8 +763,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// Drives a sequence of state transitions on one record and asserts counts after each.
   /// Locks in: counts respond to upserts, deletes, and variant transitions in the obvious
   /// way.
-  @Test func countsRespondToMutationSequence() throws {
-    let (dir, store) = try makeStore()
+  @Test func countsRespondToMutationSequence() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -813,8 +813,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// direction. This test pins the reverse — failed-first-then-inProgress — and verifies
   /// the counter map at (0,0) returns to zero after the move while (year,month) picks up
   /// the contribution.
-  @Test func failedThenInProgressMovesCountersAcrossCells() throws {
-    let (dir, store) = try makeStore()
+  @Test func failedThenInProgressMovesCountersAcrossCells() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
 
@@ -871,8 +871,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// two records: one that promotes the existing failed asset to `.original.done`, and
   /// one fresh asset with `.edited.done`. After import, every public count method
   /// matches a recompute-from-scratch over `recordsById`.
-  @Test func bulkImportRecordsKeepsCountersConsistent() throws {
-    let (dir, store) = try makeStore()
+  @Test func bulkImportRecordsKeepsCountersConsistent() async throws {
+    let (dir, store) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -954,8 +954,8 @@ struct ExportRecordStoreQueryGoldenTests {
   /// The companion test `configureReloadFromSnapshotPlusLogReproducesCounters` covers
   /// the snapshot-load path (`prepare` starts from the snapshot); together they exercise
   /// every load shape `configure(for:)` can take.
-  @Test func configureReloadFromLogOnlyReproducesCounters() throws {
-    let (dir, storeA) = try makeStore()
+  @Test func configureReloadFromLogOnlyReproducesCounters() async throws {
+    let (dir, storeA) = try await makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let now = Date(timeIntervalSince1970: 0)
     let yr = 2025
@@ -1002,7 +1002,7 @@ struct ExportRecordStoreQueryGoldenTests {
     // Construct a fresh store against the same on-disk directory. Triggers
     // configure → snapshot/log load → recoverInProgressVariants → rebuild.
     let storeB = ExportRecordStore(baseDirectoryURL: dir)
-    storeB.configure(for: "test")
+    await storeB.configureAndWait(for: "test")
     #expect(storeB.state == .ready)
 
     // Recovery transitions the two .inProgress variants → .failed. Both stores'
@@ -1085,7 +1085,7 @@ struct ExportRecordStoreQueryGoldenTests {
   ///   fire here).
   /// - `prepare` counts `monthCounters` from the final records. The resulting counts
   ///   must match a recompute exactly.
-  @Test func configureReloadFromSnapshotPlusLogReproducesCounters() throws {
+  @Test func configureReloadFromSnapshotPlusLogReproducesCounters() async throws {
     let dir = TestScratch.directory("ExportRecordStoreSnapshotReload")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -1141,7 +1141,7 @@ struct ExportRecordStoreQueryGoldenTests {
     try logData.write(to: logURL)
 
     let store = ExportRecordStore(baseDirectoryURL: dir)
-    store.configure(for: dest)
+    await store.configureAndWait(for: dest)
 
     #expect(store.state == .ready)
     #expect(store.recordsById.count == 5, "4 from snapshot + 1 from log")
@@ -1218,7 +1218,7 @@ struct ExportRecordStoreQueryGoldenTests {
   /// counters via the standard mutation API on a fresh store, plants a corrupt
   /// snapshot file, reloads → `.failed`, calls `resetToEmpty`, then asserts every
   /// public count method returns 0 for the previously-populated cell.
-  @Test func resetToEmptyClearsCounters() throws {
+  @Test func resetToEmptyClearsCounters() async throws {
     let dir = TestScratch.directory("ExportRecordStoreResetClears")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -1230,7 +1230,7 @@ struct ExportRecordStoreQueryGoldenTests {
 
     // Step 1: drive mutations on a healthy store so counters are populated.
     let storeA = ExportRecordStore(baseDirectoryURL: dir)
-    storeA.configure(for: dest)
+    await storeA.configureAndWait(for: dest)
     storeA.markVariantExported(
       assetId: "x", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
       filename: "X.HEIC", exportedAt: now)
@@ -1248,11 +1248,11 @@ struct ExportRecordStoreQueryGoldenTests {
       ExportRecordStore.Constants.snapshotFileName)
     try Data("not valid json".utf8).write(to: snapshotURL)
     let storeB = ExportRecordStore(baseDirectoryURL: dir)
-    storeB.configure(for: dest)
+    await storeB.configureAndWait(for: dest)
     #expect(storeB.state == .failed)
 
     // Step 3: resetToEmpty — should clear monthCounters along with recordsById.
-    storeB.resetToEmpty()
+    await storeB.resetHistory()
     #expect(storeB.state == .ready)
     #expect(storeB.recordsById.isEmpty)
 
@@ -1278,7 +1278,7 @@ struct ExportRecordStoreQueryGoldenTests {
   /// including the year 0 / month 0 cell that `markVariantFailed` creates for an asset that
   /// had no record. The load covers a snapshot, a log over it that moves, deletes and trims
   /// records, and the recovery of interrupted variants, which must run before counting.
-  @Test func reloadedCountersMatchCountersBuiltFromTheLoadedRecords() throws {
+  @Test func reloadedCountersMatchCountersBuiltFromTheLoadedRecords() async throws {
     let dir = TestScratch.directory("ExportRecordStoreReloadCounters")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -1288,7 +1288,7 @@ struct ExportRecordStoreQueryGoldenTests {
 
     // Step 1: history that becomes the snapshot.
     let first = ExportRecordStore(baseDirectoryURL: dir)
-    first.configure(for: dest)
+    await first.configureAndWait(for: dest)
     first.markVariantExported(
       assetId: "both", variant: .original, year: 2025, month: 6, relPath: "2025/06/",
       filename: "BOTH.HEIC", exportedAt: now)
@@ -1327,7 +1327,7 @@ struct ExportRecordStoreQueryGoldenTests {
 
     // Step 2: a log over that snapshot.
     let second = ExportRecordStore(baseDirectoryURL: dir)
-    second.configure(for: dest)
+    await second.configureAndWait(for: dest)
     #expect(Set(second.recordsById.keys) == Set(first.recordsById.keys))
     second.markVariantExported(
       assetId: "moved", variant: .original, year: 2026, month: 1, relPath: "2026/01/",
@@ -1346,7 +1346,7 @@ struct ExportRecordStoreQueryGoldenTests {
 
     // Step 3: reload and compare every counter with one computed from the records.
     let reloaded = ExportRecordStore(baseDirectoryURL: dir)
-    reloaded.configure(for: dest)
+    await reloaded.configureAndWait(for: dest)
     defer { reloaded.drainSynchronously() }
     #expect(reloaded.state == .ready)
     #expect(

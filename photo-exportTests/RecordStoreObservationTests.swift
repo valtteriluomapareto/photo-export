@@ -96,13 +96,13 @@ struct RecordStoreObservationTests {
     let original = ExportVariantRecord(
       filename: "SEED.HEIC", status: .done, exportDate: nil, lastError: nil)
 
-    init(io: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()) {
+    init(io: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()) async {
       timeline = ExportRecordStore(
         baseDirectoryURL: root, recordLogIO: io, notificationClock: clock)
       collections = CollectionExportRecordStore(
         baseDirectoryURL: root, recordLogIO: io, notificationClock: clock)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       timeline.markVariantExported(
         assetId: "seed", variant: .original, year: 2026, month: 9,
         relPath: "2026/09/", filename: "SEED.HEIC", exportedAt: Date())
@@ -142,8 +142,12 @@ struct RecordStoreObservationTests {
     func waiters(_ collection: Bool) -> Int {
       collection ? collections.pendingSettleWaiterCount : timeline.pendingSettleWaiterCount
     }
-    func configure(_ id: String?, collection: Bool) {
-      if collection { collections.configure(for: id) } else { timeline.configure(for: id) }
+    func configure(_ id: String?, collection: Bool) async {
+      if collection {
+        await collections.configureAndWait(for: id)
+      } else {
+        await timeline.configureAndWait(for: id)
+      }
     }
     func beginConfigure(_ id: String, collection: Bool) {
       if collection {
@@ -178,7 +182,7 @@ struct RecordStoreObservationTests {
 
   @Test(arguments: [false, true])
   func tileQueryTracksItsOwnRecordAndWholeHistoryReplacement(collection: Bool) async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       @MainActor func isExported() -> Bool {
         if collection {
@@ -201,7 +205,7 @@ struct RecordStoreObservationTests {
       #expect(tile.changeCount > 0)
       #expect(!isExported())
       let before = tile.changeCount
-      f.configure("B", collection: collection)
+      await f.configure("B", collection: collection)
       #expect(tile.changeCount > before)
       #expect(!isExported())
     } cleanup: {
@@ -212,7 +216,7 @@ struct RecordStoreObservationTests {
   /// Each query's notification fails before dependency tracking; writes before the flush stay silent.
   @Test(arguments: Query.allCases)
   func everyQueryRegistersThroughMutationCounter(query: Query) async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let probe = ObservationProbe { query.read(f) }
       let before = f.counter(query.collection)
@@ -228,9 +232,9 @@ struct RecordStoreObservationTests {
 
   /// The counter already coalesces writes; query notifications are missing until it is tracked.
   @Test(arguments: [false, true])
-  func queryNotificationsKeepTheCoalescedRate(collection: Bool) async {
-    let f = Fixture()
-    await withCleanup {
+  func queryNotificationsKeepTheCoalescedRate(collection: Bool) async throws {
+    let f = await Fixture()
+    try await withCleanup {
       let probe = ObservationProbe { f.readRecord(collection) }
       let before = f.counter(collection)
       for index in 0..<5 { f.write("burst-\(index)", collection: collection) }
@@ -239,9 +243,11 @@ struct RecordStoreObservationTests {
       f.clock.advance(by: 0.201)
       #expect(f.counter(collection) == before + 1)
       #expect(probe.changeCount == 1)
-      f.configure("B", collection: collection)
-      #expect(f.counter(collection) == before + 2)
-      #expect(probe.changeCount == 2)
+      try await f.timeline.flush()
+      try await f.collections.flush()
+      await f.configure("B", collection: collection)
+      #expect(f.counter(collection) == before + 3)
+      #expect(probe.changeCount == 3)
     } cleanup: {
       await f.close()
     }
@@ -250,7 +256,7 @@ struct RecordStoreObservationTests {
   /// Results already follow conversion; only the two queries that read the flag need notifications.
   @Test(arguments: [false, true])
   func convertHEICToJPEGNotifiesOnlyQueriesThatReadIt(collection: Bool) async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let exported = ObservationProbe {
         if collection {
@@ -302,7 +308,7 @@ struct RecordStoreObservationTests {
   @Test(arguments: [false, true])
   func stateNotifiesForLoadingAndSettling(collection: Bool) async throws {
     let io = HeldReadIO()
-    let f = Fixture(io: io)
+    let f = await Fixture(io: io)
     try await withCleanup {
       let states = ObservedValues { f.state(collection) }
       var notifications = 0
@@ -335,10 +341,10 @@ struct RecordStoreObservationTests {
       #expect(settled.0 == .ready)
       #expect(settled.1 == 2)
       #expect(readyProbeCount == 2)
-      f.configure(nil, collection: collection)
+      await f.configure(nil, collection: collection)
       #expect(probe.changeCount == 3)
       let afterNil = probe.changeCount
-      f.configure(nil, collection: collection)
+      await f.configure(nil, collection: collection)
       #expect(probe.changeCount == afterNil)
       #expect(states.values == [.loading, .ready, .unconfigured])
     } cleanup: {
@@ -368,7 +374,7 @@ struct RecordStoreObservationTests {
   @Test(arguments: [false, true])
   func bridgedSiblingsStayQuiet(collection: Bool) async throws {
     let io = FailingLogIO()
-    let f = Fixture(io: io)
+    let f = await Fixture(io: io)
     try await withCleanup {
       try await f.flush()
       let state = ObservationProbe { _ = f.state(collection) }

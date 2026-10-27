@@ -1,49 +1,4 @@
 import Foundation
-import Synchronization
-
-/// Conservatively estimates replay work; the checkpoint boundary leaves headroom for one batch.
-struct RecordReplayBudget: Sendable {
-  private let operationNanoseconds: UInt64
-  private let byteNanoseconds: UInt64
-  private var operationWork: UInt64 = 0
-  private var byteWork: UInt64 = 0
-  private(set) var operationCount = 0
-
-  init(operationNanoseconds: UInt64 = 200_000, byteNanoseconds: UInt64 = 250) {
-    self.operationNanoseconds = operationNanoseconds
-    self.byteNanoseconds = byteNanoseconds
-  }
-
-  var hasWork: Bool { operationWork > 0 || byteWork > 0 }
-  var needsCheckpoint: Bool { max(operationWork, byteWork) >= 750_000_000 }
-  var needsIdleCheckpoint: Bool { operationCount >= 1_000 || needsCheckpoint }
-
-  mutating func record(encodedBytes: Int) {
-    operationCount += 1
-    operationWork = min(UInt64.max - operationNanoseconds, operationWork) + operationNanoseconds
-    let bytes = UInt64(max(0, encodedBytes))
-    let work = bytes.multipliedReportingOverflow(by: byteNanoseconds)
-    let addition = work.overflow ? UInt64.max : work.partialValue
-    byteWork = min(UInt64.max - addition, byteWork) + addition
-  }
-
-  /// Adopts replay work counted off-main without walking the loaded log again.
-  mutating func adopt(operationCount: Int, encodedBytes: Int, measuredNanoseconds: UInt64 = 0) {
-    self.operationCount = max(0, operationCount)
-    let operations = UInt64(self.operationCount).multipliedReportingOverflow(
-      by: operationNanoseconds)
-    let bytes = UInt64(max(0, encodedBytes)).multipliedReportingOverflow(by: byteNanoseconds)
-    operationWork = max(
-      operations.overflow ? UInt64.max : operations.partialValue, measuredNanoseconds)
-    byteWork = bytes.overflow ? UInt64.max : bytes.partialValue
-  }
-
-  mutating func didCheckpoint() {
-    operationWork = 0
-    byteWork = 0
-    operationCount = 0
-  }
-}
 
 struct RecordMutationTicket: Equatable {
   let file: ObjectIdentifier?
@@ -123,37 +78,5 @@ final class RecordStoreMutationAdmission {
     }
     checkpointTask = task
     return task
-  }
-}
-
-/// Compatibility callers block while the actual preparation runs on its serial worker.
-/// DispatchQueue.sync may execute on the caller's thread, so it cannot establish this boundary.
-enum RecordPreparationWorker {
-  private final class ResultBox<Value: Sendable>: Sendable {
-    private let result = Mutex<Value?>(nil)
-    func put(_ value: Value) {
-      result.withLock { $0 = value }
-    }
-    func take() -> Value {
-      result.withLock { stored in
-        defer { stored = nil }
-        return stored!
-      }
-    }
-  }
-
-  nonisolated static func perform<Value: Sendable>(
-    on queue: DispatchQueue,
-    _ work: @escaping @Sendable () -> Value
-  ) -> Value {
-    let result = ResultBox<Value>()
-    let complete = DispatchSemaphore(value: 0)
-    queue.async(qos: .userInteractive, flags: .enforceQoS) {
-      precondition(!Thread.isMainThread)
-      result.put(work())
-      complete.signal()
-    }
-    complete.wait()
-    return result.take()
   }
 }

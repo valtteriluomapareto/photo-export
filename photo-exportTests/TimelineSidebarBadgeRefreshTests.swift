@@ -69,7 +69,7 @@ import Testing
       let clock = TestClock()
       let window: NSWindow
 
-      init(twoVisibleMonths: Bool = false, freezeRefresh: Bool = false) {
+      init(twoVisibleMonths: Bool = false, freezeRefresh: Bool = false) async {
         defaults = TestScratch.defaults(suiteName: suite)
         service.yearCounts = [(2026, 2), (2025, 2)]
         service.cachedCountOverride = { scope, adjusted in
@@ -82,7 +82,7 @@ import Testing
         library = PhotoLibraryManager(
           overrideService: service, refreshClock: freezeRefresh ? clock : nil)
         store = ExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
-        store.configure(for: "A")
+        await store.configureAndWait(for: "A")
         for year in [2026, 2025] {
           store.markVariantExported(
             assetId: "first-\(year)", variant: .original, year: year, month: 9,
@@ -90,7 +90,7 @@ import Testing
         }
         store.flushPendingNotifications()
         let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-        collections.configure(for: "A")
+        await collections.configureAndWait(for: "A")
         manager = ExportManager(
           photoLibraryService: service, exportDestination: destination, exportRecordStore: store,
           collectionExportRecordStore: collections,
@@ -140,7 +140,7 @@ import Testing
     /// Fails before property-specific manager observation: pause and layout leave this badge unchanged.
     @Test(.timeLimit(.minutes(1)))
     func monthRowsSkipPauseAndVideoLayout() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       try await withCleanup {
         try #require(
           await observe(in: f.window) { f.counter.renderedText["timeline-month:2026-9"] == ["1/2"] }
@@ -181,7 +181,7 @@ import Testing
 
     @Test
     func invalidatedCountRefreshKeepsYearPercentageUntilReplacementArrives() async throws {
-      let f = Fixture(freezeRefresh: true)
+      let f = await Fixture(freezeRefresh: true)
       let cache = CollectionCountCache()
       let gate = AsyncCheckpoint()
       try await withCleanup {
@@ -249,7 +249,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func heldRefreshRetainsRenderedBadgesAndExportProgressStillUpdates() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let gate = AsyncCheckpoint()
       var failure: Error?
       do {
@@ -328,7 +328,7 @@ import Testing
     /// must.
     @Test(.timeLimit(.minutes(1)))
     func monthRowsSkipPerAssetProgressButFollowTheInFlightPlacement() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -361,7 +361,7 @@ import Testing
 
     @Test
     func queueStepsOnlyInvalidateTheOwningMonth() async throws {
-      let f = Fixture(twoVisibleMonths: true)
+      let f = await Fixture(twoVisibleMonths: true)
       let gate = AsyncCheckpoint()
       try await withCleanup {
         try #require(
@@ -438,7 +438,7 @@ import Testing
 
     @Test
     func cancellationFromMonthPublicationCannotDispatchOrRestoreTheOldJob() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       try await withCleanup {
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         f.service.assetsByYearMonth["2026-9"] = [
@@ -486,7 +486,7 @@ import Testing
 
     @Test
     func recordPublicationOnlyInvalidatesChangedMonths() async throws {
-      let f = Fixture(twoVisibleMonths: true)
+      let f = await Fixture(twoVisibleMonths: true)
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -532,7 +532,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func monthQueueBadgeFollowsEnqueueAndFirstDequeue() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let gate = AsyncCheckpoint()
       try await withCleanup {
         try #require(

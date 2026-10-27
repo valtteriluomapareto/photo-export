@@ -7,10 +7,10 @@ import Testing
 struct ExportManagerHelperTests {
   // Use a minimal ExportManager instance for testing pure helpers.
   // These tests exercise filename utilities and queue counter logic.
-  private func makeManager() -> (ExportManager, ExportRecordStore) {
+  private func makeManager() async -> (ExportManager, ExportRecordStore) {
     let tempDir = TestScratch.directory("ExportManagerHelper")
     let recordStore = ExportRecordStore(baseDirectoryURL: tempDir)
-    recordStore.configure(for: "test")
+    await recordStore.configureAndWait(for: "test")
     // Left unconfigured: the timeline-only readiness test depends on it.
     let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
     let photoLib = PhotoLibraryManager()
@@ -30,15 +30,15 @@ struct ExportManagerHelperTests {
 
   // MARK: - Queue counter state
 
-  @Test func testQueuedCountDictionaryStartsEmpty() {
-    let (mgr, _) = makeManager()
+  @Test func testQueuedCountDictionaryStartsEmpty() async {
+    let (mgr, _) = await makeManager()
     #expect(mgr.queuedCount(year: 2025, month: 1) == 0)
     #expect(mgr.totalJobsEnqueued == 0)
     #expect(mgr.totalJobsCompleted == 0)
   }
 
-  @Test func testPauseAndResumeToggle() {
-    let (mgr, _) = makeManager()
+  @Test func testPauseAndResumeToggle() async {
+    let (mgr, _) = await makeManager()
     // Pause on non-running manager is a no-op
     mgr.pause()
     #expect(mgr.isPaused == false)
@@ -54,8 +54,8 @@ struct ExportManagerHelperTests {
   /// must require the **timeline** store to be `.ready`; depending on the collection
   /// store would block legitimate timeline export when only the timeline store is
   /// configured (the typical pre-Phase-3 state).
-  @Test func canExportTimelineRequiresTimelineReady() {
-    let (mgr, _) = makeManager()
+  @Test func canExportTimelineRequiresTimelineReady() async {
+    let (mgr, _) = await makeManager()
     // makeManager() configured the timeline store with a destination; collection store
     // was never configured → it stays `.unconfigured`. Timeline export should still work.
     #expect(mgr.canExportTimeline == true)
@@ -69,8 +69,8 @@ struct ExportManagerHelperTests {
   /// `AutoSyncReducerTests` and the toolbar's integration paths rather than
   /// hand-rolled runExport orchestration here — those tests already cover the
   /// active-run branches via the reducer's `ExportRunState` plumbing.
-  @Test func manualExportShouldConfirmSupersedeIsFalseWhenIdle() {
-    let (mgr, _) = makeManager()
+  @Test func manualExportShouldConfirmSupersedeIsFalseWhenIdle() async {
+    let (mgr, _) = await makeManager()
     #expect(mgr.activeRunContext == nil)
     #expect(mgr.manualExportShouldConfirmSupersede == false)
   }
@@ -82,13 +82,13 @@ struct ExportManagerHelperTests {
   /// `UserDefaults` key on the way out. Pinning this prevents drift in the
   /// "view-side stores see the right answer" contract that
   /// `MonthContentView` / `CollectionContentView` rely on.
-  @Test func convertHEICToJPEGToggleDefaultsOffAndMirrorsToStores() {
+  @Test func convertHEICToJPEGToggleDefaultsOffAndMirrorsToStores() async {
     let defaults = TestScratch.defaults("heic47")
     let tempDir = TestScratch.directory("ExportManagerHelper")
     let timeline = ExportRecordStore(baseDirectoryURL: tempDir)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let photoLib = PhotoLibraryManager()
     let destMgr = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
@@ -123,16 +123,16 @@ struct ExportManagerHelperTests {
   /// suite reads back the persisted toggle and pushes it into the record
   /// stores during init (didSet is suppressed during init, so the manual
   /// sync at the bottom of `ExportManager.init` is what guarantees this).
-  @Test func convertHEICToJPEGTogglePersistsAcrossManagerInits() {
+  @Test func convertHEICToJPEGTogglePersistsAcrossManagerInits() async {
     let suiteName = TestScratch.suiteName("heic47-persist")
     let defaults = TestScratch.defaults(suiteName: suiteName)
     defaults.set(true, forKey: ExportManager.convertHEICToJPEGDefaultsKey)
 
     let tempDir = TestScratch.directory("ExportManagerHelper")
     let timeline = ExportRecordStore(baseDirectoryURL: tempDir)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let photoLib = PhotoLibraryManager()
     let destMgr = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
@@ -161,12 +161,12 @@ struct ExportManagerHelperTests {
   /// (toggling it doesn't change `requiredVariants` in a way that would affect
   /// `isExported`), so the test only pins the UserDefaults read/write contract — but
   /// that contract is the entire reason the Settings toggle survives a relaunch.
-  @Test func livePhotosPairedExportTogglePersistsAcrossManagerInits() {
+  @Test func livePhotosPairedExportTogglePersistsAcrossManagerInits() async {
     let suiteName = TestScratch.suiteName("livePhotos49-persist")
     let defaults = TestScratch.defaults(suiteName: suiteName)
 
     // Fresh suite: toggle defaults off, didSet persists to defaults.
-    let initial = makeManagerForTogglePersistence(userDefaults: defaults)
+    let initial = await makeManagerForTogglePersistence(userDefaults: defaults)
     #expect(
       initial.livePhotosPairedExport == false,
       "Toggle must default to false when nothing is persisted")
@@ -176,7 +176,7 @@ struct ExportManagerHelperTests {
       "Manager didSet must persist the toggle to UserDefaults")
 
     // A second manager built against the same suite reads the persisted value at init.
-    let reloaded = makeManagerForTogglePersistence(userDefaults: defaults)
+    let reloaded = await makeManagerForTogglePersistence(userDefaults: defaults)
     #expect(
       reloaded.livePhotosPairedExport == true,
       "Manager init must read the persisted toggle from UserDefaults")
@@ -191,11 +191,11 @@ struct ExportManagerHelperTests {
   /// deliberately no store push for this toggle (per the `videoLayout.didSet`
   /// docstring: reconcile correctness rides on the per-variant `subfolder` field,
   /// not on the live store mirror), so this test only pins the UserDefaults contract.
-  @Test func videoLayoutTogglePersistsAcrossManagerInits() {
+  @Test func videoLayoutTogglePersistsAcrossManagerInits() async {
     let suiteName = TestScratch.suiteName("videoLayout38-persist")
     let defaults = TestScratch.defaults(suiteName: suiteName)
 
-    let initial = makeManagerForTogglePersistence(userDefaults: defaults)
+    let initial = await makeManagerForTogglePersistence(userDefaults: defaults)
     #expect(
       initial.videoLayout == .flat,
       "Toggle must default to .flat when nothing is persisted")
@@ -205,7 +205,7 @@ struct ExportManagerHelperTests {
         == ExportVideoLayout.subfolder.rawValue,
       "Manager didSet must persist the toggle's rawValue to UserDefaults")
 
-    let reloaded = makeManagerForTogglePersistence(userDefaults: defaults)
+    let reloaded = await makeManagerForTogglePersistence(userDefaults: defaults)
     #expect(
       reloaded.videoLayout == .subfolder,
       "Manager init must read the persisted toggle from UserDefaults")
@@ -215,12 +215,12 @@ struct ExportManagerHelperTests {
   /// doesn't take a `UserDefaults` argument, and the two record stores are required so
   /// `ExportManager.init` doesn't fall back to the standard suite (which would leak
   /// state across tests).
-  private func makeManagerForTogglePersistence(userDefaults: UserDefaults) -> ExportManager {
+  private func makeManagerForTogglePersistence(userDefaults: UserDefaults) async -> ExportManager {
     let tempDir = TestScratch.directory("ExportManagerHelper")
     let timeline = ExportRecordStore(baseDirectoryURL: tempDir)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let photoLib = PhotoLibraryManager()
     let destMgr = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
@@ -232,12 +232,12 @@ struct ExportManagerHelperTests {
       userDefaults: userDefaults)
   }
 
-  @Test func startExportMonthShortCircuitsWhenTimelineNotReady() {
+  @Test func startExportMonthShortCircuitsWhenTimelineNotReady() async {
     let tempDir = TestScratch.directory("ExportManagerHelper")
     let recordStore = ExportRecordStore(baseDirectoryURL: tempDir)
     // Intentionally skip configure(for:) — store stays `.unconfigured`.
     let collections = CollectionExportRecordStore(baseDirectoryURL: tempDir)
-    collections.configure(for: "test")
+    await collections.configureAndWait(for: "test")
     let photoLib = PhotoLibraryManager()
     let destMgr = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))

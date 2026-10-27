@@ -41,13 +41,13 @@ struct HistoryWriteFailureTests {
     let collections: CollectionExportRecordStore
     let manager: ExportManager
 
-    init(collectionFault: Bool = false) {
+    init(collectionFault: Bool = false) async {
       timeline = ExportRecordStore(
         baseDirectoryURL: root, recordLogIO: collectionFault ? ProductionJSONLRecordLogIO() : io)
       collections = CollectionExportRecordStore(
         baseDirectoryURL: root, recordLogIO: collectionFault ? io : ProductionJSONLRecordLogIO())
-      timeline.configure(for: "test")
-      collections.configure(for: "test")
+      await timeline.configureAndWait(for: "test")
+      await collections.configureAndWait(for: "test")
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -79,7 +79,7 @@ struct HistoryWriteFailureTests {
 
   @Test(arguments: [false, true])
   func importReportsMidAppendFailureWithSuccessfulControl(fail: Bool) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     try await withCleanup {
       let date = makeDate(2025, 1, 15)
       let directory = try f.destination.urlForMonth(year: 2025, month: 1, createIfNeeded: true)
@@ -113,7 +113,7 @@ struct HistoryWriteFailureTests {
         #expect(f.manager.importResult?.matchedCount == assets.count)
         #expect(f.io.successfulWrites == assets.count)
         let reopened = ExportRecordStore(baseDirectoryURL: f.root)
-        reopened.configure(for: "test")
+        await reopened.configureAndWait(for: "test")
         #expect(assets.allSatisfy { reopened.exportInfo(assetId: $0.id) != nil })
         reopened.drainSynchronously()
       }
@@ -124,7 +124,7 @@ struct HistoryWriteFailureTests {
 
   @Test(arguments: [false, true], [false, true])
   func reconcileCountsWholePruneDespiteAppendFailure(collection: Bool, fail: Bool) async throws {
-    let f = Fixture(collectionFault: collection)
+    let f = await Fixture(collectionFault: collection)
     try await withCleanup {
       let count = 256
       let placement = ExportPlacement.favorites()
@@ -172,7 +172,7 @@ struct HistoryWriteFailureTests {
   }
 
   @Test func autoExportRetainsVariantFailureWhenHistoryBecomesUnavailable() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     try await withCleanup {
       let gate = AsyncCheckpoint()
       f.writer.checkpoint = gate

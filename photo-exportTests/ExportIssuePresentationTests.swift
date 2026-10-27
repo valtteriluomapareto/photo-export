@@ -282,8 +282,8 @@ struct ExportIssuePresentationTests {
       timeline = ExportRecordStore(baseDirectoryURL: root.appendingPathComponent("Records"))
       collections = CollectionExportRecordStore(
         baseDirectoryURL: root.appendingPathComponent("Records"))
-      timeline.configure(for: destinationId)
-      collections.configure(for: destinationId)
+      await timeline.configureAndWait(for: destinationId)
+      await collections.configureAndWait(for: destinationId)
       timeline.markVariantInProgress(
         assetId: "asset", variant: .edited, year: 2026, month: 10, relPath: "2026/10/",
         filename: "EDIT.JPG")

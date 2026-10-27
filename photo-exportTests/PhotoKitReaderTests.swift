@@ -176,8 +176,8 @@ struct PhotoKitReaderTests {
       case .cancel: h.manager.cancelAndClear()
       case .root: h.dest.selectedFolderURL = h.dest.rootURL.appendingPathComponent("replacement")
       case .history:
-        h.store.configure(for: "replacement")
-        h.collectionStore.configure(for: "replacement")
+        await h.store.configureAndWait(for: "replacement")
+        await h.collectionStore.configureAndWait(for: "replacement")
       }
       gate.release()
       await old.value

@@ -19,11 +19,11 @@ struct ExportManagerObservationTests {
     let collections: CollectionExportRecordStore
     let manager: ExportManager
 
-    init() {
+    init() async {
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       manager = ExportManager(
         photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -177,7 +177,7 @@ struct ExportManagerObservationTests {
   /// Changing writes already notify only themselves; repeating a value must stay silent.
   @Test(arguments: Setting.allCases)
   func settingsBridgesNotifyOnlyTheirOwnProperty(setting: Setting) async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let probes = f.bridgedProbes()
       setting.write(f.manager)
@@ -193,7 +193,7 @@ struct ExportManagerObservationTests {
 
   /// Import transitions already notify their own probes; equal missing-flag writes must stay silent.
   @Test func importBridgesNotifyTheirOwnProperties() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let probes = f.bridgedProbes()
       f.manager.startImport()
@@ -206,7 +206,7 @@ struct ExportManagerObservationTests {
   }
 
   @Test func queueDepthAndRunningFlagRegisterDependencies() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let isRunning = ObservationProbe { _ = f.manager.isRunning }
       let queueCount = ObservationProbe { _ = f.manager.queueCount }
@@ -228,7 +228,7 @@ struct ExportManagerObservationTests {
 
   /// Without a dependency on queue contents, every probe remains at zero.
   @Test func queueReadThroughsRegisterDependencies() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let probes = f.queueReadThroughProbes()
       f.enqueueOne()
@@ -247,7 +247,7 @@ struct ExportManagerObservationTests {
   /// Unrelated writes are silent even without queue dependencies; the final enqueue
   /// proves the probes are active once those dependencies are registered.
   @Test func queueReadThroughsStaySilentWithoutQueueChanges() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let probes = f.queueReadThroughProbes()
       f.manager.cancelAndClear()
@@ -269,7 +269,7 @@ struct ExportManagerObservationTests {
   }
 
   @Test func runContextAndBulkFlagRegisterDependencies() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let context = ObservationProbe { _ = f.manager.activeRunContext }
       let enqueueing = ObservationProbe { _ = f.manager.isEnqueueingAll }
@@ -289,7 +289,7 @@ struct ExportManagerObservationTests {
   // input they combine, so a getter that read a bridge's value directly would fail here.
 
   @Test func derivedReadsFollowQueueDepth() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let activeWork = ObservationProbe { _ = f.manager.hasActiveExportWork }
       let canPause = ObservationProbe { _ = f.manager.canTogglePause }
@@ -302,7 +302,7 @@ struct ExportManagerObservationTests {
   }
 
   @Test func derivedReadsFollowRunningFlag() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       f.enqueueOne()
       let activeWork = ObservationProbe { _ = f.manager.hasActiveExportWork }
@@ -319,7 +319,7 @@ struct ExportManagerObservationTests {
   }
 
   @Test func derivedReadsFollowBulkFlag() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let activeWork = ObservationProbe { _ = f.manager.hasActiveExportWork }
       let canPause = ObservationProbe { _ = f.manager.canTogglePause }
@@ -334,7 +334,7 @@ struct ExportManagerObservationTests {
   }
 
   @Test func supersedeReadFollowsRunContext() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let supersede = ObservationProbe { _ = f.manager.manualExportShouldConfirmSupersede }
       f.enqueueOne()
@@ -352,7 +352,7 @@ struct ExportManagerObservationTests {
 
   /// Equal teardown writes remain silent to Observation while Combine still delivers them.
   @Test func unchangedRunStateWritesDoNotNotifyObservation() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let runState = ObservationProbe {
         _ = f.manager.activeRunContext
@@ -422,7 +422,7 @@ struct ExportManagerObservationTests {
     }
 
     @Test func viewHoldingThePlainManagerFollowsMonthQueueCounts() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let counter = BodyInvalidationCounter()
       let window = HostedViewHarness.makeWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 100, height: 40),
@@ -483,7 +483,7 @@ struct ExportManagerObservationTests {
     }
 
     @Test func viewHoldingThePlainManagerRefreshesOnlyForRunStateItReads() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let counter = BodyInvalidationCounter()
       let window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 20, height: 20),

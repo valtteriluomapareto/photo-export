@@ -60,7 +60,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
     let autoSync = AutoSyncManager()
     private(set) var summaries: SummaryProbe?
 
-    init() {
+    init() async {
       photoLibrary.favoritesAssets = [asset]
       photoLibrary.resourcesByAssetId[asset.id] = [
         TestAssetFactory.makeResource(originalFilename: "favorite-A.jpg")
@@ -77,9 +77,9 @@ struct AutoSyncPhotosAccessIntegrationTests {
         safety: .safe
       )
       timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-      timelineStore.configure(for: destinationSnapshot.id!)
+      await timelineStore.configureAndWait(for: destinationSnapshot.id!)
       collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-      collectionStore.configure(for: destinationSnapshot.id!)
+      await collectionStore.configureAndWait(for: destinationSnapshot.id!)
       exportManager = ExportManager(
         photoLibraryService: library,
         exportDestination: destination,
@@ -164,7 +164,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
   }
 
   @Test func changeExportsWithAccess() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.tearDown() }
     f.attach()
     switch f.autoSync.state {
@@ -186,7 +186,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
   /// Without access nothing runs: no journal, no summary, the change stays pending. Once
   /// access returns, the catch-up exports it.
   @Test func missingAccessHoldsTheChangeUntilAccessReturns() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.tearDown() }
     f.setAccess(false)
     f.activate()
@@ -218,7 +218,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
   /// Revoked while the app was in the background: the cached flag still says authorized,
   /// but the refresh before the run reads the live value and nothing runs.
   @Test func backgroundRevokeRunsNothing() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.tearDown() }
     f.attach()
     f.pushChange()
@@ -239,7 +239,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
   /// isn't reached under the override service (`PhotoLibraryManagerLiveAuthorizationTests`
   /// covers it).
   @Test func revokeDuringAScopesFetchFailsTheScopeAndTheNextRefreshBlocks() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.tearDown() }
     f.attach()
     f.pushChange()
