@@ -22,6 +22,13 @@ struct TestFakeBehaviorTests {
     #expect(released == nil)
   }
 
+  @Test func thumbnailDefaultsAreVisibleToTheCallRecorder() async {
+    let service = RecordingPhotoLibraryService()
+    let resolved = await service.resolveThumbnailAssets(ids: ["thumbnail"])
+    #expect(resolved.isEmpty)
+    #expect(!service.calls.isEmpty)
+  }
+
   @Test func timelineUsesCreationDatesRatherThanBucketKeys() async throws {
     let service = FakePhotoLibraryService()
     service.assetsByYearMonth["2025-1"] = [
