@@ -112,7 +112,9 @@ struct DestinationAsyncValidationTests {
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
     let library = FakePhotoLibraryService()
-    let asset = TestAssetFactory.makeAsset(id: "held", creationDate: makeDate(2025, 1, 1))
+    let asset = TestAssetFactory.makeAsset(
+      id: "held",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 1, day: 1)))
     library.yearCounts = [(2025, 1)]
     library.assetsByYearMonth["2025-1"] = [asset]
     library.resourcesByAssetId[asset.id] = [
