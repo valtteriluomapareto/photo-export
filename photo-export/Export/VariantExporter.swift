@@ -75,15 +75,8 @@ final class VariantExporter {
   private let fileSystem: any FileSystemService
   private let finalNamePlanner: FinalNamePlanner
   private let exportDestination: any ExportDestination
-  private let destinationIOFactory: @MainActor (String?) -> any DestinationIOExecuting
-  private var retainedDestinationIO: (any DestinationIOExecuting)?
+  private let destinationIO: any DestinationIOExecuting
 
-  private func destinationIO(for id: String?) -> any DestinationIOExecuting {
-    if let retainedDestinationIO { return retainedDestinationIO }
-    let context = destinationIOFactory(id)
-    retainedDestinationIO = context
-    return context
-  }
   func captureDestinationContext(
     placement: ExportPlacement, generation: Int
   ) throws -> ExportDestinationContext {
@@ -93,7 +86,7 @@ final class VariantExporter {
     let directories = try exportDestination.captureDirectoryAccess(generation: generation)
     try queueCoordinator?.throwIfCancelledOrStale(generation)
     let context = ExportDestinationContext(
-      root: root, destinationId: id, generation: generation, io: destinationIO(for: id),
+      root: root, destinationId: id, generation: generation, io: destinationIO,
       directories: directories)
     try checkOwnership(context, placement: placement)
     return context
@@ -156,9 +149,7 @@ final class VariantExporter {
     fileSystem: any FileSystemService,
     exportDestination: any ExportDestination,
     finalNamePlanner: FinalNamePlanner? = nil,
-    destinationIOFactory: @escaping @MainActor (String?) -> any DestinationIOExecuting = { _ in
-      DestinationIO()
-    }
+    destinationIO: any DestinationIOExecuting = DestinationIO()
   ) {
     self.host = host
     self.queueCoordinator = queueCoordinator
@@ -171,7 +162,7 @@ final class VariantExporter {
     self.fileSystem = fileSystem
     self.finalNamePlanner = finalNamePlanner ?? FinalNamePlanner(fileSystem: fileSystem)
     self.exportDestination = exportDestination
-    self.destinationIOFactory = destinationIOFactory
+    self.destinationIO = destinationIO
   }
 
   // MARK: - Public API

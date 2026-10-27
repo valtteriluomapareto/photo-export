@@ -15,8 +15,7 @@ extension ExportDestinationManager {
   }
 
   func revalidateAndWait() async {
-    guard let url = selectedFolderURL else { return }
-    validate(url: url)
+    revalidate()
     await waitForValidation()
   }
 }

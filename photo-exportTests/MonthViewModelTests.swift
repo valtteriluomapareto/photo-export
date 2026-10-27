@@ -251,6 +251,53 @@ struct MonthViewModelTests {
     #expect(service.stopCachingCalls.last?.count == 54)
   }
 
+  @Test func scrollingCoalescesPendingThumbnailWindows() async throws {
+    let service = FakePhotoLibraryService()
+    let firstResolve = AsyncCheckpoint()
+    service.thumbnailResolveOverride = { ids in
+      if ids == ["held"] { await firstResolve.enter() }
+      return ids.map { ThumbnailAsset.synthetic(makeAsset(id: $0)) }
+    }
+    let grid = GridThumbnailAssets(service: service)
+    let initial = Task { await grid.updateWindow([makeAsset(id: "held")]) }
+    var updates: [Task<Void, Never>] = []
+    var submitted = 0
+    let windows = (0..<12).map { index in
+      [makeAsset(id: "window-\(index)"), makeAsset(id: "shared")]
+    }
+    try await withCleanup {
+      try #require(await firstResolve.waitForEnter(count: 1))
+      for window in windows {
+        updates.append(
+          Task {
+            submitted += 1
+            await grid.updateWindow(window)
+          })
+        try #require(await eventually("scrolling window submitted") { submitted == updates.count })
+      }
+      await firstResolve.releaseAll()
+      await initial.value
+      for update in updates { await update.value }
+
+      #expect(service.thumbnailResolveCalls.count <= 2, "Only the held and newest windows resolve")
+      #expect(service.thumbnailResolveCalls.last == windows.last?.map(\.id))
+      var registrations: [String: Int] = [:]
+      for asset in service.startCachingCalls.flatMap({ $0 }) {
+        registrations[asset.id, default: 0] += 1
+      }
+      for asset in service.stopCachingCalls.flatMap({ $0 }) {
+        registrations[asset.id, default: 0] -= 1
+      }
+      #expect(registrations.values.allSatisfy { $0 == 0 || $0 == 1 })
+      #expect(Set(registrations.filter { $0.value == 1 }.keys) == Set(windows.last!.map(\.id)))
+    } cleanup: {
+      await firstResolve.releaseAll()
+      await initial.value
+      for update in updates { await update.value }
+      await grid.deactivate().value
+    }
+  }
+
   @Test func obsoleteThumbnailResolutionCannotRepopulateNewScope() async throws {
     let service = FakePhotoLibraryService()
     let gate = AsyncCheckpoint()

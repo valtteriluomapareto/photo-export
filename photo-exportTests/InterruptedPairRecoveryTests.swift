@@ -100,7 +100,7 @@ struct InterruptedPairRecoveryTests {
         assetResourceWriter: writer,
         localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
         fileSystem: files,
-        destinationIOFactory: { _ in destinationIO ?? DestinationIO() },
+        destinationIO: destinationIO ?? DestinationIO(),
         userDefaults: TestScratch.defaults(suiteName: defaultsName))
       let asset = TestAssetFactory.makeAsset(
         id: "asset",

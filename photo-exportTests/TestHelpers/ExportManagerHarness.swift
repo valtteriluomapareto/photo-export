@@ -31,9 +31,7 @@ final class ExportManagerHarness {
     localHEICStorage: LocalHEICStorage? = nil,
     runActivity: (any ExportRunActivity)? = nil,
     exportMeasurements: ExportMeasurements? = nil,
-    destinationIOFactory: @escaping @MainActor (String?) -> any DestinationIOExecuting = { _ in
-      DestinationIO()
-    }
+    destinationIO: any DestinationIOExecuting = DestinationIO()
   ) {
     self.photoLib = photoLib ?? FakePhotoLibraryService()
     self.dest = dest ?? FakeExportDestination()
@@ -58,7 +56,7 @@ final class ExportManagerHarness {
         ?? LocalHEICStorage(root: TestScratch.directory(label + "HEIC")),
       fileSystem: fileSystem,
       runActivity: runActivity, exportMeasurements: exportMeasurements,
-      destinationIOFactory: destinationIOFactory,
+      destinationIO: destinationIO,
       userDefaults: defaults)
   }
 }

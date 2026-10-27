@@ -221,7 +221,7 @@ struct DestinationIOTests {
     let identity = QueueIdentity()
     let h = ExportManagerHarness(
       label: "CapturedDestinationIO", destinationId: "A",
-      destinationIOFactory: { identity.executor($0 ?? "none") })
+      destinationIO: identity.executor("A"))
     let gate = Gate()
     defer {
       gate.release()
@@ -274,16 +274,8 @@ struct DestinationIOTests {
 
   @MainActor
   @Test func destinationChangesReuseOneSerialWorker() async throws {
-    var created: [String?] = []
-    var contexts: [RecordingDestinationIO] = []
-    let h = ExportManagerHarness(
-      label: "DestinationContexts",
-      destinationIOFactory: { id in
-        created.append(id)
-        let io = RecordingDestinationIO()
-        contexts.append(io)
-        return io
-      })
+    let io = RecordingDestinationIO()
+    let h = ExportManagerHarness(label: "DestinationContexts", destinationIO: io)
     defer {
       h.store.drainSynchronously()
       h.collectionStore.drainSynchronously()
@@ -306,9 +298,8 @@ struct DestinationIOTests {
       h.dest.canExportNow = false
       h.dest.canExportNow = true
     }
-    #expect(created == ["A"])
-    #expect(contexts.allSatisfy { $0.submissions.value > 0 })
-    #expect(contexts.flatMap { $0.workerChecks.value }.allSatisfy { $0 })
+    #expect(io.submissions.value >= 3)
+    #expect(io.workerChecks.value.allSatisfy { $0 })
   }
 
 }

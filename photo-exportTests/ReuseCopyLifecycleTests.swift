@@ -54,7 +54,7 @@ struct ReuseCopyLifecycleTests {
         assetResourceWriter: writer,
         localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
         fileSystem: files,
-        destinationIOFactory: { _ in destinationIO ?? DestinationIO() }, userDefaults: defaults)
+        destinationIO: destinationIO ?? DestinationIO(), userDefaults: defaults)
       photos.favoritesAssets = [asset]
       photos.resourcesByAssetId[asset.id] = [
         ResourceDescriptor(type: .photo, originalFilename: "IMG.JPG")

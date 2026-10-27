@@ -24,7 +24,7 @@ struct AmbiguousSameFolderTests {
 
   /// Only an unclear pick answered "Same Folder", saved and available, asks for the history check.
   @Test(arguments: Pick.allCases)
-  func onlyAnUnclearSameFolderPickAsksForTheHistoryCheck(pick: Pick) throws {
+  func onlyAnUnclearSameFolderPickAsksForTheHistoryCheck(pick: Pick) async throws {
     let dir = TestScratch.directory("UnclearPick")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -51,7 +51,7 @@ struct AmbiguousSameFolderTests {
       ambiguityResolver: { _ in pick == .unclearNew ? .newDestination : .sameDestination },
       bookmarkSaver: { _ in saves },
       validationScopeAcquirer: { _ in true }, validationScopeReleaser: { _ in })
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     var requests: [(id: String?, available: Bool)] = []
@@ -60,7 +60,7 @@ struct AmbiguousSameFolderTests {
     }
     if pick == .unclearSameBookmarkFails { saves = false }
     if pick == .unclearSameFolderUnavailable { fingerprint = nil }
-    manager.selectFolderForTesting(dir)
+    await manager.selectFolderAndWait(dir)
 
     if pick == .unclearSame {
       // Called once, after the selection applied: same stable id, folder available.
@@ -271,7 +271,7 @@ struct AmbiguousSameFolderTests {
       ambiguityResolver: { _ in chooseSame ? .sameDestination : .newDestination },
       bookmarkSaver: { _ in true },
       validationScopeAcquirer: { _ in true }, validationScopeReleaser: { _ in })
-    destinationManager.persistSelectedFolderForTesting(pickedDir)
+    await destinationManager.persistSelectionAndWait(pickedDir)
     let stableId = try #require(destinationManager.destinationId)
 
     let checker = GatedReconciliationFileChecker()
@@ -357,7 +357,7 @@ struct AmbiguousSameFolderTests {
     builder.clock.advance(by: AutoSyncReducer.debounceDelay(for: .appLaunch))
     #expect(await eventually("launch run") { runFinished(1) })
     fingerprint = nil
-    destinationManager.revalidateForTesting()
+    await destinationManager.revalidateAndWait()
     #expect(destinationManager.identity == .unavailable)
     #expect(
       await eventually("AutoSync sees no destination") {
@@ -371,7 +371,7 @@ struct AmbiguousSameFolderTests {
     let gate = AsyncCheckpoint()
     await checker.suspendNextProbe(at: gate)
     fingerprint = Self.lowConfidence("/Volumes/B/backup")
-    destinationManager.selectFolderForTesting(pickedDir)
+    await destinationManager.selectFolderAndWait(pickedDir)
 
     if chooseSame {
       #expect(exportManager.isImporting)
@@ -402,7 +402,7 @@ struct AmbiguousSameFolderTests {
       var held: [Bool] = []
       let heldSink = exportManager.isImportingPublisher.sink { held.append($0) }
       defer { heldSink.cancel() }
-      #expect(destinationManager.selectFolderKeepingHistoryForTesting(pickedDir))
+      #expect(await destinationManager.selectFolderKeepingHistory(at: pickedDir))
       #expect(destinationManager.destinationId == stableId)
       #expect(exportManager.isImporting)
       #expect(held == [true])
@@ -460,7 +460,7 @@ struct AmbiguousSameFolderTests {
     let (manager, dir, cleanup) = try makeSelectionManager(
       fingerprint: { fingerprint }, saves: { saves })
     defer { cleanup() }
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     switch newFolder {

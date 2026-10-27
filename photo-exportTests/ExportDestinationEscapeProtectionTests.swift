@@ -15,22 +15,25 @@ struct ExportDestinationEscapeProtectionTests {
 
   // MARK: - Helpers
 
-  private func makeManagerAndRoot(fileSystem: any FileSystemService = FileIOService()) throws -> (
-    ExportDestinationManager, URL
-  ) {
+  private func makeManagerAndRoot(fileSystem: any FileSystemService = FileIOService()) async throws
+    -> (
+      ExportDestinationManager, URL
+    )
+  {
     let dir = TestScratch.directory("ExportDestEscape")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let mgr = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"),
-      fileSystem: fileSystem)
-    mgr.setSelectedFolderForTesting(dir)
+      bookmarkSaver: { _ in true }, validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in }, fileSystem: fileSystem)
+    await mgr.persistSelectionAndWait(dir)
     return (mgr, dir)
   }
 
   // MARK: - Happy path
 
-  @Test func validRelativePathCreatesDirectory() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func validRelativePathCreatesDirectory() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let url = try mgr.urlForRelativeDirectory("Collections/Albums/Trip/", createIfNeeded: true)
     #expect(url.path.hasPrefix(root.path))
@@ -40,8 +43,8 @@ struct ExportDestinationEscapeProtectionTests {
   }
 
   @Test(arguments: [false, true])
-  func disappearedDirectoryIsNotSilentlyRecreated(rename: Bool) throws {
-    let (manager, root) = try makeManagerAndRoot()
+  func disappearedDirectoryIsNotSilentlyRecreated(rename: Bool) async throws {
+    let (manager, root) = try await makeManagerAndRoot()
     let directory = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
     if rename {
       try FileManager.default.moveItem(at: directory, to: root.appendingPathComponent("moved"))
@@ -54,9 +57,9 @@ struct ExportDestinationEscapeProtectionTests {
     #expect(!FileManager.default.fileExists(atPath: directory.path))
   }
 
-  @Test func generationAndRootChangesResolveAgain() throws {
+  @Test func generationAndRootChangesResolveAgain() async throws {
     let files = FakeFileSystem()
-    let (manager, root) = try makeManagerAndRoot(fileSystem: files)
+    let (manager, root) = try await makeManagerAndRoot(fileSystem: files)
     manager.prepareDirectoryResolution(generation: 1)
     let first = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
     let warm = files.calls.count
@@ -68,7 +71,7 @@ struct ExportDestinationEscapeProtectionTests {
     #expect(files.calls[cold...].contains { $0.operation == "resolvingSymlinks" })
     let other = root.appendingPathComponent("other")
     try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
-    manager.setSelectedFolderForTesting(other)
+    await manager.persistSelectionAndWait(other)
     let changed = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
     #expect(changed.path.hasPrefix(other.path + "/"))
   }
@@ -76,11 +79,14 @@ struct ExportDestinationEscapeProtectionTests {
   @Test func unavailableDestinationDropsCachedResolution() async throws {
     let root = TestScratch.directory("UnavailableDirectoryCache")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    var allowed = true
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: TestScratch.defaults("UnavailableDirectoryCache"),
-      validationScopeAcquirer: { _ in false }, validationScopeReleaser: { _ in })
-    manager.setSelectedFolderForTesting(root)
+      bookmarkSaver: { _ in true },
+      validationScopeAcquirer: { _ in allowed }, validationScopeReleaser: { _ in })
+    await manager.persistSelectionAndWait(root)
     let directory = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
+    allowed = false
     await manager.revalidateAndWait()
     #expect(throws: ExportDestinationManager.ExportDestinationError.notAvailable) {
       _ = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
@@ -89,14 +95,15 @@ struct ExportDestinationEscapeProtectionTests {
     let outside = TestScratch.directory("UnavailableDirectoryOutside")
     try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
     try FileManager.default.createSymbolicLink(at: directory, withDestinationURL: outside)
-    manager.setSelectedFolderForTesting(root)
+    allowed = true
+    await manager.persistSelectionAndWait(root)
     #expect(throws: ExportDestinationManager.ExportDestinationError.self) {
       _ = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
     }
   }
 
-  @Test func replacedCachedDirectoryChecksSymlinkEscapeAgain() throws {
-    let (manager, _) = try makeManagerAndRoot()
+  @Test func replacedCachedDirectoryChecksSymlinkEscapeAgain() async throws {
+    let (manager, _) = try await makeManagerAndRoot()
     let directory = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
     let outside = TestScratch.directory("OutsideCachedDestination")
     try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
@@ -108,8 +115,8 @@ struct ExportDestinationEscapeProtectionTests {
   }
 
   @Test(arguments: [false, true])
-  func sameInodeReparentCannotEscapeThroughCachedLeafOrAncestor(ancestor: Bool) throws {
-    let (manager, _) = try makeManagerAndRoot()
+  func sameInodeReparentCannotEscapeThroughCachedLeafOrAncestor(ancestor: Bool) async throws {
+    let (manager, _) = try await makeManagerAndRoot()
     let directory = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
     let originalIdentity = try FileIOService().directoryIdentity(at: directory)
     let moved = TestScratch.directory("ReparentedDirectory")
@@ -127,10 +134,11 @@ struct ExportDestinationEscapeProtectionTests {
   enum EarlierDirectoryChange: CaseIterable { case deletion, leafReparent, ancestorReparent }
 
   @Test(arguments: EarlierDirectoryChange.allCases)
-  func earlierDirectoryStaysProtectedAfterCacheEviction(change: EarlierDirectoryChange) throws {
+  func earlierDirectoryStaysProtectedAfterCacheEviction(change: EarlierDirectoryChange) async throws
+  {
     let files = FakeFileSystem()
     files.directoryHandleLimit = 32
-    let (manager, _) = try makeManagerAndRoot(fileSystem: files)
+    let (manager, _) = try await makeManagerAndRoot(fileSystem: files)
     let directory = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
     // More paths than the injected descriptor supply must still resolve. Previously
     // visited paths retain their safety checks after their live handles are evicted.
@@ -184,7 +192,7 @@ struct ExportDestinationEscapeProtectionTests {
 
   @Test func steadyExportUsesAtMostThreeMainThreadFilesystemCallsPerAsset() async throws {
     let files = FakeFileSystem()
-    let (destination, _) = try makeManagerAndRoot(fileSystem: files)
+    let (destination, _) = try await makeManagerAndRoot(fileSystem: files)
     let photos = FakePhotoLibraryService()
     let writer = FakeAssetResourceWriter()
     let checkpoint = AsyncCheckpoint()
@@ -234,7 +242,7 @@ struct ExportDestinationEscapeProtectionTests {
 
   @Test func directoryDeletedDuringStageWriteIsNotRecreated() async throws {
     let files = FakeFileSystem()
-    let (destination, _) = try makeManagerAndRoot(fileSystem: files)
+    let (destination, _) = try await makeManagerAndRoot(fileSystem: files)
     let photos = FakePhotoLibraryService()
     let writer = FakeAssetResourceWriter()
     let records = ExportRecordStore(baseDirectoryURL: TestScratch.directory("DeletedStageRecords"))
@@ -338,40 +346,40 @@ struct ExportDestinationEscapeProtectionTests {
 
   // MARK: - Rejected inputs
 
-  @Test func absolutePathIsRejected() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func absolutePathIsRejected() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.self) {
       _ = try mgr.urlForRelativeDirectory("/etc/passwd", createIfNeeded: false)
     }
   }
 
-  @Test func dotDotSegmentRejected() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func dotDotSegmentRejected() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.self) {
       _ = try mgr.urlForRelativeDirectory("Collections/../../etc", createIfNeeded: false)
     }
   }
 
-  @Test func bareDotSegmentRejected() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func bareDotSegmentRejected() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.self) {
       _ = try mgr.urlForRelativeDirectory("Collections/./Albums", createIfNeeded: false)
     }
   }
 
-  @Test func emptyPathRejected() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func emptyPathRejected() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.self) {
       _ = try mgr.urlForRelativeDirectory("", createIfNeeded: false)
     }
   }
 
-  @Test func doubleSlashRejected() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func doubleSlashRejected() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     #expect(throws: ExportDestinationManager.ExportDestinationError.self) {
       _ = try mgr.urlForRelativeDirectory("Collections//Albums", createIfNeeded: false)
@@ -385,7 +393,7 @@ struct ExportDestinationEscapeProtectionTests {
   /// and target `/tmp/Foo-old/Trip`) bypass the escape check. The boundary-safe check
   /// uses `root + "/"` (or equality with root) so the prefix only matches at a path
   /// component boundary.
-  @Test func siblingDirectoryWithSimilarPrefixIsRejected() throws {
+  @Test func siblingDirectoryWithSimilarPrefixIsRejected() async throws {
     let parent = TestScratch.directory("EscapePrefix")
     try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: parent) }
@@ -396,8 +404,10 @@ struct ExportDestinationEscapeProtectionTests {
     try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
 
     let mgr = ExportDestinationManager(
-      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"))
-    mgr.setSelectedFolderForTesting(root)
+      skipRestore: true, userDefaults: TestScratch.defaults("DestinationManager"),
+      bookmarkSaver: { _ in true }, validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { _ in })
+    await mgr.persistSelectionAndWait(root)
 
     // A symlink inside the root pointing at the sibling whose name happens to share a
     // prefix with the root path. Without the boundary check, the resolver would accept
@@ -413,8 +423,8 @@ struct ExportDestinationEscapeProtectionTests {
   /// If a parent directory is a symlink pointing outside the export root, the resolver
   /// must catch it and refuse — otherwise a Finder-placed symlink could trick the app
   /// into writing exports outside the selected folder.
-  @Test func symlinkEscapeIsRejected() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func symlinkEscapeIsRejected() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     // Create an external folder and a symlink inside the root pointing to it.
     let outside = TestScratch.directory("Outside")
@@ -432,8 +442,8 @@ struct ExportDestinationEscapeProtectionTests {
 
   /// If a regular file exists where the resolver expects an intermediate directory,
   /// reject rather than silently fail later when `createDirectory` throws.
-  @Test func nonDirectoryIntermediateIsRejected() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func nonDirectoryIntermediateIsRejected() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     // Place a regular file at root/Collections.
     let intruder = root.appendingPathComponent("Collections")
@@ -446,8 +456,8 @@ struct ExportDestinationEscapeProtectionTests {
 
   // MARK: - Path length
 
-  @Test func excessivelyLongPathIsRejected() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func excessivelyLongPathIsRejected() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let longComponent = String(repeating: "x", count: 600)
     let longPath = "\(longComponent)/\(longComponent)/leaf"
@@ -458,8 +468,8 @@ struct ExportDestinationEscapeProtectionTests {
 
   // MARK: - urlForMonth still works as a wrapper
 
-  @Test func urlForMonthDelegatesToUrlForRelativeDirectory() throws {
-    let (mgr, root) = try makeManagerAndRoot()
+  @Test func urlForMonthDelegatesToUrlForRelativeDirectory() async throws {
+    let (mgr, root) = try await makeManagerAndRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let url = try mgr.urlForMonth(year: 2025, month: 6)
     #expect(url.lastPathComponent == "06")

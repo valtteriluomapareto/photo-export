@@ -45,14 +45,13 @@ struct PublisherParityTests {
     let folder = try Self.folder("ParityIdentity")
     defer { try? FileManager.default.removeItem(at: folder) }
     let manager = Self.destinationManager()
-    manager.setSelectedFolderForTesting(folder)
     try #require(manager.identity == .unavailable)
     await assertPublishedParity(
       manager, \.identity, { $0.identityPublisher },
-      change: { manager.revalidateForTesting() },
+      change: { await manager.persistSelectionAndWait(folder) },
       // Revalidating the unchanged folder computes an equal identity, which
       // `identity != next` skips.
-      unchangedWrite: .after { manager.revalidateForTesting() },
+      unchangedWrite: .after { await manager.revalidateAndWait() },
       unchangedWriteDelivery: .isDropped)
     #expect(manager.identity.stableId != nil)
   }
@@ -61,14 +60,14 @@ struct PublisherParityTests {
     let folder = try Self.folder("ParityAvailable")
     defer { try? FileManager.default.removeItem(at: folder) }
     let manager = Self.destinationManager()
-    manager.setSelectedFolderForTesting(folder)
+    await manager.persistSelectionAndWait(folder)
     await assertPublishedParity(
       manager, \.isAvailable, { $0.isAvailablePublisher },
       change: {
         try? FileManager.default.removeItem(at: folder)
-        manager.revalidateForTesting()
+        await manager.revalidateAndWait()
       },
-      unchangedWrite: .before { manager.revalidateForTesting() })
+      unchangedWrite: .before { await manager.revalidateAndWait() })
     #expect(!manager.isAvailable)
   }
 
@@ -384,8 +383,8 @@ struct PublisherParityTests {
     timeline.configure(for: "A")
     collections.configure(for: "A")
     let manager = Self.destinationManager()
-    manager.setSelectedFolderForTesting(folder)
-    manager.revalidateForTesting()
+    await manager.persistSelectionAndWait(folder)
+    await manager.revalidateAndWait()
     var result = ConfigureRecordStoresResult.success
     let lifecycle = AppLifecycleCoordinator(
       cancelActiveWork: {}, interruptForDestinationUnavailable: {},
@@ -414,7 +413,7 @@ struct PublisherParityTests {
           lifecycle.apply(destination: Self.snapshot("C"))
         },
         // Revalidating an unchanged folder stores the same availability again.
-        unchangedWrite: .before { manager.revalidateForTesting() },
+        unchangedWrite: .before { await manager.revalidateAndWait() },
         unchangedWriteDelivery: .isDropped)
     } cleanup: {
       timeline.drainSynchronously()
