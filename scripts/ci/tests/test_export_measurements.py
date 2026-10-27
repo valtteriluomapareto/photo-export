@@ -36,7 +36,7 @@ def events(run=RUN, offset=0, invalid=False):
 
 
 class ExportMeasurementReplayTests(unittest.TestCase):
-    def run_replay(self, rows, runs=1, existing=False):
+    def run_replay(self, rows, runs=1, existing=False, cache_state=None):
         with tempfile.TemporaryDirectory() as folder:
             root = pathlib.Path(folder)
             capture = root / "capture.ndjson"
@@ -47,13 +47,48 @@ class ExportMeasurementReplayTests(unittest.TestCase):
                 (output / "keep").write_text("kept")
             result = subprocess.run(
                 [sys.executable, str(SCRIPT), "--replay", str(capture), "--session", SESSION,
-                 "--label", "nas", "--runs", str(runs), "--output", str(output)],
+                 "--label", "nas", "--runs", str(runs), "--output", str(output)]
+                + (["--cache-state", cache_state] if cache_state else []),
                 text=True, capture_output=True, check=False)
             data = json.loads((output / "results.json").read_text()) if (output / "results.json").exists() else None
             report = (output / "summary.md").read_text() if (output / "summary.md").exists() else ""
             kept = ((output / "keep").read_text() if (output / "keep").exists()
                     else (output / "events.ndjson").read_text() if (output / "events.ndjson").exists() else None)
             return result, data, report, kept
+
+    def test_each_run_is_reported_without_combined_throughput_or_staging(self):
+        second = events(run="22222222-2222-4222-8222-222222222222", offset=10_000_000_000)[1:]
+        for row in second:
+            if row["type"] == "jobEnd":
+                row["stageNs"] = 0
+        result, data, report, _ = self.run_replay(events() + second, runs=2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("medianAssetsPerSecond", data)
+        self.assertNotIn("stagingFraction", data)
+        self.assertNotIn("Median assets/s", report)
+        self.assertNotIn("Combined staging", report)
+        self.assertEqual([row["stagingFraction"] for row in data["runs"]], [0.75, 0.0])
+
+    def test_heic_setting_comes_from_the_run_not_the_scenario_label(self):
+        for enabled in [False, True]:
+            rows = events()
+            rows[1]["convertHEICToJPEG"] = enabled
+            result, data, _, _ = self.run_replay(rows)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIs(data["runs"][0].get("heicConversion"), enabled)
+
+    def test_short_warm_window_is_reported_but_unsuitable_for_comparison(self):
+        rows = events()
+        result, data, report, _ = self.run_replay(rows, cache_state="warm")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(data["runs"][0]["cacheState"], "warm")
+        self.assertFalse(data["runs"][0]["comparisonSuitable"])
+        self.assertIn("30", report)
+        # The same denominator with 30 seconds of completions is suitable.
+        rows[-3]["atNs"] = 31_000_000_000
+        result, data, _, _ = self.run_replay(rows, cache_state="warm")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(data["runs"][0]["comparisonSuitable"])
 
     def test_two_runs_deduplicate_variants_and_sum_job_wall_for_staging(self):
         rows = events() + events(run="22222222-2222-4222-8222-222222222222", offset=10_000_000_000)[1:]
