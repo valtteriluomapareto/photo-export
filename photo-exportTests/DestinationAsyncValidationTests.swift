@@ -178,7 +178,9 @@ struct DestinationAsyncValidationTests {
     let manager = ExportManager(
       photoLibraryService: library, exportDestination: ScratchDestination(destination),
       exportRecordStore: timeline, collectionExportRecordStore: collections,
-      assetResourceWriter: writer, fileSystem: FakeFileSystem(),
+      assetResourceWriter: writer,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: FakeFileSystem(),
       userDefaults: TestScratch.defaults("SelectionDuringExportManager"))
     var configurations: [String?] = []
     let lifecycle = AppLifecycleCoordinator(

@@ -87,7 +87,9 @@ struct ExportSettingsCaptureTests {
       manager = ExportManager(
         photoLibraryService: library, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, imageConverter: converter, fileSystem: FakeFileSystem(),
+        assetResourceWriter: writer, imageConverter: converter,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("SettingsHEIC")),
+        fileSystem: FakeFileSystem(),
         userDefaults: TestScratch.defaults(suiteName: suite))
       manager.queueCoordinator.pause()
       library.yearCounts = [(2025, 1), (2026, 1)]

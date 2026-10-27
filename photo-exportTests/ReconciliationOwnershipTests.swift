@@ -298,7 +298,9 @@ struct ReconciliationOwnershipTests {
     ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: fixture.timeline, collectionExportRecordStore: fixture.collection,
-      assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+      assetResourceWriter: FakeAssetResourceWriter(),
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: FakeFileSystem(),
       userDefaults: TestScratch.defaults("ReconciliationOwnership"))
   }
 

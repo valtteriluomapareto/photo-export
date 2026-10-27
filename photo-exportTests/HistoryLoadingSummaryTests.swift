@@ -50,7 +50,9 @@ import Testing
       let manager = ExportManager(
         photoLibraryService: service, exportDestination: FakeExportDestination(),
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+        assetResourceWriter: FakeAssetResourceWriter(),
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: FakeFileSystem(),
         userDefaults: defaults)
       let window = NSWindow(
         contentRect: NSRect(x: -10_000, y: -10_000, width: 700, height: 500),

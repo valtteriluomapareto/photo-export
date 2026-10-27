@@ -28,7 +28,9 @@ struct ExportMonthResumeTests {
       manager = ExportManager(
         photoLibraryService: library, exportDestination: destination,
         exportRecordStore: store, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, fileSystem: fileSystem,
+        assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: fileSystem,
         userDefaults: TestScratch.defaults(suiteName: suite))
     }
 

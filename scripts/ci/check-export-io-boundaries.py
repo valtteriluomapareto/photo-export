@@ -16,6 +16,7 @@ PATTERNS = {
 # These adapters intentionally own platform calls; orchestration files receive no exemption.
 BOUNDARIES = {
     'Export/FileIOService.swift': {'filesystem'},
+    'Export/LocalHEICStorage.swift': {'filesystem'},
     'Export/ExportRecordsDirectoryCoordinator.swift': {'filesystem'},
     'Export/BackupScanner.swift': {'filesystem'},
     'Export/BackupScanner+Collections.swift': {'filesystem'},

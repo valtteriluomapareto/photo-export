@@ -8,6 +8,7 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
   /// Renames `source` to `destination` with `renamex_np` flags. Returns 0 on success,
   /// otherwise the `errno` the call left.
   typealias Renamer = @Sendable (_ source: URL, _ destination: URL, _ flags: UInt32) -> Int32
+  typealias TimestampSetter = @Sendable (_ date: Date, _ url: URL) throws -> Void
   /// Whether the volume holding an existing directory advertises an exclusive rename.
   typealias ExclusiveRenameCapability = @Sendable (_ directory: URL) -> Bool
 
@@ -25,14 +26,17 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
   private let renamer: Renamer
   private let supportsExclusiveRename: ExclusiveRenameCapability
   private let hooks: Hooks
+  private let timestampSetter: TimestampSetter
 
   init(
     renamer: @escaping Renamer = FileIOService.systemRename,
     capability: @escaping ExclusiveRenameCapability = FileIOService.volumeSupportsExclusiveRename,
-    hooks: Hooks = Hooks()
+    hooks: Hooks = Hooks(),
+    timestampSetter: @escaping TimestampSetter = FileIOService.systemTimestampSetter
   ) {
     self.renamer = renamer
     self.supportsExclusiveRename = capability
+    self.timestampSetter = timestampSetter
     self.hooks = hooks
   }
 
@@ -118,28 +122,18 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
 
   // MARK: - Timestamps
 
-  static func applyTimestamps(creationDate: Date, to url: URL) {
-    do {
-      var values = URLResourceValues()
-      values.creationDate = creationDate
-      values.contentModificationDate = creationDate
-      var mutableURL = url
-      try mutableURL.setResourceValues(values)
-    } catch {
+  static let systemTimestampSetter: TimestampSetter = { date, url in
+    try FileManager.default.setAttributes(
+      [.creationDate: date, .modificationDate: date], ofItemAtPath: url.path)
+  }
+
+  static func applyTimestamps(
+    creationDate: Date, to url: URL,
+    setter: TimestampSetter = systemTimestampSetter
+  ) {
+    do { try setter(creationDate, url) } catch {
       Self.logger.error(
-        "Failed setting URLResourceValues timestamps: \(error.localizedDescription, privacy: .public)"
-      )
-    }
-    do {
-      try FileManager.default.setAttributes(
-        [
-          .creationDate: creationDate,
-          .modificationDate: creationDate,
-        ], ofItemAtPath: url.path)
-    } catch {
-      Self.logger.error(
-        "Failed setting FileManager attributes timestamps: \(error.localizedDescription, privacy: .public)"
-      )
+        "Failed setting file timestamps: \(error.localizedDescription, privacy: .public)")
     }
   }
 
@@ -209,7 +203,7 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
   }
 
   func applyTimestamps(creationDate: Date, to url: URL) {
-    Self.applyTimestamps(creationDate: creationDate, to: url)
+    Self.applyTimestamps(creationDate: creationDate, to: url, setter: timestampSetter)
   }
 
   func createDirectory(at url: URL, withIntermediateDirectories: Bool) throws {

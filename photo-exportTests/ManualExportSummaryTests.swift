@@ -30,7 +30,9 @@ struct ManualExportSummaryTests {
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, fileSystem: FakeFileSystem(), userDefaults: defaults)
+        assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: FakeFileSystem(), userDefaults: defaults)
     }
 
     func seed(_ ids: [String], year: Int = 2026, month: Int = 9, missing: Set<String> = []) {

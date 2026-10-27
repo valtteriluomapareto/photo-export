@@ -25,7 +25,9 @@ struct ProductionImageConverter: ImageConverter {
 
   /// Shared CoreImage context. `CIContext` is `Sendable` and documented as
   /// thread-safe, so one shared instance serves the whole export pipeline.
-  private static let sharedContext = CIContext(options: [.cacheIntermediates: false])
+  private static let sharedContext = CIContext(options: [
+    .cacheIntermediates: false, .priorityRequestLow: true,
+  ])
 
   func convertHEIC(at sourceURL: URL, to destURL: URL, quality: Double) async throws {
     // Pre-dispatch cancellation gate — catches a cancel issued before we got

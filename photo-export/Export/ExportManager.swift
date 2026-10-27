@@ -464,6 +464,7 @@ final class ExportManager {
   /// it through this reference. Defaults to `ProductionImageConverter` (a thin
   /// CoreImage wrapper); tests inject `FakeImageConverter`.
   let imageConverter: any ImageConverter
+  let localHEICStorage: LocalHEICStorage
   let fileSystem: any FileSystemService
 
   /// True when the **timeline** store is ready to accept writes. Timeline `startExport*`
@@ -639,6 +640,7 @@ final class ExportManager {
     assetResourceWriter: any AssetResourceWriter = ProductionAssetResourceWriter(),
     mediaRenderer: (any MediaRenderer)? = nil,
     imageConverter: any ImageConverter = ProductionImageConverter(),
+    localHEICStorage: LocalHEICStorage,
     fileSystem: any FileSystemService = FileIOService(),
     phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
     backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader(),
@@ -666,6 +668,7 @@ final class ExportManager {
       collectionStore: self.collectionExportRecordStore)
     self.assetResourceWriter = assetResourceWriter
     self.imageConverter = imageConverter
+    self.localHEICStorage = localHEICStorage
     self.fileSystem = fileSystem
     self.destinationResolver = ExportDestinationResolver(fileSystem: fileSystem)
     // Provisional renderer — gives `self.mediaRenderer` a value so all
@@ -725,7 +728,7 @@ final class ExportManager {
       recordStoreRouter: self.recordStoreRouter,
       assetResourceWriter: self.assetResourceWriter,
       mediaRenderer: self.mediaRenderer,
-      imageConverter: self.imageConverter,
+      imageConverter: self.imageConverter, localHEICStorage: self.localHEICStorage,
       fileSystem: self.fileSystem,
       exportDestination: self.exportDestination, destinationIO: destinationIO)
     // Mirror the coordinator's published queue state onto ExportManager so existing
@@ -2038,6 +2041,15 @@ final class ExportManager {
   }
 
   private func export(job: ExportJob, generation gen: Int) async -> ExportFailureSignal? {
+    var resourceWriter: (any AssetResourceWriter)?
+    let result = await export(job: job, generation: gen, resourceWriter: &resourceWriter)
+    await resourceWriter?.close()
+    return result
+  }
+
+  private func export(
+    job: ExportJob, generation gen: Int, resourceWriter: inout (any AssetResourceWriter)?
+  ) async -> ExportFailureSignal? {
     var inFlight: (assetId: String, variant: ExportVariant)?
     var intendedVariant: ExportVariant = .original
     do {
@@ -2060,6 +2072,7 @@ final class ExportManager {
 
       let metadata = await photoKitReader.readAsset(
         id: job.assetLocalIdentifier, livePhotosPaired: job.livePhotosPaired)
+      resourceWriter = metadata?.resourceWriter
       try throwIfCancelledOrStale(gen)
       guard exportDestination.selectedFolderURL == root,
         recordStoreRouter.destinationId(for: job.placement) == destinationId
@@ -2074,6 +2087,7 @@ final class ExportManager {
         return nil
       }
       let descriptor = metadata.descriptor
+      let jobResourceWriter = metadata.resourceWriter ?? assetResourceWriter
       let required = requiredVariants(
         for: descriptor, selection: job.selection,
         policy: job.placement.kind.variantPolicy,
@@ -2309,7 +2323,7 @@ final class ExportManager {
             inFlight: &inFlight,
             subfolder: subfolder,
             mayAdoptExisting: !Self.pairedVideoFollows(variant, in: orderedVariants),
-            context: destinationContext
+            context: destinationContext, resourceWriter: jobResourceWriter
           )
           try throwIfCancelledOrStale(gen)
           if let nextGroupStem { groupStem = nextGroupStem }
@@ -2347,7 +2361,7 @@ final class ExportManager {
         return await runEditedFallbackOriginal(
           descriptor: descriptor, resources: resources, destDir: destDir,
           relPath: relPath, job: job, generation: gen, inFlight: &inFlight,
-          subfolder: subfolder, context: destinationContext)
+          subfolder: subfolder, context: destinationContext, resourceWriter: jobResourceWriter)
       }
     } catch is CancellationError {
       logger.info(
@@ -2410,7 +2424,8 @@ final class ExportManager {
     job: ExportJob,
     generation gen: Int,
     inFlight: inout (assetId: String, variant: ExportVariant)?,
-    subfolder: String? = nil, context: ExportDestinationContext
+    subfolder: String? = nil, context: ExportDestinationContext,
+    resourceWriter: any AssetResourceWriter
   ) async -> ExportFailureSignal? {
     guard
       isAutoSyncVariantEligible(
@@ -2444,7 +2459,7 @@ final class ExportManager {
         generation: gen,
         inFlight: &inFlight,
         subfolder: subfolder,
-        acceptsEditedFallback: true, context: context
+        acceptsEditedFallback: true, context: context, resourceWriter: resourceWriter
       )
       try throwIfCancelledOrStale(gen)
       // Mark `.edited` with the explicit fallback sentinel so future runs

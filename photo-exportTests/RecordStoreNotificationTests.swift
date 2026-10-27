@@ -237,7 +237,9 @@ struct RecordStoreNotificationTests {
     let manager = ExportManager(
       photoLibraryService: photos, exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
-      assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+      assetResourceWriter: FakeAssetResourceWriter(),
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: FakeFileSystem(),
       userDefaults: TestScratch.defaults(suiteName: suite))
     let baseline = f.counter
     if cancel {
@@ -286,7 +288,9 @@ struct RecordStoreNotificationTests {
     let manager = ExportManager(
       photoLibraryService: photos, exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
-      assetResourceWriter: writer, fileSystem: FakeFileSystem(),
+      assetResourceWriter: writer,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: FakeFileSystem(),
       userDefaults: TestScratch.defaults(suiteName: suite))
     var physical: Task<Void, Never>?
     var failure: Error?
@@ -337,7 +341,9 @@ struct RecordStoreNotificationTests {
     let manager = ExportManager(
       photoLibraryService: photos, exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
-      assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+      assetResourceWriter: FakeAssetResourceWriter(),
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: FakeFileSystem(),
       userDefaults: TestScratch.defaults(suiteName: suite))
     var replaced = false
     let observation = ObservationProbe(
@@ -383,7 +389,9 @@ struct RecordStoreNotificationTests {
     let manager = ExportManager(
       photoLibraryService: photos, exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
-      assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+      assetResourceWriter: FakeAssetResourceWriter(),
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: FakeFileSystem(),
       userDefaults: TestScratch.defaults(suiteName: suite))
     let gate = AsyncCheckpoint()
     var replacement: Task<Void, Never>?
@@ -433,7 +441,9 @@ struct RecordStoreNotificationTests {
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: f.timeline, collectionExportRecordStore: f.collections,
-      assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+      assetResourceWriter: FakeAssetResourceWriter(),
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: FakeFileSystem(),
       userDefaults: TestScratch.defaults(suiteName: suite))
     let beforeTimeline = f.timeline.mutationCounter
     let beforeCollections = f.collections.mutationCounter

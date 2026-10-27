@@ -55,7 +55,9 @@ struct AutoSyncDisableStopsRunTests {
       exportManager = ExportManager(
         photoLibraryService: photoLibrary, exportDestination: destination,
         exportRecordStore: timelineStore, collectionExportRecordStore: collectionStore,
-        assetResourceWriter: writer, fileSystem: FakeFileSystem(),
+        assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: FakeFileSystem(),
         userDefaults: builder.userDefaults)
       subscription = exportManager.completedRunsPublisher.sink { [weak self] summary in
         MainActor.assumeIsolated { self?.runSummaries.append(summary) }

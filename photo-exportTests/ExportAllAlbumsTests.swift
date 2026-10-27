@@ -217,6 +217,7 @@ struct ExportAllAlbumsTests {
       exportRecordStore: timelineStore,
       collectionExportRecordStore: collectionStore,
       assetResourceWriter: writer,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       fileSystem: fileSystem,
       phAssetCacheControl: cacheControl,
       userDefaults: defaults

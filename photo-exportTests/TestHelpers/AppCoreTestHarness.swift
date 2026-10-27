@@ -29,7 +29,8 @@ enum AppCoreTestHarness {
       wiresAutoSync: false,
       isScreenshotMode: false,
       screenshotWindowSize: nil,
-      screenshotSurfaceKey: nil)
+      screenshotSurfaceKey: nil,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory(label + "HEIC")))
   }
 
   /// The one place these tests build a core. Uses only the supplied scratch composition.

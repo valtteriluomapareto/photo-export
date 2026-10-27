@@ -94,7 +94,9 @@ import Testing
         manager = ExportManager(
           photoLibraryService: service, exportDestination: destination, exportRecordStore: store,
           collectionExportRecordStore: collections,
-          assetResourceWriter: writer, fileSystem: FakeFileSystem(),
+          assetResourceWriter: writer,
+          localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+          fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         let content = Host(service: service, manager: manager, counter: counter, tick: tick)
           .environment(library).environment(store).environment(manager)

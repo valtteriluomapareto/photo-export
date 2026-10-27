@@ -51,7 +51,9 @@ struct ReuseCopyLifecycleTests {
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, fileSystem: files,
+        assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: files,
         destinationIO: destinationIO ?? DestinationIO(), userDefaults: defaults)
       photos.favoritesAssets = [asset]
       photos.resourcesByAssetId[asset.id] = [

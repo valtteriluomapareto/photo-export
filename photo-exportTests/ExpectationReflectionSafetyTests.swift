@@ -54,7 +54,9 @@ import Testing
         manager = ExportManager(
           photoLibraryService: service, exportDestination: destination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
-          assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+          assetResourceWriter: FakeAssetResourceWriter(),
+          localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+          fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         counts = TimelineSidebarCounts(service: service)
         monthViewModel = MonthViewModel(photoLibraryService: service)

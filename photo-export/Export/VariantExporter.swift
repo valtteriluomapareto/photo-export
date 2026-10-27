@@ -63,6 +63,7 @@ final class VariantExporter {
   private let mediaRenderer: any MediaRenderer
   /// HEIC→JPEG converter used by the `EditedProducer.convertHEIC` write arm.
   private let imageConverter: any ImageConverter
+  private let localHEICStorage: LocalHEICStorage
 
   /// JPEG quality used for HEIC→JPEG synthesis. `0.85` matches the default
   /// Apple's own apps use for "high quality" JPEG export; visible quality
@@ -144,6 +145,7 @@ final class VariantExporter {
     assetResourceWriter: any AssetResourceWriter,
     mediaRenderer: any MediaRenderer,
     imageConverter: any ImageConverter,
+    localHEICStorage: LocalHEICStorage,
     fileSystem: any FileSystemService,
     exportDestination: any ExportDestination,
     finalNamePlanner: FinalNamePlanner? = nil,
@@ -156,6 +158,7 @@ final class VariantExporter {
     self.assetResourceWriter = assetResourceWriter
     self.mediaRenderer = mediaRenderer
     self.imageConverter = imageConverter
+    self.localHEICStorage = localHEICStorage
     self.fileSystem = fileSystem
     self.finalNamePlanner = finalNamePlanner ?? FinalNamePlanner(fileSystem: fileSystem)
     self.exportDestination = exportDestination
@@ -188,10 +191,12 @@ final class VariantExporter {
     subfolder: String? = nil,
     acceptsEditedFallback: Bool = false,
     mayAdoptExisting: Bool = true,
-    context capturedContext: ExportDestinationContext? = nil
+    context capturedContext: ExportDestinationContext? = nil,
+    resourceWriter providedWriter: (any AssetResourceWriter)? = nil
   ) async throws -> String? {
     try queueCoordinator?.throwIfCancelledOrStale(gen)
     let measurement = queueCoordinator?.measurementJob
+    let assetResourceWriter = providedWriter ?? self.assetResourceWriter
     let context =
       try capturedContext
       ?? captureDestinationContext(
@@ -377,7 +382,7 @@ final class VariantExporter {
           case .resource(let resource):
             try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
               try await measureExportStage(measurement) {
-                try await self.assetResourceWriter.writeResource(
+                try await assetResourceWriter.writeResource(
                   resource, forAssetId: descriptor.id, to: tempURL)
               }
             }
@@ -405,30 +410,27 @@ final class VariantExporter {
               throw EditedResourceUnavailableError()
             }
           case .convertHEIC(let request):
-            // The intermediate belongs to this attempt and is removed before scope release.
-            let heicTempURL = tempURL.appendingPathExtension("heic-source")
+            let heicTempURL = try await localHEICStorage.allocate(
+              sourceBytes: request.sourceResource.fileSize)
             let converted: Result<Void, Error>
             do {
-              try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
-                try await measureExportStage(measurement) {
-                  try await self.assetResourceWriter.writeResource(
-                    request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
-                }
-              }
               try checkOwnership(context, placement: job.placement)
               try await measureExportStage(measurement) {
-                try await self.imageConverter.convertHEIC(
-                  at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
+                try await assetResourceWriter.writeResource(
+                  request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
+              }
+              try checkOwnership(context, placement: job.placement)
+              try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
+                try await measureExportStage(measurement) {
+                  try await self.imageConverter.convertHEIC(
+                    at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
+                }
               }
               converted = .success(())
             } catch {
               converted = .failure(error)
             }
-            await destinationIO.run { [fileSystem] in
-              if fileSystem.fileExists(atPath: heicTempURL.path) {
-                try? fileSystem.removeItem(at: heicTempURL)
-              }
-            }
+            await localHEICStorage.remove(heicTempURL)
             try checkOwnership(context, placement: job.placement)
             do { try converted.get() } catch is CancellationError {
               throw CancellationError()

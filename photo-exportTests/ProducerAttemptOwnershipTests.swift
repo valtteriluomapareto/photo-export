@@ -77,7 +77,9 @@ struct ProducerAttemptOwnershipTests {
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, mediaRenderer: renderer,
-        imageConverter: converter, fileSystem: files, userDefaults: defaults)
+        imageConverter: converter,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ProducerHEIC")),
+        fileSystem: files, userDefaults: defaults)
       manager.versionSelection = selection
       manager.convertHEICToJPEG = producer == .heicSource || producer == .heicConversion
       seed(ids: ["target"])
@@ -207,6 +209,8 @@ struct ProducerAttemptOwnershipTests {
       try #require(oldArrived)
       let old = try f.captureTask()
       let oldStage = try f.stage()
+      let oldHEICSource =
+        producer == .heicConversion ? f.converter.convertCalls.last?.sourceURL : nil
       try Data("old-attempt".utf8).write(to: oldStage)
       if supersede { f.manager.supersedeForManualRun() } else { f.manager.cancelAndClear() }
       f.armAfter(f.targetGate)
@@ -219,6 +223,10 @@ struct ProducerAttemptOwnershipTests {
       #expect(expected != Data("old-attempt".utf8))
       await f.oldGate.releaseAll()
       await old.value
+      #expect(!FileManager.default.fileExists(atPath: oldStage.path))
+      if let oldHEICSource {
+        #expect(!FileManager.default.fileExists(atPath: oldHEICSource.path))
+      }
       #expect(
         (try? Data(contentsOf: stage)) == expected, "A's cleanup must preserve B's staged bytes")
       #expect(f.variants()[f.variant]?.status == .inProgress)

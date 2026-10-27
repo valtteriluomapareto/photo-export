@@ -55,6 +55,7 @@ RULES = [
       "autoexport")),
     ("photo-export/ContentView.swift", ("authorization", "destination")),
     ("photo-export/Export/VariantExporter.swift", PIPELINE),
+    ("photo-export/Export/LocalHEICStorage.swift", PIPELINE),
     ("photo-export/Export/DestinationIO.swift", PIPELINE + ("destination",)),
     ("photo-export/Export/ProductionPhotoKitReader.swift", PIPELINE),
     ("photo-export/Protocols/PhotoKitReading.swift", PIPELINE),

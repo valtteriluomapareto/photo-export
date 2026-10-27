@@ -98,7 +98,9 @@ struct LibraryGridSelectionLifecycleTests {
       let manager = ExportManager(
         photoLibraryService: service, exportDestination: FakeExportDestination(),
         exportRecordStore: timelineStore, collectionExportRecordStore: collectionStore,
-        assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+        assetResourceWriter: FakeAssetResourceWriter(),
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: FakeFileSystem(),
         userDefaults: defaults)
       let hosted = NSHostingView(
         rootView: HostedGrid(grid: grid, service: service, selection: selection)

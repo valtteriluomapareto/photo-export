@@ -86,6 +86,7 @@ struct AutoSyncPhotosAccessIntegrationTests {
         exportRecordStore: timelineStore,
         collectionExportRecordStore: collectionStore,
         assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
         fileSystem: FakeFileSystem(),
         userDefaults: builder.userDefaults
       )

@@ -59,7 +59,9 @@ import Testing
         manager = ExportManager(
           photoLibraryService: photos, exportDestination: destination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
-          assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+          assetResourceWriter: FakeAssetResourceWriter(),
+          localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+          fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         destinationManager = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
         destinationManager.configureForScreenshotMode()
