@@ -79,11 +79,11 @@ struct ExportSettingsCaptureTests {
     let collections: CollectionExportRecordStore
     let manager: ExportManager
 
-    init() {
+    init() async {
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "test")
-      collections.configure(for: "test")
+      await timeline.configureAndWait(for: "test")
+      await collections.configureAndWait(for: "test")
       manager = ExportManager(
         photoLibraryService: library, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -155,7 +155,7 @@ struct ExportSettingsCaptureTests {
 
   @Test(arguments: Mode.allCases, [false, true])
   func everyStartKeepsClickTimeSettings(mode: Mode, high: Bool) async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.cleanup() }
     f.setSettings(high: high)
     mode.start(f.manager)
@@ -167,7 +167,7 @@ struct ExportSettingsCaptureTests {
 
   @Test(arguments: Mode.dispatched, [false, true])
   func dispatcherKeepsClickTimeSettings(mode: Mode, high: Bool) async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.cleanup() }
     f.setSettings(high: high)
     f.manager.startExport(selection: mode.selection)
@@ -179,7 +179,7 @@ struct ExportSettingsCaptureTests {
 
   @Test(arguments: Mode.overridden, [false, true])
   func runSelectionOverrideDoesNotMutateToolbar(mode: Mode, high: Bool) async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.cleanup() }
     f.setSettings(high: high)
     let override: ExportVersionSelection = high ? .edited : .editedWithOriginals
@@ -196,7 +196,7 @@ struct ExportSettingsCaptureTests {
 
   @Test(arguments: [Mode.month, .favorites], [false, true])
   func clickTimeSettingsAlsoControlExistingHistoryEligibility(mode: Mode, high: Bool) async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.cleanup() }
     let id = mode == .month ? "t1" : "fav"
     if mode == .month {
@@ -221,15 +221,15 @@ struct ExportSettingsCaptureTests {
   @Test(arguments: [Mode.month, .favorites], [false, true])
   func admissionRejectionPreservesMessagesCountersAndPreparation(mode: Mode, importing: Bool) async
   {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.cleanup() }
     if importing {
       f.manager.startImport()
       #expect(f.manager.isImporting)
     } else if mode == .month {
-      f.timeline.configure(for: nil)
+      await f.timeline.configureAndWait(for: nil)
     } else {
-      f.collections.configure(for: nil)
+      await f.collections.configureAndWait(for: nil)
     }
     let importTask = f.manager.importTask
     f.manager.progressState.emptyRunMessage = "Existing empty message"
@@ -251,7 +251,7 @@ struct ExportSettingsCaptureTests {
   }
 
   @Test func busyBulkRejectionPreservesExistingPreparation() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.cleanup() }
     f.manager.startExportAll()
     let tasks = f.manager.currentPreparationTasks
@@ -275,7 +275,7 @@ struct ExportSettingsCaptureTests {
   }
 
   @Test func heicConversionRemainsLiveAfterEnqueue() async {
-    let f = Fixture()
+    let f = await Fixture()
     defer { f.cleanup() }
     let asset = TestAssetFactory.makeAsset(
       id: "heic",

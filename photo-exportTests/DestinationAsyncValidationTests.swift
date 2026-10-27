@@ -134,13 +134,15 @@ struct DestinationAsyncValidationTests {
       interruptForDestinationUnavailable: { manager.interruptForDestinationUnavailable() },
       configureRecordStores: { id in
         configurations.append(id)
-        timeline.configure(for: id)
-        collections.configure(for: id)
+        timeline.beginConfigure(for: id)
+        collections.beginConfigure(for: id)
         return .success
       })
     lifecycle.attach(
       initial: DestinationIdentitySnapshot(identity: destination.identity),
       identityPublisher: destination.identityPublisher)
+    await timeline.waitUntilSettled()
+    await collections.waitUntilSettled()
     let context = ExportRunContext(
       source: .manual, visibility: .userVisible, scope: .timelineFullLibrary, selection: .edited)
     var completions: [ExportRunSummary] = []

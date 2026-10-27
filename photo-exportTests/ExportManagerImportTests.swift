@@ -131,13 +131,13 @@ struct ExportManagerImportTests {
     #expect(manager.importStage == nil)
   }
 
-  @Test func startImportWhenStoreNotReadyIsNoOp() throws {
+  @Test func startImportWhenStoreNotReadyIsNoOp() async throws {
     let (manager, _, dest, store, storeRoot) = makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
     }
-    store.configure(for: nil)  // → state == .unconfigured
+    await store.configureAndWait(for: nil)  // → state == .unconfigured
     #expect(store.state == .unconfigured)
 
     manager.startImport()

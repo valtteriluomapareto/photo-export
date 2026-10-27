@@ -16,12 +16,12 @@ struct RecordStoreNotificationTests {
     let placement = ExportPlacement.favorites()
     let collection: Bool
 
-    init(collection: Bool) {
+    init(collection: Bool) async {
       self.collection = collection
       timeline = ExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
       collections = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       collections.upsertPlacement(placement)
       clock.advance(by: 0.201)
     }
@@ -63,7 +63,7 @@ struct RecordStoreNotificationTests {
 
   @Test(arguments: [false, true])
   func sustainedMutationsPublishCurrentRecordsDuringTheStream(collection: Bool) async {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     var latestID = ""
     var delivered: [(Date, String)] = []
     var oldestPending: Date?
@@ -93,7 +93,7 @@ struct RecordStoreNotificationTests {
 
   @Test(arguments: [false, true])
   func burstsCoalesceAndFinalPhaseOffsetMutationIsDelivered(collection: Bool) async {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     let baseline = f.counter
     for index in 0..<5 { f.write("burst-\(index)") }
     f.clock.advance(by: 0.199)
@@ -114,7 +114,7 @@ struct RecordStoreNotificationTests {
 
   @Test(arguments: [false, true])
   func subscriberMutationOpensTheNextWindow(collection: Bool) async {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     let baseline = f.counter
     var delivered = 0
     let observation = ObservationProbe(
@@ -135,7 +135,7 @@ struct RecordStoreNotificationTests {
 
   @Test(arguments: [false, true])
   func durabilityBarrierDoesNotPublishUIChanges(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     let baseline = f.counter
     f.write("pending")
     try await f.timeline.flush()
@@ -148,7 +148,7 @@ struct RecordStoreNotificationTests {
 
   @Test(arguments: [false, true])
   func terminalFlushIsIdempotentAndPreservesSubscriberMutation(collection: Bool) async {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     let baseline = f.counter
     var delivered = 0
     let observation = ObservationProbe(
@@ -173,7 +173,7 @@ struct RecordStoreNotificationTests {
 
   @Test(arguments: [false, true])
   func corruptionAndResetImmediatePublicationsReplacePendingWindow(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     f.write("old")
     try await f.timeline.flush()
     try await f.collections.flush()
@@ -181,15 +181,19 @@ struct RecordStoreNotificationTests {
     try Data("invalid snapshot".utf8).write(
       to: f.root.appendingPathComponent("A").appendingPathComponent(name))
     let baseline = f.counter
-    if collection { f.collections.configure(for: "A") } else { f.timeline.configure(for: "A") }
+    if collection {
+      await f.collections.configureAndWait(for: "A")
+    } else {
+      await f.timeline.configureAndWait(for: "A")
+    }
     #expect(f.counter == baseline + 1)
     if collection {
       #expect(f.collections.state == .failed)
-      f.collections.resetToEmpty()
+      await f.collections.resetHistory()
       #expect(f.collections.state == .ready)
     } else {
       #expect(f.timeline.state == .failed)
-      f.timeline.resetToEmpty()
+      await f.timeline.resetHistory()
       #expect(f.timeline.state == .ready)
     }
     #expect(f.counter == baseline + 2)
@@ -201,13 +205,13 @@ struct RecordStoreNotificationTests {
 
   @Test(arguments: [false, true], [false, true])
   func immediateDestinationPublicationCancelsOldWindow(collection: Bool, clear: Bool) async {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     f.write("old")
     let baseline = f.counter
     if collection {
-      f.collections.configure(for: clear ? nil : "B")
+      await f.collections.configureAndWait(for: clear ? nil : "B")
     } else {
-      f.timeline.configure(for: clear ? nil : "B")
+      await f.timeline.configureAndWait(for: clear ? nil : "B")
     }
     #expect(f.counter == baseline + 1)
     #expect(f.record("old") == nil)
@@ -218,7 +222,7 @@ struct RecordStoreNotificationTests {
 
   @Test(arguments: [false, true], [false, true])
   func exportTerminalTransitionsPublishPendingChanges(collection: Bool, cancel: Bool) async {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     let destination = FakeExportDestination()
     let suite = TestScratch.suiteName("NotificationExport")
     let photos = FakePhotoLibraryService()
@@ -264,7 +268,7 @@ struct RecordStoreNotificationTests {
   func cancellingHeldExportPublishesAfterRemovingOwnedInProgressRecord(collection: Bool)
     async throws
   {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     let destination = FakeExportDestination()
     let suite = TestScratch.suiteName("NotificationHeldExport")
     let photos = FakePhotoLibraryService()
@@ -320,7 +324,7 @@ struct RecordStoreNotificationTests {
   }
 
   @Test func terminalBadgeSubscriberCannotEraseReplacementManualFeedback() async {
-    let f = Fixture(collection: false)
+    let f = await Fixture(collection: false)
     let destination = FakeExportDestination()
     let suite = TestScratch.suiteName("NotificationManualReentry")
     let photos = FakePhotoLibraryService()
@@ -361,7 +365,7 @@ struct RecordStoreNotificationTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func terminalBadgeSubscriberCannotEraseReplacementImportOwnership(cancel: Bool) async throws {
-    let f = Fixture(collection: false)
+    let f = await Fixture(collection: false)
     let destination = FakeExportDestination()
     let suite = TestScratch.suiteName("NotificationImportReentry")
     let photos = FakePhotoLibraryService()
@@ -421,7 +425,7 @@ struct RecordStoreNotificationTests {
 
   @Test(arguments: [false, true])
   func importTerminalPublishesBothStoresAndStaleTaskCannotFlushNewWindow(cancel: Bool) async {
-    let f = Fixture(collection: false)
+    let f = await Fixture(collection: false)
     let destination = FakeExportDestination()
     let suite = TestScratch.suiteName("NotificationImport")
     let manager = ExportManager(

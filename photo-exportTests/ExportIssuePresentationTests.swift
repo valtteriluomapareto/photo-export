@@ -98,7 +98,7 @@ struct ExportIssuePresentationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func deletedAssetsKeepRecordedFilenameAndShowUnavailableDate() async throws {
-    let f = try Fixture(created: created, failedAt: failedAt)
+    let f = try await Fixture(created: created, failedAt: failedAt)
     defer { f.close() }
     f.service.missingAssetIds = ["asset"]
     f.window.orderFront(nil)
@@ -109,7 +109,7 @@ struct ExportIssuePresentationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func destinationReplacementRejectsAnInFlightMetadataResult() async throws {
-    let f = try Fixture(created: created, failedAt: failedAt)
+    let f = try await Fixture(created: created, failedAt: failedAt)
     defer {
       f.service.descriptorFetchObserver = nil
       f.close()
@@ -185,7 +185,7 @@ struct ExportIssuePresentationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func sameAssetLosingItsRecordedFilenameLoadsTheFallback() async throws {
-    let f = try Fixture(created: created, failedAt: failedAt)
+    let f = try await Fixture(created: created, failedAt: failedAt)
     defer { f.close() }
     f.window.orderFront(nil)
     try #require(
@@ -205,7 +205,7 @@ struct ExportIssuePresentationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func aRevisionReplacingAnInFlightRequestCannotPublishOldMetadata() async throws {
-    let f = try Fixture(created: created, failedAt: failedAt)
+    let f = try await Fixture(created: created, failedAt: failedAt)
     defer {
       f.service.descriptorFetchObserver = nil
       f.close()
@@ -231,7 +231,7 @@ struct ExportIssuePresentationTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func retainedRetryRejectsAChangedDestinationOrNewFailure(newFailure: Bool) async throws {
-    let f = try Fixture(created: created, failedAt: failedAt)
+    let f = try await Fixture(created: created, failedAt: failedAt)
     defer { f.close() }
     f.window.orderFront(nil)
     try #require(
@@ -268,7 +268,7 @@ struct ExportIssuePresentationTests {
     let window: NSWindow
     let destinationId: String
 
-    init(created: Date, failedAt: Date) throws {
+    init(created: Date, failedAt: Date) async throws {
       defaults = TestScratch.defaults(suiteName: defaultsName)
       try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
       destination = ExportDestinationManager(
@@ -285,8 +285,8 @@ struct ExportIssuePresentationTests {
       timeline = ExportRecordStore(baseDirectoryURL: root.appendingPathComponent("Records"))
       collections = CollectionExportRecordStore(
         baseDirectoryURL: root.appendingPathComponent("Records"))
-      timeline.configure(for: destinationId)
-      collections.configure(for: destinationId)
+      await timeline.configureAndWait(for: destinationId)
+      await collections.configureAndWait(for: destinationId)
       timeline.markVariantInProgress(
         assetId: "asset", variant: .edited, year: 2026, month: 10, relPath: "2026/10/",
         filename: "EDIT.JPG")
@@ -333,7 +333,7 @@ struct ExportIssuePresentationTests {
 
   @Test(.timeLimit(.minutes(1)))
   func actualSettingsRowShowsRecognizableMetadataAndRetryStillWorks() async throws {
-    let f = try Fixture(created: created, failedAt: failedAt)
+    let f = try await Fixture(created: created, failedAt: failedAt)
     defer { f.close() }
     f.window.orderFront(nil)
     try #require(await observe { f.counter.renderedText["issue-row:asset"] != nil })
@@ -360,7 +360,7 @@ struct ExportIssuePresentationTests {
   /// Passes before: a new failed variant appears while the issue list is already mounted.
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func failureRecordedWhileShownAppears(collection: Bool) async throws {
-    let f = try Fixture(created: created, failedAt: failedAt)
+    let f = try await Fixture(created: created, failedAt: failedAt)
     defer { f.close() }
     f.window.orderFront(nil)
     try #require(

@@ -138,7 +138,7 @@ struct DestinationSafetyMonitorTests {
     let fp = fingerprint(id: "dest-rebuilt")
 
     // Simulate the post-rebuild world: the import has repopulated the store.
-    harness.recordStore.configure(for: fp.id)
+    await harness.recordStore.configureAndWait(for: fp.id)
     harness.recordStore.markVariantExported(
       assetId: "asset-1", variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
@@ -298,12 +298,12 @@ struct DestinationSafetyMonitorTests {
     }
     let fp = fingerprint(id: "dest-loading")
     if hasHistory {
-      recordStore.configure(for: fp.id)
+      await recordStore.configureAndWait(for: fp.id)
       recordStore.markVariantExported(
         assetId: "asset-1", variant: .original, year: 2025, month: 1,
         relPath: "2025/01/", filename: "IMG_0001.JPG", exportedAt: Date())
       try await recordStore.flush()
-      recordStore.configure(for: nil)
+      await recordStore.configureAndWait(for: nil)
     }
 
     // The destination is picked: its history starts loading, held at the snapshot read, and

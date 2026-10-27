@@ -185,11 +185,11 @@ struct BackupScannerTests {
   // MARK: - Bulk import (ExportRecordStore)
 
   @MainActor
-  @Test func bulkImportRecords_addsNewRecords() {
+  @Test func bulkImportRecords_addsNewRecords() async {
     let tempDir = makeTempDir()
     defer { cleanup(tempDir) }
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     let records = [
       ExportRecord(
@@ -214,11 +214,11 @@ struct BackupScannerTests {
   }
 
   @MainActor
-  @Test func bulkImportRecords_skipsExistingDoneRecords() {
+  @Test func bulkImportRecords_skipsExistingDoneRecords() async {
     let tempDir = makeTempDir()
     defer { cleanup(tempDir) }
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     // Pre-existing record
     store.markExported(
@@ -244,11 +244,11 @@ struct BackupScannerTests {
   }
 
   @MainActor
-  @Test func bulkImportRecords_overwritesNonDoneRecords() {
+  @Test func bulkImportRecords_overwritesNonDoneRecords() async {
     let tempDir = makeTempDir()
     defer { cleanup(tempDir) }
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     // Pre-existing failed record
     store.markFailed(assetId: "asset-1", error: "network", at: Date())

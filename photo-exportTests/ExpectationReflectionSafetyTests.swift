@@ -44,13 +44,13 @@ import Testing
       let window: NSWindow
       var isLoaded = false
 
-      init() {
+      init() async {
         defaults = TestScratch.defaults(suiteName: suite)
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         manager = ExportManager(
           photoLibraryService: service, exportDestination: destination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -97,7 +97,7 @@ import Testing
     /// has reference cycles (Combine subscriptions, collaborator back-references, SwiftUI hosting
     /// internals). Both must be recorded as failed expectations; a crash ends the test run.
     @Test func failingExpectationsOnCycleRootsRecordInsteadOfCrashing() async {
-      let f = HostedFixture()
+      let f = await HostedFixture()
       let failures = IssueCount()
       withKnownIssue("Deliberate failures capture cyclic receivers") {
         #expect(f.manager.isRunning)

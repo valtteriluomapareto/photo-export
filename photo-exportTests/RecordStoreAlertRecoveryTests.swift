@@ -65,7 +65,7 @@ import Testing
       init(
         collection: Bool = false, storageFailure: Bool = false, ready: Bool = false,
         recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
-      ) throws {
+      ) async throws {
         defaults = TestScratch.defaults(suiteName: defaultsName)
         let directory = root.appendingPathComponent("A")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -81,8 +81,8 @@ import Testing
         }
         timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: recordLogIO)
         collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: recordLogIO)
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         if ready {
           collections.upsertPlacement(.favorites())
           collections.flushPendingNotifications()
@@ -127,8 +127,12 @@ import Testing
       func error(_ collection: Bool) -> String? {
         collection ? collections.persistenceError : timeline.persistenceError
       }
-      func configure(_ id: String, collection: Bool) {
-        if collection { collections.configure(for: id) } else { timeline.configure(for: id) }
+      func configure(_ id: String, collection: Bool) async {
+        if collection {
+          await collections.configureAndWait(for: id)
+        } else {
+          await timeline.configureAndWait(for: id)
+        }
       }
       func write(_ collection: Bool) {
         if collection {
@@ -178,7 +182,7 @@ import Testing
     }
 
     @Test func timelineAlertWarnsAndOffersRebuild() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       defer { f.close() }
       f.show()
       let presented = await observe { f.window?.attachedSheet != nil }
@@ -194,7 +198,7 @@ import Testing
         "Actual alert buttons: \(buttons.map(\.title))")
     }
     @Test func rebuildImportsCurrentFolderWithoutReexportingOrResettingCollections() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       defer { f.close() }
       let date = try #require(
         Calendar.current.date(
@@ -236,7 +240,7 @@ import Testing
       #expect(resultShown, "The existing ImportView must actually present its result")
       f.timeline.drainSynchronously()
       let reopened = ExportRecordStore(baseDirectoryURL: f.root)
-      reopened.configure(for: "A")
+      await reopened.configureAndWait(for: "A")
       #expect(reopened.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
       reopened.drainSynchronously()
       f.manager.startExportMonth(year: 2026, month: 9)
@@ -249,7 +253,7 @@ import Testing
     }
 
     @Test func collectionResetWarnsAndLeavesTimelineAlone() async throws {
-      let f = try Fixture(collection: true)
+      let f = try await Fixture(collection: true)
       defer { f.close() }
       f.timeline.markExported(
         assetId: "keep", year: 2026, month: 9, relPath: "2026/09/", filename: "KEEP.JPG",
@@ -275,7 +279,7 @@ import Testing
 
     @Test(arguments: Blocker.allCases)
     func retainedRebuildRechecksEligibility(blocker: Blocker) async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       defer { f.close() }
       f.show()
       let button = try await rebuildButton(f)
@@ -287,11 +291,11 @@ import Testing
         try Data("corrupt collection".utf8).write(
           to: f.root.appendingPathComponent("A")
             .appendingPathComponent(CollectionExportRecordStore.Constants.snapshotFileName))
-        f.collections.configure(for: "A")
+        await f.collections.configureAndWait(for: "A")
       case .activeWork:
         f.manager.startExportAllAlbums()
         try #require(f.manager.hasActiveExportWork)
-      case .healthyReplacement: f.timeline.configure(for: "B")
+      case .healthyReplacement: await f.timeline.configureAndWait(for: "B")
       }
       button.performClick(nil)  // The old enabled control invokes the real, retained action.
       #expect(!f.manager.isImporting)
@@ -306,7 +310,7 @@ import Testing
     }
 
     @Test func failedResetDoesNotImportOrPresentSheet() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       defer { f.close() }
       f.show()
       let button = try await rebuildButton(f)
@@ -329,7 +333,7 @@ import Testing
 
     @Test(arguments: [false, true])
     func storageFailureOffersRetryWithoutReset(collection: Bool) async throws {
-      let f = try Fixture(collection: collection, storageFailure: true)
+      let f = try await Fixture(collection: collection, storageFailure: true)
       defer { f.close() }
       #expect((collection ? f.collections.state : f.timeline.state) == .persistenceFailed)
       f.show()
@@ -347,7 +351,7 @@ import Testing
     @Test(arguments: [false, true], [false, true])
     func failureAfterMountPresentsRecoveryAlert(collection: Bool, writeFailure: Bool) async throws {
       let io = FaultIO()
-      let f = try Fixture(ready: true, recordLogIO: io)
+      let f = try await Fixture(ready: true, recordLogIO: io)
       defer { f.close() }
       #expect(f.state(collection) == .ready)
       f.show()
@@ -365,7 +369,7 @@ import Testing
           ? CollectionExportRecordStore.Constants.snapshotFileName
           : ExportRecordStore.Constants.snapshotFileName
         try Data("corrupt tracking".utf8).write(to: directory.appendingPathComponent(name))
-        f.configure("Corrupt", collection: collection)
+        await f.configure("Corrupt", collection: collection)
         #expect(f.state(collection) == .failed)
       }
       let views = try await alertViews(f)
@@ -377,7 +381,7 @@ import Testing
     @Test(arguments: [false, true], [false, true])
     func failedRetryKeepsTheStorageAlert(collection: Bool, writeFailure: Bool) async throws {
       let io = FaultIO()
-      let f = try Fixture(ready: true, recordLogIO: io)
+      let f = try await Fixture(ready: true, recordLogIO: io)
       defer { f.close() }
       f.show()
       try await f.barrier()
@@ -402,7 +406,7 @@ import Testing
         try #require(await observe(in: f.window) { f.state(collection) == .persistenceFailed })
       } else {
         io.failReads(CocoaError(.fileReadNoPermission))
-        f.configure("A", collection: collection)
+        await f.configure("A", collection: collection)
       }
       let originalError = try #require(f.error(collection))
       let views = try await alertViews(f)

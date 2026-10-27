@@ -55,7 +55,7 @@ struct ImportReconcileTests {
     let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     try plantFile(root: root, relPath: "2025/03/", filename: "A.HEIC")
     try plantFile(root: root, relPath: "2025/03/", filename: "B.HEIC")
@@ -79,7 +79,7 @@ struct ImportReconcileTests {
     let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     // Record claims A is at 2025/03/A.HEIC but no such file exists.
     store.markVariantExported(
@@ -99,7 +99,7 @@ struct ImportReconcileTests {
     let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     // Edited asset with both .original and .edited done — the user manually
     // deleted the _orig companion only.
@@ -127,7 +127,7 @@ struct ImportReconcileTests {
     let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     // .failed variant — file is missing but the failure carries signal value
     // (Save Diagnostic Report surfaces it).
@@ -153,7 +153,7 @@ struct ImportReconcileTests {
     let storeRoot = TestScratch.directory("Store")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     // Plant a directory at the path where the file should be.
     try plantDirectory(root: root, relPath: "2025/03/", name: "X.HEIC")
@@ -187,7 +187,7 @@ struct ImportReconcileTests {
     let storeRoot = TestScratch.directory("CStore")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     let placement = ExportPlacement(
       kind: .album, id: "collections:album:abc:def",
@@ -210,7 +210,7 @@ struct ImportReconcileTests {
     let storeRoot = TestScratch.directory("CStore")
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     let store = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: "test")
+    await store.configureAndWait(for: "test")
 
     let placement = ExportPlacement(
       kind: .album, id: "collections:album:abc:def",
@@ -241,7 +241,7 @@ struct ImportReconcileTests {
   /// Reproduces issue #26: destination folder deleted, recreated empty, run import.
   /// Records must end up empty.
   @Test func importOnEmptyFolderWipesAllTimelineRecords() async throws {
-    let h = makeImportHarness()
+    let h = await makeImportHarness()
     defer { h.cleanup() }
 
     // Seed records pointing at files that don't exist.
@@ -263,7 +263,7 @@ struct ImportReconcileTests {
   }
 
   @Test func importOnPartialFolderPrunesOnlyMissingRecords() async throws {
-    let h = makeImportHarness()
+    let h = await makeImportHarness()
     defer { h.cleanup() }
 
     // A is on disk, B is not. Both have records.
@@ -285,7 +285,7 @@ struct ImportReconcileTests {
   }
 
   @Test func importBailsWhenRootUnreachable() async throws {
-    let h = makeImportHarness()
+    let h = await makeImportHarness()
     defer { h.cleanup() }
 
     // Seed a record.
@@ -309,7 +309,7 @@ struct ImportReconcileTests {
 
   @Test(arguments: [false, true], [false, true])
   func adjacentMonthImportRetainsPhysicalPlacement(reverse: Bool, video: Bool) async throws {
-    let h = makeImportHarness()
+    let h = await makeImportHarness()
     defer { h.cleanup() }
     let assetYear = reverse ? 2026 : 2025
     let assetMonth = reverse ? 1 : 12
@@ -349,7 +349,7 @@ struct ImportReconcileTests {
     #expect(record?.variants[.original]?.subfolder == (video ? "videos" : nil))
     h.timeline.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: h.storeRoot)
-    reopened.configure(for: "test")
+    await reopened.configureAndWait(for: "test")
     #expect(reopened.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
     #expect(reopened.exportInfo(assetId: asset.id)?.relPath == relativePath)
     let jobs = ExportJobPlanner.plan(
@@ -371,8 +371,8 @@ struct ImportReconcileTests {
   }
 
   @Test(arguments: ExportVariant.allCases, [false, true])
-  func importCannotRelocateAnyCompletedVariant(done: ExportVariant, changeYear: Bool) throws {
-    let h = makeImportHarness()
+  func importCannotRelocateAnyCompletedVariant(done: ExportVariant, changeYear: Bool) async throws {
+    let h = await makeImportHarness()
     defer { h.cleanup() }
     h.timeline.markVariantExported(
       assetId: "existing", variant: done, year: 2025, month: 12,
@@ -399,13 +399,13 @@ struct ImportReconcileTests {
       ).exportedCount == 0)
     h.timeline.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: h.storeRoot)
-    reopened.configure(for: "test")
+    await reopened.configureAndWait(for: "test")
     #expect(reopened.exportInfo(assetId: "existing") == before)
     reopened.drainSynchronously()
   }
 
   @Test func sameMonthVideoImportMergesWithoutChangingCompletedPlacement() async throws {
-    let h = makeImportHarness()
+    let h = await makeImportHarness()
     defer { h.cleanup() }
     let videos = try h.dest.urlForRelativeDirectory("2025/12/videos/", createIfNeeded: true)
     let originalFile = videos.appendingPathComponent("ORIGINAL.MOV")
@@ -437,7 +437,7 @@ struct ImportReconcileTests {
     #expect(try Data(contentsOf: editedFile) == Data("edited".utf8))
     h.timeline.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: h.storeRoot)
-    reopened.configure(for: "test")
+    await reopened.configureAndWait(for: "test")
     #expect(reopened.exportInfo(assetId: "video") == merged)
     reopened.drainSynchronously()
   }
@@ -481,16 +481,16 @@ struct ImportReconcileTests {
     }
   }
 
-  private func makeImportHarness() -> ImportHarness {
+  private func makeImportHarness() async -> ImportHarness {
     let photoLib = FakePhotoLibraryService()
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
     let fileSystem = FakeFileSystem()
     let storeRoot = TestScratch.directory("ImportRec")
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let defaults = TestScratch.defaults("ImportReconcile")
     let manager = ExportManager(
       photoLibraryService: photoLib,

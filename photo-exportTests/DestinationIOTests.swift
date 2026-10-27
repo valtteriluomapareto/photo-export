@@ -291,8 +291,8 @@ struct DestinationIOTests {
       try? FileManager.default.removeItem(at: h.storeRoot)
     }
     for (index, id) in ["A", "B", "A"].enumerated() {
-      h.store.configure(for: id)
-      h.collectionStore.configure(for: id)
+      await h.store.configureAndWait(for: id)
+      await h.collectionStore.configureAndWait(for: id)
       let asset = TestAssetFactory.makeAsset(
         id: "asset-\(index)",
         creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 4, day: 15)))

@@ -191,7 +191,7 @@ struct ExportDestinationEscapeProtectionTests {
     writer.checkpoint = checkpoint
     let records = ExportRecordStore(
       baseDirectoryURL: TestScratch.directory("DirectoryCountRecords"))
-    records.configure(for: "count")
+    await records.configureAndWait(for: "count")
     let manager = ExportManager(
       photoLibraryService: photos, exportDestination: ScratchDestination(destination),
       exportRecordStore: records,
@@ -236,7 +236,7 @@ struct ExportDestinationEscapeProtectionTests {
     let photos = FakePhotoLibraryService()
     let writer = FakeAssetResourceWriter()
     let records = ExportRecordStore(baseDirectoryURL: TestScratch.directory("DeletedStageRecords"))
-    records.configure(for: "deleted")
+    await records.configureAndWait(for: "deleted")
     let manager = ExportManager(
       photoLibraryService: photos, exportDestination: ScratchDestination(destination),
       exportRecordStore: records,

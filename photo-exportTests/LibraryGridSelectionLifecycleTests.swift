@@ -86,14 +86,14 @@ struct LibraryGridSelectionLifecycleTests {
     let window: NSWindow
     let hostingView: NSView
 
-    init(grid: Grid) {
+    init(grid: Grid) async {
       root = TestScratch.directory("GridSelection")
       defaultsName = TestScratch.suiteName("GridSelection")
       defaults = TestScratch.defaults(suiteName: defaultsName)
       timelineStore = ExportRecordStore(baseDirectoryURL: root)
       collectionStore = CollectionExportRecordStore(baseDirectoryURL: root)
-      timelineStore.configure(for: "grid-test")
-      collectionStore.configure(for: "grid-test")
+      await timelineStore.configureAndWait(for: "grid-test")
+      await collectionStore.configureAndWait(for: "grid-test")
       library = PhotoLibraryManager(overrideService: service)
       let manager = ExportManager(
         photoLibraryService: service, exportDestination: FakeExportDestination(),
@@ -135,7 +135,7 @@ struct LibraryGridSelectionLifecycleTests {
   /// all races.
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func disappearingGridReleasesItsPreheatWindowAndReappears(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let assets = [
       TestAssetFactory.makeAsset(id: "first"), TestAssetFactory.makeAsset(id: "second"),
     ]
@@ -165,7 +165,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func removingGridDuringLoadCannotRegisterItsLateWindow(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let old = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     let terminated = AsyncCheckpoint()
     old.continuation.onTermination = { _ in Task { await terminated.enter() } }
@@ -201,7 +201,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func retainedGridRestartsPreheatAfterReattachingToWindow(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let asset = TestAssetFactory.makeAsset(id: "same-grid")
     fixture.service.progressiveStreamOverride = { _ in
       AsyncThrowingStream { continuation in
@@ -237,7 +237,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func firstBatchSelectsDetailBeforeStreamFinishesAndKeepsUserChoice(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     var requested = false
     fixture.service.progressiveStreamOverride = { _ in
@@ -270,7 +270,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func rapidScopeChangesDoNotSelectAssetsFromObsoleteLoads(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let first = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     let second = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     let third = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
@@ -318,7 +318,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: Grid.allCases, [false, true])
   func emptyAndFailedLoadsAllowNextScopeSelection(grid: Grid, fails: Bool) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     let nextStream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     var requests = 0
@@ -350,7 +350,7 @@ struct LibraryGridSelectionLifecycleTests {
   }
   @Test(.timeLimit(.minutes(1)), arguments: Grid.allCases)
   func parentOnlySelectionChangeRendersTheCurrentHighlight(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let a = TestAssetFactory.makeAsset(id: "A")
     let b = TestAssetFactory.makeAsset(id: "B")
     fixture.service.progressiveStreamOverride = { _ in
@@ -375,7 +375,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases, RefreshMutation.allCases)
   func refreshSynchronizesTheParentDetail(grid: Grid, mutation: RefreshMutation) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let a = TestAssetFactory.makeAsset(id: "A")
     let b = TestAssetFactory.makeAsset(id: "B")
     let c = TestAssetFactory.makeAsset(id: "C")
@@ -416,7 +416,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func heldRefreshPreservesTheLatestBindingChoice(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let a = TestAssetFactory.makeAsset(id: "A")
     let b = TestAssetFactory.makeAsset(id: "B")
     let revised = TestAssetFactory.makeAsset(id: "B", pixelWidth: 777, hasAdjustments: true)
@@ -451,7 +451,7 @@ struct LibraryGridSelectionLifecycleTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Grid.allCases)
   func progressiveFutureBatchChoiceIsNotCleared(grid: Grid) async throws {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
     fixture.service.progressiveStreamOverride = { _ in stream.stream }
     defer {
@@ -485,7 +485,7 @@ struct LibraryGridSelectionLifecycleTests {
   func obsoleteRefreshCannotClearOrReplaceReturnedScope(grid: Grid, outcome: StaleOutcome)
     async throws
   {
-    let fixture = Fixture(grid: grid)
+    let fixture = await Fixture(grid: grid)
     let old = TestAssetFactory.makeAsset(id: "same")
     let current = TestAssetFactory.makeAsset(id: "same", pixelWidth: 999, hasAdjustments: true)
     let refresh = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()

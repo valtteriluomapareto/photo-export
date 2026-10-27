@@ -343,7 +343,7 @@ struct BackupScannerVariantTests {
     let tempDir = TestScratch.directory("BSV-merge")
     defer { try? FileManager.default.removeItem(at: tempDir) }
     let store = ExportRecordStore(baseDirectoryURL: tempDir)
-    store.configure(for: "merge-test")
+    await store.configureAndWait(for: "merge-test")
 
     let now = Date()
     store.bulkImportRecords([

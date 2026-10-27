@@ -60,7 +60,7 @@ struct ReconciliationOwnershipTests {
     var mediaB: URL { root.appendingPathComponent("MediaB") }
     var relPath: String { kind == .timeline ? "2025/03/" : placement.relativePath }
 
-    init(_ kind: StoreKind) throws {
+    init(_ kind: StoreKind) async throws {
       self.kind = kind
       timeline = ExportRecordStore(
         baseDirectoryURL: root.appendingPathComponent("Records"), reconciliationFileChecker: checker
@@ -70,12 +70,12 @@ struct ReconciliationOwnershipTests {
       )
       try FileManager.default.createDirectory(at: mediaA, withIntermediateDirectories: true)
       try FileManager.default.createDirectory(at: mediaB, withIntermediateDirectories: true)
-      configure("A")
+      await configure("A")
     }
 
-    func configure(_ id: String?) {
-      timeline.configure(for: id)
-      collection.configure(for: id)
+    func configure(_ id: String?) async {
+      await timeline.configureAndWait(for: id)
+      await collection.configureAndWait(for: id)
     }
 
     func seed(filename: String? = "same.jpg", assetId: String = "same") {
@@ -138,17 +138,17 @@ struct ReconciliationOwnershipTests {
       return file
     }
 
-    func reopenedInfo(_ id: String) -> ExportVariantRecord? {
+    func reopenedInfo(_ id: String) async -> ExportVariantRecord? {
       flush()
       switch kind {
       case .timeline:
         let store = ExportRecordStore(baseDirectoryURL: recordsRoot)
-        store.configure(for: id)
+        await store.configureAndWait(for: id)
         defer { store.drainSynchronously() }
         return store.exportInfo(assetId: "same")?.variants[.original]
       case .collection:
         let store = CollectionExportRecordStore(baseDirectoryURL: recordsRoot)
-        store.configure(for: id)
+        await store.configureAndWait(for: id)
         defer { store.drainSynchronously() }
         return store.exportInfo(assetId: "same", placement: placement)?.variants[.original]
       }
@@ -169,7 +169,7 @@ struct ReconciliationOwnershipTests {
   /// same seed prunes every variant.
   @Test(arguments: StoreKind.allCases, [false, true])
   func cancellationStartsNoFurtherProbes(kind: StoreKind, cancel: Bool) async throws {
-    let fixture = try Fixture(kind)
+    let fixture = try await Fixture(kind)
     defer { fixture.cleanup() }
     for assetId in ["a", "b", "c"] { fixture.seed(assetId: assetId) }
     let gate = AsyncCheckpoint()
@@ -197,34 +197,34 @@ struct ReconciliationOwnershipTests {
   func reconfigurationRejectsOldDestinationPrunes(kind: StoreKind, change: Reconfiguration)
     async throws
   {
-    let fixture = try Fixture(kind)
+    let fixture = try await Fixture(kind)
     defer { fixture.cleanup() }
     fixture.seed()
     fixture.flush()
-    fixture.configure("B")
+    await fixture.configure("B")
     fixture.seed()
     fixture.flush()
     let mediaB = try fixture.plant(at: fixture.mediaB)
     let beforeB = fixture.info()
-    fixture.configure("A")
+    await fixture.configure("A")
     let gate = AsyncCheckpoint()
     await fixture.checker.suspendNextProbe(at: gate)
     let old = Task { try await fixture.reconcile(at: fixture.mediaA) }
     await gate.waitForEnter(count: 1)
     switch change {
-    case .other: fixture.configure("B")
+    case .other: await fixture.configure("B")
     case .roundTrip:
-      fixture.configure(nil)
-      fixture.configure("A")
-    case .sameID: fixture.configure("A")
+      await fixture.configure(nil)
+      await fixture.configure("A")
+    case .sameID: await fixture.configure("A")
     }
     let beforeResume = fixture.info()
     await gate.releaseAll()
     let summary = try await old.value
     #expect(summary.variants == 0 && summary.records == 0)
     #expect(fixture.info() == beforeResume)
-    #expect(fixture.reopenedInfo(change == .other ? "B" : "A") == beforeResume)
-    #expect(fixture.reopenedInfo("B") == beforeB)
+    #expect(await fixture.reopenedInfo(change == .other ? "B" : "A") == beforeResume)
+    #expect(await fixture.reopenedInfo("B") == beforeB)
     #expect(try Data(contentsOf: mediaB) == Data("destination media stays untouched".utf8))
   }
 
@@ -232,7 +232,7 @@ struct ReconciliationOwnershipTests {
   func newerRecordCannotBePrunedEvenWhenValueIsIdentical(kind: StoreKind, identical: Bool)
     async throws
   {
-    let fixture = try Fixture(kind)
+    let fixture = try await Fixture(kind)
     defer { fixture.cleanup() }
     fixture.seed()
     let before = fixture.info()
@@ -249,7 +249,7 @@ struct ReconciliationOwnershipTests {
     let summary = try await old.value
     #expect(summary.variants == 0 && summary.records == 0)
     #expect(fixture.info() == updated)
-    #expect(fixture.reopenedInfo("A") == updated)
+    #expect(await fixture.reopenedInfo("A") == updated)
     #expect(try Data(contentsOf: media) == Data("destination media stays untouched".utf8))
   }
 
@@ -257,7 +257,7 @@ struct ReconciliationOwnershipTests {
   func cancelledOrSupersededOperationCannotPrune(kind: StoreKind, taskCancellation: Bool)
     async throws
   {
-    let fixture = try Fixture(kind)
+    let fixture = try await Fixture(kind)
     defer { fixture.cleanup() }
     fixture.seed()
     let expected = fixture.info()
@@ -270,12 +270,12 @@ struct ReconciliationOwnershipTests {
     await gate.releaseAll()
     let summary = try await old.value
     #expect(summary.variants == 0 && summary.records == 0)
-    #expect(fixture.reopenedInfo("A") == expected)
+    #expect(await fixture.reopenedInfo("A") == expected)
   }
 
   @Test(arguments: StoreKind.allCases)
   func newerNoOpReconciliationSupersedesOldNegativeProbe(kind: StoreKind) async throws {
-    let fixture = try Fixture(kind)
+    let fixture = try await Fixture(kind)
     defer { fixture.cleanup() }
     fixture.seed()
     let expected = fixture.info()
@@ -289,7 +289,7 @@ struct ReconciliationOwnershipTests {
     await gate.releaseAll()
     let stale = try await old.value
     #expect(stale.variants == 0 && stale.records == 0)
-    #expect(fixture.reopenedInfo("A") == expected)
+    #expect(await fixture.reopenedInfo("A") == expected)
   }
 
   private func makeImportManager(_ fixture: Fixture, destination: FakeExportDestination)
@@ -306,7 +306,7 @@ struct ReconciliationOwnershipTests {
   func importCannotPruneAfterTaskOrQueueGenerationCancellation(
     kind: StoreKind, interruption: Interruption
   ) async throws {
-    let fixture = try Fixture(kind)
+    let fixture = try await Fixture(kind)
     let destination = FakeExportDestination()
     destination.selectedFolderURL = fixture.mediaA
     let manager = makeImportManager(fixture, destination: destination)
@@ -336,7 +336,7 @@ struct ReconciliationOwnershipTests {
     await gate.releaseAll()
     await old.value
     #expect(fixture.info() == expected)
-    #expect(fixture.reopenedInfo("A") == expected)
+    #expect(await fixture.reopenedInfo("A") == expected)
     #expect(manager.importResult == nil)
     #expect(!manager.isImporting && manager.importStage == nil && manager.importError == nil)
     #expect(destination.endScopedAccessCount == 1)
@@ -344,7 +344,7 @@ struct ReconciliationOwnershipTests {
 
   @Test(arguments: StoreKind.allCases)
   func lateCancelledImportCannotPruneOrCleanUpItsParkedReplacement(kind: StoreKind) async throws {
-    let fixture = try Fixture(kind)
+    let fixture = try await Fixture(kind)
     let destination = FakeExportDestination()
     destination.selectedFolderURL = fixture.mediaA
     let manager = makeImportManager(fixture, destination: destination)
@@ -383,7 +383,7 @@ struct ReconciliationOwnershipTests {
 
   @Test(arguments: StoreKind.allCases)
   func invalidMetadataRejectsWholeBatch(kind: StoreKind) async throws {
-    let fixture = try Fixture(kind)
+    let fixture = try await Fixture(kind)
     defer { fixture.cleanup() }
     fixture.seed()
     fixture.seed(assetId: "also-missing")
@@ -391,7 +391,7 @@ struct ReconciliationOwnershipTests {
     await #expect(throws: ReconciliationVerificationError.self) {
       try await fixture.reconcile(at: fixture.mediaA)
     }
-    #expect(fixture.reopenedInfo("A")?.status == .done)
+    #expect(await fixture.reopenedInfo("A")?.status == .done)
   }
 
   enum ErrorInvalidation: CaseIterable { case sameID, mutation, reconciliation, task, generation }
@@ -399,7 +399,7 @@ struct ReconciliationOwnershipTests {
   @Test(.timeLimit(.minutes(1)), arguments: StoreKind.allCases, ErrorInvalidation.allCases)
   func obsoleteProbeErrorIsDiscarded(kind: StoreKind, invalidation: ErrorInvalidation) async throws
   {
-    let fixture = try Fixture(kind)
+    let fixture = try await Fixture(kind)
     fixture.seed()
     fixture.flush()
     let gate = AsyncCheckpoint()
@@ -412,7 +412,7 @@ struct ReconciliationOwnershipTests {
       await gate.waitForEnter(count: 1)
       try #require(await gate.enteredSoFar == 1)
       switch invalidation {
-      case .sameID: fixture.configure("A")
+      case .sameID: await fixture.configure("A")
       case .mutation: fixture.seed(assetId: "newer")
       case .reconciliation: _ = try await fixture.reconcile(at: fixture.mediaA)
       case .task: old.cancel()

@@ -120,7 +120,7 @@ struct CollectionImportFlowTests {
 
   @Test func albumHistoryNotReadySkipsAlbumsAndImportsTheTimeline() async throws {
     let h = try makeScenario("CollectionImportNotReady")
-    h.collections.configure(for: nil)
+    await h.collections.configureAndWait(for: nil)
 
     await h.importBackup()
 
@@ -137,17 +137,17 @@ struct CollectionImportFlowTests {
   /// change, and returns the held snapshot.
   private func reloadHeld(
     _ h: CollectionImportHarness, io: HeldReadIO, collection: Bool
-  ) throws -> URL {
+  ) async throws -> URL {
     h.timeline.drainSynchronously()
     h.collections.drainSynchronously()
     let snapshot = h.snapshotURL(collection: collection)
     io.hold(snapshot)
     if collection {
-      h.collections.configure(for: nil)
+      await h.collections.configureAndWait(for: nil)
       h.collections.beginConfigure(for: h.destinationId)
       try #require(h.collections.state == .loading)
     } else {
-      h.timeline.configure(for: nil)
+      await h.timeline.configureAndWait(for: nil)
       h.timeline.beginConfigure(for: h.destinationId)
       try #require(h.timeline.state == .loading)
     }
@@ -159,7 +159,7 @@ struct CollectionImportFlowTests {
     let io = HeldReadIO()
     let h = try makeScenario("CollectionImportAlbumsLoading", recordLogIO: io)
     try await withCleanup {
-      let snapshot = try reloadHeld(h, io: io, collection: true)
+      let snapshot = try await reloadHeld(h, io: io, collection: true)
 
       #expect(h.manager.importCoordinator.startImport() == nil)
       #expect(h.manager.isImporting)
@@ -191,7 +191,7 @@ struct CollectionImportFlowTests {
     let io = HeldReadIO()
     let h = try makeScenario("CollectionImportTimelineLoading", recordLogIO: io)
     try await withCleanup {
-      let snapshot = try reloadHeld(h, io: io, collection: false)
+      let snapshot = try await reloadHeld(h, io: io, collection: false)
 
       #expect(h.manager.importCoordinator.startImport() == nil)
       #expect(h.manager.isImporting)
@@ -220,7 +220,7 @@ struct CollectionImportFlowTests {
     let io = HeldReadIO()
     let h = try makeScenario("CollectionImportLoadingSwitch", recordLogIO: io)
     try await withCleanup {
-      let snapshot = try reloadHeld(h, io: io, collection: false)
+      let snapshot = try await reloadHeld(h, io: io, collection: false)
 
       #expect(h.manager.importCoordinator.startImport() == nil)
       #expect(h.manager.isImporting)
@@ -230,8 +230,8 @@ struct CollectionImportFlowTests {
         })
       // The held read blocks the IO queue the switch drains, so release it in the same turn.
       io.release(snapshot)
-      h.timeline.configure(for: "other")
-      h.collections.configure(for: "other")
+      await h.timeline.configureAndWait(for: "other")
+      await h.collections.configureAndWait(for: "other")
       await h.manager.waitForImportCompletion()
 
       #expect(!h.manager.isImporting)
@@ -257,7 +257,7 @@ struct CollectionImportFlowTests {
     let io = HeldReadIO()
     let h = try makeScenario("CollectionImportLoadFails", recordLogIO: io)
     try await withCleanup {
-      let snapshot = try reloadHeld(h, io: io, collection: false)
+      let snapshot = try await reloadHeld(h, io: io, collection: false)
       let log = snapshot.deletingLastPathComponent()
         .appendingPathComponent(ExportRecordStore.Constants.logFileName)
       let historyBytes = try Data(contentsOf: log)

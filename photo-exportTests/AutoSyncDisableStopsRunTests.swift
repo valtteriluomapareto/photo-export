@@ -29,7 +29,7 @@ struct AutoSyncDisableStopsRunTests {
     private(set) var runSummaries: [ExportRunSummary] = []
     private var subscription: AnyCancellable?
 
-    init() {
+    init() async {
       let assetDate = Date(timeIntervalSince1970: 1_700_000_000)
       year = Calendar.current.component(.year, from: assetDate)
       let month = Calendar.current.component(.month, from: assetDate)
@@ -49,9 +49,9 @@ struct AutoSyncDisableStopsRunTests {
           relativePathFromVolumeRoot: "/backup", standardizedPath: destination.rootURL.path),
         isAvailable: true, safety: .safe)
       timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-      timelineStore.configure(for: destinationSnapshot.id!)
+      await timelineStore.configureAndWait(for: destinationSnapshot.id!)
       collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-      collectionStore.configure(for: destinationSnapshot.id!)
+      await collectionStore.configureAndWait(for: destinationSnapshot.id!)
       exportManager = ExportManager(
         photoLibraryService: photoLibrary, exportDestination: destination,
         exportRecordStore: timelineStore, collectionExportRecordStore: collectionStore,
@@ -94,7 +94,7 @@ struct AutoSyncDisableStopsRunTests {
   }
 
   @Test func disablingStopsTheRunningExportAndReenablingExportsTheRest() async throws {
-    let h = Harness()
+    let h = await Harness()
     defer { h.close() }
     h.attach()
     h.builder.clock.advance(by: 10)
@@ -144,7 +144,7 @@ struct AutoSyncDisableStopsRunTests {
   }
 
   @Test func disablingWhilePausedEndsTheRun() async throws {
-    let h = Harness()
+    let h = await Harness()
     defer { h.close() }
     h.attach()
     h.builder.clock.advance(by: 10)
@@ -169,7 +169,7 @@ struct AutoSyncDisableStopsRunTests {
   }
 
   @Test func disablingDuringTheLibraryScanEnqueuesNothing() async throws {
-    let h = Harness()
+    let h = await Harness()
     defer { h.close() }
     let scanGate = AsyncCheckpoint()
     try await withCleanup {
@@ -202,7 +202,7 @@ struct AutoSyncDisableStopsRunTests {
   /// Guard: only automatic runs stop. A manual export (the toolbar's legacy `start*` path,
   /// which has no run context) keeps going after Auto Export is off.
   @Test func disablingLeavesAManualExportRunning() async throws {
-    let h = Harness()
+    let h = await Harness()
     defer { h.close() }
     h.attach()
     h.exportManager.startExportAll()

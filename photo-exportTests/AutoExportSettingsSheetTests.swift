@@ -42,8 +42,8 @@ import Testing
     @Test func safetyConfirmationSheetRendersWithTheManager() async throws {
       let core = AppCoreTestHarness.makeCore(
         AppCoreTestHarness.makeTestComposition(label: "settings-safety-sheet"))
-      core.exportRecordStore.configure(for: "A")
-      core.collectionExportRecordStore.configure(for: "A")
+      await core.exportRecordStore.configureAndWait(for: "A")
+      await core.collectionExportRecordStore.configureAndWait(for: "A")
       let identity = CurrentValueSubject<DestinationIdentity, Never>(
         DestinationIdentity(stableId: "A", fingerprint: nil))
       let safety = DestinationSafetyMonitor(

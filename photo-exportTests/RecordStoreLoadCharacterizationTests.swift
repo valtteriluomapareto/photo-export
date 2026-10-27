@@ -94,10 +94,10 @@ struct RecordStoreLoadCharacterizationTests {
 
   private func configureStore(
     collection: Bool, root: URL, io: FaultyReadIO
-  ) -> (state: RecordStoreState, error: String?, isEmpty: Bool) {
+  ) async -> (state: RecordStoreState, error: String?, isEmpty: Bool) {
     if collection {
       let store = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
-      store.configure(for: "A")
+      await store.configureAndWait(for: "A")
       defer { store.drainSynchronously() }
       return (
         store.state, store.persistenceError,
@@ -105,7 +105,7 @@ struct RecordStoreLoadCharacterizationTests {
       )
     }
     let store = ExportRecordStore(baseDirectoryURL: root, recordLogIO: io)
-    store.configure(for: "A")
+    await store.configureAndWait(for: "A")
     defer { store.drainSynchronously() }
     return (store.state, store.persistenceError, store.recordsById.isEmpty)
   }
@@ -115,7 +115,7 @@ struct RecordStoreLoadCharacterizationTests {
   /// An unreadable log outranks a corrupt snapshot: the store asks to retry storage access
   /// instead of offering to reset the history it could not read.
   @Test(arguments: [false, true])
-  func corruptSnapshotWithUnreadableLogIsAPersistenceFailure(collection: Bool) throws {
+  func corruptSnapshotWithUnreadableLogIsAPersistenceFailure(collection: Bool) async throws {
     let root = try makeDirectory("LoadPrecedence")
     defer { try? FileManager.default.removeItem(at: root) }
     let files = try seedStore(collection: collection, root: root)
@@ -123,7 +123,7 @@ struct RecordStoreLoadCharacterizationTests {
     let logFailure = ReadFailure(name: "log")
     let io = FaultyReadIO([files.log: logFailure])
 
-    let loaded = configureStore(collection: collection, root: root, io: io)
+    let loaded = await configureStore(collection: collection, root: root, io: io)
 
     #expect(loaded.state == .persistenceFailed)
     #expect(loaded.error == logFailure.errorDescription)
@@ -133,7 +133,7 @@ struct RecordStoreLoadCharacterizationTests {
 
   /// When both reads fail, the log's error is the one the store reports.
   @Test(arguments: [false, true])
-  func bothReadsFailingReportsTheLogError(collection: Bool) throws {
+  func bothReadsFailingReportsTheLogError(collection: Bool) async throws {
     let root = try makeDirectory("LoadPrecedence")
     defer { try? FileManager.default.removeItem(at: root) }
     let files = try seedStore(collection: collection, root: root)
@@ -142,7 +142,7 @@ struct RecordStoreLoadCharacterizationTests {
     let logFailure = ReadFailure(name: "log")
     let io = FaultyReadIO([files.snapshot: snapshotFailure, files.log: logFailure])
 
-    let loaded = configureStore(collection: collection, root: root, io: io)
+    let loaded = await configureStore(collection: collection, root: root, io: io)
 
     #expect(loaded.state == .persistenceFailed)
     #expect(loaded.error == logFailure.errorDescription)
