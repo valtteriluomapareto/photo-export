@@ -7,10 +7,10 @@ import os
 /// `volumeIdentifier`, a same-session-only token. On upgrade, existing users have records
 /// under one of two possible legacy directory names; this coordinator renames the first
 /// matching legacy directory to `ExportRecords/<newId>/` once before any record store calls
-/// `configure(for: newId)`.
+/// `beginConfigure(for: newId)`.
 ///
 /// Centralizing the rename here is load-bearing for the two-store design: with two stores
-/// both calling `configure(for: newId)`, whichever ran first would create `<newId>/` and
+/// both calling `beginConfigure(for: newId)`, whichever ran first would create `<newId>/` and
 /// cause the other store's lazy-migration check to see `<newId>` already present, leaving
 /// `<legacyId>/` orphaned. Running the migration once, before any store touches the
 /// directory, prevents this.
