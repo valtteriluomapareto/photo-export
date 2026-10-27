@@ -29,7 +29,7 @@ struct VolumeNotificationTests {
     #expect(center.removals == 2)
   }
 
-  @Test func failedScopeAcquisitionDoesNotReleaseOrProbeTheDestination() {
+  @Test func failedScopeAcquisitionDoesNotReleaseOrProbeTheDestination() async {
     let suite = TestScratch.suiteName("VolumeDenied")
     let defaults = TestScratch.defaults(suiteName: suite)
     defer { defaults.removePersistentDomain(forName: suite) }
@@ -45,7 +45,7 @@ struct VolumeNotificationTests {
       validationScopeAcquirer: { _ in false },
       validationScopeReleaser: { _ in releases += 1 })
     manager.setSelectedFolderForTesting(URL(fileURLWithPath: "/unreachable-test-volume"))
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     #expect(!manager.isAvailable && !manager.isWritable)
     #expect(manager.destinationId == nil)
     #expect(releases == 0 && fingerprints == 0)
@@ -78,7 +78,7 @@ struct VolumeNotificationTests {
         completed.continuation.yield(())
       })
     manager.setSelectedFolderForTesting(folder)
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     _ = await validationIterator.next()
     let stableId = try #require(manager.destinationId)
     let timeline = ExportRecordStore(baseDirectoryURL: root.appendingPathComponent("Records"))

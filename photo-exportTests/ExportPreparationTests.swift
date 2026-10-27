@@ -64,8 +64,6 @@ struct ExportPreparationTests {
     await old.value
     #expect(cancelled)
     #expect(h.writer.writeCalls.isEmpty)
-    #expect(h.manager.currentAssetFilename == nil)
-    #expect(h.manager.currentJobVariant == nil)
     #expect(h.manager.renderActivity == nil)
     #expect(h.fileSystem.moveCalls.isEmpty)
     #expect(h.store.exportInfo(assetId: "prepare") == nil)

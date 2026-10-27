@@ -37,7 +37,7 @@ import Testing
       var window: NSWindow?
       var folder: URL { root.appendingPathComponent("Backup") }
 
-      init(restoreFailure: Bool = false) throws {
+      init(restoreFailure: Bool = false) async throws {
         defaults = TestScratch.defaults(suiteName: suite)
         if restoreFailure {
           defaults.set(Data("bad bookmark".utf8), forKey: "ExportDestinationBookmark")
@@ -66,7 +66,7 @@ import Testing
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         if !restoreFailure {
           destination.setSelectedFolderForTesting(folder)
-          destination.revalidateForTesting()
+          await destination.revalidateAndWait()
         }
         service.collectionTree = [
           PhotoCollectionDescriptor(
@@ -80,7 +80,7 @@ import Testing
         ]
       }
 
-      func setProblem(_ problem: Problem) throws {
+      func setProblem(_ problem: Problem) async throws {
         if problem == .permission {
           scope.allowed = false
         } else {
@@ -89,7 +89,7 @@ import Testing
         if problem == .unreachable {
           destination.setSelectedFolderForTesting(URL(fileURLWithPath: folder.path))
         }
-        destination.revalidateForTesting()
+        await destination.revalidateAndWait()
       }
 
       @ViewBuilder private func pane(_ surface: Surface) -> some View {
@@ -149,30 +149,31 @@ import Testing
     private let permission =
       "Export folder access needs restoring. Reconnect the drive, then choose the same folder if needed."
 
-    @Test func missingFolderIsUnreachableRatherThanNotDirectoryAndCanRecoverIdentity() throws {
-      let f = try Fixture()
+    @Test func missingFolderIsUnreachableRatherThanNotDirectoryAndCanRecoverIdentity() async throws
+    {
+      let f = try await Fixture()
       defer { f.close() }
       let id = try #require(f.destination.destinationId)
-      try f.setProblem(.unreachable)
+      try await f.setProblem(.unreachable)
       #expect(f.destination.statusMessage == "Export folder is not reachable (drive unplugged?)")
       #expect(!f.destination.canExportNow && !f.destination.canImportNow)
       #expect(f.destination.destinationId == nil)
       try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
-      f.destination.revalidateForTesting()
+      await f.destination.revalidateAndWait()
       #expect(f.destination.canExportNow && f.destination.canImportNow)
       #expect(f.destination.destinationId == id)
       let file = f.root.appendingPathComponent("regular-file")
       try Data("file".utf8).write(to: file)
       f.destination.setSelectedFolderForTesting(file)
-      f.destination.revalidateForTesting()
+      await f.destination.revalidateAndWait()
       #expect(f.destination.statusMessage == "Selected path is not a folder")
     }
 
     @Test(arguments: Surface.allCases)
     func disabledExportHelpNamesTheUnavailableFolder(surface: Surface) async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       defer { f.close() }
-      try f.setProblem(.unreachable)
+      try await f.setProblem(.unreachable)
       f.show(surface)
       let key = surface == .root ? "toolbar-export-help" : "\(surface)-export-help"
       let rendered = await observe { f.counter.renderedText[key] != nil }
@@ -192,12 +193,12 @@ import Testing
     func rootBannerSurvivesOldProgressRegardlessOfAutoExport(problem: Problem, enabled: Bool)
       async throws
     {
-      let f = try Fixture()
+      let f = try await Fixture()
       defer { f.close() }
       f.autoSync.setEnabled(enabled)
       f.manager.progressState.totalJobsEnqueued = 3
       f.manager.progressState.totalJobsCompleted = 3
-      try f.setProblem(problem)
+      try await f.setProblem(problem)
       f.show()
       let expected = problem == .unreachable ? reconnect : permission
       let rendered = await observe { f.counter.renderedText["destination-warning"] != nil }
@@ -212,7 +213,7 @@ import Testing
       } else {
         f.scope.allowed = true
       }
-      f.destination.revalidateForTesting()
+      await f.destination.revalidateAndWait()
       let cleared = await observe { f.counter.renderedText["destination-warning"] == [] }
       #expect(cleared)
       f.destination.clearSelection()
@@ -220,7 +221,7 @@ import Testing
       #expect(noSelection)
     }
     @Test func failedBookmarkRestoreShowsRecoveryEvenWithoutResolvedURL() async throws {
-      let f = try Fixture(restoreFailure: true)
+      let f = try await Fixture(restoreFailure: true)
       defer { f.close() }
       #expect(f.destination.selectedFolderURL == nil)
       #expect(!f.destination.canExportNow && !f.destination.canImportNow)
@@ -235,13 +236,13 @@ import Testing
     }
 
     @Test func failedBookmarkSaveDoesNotBlockUsablePriorFolder() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       defer { f.close() }
       let id = try #require(f.destination.destinationId)
       let second = f.root.appendingPathComponent("Other")
       try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
       f.scope.saveAllowed = false
-      f.destination.selectFolderForTesting(second)
+      await f.destination.selectFolderAndWait(second)
       #expect(f.destination.selectedFolderURL == f.folder)
       #expect(f.destination.destinationId == id)
       #expect(f.destination.canExportNow && f.destination.canImportNow)

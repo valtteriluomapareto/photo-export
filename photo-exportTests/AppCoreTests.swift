@@ -79,7 +79,7 @@ import Testing
       composition.wiresAutoSync = true
       let core = makeCore(composition)
       let destination = core.exportDestinationManager
-      destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-first"))
+      await destination.persistSelectionAndWait(try makeDestinationFolder("app-core-first"))
       let firstId = try #require(destination.destinationId)
 
       struct Probe: Equatable {
@@ -134,7 +134,7 @@ import Testing
       #expect(source.startCount == 1)
 
       // The coordinator stays subscribed: a new destination reaches the record stores.
-      destination.persistSelectedFolderForTesting(try makeDestinationFolder("app-core-second"))
+      await destination.persistSelectionAndWait(try makeDestinationFolder("app-core-second"))
       let secondId = try #require(destination.destinationId)
       #expect(secondId != firstId)
       #expect(core.lifecycleCoordinator.lastConfiguredDestinationId == secondId)
@@ -347,7 +347,7 @@ import Testing
     #expect(screenshot.photoLibraryServiceOverride is ScreenshotPhotoLibraryService)
     #expect(screenshot.persistentChangeSource == nil)
     #expect(screenshot.assetResourceWriter is ProductionAssetResourceWriter)
-    #expect(screenshot.photoKitReader is ScreenshotPhotoKitReader)
+    #expect(screenshot.photoKitReader is PhotoLibraryServiceReader)
     #expect(screenshot.fileSystem is FileIOService)
     #expect(screenshot.clock is SystemAutoSyncClock)
     #expect(screenshot.loginItemService is SystemLoginItemService)
@@ -440,7 +440,7 @@ import Testing
       var composition = makeTestComposition(label: "app-core-isolation")
       composition.wiresAutoSync = true
       let core = makeCore(composition)
-      core.exportDestinationManager.persistSelectedFolderForTesting(
+      await core.exportDestinationManager.persistSelectionAndWait(
         try makeDestinationFolder("app-core-isolation-destination"))
       core.start()
       core.exportManager.versionSelection = .editedWithOriginals

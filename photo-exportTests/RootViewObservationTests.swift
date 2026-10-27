@@ -135,7 +135,7 @@ import Testing
         if selectFolder {
           try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
           destination.setSelectedFolderForTesting(folder)
-          destination.revalidateForTesting()
+          await destination.revalidateAndWait()
         }
       }
 
@@ -309,7 +309,7 @@ import Testing
         try #require(await observe { f.counter.count(for: "onboarding-auto-skip-checked") > 0 })
         try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
         f.destination.setSelectedFolderForTesting(f.folder)
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         try #require(
           await observe { f.counter.renderedText["onboarding-export-control"]?.first == "true" })
         await f.quiesce()
@@ -376,7 +376,7 @@ import Testing
         try #require(await observe { f.counter.renderedText[key]?.last == "true" })
         try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
         f.destination.setSelectedFolderForTesting(f.folder)
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         try #require(await observe { f.counter.renderedText[key]?.first == "true" })
         let bodies = f.counter.count(for: "content-root")
         let snapshot = beginHistoryLoad(f, section: .timeline)
@@ -458,7 +458,7 @@ import Testing
         #expect(
           f.counter.count(for: "library-root") == bodies,
           "Changes since baseline: \(f.changes(since: baseline))")
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         #expect(await observe { f.counter.count(for: "library-root") > bodies })
       } cleanup: {
         await f.close()
@@ -474,7 +474,7 @@ import Testing
         // The first rebuild after the initial render can re-run the body once while SwiftUI
         // settles the view's stored inputs, so the baseline follows one rebuild.
         var hostBodies = f.counter.count(for: "content-host")
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         try #require(await observe { f.counter.count(for: "content-host") > hostBodies })
         await f.quiesce()
         let bodies = f.counter.count(for: "content-root")
@@ -486,7 +486,7 @@ import Testing
           f.counter.count(for: "content-root") == bodies,
           "Changes since baseline: \(f.changes(since: baseline))")
         hostBodies = f.counter.count(for: "content-host")
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         try #require(await observe { f.counter.count(for: "content-host") > hostBodies })
         await f.quiesce()
         #expect(

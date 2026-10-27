@@ -67,7 +67,7 @@ The main data paths are:
    on its own serial utility queue. Framework objects stay inside that read; cancellation,
    destination and history ownership are checked before its values can authorize export IO.
    Shipping composition selects `ProductionPhotoKitReader`, and screenshot composition selects
-   `ScreenshotPhotoKitReader` backed by the same curated library as the UI. Public resource UTIs
+   `PhotoLibraryServiceReader` backed by the same curated library as the UI. Public resource UTIs
    identify the original format. The optional resource-local `fileSize` KVC read preserves
    known-size interrupted-file verification; its undocumented thread safety remains an explicit
    limitation, with access confined to the serial reader.

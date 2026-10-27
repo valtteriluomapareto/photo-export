@@ -266,14 +266,14 @@ struct DestinationIOTests {
     await h.manager.waitForQueueDrained()
     try #require(
       await eventually("both captured scopes released") { h.dest.endScopedAccessCount == 2 })
-    #expect(timestamps.value == ["A", "B"])
+    #expect(timestamps.value == ["A", "A"])
     #expect(cleanupContexts.value.contains("A"))
-    #expect(cleanupContexts.value.contains("B"))
+    #expect(cleanupContexts.value.allSatisfy { $0 == "A" })
     #expect(!cleanupContexts.value.contains("missing"))
   }
 
   @MainActor
-  @Test func logicalDestinationRoundTripReusesItsCapturedContext() async throws {
+  @Test func destinationChangesReuseOneSerialWorker() async throws {
     var created: [String?] = []
     var contexts: [RecordingDestinationIO] = []
     let h = ExportManagerHarness(
@@ -306,7 +306,7 @@ struct DestinationIOTests {
       h.dest.canExportNow = false
       h.dest.canExportNow = true
     }
-    #expect(created == ["A", "B"])
+    #expect(created == ["A"])
     #expect(contexts.allSatisfy { $0.submissions.value > 0 })
     #expect(contexts.flatMap { $0.workerChecks.value }.allSatisfy { $0 })
   }

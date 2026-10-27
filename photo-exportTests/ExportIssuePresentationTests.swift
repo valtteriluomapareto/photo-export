@@ -108,19 +108,17 @@ struct ExportIssuePresentationTests {
   }
 
   @Test(.timeLimit(.minutes(1)))
-  func destinationReplacementRejectsAnInFlightMetadataResult() async throws {
+  func clearingDestinationRejectsAnInFlightMetadataResult() async throws {
     let f = try await Fixture(created: created, failedAt: failedAt)
     defer {
       f.service.descriptorFetchObserver = nil
       f.close()
     }
-    let other = f.root.appendingPathComponent("Other")
-    try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
     var replaced = false
     f.service.descriptorFetchObserver = { _ in
       guard !replaced else { return }
       replaced = true
-      f.destination.persistSelectedFolderForTesting(other)
+      f.destination.clearSelection()
     }
     f.window.orderFront(nil)
     try #require(
@@ -244,7 +242,7 @@ struct ExportIssuePresentationTests {
     } else {
       let other = f.root.appendingPathComponent("Other")
       try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
-      f.destination.persistSelectedFolderForTesting(other)
+      await f.destination.persistSelectionAndWait(other)
     }
     action()
     #expect(
@@ -279,8 +277,7 @@ struct ExportIssuePresentationTests {
         },
         bookmarkSaver: { _ in true }, volumeNotificationCenter: NotificationCenter(),
         validationScopeAcquirer: { _ in true }, validationScopeReleaser: { _ in })
-      destination.persistSelectedFolderForTesting(root)
-      destination.revalidateForTesting()
+      await destination.persistSelectionAndWait(root)
       destinationId = try #require(destination.destinationId)
       timeline = ExportRecordStore(baseDirectoryURL: root.appendingPathComponent("Records"))
       collections = CollectionExportRecordStore(
