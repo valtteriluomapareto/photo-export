@@ -81,7 +81,9 @@ struct LocalHEICStorageTests {
     #expect(signal.category == .unknown)
     #expect(signal.localizedDescription.contains("local temporary storage"))
     let cloud = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
-    #expect(AutoSyncFailureCategory.classify(LocalHEICStorage.localizing(cloud)).category == .iCloudTransient)
+    #expect(
+      AutoSyncFailureCategory.classify(LocalHEICStorage.localizing(cloud)).category
+        == .iCloudTransient)
     #expect(LocalHEICStorage.localizing(CancellationError()) is CancellationError)
   }
 }

@@ -43,10 +43,12 @@ struct FileIOThroughputTests {
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let probes = LockedBox(0)
     let volume = LockedBox("mount-a")
-    let cache = VolumeRenameCapabilityCache(identity: { _ in volume.value }, probe: { _ in
-      probes.mutate { $0 += 1 }
-      return supported
-    })
+    let cache = VolumeRenameCapabilityCache(
+      identity: { _ in volume.value },
+      probe: { _ in
+        probes.mutate { $0 += 1 }
+        return supported
+      })
     let service = FileIOService(capabilityCache: cache)
     for n in 0..<2 {
       let source = root.appendingPathComponent("source-\(n)")
@@ -64,11 +66,16 @@ struct FileIOThroughputTests {
   @Test func unknownProbesDoNotPoisonTheCacheAndMountEventsInvalidateIt() {
     let root = TestScratch.directory("UnknownCapability")
     let probes = LockedBox(0)
-    let cache = VolumeRenameCapabilityCache(identity: { _ in "mount" }, probe: { _ in
-      var count = 0
-      probes.mutate { $0 += 1; count = $0 }
-      return count == 1 ? nil : true
-    })
+    let cache = VolumeRenameCapabilityCache(
+      identity: { _ in "mount" },
+      probe: { _ in
+        var count = 0
+        probes.mutate {
+          $0 += 1
+          count = $0
+        }
+        return count == 1 ? nil : true
+      })
     #expect(!cache.supportsExclusiveRename(in: root))
     #expect(cache.supportsExclusiveRename(in: root))
     #expect(cache.supportsExclusiveRename(in: root))
@@ -88,16 +95,21 @@ struct FileIOThroughputTests {
     let entered = AsyncCheckpoint()
     let release = DispatchSemaphore(value: 0)
     let probes = LockedBox(0)
-    let cache = VolumeRenameCapabilityCache(identity: { _ in "same-device-and-path" }, probe: { _ in
-      var count = 0
-      probes.mutate { $0 += 1; count = $0 }
-      if count == 1 {
-        Task { await entered.enter() }
-        release.wait()
-        return true
-      }
-      return false
-    })
+    let cache = VolumeRenameCapabilityCache(
+      identity: { _ in "same-device-and-path" },
+      probe: { _ in
+        var count = 0
+        probes.mutate {
+          $0 += 1
+          count = $0
+        }
+        if count == 1 {
+          Task { await entered.enter() }
+          release.wait()
+          return true
+        }
+        return false
+      })
     let old = Task.detached { cache.supportsExclusiveRename(in: root) }
     await entered.waitForEnter(count: 1)
     cache.invalidate()

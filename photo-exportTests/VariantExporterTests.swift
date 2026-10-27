@@ -79,7 +79,10 @@ struct VariantExporterTests {
     }
   }
 
-  private func makeHarness(planner: ((FakeFileSystem) -> FinalNamePlanner)? = nil) -> Harness {
+  private func makeHarness(
+    planner: ((FakeFileSystem) -> FinalNamePlanner)? = nil,
+    localHEICStorage: LocalHEICStorage? = nil
+  ) -> Harness {
     let host = FakeHost()
     let writer = FakeAssetResourceWriter()
     let renderer = FakeMediaRenderer()
@@ -104,6 +107,8 @@ struct VariantExporterTests {
       assetResourceWriter: writer,
       mediaRenderer: renderer,
       imageConverter: converter,
+      localHEICStorage: localHEICStorage
+        ?? LocalHEICStorage(root: TestScratch.directory("VariantHEIC")),
       fileSystem: fileSystem,
       exportDestination: dest,
       finalNamePlanner: planner?(fileSystem))
@@ -293,7 +298,8 @@ struct VariantExporterTests {
         selection: .edited),
       groupStem: nil, pairOriginalWithSuffix: false, generation: 0, inFlight: &inFlight)
     let conversion = try #require(h.converter.convertCalls.first)
-    #expect(!conversion.sourceURL.path.hasPrefix(h.destDir.path),
+    #expect(
+      !conversion.sourceURL.path.hasPrefix(h.destDir.path),
       "HEIC input must not make a round trip through the export destination")
     #expect(conversion.destURL.deletingLastPathComponent() == h.destDir)
     #expect(h.writer.writeCalls.first?.url == conversion.sourceURL)
@@ -301,6 +307,38 @@ struct VariantExporterTests {
     let final = try #require(h.fileSystem.moveCalls.last?.to)
     #expect(final.deletingLastPathComponent() == h.destDir)
     #expect(FileManager.default.fileExists(atPath: final.path))
+  }
+
+  @Test(.timeLimit(.minutes(2)), arguments: [true, false])
+  func localHEICSpaceFailureDoesNotBlameTheDestination(preflight: Bool) async throws {
+    let storage = LocalHEICStorage(
+      root: TestScratch.directory("HEICSpace"), capacity: { _ in preflight ? 0 : Int64.max })
+    let h = makeHarness(localHEICStorage: storage)
+    defer { h.cleanup() }
+    h.host.convertHEICToJPEG = true
+    if !preflight { h.writer.writeError = CocoaError(.fileWriteOutOfSpace) }
+    let asset = TestAssetFactory.makeAsset(
+      id: "local-space", hasAdjustments: false, originalUTI: "public.heic")
+    var inFlight: (assetId: String, variant: ExportVariant)?
+    do {
+      _ = try await h.exporter.exportSingleVariant(
+        variant: .edited, descriptor: asset,
+        resources: [TestAssetFactory.makeResource(type: .photo, originalFilename: "SPACE.HEIC")],
+        destDir: h.destDir, relPath: "2025/07/",
+        job: ExportManager.ExportJob(
+          assetLocalIdentifier: asset.id, placement: .timeline(year: 2025, month: 7),
+          selection: .edited),
+        groupStem: nil, pairOriginalWithSuffix: false, generation: 0, inFlight: &inFlight)
+      Issue.record("Local space failure must reach the caller")
+    } catch {
+      #expect(error is LocalHEICStorage.Failure)
+      let signal = AutoSyncFailureCategory.classify(error)
+      #expect(signal.category == .unknown)
+      #expect(signal.localizedDescription.contains("local temporary storage"))
+    }
+    #expect(h.writer.writeCalls.count == (preflight ? 0 : 1))
+    #expect(h.converter.convertCalls.isEmpty)
+    #expect(h.fileSystem.moveCalls.isEmpty)
   }
 
   // MARK: - HEIC→JPEG conversion (issue #47)

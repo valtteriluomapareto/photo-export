@@ -61,6 +61,7 @@ struct DestinationFailureStopTests {
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, mediaRenderer: renderer, imageConverter: converter,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("StopHEIC")),
         fileSystem: files, userDefaults: TestScratch.defaults(suiteName: suite))
       let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
       let assets = ids.map { TestAssetFactory.makeAsset(id: $0, creationDate: date) }

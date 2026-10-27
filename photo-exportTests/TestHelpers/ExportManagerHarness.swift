@@ -28,6 +28,7 @@ final class ExportManagerHarness {
     fileSystem: FakeFileSystem = FakeFileSystem(),
     mediaRenderer: (any MediaRenderer)? = nil,
     imageConverter: any ImageConverter = ProductionImageConverter(),
+    localHEICStorage: LocalHEICStorage? = nil,
     runActivity: (any ExportRunActivity)? = nil,
     exportMeasurements: ExportMeasurements? = nil,
     destinationIOFactory: @escaping @MainActor (String?) -> any DestinationIOExecuting = { _ in
@@ -53,6 +54,8 @@ final class ExportManagerHarness {
       assetResourceWriter: writer,
       mediaRenderer: mediaRenderer,
       imageConverter: imageConverter,
+      localHEICStorage: localHEICStorage
+        ?? LocalHEICStorage(root: TestScratch.directory(label + "HEIC")),
       fileSystem: fileSystem,
       runActivity: runActivity, exportMeasurements: exportMeasurements,
       destinationIOFactory: destinationIOFactory,
