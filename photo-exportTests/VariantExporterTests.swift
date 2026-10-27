@@ -310,7 +310,7 @@ struct VariantExporterTests {
   }
 
   @Test(.timeLimit(.minutes(2)), arguments: [true, false])
-  func localHEICSpaceFailureDoesNotBlameTheDestination(preflight: Bool) async throws {
+  func heicAllocationAndResourceWriteKeepSeparateErrorProvenance(preflight: Bool) async throws {
     let storage = LocalHEICStorage(
       root: TestScratch.directory("HEICSpace"), capacity: { _ in preflight ? 0 : Int64.max })
     let h = makeHarness(localHEICStorage: storage)
@@ -331,10 +331,15 @@ struct VariantExporterTests {
         groupStem: nil, pairOriginalWithSuffix: false, generation: 0, inFlight: &inFlight)
       Issue.record("Local space failure must reach the caller")
     } catch {
-      #expect(error is LocalHEICStorage.Failure)
       let signal = AutoSyncFailureCategory.classify(error)
-      #expect(signal.category == .unknown)
-      #expect(signal.localizedDescription.contains("local temporary storage"))
+      if preflight {
+        #expect(error is LocalHEICStorage.Failure)
+        #expect(signal.category == .unknown)
+        #expect(signal.localizedDescription.contains("local temporary storage"))
+      } else {
+        #expect(!(error is LocalHEICStorage.Failure))
+        #expect(signal.category == .destinationFull)
+      }
     }
     #expect(h.writer.writeCalls.count == (preflight ? 0 : 1))
     #expect(h.converter.convertCalls.isEmpty)

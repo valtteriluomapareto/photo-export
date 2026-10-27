@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Photos
 import Testing
@@ -237,6 +238,68 @@ struct PhotoKitResourceSessionTests {
     } else {
       #expect(h.fileSystem.moveCalls.count == (route == "paired" ? 4 : 1))
     }
+  }
+
+  @MainActor
+  @Test(arguments: [Int32(0), ENOENT, EIO])
+  func heicResourceWriteFailureStillExportsTheOriginal(errorCode: Int32) async throws {
+    let asset = TestAssetFactory.makeAsset(
+      id: "heic-source-error",
+      creationDate: Calendar.current.date(from: DateComponents(year: 2026, month: 1, day: 15))!,
+      hasAdjustments: true, originalUTI: "public.heic")
+    let original = ResourceDescriptor(type: .photo, originalFilename: "ORIGINAL.HEIC")
+    let edited = ResourceDescriptor(type: .fullSizePhoto, originalFilename: "EDITED.HEIC")
+    let writes = LockedBox<[URL]>([])
+    let owner = ProductionPhotoKitResourceOwner(
+      backend: .init { _ in
+        .init(descriptor: asset) {
+          [original, edited].map { resource in
+            .init(descriptor: resource) { url, completion in
+              writes.mutate { $0.append(url) }
+              if resource.type == .fullSizePhoto && errorCode != 0 {
+                completion(NSError(domain: NSPOSIXErrorDomain, code: Int(errorCode)))
+              } else {
+                do {
+                  try Data("source".utf8).write(to: url)
+                  completion(nil)
+                } catch { completion(error) }
+              }
+            }
+          }
+        }
+      })
+    let converter = FakeImageConverter()
+    let h = ExportManagerHarness(
+      label: "HEICResourceFailure", photoKitReader: ProductionPhotoKitReader(resourceOwner: owner),
+      imageConverter: converter)
+    defer {
+      h.manager.cancelAndClear()
+      h.store.drainSynchronously()
+      h.collectionStore.drainSynchronously()
+      h.dest.cleanup()
+      try? FileManager.default.removeItem(at: h.storeRoot)
+    }
+    h.photoLib.assetsByYearMonth["2026-1"] = [asset]
+    h.manager.versionSelection = .edited
+    h.manager.convertHEICToJPEG = true
+    h.manager.startExportMonth(year: 2026, month: 1)
+    await h.manager.waitForQueueDrained()
+    let record = try #require(h.store.exportInfo(assetId: asset.id))
+    if errorCode == 0 {
+      #expect(record.variants[.edited]?.status == .done)
+      #expect(record.variants[.original] == nil)
+      #expect(converter.convertCalls.count == 1)
+      #expect(writes.value.count == 1)
+    } else {
+      #expect(record.variants[.edited]?.reason == .editedUnavailableOriginalBackedUp)
+      #expect(record.variants[.original]?.status == .done)
+      #expect(record.variants[.original]?.filename == "ORIGINAL_orig.HEIC")
+      #expect(converter.convertCalls.isEmpty)
+      #expect(writes.value.count == 2)
+    }
+    #expect(h.store.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
+    #expect(!FileManager.default.fileExists(atPath: try #require(writes.value.first).path))
+    #expect(h.writer.writeCalls.isEmpty)
   }
 
   private struct HeldReader: PhotoKitReading {

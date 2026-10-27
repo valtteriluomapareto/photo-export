@@ -65,11 +65,12 @@ struct LocalHEICStorageTests {
     let storage = LocalHEICStorage(
       root: root, processID: 103, capacity: { _ in nil }, processIsAlive: { $0 != 101 })
     let allocated = try await storage.allocate(sourceBytes: nil)
-    #expect(!fm.fileExists(atPath: dead.path))
+    #expect(fm.fileExists(atPath: dead.path), "Allocation must leave launch sweeping alone")
     for dir in [live, current, other, outside, link] {
       #expect(fm.fileExists(atPath: dir.appendingPathComponent("input").path))
     }
     await storage.sweepAbandoned()
+    #expect(!fm.fileExists(atPath: dead.path))
     #expect(fm.fileExists(atPath: allocated.deletingLastPathComponent().path))
     await storage.remove(allocated)
   }
