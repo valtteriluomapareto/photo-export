@@ -98,7 +98,7 @@ struct InterruptedPairRecoveryTests {
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, fileSystem: files,
-        destinationIOFactory: { _ in destinationIO ?? DestinationIO() },
+        destinationIO: destinationIO ?? DestinationIO(),
         userDefaults: TestScratch.defaults(suiteName: defaultsName))
       let asset = TestAssetFactory.makeAsset(
         id: "asset",

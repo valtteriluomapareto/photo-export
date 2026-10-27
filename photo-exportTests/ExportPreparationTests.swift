@@ -41,7 +41,7 @@ struct ExportPreparationTests {
   @Test func progressPublicationCancellationPreventsPhysicalDispatch() async throws {
     let gate = LeafGate()
     let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
-    let h = ExportManagerHarness(label: "CancelDuringFilename", destinationIOFactory: { _ in io })
+    let h = ExportManagerHarness(label: "CancelDuringFilename", destinationIO: io)
     defer {
       gate.release()
       cleanup(h)
@@ -74,7 +74,7 @@ struct ExportPreparationTests {
   func firstMarkRefusesClaimMadeByFilenameSubscriber(paired: Bool) async throws {
     let gate = LeafGate()
     let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
-    let h = ExportManagerHarness(label: "FirstMarkClaim", destinationIOFactory: { _ in io })
+    let h = ExportManagerHarness(label: "FirstMarkClaim", destinationIO: io)
     defer {
       gate.release()
       cleanup(h)
@@ -193,9 +193,10 @@ struct ExportPreparationTests {
       try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
       let realDestination = ExportDestinationManager(
         skipRestore: true, userDefaults: TestScratch.defaults("CapturedPreparationDestination"),
-        validationScopeAcquirer: { _ in true }, validationScopeReleaser: { _ in },
+        bookmarkSaver: { _ in true }, validationScopeAcquirer: { _ in true },
+        validationScopeReleaser: { _ in },
         fileSystem: files, validationProbe: validationProbe)
-      realDestination.setSelectedFolderForTesting(first)
+      await realDestination.persistSelectionAndWait(first)
       destination = ScratchDestination(realDestination)
       timeline = ExportRecordStore(baseDirectoryURL: recordsRoot)
       collections = CollectionExportRecordStore(baseDirectoryURL: recordsRoot)
@@ -205,7 +206,7 @@ struct ExportPreparationTests {
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, fileSystem: files,
-        destinationIOFactory: { _ in io }, userDefaults: TestScratch.defaults("CapturedPreparation")
+        destinationIO: io, userDefaults: TestScratch.defaults("CapturedPreparation")
       )
       let asset = TestAssetFactory.makeAsset(
         id: "prepare",
@@ -224,8 +225,9 @@ struct ExportPreparationTests {
 
   private final class HeldValidation: DestinationValidationProbing {
     let gate = LeafGate()
+    let shouldHold = LockedBox(false)
     func inspect(_ url: URL) -> DestinationValidationResult {
-      gate.hold()
+      if shouldHold.value { gate.hold() }
       return DestinationValidationResult(
         isAvailable: true, isWritable: true, status: .ready,
         fingerprint: .makeLow(
@@ -245,6 +247,7 @@ struct ExportPreparationTests {
     f.manager.startExportMonth(year: 2025, month: 4)
     try #require(await eventually("job queued behind pause") { f.manager.pendingJobs.count == 1 })
     let identity = f.destination.manager.identity
+    probe.shouldHold.mutate { $0 = true }
     f.destination.manager.revalidate()
     try #require(await probe.gate.entered.waitForEnter(count: 1))
     #expect(f.destination.manager.isAvailable)
@@ -293,7 +296,7 @@ struct ExportPreparationTests {
     f.manager.interruptForDestinationUnavailable()
     let second = f.root.appendingPathComponent("B")
     try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
-    f.destination.manager.setSelectedFolderForTesting(second)
+    await f.destination.manager.persistSelectionAndWait(second)
     await f.timeline.configureAndWait(for: "B")
     await f.collections.configureAndWait(for: "B")
     #expect(f.destination.closed.isEmpty)

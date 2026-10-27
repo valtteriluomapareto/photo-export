@@ -52,7 +52,7 @@ struct ReuseCopyLifecycleTests {
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, fileSystem: files,
-        destinationIOFactory: { _ in destinationIO ?? DestinationIO() }, userDefaults: defaults)
+        destinationIO: destinationIO ?? DestinationIO(), userDefaults: defaults)
       photos.favoritesAssets = [asset]
       photos.resourcesByAssetId[asset.id] = [
         ResourceDescriptor(type: .photo, originalFilename: "IMG.JPG")
