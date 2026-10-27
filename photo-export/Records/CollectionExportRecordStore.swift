@@ -18,7 +18,7 @@ import os
 /// The store **rejects** `.timeline` placements at every entry point. Three layers of
 /// defense uphold the disjoint-key-space invariant:
 /// 1. The mutation API gate `accept(_:)` returns `false` and logs an error on `.timeline`.
-/// 2. `configure(for:)` filters `.timeline` placements out of the loaded snapshot before
+/// 2. `beginConfigure(for:)` filters `.timeline` placements out of the loaded snapshot before
 ///    they enter `placements`.
 /// 3. `apply(.upsertPlacement)` filters `.timeline` placements out of the log replay.
 /// `ExportManager` is responsible for routing record mutations to the correct store via
@@ -250,10 +250,6 @@ final class CollectionExportRecordStore {
 
   // MARK: - Destination configuration
 
-  /// Points the store at a specific destination id (subdirectory) and loads its history before
-  /// returning. Passing `nil` clears in-memory state and detaches from any on-disk files.
-  /// Publishes no `.loading`; the app's destination changes use `beginConfigure(for:)`.
-  /// Waits before reading or changing active history, then applies one synchronous batch.
   var mutationTicket: RecordMutationTicket {
     RecordMutationTicket(
       file: jsonl.map(ObjectIdentifier.init), load: loadGeneration, epoch: recordsEpoch)
@@ -265,6 +261,7 @@ final class CollectionExportRecordStore {
     try await mutationAdmission.waitUntilOpen()
   }
 
+  /// Waits before reading or changing active history, then applies one synchronous batch.
   func withMutationAdmission<T>(_ body: () throws -> T) async throws -> T {
     let ticket = mutationTicket
     try await prepareForMutation()
@@ -300,35 +297,12 @@ final class CollectionExportRecordStore {
     }
   }
 
-  /// Preserves synchronous protected callers; shipping code uses `beginConfigure`.
-  func configure(for destinationId: String?) {
-    precondition(!mutationAdmission.isClosed)
-    let signpost = AppDiagnostics.beginConfigure(label: "collection")
-    defer { signpost.end() }
-    guard let file = startConfiguring(for: destinationId) else { return }
-    let decoded = file.load()
-    installPreparedLoad(
-      LoadTicket(generation: loadGeneration, file: file, signpost: nil),
-      separator: decoded.needsLogSeparator, outcome: Self.prepare(decoded, logger: logger))
-  }
-
   /// Points the store at a specific destination id and loads its history off the main actor.
   /// The store is `.loading` until the load finishes in one main-actor turn; records read as
   /// empty and mutations are refused meanwhile. `waitUntilSettled()` waits for the load. The
   /// file read is queued behind the previous destination's writes on the IO queue; decoding
   /// and preparing run in a detached task.
   func beginConfigure(for destinationId: String?) {
-    if !mutationAdmission.isClosed, cancellationCleanups.isEmpty,
-      jsonl?.hasUnflushedChanges != true, finalCommitContext?.file.hasUnflushedChanges != true,
-      pendingConfiguration == nil
-    {
-      beginConfigureImmediately(for: destinationId, drained: true)
-      return
-    }
-    configurationRequest &+= 1
-    let request = configurationRequest
-    loadGeneration &+= 1
-    latestLoad.advance(to: loadGeneration)
     if let context = finalCommitContext, context.destinationId == configuredDestinationId,
       state == .ready || hasUnsavedChanges, let file = jsonl
     {
@@ -337,6 +311,17 @@ final class CollectionExportRecordStore {
         version: Constants.snapshotVersion, placements: storedPlacements,
         records: storedRecordBodies)
     }
+    if !mutationAdmission.isClosed, cancellationCleanups.isEmpty,
+      jsonl?.hasUnflushedChanges != true, finalCommitContext?.file.hasUnflushedChanges != true,
+      pendingConfiguration == nil
+    {
+      beginConfigureImmediately(for: destinationId)
+      return
+    }
+    configurationRequest &+= 1
+    let request = configurationRequest
+    loadGeneration &+= 1
+    latestLoad.advance(to: loadGeneration)
     configurationPending = true
     state = .loading
     changeNotifier.notifyNow()
@@ -361,7 +346,7 @@ final class CollectionExportRecordStore {
         mutationAdmission.installAfterMaintenance {
           self.configurationPending = false
           self.pendingConfiguration = nil
-          self.beginConfigureImmediately(for: destinationId, drained: true)
+          self.beginConfigureImmediately(for: destinationId)
         }
       }
       await transition?.value
@@ -375,12 +360,10 @@ final class CollectionExportRecordStore {
     }
   }
 
-  private func beginConfigureImmediately(
-    for destinationId: String?, drained: Bool = false
-  ) {
+  private func beginConfigureImmediately(for destinationId: String?) {
     let signpost = AppDiagnostics.beginConfigure(label: "collection")
     guard
-      let file = startConfiguring(for: destinationId, drained: drained)
+      let file = startConfiguring(for: destinationId)
     else {
       signpost.end()
       return
@@ -408,14 +391,17 @@ final class CollectionExportRecordStore {
           outcome = Self.prepare(decoded, logger: logger)
         }
         let transfer = RecordValueTransfer(consume outcome)
-        await self?.finishPreparedLoad(ticket, separator: separator, transfer: transfer)
+        guard let self else { return }
+        try? await self.mutationAdmission.waitUntilOpen(respectingCancellation: false)
+        await MainActor.run { [separator] in
+          self.installPreparedLoad(ticket, separator: separator, outcome: transfer.take())
+        }
       }
     }
   }
 
   /// Returns once the store is not `.loading`, or as soon as the calling task is cancelled.
-  /// A blocking configure, or one to nil, ends the wait at once. An asynchronous configure that
-  /// replaces the load keeps the store `.loading`, so the wait ends when the newest load settles.
+  /// A replacement load keeps the store `.loading`, so the wait ends when the newest load settles.
   func waitUntilSettled() async {
     while configurationPending || state == .loading, !Task.isCancelled {
       let id = UUID()
@@ -447,37 +433,20 @@ final class CollectionExportRecordStore {
   private struct LoadTicket: Sendable {
     let generation: UInt64
     let file: RecordFile
-    /// Ends when the load finishes; `nil` when the caller's own interval covers it.
-    let signpost: ConfigureSignpost?
+    let signpost: ConfigureSignpost
   }
 
   private static let retainedProgressMessage =
     "Progress from this destination still needs to be saved."
 
-  /// What every configure does before reading: drain and park the old destination, switch,
+  /// What every configure does before reading: park the old destination, switch,
   /// clear the in-memory history, and end there for nil or for history retained after a failed
   /// write. Returns the new destination's file when its history still has to be read.
-  private func startConfiguring(
-    for destinationId: String?, drained: Bool = false
-  ) -> RecordFile? {
+  private func startConfiguring(for destinationId: String?) -> RecordFile? {
     reconciliationRevision &+= 1
     loadGeneration &+= 1
     latestLoad.advance(to: loadGeneration)
 
-    // Finish the old destination's queued writes before replacing its file owner.
-    if !drained { jsonl?.drainSynchronously() }
-    // A parked final commit can fail while another destination is active. Deliver
-    // that owner's failure before consulting pendingRecovery or loading it again.
-    if let context = finalCommitContext {
-      if !drained, context.file !== jsonl { context.file.drainSynchronously() }
-      if context.destinationId == configuredDestinationId,
-        state == .ready || hasUnsavedChanges, let file = jsonl
-      {
-        context.file = file
-        context.snapshot = Snapshot(
-          version: Constants.snapshotVersion, placements: placements, records: recordBodies)
-      }
-    }
     if hasUnsavedChanges, let id = configuredDestinationId {
       pendingRecovery[id] = Snapshot(
         version: Constants.snapshotVersion, placements: placements, records: recordBodies)
@@ -542,19 +511,12 @@ final class CollectionExportRecordStore {
     return file
   }
 
-  private func finishPreparedLoad(
-    _ ticket: LoadTicket, separator: Bool?, transfer: RecordValueTransfer<LoadOutcome?>
-  ) async {
-    try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
-    installPreparedLoad(ticket, separator: separator, outcome: transfer.take())
-  }
-
   /// Installs a finished load in one main-actor turn, unless a newer configure replaced it.
   /// `outcome` is nil when the load skipped decoding because it was already replaced.
   private func installPreparedLoad(
     _ ticket: LoadTicket, separator: Bool?, outcome: consuming LoadOutcome?
   ) {
-    defer { ticket.signpost?.end() }
+    defer { ticket.signpost.end() }
     finishedLoadCount += 1
     guard ticket.generation == loadGeneration, ticket.file === jsonl, let outcome = consume outcome
     else {
@@ -818,7 +780,7 @@ final class CollectionExportRecordStore {
     case retained(PreparedLoad)
   }
 
-  /// Builds what `configure(for:)` installs from a decoded load: the snapshot without
+  /// Builds what `beginConfigure(for:)` installs from a decoded load: the snapshot without
   /// `.timeline` placements, the log replayed over it, then interrupted variants recovered.
   /// Prepares claims with the same recovered records before installation.
   nonisolated static func prepare(_ loaded: RecordFile.LoadResult, logger: Logger) -> LoadOutcome {
@@ -875,32 +837,6 @@ final class CollectionExportRecordStore {
       placements: snapshot.placements, recordBodies: snapshot.records,
       counts: countRecords(snapshot.records), candidates: candidates,
       claims: buildClaims(from: snapshot.records, logger: logger))
-  }
-
-  /// Retry storage access without resetting export history. After an append failure,
-  /// save the retained in-memory state; after a read failure, reload the original files.
-  ///
-  /// No commit held for a load can be waiting here: a store leaves `.loading` only through a
-  /// finished load or the retained-recovery exit, and both land those commits.
-  func retryPersistence() {
-    precondition(!mutationAdmission.isClosed)
-    guard state == .persistenceFailed else { return }
-    guard hasUnsavedChanges, let jsonl else {
-      configure(for: configuredDestinationId)
-      return
-    }
-    do {
-      try jsonl.writeSnapshot(
-        Snapshot(version: Constants.snapshotVersion, placements: placements, records: recordBodies))
-      hasUnsavedChanges = false
-      if let id = configuredDestinationId { pendingRecovery.removeValue(forKey: id) }
-      persistenceError = nil
-      setState(.ready)
-      replayFinalCompletions()
-      changeNotifier.notifyNow()
-    } catch {
-      persistenceError = error.localizedDescription
-    }
   }
 
   /// Retries retained history only after earlier physical maintenance has completed.
@@ -1798,7 +1734,7 @@ final class CollectionExportRecordStore {
   /// Validates that this store should accept the placement. Returns `false` and logs an
   /// error when given a `.timeline` placement; the store is then a no-op for the call.
   /// Combined with the snapshot-decode and log-replay guards in `apply(_:)` and
-  /// `configure(for:)`, this is one of three layers that uphold the disjoint-key-space
+  /// `beginConfigure(for:)`, this is one of three layers that uphold the disjoint-key-space
   /// invariant — a `.timeline` placement should never enter the collection store via any
   /// path. (Earlier versions tripped `assertionFailure` here, which made the rejection
   /// path untestable in debug builds; the routing-bug surfacing now happens via `Logger`

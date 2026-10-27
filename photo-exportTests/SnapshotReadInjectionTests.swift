@@ -65,7 +65,7 @@ struct SnapshotReadInjectionTests {
     return result
   }
 
-  @Test func snapshotReadFailureUsesTheInjectedBoundaryAndKeepsTheReadableLog() throws {
+  @Test func snapshotReadFailureUsesTheInjectedBoundaryAndKeepsTheReadableLog() async throws {
     let root = TestScratch.directory("SnapshotReadInjection")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -85,7 +85,7 @@ struct SnapshotReadInjectionTests {
       logger: Logger(subsystem: TestLogging.subsystem, category: "SnapshotReadInjection"), logIO: io
     )
 
-    let failed = file.load()
+    let failed = (await file.load())
     #expect(failed.ioFailure is SnapshotReadError)
     #expect(failed.snapshot == nil && failed.snapshotStatus != .corrupt)
     #expect(failed.ops == [mutation], "The log is still independently readable")
@@ -94,7 +94,7 @@ struct SnapshotReadInjectionTests {
     #expect(try Data(contentsOf: logURL) == logBytes)
 
     io.disableFault()
-    let recovered = file.load()
+    let recovered = (await file.load())
     #expect(recovered.ioFailure == nil && recovered.snapshotStatus == .loaded)
     #expect(recovered.snapshot == snapshot && recovered.ops == [mutation])
     #expect(try Data(contentsOf: snapshotURL) == snapshotBytes)

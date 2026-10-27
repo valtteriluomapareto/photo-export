@@ -65,16 +65,16 @@ final class RecordValueTransfer<Value: Sendable>: Sendable {
 /// atomically rename it over the old snapshot, synchronize its directory, then truncate
 /// the log. An interruption before log truncation leaves a replayable log intact.
 ///
-/// `@MainActor` isolates the calling-actor side: every entry point (`load`, `append`,
-/// `writeSnapshot`, `resetToEmpty`, `drainSynchronously`) and every
+/// `@MainActor` isolates the calling-actor side: every entry point (`append`, `checkpoint`,
+/// `drainSynchronously`) and every
 /// mutable property (including `submittedRevision` and the replay budget) must be touched from the main actor.
 /// Both production composing stores (`ExportRecordStore`,
 /// `CollectionExportRecordStore`) are themselves `@MainActor`, so this matches how the
 /// type is actually used. Off-actor work — log writes and snapshot encoding/replacement —
 /// happens on the dispatch queue and only reads `Sendable`
 /// locals captured from the calling actor, never reaching back into `self` for
-/// non-Sendable state. `load()` is composed of the `nonisolated` static `readFiles` and
-/// `decode`, which take everything they need as arguments and can run on any thread.
+/// non-Sendable state. The `nonisolated` static `readFiles` and `decode` take everything
+/// they need as arguments and can run on any thread.
 @MainActor
 final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Sendable> {
   enum Constants {
@@ -149,8 +149,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     /// Snapshot file present and decoded. The decoded value is in `LoadResult.snapshot`.
     case loaded
     /// Snapshot file present but failed to decode. **The file is left in place** —
-    /// composing-store code transitions the store to `.failed` and only `resetToEmpty()`
-    /// renames the file out of the way. This is the load-bearing detail that makes
+    /// composing-store code transitions the store to `.failed`; only an explicit reset
+    /// checkpoint renames the file out of the way. This is the load-bearing detail that makes
     /// "Quit" non-destructive: a quit-and-relaunch finds the same corrupt file and
     /// re-fails, never silently resetting to an empty store.
     case corrupt
@@ -178,20 +178,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let logError: (any Error)?
   }
 
-  /// Reads the snapshot (if any) and the log file (if any). The composing store applies
-  /// `ops` in order via its own dispatch logic. Malformed lines are skipped and logged but
-  /// do not abort the load. A missing snapshot is not an error (returns `.absent`); a
-  /// present-but-undecodable snapshot is reported as `.corrupt` with the file untouched.
-  func load() -> LoadResult {
-    let inputs = readInputs
-    let result = inputs.decode(inputs.read())
-    adoptLogSeparator(result.needsLogSeparator)
-    adoptReplaySize(operationCount: result.ops.count, bytes: result.replayBytes)
-    return result
-  }
-
   /// Everything `readFiles` and `decode` need, so a load can run them on any thread with the
-  /// same files, log IO and decoding as `load()`.
+  /// same files, log IO and decoding.
   struct ReadInputs: Sendable {
     let snapshotURL: URL
     let logURL: URL
@@ -319,15 +307,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
       snapshot: snapshot, snapshotStatus: snapshotStatus, ops: ops,
       malformedLineCount: malformedLineCount, ioFailure: ioFailure,
       needsLogSeparator: needsLogSeparator, replayBytes: raw.logData?.count ?? 0)
-  }
-
-  /// Renames the corrupt snapshot to `<name>.broken-<ISO8601>` and writes a fresh empty
-  /// snapshot + log. Used by composing stores' `resetToEmpty()` paths after the user picks
-  /// destructive Reset action in RecordStoreAlertHost. Until that explicit recovery,
-  /// the store remains failed and the corrupt file is preserved.
-  func resetToEmpty(emptySnapshot: Snapshot) throws {
-    try Self.preserveCorruptSnapshot(at: snapshotURL)
-    try writeSnapshot(emptySnapshot)
   }
 
   nonisolated private static func preserveCorruptSnapshot(at snapshotURL: URL) throws {
@@ -458,31 +437,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     if resetCorrupt { try preserveCorruptSnapshot(at: snapshotURL) }
     try writeSnapshotAndTruncate(
       snapshotData: data, snapshotURL: snapshotURL, logURL: logURL, fileReplacer: fileReplacer)
-  }
-
-  // MARK: - Manual snapshot
-
-  /// Synchronously writes a snapshot and truncates the log. Used by `resetToEmpty()` paths
-  /// and by tests; production recovery and maintenance await `checkpoint`.
-  func writeSnapshot(_ snapshot: Snapshot) throws {
-    let encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = dateEncodingStrategy
-    let data = try encoder.encode(snapshot)
-    // Serialize explicit snapshots with queued appends and automatic compactions.
-    let snapshotURL = self.snapshotURL
-    let logURL = self.logURL
-    let fileReplacer = self.fileReplacer
-    let ioFailureState = self.ioFailureState
-    try ioQueue.sync {
-      try Self.writeSnapshotAndTruncate(
-        snapshotData: data, snapshotURL: snapshotURL, logURL: logURL,
-        fileReplacer: fileReplacer)
-      ioFailureState.clear()
-    }
-    replayOperationCount = 0
-    replayBytes = 0
-    flushedRevision = submittedRevision
-    needsLogSeparator = false
   }
 
   /// Acknowledges all appends queued before this call only after their file writes and

@@ -40,8 +40,8 @@ struct ExportManagerPauseResumeTests {
     dest.cleanup()
   }
 
-  private func makeTestHarness() -> Harness {
-    Harness(label: "ExportManagerPause")
+  private func makeTestHarness() async -> Harness {
+    await Harness(label: "ExportManagerPause")
   }
 
   /// Polls until `condition` returns true or the timeout elapses. Used for parking
@@ -56,7 +56,7 @@ struct ExportManagerPauseResumeTests {
   // MARK: - Pause mid-run, then resume
 
   @Test func pauseDuringActiveRunStopsQueueAndResumeRestarts() async throws {
-    let h = makeTestHarness()
+    let h = await makeTestHarness()
     defer { cleanupHarness(h) }
 
     let assets = (1...3).map {
@@ -118,7 +118,7 @@ struct ExportManagerPauseResumeTests {
   /// to pause). The mirror to `testPauseAndResumeToggle` which covers the "pause
   /// before start" no-op.
   @Test func pauseAfterQueueDrainsIsNoOp() async throws {
-    let h = makeTestHarness()
+    let h = await makeTestHarness()
     defer { cleanupHarness(h) }
 
     let asset = TestAssetFactory.makeAsset(

@@ -26,11 +26,11 @@ struct ReuseSourceDestinationErrorTests {
 
   // MARK: - Fixtures
 
-  private func makeManager() throws -> (
+  private func makeManager() async throws -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
-    let harness = ExportManagerHarness(
+    let harness = await ExportManagerHarness(
       label: "ReuseSourceDestErr",
       userDefaults: TestScratch.defaults("ReuseDestErr"))
     return (
@@ -62,7 +62,7 @@ struct ReuseSourceDestinationErrorTests {
   @Test func destinationOutOfSpaceFailsVariantWithoutPhotoKitFallback() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -116,7 +116,7 @@ struct ReuseSourceDestinationErrorTests {
   @Test func destinationPermissionDeniedFailsVariantWithoutPhotoKitFallback() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()

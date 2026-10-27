@@ -23,12 +23,12 @@ struct IdenticalFileAdoptionTests {
     let manager: ExportManager
     private var historyGeneration = 0
 
-    init(files: FakeFileSystem = FakeFileSystem()) {
+    init(files: FakeFileSystem = FakeFileSystem()) async {
       self.files = files
       timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
       collections = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-      timeline.configure(for: "history-0")
-      collections.configure(for: "history-0")
+      await timeline.configureAndWait(for: "history-0")
+      await collections.configureAndWait(for: "history-0")
       defaults = TestScratch.defaults(suiteName: defaultsName)
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
@@ -43,8 +43,8 @@ struct IdenticalFileAdoptionTests {
       try await timeline.flush()
       try await collections.flush()
       historyGeneration += 1
-      timeline.configure(for: "history-\(historyGeneration)")
-      collections.configure(for: "history-\(historyGeneration)")
+      await timeline.configureAndWait(for: "history-\(historyGeneration)")
+      await collections.configureAndWait(for: "history-\(historyGeneration)")
     }
 
     /// Gives another asset's original a record naming `name` with `claim`'s status, in the
@@ -164,7 +164,7 @@ struct IdenticalFileAdoptionTests {
   /// Export, lose the records, export again: the folder still holds one file, recorded
   /// under its natural name, with its bytes and timestamps untouched.
   @Test func lostRecordIdenticalFileIsAdopted() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       let resource = TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
@@ -201,7 +201,7 @@ struct IdenticalFileAdoptionTests {
   /// records each against a different one of those files; nothing new is written.
   @Test(arguments: [false, true])
   func identicalAssetsKeepDistinctFilesAfterRecordLoss(reversed: Bool) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let first = TestAssetFactory.makeAsset(id: "first", creationDate: Self.june15)
       let second = TestAssetFactory.makeAsset(id: "second", creationDate: Self.june15)
@@ -250,7 +250,7 @@ struct IdenticalFileAdoptionTests {
   /// file, a second hard link to an identical file, and a folder.
   @Test(arguments: Unadoptable.allCases)
   func nonIdenticalOrIrregularTargetsAreSuffixedAndUntouched(target: Unadoptable) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       let resource = TestAssetFactory.makeResource(
@@ -317,7 +317,7 @@ struct IdenticalFileAdoptionTests {
   /// identical file stays with its claimant and the export lands at ` (1)`.
   @Test(arguments: Claim.allCases)
   func fileNamedByAnyOtherRecordIsNotAdopted(claim: Claim) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       let resource = TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
@@ -343,7 +343,7 @@ struct IdenticalFileAdoptionTests {
   /// natural name belongs to the asset's own original, so it is skipped even when its bytes
   /// match the edit; the identical ` (1)` is adopted rather than written again as ` (2)`.
   @Test func editedOnInheritedStemSkipsItsOwnOriginalAndAdoptsItsCopy() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let unedited = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       let edited = TestAssetFactory.makeAsset(
@@ -402,7 +402,7 @@ struct IdenticalFileAdoptionTests {
       ("Caf\u{E9}.JPG", "Cafe\u{301}.JPG"),
     ])
   func adoptionRecordsTheStoredSpelling(resourceName: String, storedName: String) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       let resource = TestAssetFactory.makeResource(originalFilename: resourceName)
@@ -432,7 +432,7 @@ struct IdenticalFileAdoptionTests {
   /// Adoption works the same in a collection folder and in a timeline month's `videos/`.
   @Test(arguments: Location.allCases)
   func lostRecordIdenticalFileIsAdoptedInOtherFolders(location: Location) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset: AssetDescriptor
       let relativePath: String
@@ -496,7 +496,7 @@ struct IdenticalFileAdoptionTests {
   /// `VariantExporterTests.staleGenerationStopsTheCompareBeforeItsNextRead` and the
   /// interval by `FinalNamePlannerTests.stopIsAskedOncePerInterval`.
   @Test func cancelDuringTheCompareLeavesNothingBehind() async throws {
-    let h = Harness()
+    let h = await Harness()
     let held = AsyncCheckpoint()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
@@ -564,7 +564,7 @@ struct IdenticalFileAdoptionTests {
   /// Once an adoption is admitted to the commit, cancelling the run does not undo it: the
   /// record names the existing file, its timestamps are not touched and the stage is gone.
   @Test func adoptionAdmittedBeforeCancellationIsStillRecorded() async throws {
-    let h = Harness()
+    let h = await Harness()
     let gate = Gate()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
@@ -612,7 +612,7 @@ struct IdenticalFileAdoptionTests {
   /// sees a different file, the export plans again, finds it different now and writes
   /// ` (1)`.
   @Test func fileChangedAfterTheCompareIsNotAdopted() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       let resource = TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
@@ -652,7 +652,7 @@ struct IdenticalFileAdoptionTests {
   /// A claim recorded while the bytes were being compared still prevents the adoption: the
   /// claim is checked again on the main actor before the variant is marked under the name.
   @Test func claimRecordedDuringTheCompareStopsTheAdoption() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       let resource = TestAssetFactory.makeResource(originalFilename: "IMG_0001.JPG")
@@ -698,7 +698,7 @@ struct IdenticalFileAdoptionTests {
   ///   considered. `pairedVideoFollowsItsImageOnEachSide` pins the rule itself.
   @Test(arguments: LivePhotoSide.allCases)
   func livePhotoImageIsNotAdoptedAheadOfItsMotionFile(side: LivePhotoSide) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let edited = side == .edited
       let asset = TestAssetFactory.makeAsset(
@@ -765,7 +765,7 @@ struct IdenticalFileAdoptionTests {
   /// A lookup error at the commit's recheck counts as a change: the export plans again,
   /// finds the same identical file and adopts it.
   @Test func lookupErrorAtTheCommitRecheckPlansAgain() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       h.photos.assetsByYearMonth["2025-6"] = [asset]
@@ -809,7 +809,7 @@ struct IdenticalFileAdoptionTests {
   func lookupErrorWhilePlanningKeepsItsClassification(
     code: Int32, category: AutoSyncFailureCategory, stops: Bool
   ) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let first = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       let second = TestAssetFactory.makeAsset(id: "second", creationDate: Self.june15)
@@ -859,7 +859,7 @@ struct IdenticalFileAdoptionTests {
   /// other record keeps its name.
   @Test(arguments: Claim.allCases)
   func claimedNameWithNoFileIsSkipped(claim: Claim) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       h.photos.assetsByYearMonth["2025-6"] = [asset]
@@ -892,7 +892,7 @@ struct IdenticalFileAdoptionTests {
   /// claims in a timeline month's `videos/` are kept apart from the month itself.
   @Test(arguments: ClaimSpelling.allCases)
   func claimedNameWithNoFileIsSkippedInAnySpelling(spelling: ClaimSpelling) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let resourceName: String
       let claimedName: String
@@ -942,7 +942,7 @@ struct IdenticalFileAdoptionTests {
   /// `IMG_0001.JPG`, its file deleted and the asset removed from the album. A new asset with
   /// the same filename lands at ` (1)`.
   @Test func claimedNameWithNoFileIsSkippedInAnAlbum() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let other = TestAssetFactory.makeAsset(id: "other", creationDate: Self.june15)
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
@@ -989,7 +989,7 @@ struct IdenticalFileAdoptionTests {
   /// name free here.
   @Test(arguments: OtherFolder.allCases)
   func claimInAnotherFolderLeavesTheNameFree(folder other: OtherFolder) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       h.photos.assetsByYearMonth["2025-6"] = [asset]
@@ -1017,7 +1017,7 @@ struct IdenticalFileAdoptionTests {
   /// name claimed too or holding a different file, the export lands at ` (2)`.
   @Test(arguments: [false, true])
   func walkSkipsEveryClaimedOrOccupiedName(naturalHoldsAFile: Bool) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       h.photos.assetsByYearMonth["2025-6"] = [asset]
@@ -1052,7 +1052,7 @@ struct IdenticalFileAdoptionTests {
   /// Its own claim does not count, so the retry commits at that name and is never marked
   /// under ` (1)`.
   @Test func ownClaimedNameIsReclaimed() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       h.photos.assetsByYearMonth["2025-6"] = [asset]
@@ -1083,7 +1083,7 @@ struct IdenticalFileAdoptionTests {
   /// file deleted that name is free on disk but still the original's, so the edit lands at
   /// ` (1)` and the original's record keeps its name.
   @Test func editSharingItsOriginalsNameSkipsItAfterTheFileIsDeleted() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let unedited = TestAssetFactory.makeAsset(id: "asset", creationDate: Self.june15)
       let edited = TestAssetFactory.makeAsset(
@@ -1119,7 +1119,7 @@ struct IdenticalFileAdoptionTests {
   /// asset's file missing and drops its record, and the next export writes that asset back
   /// at its own name.
   @Test func missingFileReturnsAfterReconcile() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let first = TestAssetFactory.makeAsset(id: "first", creationDate: Self.june15)
       let second = TestAssetFactory.makeAsset(id: "second", creationDate: Self.june15)
@@ -1169,7 +1169,7 @@ struct IdenticalFileAdoptionTests {
   /// - an edit Photos can't provide, whose original falls back to `_orig`, that name claimed.
   @Test(arguments: PairedClaim.allCases)
   func pairedStemMovesPastAClaimedName(claim: PairedClaim) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let photo = TestAssetFactory.makeResource(type: .photo, originalFilename: "IMG_0001.HEIC")
       let render = TestAssetFactory.makeResource(
@@ -1225,7 +1225,7 @@ struct IdenticalFileAdoptionTests {
   /// A guard: names the asset's own failed records hold do not move its group. An interrupted
   /// edit and `_orig` companion are written again under their own names.
   @Test func pairedStemKeepsTheAssetsOwnNames() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(
         id: "asset", creationDate: Self.june15, hasAdjustments: true)
@@ -1310,7 +1310,7 @@ struct IdenticalFileAdoptionTests {
   ///   and only the motion file's fails.
   @Test(arguments: InheritedPairedName.allCases)
   func claimedPairedNameOnAnInheritedStemFails(name: InheritedPairedName) async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let live = name == .pairedVideo
       let (asset, editNames) = try await exportEditAlone(h, livePhoto: live)
@@ -1356,7 +1356,7 @@ struct IdenticalFileAdoptionTests {
   /// A guard: the asset's own failed `_orig` record names the paired name on its inherited
   /// stem, and nothing is there. Its own claim does not count, so the name is written again.
   @Test func ownFailedPairedNameOnAnInheritedStemIsWrittenAgain() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let (asset, _) = try await exportEditAlone(h)
       h.timeline.markVariantInProgress(
@@ -1389,7 +1389,7 @@ struct IdenticalFileAdoptionTests {
   /// since it drops only completed records whose file is missing, so the paired name stays
   /// refused on the next run.
   @Test func failedClaimOnAnInheritedPairedNameSurvivesImport() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let (asset, editNames) = try await exportEditAlone(h)
       h.recordOther(named: "IMG_0001_orig.HEIC", as: .otherAssetFailed)
@@ -1420,7 +1420,7 @@ struct IdenticalFileAdoptionTests {
   /// name is then on disk, so the other asset's `_orig` fails with the on-disk message and
   /// the claimant's file is left as it is.
   @Test func failedClaimantsRetryWritesThePairedName() async throws {
-    let h = Harness()
+    let h = await Harness()
     try await withCleanup {
       let (asset, _) = try await exportEditAlone(h)
       let other = TestAssetFactory.makeAsset(

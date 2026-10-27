@@ -377,6 +377,63 @@ import Testing
       #expect(writeFailure ? titles.contains("Retry") : titles.contains("Reset Records"))
     }
 
+    @Test(arguments: [false, true])
+    func retryFindingCorruptionPresentsReset(collection: Bool) async throws {
+      let f = try await Fixture(collection: collection, storageFailure: true)
+      defer { f.close() }
+      #expect(f.state(collection) == .persistenceFailed)
+      f.show()
+      let retry = try #require(
+        try await alertViews(f).compactMap { $0 as? NSButton }.first { $0.title == "Retry" })
+      let name =
+        collection
+        ? CollectionExportRecordStore.Constants.snapshotFileName
+        : ExportRecordStore.Constants.snapshotFileName
+      let snapshot = f.root.appendingPathComponent("A").appendingPathComponent(name)
+      try FileManager.default.removeItem(at: snapshot)
+      let corrupt = Data("corrupt after storage repair".utf8)
+      try corrupt.write(to: snapshot)
+      let ended = "retry-corrupt-sheet-ended"
+      let token = NotificationCenter.default.addObserver(
+        forName: NSWindow.didEndSheetNotification, object: f.window, queue: .main
+      ) { _ in MainActor.assumeIsolated { f.counter.record(ended) } }
+      defer { NotificationCenter.default.removeObserver(token) }
+      retry.performClick(nil)
+      try #require(await observe { f.state(collection) == .failed })
+      try #require(await observe(in: f.window) { f.counter.count(for: ended) > 0 })
+      try await f.barrier()
+      let titles = try await alertViews(f).compactMap { $0 as? NSButton }.map(\.title)
+      #expect(titles.contains("Reset Records"))
+      #expect(!titles.contains("Retry"))
+      #expect(try Data(contentsOf: snapshot) == corrupt)
+    }
+
+    @Test func dismissedTimelineDoesNotHideCollectionRecovery() async throws {
+      let f = try await Fixture(storageFailure: true)
+      defer { f.close() }
+      f.show()
+      let retry = try #require(
+        try await alertViews(f).compactMap { $0 as? NSButton }.first { $0.title == "Retry" })
+      let before = f.timeline.finishedLoadCount
+      retry.performClick(nil)
+      try #require(await observe { f.timeline.finishedLoadCount > before })
+      try await f.barrier()
+      #expect(f.timeline.state == .persistenceFailed)
+      let snapshot = f.root.appendingPathComponent("A").appendingPathComponent(
+        CollectionExportRecordStore.Constants.snapshotFileName)
+      let corrupt = Data("corrupt collections".utf8)
+      try corrupt.write(to: snapshot)
+      await f.configure("A", collection: true)
+      #expect(f.collections.state == .failed)
+      let views = try await alertViews(f)
+      let titles = views.compactMap { $0 as? NSButton }.map(\.title)
+      #expect(titles.contains("Reset Records"))
+      #expect(!titles.contains("Retry"))
+      let message = views.compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " ")
+      #expect(message.contains("Favorites and album"))
+      #expect(try Data(contentsOf: snapshot) == corrupt)
+    }
+
     /// Passes before: after a failed retry and native dismissal, the storage alert remains dismissed.
     @Test(arguments: [false, true], [false, true])
     func failedRetryKeepsTheStorageAlert(collection: Bool, writeFailure: Bool) async throws {

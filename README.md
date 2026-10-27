@@ -69,7 +69,7 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
   [Diagnostics](https://valtteriluomapareto.github.io/photo-export/features/#error-handling).
 - Keep an original backup when Photos cannot supply an edited version. [Fallback
   behavior](https://valtteriluomapareto.github.io/photo-export/features/#error-handling).
-- Retry export-history storage errors without resetting retained progress. [Storage
+- Retry export-history storage errors without resetting retained progress. If Retry finds damaged history, its Reset prompt appears. [Storage
   recovery](https://valtteriluomapareto.github.io/photo-export/features/#error-handling).
 - Recover conservatively from damaged Auto Export metadata while retaining known retry history. [Auto Export
   safety](https://valtteriluomapareto.github.io/photo-export/auto-export/#safety).

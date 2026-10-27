@@ -35,9 +35,9 @@ struct EditedFallbackTests {
     }
   }
 
-  private func makeHarness() -> Harness {
+  private func makeHarness() async -> Harness {
     let renderer = FakeMediaRenderer()
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "EditedFallback", userDefaults: TestScratch.defaults("EditedFallback"),
       mediaRenderer: renderer)
     return Harness(
@@ -49,7 +49,7 @@ struct EditedFallbackTests {
   // MARK: - Pipeline behaviour
 
   @Test func editUnavailableTriggersOrigFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -83,7 +83,7 @@ struct EditedFallbackTests {
   }
 
   @Test func unedittedAssetIsUnaffectedByFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -110,7 +110,7 @@ struct EditedFallbackTests {
   }
 
   @Test func includeOriginalsModeUnaffectedByFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .editedWithOriginals
 
@@ -141,7 +141,7 @@ struct EditedFallbackTests {
   /// and unchanged `writeCalls` could pass for the wrong reasons (e.g. a
   /// silently-failed second start, or a hung queue that timed out).
   @Test func reExportSkipsAssetCoveredByFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -186,7 +186,7 @@ struct EditedFallbackTests {
   /// either the policy `isComplete` covered path OR the planner missing-variant
   /// filter would break this test.
   @Test func reExportSkipsLivePhotoWithPairedVideoUnavailableSentinel() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
     h.manager.livePhotosPairedExport = true
@@ -226,8 +226,8 @@ struct EditedFallbackTests {
 
   // MARK: - Store-level isExported recognition
 
-  @Test func isExportedRecognisesFallbackState() {
-    let h = makeHarness()
+  @Test func isExportedRecognisesFallbackState() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "fallback", hasAdjustments: true)
@@ -257,8 +257,8 @@ struct EditedFallbackTests {
   /// Recognition requires the explicit
   /// `editedUnavailableOriginalBackedUpMessage` sentinel, which is only
   /// written after `runEditedFallbackOriginal` successfully finishes.
-  @Test func isExportedRejectsGenericSentinelAsFallback() {
-    let h = makeHarness()
+  @Test func isExportedRejectsGenericSentinelAsFallback() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "generic-only", hasAdjustments: true)
@@ -280,8 +280,8 @@ struct EditedFallbackTests {
   /// The same `.failed` `.edited` variant with a *different* error message
   /// must NOT count as exported — the fallback rule is keyed on the
   /// recoverable sentinel only, so other failures still re-queue.
-  @Test func isExportedRejectsFallbackWithDifferentError() {
-    let h = makeHarness()
+  @Test func isExportedRejectsFallbackWithDifferentError() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "other-fail", hasAdjustments: true)
@@ -304,8 +304,8 @@ struct EditedFallbackTests {
   /// in the exported count, matching the asset-aware `isExported`. Without
   /// this the year/month sidebar badge stays partial (typically 99%) even
   /// after the queue stops re-trying the asset.
-  @Test func sidebarSummaryCountsFallbackCoveredRecords() {
-    let h = makeHarness()
+  @Test func sidebarSummaryCountsFallbackCoveredRecords() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let yr = 2025
     let mo = 7
@@ -352,8 +352,8 @@ struct EditedFallbackTests {
   /// (the variant-loop's pre-fallback emission) must NOT contribute to the
   /// fallback bucket — only records carrying the explicit
   /// `editedUnavailableOriginalBackedUpMessage` sentinel count.
-  @Test func sidebarSummaryDoesNotCountGenericSentinelAsFallback() {
-    let h = makeHarness()
+  @Test func sidebarSummaryDoesNotCountGenericSentinelAsFallback() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let yr = 2025
     let mo = 8
@@ -376,8 +376,8 @@ struct EditedFallbackTests {
   /// re-queueing it because it requires both variants `.done`; the sidebar
   /// must agree, or it would advertise 100% while the queue retries forever.
   @Test
-  func sidebarSummaryEditedWithOriginalsDoesNotCountFallbackCoveredRecords() {
-    let h = makeHarness()
+  func sidebarSummaryEditedWithOriginalsDoesNotCountFallbackCoveredRecords() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let yr = 2025
     let mo = 9
@@ -409,8 +409,8 @@ struct EditedFallbackTests {
   /// mirror of the timeline-store helper. Pin its behaviour with a direct
   /// asset+placement test so a future refactor that touches one and forgets
   /// the other surfaces here.
-  @Test func collectionStoreRecognisesFallbackState() {
-    let h = makeHarness()
+  @Test func collectionStoreRecognisesFallbackState() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let placement = ExportPlacement(
@@ -443,8 +443,8 @@ struct EditedFallbackTests {
   }
 
   /// Collection-store mirror of the generic-sentinel rejection test.
-  @Test func collectionStoreRejectsGenericSentinelAsFallback() {
-    let h = makeHarness()
+  @Test func collectionStoreRejectsGenericSentinelAsFallback() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     let placement = ExportPlacement(
@@ -495,7 +495,7 @@ struct EditedFallbackTests {
   /// 4. Only after the fallback's marker is set does the asset count as
   ///    covered.
   @Test func fallbackTreatsNaturalOrigFilenameCorrectly() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -556,7 +556,7 @@ struct EditedFallbackTests {
   /// then writes the original and rewrites `.edited.lastError` to the
   /// `editedUnavailableOriginalBackedUpMessage` sentinel.
   @Test func editUnavailableVideoFallbackWritesOriginal() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -596,7 +596,7 @@ struct EditedFallbackTests {
   /// duplicates from a re-import) should both end up with bytes on disk via
   /// the fallback, not collide.
   @Test func fallbackAvoidsCollisionWithExistingOrigFile() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -633,7 +633,7 @@ struct EditedFallbackTests {
   // MARK: - Diagnostic report
 
   @Test func diagnosticReportAnnotatesFallback() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -665,7 +665,7 @@ struct EditedFallbackTests {
 
 extension EditedFallbackTests {
   @Test func genericErrorWithMatchingTextAndDomainDoesNotAcquireReason() async {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
     let asset = TestAssetFactory.makeAsset(
@@ -690,7 +690,7 @@ extension EditedFallbackTests {
   }
 
   @Test func failedOriginalFallbackDoesNotAcquireSavedReason() async {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.manager.versionSelection = .edited
     let asset = TestAssetFactory.makeAsset(

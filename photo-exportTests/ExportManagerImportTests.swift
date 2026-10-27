@@ -20,10 +20,10 @@ struct ExportManagerImportTests {
 
   // MARK: - Fixtures
 
-  private func makeTestHarness() -> (
+  private func makeTestHarness() async -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore, URL
   ) {
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "ExportManagerImport", userDefaults: TestScratch.defaults("ExportManagerImport"))
     return (h.manager, h.photoLib, h.dest, h.store, h.storeRoot)
   }
@@ -52,8 +52,8 @@ struct ExportManagerImportTests {
 
   /// `cancelImport` when no import is running is a no-op. Mirror to the
   /// `pause`/`resume` no-op tests.
-  @Test func cancelImportWhenNotImportingIsNoOp() {
-    let (manager, _, _, _, storeRoot) = makeTestHarness()
+  @Test func cancelImportWhenNotImportingIsNoOp() async {
+    let (manager, _, _, _, storeRoot) = await makeTestHarness()
     defer { try? FileManager.default.removeItem(at: storeRoot) }
 
     let genBefore = manager.totalJobsEnqueued  // any state we can read
@@ -69,7 +69,7 @@ struct ExportManagerImportTests {
   /// any late-completing import work gates out via the `self.generation == importGen`
   /// checks scattered throughout the import task body.
   @Test func cancelImportDuringRunClearsStateAndBumpsGeneration() async throws {
-    let (manager, _, dest, _, storeRoot) = makeTestHarness()
+    let (manager, _, dest, _, storeRoot) = await makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -101,7 +101,7 @@ struct ExportManagerImportTests {
   /// necessarily run its body yet); a second call from the same actor frame must
   /// hit the `guard !isImporting` early return.
   @Test func startImportWhenAlreadyImportingIsNoOp() async throws {
-    let (manager, _, dest, _, storeRoot) = makeTestHarness()
+    let (manager, _, dest, _, storeRoot) = await makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -121,8 +121,8 @@ struct ExportManagerImportTests {
     await manager.waitForImportCompletion()
   }
 
-  @Test func startImportWithoutDestinationIsNoOp() {
-    let (manager, _, dest, _, storeRoot) = makeTestHarness()
+  @Test func startImportWithoutDestinationIsNoOp() async {
+    let (manager, _, dest, _, storeRoot) = await makeTestHarness()
     defer { try? FileManager.default.removeItem(at: storeRoot) }
     dest.selectedFolderURL = nil  // simulate no destination
 
@@ -132,7 +132,7 @@ struct ExportManagerImportTests {
   }
 
   @Test func startImportWhenStoreNotReadyIsNoOp() async throws {
-    let (manager, _, dest, store, storeRoot) = makeTestHarness()
+    let (manager, _, dest, store, storeRoot) = await makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -151,7 +151,7 @@ struct ExportManagerImportTests {
   /// `.done` stage. Importantly, the early return after the empty-scan guard
   /// must still flip `isImporting` back to false.
   @Test func startImportWithEmptyBackupFolderProducesEmptyReport() async throws {
-    let (manager, _, dest, _, storeRoot) = makeTestHarness()
+    let (manager, _, dest, _, storeRoot) = await makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -172,7 +172,7 @@ struct ExportManagerImportTests {
   /// `bulkImportRecords` having landed a `.done` record for that asset.
   /// Verifies the scanner → matcher → bulk-import wiring end-to-end.
   @Test func startImportWithMatchableFilePersistsAndReports() async throws {
-    let (manager, photoLib, dest, store, storeRoot) = makeTestHarness()
+    let (manager, photoLib, dest, store, storeRoot) = await makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -229,7 +229,7 @@ struct ExportManagerImportTests {
   /// path) and silently mis-locate every imported video on the next reuse-source
   /// or reconcile lookup.
   @Test func startImportPreservesSubfolderForVideoFilesInVideosSubdirectory() async throws {
-    let (manager, photoLib, dest, store, storeRoot) = makeTestHarness()
+    let (manager, photoLib, dest, store, storeRoot) = await makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -279,7 +279,7 @@ struct ExportManagerImportTests {
   /// A backup with a file that has no matching asset in the library produces
   /// `unmatchedCount: 1` and no `bulkImport` writes.
   @Test func startImportUnmatchedFilesReportedNotPersisted() async throws {
-    let (manager, photoLib, dest, store, storeRoot) = makeTestHarness()
+    let (manager, photoLib, dest, store, storeRoot) = await makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()

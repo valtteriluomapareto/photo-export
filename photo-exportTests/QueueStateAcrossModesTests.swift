@@ -52,8 +52,8 @@ struct QueueStateAcrossModesTests {
     dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    Harness(label: "QueueAcrossModes")
+  private func makeHarness() async -> Harness {
+    await Harness(label: "QueueAcrossModes")
   }
 
   private func makeAsset(id: String, year: Int = 2025, month: Int = 4) -> AssetDescriptor {
@@ -117,7 +117,7 @@ struct QueueStateAcrossModesTests {
   /// `queueCount` must equal `pendingJobs.count` so the toolbar shows
   /// the same depth the run loop will actually drain.
   @Test func startingNewExportWhilePausedAccumulatesCounter() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     // Gate writes so we can deterministically observe the in-flight → paused
@@ -175,7 +175,7 @@ struct QueueStateAcrossModesTests {
   /// down so a future "auto-resume on enqueue" change cannot land
   /// without a test failing.
   @Test func pausedQueueStaysParkedWhenNewWorkIsAdded() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
     let writeGate = AsyncCheckpoint()
     h.writer.checkpoint = writeGate
@@ -208,7 +208,7 @@ struct QueueStateAcrossModesTests {
   /// "separate per-mode queues" refactor is intentional and updates
   /// every dependent assumption.
   @Test func pendingJobsHoldsMixedTimelineAndCollectionWork() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
     let writeGate = AsyncCheckpoint()
     h.writer.checkpoint = writeGate
@@ -239,7 +239,7 @@ struct QueueStateAcrossModesTests {
   /// reported symptom: visible state advertises one thing while the
   /// run loop actually does another.
   @Test func resumeDrainsFifoAcrossModes() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
     let writeGate = AsyncCheckpoint()
     h.writer.checkpoint = writeGate

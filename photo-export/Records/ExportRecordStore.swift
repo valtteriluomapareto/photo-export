@@ -42,7 +42,7 @@ final class ExportRecordStore {
   /// year-roll-up helpers each iterate `recordsById.values` once per call — a 500k-record
   /// library × ~5 visible years on screen × every coalesced `mutationCounter` bump turned
   /// the timeline sidebar into a multi-second stall during exports. The counters are
-  /// rebuilt from scratch at `configure(for:)` time and updated incrementally on every
+  /// rebuilt from scratch at `beginConfigure(for:)` time and updated incrementally on every
   /// `apply(_:)` thereafter (every public mutation routes through `apply` via `append`).
   ///
   /// All public read methods translate one-for-one against the original implementations;
@@ -201,7 +201,7 @@ final class ExportRecordStore {
   let storeRootURL: URL
   typealias RecordFile = JSONLRecordFile<[String: ExportRecord], ExportRecordMutation>
   /// JSONL persistence for the currently configured destination. `nil` when the store is
-  /// unconfigured (no destination selected). Reconstructed on every `configure(for:)`.
+  /// unconfigured (no destination selected). Reconstructed on every `beginConfigure(for:)`.
   @ObservationIgnored private var jsonl: RecordFile?
 
   /// `baseDirectoryURL` is the parent of the per-destination folders; the app passes
@@ -222,10 +222,6 @@ final class ExportRecordStore {
   }
 
   // MARK: - Destination configuration
-  /// Points the store at a specific destination id (subdirectory) and loads its history before
-  /// returning. Passing nil clears state (shows empty). Publishes no `.loading`; the app's
-  /// destination changes use `beginConfigure(for:)`.
-  /// Waits before reading or changing active history, then applies one synchronous batch.
   var mutationTicket: RecordMutationTicket {
     RecordMutationTicket(
       file: jsonl.map(ObjectIdentifier.init), load: loadGeneration, epoch: recordsEpoch)
@@ -237,6 +233,7 @@ final class ExportRecordStore {
     try await mutationAdmission.waitUntilOpen()
   }
 
+  /// Waits before reading or changing active history, then applies one synchronous batch.
   func withMutationAdmission<T>(_ body: () throws -> T) async throws -> T {
     let ticket = mutationTicket
     try await prepareForMutation()
@@ -270,41 +267,29 @@ final class ExportRecordStore {
     }
   }
 
-  /// Preserves synchronous protected callers; shipping code uses `beginConfigure`.
-  func configure(for destinationId: String?) {
-    precondition(!mutationAdmission.isClosed)
-    let signpost = AppDiagnostics.beginConfigure(label: "timeline")
-    defer { signpost.end() }
-    guard let file = startConfiguring(for: destinationId) else { return }
-    let decoded = file.load()
-    installPreparedLoad(
-      LoadTicket(generation: loadGeneration, file: file, signpost: nil),
-      separator: decoded.needsLogSeparator, outcome: Self.prepare(decoded))
-  }
-
   /// Points the store at a specific destination id and loads its history off the main actor.
   /// The store is `.loading` until the load finishes in one main-actor turn; records read as
   /// empty and mutations are refused meanwhile. `waitUntilSettled()` waits for the load. The
   /// file read is queued behind the previous destination's writes on the IO queue; decoding
   /// and preparing run in a detached task.
   func beginConfigure(for destinationId: String?) {
-    if !mutationAdmission.isClosed, cancellationCleanups.isEmpty,
-      jsonl?.hasUnflushedChanges != true, finalCommitContext?.file.hasUnflushedChanges != true,
-      pendingConfiguration == nil
-    {
-      beginConfigureImmediately(for: destinationId, drained: true)
-      return
-    }
-    configurationRequest &+= 1
-    let request = configurationRequest
-    loadGeneration &+= 1
-    latestLoad.advance(to: loadGeneration)
     if let context = finalCommitContext, context.destinationId == configuredDestinationId,
       state == .ready || hasUnsavedChanges, let file = jsonl
     {
       context.file = file
       context.snapshot = storedRecords
     }
+    if !mutationAdmission.isClosed, cancellationCleanups.isEmpty,
+      jsonl?.hasUnflushedChanges != true, finalCommitContext?.file.hasUnflushedChanges != true,
+      pendingConfiguration == nil
+    {
+      beginConfigureImmediately(for: destinationId)
+      return
+    }
+    configurationRequest &+= 1
+    let request = configurationRequest
+    loadGeneration &+= 1
+    latestLoad.advance(to: loadGeneration)
     configurationPending = true
     state = .loading
     changeNotifier.notifyNow()
@@ -327,7 +312,7 @@ final class ExportRecordStore {
         mutationAdmission.installAfterMaintenance {
           self.configurationPending = false
           self.pendingConfiguration = nil
-          self.beginConfigureImmediately(for: destinationId, drained: true)
+          self.beginConfigureImmediately(for: destinationId)
         }
       }
       await transition?.value
@@ -341,12 +326,10 @@ final class ExportRecordStore {
     }
   }
 
-  private func beginConfigureImmediately(
-    for destinationId: String?, drained: Bool = false
-  ) {
+  private func beginConfigureImmediately(for destinationId: String?) {
     let signpost = AppDiagnostics.beginConfigure(label: "timeline")
     guard
-      let file = startConfiguring(for: destinationId, drained: drained)
+      let file = startConfiguring(for: destinationId)
     else {
       signpost.end()
       return
@@ -373,14 +356,17 @@ final class ExportRecordStore {
           outcome = Self.prepare(decoded)
         }
         let transfer = RecordValueTransfer(consume outcome)
-        await self?.finishPreparedLoad(ticket, separator: separator, transfer: transfer)
+        guard let self else { return }
+        try? await self.mutationAdmission.waitUntilOpen(respectingCancellation: false)
+        await MainActor.run { [separator] in
+          self.installPreparedLoad(ticket, separator: separator, outcome: transfer.take())
+        }
       }
     }
   }
 
   /// Returns once the store is not `.loading`, or as soon as the calling task is cancelled.
-  /// A blocking configure, or one to nil, ends the wait at once. An asynchronous configure that
-  /// replaces the load keeps the store `.loading`, so the wait ends when the newest load settles.
+  /// A replacement load keeps the store `.loading`, so the wait ends when the newest load settles.
   func waitUntilSettled() async {
     while configurationPending || state == .loading, !Task.isCancelled {
       let id = UUID()
@@ -412,36 +398,20 @@ final class ExportRecordStore {
   private struct LoadTicket: Sendable {
     let generation: UInt64
     let file: RecordFile
-    /// Ends when the load finishes; `nil` when the caller's own interval covers it.
-    let signpost: ConfigureSignpost?
+    let signpost: ConfigureSignpost
   }
 
   private static let retainedProgressMessage =
     "Progress from this destination still needs to be saved."
 
-  /// What every configure does before reading: drain and park the old destination, switch,
+  /// What every configure does before reading: park the old destination, switch,
   /// clear the in-memory history, and end there for nil or for history retained after a failed
   /// write. Returns the new destination's file when its history still has to be read.
-  private func startConfiguring(
-    for destinationId: String?, drained: Bool = false
-  ) -> RecordFile? {
+  private func startConfiguring(for destinationId: String?) -> RecordFile? {
     reconciliationRevision &+= 1
     loadGeneration &+= 1
     latestLoad.advance(to: loadGeneration)
 
-    // Finish the old destination's queued writes before replacing its file owner.
-    if !drained { jsonl?.drainSynchronously() }
-    // A parked final commit can fail while another destination is active. Deliver
-    // that owner's failure before consulting pendingRecovery or loading it again.
-    if let context = finalCommitContext {
-      if !drained, context.file !== jsonl { context.file.drainSynchronously() }
-      if context.destinationId == configuredDestinationId,
-        state == .ready || hasUnsavedChanges, let file = jsonl
-      {
-        context.file = file
-        context.snapshot = recordsById
-      }
-    }
     if hasUnsavedChanges, let id = configuredDestinationId {
       pendingRecovery[id] = recordsById
     }
@@ -506,19 +476,12 @@ final class ExportRecordStore {
     return file
   }
 
-  private func finishPreparedLoad(
-    _ ticket: LoadTicket, separator: Bool?, transfer: RecordValueTransfer<LoadOutcome?>
-  ) async {
-    try? await mutationAdmission.waitUntilOpen(respectingCancellation: false)
-    installPreparedLoad(ticket, separator: separator, outcome: transfer.take())
-  }
-
   /// Installs a finished load in one main-actor turn, unless a newer configure replaced it.
   /// `outcome` is nil when the load skipped decoding because it was already replaced.
   private func installPreparedLoad(
     _ ticket: LoadTicket, separator: Bool?, outcome: consuming LoadOutcome?
   ) {
-    defer { ticket.signpost?.end() }
+    defer { ticket.signpost.end() }
     finishedLoadCount += 1
     guard ticket.generation == loadGeneration, ticket.file === jsonl, let outcome = consume outcome
     else {
@@ -601,7 +564,7 @@ final class ExportRecordStore {
     case retained(PreparedLoad)
   }
 
-  /// Builds what `configure(for:)` installs from a decoded load: the snapshot, the log
+  /// Builds what `beginConfigure(for:)` installs from a decoded load: the snapshot, the log
   /// replayed over it, interrupted variants recovered, then the counters counted once.
   /// Prepares claims with the same recovered records before installation.
   nonisolated static func prepare(_ loaded: RecordFile.LoadResult) -> LoadOutcome {
@@ -705,30 +668,6 @@ final class ExportRecordStore {
     try await file.flush()
     guard jsonl === file else { throw CancellationError() }
     guard state == .ready else { throw RecordPersistenceUnavailable() }
-  }
-
-  /// Renames a corrupt snapshot to `<name>.broken-<ISO8601>` and reinitializes the store
-  /// with an empty snapshot + log after the user chooses recovery in RecordStoreAlertHost.
-  ///
-  /// Transitions `state` from `.failed` back to `.ready` on success. Only valid to call
-  /// when `state == .failed` (otherwise it is a no-op so callers can wire it through a
-  /// generic alert handler without first checking).
-  func resetToEmpty() {
-    precondition(!mutationAdmission.isClosed)
-    guard state == .failed else { return }
-    reconciliationRevision &+= 1
-    guard let jsonl else { return }
-    do {
-      try jsonl.resetToEmpty(emptySnapshot: [:])
-      installHistory(.empty)
-      setState(.ready)
-      replayFinalCompletions()
-      changeNotifier.notifyNow()
-    } catch {
-      logger.error(
-        "resetToEmpty failed: \(String(describing: error), privacy: .public). Store remains .failed."
-      )
-    }
   }
 
   /// Converts any variant left as `.inProgress` after load into `.failed` with the interrupted

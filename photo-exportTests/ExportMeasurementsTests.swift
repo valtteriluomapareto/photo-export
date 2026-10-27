@@ -99,7 +99,7 @@ struct ExportMeasurementsTests {
     writer.writeHook = { _ in clock.advance(60) }
     let fs = FakeFileSystem()
     fs.afterTimestampsHook = { _ in clock.advance(40) }
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "ExportMeasurements", userDefaults: defaults, photoLib: photoLib,
       writer: writer, fileSystem: fs, exportMeasurements: c.measurements)
     defer {
@@ -157,7 +157,7 @@ struct ExportMeasurementsTests {
       // Utility work outside producers, including directory repair and cleanup, remains job overhead.
       if route == "heic" { clock.advance(10) }
     })
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "ProducerMeasurements", photoLib: photos, writer: writer, fileSystem: files,
       mediaRenderer: renderer, imageConverter: TimedConverter(clock: clock),
       exportMeasurements: c.measurements, destinationIO: io)
@@ -196,7 +196,7 @@ struct ExportMeasurementsTests {
       let writer = FakeAssetResourceWriter()
       writer.writeHook = { _ in clock.advance(100) }
       if fail { writer.writeError = CocoaError(.fileWriteUnknown) }
-      let h = ExportManagerHarness(
+      let h = await ExportManagerHarness(
         label: "AutomaticMeasurements", writer: writer, exportMeasurements: c.measurements)
       defer {
         h.manager.cancelAndClear()

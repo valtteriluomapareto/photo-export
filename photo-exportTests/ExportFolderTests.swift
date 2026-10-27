@@ -313,8 +313,8 @@ struct ExportFolderTests {
     dest.cleanup()
   }
 
-  private func makeHarness() -> Harness {
-    Harness(label: "ExportFolder")
+  private func makeHarness() async -> Harness {
+    await Harness(label: "ExportFolder")
   }
 
   private func makeAsset(id: String) -> AssetDescriptor {
@@ -352,7 +352,7 @@ struct ExportFolderTests {
   /// subfolders) and *only* those — albums that live outside the chosen folder must
   /// not be touched.
   @Test func enqueuesOnlyDescendantAlbumsAcrossSubfolders() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     // Inside the target folder: one direct album + one nested under a subfolder.
@@ -410,7 +410,7 @@ struct ExportFolderTests {
   /// any storage-format change: the on-disk path comes from `pathComponents` on each
   /// album, so folder-walk and per-album walk are interchangeable.
   @Test func descendantAlbumPlacementIsIdenticalToDirectExport() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let nested = seedAlbum(
@@ -445,7 +445,7 @@ struct ExportFolderTests {
   }
 
   @Test func emptyFolderSetsNoAlbumsMessage() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let empty = PhotoCollectionDescriptor(
@@ -464,7 +464,7 @@ struct ExportFolderTests {
   /// and enqueues the deeply-nested albums. Catches a regression where a future
   /// refactor switches from `albumLocalIds(under:)` (recursive) to a one-level lookup.
   @Test func folderWithOnlySubfoldersStillEnqueuesNestedAlbums() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let leafAlbum = seedAlbum(
@@ -496,7 +496,7 @@ struct ExportFolderTests {
   }
 
   @Test func missingFolderSetsExplanatoryMessage() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     h.photoLib.collectionTree = []
@@ -525,7 +525,7 @@ struct ExportFolderTests {
   @Test(.timeLimit(.minutes(1))) func allDescendantsAlreadyExportedSetsAlreadyDoneMessage()
     async throws
   {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let album = seedAlbum(
@@ -564,7 +564,7 @@ struct ExportFolderTests {
   /// This is the entry point the folder content pane's multi-select uses after
   /// expanding subfolder tiles to their descendant album ids.
   @Test func startExportAlbumsEnqueuesSuppliedAlbumsOnly() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let albumA = seedAlbum(h.photoLib, localId: "A", ids: ["a1"])
@@ -594,7 +594,7 @@ struct ExportFolderTests {
   /// ids of selected subfolders, which can produce duplicates if a subfolder and one
   /// of its child albums are both selected.
   @Test(.timeLimit(.minutes(1))) func startExportAlbumsDeduplicatesInput() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "dup", ids: ["x1", "x2"])
@@ -618,7 +618,7 @@ struct ExportFolderTests {
   }
 
   @Test func startExportAlbumsWithEmptyListSetsEmptyMessage() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     h.manager.startExportAlbums(collectionIds: [])
@@ -631,7 +631,7 @@ struct ExportFolderTests {
   @Test(.timeLimit(.minutes(1))) func startExportAlbumsWhenAllAlreadyDoneSetsAlreadyDoneMessage()
     async throws
   {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { cleanupHarness(h) }
 
     let album = seedAlbum(h.photoLib, localId: "done", ids: ["d1"])
