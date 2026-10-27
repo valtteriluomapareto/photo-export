@@ -232,7 +232,7 @@ struct CollectionBackupImportTests {
     let copies = h.fileSystem.copyCalls.count
     let moves = h.fileSystem.moveCalls.count
 
-    h.wipeHistory()
+    await h.wipeHistory()
     try #require(h.collections.placements.isEmpty)
     await h.importBackup()
     try #require(h.manager.importError == nil)
