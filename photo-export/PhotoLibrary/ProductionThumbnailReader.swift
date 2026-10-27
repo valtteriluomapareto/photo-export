@@ -2,7 +2,7 @@ import Foundation
 import Photos
 import os
 
-/// Uses the metadata reader's serial utility boundary for resolution, requests and raster work.
+/// Owns a serial utility boundary for thumbnail resolution, requests and raster work.
 final class ProductionThumbnailReader: ThumbnailReading {
   private let io: any DestinationIOExecuting
   private let backend: any PhotoKitThumbnailBackend
