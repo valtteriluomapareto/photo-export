@@ -152,7 +152,7 @@ final class VariantExporter {
     assetResourceWriter: any AssetResourceWriter,
     mediaRenderer: any MediaRenderer,
     imageConverter: any ImageConverter,
-    localHEICStorage: LocalHEICStorage = .production(),
+    localHEICStorage: LocalHEICStorage,
     fileSystem: any FileSystemService,
     exportDestination: any ExportDestination,
     finalNamePlanner: FinalNamePlanner? = nil,
@@ -426,12 +426,10 @@ final class VariantExporter {
             let converted: Result<Void, Error>
             do {
               try checkOwnership(context, placement: job.placement)
-              do {
-                try await measureExportStage(measurement) {
-                  try await assetResourceWriter.writeResource(
-                    request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
-                }
-              } catch { throw LocalHEICStorage.localizing(error) }
+              try await measureExportStage(measurement) {
+                try await assetResourceWriter.writeResource(
+                  request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
+              }
               try checkOwnership(context, placement: job.placement)
               try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
                 try await measureExportStage(measurement) {

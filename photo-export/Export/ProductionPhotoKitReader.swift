@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import os
 
 /// Resolves export values and their private resource owner away from the main actor.
 final class ProductionPhotoKitReader: PhotoKitReading {
@@ -89,6 +90,7 @@ final class ProductionPhotoKitResourceOwner: @unchecked Sendable {
     func close() async { await owner.close(id) }
   }
 
+  private static let logger = Logger.app(.resourceWriter)
   private let queue: DispatchQueue
   private let backend: Backend
   private var sessions: [UUID: Session] = [:]
@@ -137,14 +139,25 @@ final class ProductionPhotoKitResourceOwner: @unchecked Sendable {
           continuation.resume(throwing: Self.resourceNotFoundError())
           return
         }
+        let start = Date()
+        Self.logger.debug(
+          "writeResource begin type: \(descriptor.type.rawValue) filename: \(descriptor.originalFilename, privacy: .public) -> \(url.lastPathComponent, privacy: .public)"
+        )
         session.inFlight += 1
         resource.writeData(url) { [self] error in
           queue.async { [self] in
             // Completion resumes only after the serial owner settles this physical write.
             finishWrite(sessionId)
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if let error {
+              Self.logger.error(
+                "writeResource failed after \(elapsedMs)ms: \(error.localizedDescription, privacy: .public)"
+              )
               continuation.resume(throwing: error)
             } else {
+              Self.logger.debug(
+                "writeResource success after \(elapsedMs)ms -> \(url.lastPathComponent, privacy: .public)"
+              )
               continuation.resume(returning: ())
             }
           }

@@ -47,7 +47,6 @@ final class LocalHEICStorage: Sendable {
     do {
       return try await io.run { [self] in
         try prepareRoot()
-        sweep()
         // This is a preflight, not a reservation. The writer still handles real exhaustion.
         let required = max(sourceBytes ?? 0, 1_048_576)
         if let available = try? capacity(root), available < required {

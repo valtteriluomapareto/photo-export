@@ -30,13 +30,12 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
 
   init(
     renamer: @escaping Renamer = FileIOService.systemRename,
-    capability: ExclusiveRenameCapability? = nil,
+    capability: @escaping ExclusiveRenameCapability = FileIOService.volumeSupportsExclusiveRename,
     hooks: Hooks = Hooks(),
-    timestampSetter: @escaping TimestampSetter = FileIOService.systemTimestampSetter,
-    capabilityCache: VolumeRenameCapabilityCache = .shared
+    timestampSetter: @escaping TimestampSetter = FileIOService.systemTimestampSetter
   ) {
     self.renamer = renamer
-    self.supportsExclusiveRename = capability ?? { capabilityCache.supportsExclusiveRename(in: $0) }
+    self.supportsExclusiveRename = capability
     self.timestampSetter = timestampSetter
     self.hooks = hooks
   }
@@ -50,26 +49,12 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     }
   }
 
-  static func mountedVolumeIdentity(_ directory: URL) -> String? {
-    var info = statfs()
-    guard statfs(directory.path, &info) == 0 else { return nil }
-    let id = info.f_fsid.val
-    let mount = withUnsafePointer(to: &info.f_mntonname) {
-      $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
-    }
-    return "\(id.0):\(id.1):\(mount)"
-  }
-
   /// Reads `VOL_CAP_INT_RENAME_EXCL` from the volume's interface capabilities. A volume
   /// that cannot be queried, or does not mark the bit valid, is treated as not capable.
   /// getattrlist(2) documents `EINVAL` for volume attributes on a path that is not the
   /// volume root, but XNU answers for any path on the volume;
   /// `scratchVolumeAdvertisesExclusiveRenameAndAMissingFolderDoesNot` covers that.
   static let volumeSupportsExclusiveRename: ExclusiveRenameCapability = { directory in
-    probeExclusiveRename(directory) ?? false
-  }
-
-  static let probeExclusiveRename: @Sendable (URL) -> Bool? = { directory in
     struct VolumeCapabilities {
       var length: UInt32 = 0
       var capabilities = vol_capabilities_attr_t()
@@ -89,13 +74,8 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
       logger.debug(
         "getattrlist failed for \(directory.path, privacy: .public): errno \(code, privacy: .public)"
       )
-      return nil
+      return false
     }
-    let offset = Int(VOL_CAPABILITIES_INTERFACES) * MemoryLayout<UInt32>.size
-    let valid = withUnsafeBytes(of: reply.capabilities.valid) {
-      $0.load(fromByteOffset: offset, as: UInt32.self)
-    }
-    guard valid & UInt32(VOL_CAP_INT_RENAME_EXCL) != 0 else { return nil }
     return advertisesExclusiveRename(reply.capabilities)
   }
 
