@@ -94,7 +94,7 @@ struct ExportDestinationValidationTests {
   /// folder is removed before restore. The behavioural pin: restore reports
   /// the destination as unavailable, and the stored bookmark bytes are not
   /// rewritten (proving the synchronous refresh was deferred).
-  @Test func restoringBookmarkForMissingFolderDoesNotRewriteBookmark() throws {
+  @Test func restoringBookmarkForMissingFolderDoesNotRewriteBookmark() async throws {
     let dir = TestScratch.directory("ExportDest-Issue92")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
@@ -108,7 +108,7 @@ struct ExportDestinationValidationTests {
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey
     )
-    writer.persistSelectedFolderForTesting(dir)
+    await writer.persistSelectionAndWait(dir)
     let bookmarkBytesBefore = defaults.data(forKey: bookmarkKey)
     #expect(bookmarkBytesBefore != nil)
 
@@ -119,6 +119,7 @@ struct ExportDestinationValidationTests {
       bookmarkDefaultsKey: bookmarkKey
     )
 
+    await restored.waitForValidation()
     #expect(restored.isAvailable == false)
     #expect(restored.isWritable == false)
     #expect(restored.destinationId == nil)
@@ -146,7 +147,7 @@ struct ExportDestinationValidationTests {
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey
     )
-    writer.persistSelectedFolderForTesting(dir)
+    await writer.persistSelectionAndWait(dir)
 
     let restored = ExportDestinationManager(
       userDefaults: defaults,
