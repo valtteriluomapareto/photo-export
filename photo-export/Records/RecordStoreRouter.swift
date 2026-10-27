@@ -184,31 +184,6 @@ final class RecordStoreRouter {
     await collectionStore.waitForCancellationCleanup()
   }
 
-  static func withImportMutationAdmission<T>(
-    timeline: ExportRecordStore, collections: CollectionExportRecordStore?, _ body: () throws -> T
-  ) async throws -> T {
-    let timelineTicket = timeline.mutationTicket
-    let collectionTicket = collections?.mutationTicket
-    while true {
-      try await timeline.prepareForMutation()
-      if let collections { try await collections.prepareForMutation() }
-      guard timeline.mutationTicket == timelineTicket, timeline.state == .ready,
-        collections?.mutationTicket == collectionTicket,
-        collections == nil || collections?.state == .ready
-      else { throw CancellationError() }
-      guard !timeline.mutationAdmission.isClosed,
-        collections?.mutationAdmission.isClosed != true
-      else { continue }
-      let result = try timeline.mutationAdmission.perform {
-        if let collections { return try collections.mutationAdmission.perform(body) }
-        return try body()
-      }
-      timeline.requestCheckpointIfPressured()
-      collections?.requestCheckpointIfPressured()
-      return result
-    }
-  }
-
   // MARK: - Writes
 
   func markVariantInProgress(

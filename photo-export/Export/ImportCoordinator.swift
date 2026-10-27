@@ -326,39 +326,35 @@ final class ImportCoordinator: ObservableObject {
           $0.importBatch(exportedAt: now)
         }
 
-        // Recheck both histories before each bounded, synchronous pair of writes.
-        guard self.isCurrentImport(operationID, generation: importGen) else { return }
+        // Admit each history once; a failed collection history must not block the timeline.
+        let timelineTicket = host.exportRecordStore.mutationTicket
+        try await host.exportRecordStore.prepareForMutation()
+        guard host.exportRecordStore.mutationTicket == timelineTicket,
+          self.isCurrentImport(operationID, generation: importGen),
+          host.exportRecordStore.destinationId == timelineDestination,
+          collectionStore.destinationId == collectionDestination
+        else { throw CancellationError() }
         guard host.exportRecordStore.state == .ready else { throw RecordPersistenceUnavailable() }
+        host.exportRecordStore.mutationAdmission.perform {
+          host.exportRecordStore.bulkImportRecords(records)
+        }
+        host.exportRecordStore.requestCheckpointIfPressured()
+
+        let collectionTicket = collectionStore.mutationTicket
+        try await collectionStore.prepareForMutation()
+        guard host.exportRecordStore.mutationTicket == timelineTicket,
+          collectionStore.mutationTicket == collectionTicket,
+          self.isCurrentImport(operationID, generation: importGen),
+          host.exportRecordStore.destinationId == timelineDestination,
+          collectionStore.destinationId == collectionDestination
+        else { throw CancellationError() }
         let collectionsReady = collectionStore.state == .ready
         if !collectionsReady && !collectionBatches.isEmpty { collectionsSkipped = true }
-        let boundedCollections = collectionBatches.flatMap { batch in
-          let assets = Array(batch.records)
-          return stride(from: 0, to: assets.count, by: 64).map { offset in
-            CollectionExportRecordStore.ImportBatch(
-              placement: batch.placement,
-              records: Dictionary(
-                uniqueKeysWithValues: assets[offset..<min(offset + 64, assets.count)].map {
-                  ($0.key, $0.value)
-                }))
+        if collectionsReady {
+          collectionStore.mutationAdmission.perform {
+            collectionStore.bulkImportRecords(collectionBatches)
           }
-        }
-        let turns = max((records.count + 63) / 64, boundedCollections.count)
-        for turn in 0..<turns {
-          try await RecordStoreRouter.withImportMutationAdmission(
-            timeline: host.exportRecordStore, collections: collectionsReady ? collectionStore : nil
-          ) {
-            guard self.isCurrentImport(operationID, generation: importGen),
-              host.exportRecordStore.destinationId == timelineDestination,
-              collectionStore.destinationId == collectionDestination
-            else { throw CancellationError() }
-            let offset = min(turn * 64, records.count)
-            host.exportRecordStore.bulkImportRecords(
-              Array(records[offset..<min(offset + 64, records.count)]))
-            if collectionsReady, turn < boundedCollections.count {
-              collectionStore.bulkImportRecords([boundedCollections[turn]])
-            }
-          }
-          await Task.yield()
+          collectionStore.requestCheckpointIfPressured()
         }
 
         guard self.isCurrentImport(operationID, generation: importGen) else { return }
@@ -383,7 +379,7 @@ final class ImportCoordinator: ObservableObject {
 
         try await host.exportRecordStore.flush()
         guard self.isCurrentImport(operationID, generation: importGen) else { return }
-        if reconciledCollections {
+        if collectionsReady || reconciledCollections {
           try await host.collectionExportRecordStore.flush()
           guard self.isCurrentImport(operationID, generation: importGen) else { return }
         }

@@ -2706,25 +2706,26 @@ final class ExportManager {
     failure: ExportFailureSignal, reason: ExportVariantReason? = nil, at date: Date
   ) async {
     let owner = generation
+    guard isCurrent(owner), !Task.isCancelled else { return }
+    if manualRunFeedback?.generation == owner { manualRunFeedback?.failureSignals += 1 }
+    exportMeasurements?.invalidate("variant-failed")
+    activeRunBookkeeping?.failedCount += 1
+    activeRunBookkeeping?.failures.append(
+      ExportRunFailureDetail(
+        assetId: assetId,
+        placement: placement,
+        variant: variant,
+        category: failure.category,
+        errorSignature: failure.errorSignature,
+        localizedDescription: failure.localizedDescription,
+        failedAt: date
+      ))
     do {
       try await recordStoreRouter.withMutationAdmission(placement: placement) {
         try throwIfCancelledOrStale(owner)
         recordStoreRouter.markVariantFailed(
           assetId: assetId, placement: placement, variant: variant,
           error: failure.localizedDescription, reason: reason, at: date)
-        if manualRunFeedback?.generation == generation { manualRunFeedback?.failureSignals += 1 }
-        exportMeasurements?.invalidate("variant-failed")
-        activeRunBookkeeping?.failedCount += 1
-        activeRunBookkeeping?.failures.append(
-          ExportRunFailureDetail(
-            assetId: assetId,
-            placement: placement,
-            variant: variant,
-            category: failure.category,
-            errorSignature: failure.errorSignature,
-            localizedDescription: failure.localizedDescription,
-            failedAt: date
-          ))
       }
     } catch { return }
   }
