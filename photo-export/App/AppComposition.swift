@@ -41,6 +41,8 @@ struct AppComposition {
   /// has been; `nil` lands on the default Timeline month.
   var screenshotSurfaceKey: String?
 
+  var localHEICStorage: LocalHEICStorage?
+
   /// The shipping app.
   static func production() -> AppComposition {
     AppComposition(
@@ -57,7 +59,7 @@ struct AppComposition {
       wiresAutoSync: true,
       isScreenshotMode: false,
       screenshotWindowSize: nil,
-      screenshotSurfaceKey: nil)
+      screenshotSurfaceKey: nil, localHEICStorage: .production())
   }
 
   /// `--screenshot-mode`: the shipping app with a curated synthetic library, so marketing

@@ -76,6 +76,8 @@ final class AppCore {
       exportDestination: edm, exportRecordStore: ers,
       collectionExportRecordStore: cers,
       assetResourceWriter: composition.assetResourceWriter,
+      localHEICStorage: composition.localHEICStorage
+        ?? LocalHEICStorage(root: composition.appStateRoot.appendingPathComponent("heic-temp")),
       fileSystem: composition.fileSystem,
       phAssetCacheControl: composition.phAssetCacheControl(plm), userDefaults: defaults)
     // Drive the PhotoLibraryManager `descriptor(from:)` Live Photo resource fallback from the
@@ -181,6 +183,8 @@ final class AppCore {
   func start() {
     guard !hasStarted else { return }
     hasStarted = true
+    Task { await exportManager.localHEICStorage.sweepAbandoned() }
+    VolumeRenameCapabilityCache.shared.observeMounts(in: NSWorkspace.shared.notificationCenter)
     // First PhotoKit touch: here, after the window has rendered, not in App.init. On
     // macOS 15.7+ the synchronous singleton init has been observed to hang launch. A
     // no-op under tests and with a Photos service override.
