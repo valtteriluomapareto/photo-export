@@ -4,14 +4,9 @@ import os
 
 /// Resolves export values and their private resource owner away from the main actor.
 final class ProductionPhotoKitReader: PhotoKitReading {
-  let thumbnailReader: (any ThumbnailReading)?
   private let resourceOwner: ProductionPhotoKitResourceOwner
 
-  init(
-    thumbnailBackend: any PhotoKitThumbnailBackend = ProductionThumbnailBackend(),
-    resourceOwner: ProductionPhotoKitResourceOwner = ProductionPhotoKitResourceOwner()
-  ) {
-    self.thumbnailReader = ProductionThumbnailReader(backend: thumbnailBackend)
+  init(resourceOwner: ProductionPhotoKitResourceOwner = ProductionPhotoKitResourceOwner()) {
     self.resourceOwner = resourceOwner
   }
 

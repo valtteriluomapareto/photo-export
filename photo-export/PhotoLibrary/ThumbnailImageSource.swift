@@ -15,7 +15,6 @@ struct ThumbnailImageSource: @unchecked Sendable {
   }
 
   func rasterize(size: CGSize) -> CGImage? {
-    guard !Thread.isMainThread else { return nil }
     return autoreleasepool {
       var proposed = CGRect(origin: .zero, size: size)
       guard

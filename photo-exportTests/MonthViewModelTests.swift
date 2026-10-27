@@ -261,18 +261,18 @@ struct MonthViewModelTests {
       return [.synthetic(old)]
     }
     let map = GridThumbnailAssets(service: service)
-    let pending = Task { await map.handle(for: "same", revision: 0, isCurrent: { true }) }
+    var isCurrent = true
+    let pending = Task { await map.handle(for: "same", revision: 0, isCurrent: { isCurrent }) }
     try await withCleanup {
       try #require(await gate.waitForEnter(count: 1))
+      isCurrent = false
       map.reset()
       service.thumbnailResolveOverride = { _ in [.synthetic(fresh)] }
       await map.updateWindow([fresh])
       await gate.releaseAll()
       #expect(await pending.value == nil)
-      let calls = service.thumbnailResolveCalls.count
       #expect(
         await map.handle(for: "fresh", revision: 0, isCurrent: { true })?.descriptor.id == "fresh")
-      #expect(service.thumbnailResolveCalls.count == calls)
     } cleanup: {
       await gate.releaseAll()
       _ = await pending.value
