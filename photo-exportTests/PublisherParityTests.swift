@@ -45,11 +45,10 @@ struct PublisherParityTests {
     let folder = try Self.folder("ParityIdentity")
     defer { try? FileManager.default.removeItem(at: folder) }
     let manager = Self.destinationManager()
-    manager.applyFolderSelection(folder, decision: .newDestination)
     try #require(manager.identity == .unavailable)
     await assertPublishedParity(
       manager, \.identity, { $0.identityPublisher },
-      change: { await manager.waitForValidation() },
+      change: { await manager.persistSelectionAndWait(folder) },
       // Revalidating the unchanged folder computes an equal identity, which
       // `identity != next` skips.
       unchangedWrite: .after { await manager.revalidateAndWait() },
