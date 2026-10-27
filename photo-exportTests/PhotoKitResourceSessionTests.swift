@@ -206,7 +206,7 @@ struct PhotoKitResourceSessionTests {
         }
       })
     let reader = ProductionPhotoKitReader(resourceOwner: owner)
-    let h = ExportManagerHarness(label: "JobResourceSession", photoKitReader: reader)
+    let h = await ExportManagerHarness(label: "JobResourceSession", photoKitReader: reader)
     defer {
       h.manager.cancelAndClear()
       h.store.drainSynchronously()
@@ -269,7 +269,7 @@ struct PhotoKitResourceSessionTests {
         }
       })
     let converter = FakeImageConverter()
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "HEICResourceFailure", photoKitReader: ProductionPhotoKitReader(resourceOwner: owner),
       imageConverter: converter)
     defer {
@@ -336,7 +336,7 @@ struct PhotoKitResourceSessionTests {
     let reader = HeldReader(
       base: ProductionPhotoKitReader(resourceOwner: owner),
       checkpoint: route == "stale-metadata" ? gate : nil)
-    let h = ExportManagerHarness(label: "ResourceSessionTerminal", photoKitReader: reader)
+    let h = await ExportManagerHarness(label: "ResourceSessionTerminal", photoKitReader: reader)
     defer {
       h.manager.cancelAndClear()
       h.store.drainSynchronously()
