@@ -207,6 +207,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 - Standard macOS folder picker for selecting the export root
 - Works with local folders, external drives, or mounted network volumes
 - Selection persists across app launches via security-scoped bookmarks
+- Re-selecting the same folder keeps an active export and its history running; choosing a different folder cancels the old run
 - Drive status indicator in the toolbar (connected/disconnected)
 - Destination problems stay visible in the main window and disable export controls whether Auto Export is on or off. Reconnect an unavailable drive or share, or restore access with **Choose Folder**
 

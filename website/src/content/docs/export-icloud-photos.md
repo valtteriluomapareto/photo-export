@@ -28,7 +28,7 @@ When you first open Photo Export, macOS will ask you to grant access to your Pho
 
 ## Step 3: Choose your export destination
 
-Click **Choose Folder** and select your external hard drive or any local folder. The app remembers your choice, so you only need to do this once.
+Click **Choose Folder** and select your external hard drive or any local folder. The app remembers your choice, so you only need to do this once. Re-selecting the same folder keeps an active export running. Choosing a different folder cancels the previous run and switches to that folder’s history.
 
 ## Step 4: Browse and export
 
