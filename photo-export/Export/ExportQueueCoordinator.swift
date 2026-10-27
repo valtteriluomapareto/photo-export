@@ -119,7 +119,6 @@ final class ExportQueueCoordinator: ObservableObject {
   /// `ExportManager` (which routes through here) and by `ImportCoordinator`'s
   /// cancel path (which holds a direct reference).
   func bumpGeneration() {
-    measurements?.invalidate("superseded")
     generation += 1
   }
 
@@ -221,9 +220,9 @@ final class ExportQueueCoordinator: ObservableObject {
   }
 
   /// Capture includes preparation and every queue fragment of the logical activity.
-  func beginMeasurementRun(automatic: Bool) {
+  func beginMeasurementRun(automatic: Bool, convertHEICToJPEG: Bool) {
     guard let measurements else { return }
-    measurements.beginRun(automatic: automatic)
+    measurements.beginRun(automatic: automatic, convertHEICToJPEG: convertHEICToJPEG)
     runWatchdog.begin()
   }
 
@@ -239,7 +238,6 @@ final class ExportQueueCoordinator: ObservableObject {
   /// admission check (`canTogglePause`) lives on `ExportManager` — pause is also valid
   /// during the "jobs queued, run loop not started yet" window the manager handles.
   func pause() {
-    measurements?.invalidate("paused")
     host?.beginProgressUpdates()
     defer { host?.endProgressUpdates() }
     isPaused = true
@@ -268,7 +266,6 @@ final class ExportQueueCoordinator: ObservableObject {
     jobStorage.append(contentsOf: jobs)
     if !jobs.isEmpty { placementRevision &+= 1 }
     totalJobsEnqueued += jobs.count
-    measurements?.enqueued(jobs.count)
     for job in jobs {
       queuedCountsByPlacementId[job.placement.id, default: 0] += 1
     }
@@ -292,7 +289,6 @@ final class ExportQueueCoordinator: ObservableObject {
     defer { host?.endProgressUpdates() }
     let previous = queueFingerprint
     let removed = pendingJobs.count
-    if removed > 0 { measurements?.invalidate("pending-cleared") }
     removePendingJobs()
     if !queuedCountsByPlacementId.isEmpty { placementRevision &+= 1 }
     queuedCountsByPlacementId.removeAll()
@@ -312,7 +308,6 @@ final class ExportQueueCoordinator: ObservableObject {
   /// split lets `clearPending` (queue-only drop, no cancellation of in-flight work)
   /// share the queue teardown logic.
   func teardownQueue() {
-    measurements?.invalidate("cancelled")
     host?.beginProgressUpdates()
     defer { host?.endProgressUpdates() }
     let previous = queueFingerprint
