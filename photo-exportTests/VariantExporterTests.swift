@@ -276,6 +276,33 @@ struct VariantExporterTests {
     #expect(h.host.failureCalls.first?.message == "No exportable resource")
   }
 
+  @Test(.timeLimit(.minutes(2)))
+  func heicSourceIsLocalWhileJPEGStaysAtDestination() async throws {
+    let h = makeHarness()
+    defer { h.cleanup() }
+    h.host.convertHEICToJPEG = true
+    let asset = TestAssetFactory.makeAsset(
+      id: "local-source", hasAdjustments: false, originalUTI: "public.heic")
+    let resources = [TestAssetFactory.makeResource(type: .photo, originalFilename: "LOCAL.HEIC")]
+    var inFlight: (assetId: String, variant: ExportVariant)?
+    _ = try await h.exporter.exportSingleVariant(
+      variant: .edited, descriptor: asset, resources: resources,
+      destDir: h.destDir, relPath: "2025/07/",
+      job: ExportManager.ExportJob(
+        assetLocalIdentifier: asset.id, placement: .timeline(year: 2025, month: 7),
+        selection: .edited),
+      groupStem: nil, pairOriginalWithSuffix: false, generation: 0, inFlight: &inFlight)
+    let conversion = try #require(h.converter.convertCalls.first)
+    #expect(!conversion.sourceURL.path.hasPrefix(h.destDir.path),
+      "HEIC input must not make a round trip through the export destination")
+    #expect(conversion.destURL.deletingLastPathComponent() == h.destDir)
+    #expect(h.writer.writeCalls.first?.url == conversion.sourceURL)
+    #expect(!FileManager.default.fileExists(atPath: conversion.sourceURL.path))
+    let final = try #require(h.fileSystem.moveCalls.last?.to)
+    #expect(final.deletingLastPathComponent() == h.destDir)
+    #expect(FileManager.default.fileExists(atPath: final.path))
+  }
+
   // MARK: - HEIC→JPEG conversion (issue #47)
 
   /// HEIC original + toggle ON + unedited asset: `selectEditedProducer` returns
