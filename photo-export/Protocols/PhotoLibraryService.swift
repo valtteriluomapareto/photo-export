@@ -77,25 +77,12 @@ protocol PhotoLibraryService: AnyObject, Sendable {
   /// Cached version of `countAdjustedAssets(in:)`.
   nonisolated func cachedCountAdjustedAssets(in scope: PhotoFetchScope) async throws -> Int
 
-  /// Each consumer balances start/stop calls for its window. Duplicate IDs within
-  /// one batch count once; overlapping consumers retain independent registrations.
-  func startCachingThumbnails(for assets: [AssetDescriptor])
-  func stopCachingThumbnails(for assets: [AssetDescriptor])
-  func loadThumbnail(for assetId: String, allowNetwork: Bool) async -> NSImage?
-  /// `pixelSize`, when supplied, replaces the default 200×200 px target. Tile
-  /// views in particular need ~360×360 px on Retina (180pt × 2x scale) for
-  /// the single-cover case to read sharply; the default leaves them blurry.
-  func loadThumbnailHighQuality(
-    for assetId: String, pixelSize: CGSize?, allowNetwork: Bool
-  ) async -> NSImage?
+  var thumbnailReader: any ThumbnailReading { get }
 
   func resolveThumbnailAssets(ids: [String]) async -> [ThumbnailAsset]
   func preheatThumbnailAssets(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async
   func thumbnailContentRevision(for assetId: String) -> Int
   func coverAssets(in scope: PhotoFetchScope, limit: Int) async throws -> [AssetDescriptor]
-  func decodedThumbnail(
-    for asset: ThumbnailAsset, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
-  ) async -> CGImage?
 
   // MARK: - Decoded thumbnail cache
 
@@ -124,26 +111,17 @@ protocol PhotoLibraryService: AnyObject, Sendable {
 
 extension PhotoLibraryService {
   func resolveThumbnailAssets(ids: [String]) async -> [ThumbnailAsset] {
-    ids.compactMap { fetchAssetDescriptor(for: $0) }.map(ThumbnailAsset.synthetic)
+    await thumbnailReader.resolveAssets(ids: ids)
   }
 
   func preheatThumbnailAssets(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async {
-    if !stop.isEmpty { stopCachingThumbnails(for: stop.map(\.descriptor)) }
-    if !start.isEmpty { startCachingThumbnails(for: start.map(\.descriptor)) }
+    await thumbnailReader.preheat(start: start, stop: stop)
   }
 
   func thumbnailContentRevision(for assetId: String) -> Int { 0 }
 
   func coverAssets(in scope: PhotoFetchScope, limit: Int) async throws -> [AssetDescriptor] {
-    let assets = try await fetchAssets(in: scope, mediaType: nil)
-    return Array(assets.prefix(max(0, min(limit, 4))))
-  }
-
-  func decodedThumbnail(
-    for asset: ThumbnailAsset, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode
-  ) async -> CGImage? {
-    await decodedThumbnail(
-      for: asset.descriptor.id, quantizedSize: quantizedSize, deliveryMode: deliveryMode)
+    try await thumbnailReader.coverThumbnails(in: scope, limit: limit).map(\.descriptor)
   }
 
   func fetchAssets(year: Int, month: Int?) async throws -> [AssetDescriptor] {

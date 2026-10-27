@@ -8,6 +8,7 @@ import Photos
 /// model's init, which `@State` repeats on every view init.
 @MainActor
 final class RecordingPhotoLibraryService: PhotoLibraryService {
+  let thumbnailReader: any ThumbnailReading = FakePhotoLibraryService()
   private let recorded = LockedBox<[String]>([])
   /// Every call so far, in order.
   var calls: [String] { recorded.value }

@@ -20,7 +20,7 @@ import os
 /// computed from `String.hashValue`, which is randomised per process — they
 /// look stable within a single capture run, not across reruns.
 @MainActor
-final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
+final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService, ThumbnailReading {
 
   // Authorization state for the curated mode. Always-authorized; the values are
   // surfaced through the (now-required) protocol properties below so the wrapping
@@ -307,24 +307,22 @@ final class ScreenshotPhotoLibraryService: NSObject, PhotoLibraryService {
 
   // MARK: - PhotoLibraryService overrides — thumbnails
 
-  func startCachingThumbnails(for assets: [AssetDescriptor]) {
-    // No-op — placeholder thumbnails are cheap to materialise on demand.
+  var thumbnailReader: any ThumbnailReading { self }
+
+  func resolveAssets(ids: [String]) async -> [ThumbnailAsset] {
+    ids.compactMap { fetchAssetDescriptor(for: $0) }.map(ThumbnailAsset.synthetic)
   }
 
-  func stopCachingThumbnails(for assets: [AssetDescriptor]) {
-    // No-op.
+  func image(for asset: ThumbnailAsset, spec: ThumbnailRequestSpec) async -> CGImage? {
+    cachedDecodedThumbnail(
+      for: asset.descriptor.id, quantizedSize: spec.size, deliveryMode: spec.delivery)
   }
 
-  func loadThumbnail(
-    for assetId: String, allowNetwork: Bool = true
-  ) async -> NSImage? {
-    image(for: assetId, size: CGSize(width: 256, height: 256))
-  }
+  func preheat(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async {}
 
-  func loadThumbnailHighQuality(
-    for assetId: String, pixelSize: CGSize? = nil, allowNetwork: Bool = true
-  ) async -> NSImage? {
-    image(for: assetId, size: pixelSize ?? CGSize(width: 1024, height: 1024))
+  func coverThumbnails(in scope: PhotoFetchScope, limit: Int) async throws -> [ThumbnailAsset] {
+    try await fetchAssets(in: scope, mediaType: nil)
+      .prefix(max(0, min(limit, 4))).map(ThumbnailAsset.synthetic)
   }
 
   func decodedThumbnail(

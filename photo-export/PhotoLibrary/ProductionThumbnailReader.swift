@@ -1,17 +1,12 @@
 import Foundation
 import Photos
-import os
+import Synchronization
 
 /// Owns a serial utility boundary for thumbnail resolution, requests and raster work.
 final class ProductionThumbnailReader: ThumbnailReading {
   private let io: any DestinationIOExecuting
   private let backend: any PhotoKitThumbnailBackend
-  private let state = PreheatState()
-
-  /// Accessed only from the serial executor, including overlapping windows' registrations.
-  private final class PreheatState: @unchecked Sendable {
-    var modes: [ThumbnailDeliveryMode: ThumbnailPreheatRegistrations<ThumbnailAsset>] = [:]
-  }
+  private let registrations = Mutex(ThumbnailPreheatRegistrations<ThumbnailAsset>())
 
   init(
     io: any DestinationIOExecuting = DestinationIO(
@@ -27,7 +22,7 @@ final class ProductionThumbnailReader: ThumbnailReading {
     return await io.run { [backend] in autoreleasepool { backend.resolveAssets(ids: ids) } }
   }
 
-  func coverAssets(in scope: PhotoFetchScope, limit: Int) async throws -> [ThumbnailAsset] {
+  func coverThumbnails(in scope: PhotoFetchScope, limit: Int) async throws -> [ThumbnailAsset] {
     try Task.checkCancellation()
     let handles = await io.run { [backend] in
       autoreleasepool {
@@ -41,23 +36,22 @@ final class ProductionThumbnailReader: ThumbnailReading {
   }
 
   func preheat(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async {
-    await io.run { [backend, state] in
-      for delivery in [ThumbnailDeliveryMode.fast, .highQuality] {
-        let spec = ThumbnailRequestSpec(size: ThumbnailRequestSpec.gridSize, delivery: delivery)
-        var registrations = state.modes[delivery] ?? ThumbnailPreheatRegistrations()
-        let stopping = registrations.release(stop.map(\.preheatKey))
+    await io.run { [self] in
+      let spec = ThumbnailRequestSpec(size: ThumbnailRequestSpec.gridSize, delivery: .fast)
+      let changes = registrations.withLock { registrations in
         let lookup = Dictionary(
           start.map { ($0.preheatKey, $0) }, uniquingKeysWith: { _, last in last })
         let starting = registrations.register(start.map(\.preheatKey)) { lookup[$0] }
-        state.modes[delivery] = registrations
-        if !stopping.isEmpty {
-          backend.stopCaching(
-            assets: stopping, size: spec.size, mode: spec.contentMode, options: spec.options())
-        }
-        if !starting.isEmpty {
-          backend.startCaching(
-            assets: starting, size: spec.size, mode: spec.contentMode, options: spec.options())
-        }
+        let stopping = registrations.release(stop.map(\.preheatKey))
+        return (starting, stopping)
+      }
+      if !changes.1.isEmpty {
+        backend.stopCaching(
+          assets: changes.1, size: spec.size, mode: spec.contentMode, options: spec.options())
+      }
+      if !changes.0.isEmpty {
+        backend.startCaching(
+          assets: changes.0, size: spec.size, mode: spec.contentMode, options: spec.options())
       }
     }
   }
@@ -87,14 +81,14 @@ final class ProductionThumbnailReader: ThumbnailReading {
 }
 
 /// Joins cancellation and synchronous PhotoKit callbacks without holding the lock while resuming.
-private final class ThumbnailRequestState: @unchecked Sendable {
+private final class ThumbnailRequestState: Sendable {
   private struct State {
     var continuation: CheckedContinuation<ThumbnailImageSource?, Never>?
     var id: PHImageRequestID?
     var cancelled = false
     var finished = false
   }
-  private let state = OSAllocatedUnfairLock(initialState: State())
+  private let state = Mutex(State())
   var isCancelled: Bool { state.withLock { $0.cancelled } }
 
   func install(_ continuation: CheckedContinuation<ThumbnailImageSource?, Never>) {

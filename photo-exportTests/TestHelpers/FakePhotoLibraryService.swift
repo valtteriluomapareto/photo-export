@@ -5,7 +5,7 @@ import Photos
 @testable import Photo_Export
 
 @MainActor
-final class FakePhotoLibraryService: PhotoLibraryService {
+final class FakePhotoLibraryService: PhotoLibraryService, ThumbnailReading {
   var isAuthorized: Bool = true
   var authorizationStatus: PHAuthorizationStatus = .authorized
 
@@ -18,6 +18,32 @@ final class FakePhotoLibraryService: PhotoLibraryService {
     return ids.map { id in
       ThumbnailAsset.synthetic(fetchAssetDescriptor(for: id) ?? TestAssetFactory.makeAsset(id: id))
     }
+  }
+
+  lazy var thumbnailReader: any ThumbnailReading = self
+  private var preheatRegistrations = ThumbnailPreheatRegistrations<ThumbnailAsset>()
+
+  func resolveAssets(ids: [String]) async -> [ThumbnailAsset] {
+    await resolveThumbnailAssets(ids: ids)
+  }
+
+  func image(for asset: ThumbnailAsset, spec: ThumbnailRequestSpec) async -> CGImage? {
+    await decodedThumbnail(
+      for: asset.descriptor.id, quantizedSize: spec.size, deliveryMode: spec.delivery)
+  }
+
+  func preheat(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async {
+    let lookup = Dictionary(
+      start.map { ($0.preheatKey, $0) }, uniquingKeysWith: { _, last in last })
+    let added = preheatRegistrations.register(start.map(\.preheatKey)) { lookup[$0] }
+    let removed = preheatRegistrations.release(stop.map(\.preheatKey))
+    if !removed.isEmpty { stopCachingCalls.append(removed.map(\.descriptor)) }
+    if !added.isEmpty { startCachingCalls.append(added.map(\.descriptor)) }
+  }
+
+  func coverThumbnails(in scope: PhotoFetchScope, limit: Int) async throws -> [ThumbnailAsset] {
+    try await fetchAssets(in: scope, mediaType: nil)
+      .prefix(max(0, min(limit, 4))).map(ThumbnailAsset.synthetic)
   }
 
   var cachedCountOverride: (@MainActor (PhotoFetchScope, Bool) async throws -> Int)?

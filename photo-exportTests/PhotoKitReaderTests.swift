@@ -107,14 +107,14 @@ struct PhotoKitReaderTests {
       }
     }
     let returned = LockedBox(false)
-    let reader = ProductionPhotoKitReader(io: io, thumbnailBackend: backend) { _, _ in
+    let reader = ProductionPhotoKitReader(io: io) { _, _ in
       PhotoKitAssetSnapshot(descriptor: asset, resources: [])
     }
     let thumbnails: any ThumbnailReading
     if sharedExecutor {
       thumbnails = ProductionThumbnailReader(io: io, backend: backend)
     } else {
-      thumbnails = try #require(await reader.thumbnailReader)
+      thumbnails = ProductionThumbnailReader(backend: backend)
     }
     let thumbnail = Task {
       await thumbnails.image(
@@ -343,14 +343,14 @@ struct PhotoKitReaderTests {
     let assets = (0..<10).map { TestAssetFactory.makeAsset(id: "cover-\($0)") }
     let backend = FakeThumbnailBackend(assets: assets)
     let reader = ProductionThumbnailReader(backend: backend)
-    let covers = try await reader.coverAssets(in: .timeline(year: 2025, month: 4), limit: 4)
+    let covers = try await reader.coverThumbnails(in: .timeline(year: 2025, month: 4), limit: 4)
     #expect(covers.map(\.descriptor.id) == Array(assets.prefix(4)).map(\.id))
     let query = try #require(backend.queries.value.first)
     #expect(query.limit == 4)
     #expect(query.hasPredicate)
     #expect(query.sortKeys == ["creationDate"])
     #expect(!query.onMain)
-    let album = try await reader.coverAssets(in: .album(collectionId: "album"), limit: 4)
+    let album = try await reader.coverThumbnails(in: .album(collectionId: "album"), limit: 4)
     #expect(album.count == 4)
     #expect(backend.queries.value.count == 2)
   }
@@ -358,9 +358,9 @@ struct PhotoKitReaderTests {
   @Test func obsoleteHandleResolutionCannotRegisterOldChangeSnapshots() async throws {
     let asset = makeAsset()
     let backend = FakeThumbnailBackend(assets: [asset])
-    let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let reader = ProductionThumbnailReader(backend: backend)
     let service = FakePhotoLibraryService()
-    let manager = PhotoLibraryManager(overrideService: service, photoKitReader: reader)
+    let manager = PhotoLibraryManager(overrideService: service, thumbnailReader: reader)
     let gate = Gate()
     backend.resolveOverride.mutate { value in
       value = { _ in
@@ -402,9 +402,9 @@ struct PhotoKitReaderTests {
   @Test func resolvedGridHandleSurvivesExportDiscardingLegacyAssetCache() async throws {
     let asset = makeAsset()
     let backend = FakeThumbnailBackend(assets: [asset])
-    let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let reader = ProductionThumbnailReader(backend: backend)
     let manager = PhotoLibraryManager(
-      overrideService: FakePhotoLibraryService(), photoKitReader: reader)
+      overrideService: FakePhotoLibraryService(), thumbnailReader: reader)
     let map = GridThumbnailAssets(service: manager)
     await map.updateWindow([asset])
     let first = try #require(await map.handle(for: asset.id, revision: 0, isCurrent: { true }))
@@ -421,7 +421,7 @@ struct PhotoKitReaderTests {
     let year = try #require(try service.availableYears().first)
     let asset = try #require(
       try await service.fetchAssets(year: year, month: nil, mediaType: nil).first)
-    let reader = try #require(await PhotoLibraryServiceReader(service: service).thumbnailReader)
+    let reader = service.thumbnailReader
     let handle = try #require(await reader.resolveAssets(ids: [asset.id]).first)
     #expect(handle.photoKitAsset == nil)
     #expect(
@@ -441,9 +441,9 @@ struct PhotoKitReaderTests {
   @Test func mountedMonthAndAlbumCoversUseLimitedQueriesAndDecodedTargets() async throws {
     let assets = (0..<10).map { TestAssetFactory.makeAsset(id: "tile-cover-\($0)") }
     let backend = FakeThumbnailBackend(assets: assets)
-    let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let reader = ProductionThumbnailReader(backend: backend)
     let library = PhotoLibraryManager(
-      overrideService: FakePhotoLibraryService(), photoKitReader: reader)
+      overrideService: FakePhotoLibraryService(), thumbnailReader: reader)
     let album = PhotoCollectionDescriptor(
       id: "album", localIdentifier: "album", title: "Album", kind: .album,
       pathComponents: [], children: [])

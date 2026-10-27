@@ -3,18 +3,15 @@ import Photos
 
 /// Owns serial, utility-priority metadata reads; all framework objects remain inside a leaf.
 final class ProductionPhotoKitReader: PhotoKitReading {
-  let thumbnailReader: (any ThumbnailReading)?
   private let io: any DestinationIOExecuting
   private let lookup: @Sendable (String, Bool) -> PhotoKitAssetSnapshot?
 
   init(
     io: any DestinationIOExecuting = DestinationIO(
       queue: DispatchQueue(label: "photo-export.photokit-reader", qos: .utility)),
-    thumbnailBackend: any PhotoKitThumbnailBackend = ProductionThumbnailBackend(),
     lookup: @escaping @Sendable (String, Bool) -> PhotoKitAssetSnapshot? =
       { id, livePhotosPaired in lookupAsset(id: id, livePhotosPaired: livePhotosPaired) }
   ) {
-    self.thumbnailReader = ProductionThumbnailReader(backend: thumbnailBackend)
     self.io = io
     self.lookup = lookup
   }

@@ -99,11 +99,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     case assetUnavailable
   }
 
-  /// Shared caching image manager for thumbnails. `nonisolated` because `onCancel` handlers
-  /// cancel requests from whichever thread cancels; `PHCachingImageManager` is Sendable.
-  private nonisolated static let cachingImageManager = PHCachingImageManager()
-  private static var thumbnailPreheatRegistrations = ThumbnailPreheatRegistrations<PHAsset>()
-
   /// Long-lived cache of PHAsset objects keyed by `localIdentifier`. Populated
   /// additively by `cacheAssets(_:)` from `fetchAssets(in:)`. Cleared by
   /// `invalidateCache()` (library change) or `forgetPHAssetCache()`
@@ -229,15 +224,15 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   /// into `ExportManager` directly and don't construct a manager).
   override init() {
     self.overrideService = nil
+    self.thumbnailReader = ProductionThumbnailReader()
     self.liveAuthorizationStatus = Self.systemAuthorizationStatus
     super.init()
     setupDecodedThumbnailCache()
   }
 
-  convenience init(refreshClock: any AutoSyncClock, photoKitReader: (any PhotoKitReading)? = nil) {
+  convenience init(refreshClock: any AutoSyncClock) {
     self.init()
     self.refreshClock = refreshClock
-    if let photoKitReader { thumbnailReaderFactory = photoKitReader }
   }
 
   #if DEBUG
@@ -246,6 +241,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     /// so tests call only methods whose guard the stub fails.
     init(liveAuthorizationStatus: @escaping @Sendable () -> PHAuthorizationStatus) {
       self.overrideService = nil
+      self.thumbnailReader = ProductionThumbnailReader()
       self.liveAuthorizationStatus = liveAuthorizationStatus
       super.init()
       setupDecodedThumbnailCache()
@@ -261,14 +257,13 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     countInvalidationOverride: (@Sendable () async -> Void)? = nil,
     countInvalidationWaitObserver: (@MainActor () -> Void)? = nil,
     refreshClock: (any AutoSyncClock)? = nil,
-    photoKitReader: (any PhotoKitReading)? = nil
+    thumbnailReader: (any ThumbnailReading)? = nil
   ) {
     self.overrideService = overrideService
     self.liveAuthorizationStatus = Self.systemAuthorizationStatus
     self.countInvalidationOverride = countInvalidationOverride
     self.countInvalidationWaitObserver = countInvalidationWaitObserver
-    self.thumbnailReaderFactory =
-      photoKitReader ?? PhotoLibraryServiceReader(service: overrideService)
+    self.thumbnailReader = thumbnailReader ?? overrideService.thumbnailReader
     self.refreshClock = refreshClock ?? SystemAutoSyncClock()
     super.init()
     // Sync the UI-facing auth state from the injected service so the onboarding
@@ -279,22 +274,10 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     setupDecodedThumbnailCache()
   }
 
-  @ObservationIgnored private var thumbnailReaderFactory: any PhotoKitReading =
-    ProductionPhotoKitReader()
-  private struct ResolvedThumbnail {
-    let handle: ThumbnailAsset
-    let revision: Int
-  }
-  @ObservationIgnored private var defaultThumbnailAssets: [String: ResolvedThumbnail] = [:]
+  @ObservationIgnored let thumbnailReader: any ThumbnailReading
   #if DEBUG
     @ObservationIgnored var thumbnailRegistrationObserver: (@MainActor (ThumbnailAsset) -> Void)?
   #endif
-
-  private func thumbnailReader() async -> any ThumbnailReading {
-    if let reader = await thumbnailReaderFactory.thumbnailReader { return reader }
-    if let service = overrideService { return ServiceThumbnailReader(service: service) }
-    return UnavailableThumbnailReader()
-  }
 
   private func setupDecodedThumbnailCache() {
     decodedThumbnailCache = DecodedThumbnailCache { [weak self] key in
@@ -304,22 +287,9 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   }
 
   private func decodeThumbnail(for key: DecodedThumbnailCache.Key) async -> CGImage? {
-    let handle: ThumbnailAsset
-    if let cached = defaultThumbnailAssets[key.assetId], cached.revision == key.contentRevision {
-      handle = cached.handle
-    } else {
-      let resolved = await resolveThumbnailAssets(ids: [key.assetId])
-      guard let first = resolved.first, !Task.isCancelled,
-        key.contentRevision == thumbnailContentRevision(for: key.assetId)
-      else { return nil }
-      handle = first
-      if defaultThumbnailAssets.count >= 64, let oldest = defaultThumbnailAssets.keys.first {
-        defaultThumbnailAssets.removeValue(forKey: oldest)
-      }
-      defaultThumbnailAssets[key.assetId] = ResolvedThumbnail(
-        handle: first, revision: key.contentRevision)
-    }
-    let reader = await thumbnailReader()
+    let resolved = await resolveThumbnailAssets(ids: [key.assetId])
+    guard let handle = resolved.first else { return nil }
+    let reader = thumbnailReader
     guard key.contentRevision == thumbnailContentRevision(for: key.assetId), !Task.isCancelled
     else { return nil }
     registerDisplayedThumbnail(handle)
@@ -330,7 +300,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   func resolveThumbnailAssets(ids: [String]) async -> [ThumbnailAsset] {
     let revisions = Dictionary(
       ids.map { ($0, thumbnailContentRevision(for: $0)) }, uniquingKeysWith: { first, _ in first })
-    let reader = await thumbnailReader()
+    let reader = thumbnailReader
     let resolved = await reader.resolveAssets(ids: ids)
     guard !Task.isCancelled else { return [] }
     let handles = resolved.compactMap { handle -> ThumbnailAsset? in
@@ -360,26 +330,20 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   }
 
   func preheatThumbnailAssets(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async {
-    let reader = await thumbnailReader()
+    let reader = thumbnailReader
     await reader.preheat(start: start, stop: stop)
   }
 
   func coverAssets(in scope: PhotoFetchScope, limit: Int) async throws -> [AssetDescriptor] {
     if overrideService == nil { try await requireLiveAuthorizationAsync() }
     let source = libraryRevision
-    let reader = await thumbnailReader()
-    let handles = try await reader.coverAssets(in: scope, limit: limit)
+    let reader = thumbnailReader
+    let handles = try await reader.coverThumbnails(in: scope, limit: limit)
     try Task.checkCancellation()
     // A changed query cannot seed current image keys with older framework snapshots.
     guard source == libraryRevision else { return handles.map(\.descriptor) }
     for rawHandle in handles {
       let handle = rawHandle.withRevision(thumbnailContentRevision(for: rawHandle.descriptor.id))
-      let id = handle.descriptor.id
-      if defaultThumbnailAssets.count >= 64, let oldest = defaultThumbnailAssets.keys.first {
-        defaultThumbnailAssets.removeValue(forKey: oldest)
-      }
-      defaultThumbnailAssets[id] = ResolvedThumbnail(
-        handle: handle, revision: thumbnailContentRevision(for: id))
       if let asset = handle.photoKitAsset { observeThumbnailAsset(asset) }
       #if DEBUG
         thumbnailRegistrationObserver?(handle)
@@ -393,7 +357,7 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
   ) async -> CGImage? {
     let id = asset.descriptor.id
     let revision = thumbnailContentRevision(for: id)
-    let reader = await thumbnailReader()
+    let reader = thumbnailReader
     guard revision == thumbnailContentRevision(for: id), asset.contentRevision == revision,
       !Task.isCancelled
     else { return nil }
@@ -948,141 +912,6 @@ final class PhotoLibraryManager: NSObject, PhotoLibraryService, PHAssetCacheCont
     }
     try Task.checkCancellation()
     return yearCounts
-  }
-
-  // MARK: - Thumbnail Management (PhotoLibraryService)
-
-  func startCachingThumbnails(for assets: [AssetDescriptor]) {
-    if let s = overrideService {
-      s.startCachingThumbnails(for: assets)
-      return
-    }
-    // Retain the PHAssets and balance overlapping consumers of the shared manager.
-    let phAssets = Self.thumbnailPreheatRegistrations.register(assets.map(\.id)) {
-      self.phAssetCache[$0]
-    }
-    guard !phAssets.isEmpty else { return }
-    for delivery in [ThumbnailDeliveryMode.fast, .highQuality] {
-      let spec = ThumbnailRequestSpec(size: ThumbnailRequestSpec.gridSize, delivery: delivery)
-      Self.cachingImageManager.startCachingImages(
-        for: phAssets, targetSize: spec.size, contentMode: spec.contentMode, options: spec.options()
-      )
-    }
-  }
-
-  func stopCachingThumbnails(for assets: [AssetDescriptor]) {
-    if let s = overrideService {
-      s.stopCachingThumbnails(for: assets)
-      return
-    }
-    let phAssets = Self.thumbnailPreheatRegistrations.release(assets.map(\.id))
-    guard !phAssets.isEmpty else { return }
-    for delivery in [ThumbnailDeliveryMode.fast, .highQuality] {
-      let spec = ThumbnailRequestSpec(size: ThumbnailRequestSpec.gridSize, delivery: delivery)
-      Self.cachingImageManager.stopCachingImages(
-        for: phAssets, targetSize: spec.size, contentMode: spec.contentMode, options: spec.options()
-      )
-    }
-  }
-
-  /// Load thumbnail for an asset (fast/degraded version only, for initial grid
-  /// population). `allowNetwork` controls whether PhotoKit may go to iCloud if a fast
-  /// format isn't cached locally — historically this was hardcoded to `false`, which
-  /// stranded freshly-arrived iCloud assets with no rendered thumbnail (`PHPhotosError`
-  /// 3303 "no resource found matching image request spec") even when the caller
-  /// explicitly opted into the network. The `MonthViewModel.refresh(for:)` path and
-  /// `retryThumbnail(for:)` both pass `true` for that reason.
-  func loadThumbnail(for assetId: String, allowNetwork: Bool = true) async -> NSImage? {
-    if let s = overrideService {
-      return await s.loadThumbnail(for: assetId, allowNetwork: allowNetwork)
-    }
-    guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
-    let options = PHImageRequestOptions()
-    options.deliveryMode = .fastFormat
-    options.isNetworkAccessAllowed = allowNetwork
-    options.resizeMode = .fast
-    let requestIDLock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
-    return await withTaskCancellationHandler {
-      if Task.isCancelled { return nil }
-      return await withCheckedContinuation { continuation in
-        let resumed = OSAllocatedUnfairLock(initialState: false)
-        let requestID = Self.cachingImageManager.requestImage(
-          for: asset,
-          targetSize: CGSize(width: 200, height: 200),
-          contentMode: .aspectFill,
-          options: options
-        ) { image, _ in
-          guard
-            resumed.withLock({
-              let was = $0
-              $0 = true
-              return !was
-            })
-          else { return }
-          continuation.resume(returning: image)
-        }
-        requestIDLock.withLock { $0 = requestID }
-        if Task.isCancelled {
-          Self.cachingImageManager.cancelImageRequest(requestID)
-        }
-      }
-    } onCancel: {
-      if let requestID = requestIDLock.withLock({ $0 }) {
-        Self.cachingImageManager.cancelImageRequest(requestID)
-      }
-    }
-  }
-
-  /// Load a high-quality thumbnail for an asset. `pixelSize` defaults to
-  /// 200×200 px (the legacy size used by the timeline grid's high-quality
-  /// upgrade path); tile views pass their displayed-pixel dimensions so
-  /// PhotoKit doesn't return a smaller cached version that has to be
-  /// scaled up by AppKit.
-  func loadThumbnailHighQuality(
-    for assetId: String,
-    pixelSize: CGSize? = nil,
-    allowNetwork: Bool = true
-  ) async -> NSImage? {
-    if let s = overrideService {
-      return await s.loadThumbnailHighQuality(
-        for: assetId, pixelSize: pixelSize, allowNetwork: allowNetwork)
-    }
-    guard let asset = cachedOrFetchPHAsset(id: assetId) else { return nil }
-    let target = pixelSize ?? CGSize(width: 200, height: 200)
-    let options = PHImageRequestOptions()
-    options.deliveryMode = .highQualityFormat
-    options.isNetworkAccessAllowed = allowNetwork
-    options.resizeMode = .exact
-    let requestIDLock = OSAllocatedUnfairLock<PHImageRequestID?>(initialState: nil)
-    return await withTaskCancellationHandler {
-      if Task.isCancelled { return nil }
-      return await withCheckedContinuation { continuation in
-        let resumed = OSAllocatedUnfairLock(initialState: false)
-        let requestID = Self.cachingImageManager.requestImage(
-          for: asset,
-          targetSize: target,
-          contentMode: .aspectFill,
-          options: options
-        ) { image, _ in
-          guard
-            resumed.withLock({
-              let was = $0
-              $0 = true
-              return !was
-            })
-          else { return }
-          continuation.resume(returning: image)
-        }
-        requestIDLock.withLock { $0 = requestID }
-        if Task.isCancelled {
-          Self.cachingImageManager.cancelImageRequest(requestID)
-        }
-      }
-    } onCancel: {
-      if let requestID = requestIDLock.withLock({ $0 }) {
-        Self.cachingImageManager.cancelImageRequest(requestID)
-      }
-    }
   }
 
   func requestPreview(

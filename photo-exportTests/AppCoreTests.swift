@@ -57,7 +57,8 @@ import Testing
     defer { try? FileManager.default.removeItem(at: composition.appStateRoot) }
     let asset = TestAssetFactory.makeAsset(id: "composed-thumbnail")
     let backend = FakeThumbnailBackend(assets: [asset])
-    composition.photoKitReader = ProductionPhotoKitReader(thumbnailBackend: backend)
+    let service = try #require(composition.photoLibraryServiceOverride as? FakePhotoLibraryService)
+    service.thumbnailReader = ProductionThumbnailReader(backend: backend)
     let core = makeCore(composition)
     let handle = try #require(
       await core.photoLibraryManager.resolveThumbnailAssets(ids: [asset.id]).first)
