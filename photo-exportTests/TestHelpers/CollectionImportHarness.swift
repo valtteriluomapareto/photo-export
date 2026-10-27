@@ -31,7 +31,9 @@ final class CollectionImportHarness {
     manager = ExportManager(
       photoLibraryService: library, exportDestination: destination,
       exportRecordStore: timeline, collectionExportRecordStore: collections,
-      assetResourceWriter: writer, fileSystem: fileSystem,
+      assetResourceWriter: writer,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: fileSystem,
       userDefaults: TestScratch.defaults(label))
     manager.videoLayout = videoLayout
   }

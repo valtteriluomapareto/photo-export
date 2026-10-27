@@ -137,6 +137,7 @@ struct BackupScanCancellationTests {
     let created = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: timeline, collectionExportRecordStore: collections,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       backupDirectoryReader: reader, userDefaults: TestScratch.defaults(suiteName: defaultsName))
     manager = created
     defer { manager = nil }  // The reader's closure would otherwise keep the manager alive.

@@ -138,6 +138,7 @@ struct LibraryRefreshTests {
     let manager = ExportManager(
       photoLibraryService: library, exportDestination: h.dest, exportRecordStore: h.store,
       collectionExportRecordStore: h.collectionStore, assetResourceWriter: h.writer,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       fileSystem: h.fileSystem, userDefaults: h.defaults)
     func tree(_ member: String) -> [PhotoCollectionDescriptor] {
       [

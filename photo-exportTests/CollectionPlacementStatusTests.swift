@@ -100,7 +100,9 @@ import Testing
         manager = ExportManager(
           photoLibraryService: service, exportDestination: fakeDestination,
           exportRecordStore: timeline, collectionExportRecordStore: records,
-          assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+          assetResourceWriter: FakeAssetResourceWriter(),
+          localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+          fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         let shared = change == .sharedRename
         selection = shared ? .sharedAlbum(collectionId: "target") : .album(collectionId: "target")

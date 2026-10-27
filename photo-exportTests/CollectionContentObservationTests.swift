@@ -92,7 +92,9 @@ import Testing
         manager = ExportManager(
           photoLibraryService: service, exportDestination: fakeDestination,
           exportRecordStore: timeline, collectionExportRecordStore: records,
-          assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+          assetResourceWriter: FakeAssetResourceWriter(),
+          localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+          fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         destination = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
         // Deliver the coalesced setup publication now so it cannot land after a test's baseline.

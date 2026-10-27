@@ -128,7 +128,9 @@ import Testing
         manager = ExportManager(
           photoLibraryService: service, exportDestination: fakeDestination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
-          assetResourceWriter: writer, fileSystem: FakeFileSystem(),
+          assetResourceWriter: writer,
+          localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+          fileSystem: FakeFileSystem(),
           userDefaults: defaults)
         whatsNew = WhatsNewState(userDefaults: defaults, currentVersion: "test", catalog: [])
         if whatsNewSeen { whatsNew.markAsSeen() }

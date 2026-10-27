@@ -21,6 +21,7 @@ struct ExportManagerHelperTests {
       exportDestination: destMgr,
       exportRecordStore: recordStore,
       collectionExportRecordStore: collections,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       userDefaults: TestScratch.defaults("ExportManagerHelper"))
     return (manager, recordStore)
   }
@@ -97,6 +98,7 @@ struct ExportManagerHelperTests {
       exportDestination: destMgr,
       exportRecordStore: timeline,
       collectionExportRecordStore: collection,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       userDefaults: defaults)
 
     #expect(
@@ -141,6 +143,7 @@ struct ExportManagerHelperTests {
       exportDestination: destMgr,
       exportRecordStore: timeline,
       collectionExportRecordStore: collection,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       userDefaults: defaults)
 
     #expect(
@@ -229,6 +232,7 @@ struct ExportManagerHelperTests {
       exportDestination: destMgr,
       exportRecordStore: timeline,
       collectionExportRecordStore: collection,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       userDefaults: userDefaults)
   }
 
@@ -246,6 +250,7 @@ struct ExportManagerHelperTests {
       exportDestination: destMgr,
       exportRecordStore: recordStore,
       collectionExportRecordStore: collections,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       userDefaults: TestScratch.defaults("ExportManagerHelper"))
 
     #expect(manager.canExportTimeline == false)

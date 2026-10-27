@@ -444,7 +444,9 @@ struct RecordStoreMaintenanceTests {
     let files = FakeFileSystem()
     let manager = ExportManager(
       photoLibraryService: photos, exportDestination: destination, exportRecordStore: f.timeline,
-      collectionExportRecordStore: f.collections, assetResourceWriter: writer, fileSystem: files,
+      collectionExportRecordStore: f.collections, assetResourceWriter: writer,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: files,
       userDefaults: TestScratch.defaults("MaintenanceCleanup"))
     let asset = TestAssetFactory.makeAsset(
       id: "export",

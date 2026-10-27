@@ -83,6 +83,7 @@ struct AutoSyncDestinationStopIntegrationTests {
         exportRecordStore: timelineStore,
         collectionExportRecordStore: collectionStore,
         assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
         fileSystem: files,
         userDefaults: builder.userDefaults
       )

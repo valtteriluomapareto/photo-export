@@ -112,6 +112,7 @@ struct BackupScanReadFailureTests {
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: timeline, collectionExportRecordStore: collections,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       backupDirectoryReader: reader, userDefaults: TestScratch.defaults(suiteName: defaultsName))
     manager.startImport()
     await manager.waitForImportCompletion()

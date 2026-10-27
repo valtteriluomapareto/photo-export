@@ -27,7 +27,9 @@ struct ExportProgressStateTests {
       manager = ExportManager(
         photoLibraryService: service, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, fileSystem: FakeFileSystem(),
+        assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: FakeFileSystem(),
         progressClock: clock, userDefaults: TestScratch.defaults("ProgressPresentation"))
     }
 

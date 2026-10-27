@@ -204,7 +204,9 @@ struct ExportPreparationTests {
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, fileSystem: files,
+        assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: files,
         destinationIOFactory: { _ in io }, userDefaults: TestScratch.defaults("CapturedPreparation")
       )
       let asset = TestAssetFactory.makeAsset(

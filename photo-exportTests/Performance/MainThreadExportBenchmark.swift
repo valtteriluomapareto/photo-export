@@ -265,7 +265,9 @@ import Testing
       let manager = ExportManager(
         photoLibraryService: service, photoKitReader: reader, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: pacedWriter, fileSystem: FakeFileSystem(), userDefaults: defaults)
+        assetResourceWriter: pacedWriter,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: FakeFileSystem(), userDefaults: defaults)
       let destinationManager = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
       destinationManager.configureForScreenshotMode()
       let autoSync = AutoSyncManager()

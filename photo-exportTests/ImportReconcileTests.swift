@@ -498,6 +498,7 @@ struct ImportReconcileTests {
       exportRecordStore: timeline,
       collectionExportRecordStore: collection,
       assetResourceWriter: writer,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       fileSystem: fileSystem,
       userDefaults: defaults
     )

@@ -76,22 +76,25 @@ struct LocalHEICStorageTests {
   }
 
   @MainActor
-  @Test func omittedStorageStaysUnderTheInjectedRecordRoot() async throws {
-    let root = TestScratch.directory("HEICDefaultStorage")
+  @Test func suppliedStorageUsesItsExplicitRoot() async throws {
+    let root = TestScratch.directory("HEICRecordStorage")
+    let suppliedRoot = TestScratch.directory("HEICExplicitStorage")
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
     let destination = FakeExportDestination()
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: timeline, collectionExportRecordStore: collections,
-      assetResourceWriter: FakeAssetResourceWriter(), fileSystem: FakeFileSystem(),
+      assetResourceWriter: FakeAssetResourceWriter(),
+      localHEICStorage: LocalHEICStorage(root: suppliedRoot), fileSystem: FakeFileSystem(),
       userDefaults: TestScratch.defaults("HEICDefaultStorage"))
     defer {
       destination.cleanup()
       try? FileManager.default.removeItem(at: root)
+      try? FileManager.default.removeItem(at: suppliedRoot)
     }
     let input = try await manager.localHEICStorage.allocate(sourceBytes: nil)
-    #expect(input.path.hasPrefix(root.appendingPathComponent("heic-temp").path + "/"))
+    #expect(input.path.hasPrefix(suppliedRoot.path + "/"))
     await manager.localHEICStorage.remove(input)
   }
 

@@ -51,7 +51,9 @@ struct HistoryWriteFailureTests {
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, fileSystem: FakeFileSystem(),
+        assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: FakeFileSystem(),
         userDefaults: TestScratch.defaults("HistoryWriteFailure"))
     }
 

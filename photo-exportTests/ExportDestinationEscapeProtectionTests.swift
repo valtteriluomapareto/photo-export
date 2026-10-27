@@ -197,7 +197,9 @@ struct ExportDestinationEscapeProtectionTests {
       exportRecordStore: records,
       collectionExportRecordStore: CollectionExportRecordStore(
         baseDirectoryURL: TestScratch.directory("DirectoryCountCollections")),
-      assetResourceWriter: writer, fileSystem: files,
+      assetResourceWriter: writer,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: files,
       userDefaults: TestScratch.defaults("DirectoryCount"))
     let assets = (0..<3).map {
       TestAssetFactory.makeAsset(
@@ -242,7 +244,9 @@ struct ExportDestinationEscapeProtectionTests {
       exportRecordStore: records,
       collectionExportRecordStore: CollectionExportRecordStore(
         baseDirectoryURL: TestScratch.directory("DeletedStageCollections")),
-      assetResourceWriter: writer, fileSystem: files,
+      assetResourceWriter: writer,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+      fileSystem: files,
       userDefaults: TestScratch.defaults("DeletedStage"))
     let asset = TestAssetFactory.makeAsset(
       id: "deleted-stage",

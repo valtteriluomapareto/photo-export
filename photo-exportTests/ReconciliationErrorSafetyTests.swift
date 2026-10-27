@@ -323,6 +323,7 @@ struct ReconciliationErrorSafetyTests {
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
       exportRecordStore: timeline, collectionExportRecordStore: collections,
+      localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
       userDefaults: TestScratch.defaults(suiteName: suite))
     manager.startImport()
     await manager.waitForImportCompletion()

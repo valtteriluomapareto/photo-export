@@ -104,7 +104,9 @@ struct FinalCommitCancellationTests {
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: writer, fileSystem: files, userDefaults: defaults)
+        assetResourceWriter: writer,
+        localHEICStorage: LocalHEICStorage(root: TestScratch.directory("ExportHEIC")),
+        fileSystem: files, userDefaults: defaults)
       photos.assetsByYearMonth["2025-1"] = [asset]
       photos.favoritesAssets = [asset]
       photos.resourcesByAssetId[asset.id] = [.init(type: .photo, originalFilename: "FILE.JPG")]
