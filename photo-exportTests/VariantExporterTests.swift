@@ -283,7 +283,7 @@ struct VariantExporterTests {
 
   @Test(.timeLimit(.minutes(2)))
   func heicSourceIsLocalWhileJPEGStaysAtDestination() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.host.convertHEICToJPEG = true
     let asset = TestAssetFactory.makeAsset(
@@ -313,7 +313,7 @@ struct VariantExporterTests {
   func heicAllocationAndResourceWriteKeepSeparateErrorProvenance(preflight: Bool) async throws {
     let storage = LocalHEICStorage(
       root: TestScratch.directory("HEICSpace"), capacity: { _ in preflight ? 0 : Int64.max })
-    let h = makeHarness(localHEICStorage: storage)
+    let h = await makeHarness(localHEICStorage: storage)
     defer { h.cleanup() }
     h.host.convertHEICToJPEG = true
     if !preflight { h.writer.writeError = CocoaError(.fileWriteOutOfSpace) }
