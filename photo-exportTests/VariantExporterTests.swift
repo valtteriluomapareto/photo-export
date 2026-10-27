@@ -338,7 +338,7 @@ struct VariantExporterTests {
         #expect(signal.localizedDescription.contains("local temporary storage"))
       } else {
         #expect(!(error is LocalHEICStorage.Failure))
-        #expect(signal.category == .destinationFull)
+        #expect(signal.category == .destinationNoSpace)
       }
     }
     #expect(h.writer.writeCalls.count == (preflight ? 0 : 1))
