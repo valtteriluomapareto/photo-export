@@ -72,6 +72,56 @@ struct DestinationAsyncValidationTests {
     #expect(opened.value.map(\.path).sorted() == closed.value.map(\.path).sorted())
   }
 
+  @Test(.timeLimit(.minutes(1)))
+  func aHungProbeDoesNotBlockAReplacementFolder() async throws {
+    let root = TestScratch.directory("IndependentValidation")
+    let a = root.appendingPathComponent("A")
+    let b = root.appendingPathComponent("B")
+    for folder in [a, b] {
+      try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    }
+    let probe = Probe(heldPath: "A")
+    let closed = LockedBox<[URL]>([])
+    let manager = ExportDestinationManager(
+      skipRestore: true, userDefaults: TestScratch.defaults("IndependentValidation"),
+      bookmarkSaver: { _ in true }, volumeNotificationCenter: NotificationCenter(),
+      validationScopeAcquirer: { _ in true },
+      validationScopeReleaser: { url in closed.mutate { $0.append(url) } }, validationProbe: probe)
+    var publishedPaths: [String] = []
+    let sink = manager.identityPublisher.sink {
+      if let path = $0.fingerprint?.standardizedPath { publishedPaths.append(path) }
+    }
+    var replacement: Task<Void, Never>?
+    try await withCleanup {
+      #expect(manager.applyFolderSelection(a, decision: .newDestination))
+      try #require(await probe.entered.waitForEnter(count: 1))
+      #expect(manager.applyFolderSelection(b, decision: .newDestination))
+      let pending = Task { await manager.waitForValidation() }
+      replacement = pending
+      try #require(
+        await eventually("replacement folder validates while the first probe remains held") {
+          manager.canExportNow && manager.identity.fingerprint?.standardizedPath == b.path
+        })
+      await pending.value
+      #expect(closed.value == [b])
+      #expect(publishedPaths == [b.path])
+      probe.release()
+      try #require(
+        await eventually("superseded probe releases its scope") { closed.value.contains(a) })
+      #expect(manager.selectedFolderURL == b)
+      #expect(manager.identity.fingerprint?.standardizedPath == b.path)
+      #expect(publishedPaths == [b.path])
+      #expect(probe.calls.value == [true, true])
+    } cleanup: {
+      probe.release()
+      await probe.entered.releaseAll()
+      if let replacement { await replacement.value }
+      manager.clearSelection()
+      sink.cancel()
+      try? FileManager.default.removeItem(at: root)
+    }
+  }
+
   /// Real selection/validation and directory access, with scratch paths requiring no sandbox grant.
   private final class ScratchDestination: ExportDestination {
     let manager: ExportDestinationManager
