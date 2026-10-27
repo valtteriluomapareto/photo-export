@@ -24,6 +24,7 @@ final class FakeThumbnailBackend: PhotoKitThumbnailBackend, @unchecked Sendable 
   }
   let resolveCalls = LockedBox<[[String]]>([])
   let resolveOverride = LockedBox<(@Sendable ([String]) -> [ThumbnailAsset])?>(nil)
+  let requestOverride = LockedBox<(@Sendable () -> Void)?>(nil)
   let calls = LockedBox<[Call]>([])
   let queries = LockedBox<[Query]>([])
   private let assets: [AssetDescriptor]
@@ -62,6 +63,7 @@ final class FakeThumbnailBackend: PhotoKitThumbnailBackend, @unchecked Sendable 
     completion: @escaping @Sendable (ThumbnailImageSource?) -> Void
   ) -> PHImageRequestID {
     record("request", size: size, mode: mode, options: options)
+    requestOverride.value?()
     completion(ThumbnailImageSource(image))
     return 1
   }

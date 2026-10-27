@@ -92,6 +92,67 @@ struct PhotoKitReaderTests {
     await gate.entered.releaseAll()
   }
 
+  @Test(arguments: [false, true])
+  func blockedThumbnailRequestOnlyBlocksMetadataOnSharedExecutor(sharedExecutor: Bool) async throws
+  {
+    let gate = Gate()
+    let io = RecordingDestinationIO()
+    let asset = makeAsset()
+    let backend = FakeThumbnailBackend(assets: [asset])
+    let thumbnailOnMetadataWorker = LockedBox(false)
+    backend.requestOverride.mutate {
+      $0 = {
+        thumbnailOnMetadataWorker.mutate { $0 = io.isOnWorker }
+        gate.hold()
+      }
+    }
+    let returned = LockedBox(false)
+    let reader = ProductionPhotoKitReader(io: io, thumbnailBackend: backend) { _, _ in
+      PhotoKitAssetSnapshot(descriptor: asset, resources: [])
+    }
+    let thumbnails: any ThumbnailReading
+    if sharedExecutor {
+      thumbnails = ProductionThumbnailReader(io: io, backend: backend)
+    } else {
+      thumbnails = try #require(await reader.thumbnailReader)
+    }
+    let thumbnail = Task {
+      await thumbnails.image(
+        for: .synthetic(asset),
+        spec: .init(size: ThumbnailRequestSpec.gridSize, delivery: .highQuality))
+    }
+    try await withCleanup {
+      try #require(await gate.entered.waitForEnter(count: 1))
+      #expect(thumbnailOnMetadataWorker.value == sharedExecutor)
+      // Release a broken production composition after recording red, so it cannot deadlock the test.
+      if !sharedExecutor && thumbnailOnMetadataWorker.value { gate.release() }
+      let submittedBeforeMetadata = io.submissions.value
+      let metadata = Task {
+        let snapshot = await reader.readAsset(id: asset.id, livePhotosPaired: false)
+        returned.mutate { $0 = true }
+        return snapshot
+      }
+      try #require(
+        await eventually("metadata read admitted") {
+          io.submissions.value > submittedBeforeMetadata
+        })
+      if sharedExecutor {
+        #expect(!returned.value, "The held request occupies the shared serial executor")
+      } else {
+        #expect(
+          await eventually("metadata returns while thumbnail request is blocked") { returned.value }
+        )
+      }
+      gate.release()
+      #expect(await metadata.value?.descriptor == asset)
+      #expect(await thumbnail.value != nil)
+    } cleanup: {
+      gate.release()
+      await gate.entered.releaseAll()
+      _ = await thumbnail.value
+    }
+  }
+
   enum Invalidation: CaseIterable { case cancel, root, history }
 
   @Test(arguments: Invalidation.allCases)

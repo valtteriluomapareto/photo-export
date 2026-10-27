@@ -14,7 +14,7 @@ final class ProductionPhotoKitReader: PhotoKitReading {
     lookup: @escaping @Sendable (String, Bool) -> PhotoKitAssetSnapshot? =
       { id, livePhotosPaired in lookupAsset(id: id, livePhotosPaired: livePhotosPaired) }
   ) {
-    self.thumbnailReader = ProductionThumbnailReader(io: io, backend: thumbnailBackend)
+    self.thumbnailReader = ProductionThumbnailReader(backend: thumbnailBackend)
     self.io = io
     self.lookup = lookup
   }
