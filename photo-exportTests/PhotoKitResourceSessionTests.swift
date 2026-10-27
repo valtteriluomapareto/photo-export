@@ -62,11 +62,15 @@ struct PhotoKitResourceSessionTests {
       #expect(try String(contentsOf: url, encoding: .utf8) == "\(index)")
     }
     // A fallback resource write reuses the same snapshot and first matching handle.
-    try await writer.writeResource(resources[0], forAssetId: "asset", to: root.appendingPathComponent("fallback"))
+    try await writer.writeResource(
+      resources[0], forAssetId: "asset", to: root.appendingPathComponent("fallback"))
     await writer.close()
     #expect(fetches.value == 1)
     #expect(enumerations.value == 1)
-    #expect(writes.value == ["0:original.jpg", "1:edited.jpg", "2:original.mov", "3:edited.mov", "0:original.jpg"])
+    #expect(
+      writes.value == [
+        "0:original.jpg", "1:edited.jpg", "2:original.mov", "3:edited.mov", "0:original.jpg",
+      ])
     #expect(workerChecks.value.count == 7)
     #expect(workerChecks.value.allSatisfy { $0 })
   }
@@ -75,16 +79,19 @@ struct PhotoKitResourceSessionTests {
     let fetches = LockedBox(0)
     let writes = LockedBox<[Int]>([])
     let resource = descriptors()[0]
-    let owner = ProductionPhotoKitResourceOwner(backend: .init { id in
-      fetches.mutate { $0 += 1 }
-      let identity = fetches.value
-      return .init(descriptor: TestAssetFactory.makeAsset(id: id)) {
-        [.init(descriptor: resource) { _, completion in
-          writes.mutate { $0.append(identity) }
-          completion(nil)
-        }]
-      }
-    })
+    let owner = ProductionPhotoKitResourceOwner(
+      backend: .init { id in
+        fetches.mutate { $0 += 1 }
+        let identity = fetches.value
+        return .init(descriptor: TestAssetFactory.makeAsset(id: id)) {
+          [
+            .init(descriptor: resource) { _, completion in
+              writes.mutate { $0.append(identity) }
+              completion(nil)
+            }
+          ]
+        }
+      })
     let reader = ProductionPhotoKitReader(resourceOwner: owner)
     let oldSnapshot = try #require(await reader.readAsset(id: "same", livePhotosPaired: false))
     let newSnapshot = try #require(await reader.readAsset(id: "same", livePhotosPaired: false))
@@ -100,7 +107,9 @@ struct PhotoKitResourceSessionTests {
       try await replacement.writeResource(resource, forAssetId: "other", to: url)
     }
     await #expect(throws: (any Error).self) {
-      try await replacement.writeResource(.init(type: .video, originalFilename: resource.originalFilename), forAssetId: "same", to: url)
+      try await replacement.writeResource(
+        .init(type: .video, originalFilename: resource.originalFilename), forAssetId: "same",
+        to: url)
     }
     try await replacement.writeResource(resource, forAssetId: "same", to: url)
     await old.close()
@@ -117,16 +126,19 @@ struct PhotoKitResourceSessionTests {
     let callback = LockedBox<(@Sendable (Error?) -> Void)?>(nil)
     let entered = AsyncCheckpoint()
     let resource = descriptors()[0]
-    let owner = ProductionPhotoKitResourceOwner(backend: .init { id in
-      let lifetime = Lifetime(released)
-      return .init(descriptor: TestAssetFactory.makeAsset(id: id)) {
-        [.init(descriptor: resource) { [lifetime] _, completion in
-          _ = lifetime
-          callback.mutate { $0 = completion }
-          Task { await entered.enter() }
-        }]
-      }
-    })
+    let owner = ProductionPhotoKitResourceOwner(
+      backend: .init { id in
+        let lifetime = Lifetime(released)
+        return .init(descriptor: TestAssetFactory.makeAsset(id: id)) {
+          [
+            .init(descriptor: resource) { [lifetime] _, completion in
+              _ = lifetime
+              callback.mutate { $0 = completion }
+              Task { await entered.enter() }
+            }
+          ]
+        }
+      })
     let snapshot = try #require(await owner.readAsset(id: "held", livePhotosPaired: false))
     let writer = try #require(snapshot.resourceWriter)
     let url = TestScratch.directory("ResourceSessionHeld").appendingPathComponent("held")
@@ -147,12 +159,84 @@ struct PhotoKitResourceSessionTests {
     finish(fails ? NSError(domain: "test.resource", code: 9) : nil)
     let result = await task.value
     if fails {
-      guard case .failure = result else { Issue.record("The physical error must be preserved"); return }
+      guard case .failure = result else {
+        Issue.record("The physical error must be preserved")
+        return
+      }
     } else {
-      guard case .success = result else { Issue.record("Cancellation must still await physical success"); return }
+      guard case .success = result else {
+        Issue.record("Cancellation must still await physical success")
+        return
+      }
     }
     #expect(released.value == 1)
     #expect(returned.value)
     await entered.releaseAll()
   }
+
+  @MainActor
+  @Test(arguments: ["paired", "reuse-fallback", "edited-fallback"])
+  func exportJobUsesResolvedWriterThroughVariantsAndFallbacks(route: String) async throws {
+    let fetches = LockedBox(0)
+    let enumerations = LockedBox(0)
+    let writes = LockedBox<[String]>([])
+    let released = LockedBox(0)
+    let date = Calendar.current.date(from: DateComponents(year: 2026, month: 1, day: 15))
+    let asset = TestAssetFactory.makeAsset(
+      id: "session-export", creationDate: date, hasAdjustments: route != "reuse-fallback",
+      isLivePhoto: route == "paired")
+    let resources = route == "paired" ? descriptors() : [descriptors()[0]]
+    let owner = ProductionPhotoKitResourceOwner(
+      backend: .init { _ in
+        fetches.mutate { $0 += 1 }
+        let lifetime = Lifetime(released)
+        return .init(descriptor: asset) {
+          enumerations.mutate { $0 += 1 }
+          return resources.map { descriptor in
+            .init(descriptor: descriptor) { [lifetime] url, completion in
+              _ = lifetime
+              writes.mutate { $0.append(descriptor.originalFilename) }
+              do {
+                try Data("job".utf8).write(to: url)
+                completion(nil)
+              } catch { completion(error) }
+            }
+          }
+        }
+      })
+    let reader = ProductionPhotoKitReader(resourceOwner: owner)
+    let h = ExportManagerHarness(label: "JobResourceSession", photoKitReader: reader)
+    defer {
+      h.manager.cancelAndClear()
+      h.store.drainSynchronously()
+      h.collectionStore.drainSynchronously()
+      h.dest.cleanup()
+      try? FileManager.default.removeItem(at: h.storeRoot)
+    }
+    h.photoLib.assetsByYearMonth["2026-1"] = [asset]
+    h.photoLib.favoritesAssets = [asset]
+    h.manager.livePhotosPairedExport = route == "paired"
+    h.manager.versionSelection = route == "paired" ? .editedWithOriginals : .edited
+    if route == "reuse-fallback" {
+      _ = try h.dest.urlForRelativeDirectory("2026/01/", createIfNeeded: true)
+      h.store.markVariantExported(
+        assetId: asset.id, variant: .original, year: 2026, month: 1, relPath: "2026/01/",
+        filename: "missing.jpg", exportedAt: Date())
+      h.manager.startExportFavorites()
+    } else {
+      h.manager.startExportMonth(year: 2026, month: 1)
+    }
+    await h.manager.waitForQueueDrained()
+    #expect(h.writer.writeCalls.isEmpty, "The job must use its captured production resource owner")
+    #expect(fetches.value == 1)
+    #expect(enumerations.value == 1)
+    #expect(writes.value.count == (route == "paired" ? 4 : 1))
+    #expect(released.value == 1, "The drained job must have awaited resource release")
+    if route == "reuse-fallback" {
+      #expect(h.fileSystem.copyCalls.count == 1)
+    } else {
+      #expect(h.fileSystem.moveCalls.count == (route == "paired" ? 4 : 1))
+    }
+  }
+
 }
