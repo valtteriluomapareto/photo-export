@@ -124,7 +124,7 @@ struct ExportDestinationManagerIdentityTests {
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey
     )
-    writer.persistSelectedFolderForTesting(dir)
+    await writer.persistSelectionAndWait(dir)
     let firstId = writer.destinationId
 
     // "Refresh" by restoring from defaults (a fresh manager parses the bookmark again).
@@ -156,7 +156,7 @@ struct ExportDestinationManagerIdentityTests {
 
   /// `currentLegacyDestinationId()` returns nil when no bookmark is stored, and the legacy
   /// hash of the bookmark bytes when one is.
-  @Test func currentLegacyDestinationIdReadsStoredBookmark() throws {
+  @Test func currentLegacyDestinationIdReadsStoredBookmark() async throws {
     let dir = TestScratch.directory("DestId-Legacy")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -178,7 +178,7 @@ struct ExportDestinationManagerIdentityTests {
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey
     )
-    mgr.persistSelectedFolderForTesting(dir)
+    await mgr.persistSelectionAndWait(dir)
     let legacyId = mgr.currentLegacyDestinationId()
     #expect(legacyId != nil)
     #expect(legacyId?.count == 64)
@@ -195,7 +195,7 @@ struct ExportDestinationManagerIdentityTests {
   /// `saveBookmark(for: url)` which writes bytes B over bytes A. Without the snapshot, the
   /// coordinator would call `currentLegacyDestinationId()` and get `hash(B)` — but the
   /// existing on-disk directory is named `hash(A)`.
-  @Test func legacyIdSnapshotSurvivesBookmarkRefresh() throws {
+  @Test func legacyIdSnapshotSurvivesBookmarkRefresh() async throws {
     let dir = TestScratch.directory("DestId-LegacyRefresh")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -211,7 +211,7 @@ struct ExportDestinationManagerIdentityTests {
       userDefaults: defaults,
       bookmarkDefaultsKey: bookmarkKey
     )
-    writer.persistSelectedFolderForTesting(dir)
+    await writer.persistSelectionAndWait(dir)
     let originalBytes = defaults.data(forKey: bookmarkKey)!
     let originalLegacyId = ExportDestinationManager.legacyDestinationId(from: originalBytes)
 

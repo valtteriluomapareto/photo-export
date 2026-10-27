@@ -51,12 +51,12 @@ import Testing
       init(
         adjusted: Bool = false, live: Bool = false,
         paneSize: NSSize = NSSize(width: 500, height: 600)
-      ) {
+      ) async {
         library = PhotoLibraryManager(overrideService: photos)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         navigation = Navigation(
           asset: TestAssetFactory.makeAsset(
             id: "selected", hasAdjustments: adjusted, isLivePhoto: live))
@@ -134,7 +134,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func actualRowsFollowCurrentScopeWhileOneImageRequestRemainsHeld() async {
-      let f = Fixture()
+      let f = await Fixture()
       await withCleanup {
         let favorites = ExportPlacement.favorites()
         let album = placement(.album, "album")
@@ -163,7 +163,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)), arguments: [false, true])
     func mountedPreviewUsesBoundedPanePixels(oversized: Bool) async throws {
-      let f = Fixture(
+      let f = await Fixture(
         paneSize: oversized ? NSSize(width: 4096, height: 3072) : NSSize(width: 500, height: 600))
       try await withCleanup {
         await f.show(f.timelinePlacement)
@@ -182,7 +182,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func recordPublicationUpdatesStatusWithoutFetchingDetails() async {
-      let f = Fixture()
+      let f = await Fixture()
       await withCleanup {
         f.set(f.timelinePlacement, variants: [.original: record(.pending)])
         await f.show(f.timelinePlacement)
@@ -199,7 +199,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func collectionOnlySuccessIsVisibleWithoutTimelineHistory() async {
-      let f = Fixture()
+      let f = await Fixture()
       await withCleanup {
         let album = placement(.album, "only-album")
         f.set(album, variants: [.original: record(.done)])
@@ -213,7 +213,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func sharedAlbumShowsOnlySingleResourceHistoryForAdjustedLivePhoto() async {
-      let f = Fixture(adjusted: true, live: true)
+      let f = await Fixture(adjusted: true, live: true)
       await withCleanup {
         let variants: [ExportVariant: ExportVariantRecord] = [
           .original: record(.done), .originalPairedVideo: record(.pending),
@@ -231,7 +231,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func convertedEditedHistoryIsVisibleWithoutPhotosAdjustments() async {
-      let f = Fixture()
+      let f = await Fixture()
       await withCleanup {
         f.set(f.timelinePlacement, variants: [.edited: record(.done)])
         await f.show(f.timelinePlacement)
@@ -243,7 +243,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)), arguments: [false, true])
     func currentPlacementLookupIsExactAndReadOnly(shared: Bool) async throws {
-      let f = Fixture()
+      let f = await Fixture()
       try await withCleanup {
         let kind: PhotoCollectionDescriptor.Kind = shared ? .sharedAlbum : .album
         let selection: LibrarySelection =
@@ -287,7 +287,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func actualRowsRefreshOnCurrentTreeAndStoreChangesWithoutReloadingImage() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       try await withCleanup {
         func album(_ title: String) -> PhotoCollectionDescriptor {
           PhotoCollectionDescriptor(
@@ -330,7 +330,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func typedRecoveryRowsRemainLiteralInCurrentCollection() async {
-      let f = Fixture(adjusted: true, live: true)
+      let f = await Fixture(adjusted: true, live: true)
       await withCleanup {
         let album = placement(.album, "fallback")
         f.set(

@@ -73,13 +73,13 @@ import Testing
           from: DateComponents(year: 2026, month: 1, day: 10)))
       service.yearCounts = [(2026, 1)]
       service.assetsByYearMonth["2026-1"] = [asset]
-      timeline.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
       timeline.markVariantExported(
         assetId: asset.id, variant: .original, year: 2026, month: 1, relPath: "2026/01/",
         filename: "JANUARY.JPG", exportedAt: Date())
       try await timeline.flush()
-      timeline.configure(for: nil)
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: nil)
+      await collections.configureAndWait(for: "A")
       let snapshot = root.appendingPathComponent("A")
         .appendingPathComponent(ExportRecordStore.Constants.snapshotFileName)
       io.hold(snapshot)

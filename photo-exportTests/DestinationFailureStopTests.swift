@@ -50,13 +50,13 @@ struct DestinationFailureStopTests {
     init(
       collection: Bool = false, logIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO(),
       files: FakeFileSystem = FakeFileSystem()
-    ) {
+    ) async {
       self.collection = collection
       self.files = files
       timeline = ExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
       collections = CollectionExportRecordStore(baseDirectoryURL: root, recordLogIO: logIO)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -121,11 +121,11 @@ struct DestinationFailureStopTests {
       try await collections.flush()
       if collection {
         let fresh = CollectionExportRecordStore(baseDirectoryURL: root)
-        fresh.configure(for: "A")
+        await fresh.configureAndWait(for: "A")
         return fresh.exportInfo(assetId: id, placement: placement)?.variants ?? [:]
       }
       let fresh = ExportRecordStore(baseDirectoryURL: root)
-      fresh.configure(for: "A")
+      await fresh.configureAndWait(for: "A")
       return fresh.exportInfo(assetId: id)?.variants ?? [:]
     }
 
@@ -168,7 +168,7 @@ struct DestinationFailureStopTests {
   func manualFailureStopsBeforeOtherAssetsAndExplicitRetryWorks(collection: Bool, code: Int)
     async throws
   {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     f.writer.writeError = NSError(domain: NSPOSIXErrorDomain, code: code)
     f.start()
     await f.manager.waitForQueueDrained()
@@ -193,7 +193,7 @@ struct DestinationFailureStopTests {
     arguments: [ExportRunSource.manual, .autoSync],
     [Int(ENOSPC), Int(EACCES), Int(ENOTCONN), Int(ETIMEDOUT)])
   func awaitableRunStopsWithAccurateCounts(source: ExportRunSource, code: Int) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     f.writer.writeError = NSError(domain: NSPOSIXErrorDomain, code: code)
     let summary = await f.manager.runExport(
       context: .init(
@@ -216,7 +216,7 @@ struct DestinationFailureStopTests {
 
   @Test(arguments: Route.allCases)
   func destinationFailureStopsEachByteAndDirectoryRoute(route: Route) async throws {
-    let f = Fixture(collection: route == .directory)
+    let f = await Fixture(collection: route == .directory)
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     switch route {
     case .render, .conversion, .fallback, .directory:
@@ -294,7 +294,7 @@ struct DestinationFailureStopTests {
 
   @Test(.timeLimit(.minutes(1)))
   func successfulPredecessorAndStoppedMultivariantJobKeepCounts() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     f.photos.assetsByYearMonth["2026-9"] = f.ids.enumerated().map {
       TestAssetFactory.makeAsset(id: $0.element, creationDate: date, hasAdjustments: $0.offset == 1)
@@ -338,7 +338,7 @@ struct DestinationFailureStopTests {
   }
 
   @Test func fallbackCountsTwoVariantFailuresAsOneFailedManualJob() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     f.photos.assetsByYearMonth["2026-9"] = f.ids.map {
       TestAssetFactory.makeAsset(id: $0, creationDate: date, hasAdjustments: true)
@@ -356,7 +356,7 @@ struct DestinationFailureStopTests {
   }
 
   @Test func ordinaryResourceErrorsStillContinue() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     let generation = f.manager.generation
     f.writer.writeError = NSError(domain: "ResourceTest", code: 99)
     f.start()
@@ -437,7 +437,7 @@ struct DestinationFailureStopTests {
 
   @Test(arguments: commitStopCases)
   func commitFailureStopsTheRunWithItsCategory(stop: StopCase) async {
-    let f = Fixture(files: Self.failingCommit(stop.code))
+    let f = await Fixture(files: Self.failingCommit(stop.code))
     await expectStop(f, category: stop.category, signature: "NSPOSIXErrorDomain:\(stop.code)")
     #expect(f.writer.writeCalls.count == 1)
     #expect(f.variants(f.ids[0])[.original]?.status == .failed)
@@ -452,7 +452,7 @@ struct DestinationFailureStopTests {
   /// and still becomes edited-unavailable. That is a known limit.
   @Test(arguments: StopRoute.allCases, [true, false])
   func eachProducerRouteStopsTheRun(route: StopRoute, unavailable: Bool) async {
-    let f = Fixture(collection: route == .directory)
+    let f = await Fixture(collection: route == .directory)
     let error: Error
     let category: AutoSyncFailureCategory
     switch route {
@@ -506,7 +506,7 @@ struct DestinationFailureStopTests {
   /// destination error stops the run at its first item as a permission failure.
   @Test(arguments: WriteAccessFailure.allCases)
   func destinationWriteAccessErrorStopsTheRun(failure: WriteAccessFailure) async {
-    let f = Fixture()
+    let f = await Fixture()
     let error = failure.error
     f.destination.urlForRelativeDirectoryError = error
     let bridged = error as NSError
@@ -520,7 +520,7 @@ struct DestinationFailureStopTests {
   /// A missing file at the commit can come from the source side, so it fails one item and
   /// the run goes on.
   @Test func missingFileAtTheCommitFailsOneItemAndContinues() async {
-    let f = Fixture(files: Self.failingCommit(ENOENT, filename: "asset-0.JPG"))
+    let f = await Fixture(files: Self.failingCommit(ENOENT, filename: "asset-0.JPG"))
     let summary = await f.runManualExport()
     #expect(summary.result == .failed && summary.cancelReason == nil)
     #expect(summary.stoppedBy == nil)
@@ -537,7 +537,8 @@ struct DestinationFailureStopTests {
   /// stopped run left: the failed item and the ones it never reached.
   @Test func nextManualExportAfterAnUnavailableStopQueuesWhatTheStopLeft() async {
     let failing = LockedBox(true)
-    let f = Fixture(files: Self.failingCommit(ENOTCONN, filename: "asset-1.JPG", while: failing))
+    let f = await Fixture(
+      files: Self.failingCommit(ENOTCONN, filename: "asset-1.JPG", while: failing))
     let stopped = await f.runManualExport()
     #expect(stopped.result == .interrupted && stopped.stoppedBy == .destinationUnavailable)
     #expect(f.variants(f.ids[0])[.original]?.status == .done)
@@ -557,7 +558,7 @@ struct DestinationFailureStopTests {
   /// The unmount notification that follows a dropped share must not erase the stop
   /// message while nothing is running.
   @Test func stopMessageSurvivesALaterUnmountWhileIdle() async {
-    let f = Fixture(files: Self.failingCommit(ENOTCONN))
+    let f = await Fixture(files: Self.failingCommit(ENOTCONN))
     f.start()
     await f.manager.waitForQueueDrained()
     let stopped = f.manager.progressState.manualSummary
@@ -573,7 +574,7 @@ struct DestinationFailureStopTests {
   /// keeps it only while idle is defensive here.
   @Test(.timeLimit(.minutes(1)))
   func unmountDuringAnActiveExportClearsTheFeedback() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     let gate = AsyncCheckpoint()
     f.writer.checkpoint = gate
     f.start()
@@ -597,7 +598,7 @@ struct DestinationFailureStopTests {
   }
 
   @Test func historyFailureTakesPrecedenceOverDestinationFailure() async throws {
-    let f = Fixture(logIO: FailingLogIO())
+    let f = await Fixture(logIO: FailingLogIO())
     f.writer.writeError = CocoaError(.fileWriteOutOfSpace)
     let summary = await f.manager.runExport(
       context: .init(
@@ -615,7 +616,7 @@ struct DestinationFailureStopTests {
 
   @Test(.timeLimit(.minutes(1)))
   func staleHardRendererFailureCannotStopReplacement() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     f.photos.assetsByYearMonth["2026-9"] = f.ids.map {
       TestAssetFactory.makeAsset(
@@ -671,7 +672,7 @@ struct DestinationFailureStopTests {
 
   @Test(.timeLimit(.minutes(1)))
   func destinationStopInvalidatesConcurrentPreparation() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     let scan = AsyncCheckpoint()
     f.photos.fetchAssetsCheckpointByYear[2027] = scan
     f.photos.assetsByYearMonth["2027-1"] = [
@@ -710,7 +711,7 @@ struct DestinationFailureStopTests {
   }
 
   @Test func autoSyncDirectoryFailurePreservesBlockedOriginal() async throws {
-    let f = Fixture(collection: true)
+    let f = await Fixture(collection: true)
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     f.photos.favoritesAssets = [
       TestAssetFactory.makeAsset(id: f.ids[0], creationDate: date, hasAdjustments: true)
@@ -738,7 +739,7 @@ struct DestinationFailureStopTests {
 
   @Test(.timeLimit(.minutes(1)))
   func newlyBlockedAutoSyncJobsSkipBeforeDestinationAccess() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     var eligible = true
     f.manager.autoSyncEligibilityCheck = { _, _, _, _ in eligible }
     let gate = AsyncCheckpoint()
@@ -776,7 +777,7 @@ struct DestinationFailureStopTests {
   }
 
   @Test func directoryFailurePreservesDoneOriginalAndFailsOnlyMissingVersion() async throws {
-    let f = Fixture(collection: true)
+    let f = await Fixture(collection: true)
     let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
     f.photos.favoritesAssets = f.ids.enumerated().map {
       TestAssetFactory.makeAsset(id: $0.element, creationDate: date, hasAdjustments: $0.offset == 0)

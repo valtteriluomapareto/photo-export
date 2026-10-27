@@ -33,12 +33,12 @@ struct AssetDetailPreviewRevisionTests {
     var holdsReplacement = false
     var currentImage = image(.red)
 
-    init() {
+    init() async {
       manager = PhotoLibraryManager(overrideService: service)
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "test")
-      collections.configure(for: "test")
+      await timeline.configureAndWait(for: "test")
+      await collections.configureAndWait(for: "test")
       let hosted = NSHostingView(
         rootView: AssetDetailView(
           asset: TestAssetFactory.makeAsset(id: "A"), placement: .timeline(year: 2025, month: 1)
@@ -113,7 +113,7 @@ struct AssetDetailPreviewRevisionTests {
 
   @Test(.timeLimit(.minutes(2)), arguments: Change.allCases)
   func mountedSameIDEditAndRevertRefreshPixelsWithoutBlanking(change: Change) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     try await withCleanup {
       f.show()
       let initial = await observe { f.shows(.red) }
@@ -141,7 +141,7 @@ struct AssetDetailPreviewRevisionTests {
 
   @Test(.timeLimit(.minutes(1)))
   func unrelatedKnownEditRendersWithoutReloadingSelectedImage() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     try await withCleanup {
       f.show()
       let initial = await observe { f.shows(.red) }

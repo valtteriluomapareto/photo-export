@@ -103,7 +103,7 @@ import Testing
       init(
         _ surface: Surface,
         stream: AsyncThrowingStream<[AssetDescriptor], any Error>? = nil
-      ) {
+      ) async {
         defaults = TestScratch.defaults(suiteName: suite)
         let date: Date =
           if case .library = surface {
@@ -145,8 +145,8 @@ import Testing
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
         collections = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         album = try! ExportPlacementResolver().placement(
           for: .album(collectionId: "trip"), collections: service.collectionTree,
           existingPlacements: [])
@@ -288,7 +288,7 @@ import Testing
 
     @Test(arguments: [false, true])
     func oneRecordPublicationLeavesGridAndSiblingTileQuiet(collection: Bool) async throws {
-      let f = Fixture(collection ? .collection : .month)
+      let f = await Fixture(collection ? .collection : .month)
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -331,7 +331,7 @@ import Testing
 
     @Test(arguments: [false, true])
     func selectingAssetDoesNotRescanHeader(collection: Bool) async throws {
-      let f = Fixture(collection ? .collection : .month)
+      let f = await Fixture(collection ? .collection : .month)
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -357,7 +357,7 @@ import Testing
     }
 
     @Test func assetSelectionLeavesLibraryLayoutAndSummaryQuiet() async throws {
-      let f = Fixture(.library)
+      let f = await Fixture(.library)
       try await withCleanup {
         try #require(await observe(in: f.window) { f.count("library-root") > 0 })
         try await f.barrier()
@@ -387,7 +387,7 @@ import Testing
     func progressiveLoadScansSummaryOnlyAfterTwoThousandAssetsFinish(collection: Bool) async throws
     {
       let stream = AsyncThrowingStream<[AssetDescriptor], any Error>.makeStream()
-      let f = Fixture(collection ? .collection : .month, stream: stream.stream)
+      let f = await Fixture(collection ? .collection : .month, stream: stream.stream)
       try await withCleanup {
         try #require(await observe(in: f.window) { f.counter.renderedText["grid-assets"] == ["0"] })
         for batch in 0..<10 {
@@ -420,7 +420,7 @@ import Testing
 
     /// Passes before: badges change only when the coalesced record publication reaches the grid.
     @Test func monthPaneRendersOncePerRecordPublication() async throws {
-      let f = Fixture(.month)
+      let f = await Fixture(.month)
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -453,7 +453,7 @@ import Testing
 
     /// Passes before: the lazy month tile updates without extra parent-body evaluations.
     @Test func yearPaneTilesFollowRecordsOncePerPublication() async throws {
-      let f = Fixture(.year)
+      let f = await Fixture(.year)
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -479,7 +479,7 @@ import Testing
 
     /// Passes before: each store refreshes its own rows and leaves the other sidebar quiet.
     @Test func sidebarRowsRenderOncePerOwnRecordPublication() async throws {
-      let f = Fixture(.sidebars)
+      let f = await Fixture(.sidebars)
       try await withCleanup {
         try #require(
           await observe(in: f.window) {

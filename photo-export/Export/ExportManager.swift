@@ -495,7 +495,8 @@ final class ExportManager {
   private func beginRunActivityIfNeeded() {
     guard !holdsRunActivity else { return }
     holdsRunActivity = true
-    queueCoordinator.beginMeasurementRun(automatic: activeRunContext?.source == .autoSync)
+    queueCoordinator.beginMeasurementRun(
+      automatic: activeRunContext?.source == .autoSync, convertHEICToJPEG: convertHEICToJPEG)
     runActivity.begin()
   }
 
@@ -2000,7 +2001,6 @@ final class ExportManager {
   }
 
   private func noteManualPreparationFailure(_ message: String) {
-    exportMeasurements?.invalidate("scan-failed")
     guard manualRunFeedback?.generation == generation else { return }
     if manualRunFeedback?.failureMessage == nil { manualRunFeedback?.failureMessage = message }
   }
@@ -2514,15 +2514,8 @@ final class ExportManager {
   // The sentinel-message `recordVariantFailed` overload is declared above.
   // Cancellation goes directly through the exporter's queue coordinator.
 
-  @ObservationIgnored private var requestedAssetFilename: String?
-
   func setCurrentAssetFilename(_ name: String?) {
-    requestedAssetFilename = name
     progressState.currentAssetFilename = name
-    // A synchronous cancellation may replace the requested value before storage completes.
-    while progressState.currentAssetFilename != requestedAssetFilename {
-      progressState.currentAssetFilename = requestedAssetFilename
-    }
   }
 
   func setCurrentJobVariant(_ variant: ExportVariant?) {
@@ -2725,7 +2718,6 @@ final class ExportManager {
     let owner = generation
     guard isCurrent(owner), !Task.isCancelled else { return }
     if manualRunFeedback?.generation == owner { manualRunFeedback?.failureSignals += 1 }
-    exportMeasurements?.invalidate("variant-failed")
     activeRunBookkeeping?.failedCount += 1
     activeRunBookkeeping?.failures.append(
       ExportRunFailureDetail(

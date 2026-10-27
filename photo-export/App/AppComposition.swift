@@ -69,7 +69,7 @@ struct AppComposition {
     var composition = production()
     let service = ScreenshotPhotoLibraryService()
     composition.photoLibraryServiceOverride = service
-    composition.photoKitReader = ScreenshotPhotoKitReader(service: service)
+    composition.photoKitReader = PhotoLibraryServiceReader(service: service)
     composition.wiresAutoSync = false
     composition.isScreenshotMode = true
     composition.screenshotWindowSize = windowSize

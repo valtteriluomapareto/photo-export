@@ -21,59 +21,72 @@ Small development utilities for this project. CI-only steps live under [`ci/`](c
 
 ## Export measurements
 
-For real Photos/NAS throughput, quit existing Photo Export instances and run:
+The single measurement tool captures numeric export events or replays saved numeric and
+legacy completion logs. For a real export, quit Photo Export first, then run:
 
 ```bash
-scripts/perf/collect-export-measurements.sh --app "/path/to/Photo Export.app" --label nas --runs 2
+scripts/perf/collect-export-measurements.sh --app "/path/to/Photo Export.app" \
+  --label local --cache-state cold --runs 1
 ```
 
-Use a build containing the measurement instrumentation. The command starts a narrowly
-filtered numeric log subscriber before launching the app with temporary measurement
-arguments. Choose the same Photos selection and export settings, then start an export
-to a **fresh disposable destination for each run**. Reusing an already-exported destination
-measures skipping rather than export throughput. Do not delete your real export history.
-Repeat with `--label icloud` and `--label heic` for the applicable selections. Keep the
-same workload, power/network conditions, and capture mode for before/after comparisons;
-iCloud caches warm between runs, so record the order and compare like conditions.
+The tool starts its filtered log subscriber before launching the supplied app with
+`--export-measurements` and `--export-watchdog`. You choose the Photos selection and
+settings and start the export to a **fresh disposable destination**. Reusing an already
+exported destination measures skipping. Do not delete your real export history. The tool
+never starts exports or changes settings, uploads nothing, and leaves the app open.
+Ctrl-C saves partial results and stops only its own log/caffeinate processes.
 
-Capture stops after 2 eligible complete manual runs; background Auto Export runs are
-identified separately and do not satisfy the requested sample count. The app stays open. Ctrl-C saves partial
-results and stops only the collector's log/caffeinate processes. No exports are started
-by the command, no settings are changed, and nothing is uploaded. An existing app is
-refused so two instances cannot share its stores. Log access must be allowed for the
-terminal running the command; no sudo is needed or requested.
+Capture cold and warm runs separately with `--cache-state cold` or `--cache-state warm`.
+Record run order and use the same workload, power/network conditions and settings for
+before/after comparisons. A warm run needs **at least 30 seconds between its first and
+last completion**; shorter windows remain visible but are marked unsuitable for comparison.
+The T0 warm window of about 2 seconds is too short. Never combine cold and warm medians or
+staging shares. For T1's HEIC conversion workload, turn **Convert HEIC to JPEG** on before
+starting the export; each numeric run records the actual setting. Older captures and
+legacy completion logs report HEIC conversion as **unknown**, without inferring it from a
+label; unknown settings also make a run unsuitable for comparison. Use `--cache-state unknown` if the source/cache conditions are not known.
 
-The printed output directory contains `summary.md` (paste this on the tracking issue),
-`results.json` (build identity and numeric results), and `events.ndjson` (sanitized replay
-input). Add `--output /new/folder` to choose a location; existing paths are never reused.
-The report omits filenames, Photos identifiers and destination paths. Asset ordinals
-in the replay input are local to each run and are not Photos identifiers.
+The output directory contains `summary.md`, `results.json`, and sanitized `events.ndjson`.
+Use `--output /new/folder` to choose a new location; existing paths are refused. The
+report includes build/version metadata when capturing live, and omits filenames, Photos
+identifiers and destination paths. Per-run asset ordinals are not Photos identifiers.
 
-- Throughput is distinct committed assets divided by the **first-to-last-completion**
-  window, matching `throughput-from-log.sh`; preparation and the first write precede it.
-- Logical run wall includes preparation and queue work. Job wall brackets each actual
-  `performExport` await, including final commit/history work.
-- Staging is the sum of physical copy/resource/render/conversion await times divided by
-  summed complete-job wall time. It includes producer suspension and retry attempts,
-  excludes directory repair and cleanup, and is **not CPU time** or main-thread stall time.
-- The report counts main-thread turns strictly above 16, 33 and 100 ms and lists long
-  turns. These thresholds are cumulative. Numeric event sequences and terminal counts
-  catch missing evidence; paused, canceled, cleared or failed runs cannot become clean
-  baselines. Staging validity is reported separately from completion-window validity.
+Each run reports independently:
 
-The app's build toolchain comes from its bundle metadata when available; the executable
-bundle SHA-256 identifies the measured app, including Debug implementation dylibs. This does not claim that an installed
-Xcode version built an arbitrary supplied app. For offline report regeneration (retain the original `results.json` for build provenance):
+- Distinct committed assets divided by the **first-to-last-completion** window.
+  Preparation and the first asset's write precede this window; keep the denominator
+  unchanged for comparisons.
+- Staging share: summed physical copy/resource/render/conversion await times divided by
+  summed job wall time. This includes producer suspension and retries, excludes directory
+  repair and cleanup, and is **not CPU time** or main-thread stall time.
+- Main-thread turns strictly above 16, 33 and 100 ms, counted cumulatively.
+
+Choose complete, uninterrupted exports. These are observed timings, without sequence
+checks or run seals that certify completeness. An unfinished capture retains its observed
+metrics. Automatic runs are labeled separately and do not satisfy the manual run count.
+
+Replay a numeric capture without launching the app (keep its original report for build
+metadata):
 
 ```bash
 scripts/perf/collect-export-measurements.sh --replay /capture/events.ndjson \
-  --session <UUID-from-results.json> --label nas --runs 2 --output /new/replay-folder
+  --session <UUID-from-results.json> --label local --cache-state cold --output /new/replay
 ```
 
-Legacy completion logs remain supported by `scripts/perf/throughput-from-log.sh --verbose
-run-1.log run-2.log`. The existing `scripts/perf/run-main-thread-bench.sh` separately runs
-optimized Debug samples using scratch-only fakes and prints `BENCH` medians; it does not
-establish real Photos/NAS throughput or staging percentages.
+Replay legacy completion logs through the same tool, one file per export run. Their
+staging, HEIC setting and main-thread counts are unavailable; the raw identifiers and
+paths in those logs are not copied into the output. Capture compact logs in UTC and
+isolate each run's `VariantExporter` completion lines using its start/end times.
+
+```bash
+scripts/perf/collect-export-measurements.sh --completion-log run-1.log run-2.log \
+  --label local --cache-state warm --runs 2 --output /new/legacy-report
+```
+
+`--completion-log -` reads one run from stdin. The separate
+`scripts/perf/run-main-thread-bench.sh` runs optimized Debug samples using scratch-only
+fakes and prints `BENCH` medians; it does not establish real Photos/NAS throughput or
+staging percentages.
 
 ## CI scripts (`scripts/ci/`)
 

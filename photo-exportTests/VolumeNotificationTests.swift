@@ -29,7 +29,7 @@ struct VolumeNotificationTests {
     #expect(center.removals == 2)
   }
 
-  @Test func failedScopeAcquisitionDoesNotReleaseOrProbeTheDestination() {
+  @Test func failedScopeAcquisitionDoesNotReleaseOrProbeTheDestination() async {
     let suite = TestScratch.suiteName("VolumeDenied")
     let defaults = TestScratch.defaults(suiteName: suite)
     defer { defaults.removePersistentDomain(forName: suite) }
@@ -45,7 +45,7 @@ struct VolumeNotificationTests {
       validationScopeAcquirer: { _ in false },
       validationScopeReleaser: { _ in releases += 1 })
     manager.setSelectedFolderForTesting(URL(fileURLWithPath: "/unreachable-test-volume"))
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     #expect(!manager.isAvailable && !manager.isWritable)
     #expect(manager.destinationId == nil)
     #expect(releases == 0 && fingerprints == 0)
@@ -78,7 +78,7 @@ struct VolumeNotificationTests {
         completed.continuation.yield(())
       })
     manager.setSelectedFolderForTesting(folder)
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     _ = await validationIterator.next()
     let stableId = try #require(manager.destinationId)
     let timeline = ExportRecordStore(baseDirectoryURL: root.appendingPathComponent("Records"))
@@ -94,13 +94,15 @@ struct VolumeNotificationTests {
       cancelActiveWork: {}, interruptForDestinationUnavailable: { interruptions += 1 },
       configureRecordStores: { id in
         configurations.append(id)
-        timeline.configure(for: id)
-        collections.configure(for: id)
+        timeline.beginConfigure(for: id)
+        collections.beginConfigure(for: id)
         return .success
       })
     lifecycle.attach(
       initial: DestinationIdentitySnapshot(identity: manager.identity),
       identityPublisher: manager.identityPublisher)
+    await timeline.waitUntilSettled()
+    await collections.waitUntilSettled()
     timeline.markVariantExported(
       assetId: "kept", variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "kept.jpg", exportedAt: Date())
@@ -129,6 +131,8 @@ struct VolumeNotificationTests {
     #expect(manager.destinationId == stableId)
     #expect(lifecycle.lastConfiguredDestinationId == stableId)
     #expect(configurations == [stableId, nil, stableId])
+    await timeline.waitUntilSettled()
+    await collections.waitUntilSettled()
     #expect(timeline.exportInfo(assetId: "kept")?.variants[.original]?.status == .done)
     #expect(
       collections.exportInfo(assetId: "kept", placement: placement)?.variants[.original]?.status

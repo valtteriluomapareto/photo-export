@@ -75,7 +75,7 @@ import Testing
       let window: NSWindow
       let favorite = ExportPlacement.favorites()
 
-      init(preselectFirstAsset: Bool = false) {
+      init(preselectFirstAsset: Bool = false) async {
         service = BulkLibraryFixture.makeFakeLibrary(
           timelineAssets: 0,
           albumFolders: 1, albumsPerFolder: 1, assetsPerAlbum: 10_000)
@@ -86,8 +86,8 @@ import Testing
         defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         records = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
-        timeline.configure(for: "test")
-        records.configure(for: "test")
+        await timeline.configureAndWait(for: "test")
+        await records.configureAndWait(for: "test")
         records.upsertPlacement(favorite)
         manager = ExportManager(
           photoLibraryService: service, exportDestination: fakeDestination,
@@ -143,7 +143,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func mountedGridScrollingPreheatsAssetsBeyondInitialWindow() async throws {
-      let f = Fixture(preselectFirstAsset: true)
+      let f = await Fixture(preselectFirstAsset: true)
       defer { f.close() }
       f.show()
       try #require(
@@ -175,7 +175,7 @@ import Testing
     /// modifier alone doesn't fail this.
     @Test(.timeLimit(.minutes(2)))
     func unrelatedQueuePublicationsDoNotRescanLoadedCollection() async throws {
-      let f = Fixture(preselectFirstAsset: true)
+      let f = await Fixture(preselectFirstAsset: true)
       defer { f.close() }
       f.show()
       let loaded = await observe(in: f.window) {
@@ -220,7 +220,7 @@ import Testing
   extension CollectionContentObservationTests {
     @Test(.timeLimit(.minutes(2)))
     func settingsRecordsMembershipAndLiveBindingStillRender() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       let adjusted = TestAssetFactory.makeAsset(
         id: "adjusted", creationDate: Date(timeIntervalSince1970: 1_700_000_000),
@@ -309,7 +309,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func readinessAndRenderedActionsFollowCurrentScopeAfterNavigation() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.destination.configureForScreenshotMode()
       f.navigation.title = "Same title"
@@ -328,13 +328,13 @@ import Testing
       let ready = await observe(in: f.window) { f.counter.count(for: "canExport:true") > 0 }
       try #require(ready)
       let disabledBefore = f.counter.count(for: "canExport:false")
-      f.records.configure(for: nil)
+      await f.records.configureAndWait(for: nil)
       let disabled = await observe(in: f.window) {
         f.counter.count(for: "canExport:false") > disabledBefore
       }
       try #require(disabled)
       let enabledBefore = f.counter.count(for: "canExport:true")
-      f.records.configure(for: "test")
+      await f.records.configureAndWait(for: "test")
       let reenabled = await observe(in: f.window) {
         f.counter.count(for: "canExport:true") > enabledBefore
       }

@@ -46,7 +46,7 @@ import Testing
       var hosted: NSView?
       static let hostHeight: CGFloat = 600
 
-      init(fault: History? = nil) {
+      init(fault: History? = nil) async {
         defaults = TestScratch.defaults(suiteName: defaultsName)
         timeline = ExportRecordStore(
           baseDirectoryURL: root, reconciliationFileChecker: checker,
@@ -54,8 +54,8 @@ import Testing
         collections = CollectionExportRecordStore(
           baseDirectoryURL: root, reconciliationFileChecker: checker,
           recordLogIO: fault == .collection ? io : ProductionJSONLRecordLogIO())
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         manager = ExportManager(
           photoLibraryService: photos, exportDestination: destination,
           exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -135,7 +135,7 @@ import Testing
     /// was matched to, and says when the album history couldn't be rebuilt.
     @Test(.timeLimit(.minutes(2)))
     func resultShowsAlbumAndFavoritesRows() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.show()
       f.manager.importResult = ImportReport(
@@ -160,7 +160,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func rootFailureIsTerminalPreservesHistoryAndCanRetry() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       var started = false
       var terminal: (error: String?, stage: BackupScanner.ImportStage?, report: ImportReport?)?
@@ -189,8 +189,8 @@ import Testing
         f.collections.exportInfo(assetId: "history", placement: f.favorites) == collectionBefore)
       let reopenedTimeline = ExportRecordStore(baseDirectoryURL: f.root)
       let reopenedCollections = CollectionExportRecordStore(baseDirectoryURL: f.root)
-      reopenedTimeline.configure(for: "A")
-      reopenedCollections.configure(for: "A")
+      await reopenedTimeline.configureAndWait(for: "A")
+      await reopenedCollections.configureAndWait(for: "A")
       #expect(reopenedTimeline.exportInfo(assetId: "history") == timelineBefore)
       #expect(
         reopenedCollections.exportInfo(assetId: "history", placement: f.favorites)
@@ -203,7 +203,7 @@ import Testing
       #expect(f.counter.renderedText["import-message"] == [importError])
       #expect(f.counter.renderedActions["import-close"] != nil)
       let failure = f.manager.importError
-      f.timeline.configure(for: nil)
+      await f.timeline.configureAndWait(for: nil)
       f.manager.startImport()  // Rejected start must preserve the failure.
       #expect(f.manager.importError == failure)
       let blocked = await observe { f.counter.renderedText["import-can-retry"] == ["false"] }
@@ -211,7 +211,7 @@ import Testing
       let rejectedRetry = try #require(f.counter.renderedActions["import-retry"])
       rejectedRetry()
       #expect(!f.manager.isImporting && f.manager.importError == failure)
-      f.timeline.configure(for: "A")
+      await f.timeline.configureAndWait(for: "A")
       f.destinationManager.clearSelection()
       let disconnected = await observe { f.counter.renderedText["import-can-retry"] == ["false"] }
       try #require(disconnected)
@@ -236,7 +236,7 @@ import Testing
     /// A failure already showing at the first layout must render whole.
     @Test(.timeLimit(.minutes(1)))
     func failureViewRendersWhenItIsTheFirstLayout() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.destination.selectedFolderURL = f.destination.rootURL.appendingPathComponent("missing")
       f.manager.startImport()
@@ -259,7 +259,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func deniedScopeStopsProgressWithoutClosingAnUnopenedScope() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.destination.scopedAccessAvailable = false
       f.show()
@@ -276,7 +276,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)), arguments: History.allCases)
     func failedHistoryWriteRequiresRecoveryBeforeRetry(history: History) async throws {
-      let f = Fixture(fault: history)
+      let f = await Fixture(fault: history)
       defer { f.close() }
       try await f.seedHistory()
       try f.plantMatch()
@@ -297,9 +297,9 @@ import Testing
       #expect(!f.manager.isImporting && f.manager.importError == failure)
       f.io.arm(false)
       if history == .timeline {
-        f.timeline.retryPersistence()
+        await f.timeline.retryHistoryPersistence()
       } else {
-        f.collections.retryPersistence()
+        await f.collections.retryHistoryPersistence()
       }
       let eligible = await observe { f.counter.renderedText["import-can-retry"] == ["true"] }
       try #require(eligible)
@@ -317,7 +317,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)), arguments: [false, true])
     func generationInvalidationBeforeTaskEntrySettlesActivity(unavailable: Bool) async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.manager.startImport()
       let old = try #require(f.manager.importTask)
@@ -336,7 +336,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func oldMatchingTaskCannotReplaceNewFailure() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let gate = AsyncCheckpoint()
       var imports: [Task<Void, Never>] = []
       try await withCleanup {
@@ -377,7 +377,7 @@ import Testing
     func generationOnlyInterruptionDuringMatchingSettlesWithoutFailure(unavailable: Bool)
       async throws
     {
-      let f = Fixture()
+      let f = await Fixture()
       let gate = AsyncCheckpoint()
       var imports: [Task<Void, Never>] = []
       try await withCleanup {
@@ -419,18 +419,18 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func idleRejectedStartAndCancelStayCloseableWithoutFailure() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let gate = AsyncCheckpoint()
       var imports: [Task<Void, Never>] = []
       try await withCleanup {
-        f.timeline.configure(for: nil)
+        await f.timeline.configureAndWait(for: nil)
         f.show()
         f.manager.startImport()
         #expect(!f.manager.isImporting && f.manager.importError == nil)
         guard await shows("Import Stopped", in: f) else { return }
         #expect(f.counter.renderedText["import-progress"] == ["false"])
         #expect(f.counter.renderedActions["import-close"] != nil)
-        f.timeline.configure(for: "A")
+        await f.timeline.configureAndWait(for: "A")
         try f.plantMatch()
         f.photos.fetchAssetsCheckpointByYear[2026] = gate
         f.manager.startImport()

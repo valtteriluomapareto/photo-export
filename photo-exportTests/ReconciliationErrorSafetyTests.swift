@@ -17,7 +17,7 @@ struct ReconciliationErrorSafetyTests {
     let collections: CollectionExportRecordStore
 
     init(collection: Bool, checker: any ReconciliationFileChecking = ReconciliationFileChecker())
-      throws
+      async throws
     {
       self.collection = collection
       placement = collection ? .favorites() : .timeline(year: 2025, month: 3)
@@ -27,8 +27,8 @@ struct ReconciliationErrorSafetyTests {
       collections = CollectionExportRecordStore(
         baseDirectoryURL: root.appendingPathComponent("Records"), reconciliationFileChecker: checker
       )
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       collections.upsertPlacement(.favorites())
       try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
     }
@@ -104,8 +104,8 @@ struct ReconciliationErrorSafetyTests {
       withDestinationPath: "LOOP.JPG")
     let timeline = ExportRecordStore(baseDirectoryURL: records)
     let collections = CollectionExportRecordStore(baseDirectoryURL: records)
-    timeline.configure(for: "A")
-    collections.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
+    await collections.configureAndWait(for: "A")
     collections.upsertPlacement(.favorites())
     for filename in ["PRESENT.JPG", "MISSING.JPG", "LOOP.JPG"] {
       if collection {
@@ -129,7 +129,7 @@ struct ReconciliationErrorSafetyTests {
       #expect(collections.recordBodies == before)
       try await collections.flush()
       let fresh = CollectionExportRecordStore(baseDirectoryURL: records)
-      fresh.configure(for: "A")
+      await fresh.configureAndWait(for: "A")
       #expect(fresh.recordBodies == before)
     } else {
       let before = timeline.recordsById
@@ -139,14 +139,14 @@ struct ReconciliationErrorSafetyTests {
       #expect(timeline.recordsById == before)
       try await timeline.flush()
       let fresh = ExportRecordStore(baseDirectoryURL: records)
-      fresh.configure(for: "A")
+      await fresh.configureAndWait(for: "A")
       #expect(fresh.recordsById == before)
     }
   }
 
   @Test(arguments: [false, true], [Int(EACCES), Int(EIO), Int(ENOTCONN)])
   func verificationFailuresNeverCommitMissingCandidates(collection: Bool, code: Int) async throws {
-    let f = try Fixture(collection: collection, checker: FaultChecker(code: code))
+    let f = try await Fixture(collection: collection, checker: FaultChecker(code: code))
     f.seed("MISSING.JPG")
     f.seed("ERROR.JPG")
     let before = f.info("MISSING.JPG")
@@ -159,7 +159,7 @@ struct ReconciliationErrorSafetyTests {
   @Test(arguments: [false, true])
   func laterProbeFailureDiscardsAlreadyAccumulatedMissingCandidate(collection: Bool) async throws {
     let checker = LateFailureChecker()
-    let f = try Fixture(collection: collection, checker: checker)
+    let f = try await Fixture(collection: collection, checker: checker)
     f.seed("FIRST.JPG")
     f.seed("SECOND.JPG")
     await #expect(throws: (any Error).self) { try await f.reconcile() }
@@ -170,7 +170,7 @@ struct ReconciliationErrorSafetyTests {
     try await f.collections.flush()
     if collection {
       let fresh = CollectionExportRecordStore(baseDirectoryURL: f.records)
-      fresh.configure(for: "A")
+      await fresh.configureAndWait(for: "A")
       for filename in ["FIRST.JPG", "SECOND.JPG"] {
         #expect(
           fresh.exportInfo(assetId: filename, placement: f.placement)?.variants[.original]?.status
@@ -178,7 +178,7 @@ struct ReconciliationErrorSafetyTests {
       }
     } else {
       let fresh = ExportRecordStore(baseDirectoryURL: f.records)
-      fresh.configure(for: "A")
+      await fresh.configureAndWait(for: "A")
       for filename in ["FIRST.JPG", "SECOND.JPG"] {
         #expect(fresh.exportInfo(assetId: filename)?.variants[.original]?.status == .done)
       }
@@ -187,7 +187,7 @@ struct ReconciliationErrorSafetyTests {
   }
 
   @Test func malformedCollectionDirectoryCannotPruneExistingVideo() async throws {
-    let f = try Fixture(collection: true)
+    let f = try await Fixture(collection: true)
     let malformed = ExportPlacement(
       kind: .favorites, id: f.placement.id, displayName: "Favorites",
       collectionLocalIdentifier: nil, relativePath: "Collections/Favorites", createdAt: Date())
@@ -205,7 +205,7 @@ struct ReconciliationErrorSafetyTests {
     #expect(f.collections.recordBodies == before)
     try await f.collections.flush()
     let fresh = CollectionExportRecordStore(baseDirectoryURL: f.records)
-    fresh.configure(for: "A")
+    await fresh.configureAndWait(for: "A")
     #expect(fresh.recordBodies == before)
     #expect(
       try Data(contentsOf: directory.appendingPathComponent("FILE.MOV"))
@@ -215,7 +215,7 @@ struct ReconciliationErrorSafetyTests {
 
   @Test(arguments: [false, true])
   func genuineChildMissingAndNotDirectoryPathsArePruned(collection: Bool) async throws {
-    let f = try Fixture(collection: collection)
+    let f = try await Fixture(collection: collection)
     f.seed("ENOENT.JPG")
     #expect(try await f.reconcile() == 1)
     f.seed("ENOTDIR.JPG")
@@ -247,7 +247,7 @@ struct ReconciliationErrorSafetyTests {
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func rootDisappearingAfterFileProbesRejectsPrunes(collection: Bool) async throws {
     let checker = GatedReconciliationFileChecker()
-    let f = try Fixture(collection: collection, checker: checker)
+    let f = try await Fixture(collection: collection, checker: checker)
     f.seed("MISSING.JPG")
     let before = f.info("MISSING.JPG")
     let gate = AsyncCheckpoint()
@@ -270,7 +270,7 @@ struct ReconciliationErrorSafetyTests {
 
   @Test(arguments: [false, true])
   func nonDirectoryRootCannotAuthorizePruning(collection: Bool) async throws {
-    let f = try Fixture(collection: collection)
+    let f = try await Fixture(collection: collection)
     f.seed("MISSING.JPG")
     try FileManager.default.removeItem(at: f.media)
     try Data("file".utf8).write(to: f.media)
@@ -281,7 +281,7 @@ struct ReconciliationErrorSafetyTests {
 
   @Test(arguments: ["", "../escape.JPG", "/absolute.JPG", "a/b.JPG", ".", ".."])
   func unsafeStoredFilenameCannotAuthorizePruning(filename: String) async throws {
-    let f = try Fixture(collection: false)
+    let f = try await Fixture(collection: false)
     f.seed(filename)
     await #expect(throws: ReconciliationVerificationError.self) { try await f.reconcile() }
     #expect(f.info(filename)?.status == .done)
@@ -305,8 +305,8 @@ struct ReconciliationErrorSafetyTests {
       baseDirectoryURL: root, reconciliationFileChecker: collectionFailure ? normal : fault)
     let collections = CollectionExportRecordStore(
       baseDirectoryURL: root, reconciliationFileChecker: collectionFailure ? fault : normal)
-    timeline.configure(for: "A")
-    collections.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
+    await collections.configureAndWait(for: "A")
     collections.upsertPlacement(.favorites())
     for filename in ["MISSING.JPG", "ERROR.JPG"] {
       timeline.markVariantExported(
@@ -334,7 +334,7 @@ struct ReconciliationErrorSafetyTests {
     try await timeline.flush()
     try await collections.flush()
     let fresh = CollectionExportRecordStore(baseDirectoryURL: root)
-    fresh.configure(for: "A")
+    await fresh.configureAndWait(for: "A")
     #expect(fresh.recordBodies == beforeCollections)
     #expect(destination.beginScopedAccessCount == destination.endScopedAccessCount)
   }

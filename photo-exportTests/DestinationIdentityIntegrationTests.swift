@@ -46,7 +46,7 @@ struct DestinationIdentityIntegrationTests {
       bookmarkDefaultsKey: "Bookmark-\(UUID().uuidString)",
       stableIdDefaultsKey: "StableId-\(UUID().uuidString)",
       fingerprintProvider: { _ in currentFP })
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let stableId = try #require(manager.destinationId)
 
     let timelineStore = ExportRecordStore(baseDirectoryURL: recordsRoot)
@@ -101,7 +101,7 @@ struct DestinationIdentityIntegrationTests {
     // Remount drift: same folder, different fingerprint id.
     currentFP = lowConfidence("/Volumes/mount-B/backup")
     #expect(currentFP?.id != stableId)
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     for _ in 0..<5 { await Task.yield() }
     await timelineStore.waitUntilSettled()
     await collectionStore.waitUntilSettled()

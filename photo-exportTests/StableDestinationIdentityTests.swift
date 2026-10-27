@@ -42,7 +42,7 @@ struct StableDestinationIdentityTests {
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS quirk: startAccessingSecurityScopedResource() returns false for bare container tmp URLs, tripping the #92 bail-out in validate(). The CI macOS runner returns true so this runs there."
     ))
-  func stableIdReusedAcrossSimulatedRemountDrift() throws {
+  func stableIdReusedAcrossSimulatedRemountDrift() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -53,7 +53,7 @@ struct StableDestinationIdentityTests {
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP })
 
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = manager.destinationId
     #expect(seeded == currentFP?.id)  // seed == the fingerprint id at first validate
     #expect(defaults.string(forKey: stableKey) == seeded)  // frozen to defaults
@@ -61,7 +61,7 @@ struct StableDestinationIdentityTests {
     // Remount drift: same folder, different (low-confidence) fingerprint id.
     currentFP = lowConfidence("/Volumes/mount-B/backup")
     #expect(currentFP?.id != seeded)
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
 
     #expect(manager.destinationId == seeded)  // reused verbatim, NOT re-derived — the #127 fix
     #expect(manager.identity.fingerprint == currentFP)  // advisory fingerprint refreshed
@@ -74,7 +74,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func highConfidenceAbsentIdSeedsToFingerprintId() throws {
+  func highConfidenceAbsentIdSeedsToFingerprintId() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -87,7 +87,7 @@ struct StableDestinationIdentityTests {
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in highFP })
 
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
 
     #expect(manager.destinationId == highFP.id)
     #expect(defaults.string(forKey: stableKey) == highFP.id)
@@ -97,7 +97,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func nilFingerprintAtValidateDefersSeedingThenSeedsWhenReadable() throws {
+  func nilFingerprintAtValidateDefersSeedingThenSeedsWhenReadable() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -109,13 +109,13 @@ struct StableDestinationIdentityTests {
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP })
 
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     #expect(manager.destinationId == nil)  // seeding deferred
     #expect(defaults.string(forKey: stableKey) == nil)  // nothing persisted
 
     // Fingerprint becomes readable → seeds now.
     currentFP = lowConfidence("/Volumes/mount-A/backup")
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     #expect(manager.destinationId == currentFP?.id)
     #expect(defaults.string(forKey: stableKey) == currentFP?.id)
   }
@@ -130,7 +130,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func remountAfterUnavailableReusesSameStableIdWithoutReseeding() throws {
+  func remountAfterUnavailableReusesSameStableIdWithoutReseeding() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -140,18 +140,18 @@ struct StableDestinationIdentityTests {
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP })
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     // Drive becomes unavailable (resource keys unreadable) → active id nil, persisted retained.
     currentFP = nil
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     #expect(manager.destinationId == nil)
     #expect(defaults.string(forKey: stableKey) == seeded)
 
     // Returns under a drifted path → the same id is reused, not re-seeded.
     currentFP = lowConfidence("/Volumes/mount-B/backup")
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     #expect(manager.destinationId == seeded)
   }
 
@@ -162,7 +162,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func clearSelectionDropsStableIdSoNextSelectionReseeds() throws {
+  func clearSelectionDropsStableIdSoNextSelectionReseeds() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -172,7 +172,7 @@ struct StableDestinationIdentityTests {
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP })
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
     #expect(defaults.string(forKey: stableKey) == seeded)
 
@@ -184,7 +184,7 @@ struct StableDestinationIdentityTests {
     #expect(manager.currentLegacyDestinationId() == nil)  // stashed legacy id cleared
 
     currentFP = lowConfidence("/Volumes/mount-Z/backup")
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     #expect(manager.destinationId == currentFP.id)
     #expect(manager.destinationId != seeded)
   }
@@ -200,7 +200,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func sameFolderReSelectionViaRealEvidenceKeepsStableId() throws {
+  func sameFolderReSelectionViaRealEvidenceKeepsStableId() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -211,11 +211,11 @@ struct StableDestinationIdentityTests {
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP })
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     currentFP = lowConfidence("/Volumes/mount-B/backup")  // path drift between selections
-    manager.selectFolderForTesting(dir)
+    await manager.selectFolderAndWait(dir)
 
     #expect(manager.destinationId == seeded)
   }
@@ -226,7 +226,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func differentFolderReSelectionViaRealEvidenceMintsNewId() throws {
+  func differentFolderReSelectionViaRealEvidenceMintsNewId() async throws {
     let dirA = try makeTempDir()
     let dirB = try makeTempDir()
     defer {
@@ -241,10 +241,10 @@ struct StableDestinationIdentityTests {
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey,
       fingerprintProvider: { url in self.lowConfidence(url.path) })
-    manager.persistSelectedFolderForTesting(dirA)
+    await manager.persistSelectionAndWait(dirA)
     let seededA = try #require(manager.destinationId)
 
-    manager.selectFolderForTesting(dirB)
+    await manager.selectFolderAndWait(dirB)
 
     #expect(manager.destinationId != seededA)
   }
@@ -258,7 +258,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func ambiguousSelectionResolvedAsSameKeepsStableId() throws {
+  func ambiguousSelectionResolvedAsSameKeepsStableId() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -270,11 +270,11 @@ struct StableDestinationIdentityTests {
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP },
       sameFolderEvidenceProvider: { _ in .ambiguous },
       ambiguityResolver: { _ in .sameDestination })
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     currentFP = lowConfidence("/Volumes/mount-B/backup")
-    manager.selectFolderForTesting(dir)
+    await manager.selectFolderAndWait(dir)
 
     #expect(manager.destinationId == seeded)
   }
@@ -284,7 +284,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func ambiguousSelectionResolvedAsNewMintsStableId() throws {
+  func ambiguousSelectionResolvedAsNewMintsStableId() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -296,11 +296,11 @@ struct StableDestinationIdentityTests {
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in currentFP },
       sameFolderEvidenceProvider: { _ in .ambiguous },
       ambiguityResolver: { _ in .newDestination })
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     currentFP = lowConfidence("/Volumes/mount-B/backup")
-    manager.selectFolderForTesting(dir)
+    await manager.selectFolderAndWait(dir)
 
     #expect(manager.destinationId == currentFP.id)
     #expect(manager.destinationId != seeded)
@@ -314,7 +314,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func unresolvableStoredBookmarkIsAmbiguousAndDelegatesToResolver() throws {
+  func unresolvableStoredBookmarkIsAmbiguousAndDelegatesToResolver() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -329,12 +329,12 @@ struct StableDestinationIdentityTests {
         resolverCalls += 1
         return .sameDestination
       })
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     // Corrupt the stored bookmark so `URL(resolvingBookmarkData:)` throws → `.ambiguous`.
     defaults.set(Data("not-a-bookmark".utf8), forKey: bookmarkKey)
-    manager.selectFolderForTesting(dir)
+    await manager.selectFolderAndWait(dir)
 
     #expect(resolverCalls == 1)  // routed through the ambiguity resolver
     #expect(manager.destinationId == seeded)  // resolver chose .sameDestination → id kept
@@ -346,7 +346,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func firstEverSelectionViaRealEvidenceSeedsFreshId() throws {
+  func firstEverSelectionViaRealEvidenceSeedsFreshId() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -357,7 +357,7 @@ struct StableDestinationIdentityTests {
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey, fingerprintProvider: { _ in fp })
 
-    manager.selectFolderForTesting(dir)  // real evidence → .noStoredBookmark → seed
+    await manager.selectFolderAndWait(dir)  // real evidence → .noStoredBookmark → seed
 
     #expect(manager.destinationId == fp.id)
     #expect(defaults.string(forKey: stableKey) == fp.id)
@@ -383,7 +383,7 @@ struct StableDestinationIdentityTests {
       skipRestore: true, userDefaults: defaults, bookmarkDefaultsKey: bookmarkKey,
       stableIdDefaultsKey: stableKey,
       fingerprintProvider: { _ in self.lowConfidence("/Volumes/mount-A/backup") })
-    writer.persistSelectedFolderForTesting(dir)
+    await writer.persistSelectionAndWait(dir)
     let seeded = try #require(writer.destinationId)
 
     // Fresh manager restores on launch (skipRestore defaults false) with a DRIFTED fingerprint.
@@ -406,7 +406,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func failedBookmarkSaveOnNewDestinationKeepsPriorStableId() throws {
+  func failedBookmarkSaveOnNewDestinationKeepsPriorStableId() async throws {
     let dirA = try makeTempDir()
     let dirB = try makeTempDir()
     defer {
@@ -423,11 +423,11 @@ struct StableDestinationIdentityTests {
       fingerprintProvider: { _ in self.lowConfidence("/Volumes/mount-A/backup") },
       sameFolderEvidenceProvider: { _ in .differentFromStored },
       bookmarkSaver: { _ in !failSave })
-    manager.persistSelectedFolderForTesting(dirA)
+    await manager.persistSelectionAndWait(dirA)
     let seeded = try #require(manager.destinationId)
 
     failSave = true
-    manager.selectFolderForTesting(dirB)  // .differentFromStored → .newDestination → save fails
+    await manager.selectFolderAndWait(dirB)  // .differentFromStored → .newDestination → save fails
 
     #expect(manager.destinationId == seeded)  // prior id NOT dropped
     #expect(defaults.string(forKey: stableKey) == seeded)
@@ -442,7 +442,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func resolvedButUnscopableStoredBookmarkIsAmbiguous() throws {
+  func resolvedButUnscopableStoredBookmarkIsAmbiguous() async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
     let (defaults, suite, bookmarkKey, stableKey) = makeDefaults()
@@ -458,10 +458,10 @@ struct StableDestinationIdentityTests {
         return .sameDestination
       },
       storedBookmarkScopeAcquirer: { _ in false })  // resolves, but scope can't be acquired
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
-    manager.selectFolderForTesting(dir)  // real evidence: resolves but unscopable → .ambiguous
+    await manager.selectFolderAndWait(dir)  // real evidence: resolves but unscopable → .ambiguous
 
     #expect(resolverCalls == 1)
     #expect(manager.destinationId == seeded)  // resolver chose .sameDestination → kept
@@ -475,7 +475,7 @@ struct StableDestinationIdentityTests {
     .disabled(
       if: BareTmpScopeProbe.bareTmpRejectsScopeStart(),
       "Local macOS scope quirk; runs on the CI macOS runner."))
-  func fileIdentityUnreadableKeepsIdOnSamePathAndIsAmbiguousOnDifferentPath() throws {
+  func fileIdentityUnreadableKeepsIdOnSamePathAndIsAmbiguousOnDifferentPath() async throws {
     let dir = try makeTempDir()
     let other = try makeTempDir()
     defer {
@@ -495,16 +495,16 @@ struct StableDestinationIdentityTests {
         return .newDestination
       },
       fileIdentifierProvider: { _ in nil })  // force the path fallback
-    manager.persistSelectedFolderForTesting(dir)
+    await manager.persistSelectionAndWait(dir)
     let seeded = try #require(manager.destinationId)
 
     // Same canonical path → still `.sameAsStored`, no confirmation → keep id.
-    manager.selectFolderForTesting(dir)
+    await manager.selectFolderAndWait(dir)
     #expect(resolverCalls == 0)
     #expect(manager.destinationId == seeded)
 
     // Different canonical path with unreadable file ids → `.ambiguous` → resolver decides.
-    manager.selectFolderForTesting(other)
+    await manager.selectFolderAndWait(other)
     #expect(resolverCalls == 1)
     #expect(manager.destinationId != seeded)  // resolver chose .newDestination
   }
@@ -551,7 +551,7 @@ struct StableDestinationIdentityTests {
 
     // User re-selects the same folder; the stored bookmark won't resolve → `.ambiguous` →
     // resolver chooses "Same folder" → `.sameDestination` keeps the stash.
-    manager.selectFolderForTesting(dir)
+    await manager.selectFolderAndWait(dir)
     #expect(manager.currentLegacyDestinationId() == oldLegacyId)
 
     // configureRecordStores migrates ExportRecords/<oldLegacyId>/ → ExportRecords/<stableId>/.

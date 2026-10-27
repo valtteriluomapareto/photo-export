@@ -73,7 +73,7 @@ struct ExportDestinationEscapeProtectionTests {
     #expect(changed.path.hasPrefix(other.path + "/"))
   }
 
-  @Test func unavailableDestinationDropsCachedResolution() throws {
+  @Test func unavailableDestinationDropsCachedResolution() async throws {
     let root = TestScratch.directory("UnavailableDirectoryCache")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let manager = ExportDestinationManager(
@@ -81,7 +81,7 @@ struct ExportDestinationEscapeProtectionTests {
       validationScopeAcquirer: { _ in false }, validationScopeReleaser: { _ in })
     manager.setSelectedFolderForTesting(root)
     let directory = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
-    manager.revalidateForTesting()
+    await manager.revalidateAndWait()
     #expect(throws: ExportDestinationManager.ExportDestinationError.notAvailable) {
       _ = try manager.urlForRelativeDirectory("2025/02/", createIfNeeded: true)
     }
@@ -191,7 +191,7 @@ struct ExportDestinationEscapeProtectionTests {
     writer.checkpoint = checkpoint
     let records = ExportRecordStore(
       baseDirectoryURL: TestScratch.directory("DirectoryCountRecords"))
-    records.configure(for: "count")
+    await records.configureAndWait(for: "count")
     let manager = ExportManager(
       photoLibraryService: photos, exportDestination: ScratchDestination(destination),
       exportRecordStore: records,
@@ -236,7 +236,7 @@ struct ExportDestinationEscapeProtectionTests {
     let photos = FakePhotoLibraryService()
     let writer = FakeAssetResourceWriter()
     let records = ExportRecordStore(baseDirectoryURL: TestScratch.directory("DeletedStageRecords"))
-    records.configure(for: "deleted")
+    await records.configureAndWait(for: "deleted")
     let manager = ExportManager(
       photoLibraryService: photos, exportDestination: ScratchDestination(destination),
       exportRecordStore: records,

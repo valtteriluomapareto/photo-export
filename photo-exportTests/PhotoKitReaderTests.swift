@@ -227,8 +227,8 @@ struct PhotoKitReaderTests {
       case .cancel: h.manager.cancelAndClear()
       case .root: h.dest.selectedFolderURL = h.dest.rootURL.appendingPathComponent("replacement")
       case .history:
-        h.store.configure(for: "replacement")
-        h.collectionStore.configure(for: "replacement")
+        await h.store.configureAndWait(for: "replacement")
+        await h.collectionStore.configureAndWait(for: "replacement")
       }
       gate.release()
       await old.value
@@ -475,7 +475,7 @@ struct PhotoKitReaderTests {
     let year = try #require(try service.availableYears().first)
     let asset = try #require(
       try await service.fetchAssets(year: year, month: nil, mediaType: nil).first)
-    let reader = try #require(await ScreenshotPhotoKitReader(service: service).thumbnailReader)
+    let reader = try #require(await PhotoLibraryServiceReader(service: service).thumbnailReader)
     let handle = try #require(await reader.resolveAssets(ids: [asset.id]).first)
     #expect(handle.photoKitAsset == nil)
     #expect(
@@ -536,3 +536,6 @@ struct PhotoKitReaderTests {
   }
 
 }
+
+// Preserve the protected screenshot tests while sharing the service-backed implementation.
+typealias ScreenshotPhotoKitReader = PhotoLibraryServiceReader

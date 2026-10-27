@@ -18,18 +18,18 @@ struct FinalCommitAcknowledgementTests {
     let placement: ExportPlacement
     let collection: Bool
 
-    init(collection: Bool) {
+    init(collection: Bool) async {
       self.collection = collection
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
       router = RecordStoreRouter(timelineStore: timeline, collectionStore: collections)
       placement = collection ? .favorites() : .timeline(year: 2025, month: 6)
-      select("A")
+      await select("A")
     }
 
-    func select(_ id: String) {
-      timeline.configure(for: id)
-      collections.configure(for: id)
+    func select(_ id: String) async {
+      await timeline.configureAndWait(for: id)
+      await collections.configureAndWait(for: id)
     }
 
     var state: RecordStoreState { collection ? collections.state : timeline.state }
@@ -92,14 +92,14 @@ struct FinalCommitAcknowledgementTests {
   /// The store is ready and still on the commit's destination.
   @Test(arguments: [false, true])
   func readyStoreRecordsTheAcknowledgedName(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.cleanup() }
     let acknowledge = try f.capture()
     await acknowledge(Self.committed)
     #expect(f.filename() == Self.committed)
     #expect(f.isClaimed("img_0001 (1).jpg"))
     #expect(!f.isClaimed(Self.committed, excluding: "asset"))
-    f.select("A")
+    await f.select("A")
     #expect(f.filename() == Self.committed)
     #expect(f.isClaimed(Self.committed))
   }
@@ -107,7 +107,7 @@ struct FinalCommitAcknowledgementTests {
   /// A nil acknowledgement records nothing.
   @Test(arguments: [false, true])
   func nilAcknowledgementRecordsNothing(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.cleanup() }
     let acknowledge = try f.capture()
     await acknowledge(nil)
@@ -119,17 +119,17 @@ struct FinalCommitAcknowledgementTests {
   /// and then recorded under the acknowledged name.
   @Test(arguments: [false, true])
   func deferredCompletionRecordsTheAcknowledgedName(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("old", filename: "OLD.JPG")
     let acknowledge = try f.capture()
-    f.select("B")
+    await f.select("B")
     try Data("corrupt snapshot".utf8).write(to: f.file("A", snapshot: true))
-    f.select("A")
+    await f.select("A")
     #expect(f.state == .failed)
     await acknowledge(Self.committed)
     #expect(f.filename() == nil)
-    if collection { f.collections.resetToEmpty() } else { f.timeline.resetToEmpty() }
+    if collection { await f.collections.resetHistory() } else { await f.timeline.resetHistory() }
     #expect(f.state == .ready)
     #expect(f.filename() == Self.committed)
     #expect(f.isClaimed(Self.committed))
@@ -140,14 +140,14 @@ struct FinalCommitAcknowledgementTests {
   /// and is there under the acknowledged name when that destination is selected again.
   @Test(arguments: [false, true])
   func parkedCompletionRecordsTheAcknowledgedName(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.cleanup() }
     let acknowledge = try f.capture()
-    f.select("B")
+    await f.select("B")
     await acknowledge(Self.committed)
     #expect(f.filename() == nil)
     #expect(!f.isClaimed(Self.committed))
-    f.select("A")
+    await f.select("A")
     #expect(f.filename() == Self.committed)
     #expect(f.isClaimed(Self.committed))
   }
@@ -156,16 +156,16 @@ struct FinalCommitAcknowledgementTests {
   /// its claims, and the completion is added under the acknowledged name.
   @Test(arguments: [false, true])
   func restoredSnapshotRecordsTheAcknowledgedName(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("old", filename: "OLD.JPG")
     let acknowledge = try f.capture()
-    f.select("B")
+    await f.select("B")
     let log = f.file("A", snapshot: false)
     let logBytes = try Data(contentsOf: log)
     try FileManager.default.removeItem(at: log)
     try FileManager.default.createDirectory(at: log, withIntermediateDirectories: false)
-    f.select("A")
+    await f.select("A")
     #expect(f.state == .persistenceFailed)
     #expect(!f.isClaimed("OLD.JPG"))
     await acknowledge(Self.committed)
@@ -174,17 +174,21 @@ struct FinalCommitAcknowledgementTests {
     #expect(f.isClaimed("OLD.JPG"))
     #expect(f.isClaimed(Self.committed))
     // Still unsaved: switching away and back restores the retained history and its claims.
-    f.select("B")
-    f.select("A")
+    await f.select("B")
+    await f.select("A")
     #expect(f.state == .persistenceFailed)
     #expect(f.isClaimed("OLD.JPG"))
     #expect(f.isClaimed(Self.committed))
     try FileManager.default.removeItem(at: log)
     try logBytes.write(to: log)
-    if collection { f.collections.retryPersistence() } else { f.timeline.retryPersistence() }
+    if collection {
+      await f.collections.retryHistoryPersistence()
+    } else {
+      await f.timeline.retryHistoryPersistence()
+    }
     #expect(f.state == .ready)
-    f.select("B")
-    f.select("A")
+    await f.select("B")
+    await f.select("A")
     #expect(f.filename() == Self.committed)
     #expect(f.isClaimed(Self.committed))
   }
@@ -192,22 +196,22 @@ struct FinalCommitAcknowledgementTests {
   /// The captured acknowledgement remains outstanding through the newer destination history.
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func lateAcknowledgementPreservesNewerRoundTripHistory(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("old", filename: "OLD.JPG")
     let acknowledge = try f.capture()
-    f.select("B")
+    await f.select("B")
     try await f.seed("B-only", filename: "B.JPG")
-    f.select("A")
+    await f.select("A")
     try await f.seed("newer-A", filename: "NEW.JPG")
-    f.select("B")
+    await f.select("B")
     #expect(f.filename() == nil)
     await acknowledge(Self.committed)
-    f.select("A")
+    await f.select("A")
     #expect(f.filename() == Self.committed)
     #expect(f.filename("newer-A") == "NEW.JPG")
     #expect(f.isClaimed("NEW.JPG"))
-    f.select("B")
+    await f.select("B")
     #expect(f.filename("B-only") == "B.JPG")
     #expect(f.filename() == nil)
   }
@@ -217,12 +221,12 @@ struct FinalCommitAcknowledgementTests {
   /// original's file is claimed only by the original.
   @Test(arguments: [false, true], [false, true])
   func editedFallbackNamesNoFile(collection: Bool, parked: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.cleanup() }
     let acknowledge = try f.capture(fallback: true)
-    if parked { f.select("B") }
+    if parked { await f.select("B") }
     await acknowledge("IMG_0001_orig.JPG")
-    if parked { f.select("A") }
+    if parked { await f.select("A") }
 
     #expect(f.variant(.original)?.filename == "IMG_0001_orig.JPG")
     #expect(f.variant(.edited)?.reason == .editedUnavailableOriginalBackedUp)

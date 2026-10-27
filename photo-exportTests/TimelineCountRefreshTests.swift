@@ -18,7 +18,7 @@ struct TimelineCountRefreshTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
     defer { store.drainSynchronously() }
-    store.configure(for: "A")
+    await store.configureAndWait(for: "A")
     store.markVariantExported(
       assetId: "old", variant: .original, year: 2025, month: 1,
       relPath: "2025/01/", filename: "old.jpg", exportedAt: Date())

@@ -73,8 +73,7 @@ struct JSONLRecordFileRoundTripTests {
   ) {
     for op in ops {
       replica.apply(op)
-      let captured = replica.snapshot
-      file.append(op, currentSnapshot: { captured })
+      file.append(op)
     }
     file.drainSynchronously()
 
@@ -132,15 +131,8 @@ struct JSONLRecordFileRoundTripTests {
     let (dir, file, queue) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let snapshotURL = dir.appendingPathComponent("snapshot.json")
-    var captured = false
     queue.suspend()
-    file.append(
-      Operation(kind: .upsert, key: "new", value: "v"),
-      currentSnapshot: {
-        captured = true
-        return Snapshot(records: ["new": "v"])
-      })
-    #expect(!captured)
+    file.append(Operation(kind: .upsert, key: "new", value: "v"))
     #expect(!FileManager.default.fileExists(atPath: snapshotURL.path))
     queue.resume()
     try await file.flush()
@@ -277,8 +269,7 @@ struct JSONLRecordFileRoundTripTests {
     for i in 0..<(n - 1) {
       let op = Operation(kind: .upsert, key: "k\(i)", value: "v")
       replica.apply(op)
-      let captured = replica.snapshot
-      file.append(op, currentSnapshot: { captured })
+      file.append(op)
     }
     file.drainSynchronously()
 
@@ -296,8 +287,7 @@ struct JSONLRecordFileRoundTripTests {
     // An append remains independent; only explicit maintenance replaces the snapshot.
     let firstAfterRestart = Operation(kind: .upsert, key: "post-0", value: "v")
     replica.apply(firstAfterRestart)
-    let captured = replica.snapshot
-    secondInstance.append(firstAfterRestart, currentSnapshot: { captured })
+    secondInstance.append(firstAfterRestart)
     secondInstance.drainSynchronously()
 
     let loadedAgain = secondInstance.load()
@@ -319,8 +309,7 @@ struct JSONLRecordFileRoundTripTests {
     for i in 0..<10 {
       let op = Operation(kind: .upsert, key: "k\(i)", value: "v\(i)")
       replica.apply(op)
-      let captured = replica.snapshot
-      file.append(op, currentSnapshot: { captured })
+      file.append(op)
     }
     file.drainSynchronously()
 

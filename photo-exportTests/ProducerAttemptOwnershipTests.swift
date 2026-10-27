@@ -65,14 +65,14 @@ struct ProducerAttemptOwnershipTests {
     }
     var selection: ExportVersionSelection { .edited }
 
-    init(_ producer: Producer, collection: Bool = false) {
+    init(_ producer: Producer, collection: Bool = false) async {
       self.producer = producer
       self.collection = collection
       defaults = TestScratch.defaults(suiteName: defaultsName)
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -123,10 +123,10 @@ struct ProducerAttemptOwnershipTests {
       return Task { await manager.runExport(context: context) }
     }
 
-    func selectB() {
+    func selectB() async {
       destination.selectedFolderURL = destination.root.appendingPathComponent("B")
-      timeline.configure(for: "B")
-      collections.configure(for: "B")
+      await timeline.configureAndWait(for: "B")
+      await collections.configureAndWait(for: "B")
     }
 
     func variants(_ id: String = "target") -> [ExportVariant: ExportVariantRecord] {
@@ -201,7 +201,7 @@ struct ProducerAttemptOwnershipTests {
     .timeLimit(.minutes(1)), arguments: [Producer.resource, .render, .heicSource, .heicConversion],
     [false, true])
   func oldCleanupCannotDeleteReplacementStage(producer: Producer, supersede: Bool) async throws {
-    let f = Fixture(producer)
+    let f = await Fixture(producer)
     try await withCleanup {
       f.armAfter(f.oldGate)
       f.start()
@@ -264,7 +264,7 @@ struct ProducerAttemptOwnershipTests {
   func staleErrorCannotDowngradeDoneOrContaminateActiveRun(producer: Producer, collection: Bool)
     async throws
   {
-    let f = Fixture(producer, collection: collection)
+    let f = await Fixture(producer, collection: collection)
     try await withCleanup {
       f.armBefore(f.oldGate)
       f.start()
@@ -272,7 +272,7 @@ struct ProducerAttemptOwnershipTests {
       try #require(oldArrived)
       let old = try f.captureTask()
       f.manager.supersedeForManualRun()
-      f.selectB()
+      await f.selectB()
       f.armBefore(nil)
       f.armAfter(f.targetGate)
       f.seed(ids: ["target", "blocker"], includeEdits: producer != .fallback)
@@ -304,8 +304,8 @@ struct ProducerAttemptOwnershipTests {
       try await f.collections.flush()
       let reopenedTimeline = ExportRecordStore(baseDirectoryURL: f.root)
       let reopenedCollections = CollectionExportRecordStore(baseDirectoryURL: f.root)
-      reopenedTimeline.configure(for: "B")
-      reopenedCollections.configure(for: "B")
+      await reopenedTimeline.configureAndWait(for: "B")
+      await reopenedCollections.configureAndWait(for: "B")
       let reopened =
         collection
         ? reopenedCollections.exportInfo(assetId: "target", placement: f.placement)?.variants
@@ -334,7 +334,7 @@ struct ProducerAttemptOwnershipTests {
   @Test(
     .timeLimit(.minutes(1)), arguments: [Producer.resource, .render, .heicSource, .heicConversion])
   func cancelledProducerErrorDoesNotCreateFailure(producer: Producer) async throws {
-    let f = Fixture(producer)
+    let f = await Fixture(producer)
     try await withCleanup {
       f.armBefore(f.oldGate)
       f.start()

@@ -89,14 +89,14 @@ import Testing
       let sidebarFolderId: String?
       var window: NSWindow?
 
-      init(change: Change, notificationClock: (any AutoSyncClock)? = nil) throws {
+      init(change: Change, notificationClock: (any AutoSyncClock)? = nil) async throws {
         library = PhotoLibraryManager(overrideService: service)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         records = CollectionExportRecordStore(
           baseDirectoryURL: root, notificationClock: notificationClock ?? SystemAutoSyncClock())
         defaults = TestScratch.defaults(suiteName: defaultsName)
-        timeline.configure(for: "A")
-        records.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await records.configureAndWait(for: "A")
         manager = ExportManager(
           photoLibraryService: service, exportDestination: fakeDestination,
           exportRecordStore: timeline, collectionExportRecordStore: records,
@@ -240,7 +240,7 @@ import Testing
 
     @Test(arguments: [false, true])
     func sidebarUpdatesOnlyAffectedBadge(folder: Bool) async throws {
-      let f = try Fixture(
+      let f = try await Fixture(
         change: folder ? .ancestorRename : .rename, notificationClock: TestClock())
       defer { f.close() }
       let other = PhotoCollectionDescriptor(
@@ -279,8 +279,8 @@ import Testing
       #expect(f.counter.count(for: changedBodyKey) - changedBodies <= 1)
     }
 
-    @Test func coalescedChildChangesLeaveNetZeroFolderBadgeQuiet() throws {
-      let f = try Fixture(change: .ancestorRename, notificationClock: TestClock())
+    @Test func coalescedChildChangesLeaveNetZeroFolderBadgeQuiet() async throws {
+      let f = try await Fixture(change: .ancestorRename, notificationClock: TestClock())
       defer { f.close() }
       let stable = try #require(f.unchanged)
       let folder = try #require(f.currentTree.first)
@@ -317,8 +317,8 @@ import Testing
     enum BadgeReentry: CaseIterable { case identicalTree, firstBadgeFlush }
 
     @Test(arguments: BadgeReentry.allCases)
-    func reentrantPublicationDeliversBothPendingBadges(reentry: BadgeReentry) throws {
-      let f = try Fixture(change: .ancestorRename, notificationClock: TestClock())
+    func reentrantPublicationDeliversBothPendingBadges(reentry: BadgeReentry) async throws {
+      let f = try await Fixture(change: .ancestorRename, notificationClock: TestClock())
       defer { f.close() }
       let stable = try #require(f.unchanged)
       let folder = try #require(f.currentTree.first)
@@ -371,8 +371,8 @@ import Testing
       #expect(stableProbe.changeCount == 1)
     }
 
-    @Test func badgePublicationCannotRestoreHistoryAfterReentrantConfigure() throws {
-      let f = try Fixture(change: .ancestorRename, notificationClock: TestClock())
+    @Test func badgePublicationCannotRestoreHistoryAfterReentrantConfigure() async throws {
+      let f = try await Fixture(change: .ancestorRename, notificationClock: TestClock())
       defer { f.close() }
       let folder = try #require(f.currentTree.first)
       let target = try #require(folder.children.first { $0.localIdentifier == "target" })
@@ -389,12 +389,13 @@ import Testing
         onChange: {
           guard !reconfigured else { return }
           reconfigured = true
-          f.records.configure(for: "B")
+          f.records.beginConfigure(for: "B")
         })
       defer { probe.stop() }
       f.set(f.current, .done)
       f.records.flushPendingNotifications()
       #expect(reconfigured)
+      await f.records.waitUntilSettled()
       #expect(f.records.state == .ready)
       #expect(f.records.recordBodies.isEmpty)
       #expect(f.records.summary(for: f.current).totalCount == 0)
@@ -404,8 +405,8 @@ import Testing
       #expect(f.records.currentGridPlacement(for: f.selection, collections: f.currentTree) == nil)
     }
 
-    @Test func replacingSidebarTreeReleasesRemovedBadgesAndUpdatesCurrentPaths() throws {
-      let f = try Fixture(change: .rename, notificationClock: TestClock())
+    @Test func replacingSidebarTreeReleasesRemovedBadgesAndUpdatesCurrentPaths() async throws {
+      let f = try await Fixture(change: .rename, notificationClock: TestClock())
       defer { f.close() }
       let current = try #require(f.currentTree.first)
       f.set(f.old, .done)
@@ -488,7 +489,7 @@ import Testing
       }
       try await f.records.flush()
       let reopened = CollectionExportRecordStore(baseDirectoryURL: f.root)
-      reopened.configure(for: "A")
+      await reopened.configureAndWait(for: "A")
       #expect(
         reopened.placements.mapValues {
           [$0.relativePath, $0.displayName, String($0.createdAt.timeIntervalSince1970)]
@@ -504,15 +505,15 @@ import Testing
 
     @Test(.timeLimit(.minutes(3)), arguments: Change.allCases)
     func historicalSuccessDoesNotCompleteChangedTarget(change: Change) async throws {
-      let f = try Fixture(change: change)
+      let f = try await Fixture(change: change)
       defer { f.close() }
       f.set(f.old, .done)
       if let stable = f.unchanged { f.set(stable, .done, assetId: f.unchangedAsset.id) }
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       let mutations = f.records.mutationCounter
       f.show()
       try await loaded(f)
+      try await f.barrier()
       await expectStatus(f, exported: false, currentExists: false)
       try await verifyUnchangedHistory(f, mutations: mutations)
       #expect(f.old.id != f.current.id)
@@ -543,15 +544,14 @@ import Testing
     func conflictsUseCurrentHistoryRegardlessOfInsertionOrder(change: Change, reverse: Bool)
       async throws
     {
-      let f = try Fixture(change: change)
+      let f = try await Fixture(change: change)
       defer { f.close() }
       let placements = reverse ? [f.current, f.old] : [f.old, f.current]
       for placement in placements {
         f.set(placement, placement.id == f.current.id ? .failed : .done)
       }
       if let stable = f.unchanged { f.set(stable, .done, assetId: f.unchangedAsset.id) }
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       f.show()
       try await loaded(f)
       let firstMutations = f.records.mutationCounter
@@ -570,7 +570,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func mountedAncestorRenameMissingTreeAndRecoveryFollowCurrentTarget() async throws {
-      let f = try Fixture(change: .ancestorRename)
+      let f = try await Fixture(change: .ancestorRename)
       defer { f.close() }
       let oldAlbum = PhotoCollectionDescriptor(
         id: "album:target", localIdentifier: "target", title: "Album", kind: .album,
@@ -585,8 +585,7 @@ import Testing
       ]
       f.set(f.old, .done)
       f.set(try #require(f.unchanged), .done, assetId: f.unchangedAsset.id)
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       let mutations = f.records.mutationCounter
       f.show()
       try await loaded(f)
@@ -626,14 +625,13 @@ import Testing
 
     @Test(.timeLimit(.minutes(2)))
     func favoritesIgnoreTreeErrorsAndDestinationSwitchDoesNotBorrowHistory() async throws {
-      let f = try Fixture(change: .rename)
+      let f = try await Fixture(change: .rename)
       defer { f.close() }
       let favorites = ExportPlacement.favorites()
       f.set(favorites, .done)
       f.service.favoritesAssets = [f.asset]
       f.service.collectionTreeError = CocoaError(.fileReadUnknown)
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       f.show(selectionOverride: .favorites)
       let original = await observe {
         f.counter.renderedText["collection-summary"] == ["1/1"]
@@ -642,7 +640,7 @@ import Testing
       }
       try #require(original)
       try await f.records.flush()
-      f.records.configure(for: "B")
+      await f.records.configureAndWait(for: "B")
       let other = await observe {
         f.counter.renderedText["collection-summary"] == ["0/1"]
           && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["false"]
@@ -650,7 +648,7 @@ import Testing
       }
       #expect(other)
       #expect(f.records.placements.isEmpty)
-      f.records.configure(for: "A")
+      await f.records.configureAndWait(for: "A")
       let restored = await observe {
         f.counter.renderedText["collection-summary"] == ["1/1"]
           && f.counter.renderedText["thumbnail-exported:changed-asset"] == ["true"]
@@ -672,7 +670,7 @@ import Testing
     /// and only a child that left the folder drops out of it.
     @Test(.timeLimit(.minutes(2)))
     func libraryChangeKeepsFolderSelectionAndPrunesRemovedChildren() async throws {
-      let f = try Fixture(change: .ancestorRename)
+      let f = try await Fixture(change: .ancestorRename)
       defer { f.close() }
       f.useLiveCounts()
       f.show(sidebar: false)
@@ -713,7 +711,7 @@ import Testing
     func supersededFolderCountLoadDoesNotOverwriteNewerCounts(
       surface: FolderCountSurface
     ) async throws {
-      let f = try Fixture(change: .ancestorRename)
+      let f = try await Fixture(change: .ancestorRename)
       defer { f.close() }
       let older = AsyncCheckpoint()
       let newer = AsyncCheckpoint()

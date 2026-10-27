@@ -76,12 +76,12 @@ final class VariantExporter {
   private let finalNamePlanner: FinalNamePlanner
   private let exportDestination: any ExportDestination
   private let destinationIOFactory: @MainActor (String?) -> any DestinationIOExecuting
-  private var destinationContexts: [String?: any DestinationIOExecuting] = [:]
+  private var retainedDestinationIO: (any DestinationIOExecuting)?
 
   private func destinationIO(for id: String?) -> any DestinationIOExecuting {
-    if let context = destinationContexts[id] { return context }
+    if let retainedDestinationIO { return retainedDestinationIO }
     let context = destinationIOFactory(id)
-    destinationContexts[id] = context
+    retainedDestinationIO = context
     return context
   }
   func captureDestinationContext(
@@ -314,9 +314,7 @@ final class VariantExporter {
     @MainActor func writeAndCommit() async throws -> String? {
       try checkOwnership(context, placement: job.placement)
       host?.setCurrentAssetFilename(finalURL.lastPathComponent)
-      try checkOwnership(context, placement: job.placement)
       host?.setCurrentJobVariant(variant)
-      try checkOwnership(context, placement: job.placement)
       inFlight = (assetId: descriptor.id, variant: variant)
       try await recordStoreRouter.withMutationAdmission(placement: job.placement) {
         try checkOwnership(context, placement: job.placement)
@@ -643,7 +641,6 @@ final class VariantExporter {
       try checkOwnership(context, placement: job.placement)
       if commit.recordedName != markedName {
         host?.setCurrentAssetFilename(commit.recordedName)
-        try checkOwnership(context, placement: job.placement)
       }
       let accepted = try await recordStoreRouter.withMutationAdmission(placement: job.placement) {
         try checkOwnership(context, placement: job.placement)

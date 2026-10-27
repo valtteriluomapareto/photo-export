@@ -83,7 +83,7 @@ struct InterruptedPairRecoveryTests {
     init(
       root: URL, destination: Destination, collection: Bool, companion: Bool,
       destinationIO: (any DestinationIOExecuting)? = nil
-    ) {
+    ) async {
       self.root = root
       self.destination = destination
       placement = collection ? .favorites() : .timeline(year: 2025, month: 1)
@@ -91,8 +91,8 @@ struct InterruptedPairRecoveryTests {
       filename = companion ? "FILE_orig.JPG" : "FILE.MOV"
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       defaultsName = TestScratch.suiteName("InterruptedPair")
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
@@ -152,11 +152,11 @@ struct InterruptedPairRecoveryTests {
       try await collections.flush()
       if placement.kind == .favorites {
         let fresh = CollectionExportRecordStore(baseDirectoryURL: root)
-        fresh.configure(for: "A")
+        await fresh.configureAndWait(for: "A")
         return fresh.exportInfo(assetId: "asset", placement: placement)?.variants ?? [:]
       }
       let fresh = ExportRecordStore(baseDirectoryURL: root)
-      fresh.configure(for: "A")
+      await fresh.configureAndWait(for: "A")
       return fresh.exportInfo(assetId: "asset")?.variants ?? [:]
     }
 
@@ -185,8 +185,8 @@ struct InterruptedPairRecoveryTests {
     let anchorFilename = "FILE.JPG"
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    timeline.configure(for: "A")
-    collections.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
+    await collections.configureAndWait(for: "A")
     let recordedFilename = mismatch == .filename ? "OTHER.MOV" : filename
     let subfolder = mismatch == .subfolder ? "videos" : nil
     if collection {
@@ -236,7 +236,7 @@ struct InterruptedPairRecoveryTests {
       let bytes = mismatch == .empty ? Data() : Data("paired-bytes".utf8)
       try bytes.write(to: candidate)
     }
-    let fixture = Fixture(
+    let fixture = await Fixture(
       root: root, destination: destination, collection: collection, companion: companion,
       destinationIO: destinationIO)
     if mismatch == .size {
@@ -473,12 +473,13 @@ struct InterruptedPairRecoveryTests {
       await f.select("B")
       f.writer.checkpoint = replacement
       f.start()
-      try #require(await reached { await replacement.enteredSoFar > 0 })
-      // Reaching this main-actor code while the physical probe is held also proves
-      // inspection did not block the main actor.
-      #expect(f.variants()[.original]?.status == .inProgress)
+      // Selection remains responsive while admitted physical IO finishes on the serial worker.
+      #expect(f.destination.selectedFolderURL?.lastPathComponent == "B")
+      #expect(f.writer.writeCalls.isEmpty)
       probe.release()
       await old?.value
+      try #require(await reached { await replacement.enteredSoFar > 0 })
+      #expect(f.variants()[.original]?.status == .inProgress)
       #expect(f.variants()[.originalPairedVideo] == nil)
       #expect(f.files.timestampCalls.isEmpty)
       #expect(f.writer.writeCalls.count == 1)

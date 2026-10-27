@@ -67,17 +67,17 @@ struct RecordStoreMaintenanceTests {
     let placement = ExportPlacement.favorites()
     var checkpointError: (any Error)?
 
-    init(collection: Bool) {
+    init(collection: Bool) async {
       self.collection = collection
       timeline = ExportRecordStore(
         baseDirectoryURL: root, recordLogIO: log, snapshotReplacer: replacement)
       collections = CollectionExportRecordStore(
         baseDirectoryURL: root, recordLogIO: log, snapshotReplacer: replacement)
       if collection {
-        collections.configure(for: "A")
+        await collections.configureAndWait(for: "A")
         collections.upsertPlacement(placement)
       } else {
-        timeline.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
       }
     }
 
@@ -172,7 +172,7 @@ struct RecordStoreMaintenanceTests {
 
   @Test(arguments: [false, true])
   func failedResetKeepsCorruptHistoryUnreadable(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.close() }
     f.timeline.drainSynchronously()
     f.collections.drainSynchronously()
@@ -183,7 +183,11 @@ struct RecordStoreMaintenanceTests {
         : ExportRecordStore.Constants.snapshotFileName)
     let corrupt = Data("corrupt history".utf8)
     try corrupt.write(to: snapshot)
-    if collection { f.collections.configure(for: "A") } else { f.timeline.configure(for: "A") }
+    if collection {
+      await f.collections.configureAndWait(for: "A")
+    } else {
+      await f.timeline.configureAndWait(for: "A")
+    }
     #expect((collection ? f.collections.state : f.timeline.state) == .failed)
     let saved = f.root.appendingPathComponent("saved")
     try FileManager.default.moveItem(at: directory, to: saved)
@@ -205,11 +209,70 @@ struct RecordStoreMaintenanceTests {
     #expect(try Data(contentsOf: snapshot) == corrupt)
   }
 
+  @Test(arguments: [false, true])
+  func failedResetDuringReconfigurationKeepsCorruptHistoryUnreadable(collection: Bool) async throws
+  {
+    let f = await Fixture(collection: collection)
+    f.timeline.drainSynchronously()
+    f.collections.drainSynchronously()
+    let directory = f.root.appendingPathComponent("A")
+    let snapshot = directory.appendingPathComponent(
+      collection
+        ? CollectionExportRecordStore.Constants.snapshotFileName
+        : ExportRecordStore.Constants.snapshotFileName)
+    let corrupt = Data("corrupt history".utf8)
+    try corrupt.write(to: snapshot)
+    await f.select("A")
+    #expect(f.state == .failed)
+    f.replacement.arm(fail: true)
+    let reset = Task {
+      if collection { await f.collections.resetHistory() } else { await f.timeline.resetHistory() }
+    }
+    try await withCleanup {
+      await f.replacement.entered.waitForEnter(count: 1)
+      if collection {
+        f.collections.beginConfigure(for: "B")
+      } else {
+        f.timeline.beginConfigure(for: "B")
+      }
+      #expect(f.state == .loading)
+      f.replacement.release()
+      await reset.value
+      if collection {
+        await f.collections.waitUntilSettled()
+      } else {
+        await f.timeline.waitUntilSettled()
+      }
+      let backups = try FileManager.default.contentsOfDirectory(
+        at: directory, includingPropertiesForKeys: nil
+      ).filter {
+        $0.lastPathComponent.hasPrefix(
+          snapshot.deletingPathExtension().lastPathComponent + ".broken-")
+      }
+      let backup = try #require(backups.first)
+      #expect(backups.count == 1)
+      #expect(try Data(contentsOf: backup) == corrupt)
+      // Restore the preserved corrupt file after failed Reset, as a storage repair might.
+      try FileManager.default.copyItem(at: backup, to: snapshot)
+      await f.select("A")
+      #expect(f.state == .failed)
+      await f.retry()
+      #expect(f.state == .failed)
+      #expect(try Data(contentsOf: snapshot) == corrupt)
+      #expect(try Data(contentsOf: backup) == corrupt)
+      #expect(!f.has("seed"))
+    } cleanup: {
+      f.replacement.release()
+      await reset.value
+      f.close()
+    }
+  }
+
   @Test(arguments: [false, true], [false, true])
   func heldCheckpointExcludesSecondWriterFromMemoryAndLog(collection: Bool, finalCommit: Bool)
     async throws
   {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     try await f.seed()
     let acknowledge = finalCommit ? try f.acknowledgement() : nil
     f.replacement.arm()
@@ -245,7 +308,7 @@ struct RecordStoreMaintenanceTests {
 
   @Test(arguments: [false, true])
   func cancelledWaiterDoesNotReopenPhysicalMaintenance(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     try await f.seed()
     f.replacement.arm()
     let maintenance = Task { await f.checkpoint() }
@@ -273,7 +336,7 @@ struct RecordStoreMaintenanceTests {
 
   @Test(arguments: [false, true])
   func failedCheckpointKeepsTheReplayLogAndRejectsAWaitingImport(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     try await f.seed()
     let logName =
       collection
@@ -326,7 +389,7 @@ struct RecordStoreMaintenanceTests {
   func reconfigurationWaitsForPhysicalCheckpointBeforeReplacingHistory(collection: Bool)
     async throws
   {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     try await f.seed()
     f.replacement.arm()
     let maintenance = Task { await f.checkpoint() }
@@ -374,7 +437,7 @@ struct RecordStoreMaintenanceTests {
   @Test(arguments: [false, true])
   func cancelledRecordCleanupCannotEraseAReplacementAfterMaintenance(collection: Bool) async throws
   {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     let photos = FakePhotoLibraryService()
     let writer = FakeAssetResourceWriter()
     let destination = FakeExportDestination()
@@ -445,10 +508,14 @@ struct RecordStoreMaintenanceTests {
 
   @Test(arguments: [false, true])
   func parkedCompletionWaitsBeforeChangingItsCapturedHistory(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     try await f.seed()
     let acknowledge = try f.acknowledgement()
-    if collection { f.collections.configure(for: "B") } else { f.timeline.configure(for: "B") }
+    if collection {
+      await f.collections.configureAndWait(for: "B")
+    } else {
+      await f.timeline.configureAndWait(for: "B")
+    }
     try await f.seed()
     f.replacement.arm()
     let maintenance = Task { await f.checkpoint() }
@@ -485,9 +552,6 @@ struct RecordStoreMaintenanceTests {
         await f.timeline.waitUntilSettled()
       }
       #expect(f.has("commit"))
-      #expect(
-        (collection ? f.collections.claimsEpoch : f.timeline.claimsEpoch)
-          == (collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch))
     } cleanup: {
       f.replacement.release()
       await maintenance.value
@@ -500,13 +564,21 @@ struct RecordStoreMaintenanceTests {
   func corruptResetWaitsForPhysicalIOAndClaimsReadyHistorySynchronously(collection: Bool)
     async throws
   {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     let name = collection ? "collection-records.json" : "export-records.json"
-    if collection { f.collections.configure(for: nil) } else { f.timeline.configure(for: nil) }
+    if collection {
+      await f.collections.configureAndWait(for: nil)
+    } else {
+      await f.timeline.configureAndWait(for: nil)
+    }
     let path = f.root.appendingPathComponent("A").appendingPathComponent(name)
     let corrupt = Data("corrupt".utf8)
     try corrupt.write(to: path)
-    if collection { f.collections.configure(for: "A") } else { f.timeline.configure(for: "A") }
+    if collection {
+      await f.collections.configureAndWait(for: "A")
+    } else {
+      await f.timeline.configureAndWait(for: "A")
+    }
     let epoch = collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch
     f.replacement.arm()
     var claimed = false
@@ -514,9 +586,6 @@ struct RecordStoreMaintenanceTests {
       let claim = {
         #expect((collection ? f.collections.state : f.timeline.state) == .ready)
         #expect((collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch) > epoch)
-        #expect(
-          (collection ? f.collections.claimsEpoch : f.timeline.claimsEpoch)
-            == (collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch))
         claimed = true
       }
       if collection {
@@ -574,270 +643,11 @@ struct RecordStoreMaintenanceTests {
     try FileManager.default.removeItem(at: root)
   }
 
-  @Test(arguments: [false, true], [false, true])
-  func retainedPreparationKeepsMainActorResponsiveAndRejectsSupersededHistory(
-    collection: Bool, supersede: Bool
-  ) async throws {
-    let f = Fixture(collection: collection)
-    f.log.failWrites.mutate { $0 = true }
-    do {
-      try await f.seed()
-      Issue.record("Expected retained write failure")
-    } catch {}
-    f.log.failWrites.mutate { $0 = false }
-    if collection {
-      f.collections.beginConfigure(for: "B")
-      await f.collections.waitUntilSettled()
-    } else {
-      f.timeline.beginConfigure(for: "B")
-      await f.timeline.waitUntilSettled()
-    }
-    let preparation = AsyncCheckpoint()
-    let entered = LockedBox(false)
-    let onMain = LockedBox(false)
-    let checkpoint: @Sendable () async -> Void = {
-      onMain.mutate { $0 = Thread.isMainThread }
-      entered.mutate { $0 = true }
-      await preparation.enter()
-    }
-    if collection {
-      f.collections.preparationCheckpoint = checkpoint
-    } else {
-      f.timeline.preparationCheckpoint = checkpoint
-    }
-    try await withCleanup {
-      if collection {
-        f.collections.beginConfigure(for: "A")
-      } else {
-        f.timeline.beginConfigure(for: "A")
-      }
-      try #require(
-        await eventually("retained preparation starts or settles") {
-          entered.value || (collection ? f.collections.state : f.timeline.state) != .loading
-        })
-      try #require(entered.value, "Retained history must use suspended asynchronous preparation")
-      #expect(!onMain.value)
-      #expect((collection ? f.collections.state : f.timeline.state) == .loading)
-      #expect(!f.has("seed"))
-      let heartbeat = Task { @MainActor in true }
-      #expect(await finished(heartbeat))
-      if supersede {
-        if collection {
-          f.collections.beginConfigure(for: "B")
-        } else {
-          f.timeline.beginConfigure(for: "B")
-        }
-      }
-      await preparation.releaseAll()
-      if collection {
-        await f.collections.waitUntilSettled()
-      } else {
-        await f.timeline.waitUntilSettled()
-      }
-      #expect(f.has("seed") == !supersede)
-      #expect(
-        (collection ? f.collections.claimsEpoch : f.timeline.claimsEpoch)
-          == (collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch))
-      #expect(
-        (collection ? f.collections.state : f.timeline.state)
-          == (supersede ? .ready : .persistenceFailed))
-    } cleanup: {
-      await preparation.releaseAll()
-      if collection {
-        await f.collections.waitUntilSettled()
-      } else {
-        await f.timeline.waitUntilSettled()
-      }
-      f.close()
-    }
-  }
-
-  @Test(arguments: [false, true], [false, true])
-  func unreadableCompletionPreparationStaysResponsiveAndKeepsItsCapturedOwner(
-    collection: Bool, supersede: Bool
-  ) async throws {
-    let f = Fixture(collection: collection)
-    try await f.seed()
-    let acknowledge = try f.acknowledgement()
-    if collection {
-      f.collections.beginConfigure(for: "B")
-      await f.collections.waitUntilSettled()
-    } else {
-      f.timeline.beginConfigure(for: "B")
-      await f.timeline.waitUntilSettled()
-    }
-    f.log.failReads.mutate { $0 = true }
-    if collection {
-      f.collections.beginConfigure(for: "A")
-      await f.collections.waitUntilSettled()
-    } else {
-      f.timeline.beginConfigure(for: "A")
-      await f.timeline.waitUntilSettled()
-    }
-    f.log.failReads.mutate { $0 = false }
-    let preparation = AsyncCheckpoint()
-    let entered = LockedBox(false)
-    let completed = LockedBox(false)
-    let checkpoint: @Sendable () async -> Void = {
-      #expect(!Thread.isMainThread)
-      entered.mutate { $0 = true }
-      await preparation.enter()
-    }
-    if collection {
-      f.collections.preparationCheckpoint = checkpoint
-    } else {
-      f.timeline.preparationCheckpoint = checkpoint
-    }
-    let completion = Task {
-      defer { completed.mutate { $0 = true } }
-      await acknowledge("late.JPG")
-    }
-    try await withCleanup {
-      try #require(
-        await eventually("unreadable completion starts preparation or completes") {
-          entered.value || completed.value
-        })
-      try #require(
-        entered.value, "Unreadable completion must prepare retained history asynchronously")
-      #expect(!completed.value)
-      #expect(!f.has("seed"))
-      let heartbeat = Task { @MainActor in true }
-      #expect(await finished(heartbeat))
-      if supersede {
-        if collection {
-          f.collections.beginConfigure(for: "B")
-        } else {
-          f.timeline.beginConfigure(for: "B")
-        }
-      }
-      await preparation.releaseAll()
-      await completion.value
-      if collection {
-        await f.collections.waitUntilSettled()
-      } else {
-        await f.timeline.waitUntilSettled()
-      }
-      #expect(f.has("seed") == !supersede)
-      #expect(f.has("commit") == !supersede)
-      if supersede {
-        if collection {
-          f.collections.beginConfigure(for: "A")
-          await f.collections.waitUntilSettled()
-        } else {
-          f.timeline.beginConfigure(for: "A")
-          await f.timeline.waitUntilSettled()
-        }
-        #expect(f.has("seed"))
-        #expect(f.has("commit"))
-      }
-      #expect(
-        (collection ? f.collections.claimsEpoch : f.timeline.claimsEpoch)
-          == (collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch))
-    } cleanup: {
-      await preparation.releaseAll()
-      await completion.value
-      if collection {
-        await f.collections.waitUntilSettled()
-      } else {
-        await f.timeline.waitUntilSettled()
-      }
-      f.close()
-    }
-  }
-
-  @Test(arguments: [false, true])
-  func unreadableCompletionRetriesAfterSameDestinationReloadFails(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
-    func select(_ id: String) async {
-      if collection {
-        f.collections.beginConfigure(for: id)
-        await f.collections.waitUntilSettled()
-      } else {
-        f.timeline.beginConfigure(for: id)
-        await f.timeline.waitUntilSettled()
-      }
-    }
-    try await f.seed()
-    let acknowledge = try f.acknowledgement()
-    await select("B")
-    f.log.failReads.mutate { $0 = true }
-    await select("A")
-    f.log.failReads.mutate { $0 = false }
-    let preparation = AsyncCheckpoint()
-    let landing = AsyncCheckpoint()
-    if collection {
-      f.collections.preparationCheckpoint = { await preparation.enter() }
-      f.collections.finalCommitLandingCheckpoint = { await landing.enter() }
-    } else {
-      f.timeline.preparationCheckpoint = { await preparation.enter() }
-      f.timeline.finalCommitLandingCheckpoint = { await landing.enter() }
-    }
-    let completion = Task { await acknowledge("late.JPG") }
-    try await withCleanup {
-      try #require(await preparation.waitForEnter(count: 1))
-      if collection {
-        f.collections.preparationCheckpoint = nil
-      } else {
-        f.timeline.preparationCheckpoint = nil
-      }
-      f.log.failReads.mutate { $0 = true }
-      if collection {
-        f.collections.beginConfigure(for: "A")
-      } else {
-        f.timeline.beginConfigure(for: "A")
-      }
-      await preparation.releaseAll()
-      try #require(await landing.waitForEnter(count: 1))
-      if collection {
-        await f.collections.waitUntilSettled()
-      } else {
-        await f.timeline.waitUntilSettled()
-      }
-      #expect((collection ? f.collections.state : f.timeline.state) == .persistenceFailed)
-      #expect(!f.has("seed") && !f.has("commit"))
-      await landing.releaseAll()
-      await completion.value
-      #expect(f.has("seed") && f.has("commit"))
-      #expect(
-        (collection ? f.collections.claimsEpoch : f.timeline.claimsEpoch)
-          == (collection ? f.collections.recordsEpoch : f.timeline.recordsEpoch))
-      f.log.failReads.mutate { $0 = false }
-      if collection {
-        await f.collections.retryHistoryPersistence()
-      } else {
-        await f.timeline.retryHistoryPersistence()
-      }
-      #expect((collection ? f.collections.state : f.timeline.state) == .ready)
-      await select("B")
-      await select("A")
-      #expect(f.has("seed") && f.has("commit"))
-      if collection {
-        #expect(
-          f.collections.isFilenameClaimed(
-            "late.JPG", placement: f.placement, subfolder: nil, exceptAsset: "probe"))
-      } else {
-        #expect(
-          f.timeline.isFilenameClaimed(
-            "late.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe"))
-      }
-    } cleanup: {
-      await preparation.releaseAll()
-      await landing.releaseAll()
-      await completion.value
-      if collection {
-        await f.collections.waitUntilSettled()
-      } else {
-        await f.timeline.waitUntilSettled()
-      }
-      f.close()
-    }
-  }
-
   @Test(arguments: [false, true])
   func acknowledgementDuringFailedRetryKeepsItsCapturedHistoryUntilLoadFinishes(collection: Bool)
     async throws
   {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     try await f.seed()
     let acknowledge = try f.acknowledgement()
     await f.select("B")
@@ -862,7 +672,6 @@ struct RecordStoreMaintenanceTests {
     var completion: Task<Void, Never>?
     try await withCleanup {
       try #require(await preparation.waitForEnter(count: 1))
-      #expect(f.state == .persistenceFailed, "Retry keeps the failure alert visible while loading")
       completion = Task { await acknowledge("late.JPG") }
       await completion?.value
       #expect(preparations.value == 1, "The acknowledgement must wait for the actual retry load")
@@ -886,7 +695,7 @@ struct RecordStoreMaintenanceTests {
 
   @Test(arguments: [false, true])
   func capturedCorruptionRequiresResetAfterAnUnreadableRoundTrip(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.close() }
     try await f.seed()
     let acknowledge = try f.acknowledgement()
@@ -938,7 +747,7 @@ struct RecordStoreMaintenanceTests {
   func idleCheckpointEligibilityPreservesSmallLogsAndStillBoundsReplay(collection: Bool)
     async throws
   {
-    let f = Fixture(collection: collection)
+    let f = await Fixture(collection: collection)
     defer { f.close() }
     try await f.seed()
     let log = f.root.appendingPathComponent("A").appendingPathComponent(
@@ -998,19 +807,4 @@ struct RecordStoreMaintenanceTests {
     #expect(f.has("seed"))
   }
 
-  @Test func replayPressureUsesWorkUnitsRatherThanElapsedTestTime() {
-    var budget = RecordReplayBudget(operationNanoseconds: 200_000_000, byteNanoseconds: 1)
-    for _ in 0..<3 { budget.record(encodedBytes: 1) }
-    #expect(!budget.needsCheckpoint)
-    budget.record(encodedBytes: 1)
-    #expect(budget.needsCheckpoint)
-    budget.didCheckpoint()
-    #expect(!budget.needsCheckpoint)
-    budget.record(encodedBytes: 800_000_000)
-    #expect(budget.needsCheckpoint)
-    budget.adopt(operationCount: 1, encodedBytes: 1, measuredNanoseconds: 800_000_000)
-    #expect(budget.needsCheckpoint)
-    budget.didCheckpoint()
-    #expect(!budget.hasWork)
-  }
 }

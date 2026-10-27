@@ -109,7 +109,7 @@ struct HistoricalPersistenceFixtureTests {
   }
 
   @Test(arguments: tags)
-  func timelineSnapshotReplayAndReopenPreserveHistoricalSemantics(tag: String) throws {
+  func timelineSnapshotReplayAndReopenPreserveHistoricalSemantics(tag: String) async throws {
     let fixture = try Fixture(tag: tag)
     defer { fixture.cleanup() }
     for _ in 0..<2 {
@@ -117,8 +117,8 @@ struct HistoricalPersistenceFixtureTests {
       // compaction can mask a missing load/replay operation.
       let a = ExportRecordStore(baseDirectoryURL: fixture.root)
       let b = ExportRecordStore(baseDirectoryURL: fixture.root)
-      a.configure(for: "A")
-      b.configure(for: "B")
+      await a.configureAndWait(for: "A")
+      await b.configureAndWait(for: "B")
       #expect(a.state == .ready)
       #expect(b.state == .ready)
       let expectedIds: Set<String> =
@@ -193,14 +193,14 @@ struct HistoricalPersistenceFixtureTests {
     }
   }
 
-  @Test func collectionSnapshotReplayAndReopenPreservePlacementOwnership() throws {
+  @Test func collectionSnapshotReplayAndReopenPreservePlacementOwnership() async throws {
     let fixture = try Fixture(tag: "v1.6.5")
     defer { fixture.cleanup() }
     for _ in 0..<2 {
       let a = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
       let b = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
-      a.configure(for: "A")
-      b.configure(for: "B")
+      await a.configureAndWait(for: "A")
+      await b.configureAndWait(for: "B")
       #expect(a.state == .ready && b.state == .ready)
       #expect(
         Set(a.placements.keys) == ["collections:favorites", "fixture-album", "fixture-shared"])
@@ -277,13 +277,13 @@ struct HistoricalPersistenceFixtureTests {
   /// Import Existing Backup's album adoption on top of v1.6.5 collection history: it appends
   /// only the existing placement and record operations, keeps the saved placement's folder and
   /// completed variants, and the result reopens.
-  @Test func collectionBulkImportOnHistoricalStoreUsesExistingOperations() throws {
+  @Test func collectionBulkImportOnHistoricalStoreUsesExistingOperations() async throws {
     let fixture = try Fixture(tag: "v1.6.5")
     defer { fixture.cleanup() }
     let logURL = fixture.root.appendingPathComponent("A/collection-records.jsonl")
     let originalLog = try Data(contentsOf: logURL)
     let store = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
-    store.configure(for: "A")
+    await store.configureAndWait(for: "A")
     let saved = try #require(store.placements["fixture-album"])
     let imported = ExportPlacement(
       kind: .album, id: "collections:album:aaaaaaaaaaaaaaaa:bbbbbbbb", displayName: "Imported",
@@ -325,7 +325,7 @@ struct HistoricalPersistenceFixtureTests {
     }
 
     let reopened = CollectionExportRecordStore(baseDirectoryURL: fixture.root)
-    reopened.configure(for: "A")
+    await reopened.configureAndWait(for: "A")
     #expect(reopened.state == .ready)
     let album = try #require(reopened.placements["fixture-album"])
     #expect(album.relativePath == "Collections/Albums/Nested/Album/")
