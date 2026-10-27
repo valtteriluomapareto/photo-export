@@ -250,4 +250,34 @@ struct ExportMeasurementsTests {
     }
   }
 
+  @Test func actualAutomaticRunIsLabelledAndFailedVariantsInvalidateSamples() async throws {
+    for fail in [false, true] {
+      let c = Capture()
+      let clock = c.clock
+      let writer = FakeAssetResourceWriter()
+      writer.writeHook = { _ in clock.advance(100) }
+      if fail { writer.writeError = CocoaError(.fileWriteUnknown) }
+      let h = ExportManagerHarness(
+        label: "AutomaticMeasurements", writer: writer, exportMeasurements: c.measurements)
+      defer {
+        h.manager.cancelAndClear()
+        h.store.drainSynchronously()
+        h.collectionStore.drainSynchronously()
+        h.dest.cleanup()
+        try? FileManager.default.removeItem(at: h.storeRoot)
+      }
+      let asset = TestAssetFactory.makeAsset(id: "automatic")
+      h.photoLib.favoritesAssets = [asset]
+      h.photoLib.resourcesByAssetId[asset.id] = [.init(type: .photo, originalFilename: "IMG.JPG")]
+      let summary = await h.manager.runExport(
+        context: ExportRunContext(
+          source: .autoSync, visibility: .background, scope: .favoritesFull, selection: .edited))
+      await h.manager.waitForQueueDrained()
+      #expect(c.rows("runBegin").first?["automatic"] as? Bool == true)
+      #expect(c.rows("runEnd").first?["valid"] as? Bool == !fail)
+      #expect(summary.result == (fail ? .failed : .completed))
+      if fail { #expect(c.rows("runEnd").first?["reason"] as? String == "variant-failed") }
+    }
+  }
+
 }

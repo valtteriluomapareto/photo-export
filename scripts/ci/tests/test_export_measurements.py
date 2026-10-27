@@ -51,7 +51,8 @@ class ExportMeasurementReplayTests(unittest.TestCase):
                 text=True, capture_output=True, check=False)
             data = json.loads((output / "results.json").read_text()) if (output / "results.json").exists() else None
             report = (output / "summary.md").read_text() if (output / "summary.md").exists() else ""
-            kept = (output / "keep").read_text() if (output / "keep").exists() else None
+            kept = ((output / "keep").read_text() if (output / "keep").exists()
+                    else (output / "events.ndjson").read_text() if (output / "events.ndjson").exists() else None)
             return result, data, report, kept
 
     def test_two_runs_deduplicate_variants_and_sum_job_wall_for_staging(self):
@@ -121,9 +122,13 @@ class ExportMeasurementReplayTests(unittest.TestCase):
     def test_raw_messages_and_unknown_fields_are_not_saved_in_report(self):
         rows = events()
         rows[3]["filename"] = "/private/Photos/secret.HEIC"
-        result, data, report, _ = self.run_replay(rows)
+        result, data, report, archive = self.run_replay(rows)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("secret.HEIC", json.dumps(data) + report)
+        self.assertNotIn("secret.HEIC", json.dumps(data) + report + archive)
+        rows[3]["asset"] = "private-Photos-identifier"
+        result, data, report, archive = self.run_replay(rows)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("private-Photos-identifier", json.dumps(data) + report + archive)
 
     def test_dropped_messages_or_malformed_events_fail_visibly(self):
         for extra in [{"dropped": 1}, {"schema": 1, "session": SESSION, "type": "completion", "pid": 42}]:
@@ -138,9 +143,27 @@ class ExportMeasurementReplayTests(unittest.TestCase):
         self.assertIn("--app", result.stdout)
         self.assertIn("--replay", result.stdout)
 
+    def test_automatic_runs_do_not_satisfy_manual_sample_count(self):
+        rows = events()
+        rows[1]["automatic"] = True
+        result, data, report, _ = self.run_replay(rows)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(data["eligibleRuns"], 0)
+        self.assertTrue(data["runs"][0]["throughputValid"])
+        self.assertIn("excluded", report)
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_combined_staging_uses_total_job_wall_not_mean_of_fractions(self):
+        second = events(run="22222222-2222-4222-8222-222222222222", offset=10_000_000_000)[1:]
+        for row in second:
+            if row["type"] == "jobEnd":
+                row["wallNs"] = 4_000_000_000
+                row["stageNs"] = 1_000_000_000
+            if row["type"] == "runEnd":
+                row["wallNs"] = 9_000_000_000
+        result, data, _, _ = self.run_replay(events() + second, runs=2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertAlmostEqual(data["stagingFraction"], 5 / 12)
+        self.assertFalse(data["stagingMeets50Percent"])
 
 
 class ExportMeasurementLiveTests(unittest.TestCase):
@@ -215,3 +238,41 @@ class ExportMeasurementLiveTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already running"):
                 self.module.live_capture(args, self.module.Capture(SESSION), io.StringIO(), {})
             popen.assert_not_called()
+
+
+    def test_interrupted_launch_reaps_only_owned_capture_children(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import io
+        children = [SimpleNamespace(stdout=io.BytesIO(b"Filtering the log data using fixture\n"),
+                                    poll=Mock(return_value=None), terminate=Mock(), wait=Mock(), kill=Mock()),
+                    SimpleNamespace(poll=Mock(return_value=None), terminate=Mock(), wait=Mock(), kill=Mock())]
+        args = SimpleNamespace(app=pathlib.Path("fixture.app"), label="nas", runs=1)
+        with patch.object(self.module, "app_metadata", return_value=("Photo Export", {})), \
+             patch.object(self.module.subprocess, "run", side_effect=[SimpleNamespace(returncode=1), KeyboardInterrupt]), \
+             patch.object(self.module.subprocess, "Popen", side_effect=children):
+            with self.assertRaises(KeyboardInterrupt):
+                self.module.live_capture(args, self.module.Capture(SESSION), io.StringIO(), {})
+        for child in children:
+            child.terminate.assert_called_once()
+            child.wait.assert_called_once()
+            child.kill.assert_not_called()
+
+    def test_log_subscription_failure_never_launches_app(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        import io
+        child = SimpleNamespace(stdout=io.BytesIO(b""), poll=Mock(return_value=1),
+                                terminate=Mock(), wait=Mock())
+        args = SimpleNamespace(app=pathlib.Path("fixture.app"), label="nas", runs=1)
+        with patch.object(self.module, "app_metadata", return_value=("Photo Export", {})), \
+             patch.object(self.module.subprocess, "run", return_value=SimpleNamespace(returncode=1)) as run, \
+             patch.object(self.module.subprocess, "Popen", return_value=child):
+            with self.assertRaisesRegex(ValueError, "no app was launched"):
+                self.module.live_capture(args, self.module.Capture(SESSION), io.StringIO(), {})
+        self.assertEqual(run.call_count, 1)
+        child.wait.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()
