@@ -488,17 +488,20 @@ final class ExportManager {
   }
 
   @ObservationIgnored private let runActivity: any ExportRunActivity
+  @ObservationIgnored private let exportMeasurements: ExportMeasurements?
   @ObservationIgnored private var holdsRunActivity = false
 
   private func beginRunActivityIfNeeded() {
     guard !holdsRunActivity else { return }
     holdsRunActivity = true
+    queueCoordinator.beginMeasurementRun(automatic: activeRunContext?.source == .autoSync)
     runActivity.begin()
   }
 
   private func endRunActivity() {
     guard holdsRunActivity else { return }
     holdsRunActivity = false
+    queueCoordinator.endMeasurementRun()
     runActivity.end()
   }
 
@@ -639,6 +642,7 @@ final class ExportManager {
     phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
     backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader(),
     runActivity: (any ExportRunActivity)? = nil,
+    exportMeasurements: ExportMeasurements? = nil,
     progressClock: (any AutoSyncClock)? = nil,
     destinationIOFactory: @escaping @MainActor (String?) -> any DestinationIOExecuting = { _ in
       DestinationIO()
@@ -648,6 +652,8 @@ final class ExportManager {
     self.progressState = ExportProgressState(clock: progressClock)
     self.userDefaults = userDefaults
     self.runActivity = runActivity ?? SystemExportRunActivity()
+    self.exportMeasurements =
+      exportMeasurements ?? ExportMeasurements.fromArguments(ProcessInfo.processInfo.arguments)
     self.photoLibraryService = photoLibraryService
     self.photoKitReader = photoKitReader ?? PhotoLibraryServiceReader(service: photoLibraryService)
     self.exportDestination = exportDestination
@@ -709,6 +715,7 @@ final class ExportManager {
     // through their Host protocols.
     self.queueCoordinator = ExportQueueCoordinator(
       host: self,
+      measurements: self.exportMeasurements,
       watchdogEnabled: ExportRunWatchdog.isEnabled(
         arguments: ProcessInfo.processInfo.arguments,
         preferenceEnabled: userDefaults.bool(forKey: "exportWatchdogEnabled")))
@@ -1988,6 +1995,7 @@ final class ExportManager {
   }
 
   private func noteManualPreparationFailure(_ message: String) {
+    exportMeasurements?.invalidate("scan-failed")
     guard manualRunFeedback?.generation == generation else { return }
     if manualRunFeedback?.failureMessage == nil { manualRunFeedback?.failureMessage = message }
   }
@@ -2705,6 +2713,7 @@ final class ExportManager {
           assetId: assetId, placement: placement, variant: variant,
           error: failure.localizedDescription, reason: reason, at: date)
         if manualRunFeedback?.generation == generation { manualRunFeedback?.failureSignals += 1 }
+        exportMeasurements?.invalidate("variant-failed")
         activeRunBookkeeping?.failedCount += 1
         activeRunBookkeeping?.failures.append(
           ExportRunFailureDetail(

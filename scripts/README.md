@@ -19,6 +19,62 @@ Small development utilities for this project. CI-only steps live under [`ci/`](c
 | [`screenshots/optimize-bundle.sh`](screenshots/optimize-bundle.sh) | Batch-resizes + re-encodes the stock photos under `photo-export/Resources/screenshots/` as JPEG at quality 85, capped at 1600px on the long edge. PNGs typically shrink to ~25% of their original size. Skips files that already have a `.jpg` / `.heic` sibling. Run after dropping new PNGs into the bundle. |
 | [`xccov2lcov.sh`](xccov2lcov.sh) | Converts an `.xcresult` coverage bundle into `lcov.info` for tools that consume LCOV. Used by the coverage commands in [`README.md`](../README.md). |
 
+## Export measurements
+
+For real Photos/NAS throughput, quit existing Photo Export instances and run:
+
+```bash
+scripts/perf/collect-export-measurements.sh --app "/path/to/Photo Export.app" --label nas --runs 2
+```
+
+Use a build containing the measurement instrumentation. The command starts a narrowly
+filtered numeric log subscriber before launching the app with temporary measurement
+arguments. Choose the same Photos selection and export settings, then start an export
+to a **fresh disposable destination for each run**. Reusing an already-exported destination
+measures skipping rather than export throughput. Do not delete your real export history.
+Repeat with `--label icloud` and `--label heic` for the applicable selections. Keep the
+same workload, power/network conditions, and capture mode for before/after comparisons;
+iCloud caches warm between runs, so record the order and compare like conditions.
+
+Capture stops after 2 eligible complete manual runs; background Auto Export runs are
+identified separately and do not satisfy the requested sample count. The app stays open. Ctrl-C saves partial
+results and stops only the collector's log/caffeinate processes. No exports are started
+by the command, no settings are changed, and nothing is uploaded. An existing app is
+refused so two instances cannot share its stores. Log access must be allowed for the
+terminal running the command; no sudo is needed or requested.
+
+The printed output directory contains `summary.md` (paste this on the tracking issue),
+`results.json` (build identity and numeric results), and `events.ndjson` (sanitized replay
+input). Add `--output /new/folder` to choose a location; existing paths are never reused.
+The report omits filenames, Photos identifiers and destination paths. Asset ordinals
+in the replay input are local to each run and are not Photos identifiers.
+
+- Throughput is distinct committed assets divided by the **first-to-last-completion**
+  window, matching `throughput-from-log.sh`; preparation and the first write precede it.
+- Logical run wall includes preparation and queue work. Job wall brackets each actual
+  `performExport` await, including final commit/history work.
+- Staging is the sum of physical copy/resource/render/conversion await times divided by
+  summed complete-job wall time. It includes producer suspension and retry attempts,
+  excludes directory repair and cleanup, and is **not CPU time** or main-thread stall time.
+- The report counts main-thread turns strictly above 16, 33 and 100 ms and lists long
+  turns. These thresholds are cumulative. Numeric event sequences and terminal counts
+  catch missing evidence; paused, canceled, cleared or failed runs cannot become clean
+  baselines. Staging validity is reported separately from completion-window validity.
+
+The app's build toolchain comes from its bundle metadata when available; the executable
+bundle SHA-256 identifies the measured app, including Debug implementation dylibs. This does not claim that an installed
+Xcode version built an arbitrary supplied app. For offline report regeneration (retain the original `results.json` for build provenance):
+
+```bash
+scripts/perf/collect-export-measurements.sh --replay /capture/events.ndjson \
+  --session <UUID-from-results.json> --label nas --runs 2 --output /new/replay-folder
+```
+
+Legacy completion logs remain supported by `scripts/perf/throughput-from-log.sh --verbose
+run-1.log run-2.log`. The existing `scripts/perf/run-main-thread-bench.sh` separately runs
+optimized Debug samples using scratch-only fakes and prints `BENCH` medians; it does not
+establish real Photos/NAS throughput or staging percentages.
+
 ## CI scripts (`scripts/ci/`)
 
 These are wrappers around `xcodebuild` / signing / App Store Connect that the release workflows call. They are not meant to be run interactively unless you are reproducing a CI failure locally — they expect environment variables that the workflows inject.

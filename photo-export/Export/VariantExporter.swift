@@ -200,6 +200,7 @@ final class VariantExporter {
     context capturedContext: ExportDestinationContext? = nil
   ) async throws -> String? {
     try queueCoordinator?.throwIfCancelledOrStale(gen)
+    let measurement = queueCoordinator?.measurementJob
     let context =
       try capturedContext
       ?? captureDestinationContext(
@@ -271,6 +272,7 @@ final class VariantExporter {
         acceptsEditedFallback: acceptsEditedFallback, context: context)
       {
       case .committed:
+        measurement?.committed()
         return slot.chosenStem(forFilename: finalURL.lastPathComponent)
       case .collision(let error):
         throw error
@@ -343,8 +345,10 @@ final class VariantExporter {
         do {
           // Wait for physical IO even on cancellation. The surrounding export owns
           // security-scoped access until this continuation finishes.
-          try await destinationIO.run { [fileSystem] in
-            try fileSystem.copyItem(from: sourceURL, to: tempURL)
+          try await measureExportStage(measurement) {
+            try await destinationIO.run { [fileSystem] in
+              try fileSystem.copyItem(from: sourceURL, to: tempURL)
+            }
           }
           try checkOwnership(context, placement: job.placement)
           didCopyFromReuseSource = true
@@ -383,8 +387,10 @@ final class VariantExporter {
           switch producer {
           case .resource(let resource):
             try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
-              try await self.assetResourceWriter.writeResource(
-                resource, forAssetId: descriptor.id, to: tempURL)
+              try await measureExportStage(measurement) {
+                try await self.assetResourceWriter.writeResource(
+                  resource, forAssetId: descriptor.id, to: tempURL)
+              }
             }
           case .render(let request):
             // Preserve cancellation and hard destination failures; translate ordinary
@@ -393,7 +399,9 @@ final class VariantExporter {
             // error survives in the log for diagnostics.
             do {
               try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
-                try await self.mediaRenderer.render(request: request, to: tempURL)
+                try await measureExportStage(measurement) {
+                  try await self.mediaRenderer.render(request: request, to: tempURL)
+                }
               }
             } catch is CancellationError {
               throw CancellationError()
@@ -413,12 +421,16 @@ final class VariantExporter {
             let converted: Result<Void, Error>
             do {
               try await withDirectoryRetry(relPath, context: context, placement: job.placement) {
-                try await self.assetResourceWriter.writeResource(
-                  request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
+                try await measureExportStage(measurement) {
+                  try await self.assetResourceWriter.writeResource(
+                    request.sourceResource, forAssetId: descriptor.id, to: heicTempURL)
+                }
               }
               try checkOwnership(context, placement: job.placement)
-              try await imageConverter.convertHEIC(
-                at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
+              try await measureExportStage(measurement) {
+                try await self.imageConverter.convertHEIC(
+                  at: heicTempURL, to: tempURL, quality: Self.heicJPEGQuality)
+              }
               converted = .success(())
             } catch {
               converted = .failure(error)
@@ -464,6 +476,7 @@ final class VariantExporter {
         acceptsEditedFallback: acceptsEditedFallback, mayAdoptExisting: mayAdoptExisting,
         context: context)
       inFlight = nil
+      measurement?.committed()
       logger.info(
         "Exported \(committedName, privacy: .public) variant: \(variant.rawValue, privacy: .public) -> \(destDir.path, privacy: .public) asset: \(descriptor.id, privacy: .public)"
       )

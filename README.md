@@ -142,6 +142,9 @@ xcodebuild \
 
 Optional local tools: `swiftlint`, `swift-format`, `xcpretty`.
 
+For automatic real-export measurement capture and the local synthetic benchmark, see
+[`scripts/README.md` → Export measurements](scripts/README.md#export-measurements).
+
 Marketing screenshots are captured with `scripts/screenshots/capture.sh`, which builds the app, then for each marketing surface launches it
 with `--screenshot-mode --screenshot-surface=<key>` against a curated synthetic Photos library (no personal photos involved) and captures
 the window via `screencapture -l<window-id>`. See [`scripts/README.md`](scripts/README.md) for entry points and
