@@ -64,11 +64,10 @@ final class AppCore {
     let plm: PhotoLibraryManager =
       composition.photoLibraryServiceOverride.map {
         PhotoLibraryManager(
-          overrideService: $0, refreshClock: composition.clock,
-          photoKitReader: composition.photoKitReader)
+          overrideService: $0, refreshClock: composition.clock)
       }
       ?? PhotoLibraryManager(
-        refreshClock: composition.clock, photoKitReader: composition.photoKitReader)
+        refreshClock: composition.clock)
     let ers = ExportRecordStore(baseDirectoryURL: composition.recordsRoot)
     let cers = CollectionExportRecordStore(baseDirectoryURL: composition.recordsRoot)
     let em = ExportManager(

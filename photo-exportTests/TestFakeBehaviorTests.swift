@@ -12,6 +12,23 @@ struct TestFakeBehaviorTests {
     Calendar.current.date(from: DateComponents(year: year, month: month, day: day))!
   }
 
+  @Test func readingThumbnailReaderDoesNotRetainTheLibrary() {
+    weak var released: FakePhotoLibraryService?
+    autoreleasepool {
+      let service = FakePhotoLibraryService()
+      released = service
+      _ = service.thumbnailReader
+    }
+    #expect(released == nil)
+  }
+
+  @Test func thumbnailDefaultsAreVisibleToTheCallRecorder() async {
+    let service = RecordingPhotoLibraryService()
+    let resolved = await service.resolveThumbnailAssets(ids: ["thumbnail"])
+    #expect(resolved.isEmpty)
+    #expect(!service.calls.isEmpty)
+  }
+
   @Test func timelineUsesCreationDatesRatherThanBucketKeys() async throws {
     let service = FakePhotoLibraryService()
     service.assetsByYearMonth["2025-1"] = [
