@@ -11,7 +11,8 @@ MUTATION = re.compile(r'\b(?:markVariantInProgress|markVariantExported|markVaria
                       r'removeRecord|retryPersistence|resetToEmpty|configure)\s*\(')
 RECEIVER = re.compile(r'(?:\b(?:\w*RecordStore|timelineStore|collectionStore|'
                       r'recordStoreRouter|collections|timeline))\s*\.\s*$')
-ADMISSION = re.compile(r'\bwith(?:Import)?MutationAdmission\b[^{}]*$')
+ADMISSION = re.compile(r'\b(?:with(?:Import)?MutationAdmission|'
+                       r'mutationAdmission\s*\.\s*perform)\b[^{}]*$')
 OWNERS = {'ExportRecordStore.swift', 'CollectionExportRecordStore.swift', 'RecordStoreRouter.swift'}
 
 

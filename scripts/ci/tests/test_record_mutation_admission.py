@@ -23,6 +23,21 @@ class RecordMutationAdmissionTests(unittest.TestCase):
             self.assertEqual(GUARD.problems(source), [])
             self.assertEqual(len(GUARD.problems(source + '\ncollectionStore.upsertPlacement(p)')), 1)
 
+    def test_admission_primitive_allows_nested_writes_only_inside_its_closure(self):
+        for receiver in ['host.exportRecordStore', 'collectionStore']:
+            source = f'{receiver}.mutationAdmission.perform {{ if current {{ {receiver}.bulkImportRecords(rows) }} }}'
+            self.assertEqual(GUARD.problems(source), [])
+            self.assertEqual(len(GUARD.problems(source + f'\n{receiver}.bulkImportRecords(rows)')), 1)
+
+    def test_admission_primitive_lookalikes_and_text_do_not_authorize_writes(self):
+        for expression in ['other.perform', 'mutationAdmission.performLater',
+                           'mutationAdmission.other', 'notmutationAdmission.perform']:
+            source = f'{expression} {{ collectionStore.bulkImportRecords(rows) }}'
+            self.assertEqual(len(GUARD.problems(source)), 1)
+        for text in ['// mutationAdmission.perform', 'let text = "mutationAdmission.perform"']:
+            source = text + '\nif current { collectionStore.bulkImportRecords(rows) }'
+            self.assertEqual(len(GUARD.problems(source)), 1)
+
     def test_comments_strings_and_unrelated_methods_are_ignored(self):
         self.assertEqual(GUARD.problems('// collectionStore.configure(x)\nlet text = "timelineStore.resetToEmpty()"\nother.configure(x)'), [])
 
