@@ -146,8 +146,10 @@ struct DestinationAsyncValidationTests {
     var completions: [ExportRunSummary] = []
     let subscription = manager.completedRunsPublisher.sink { completions.append($0) }
     let run = Task { await manager.runExport(context: context) }
+    var admittedWorker: Task<Void, Never>?
     try await withCleanup {
       try #require(await gate.waitForEnter(count: 1))
+      admittedWorker = try #require(manager.currentTask)
       #expect(manager.activeRunContext == context)
       configurations.removeAll()
       let generation = manager.generation
@@ -171,6 +173,7 @@ struct DestinationAsyncValidationTests {
         #expect(completions.isEmpty)
       }
       await gate.releaseAll()
+      if let admittedWorker { try #require(await finished(admittedWorker)) }
       try #require(await finished(run))
       let summary = await run.value
       #expect(summary.context == context)
@@ -180,7 +183,7 @@ struct DestinationAsyncValidationTests {
     } cleanup: {
       subscription.cancel()
       await gate.releaseAll()
-      let worker = manager.currentTask
+      let worker = admittedWorker ?? manager.currentTask
       manager.cancelAndClear()
       _ = await finished(run)
       if let worker { _ = await finished(worker) }
