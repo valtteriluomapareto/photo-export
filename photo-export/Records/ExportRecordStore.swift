@@ -222,10 +222,6 @@ final class ExportRecordStore {
   }
 
   // MARK: - Destination configuration
-  /// Points the store at a specific destination id (subdirectory) and loads its history before
-  /// returning. Passing nil clears state (shows empty). Publishes no `.loading`; the app's
-  /// destination changes use `beginConfigure(for:)`.
-  /// Waits before reading or changing active history, then applies one synchronous batch.
   var mutationTicket: RecordMutationTicket {
     RecordMutationTicket(
       file: jsonl.map(ObjectIdentifier.init), load: loadGeneration, epoch: recordsEpoch)
@@ -237,6 +233,7 @@ final class ExportRecordStore {
     try await mutationAdmission.waitUntilOpen()
   }
 
+  /// Waits before reading or changing active history, then applies one synchronous batch.
   func withMutationAdmission<T>(_ body: () throws -> T) async throws -> T {
     let ticket = mutationTicket
     try await prepareForMutation()
