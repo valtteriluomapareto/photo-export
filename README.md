@@ -60,6 +60,7 @@ If Auto Export shows "Blocked — Photos access needed", Photos access is off an
   guide](https://valtteriluomapareto.github.io/photo-export/auto-export/).
 - See destination problems in the main window and reconnect a drive or restore folder access. [Destination
   guidance](https://valtteriluomapareto.github.io/photo-export/features/#export-destination).
+- Re-select the same backup folder without interrupting an active export.
 - Track progress separately for each destination and resume interrupted exports. [History and
   recovery](https://valtteriluomapareto.github.io/photo-export/features/#tracking-and-resume).
 - Import an existing backup to rebuild history for Timeline, Favorites, albums and Shared Albums. [Import and

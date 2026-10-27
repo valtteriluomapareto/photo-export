@@ -626,11 +626,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     invalidateValidation()
     let generation = validationGeneration
     isValidating = true
-    if !synchronously {
-      publishValidation(
-        ValidationPresentation(
-          available: false, writable: false, status: status, identity: .unavailable))
-    }
     guard generation == validationGeneration else { return false }
     publishSelectedFolder(url)
     guard generation == validationGeneration else { return false }
