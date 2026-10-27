@@ -125,7 +125,8 @@ struct PhotoKitReaderTests {
   func blockedThumbnailRequestOnlyBlocksMetadataOnSharedExecutor(sharedExecutor: Bool) async throws
   {
     let gate = Gate()
-    let io = RecordingDestinationIO()
+    let queue = DispatchQueue(label: "test.metadata-owner", qos: .utility)
+    let io = RecordingDestinationIO(queue: queue)
     let asset = makeAsset()
     let backend = FakeThumbnailBackend(assets: [asset])
     let thumbnailOnMetadataWorker = LockedBox(false)
@@ -135,10 +136,15 @@ struct PhotoKitReaderTests {
         gate.hold()
       }
     }
-    let returned = LockedBox(false)
-    let reader = ProductionPhotoKitReader(io: io, thumbnailBackend: backend) { _, _ in
-      PhotoKitAssetSnapshot(descriptor: asset, resources: [])
-    }
+    let metadataOnExpectedWorker = LockedBox(false)
+    let reader = ProductionPhotoKitReader(
+      thumbnailBackend: backend,
+      resourceOwner: ProductionPhotoKitResourceOwner(
+        queue: queue,
+        backend: .init { _ in
+          metadataOnExpectedWorker.mutate { $0 = io.isOnWorker }
+          return .init(descriptor: asset) { [] }
+        }))
     let thumbnails: any ThumbnailReading
     if sharedExecutor {
       thumbnails = ProductionThumbnailReader(io: io, backend: backend)
@@ -150,21 +156,21 @@ struct PhotoKitReaderTests {
         for: .synthetic(asset),
         spec: .init(size: ThumbnailRequestSpec.gridSize, delivery: .highQuality))
     }
+    let started = LockedBox(false)
+    let returned = LockedBox(false)
+    var metadata: Task<PhotoKitAssetSnapshot?, Never>?
     try await withCleanup {
       try #require(await gate.entered.waitForEnter(count: 1))
       #expect(thumbnailOnMetadataWorker.value == sharedExecutor)
-      // Release a broken production composition after recording red, so it cannot deadlock the test.
       if !sharedExecutor && thumbnailOnMetadataWorker.value { gate.release() }
-      let submittedBeforeMetadata = io.submissions.value
-      let metadata = Task {
+      let pending = Task {
+        started.mutate { $0 = true }
         let snapshot = await reader.readAsset(id: asset.id, livePhotosPaired: false)
         returned.mutate { $0 = true }
         return snapshot
       }
-      try #require(
-        await eventually("metadata read admitted") {
-          io.submissions.value > submittedBeforeMetadata
-        })
+      metadata = pending
+      try #require(await eventually("metadata task started") { started.value })
       if sharedExecutor {
         #expect(!returned.value, "The held request occupies the shared serial executor")
       } else {
@@ -173,12 +179,16 @@ struct PhotoKitReaderTests {
         )
       }
       gate.release()
-      #expect(await metadata.value?.descriptor == asset)
+      let snapshot = await pending.value
+      #expect(snapshot?.descriptor == asset)
+      #expect(metadataOnExpectedWorker.value)
+      await snapshot?.resourceWriter?.close()
       #expect(await thumbnail.value != nil)
     } cleanup: {
       gate.release()
       await gate.entered.releaseAll()
       _ = await thumbnail.value
+      if let metadata { await metadata.value?.resourceWriter?.close() }
     }
   }
 

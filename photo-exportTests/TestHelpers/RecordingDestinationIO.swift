@@ -11,9 +11,11 @@ final class RecordingDestinationIO: DestinationIOExecuting, @unchecked Sendable 
   private let beforeLeaf: @Sendable (Int) -> Void
   var isOnWorker: Bool { DispatchQueue.getSpecific(key: key) == true }
 
-  init(beforeLeaf: @escaping @Sendable (Int) -> Void = { _ in }) {
+  init(
+    queue: DispatchQueue = DispatchQueue(label: "test.destination-io", qos: .utility),
+    beforeLeaf: @escaping @Sendable (Int) -> Void = { _ in }
+  ) {
     self.beforeLeaf = beforeLeaf
-    let queue = DispatchQueue(label: "test.destination-io", qos: .utility)
     queue.setSpecific(key: key, value: true)
     worker = DestinationIO(queue: queue)
   }
