@@ -263,7 +263,7 @@ struct ExportDestinationEscapeProtectionTests {
 
   @Test(arguments: [ENOENT, ENOTDIR], [false, true])
   func missingDirectoryProducerIsRetriedOnlyOnce(code: Int32, succeedsOnRetry: Bool) async throws {
-    let harness = ExportManagerHarness(label: "DirectoryRetry")
+    let harness = await ExportManagerHarness(label: "DirectoryRetry")
     let asset = TestAssetFactory.makeAsset(
       id: "retry",
       creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 1)))
@@ -298,7 +298,7 @@ struct ExportDestinationEscapeProtectionTests {
 
   @Test(arguments: CleanupOutcome.allCases)
   func stageCleanupFinishesBeforeDestinationScopeCloses(outcome: CleanupOutcome) async throws {
-    let harness = ExportManagerHarness(label: "DirectoryCleanup")
+    let harness = await ExportManagerHarness(label: "DirectoryCleanup")
     let asset = TestAssetFactory.makeAsset(
       id: "cleanup",
       creationDate: Calendar.current.date(from: DateComponents(year: 2025, month: 2, day: 1)))

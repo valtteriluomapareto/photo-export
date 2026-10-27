@@ -32,9 +32,9 @@ import Testing
       let imageGate = AsyncCheckpoint()
       let window: NSWindow
 
-      init() {
+      init() async {
         library = PhotoLibraryManager(overrideService: service)
-        export = ExportManagerHarness(label: "PhotoLibraryViewDependency", photoLib: service)
+        export = await ExportManagerHarness(label: "PhotoLibraryViewDependency", photoLib: service)
         destination = ExportDestinationManager(skipRestore: true, userDefaults: export.defaults)
         window = HostedViewHarness.makeWindow(
           contentRect: NSRect(x: -10000, y: -10000, width: 900, height: 700),
@@ -68,7 +68,7 @@ import Testing
 
     /// Already passes: metadata is reread while the unrelated preview load remains suspended.
     @Test func assetDetailRereadsMetadataAfterALibraryChange() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       f.service.detailsByAssetId["selected"] = AssetDetails(
         originalFilename: "Before.jpg", fileSize: 10, resources: [])
       f.service.fullImageRequestOverride = { [gate = f.imageGate] _ in
@@ -90,7 +90,7 @@ import Testing
     }
 
     @Test func yearSummaryNeverShowsThePreviousYearsHeldCount() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let input = YearInput()
       let gate = AsyncCheckpoint()
       let refreshGate = AsyncCheckpoint()
@@ -138,7 +138,7 @@ import Testing
 
     /// Already passes: the year total follows library invalidation without remounting.
     @Test func yearSummaryRecountsAfterALibraryChange() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
       f.service.assetsByYearMonth["2026-9"] = [
         TestAssetFactory.makeAsset(id: "first", creationDate: date)

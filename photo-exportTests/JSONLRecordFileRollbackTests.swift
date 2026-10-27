@@ -92,7 +92,7 @@ struct JSONLRecordFileRollbackTests {
     #expect(try Data(contentsOf: logURL) == durableLog)
     #expect(file.hasReplayWork)
     try await file.checkpoint(ConditionalSnapshot(records: ["crossing": "v"]))
-    let loaded = file.load()
+    let loaded = (await file.load())
     #expect(loaded.snapshot?.records == ["crossing": "v"])
     #expect(loaded.ops.isEmpty)
   }
@@ -131,7 +131,7 @@ struct JSONLRecordFileRollbackTests {
     #expect(!FileManager.default.fileExists(atPath: nonexistentDir.path))
 
     // load() returns empty everywhere — no log to read, no snapshot, no ops.
-    let loaded = file.load()
+    let loaded = (await file.load())
     #expect(loaded.snapshot == nil)
     #expect(loaded.ops.isEmpty)
     #expect(loaded.malformedLineCount == 0)
@@ -143,16 +143,17 @@ struct JSONLRecordFileRollbackTests {
     let recovered = Operation(key: "ok", value: "v")
     file.append(recovered)
     await drainIOAndRollbacks(file)
-    #expect(file.load().ops.isEmpty)
+    #expect((await file.load()).ops.isEmpty)
 
     // The owner retries by saving its complete retained state. Subsequent appends now
     // proceed, and reopening recovers both the originally failed and later operation.
-    try file.writeSnapshot(ConditionalSnapshot(records: ["k": "v", "ok": "v"]))
+    try await file.checkpoint(
+      ConditionalSnapshot(records: ["k": "v", "ok": "v"]), recovering: true)
     let afterRecovery = Operation(key: "later", value: "v")
     file.append(afterRecovery)
     await drainIOAndRollbacks(file)
 
-    let loadedAfterRecovery = file.load()
+    let loadedAfterRecovery = (await file.load())
     #expect(loadedAfterRecovery.snapshot?.records == ["k": "v", "ok": "v"])
     #expect(loadedAfterRecovery.ops == [afterRecovery])
   }

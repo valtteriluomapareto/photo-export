@@ -11,10 +11,10 @@ import Testing
 struct EmptyRunMessageTests {
   // MARK: - Test harness
 
-  private func makeTestHarness() -> (
+  private func makeTestHarness() async -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore
   ) {
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "EmptyRunTest", userDefaults: TestScratch.defaults("EmptyRun"))
     return (h.manager, h.photoLib, h.dest, h.store)
   }
@@ -22,7 +22,7 @@ struct EmptyRunMessageTests {
   // MARK: - Empty Export Month
 
   @Test func startExportMonthSetsMessageWhenAllAssetsAreAlreadyDone() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -44,7 +44,7 @@ struct EmptyRunMessageTests {
   }
 
   @Test func startExportYearSetsYearScopedMessageWhenAlreadyDone() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "done-y", creationDate: makeDate(2024, 5, 1))
@@ -63,7 +63,7 @@ struct EmptyRunMessageTests {
   }
 
   @Test func startExportAllSetsLibraryScopedMessageWhenAlreadyDone() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(id: "done-all", creationDate: makeDate(2024, 5, 1))
@@ -85,7 +85,7 @@ struct EmptyRunMessageTests {
   // MARK: - Message NOT set when there is real work
 
   @Test func startExportMonthDoesNotSetMessageWhenWorkRemains() async throws {
-    let (manager, photoLib, dest, _) = makeTestHarness()
+    let (manager, photoLib, dest, _) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -105,7 +105,7 @@ struct EmptyRunMessageTests {
   // MARK: - Clearing rules
 
   @Test func newStartExportClearsPriorMessage() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -136,7 +136,7 @@ struct EmptyRunMessageTests {
   }
 
   @Test func versionSelectionChangeClearsMessage() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -159,7 +159,7 @@ struct EmptyRunMessageTests {
   }
 
   @Test func cancelAndClearClearsMessage() async throws {
-    let (manager, photoLib, dest, store) = makeTestHarness()
+    let (manager, photoLib, dest, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(

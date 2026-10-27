@@ -30,7 +30,8 @@ final class ExportManagerHarness {
     imageConverter: any ImageConverter = ProductionImageConverter(),
     runActivity: (any ExportRunActivity)? = nil,
     exportMeasurements: ExportMeasurements? = nil,
-    destinationIOFactory: @escaping @MainActor (String?) -> any DestinationIOExecuting = { _ in
+    destinationIOFactory: @escaping @MainActor (String?) async -> any DestinationIOExecuting = {
+      _ in
       DestinationIO()
     }
   ) {
@@ -40,9 +41,9 @@ final class ExportManagerHarness {
     self.fileSystem = fileSystem
     storeRoot = storeRootURL ?? TestScratch.directory(label)
     store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: destinationId)
+    await store.configureAndWait(for: destinationId)
     collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: destinationId)
+    await collectionStore.configureAndWait(for: destinationId)
     defaults = userDefaults ?? TestScratch.defaults(label)
     manager = ExportManager(
       photoLibraryService: self.photoLib,

@@ -25,3 +25,13 @@ extension CollectionExportRecordStore {
     try await flush()
   }
 }
+
+extension JSONLRecordFile {
+  func load() async -> LoadResult {
+    let inputs = readInputs
+    let result = await runDetached(priority: .userInitiated) { inputs.decode(inputs.read()) }
+    adoptLogSeparator(result.needsLogSeparator)
+    adoptReplaySize(operationCount: result.ops.count, bytes: result.replayBytes)
+    return result
+  }
+}

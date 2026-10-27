@@ -133,7 +133,7 @@ struct LibraryRefreshTests {
   }
 
   @Test func activeFolderExportRetriesChangedMembershipBeforeEnqueuing() async throws {
-    let h = ExportManagerHarness(label: "LibraryRefreshCoreScope")
+    let h = await ExportManagerHarness(label: "LibraryRefreshCoreScope")
     let library = PhotoLibraryManager(overrideService: h.photoLib, refreshClock: TestClock())
     let manager = ExportManager(
       photoLibraryService: library, exportDestination: h.dest, exportRecordStore: h.store,

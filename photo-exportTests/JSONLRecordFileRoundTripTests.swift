@@ -70,14 +70,14 @@ struct JSONLRecordFileRoundTripTests {
   /// loading the file and replaying its ops reproduces the replica's state.
   private func driveAndVerify(
     file: JSONLRecordFile<Snapshot, Operation>, replica: Replica, ops: [Operation]
-  ) {
+  ) async {
     for op in ops {
       replica.apply(op)
       file.append(op)
     }
     file.drainSynchronously()
 
-    let loaded = file.load()
+    let loaded = (await file.load())
     var reconstructed = loaded.snapshot?.records ?? [:]
     for op in loaded.ops {
       switch op.kind {
@@ -93,7 +93,7 @@ struct JSONLRecordFileRoundTripTests {
   ) async throws {
     for offset in stride(from: 0, to: ops.count, by: every) {
       let end = min(offset + every, ops.count)
-      driveAndVerify(file: file, replica: replica, ops: Array(ops[offset..<end]))
+      await driveAndVerify(file: file, replica: replica, ops: Array(ops[offset..<end]))
       if end % every == 0 { try await file.checkpoint(replica.snapshot) }
     }
   }
@@ -102,7 +102,7 @@ struct JSONLRecordFileRoundTripTests {
 
   /// 50 keys × 5 mutations each (upsert → update → update → delete → upsert), no
   /// compaction reached. Pure log replay must reproduce the final state exactly.
-  @Test func churnNoCompactionRoundTrip() throws {
+  @Test func churnNoCompactionRoundTrip() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
@@ -117,9 +117,9 @@ struct JSONLRecordFileRoundTripTests {
       ops.append(Operation(kind: .upsert, key: key, value: "final"))
     }
     // 250 ops; threshold is 1000 → no compaction yet.
-    driveAndVerify(file: file, replica: replica, ops: ops)
+    await driveAndVerify(file: file, replica: replica, ops: ops)
 
-    let loaded = file.load()
+    let loaded = (await file.load())
     #expect(loaded.snapshot == nil, "no compaction should have run yet")
     #expect(loaded.ops.count == ops.count)
   }
@@ -138,7 +138,7 @@ struct JSONLRecordFileRoundTripTests {
     try await file.flush()
     #expect(!FileManager.default.fileExists(atPath: snapshotURL.path))
     try await file.checkpoint(Snapshot(records: ["new": "v"]))
-    #expect(file.load().snapshot?.records == ["new": "v"])
+    #expect((await file.load()).snapshot?.records == ["new": "v"])
   }
 
   // MARK: - Cross-threshold compaction
@@ -161,7 +161,7 @@ struct JSONLRecordFileRoundTripTests {
     }
     try await driveWithCheckpoints(file: file, replica: replica, ops: ops, every: n)
 
-    let loaded = file.load()
+    let loaded = (await file.load())
     #expect(loaded.snapshot != nil, "compaction must have written a snapshot")
     #expect(loaded.ops.count == 5, "post-compaction log lines must remain")
     // Snapshot reflects the state at the threshold-crossing append.
@@ -195,7 +195,7 @@ struct JSONLRecordFileRoundTripTests {
     }
     try await driveWithCheckpoints(file: file, replica: replica, ops: ops, every: n)
 
-    let loaded = file.load()
+    let loaded = (await file.load())
     #expect(loaded.snapshot != nil)
     #expect(loaded.ops.isEmpty, "final batch ended on a threshold; log should be truncated")
     #expect(loaded.snapshot?.records.count == 3 * n)
@@ -224,7 +224,7 @@ struct JSONLRecordFileRoundTripTests {
     }
     try await driveWithCheckpoints(file: file, replica: replica, ops: ops, every: n)
 
-    let loaded = file.load()
+    let loaded = (await file.load())
     #expect(loaded.snapshot != nil)
     // Snapshot should NOT contain the 100 deleted keys.
     for i in 0..<100 {
@@ -243,7 +243,7 @@ struct JSONLRecordFileRoundTripTests {
   /// faithfully round-trip, because production placement records can carry nil filenames
   /// for in-progress variants. Lock in: the value flows through encode → decode → apply
   /// without alteration.
-  @Test func upsertWithNilValueRoundTrips() throws {
+  @Test func upsertWithNilValueRoundTrips() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
@@ -253,13 +253,13 @@ struct JSONLRecordFileRoundTripTests {
       Operation(kind: .upsert, key: "b", value: ""),
       Operation(kind: .upsert, key: "c", value: "non-empty"),
     ]
-    driveAndVerify(file: file, replica: replica, ops: ops)
+    await driveAndVerify(file: file, replica: replica, ops: ops)
   }
 
   // MARK: - Reopening does not itself capture a history snapshot
 
   /// Loading adopts replay pressure; the composing store owns the next maintenance boundary.
-  @Test func freshInstanceAfterRestartDoesNotInheritOldCounter() throws {
+  @Test func freshInstanceAfterRestartDoesNotInheritOldCounter() async throws {
     let (dir, file, queue) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
@@ -280,7 +280,7 @@ struct JSONLRecordFileRoundTripTests {
       snapshotURL: snapshotURL, logURL: logURL, ioQueue: queue,
       logger: Logger(subsystem: TestLogging.subsystem, category: "JSONLRecordFile-rt-2")
     )
-    let loaded = secondInstance.load()
+    let loaded = (await secondInstance.load())
     #expect(loaded.snapshot == nil)
     #expect(loaded.ops.count == n - 1)
 
@@ -290,7 +290,7 @@ struct JSONLRecordFileRoundTripTests {
     secondInstance.append(firstAfterRestart)
     secondInstance.drainSynchronously()
 
-    let loadedAgain = secondInstance.load()
+    let loadedAgain = (await secondInstance.load())
     #expect(loadedAgain.snapshot == nil, "first append after restart must not trigger compaction")
     #expect(loadedAgain.ops.count == n, "the new op landed in the log alongside the prior n-1")
   }
@@ -300,7 +300,7 @@ struct JSONLRecordFileRoundTripTests {
   /// `resetToEmpty(emptySnapshot:)` writes a fresh empty snapshot and truncates the log.
   /// Subsequent reload returns the empty snapshot and zero ops. Used by the corruption-
   /// recovery flow.
-  @Test func resetToEmptyProducesCleanReloadable() throws {
+  @Test func resetToEmptyProducesCleanReloadable() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
@@ -316,9 +316,9 @@ struct JSONLRecordFileRoundTripTests {
     // Plant a fake "broken" snapshot so resetToEmpty has something to rename aside.
     try Data("garbage".utf8).write(to: dir.appendingPathComponent("snapshot.json"))
 
-    try file.resetToEmpty(emptySnapshot: Snapshot(records: [:]))
+    try await file.checkpoint(Snapshot(records: [:]), recovering: true, resetCorrupt: true)
 
-    let loaded = file.load()
+    let loaded = (await file.load())
     #expect(loaded.snapshot == Snapshot(records: [:]))
     #expect(loaded.ops.isEmpty)
     #expect(loaded.snapshotStatus == .loaded)
@@ -340,7 +340,7 @@ struct JSONLRecordFileRoundTripTests {
   /// final value matches the replica. Locks in: ops are replayed in their original order
   /// (FIFO), which is essential for correctness when an upsert and a later delete touch
   /// the same key.
-  @Test func interleavedSequencePreservesOrder() throws {
+  @Test func interleavedSequencePreservesOrder() async throws {
     let (dir, file, _) = try makeStore()
     defer { try? FileManager.default.removeItem(at: dir) }
     let replica = Replica()
@@ -359,7 +359,7 @@ struct JSONLRecordFileRoundTripTests {
       }
       ops.append(op)
     }
-    driveAndVerify(file: file, replica: replica, ops: ops)
+    await driveAndVerify(file: file, replica: replica, ops: ops)
   }
 }
 

@@ -33,7 +33,7 @@ struct LibraryWindowSizeTests {
     service.yearCounts = [(2026, 2)]
     let library = PhotoLibraryManager(overrideService: service)
     let fakeDestination = FakeExportDestination()
-    let export = ExportManagerHarness(
+    let export = await ExportManagerHarness(
       label: "LibraryWindowSize", destinationId: "A",
       storeRootURL: root.appendingPathComponent("Records"), userDefaults: defaults,
       photoLib: service, dest: fakeDestination)

@@ -28,11 +28,11 @@ struct ReuseSourceAlbumPathTests {
 
   // MARK: - Fixtures
 
-  private func makeManager() throws -> (
+  private func makeManager() async throws -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
-    let harness = ExportManagerHarness(
+    let harness = await ExportManagerHarness(
       label: "ReuseSourceAlbum",
       userDefaults: TestScratch.defaults("ReuseAlbum"))
     return (
@@ -59,7 +59,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func timelineReusesAlbumFile() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -112,7 +112,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func albumReusesAnotherAlbumFile() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -175,7 +175,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func newAlbumExportPrefersTimelineSourceOverAlbumSource() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -238,7 +238,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func multipleAlbumsTiebrokenByLexicographicPlacementId() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -300,7 +300,7 @@ struct ReuseSourceAlbumPathTests {
   @Test func currentPlacementExcludedFromItsOwnReuseSearch() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()

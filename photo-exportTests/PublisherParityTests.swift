@@ -111,8 +111,8 @@ struct PublisherParityTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    timeline.configure(for: "A")
-    collections.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
+    await collections.configureAndWait(for: "A")
     let identity = CurrentValueSubject<DestinationIdentity, Never>(Self.identity("A"))
     let monitor = DestinationSafetyMonitor(
       identityPublisher: identity.eraseToAnyPublisher(),
@@ -157,11 +157,11 @@ struct PublisherParityTests {
     let collections: CollectionExportRecordStore
     let manager: ExportManager
 
-    init() {
+    init() async {
       timeline = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       manager = ExportManager(
         photoLibraryService: FakePhotoLibraryService(), exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -188,7 +188,7 @@ struct PublisherParityTests {
   }
 
   @Test func managerVersionSelection() async {
-    let f = ManagerFixture()
+    let f = await ManagerFixture()
     await withCleanup {
       await assertPublishedParity(
         f.manager, \.versionSelection, { $0.versionSelectionPublisher },
@@ -203,7 +203,7 @@ struct PublisherParityTests {
   }
 
   @Test func managerConvertHEICToJPEG() async {
-    let f = ManagerFixture()
+    let f = await ManagerFixture()
     await withCleanup {
       await assertPublishedParity(
         f.manager, \.convertHEICToJPEG, { $0.convertHEICToJPEGPublisher },
@@ -215,7 +215,7 @@ struct PublisherParityTests {
   }
 
   @Test func managerLivePhotosPairedExport() async {
-    let f = ManagerFixture()
+    let f = await ManagerFixture()
     await withCleanup {
       await assertPublishedParity(
         f.manager, \.livePhotosPairedExport, { $0.livePhotosPairedExportPublisher },
@@ -229,7 +229,7 @@ struct PublisherParityTests {
   }
 
   @Test func managerImportStage() async {
-    let f = ManagerFixture()
+    let f = await ManagerFixture()
     await withCleanup {
       await assertPublishedParity(
         f.manager, \.importStage, { $0.importStagePublisher },
@@ -242,7 +242,7 @@ struct PublisherParityTests {
   }
 
   @Test func managerIsImportingFlag() async {
-    let f = ManagerFixture()
+    let f = await ManagerFixture()
     await withCleanup {
       await assertPublishedParity(
         f.manager, \.isImporting, { $0.isImportingFlagOnlyPublisher },
@@ -257,7 +257,7 @@ struct PublisherParityTests {
 
   /// AutoSync's import hold: `isImporting || previousBackupMissing`, without repeats.
   @Test func managerIsImportingHold() async {
-    let f = ManagerFixture()
+    let f = await ManagerFixture()
     await withCleanup {
       await assertPublishedParity(
         { f.manager.isImportingPublisher },
@@ -272,7 +272,7 @@ struct PublisherParityTests {
   }
 
   @Test func managerActiveRunContext() async {
-    let f = ManagerFixture()
+    let f = await ManagerFixture()
     await withCleanup {
       let context = ExportRunContext(
         source: .manual, visibility: .userVisible, scope: .timelineFullLibrary,
@@ -287,7 +287,7 @@ struct PublisherParityTests {
   }
 
   @Test func managerIsEnqueueingAll() async {
-    let f = ManagerFixture()
+    let f = await ManagerFixture()
     await withCleanup {
       await assertPublishedParity(
         f.manager, \.isEnqueueingAll, { $0.isEnqueueingAllPublisher },
@@ -302,7 +302,7 @@ struct PublisherParityTests {
   /// AutoSync's run-state contract: `CombineLatest4` over the run context, the running flag,
   /// the queue depth and the bulk-enqueue flag, without repeats.
   @Test func managerExportRunState() async {
-    let f = ManagerFixture()
+    let f = await ManagerFixture()
     await withCleanup {
       let manager = f.manager
       await assertPublishedParity(
@@ -381,8 +381,8 @@ struct PublisherParityTests {
     let root = TestScratch.directory("ParitySnapshotRecords")
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    timeline.configure(for: "A")
-    collections.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
+    await collections.configureAndWait(for: "A")
     let manager = Self.destinationManager()
     manager.setSelectedFolderForTesting(folder)
     manager.revalidateForTesting()

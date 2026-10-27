@@ -56,8 +56,8 @@ struct ExportManagerRunExportTests {
     }
   }
 
-  private func makeHarness() -> Harness {
-    let h = ExportManagerHarness(label: "ExportManagerRunExport")
+  private func makeHarness() async -> Harness {
+    let h = await ExportManagerHarness(label: "ExportManagerRunExport")
     return Harness(
       manager: h.manager, photoLib: h.photoLib, dest: h.dest, writer: h.writer,
       store: h.store, collectionStore: h.collectionStore, storeRoot: h.storeRoot)
@@ -114,7 +114,7 @@ struct ExportManagerRunExportTests {
 
   @Test(arguments: ProgressiveScope.allCases)
   func enqueueUsesProgressiveAssetsAcrossEveryScope(scope: ProgressiveScope) async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let gate = AsyncCheckpoint()
     harness.writer.checkpoint = gate
     let assets = ["stream-a", "stream-b", "legacy-only"].map {
@@ -166,7 +166,7 @@ struct ExportManagerRunExportTests {
   }
 
   @Test func progressiveLateFailureDoesNotCommitJobsMetadataOrRetrySkips() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let assets = ["eligible", "blocked"].map {
       TestAssetFactory.makeAsset(id: $0, creationDate: makeDate(2025, 1, 1))
     }
@@ -190,7 +190,7 @@ struct ExportManagerRunExportTests {
   }
 
   @Test func oversizedProgressiveBatchYieldsBeforePlanningEveryAsset() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let assets = (0..<501).map {
       TestAssetFactory.makeAsset(id: "large-\($0)", creationDate: makeDate(2025, 1, 1))
     }
@@ -240,7 +240,7 @@ struct ExportManagerRunExportTests {
   }
 
   @Test func progressiveScopeCommitsOnlyAfterCompletionAndKeepsClickTimeSettings() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let assets = ["first", "second"].map {
       TestAssetFactory.makeAsset(id: $0, creationDate: makeDate(2025, 1, 1), isLivePhoto: true)
     }
@@ -287,7 +287,7 @@ struct ExportManagerRunExportTests {
   }
 
   @Test func preparationHandlesCoverOverlappingScopesCompletingOutOfOrder() async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let oldGate = AsyncCheckpoint()
     let freshGate = AsyncCheckpoint()
     let writerGate = AsyncCheckpoint()
@@ -323,7 +323,7 @@ struct ExportManagerRunExportTests {
     .folder(collectionId: "folder"),
   ])
   func selectionDispatcherUsesLiteralPlacements(selection: LibrarySelection) async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let january = TestAssetFactory.makeAsset(id: "same", creationDate: makeDate(2025, 1, 1))
     let february = TestAssetFactory.makeAsset(id: "feb", creationDate: makeDate(2025, 2, 1))
     harness.photoLib.assetsByYearMonth = ["2025-1": [january], "2025-2": [february]]
@@ -386,7 +386,7 @@ struct ExportManagerRunExportTests {
   {
     let throwsError = mode == .legacyFailure || mode == .streamFailure
     let progressive = mode == .streamSuccess || mode == .streamFailure
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let manager = harness.manager
     let oldFetch = AsyncCheckpoint()
     let newFetch = AsyncCheckpoint()
@@ -483,7 +483,7 @@ struct ExportManagerRunExportTests {
   func bulkTaskCancelledBeforeStartingCannotClearReplacementEnqueueFlag(supersede: Bool)
     async throws
   {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let gate = AsyncCheckpoint()
     try await withCleanup {
       harness.photoLib.yearCounts = [(2025, 0)]
@@ -528,7 +528,7 @@ struct ExportManagerRunExportTests {
   /// for video without a `.video` resource), so the variant write hits the
   /// `producer.originalFilename == nil` guard and emits a sentinel-message failure.
   @Test func sentinelFailurePopulatesRunSummaryBookkeeping() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "no-resource", mediaType: .video)
       // No resources seeded for the asset — variant write fails on the "no resource" guard.
@@ -558,7 +558,7 @@ struct ExportManagerRunExportTests {
     let storeRoot = TestScratch.directory("ExportManagerRunExportLoading")
     let store = ExportRecordStore(baseDirectoryURL: storeRoot)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "test")
+    await collectionStore.configureAndWait(for: "test")
     let photoLib = FakePhotoLibraryService()
     let dest = FakeExportDestination()
     let writer = FakeAssetResourceWriter()
@@ -598,7 +598,7 @@ struct ExportManagerRunExportTests {
   }
 
   @Test func persistenceFailureCannotReportSuccessfulRun() async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     try await withCleanup {
       let checkpoint = AsyncCheckpoint()
       harness.writer.checkpoint = checkpoint
@@ -626,9 +626,9 @@ struct ExportManagerRunExportTests {
         harness.collectionStore.exportInfo(assetId: asset.id, placement: .favorites())?
           .variants[.original]?.status == .done)
       try FileManager.default.removeItem(at: log)
-      harness.collectionStore.retryPersistence()
+      await harness.collectionStore.retryHistoryPersistence()
       #expect(harness.collectionStore.state == .ready)
-      harness.collectionStore.configure(for: "test")
+      await harness.collectionStore.configureAndWait(for: "test")
       #expect(
         harness.collectionStore.exportInfo(assetId: asset.id, placement: .favorites())?
           .variants[.original]?.status == .done)
@@ -644,7 +644,7 @@ struct ExportManagerRunExportTests {
   /// own context instead of trapping. The active run keeps ownership and completes.
   @Test(.timeLimit(.minutes(1)))
   func concurrentRunExportIsRejectedWithoutDisturbingTheActiveRun() async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     try await withCleanup {
       let gate = AsyncCheckpoint()
       harness.writer.checkpoint = gate
@@ -679,7 +679,7 @@ struct ExportManagerRunExportTests {
   /// keeps its ownership and completes.
   @Test(.timeLimit(.minutes(1)))
   func cancelAutoSyncRunLeavesAManualSourcedRunRunning() async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     try await withCleanup {
       let gate = AsyncCheckpoint()
       harness.writer.checkpoint = gate
@@ -708,7 +708,7 @@ struct ExportManagerRunExportTests {
   /// regression fails here instead of hanging.
   @Test(.timeLimit(.minutes(1)), arguments: [ExportRunSource.manual, .autoSync])
   func favoritesScanFailureResolvesTheRunAsFailed(source: ExportRunSource) async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     try await withCleanup {
       harness.photoLib.fetchAssetsError = CocoaError(.fileReadUnknown)
       var completions: [ExportRunSummary] = []
@@ -746,7 +746,7 @@ struct ExportManagerRunExportTests {
   /// the zero-count baseline captured after synchronous start* dispatch.
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
   func emptyFullScopeCompletesExactlyOnce(scope: FullScope) async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let context = makeContext(scope: scope.runScope)
       var completions: [ExportRunSummary] = []
@@ -772,7 +772,7 @@ struct ExportManagerRunExportTests {
   /// A new asset on the same scope forces another real job after the reset.
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
   func fullScopeSummaryUsesFreshCounterBaseline(scope: FullScope) async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(
         id: "baseline-\(scope)", creationDate: makeDate(2025, 1, 1))
@@ -803,7 +803,7 @@ struct ExportManagerRunExportTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
   func importingRejectsEveryFullScopeWithoutStrandingAwaiter(scope: FullScope) async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       harness.manager.startImport()
       #expect(harness.manager.isImporting)
@@ -828,13 +828,13 @@ struct ExportManagerRunExportTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
   func unavailableRelevantStoreRejectsEveryFullScope(scope: FullScope) async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       if scope == .timeline {
-        harness.store.configure(for: nil)
+        await harness.store.configureAndWait(for: nil)
         #expect(harness.manager.canExportCollection)
       } else {
-        harness.collectionStore.configure(for: nil)
+        await harness.collectionStore.configureAndWait(for: nil)
         #expect(harness.manager.canExportTimeline)
       }
       let context = makeContext(scope: scope.runScope)
@@ -867,7 +867,7 @@ struct ExportManagerRunExportTests {
   func fullScopeWithoutPhotosAccessResolvesFailed(
     scope: FullScope, source: ExportRunSource
   ) async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(
         id: "no-access-\(scope)", creationDate: makeDate(2025, 1, 1))
@@ -920,7 +920,7 @@ struct ExportManagerRunExportTests {
   /// second item can fail the run.
   @Test(.timeLimit(.minutes(1)), arguments: MidScanScope.allCases)
   func fullScopeLosingPhotosAccessMidScanResolvesFailed(scope: MidScanScope) async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let firstFetch = AsyncCheckpoint()
     try await withCleanup {
       let assets = (1...2).map {
@@ -989,7 +989,7 @@ struct ExportManagerRunExportTests {
   /// occupies the queue and must cause `runExport` to fail fast.
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
   func busyLegacyQueueRejectsEveryFullScope(scope: FullScope) async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let gate = AsyncCheckpoint()
     harness.writer.checkpoint = gate
     await withCleanup {
@@ -1023,7 +1023,7 @@ struct ExportManagerRunExportTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
   func cancellationCompletesEveryFullScopeExactlyOnce(scope: FullScope) async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let gate = AsyncCheckpoint()
     harness.writer.checkpoint = gate
     await withCleanup {
@@ -1059,7 +1059,7 @@ struct ExportManagerRunExportTests {
   /// active until resume drains the second job, including across bulk scopes.
   @Test(.timeLimit(.minutes(1)), arguments: FullScope.allCases)
   func pauseAndResumeCompletesEveryFullScope(scope: FullScope) async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let gate = AsyncCheckpoint()
     harness.writer.checkpoint = gate
     await withCleanup {
@@ -1108,7 +1108,7 @@ struct ExportManagerRunExportTests {
   /// to drain the partial queue, and `incompleteScan` flips the natural
   /// `.completed` to `.failed` in `finalizeActiveRun`.
   @Test func allAlbumsFullPartialEnqueueResolvesFailed() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "a1")
       harness.photoLib.assetsByAlbumLocalId["album-A"] = [asset]
@@ -1146,7 +1146,7 @@ struct ExportManagerRunExportTests {
   /// the collection store, and the on-disk relative path uses the Shared
   /// Albums root.
   @Test(.timeLimit(.minutes(2))) func startExportSharedAlbumWritesUnderSharedAlbumsRoot() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "s-asset-1")
       harness.photoLib.assetsBySharedAlbumLocalId["shared-1"] = [asset]
@@ -1191,7 +1191,7 @@ struct ExportManagerRunExportTests {
   /// `AutoSyncReducer.coveredScopes`, and pinning both gives the bug two red
   /// tests to walk through instead of one.
   @Test func allSharedAlbumsFullPartialEnqueueResolvesFailed() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "s1")
       harness.photoLib.assetsBySharedAlbumLocalId["shared-A"] = [asset]
@@ -1229,7 +1229,7 @@ struct ExportManagerRunExportTests {
   /// must skip enqueuing those assets and surface them as `skippedCount`
   /// rather than letting them churn the queue immediately after they fail.
   @Test func autoSyncRunSkipsAssetsWithAllVariantsInBackoff() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       // Seed two assets in July 2025.
       let asset1 = TestAssetFactory.makeAsset(
@@ -1273,7 +1273,7 @@ struct ExportManagerRunExportTests {
   /// observe the asset and increment `skippedCount`, inflating AutoSync's "ran but
   /// found nothing to do" counter for assets that were never going to be queued.
   @Test func autoSyncRunFilterAlreadyExportedBeforeRetryCheck() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let assetDate = makeDate(2025, 7, 1)
       let asset = TestAssetFactory.makeAsset(id: "already-done", creationDate: assetDate)
@@ -1319,7 +1319,7 @@ struct ExportManagerRunExportTests {
   /// eligibility — that's plan §"Retry": only auto-sync runs honor the
   /// retry store; a manual export is the user's explicit override.
   @Test func manualRunIgnoresEligibilityCheck() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(
         id: "asset-x",
@@ -1348,7 +1348,7 @@ struct ExportManagerRunExportTests {
 
   @Test(arguments: [false, true])
   func autoSyncOnlyAttemptsEligibleMissingVariants(originalAlreadyDone: Bool) async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "mixed-retry", hasAdjustments: true)
       let placement = ExportPlacement.favorites()
@@ -1396,7 +1396,7 @@ struct ExportManagerRunExportTests {
 
   @Test(arguments: [false, true])
   func mixedLivePhotoEligibilityPreservesPairingAndManualOverride(manual: Bool) async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     try await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "live-retry", isLivePhoto: true)
       harness.photoLib.favoritesAssets = [asset]
@@ -1439,7 +1439,7 @@ struct ExportManagerRunExportTests {
 
   @Test(.timeLimit(.minutes(1)))
   func variantEligibilityIsRecheckedAfterEarlierVariantSuspends() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let gate = AsyncCheckpoint()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "queued-retry", hasAdjustments: true)
@@ -1472,7 +1472,7 @@ struct ExportManagerRunExportTests {
   }
 
   @Test func editedFallbackCannotBypassOriginalBackoff() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "fallback-retry", hasAdjustments: true)
       harness.photoLib.favoritesAssets = [asset]
@@ -1493,7 +1493,7 @@ struct ExportManagerRunExportTests {
 
   @Test(.timeLimit(.minutes(1)))
   func legacyManualExportPrunesRetryAfterDurableCompletion() async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     let builder = FakeAutoSyncEnvironmentBuilder()
     let autoSync = AutoSyncManager()
     let gate = AsyncCheckpoint()
@@ -1552,7 +1552,7 @@ struct ExportManagerRunExportTests {
   // MARK: - Targeted scopes (not implemented yet)
 
   @Test func timelineAssetsScopeResolvesFailedForNow() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let summary = await harness.manager.runExport(
         context: makeContext(scope: .timelineAssets(["asset-1"])))
@@ -1565,7 +1565,7 @@ struct ExportManagerRunExportTests {
   }
 
   @Test func autoExportScopeResolvesFailedForNow() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let summary = await harness.manager.runExport(
         context: makeContext(
@@ -1589,7 +1589,7 @@ struct ExportManagerRunExportTests {
   /// Deterministic via a writer checkpoint: real assets enqueue, the writer suspends
   /// on the gate, the test then fires the interrupt. No `Task.yield()` race.
   @Test func interruptForDestinationUnavailableResolvesAsInterrupted() async throws {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(id: "interrupt-1", creationDate: makeDate(2025, 7, 15))
       harness.photoLib.assetsByYearMonth["2025-7"] = [asset]
@@ -1627,7 +1627,7 @@ struct ExportManagerRunExportTests {
   /// resolves. The published value flips through nil → ctx → nil; future SwiftUI views
   /// can observe this directly.
   @Test func activeRunContextSurfacesAndClears() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       var observedContexts: [ExportRunContext?] = []
       let cancellable = harness.manager.activeRunContextPublisher.sink { ctx in
@@ -1667,7 +1667,7 @@ struct ExportManagerRunExportTests {
   /// either side would fail this test.
   @Test(.timeLimit(.minutes(2)))
   func videoLayoutSubfolderRoutesStandaloneVideosOnlyLivePhotosStayPaired() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       // Three assets in the same month so a single export run exercises all three:
       let photo = TestAssetFactory.makeAsset(
@@ -1734,7 +1734,7 @@ struct ExportManagerRunExportTests {
   @Test(.timeLimit(.minutes(2))) func videoLayoutFlipAfterFlatExportDoesNotRelocateOrDoubleWrite()
     async
   {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let asset = TestAssetFactory.makeAsset(
         id: "vid-flip", creationDate: makeDate(2026, 3, 15), mediaType: .video, isLivePhoto: false)
@@ -1795,7 +1795,7 @@ struct ExportManagerRunExportTests {
   /// the `.original` variant on the next reconcile and silently pruning it.
   @Test(.timeLimit(.minutes(2)))
   func videoLayoutMidLifeSynthesizerWritesEditedToSubfolderKeepsOriginalAtBase() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       // Adjusted standalone video. Two resources: the original `.video` plus a
       // `.fullSizeVideo` so `selectEditedProducer` returns `.resource(...)` and
@@ -1864,7 +1864,7 @@ struct ExportManagerRunExportTests {
   /// the per-asset month derivation and the queue fans them out to three distinct
   /// `2025/MM/` directories.
   @Test(.timeLimit(.minutes(2))) func startExportYearWritesEachMonthInYYYYMMStructure() async {
-    let harness = makeHarness()
+    let harness = await makeHarness()
     await withCleanup {
       let march = TestAssetFactory.makeAsset(
         id: "asset-march", creationDate: makeDate(2025, 3, 12))
@@ -1929,7 +1929,7 @@ struct ExportManagerRunExportTests {
   @Test(arguments: ActivityTermination.allCases)
   func exportActivityBalancesEveryTerminalPath(termination: ActivityTermination) async throws {
     let activity = RunActivitySpy()
-    let h = ExportManagerHarness(label: "ExportActivity", runActivity: activity)
+    let h = await ExportManagerHarness(label: "ExportActivity", runActivity: activity)
     let gate = AsyncCheckpoint()
     h.writer.checkpoint = gate
     let asset = TestAssetFactory.makeAsset(id: "activity", creationDate: makeDate(2025, 1, 1))
@@ -1962,7 +1962,7 @@ struct ExportManagerRunExportTests {
 
   @Test func exportActivitySurvivesPauseAndAppendedPreparation() async throws {
     let activity = RunActivitySpy()
-    let h = ExportManagerHarness(label: "ExportActivityPause", runActivity: activity)
+    let h = await ExportManagerHarness(label: "ExportActivityPause", runActivity: activity)
     let gate = AsyncCheckpoint()
     h.writer.checkpoint = gate
     let assets = (1...3).map {
@@ -1999,7 +1999,7 @@ struct ExportManagerRunExportTests {
   @Test func exportActivityCoversEmptyAndFailedPreparation() async {
     for fails in [false, true] {
       let activity = RunActivitySpy()
-      let h = ExportManagerHarness(label: "ExportActivityPreparation", runActivity: activity)
+      let h = await ExportManagerHarness(label: "ExportActivityPreparation", runActivity: activity)
       if fails { h.photoLib.availableYearsError = CocoaError(.fileReadUnknown) }
       let preparation = h.manager.startExportAll()
       #expect(activity.begins == 1)
@@ -2016,7 +2016,7 @@ struct ExportManagerRunExportTests {
 
   @Test func supersededPreparationCannotEndItsReplacementActivity() async {
     let activity = RunActivitySpy()
-    let h = ExportManagerHarness(label: "ExportActivityReplacement", runActivity: activity)
+    let h = await ExportManagerHarness(label: "ExportActivityReplacement", runActivity: activity)
     let oldGate = AsyncCheckpoint()
     let newGate = AsyncCheckpoint()
     let asset = TestAssetFactory.makeAsset(id: "replacement", creationDate: makeDate(2025, 1, 1))
@@ -2046,7 +2046,7 @@ struct ExportManagerRunExportTests {
   }
 
   @Test func bulkPreparationStartsAtUtilityPriorityBeforeJoining() async {
-    let h = ExportManagerHarness(label: "ExportPreparationPriority")
+    let h = await ExportManagerHarness(label: "ExportPreparationPriority")
     let observed = AsyncStream<TaskPriority>.makeStream()
     h.photoLib.availableYearsObserver = { observed.continuation.yield(Task.currentPriority) }
     // The high-priority parent makes an inherited default task observably wrong.

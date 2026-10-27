@@ -19,11 +19,11 @@ struct ReuseSourceCopyPathTests {
 
   // MARK: - Fixtures
 
-  private func makeManager() throws -> (
+  private func makeManager() async throws -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
-    let harness = ExportManagerHarness(
+    let harness = await ExportManagerHarness(
       label: "ReuseSource",
       userDefaults: TestScratch.defaults("ReuseCopy"))
     return (
@@ -52,7 +52,7 @@ struct ReuseSourceCopyPathTests {
   @Test func favoritesReusesTimelineFile() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, _, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -95,7 +95,7 @@ struct ReuseSourceCopyPathTests {
   @Test func timelineReusesFavoritesFileForSameAsset() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, _, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -141,7 +141,7 @@ struct ReuseSourceCopyPathTests {
   @Test func missingReuseSourceFallsBackToPhotoKit() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, _, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -173,7 +173,7 @@ struct ReuseSourceCopyPathTests {
   @Test func noReuseSourceUsesPhotoKitDirectly() async throws {
     let (
       manager, photoLib, dest, writer, fileSystem, _, _, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()

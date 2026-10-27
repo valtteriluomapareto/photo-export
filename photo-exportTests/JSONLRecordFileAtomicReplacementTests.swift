@@ -59,18 +59,18 @@ struct JSONLRecordFileAtomicReplacementTests {
     return directory
   }
 
-  @Test(arguments: Interruption.allCases, [false, true])
+  @Test(arguments: Interruption.allCases)
   func interruptedReplacementPreservesCompactedHistory(
-    interruption: Interruption, asyncCheckpoint: Bool
+    interruption: Interruption
   ) async throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let oldSnapshot = ["old": "done", "removed": "done", "updated": "original"]
-    try makeStore(in: directory).writeSnapshot(oldSnapshot)
+    try await makeStore(in: directory).checkpoint(oldSnapshot, recovering: true)
 
     let store = makeStore(
       in: directory, fileReplacer: InterruptingReplacer(interruption: interruption))
-    let count = asyncCheckpoint ? Store.Constants.compactEveryNMutations : 3
+    let count = Store.Constants.compactEveryNMutations
     var snapshot = oldSnapshot
     for index in 0..<count {
       let mutation: Mutation
@@ -84,15 +84,11 @@ struct JSONLRecordFileAtomicReplacementTests {
     }
     store.drainSynchronously()
 
-    if asyncCheckpoint {
-      await #expect(throws: (any Error).self) { try await store.checkpoint(snapshot) }
-    } else {
-      #expect(throws: (any Error).self) { try store.writeSnapshot(snapshot) }
-    }
+    await #expect(throws: (any Error).self) { try await store.checkpoint(snapshot) }
 
     // Reopen independently: "old" only exists in the compacted snapshot, never
     // in this log. Losing it recreates the duplicate-export bug from issue #138.
-    let reopened = makeStore(in: directory).load()
+    let reopened = (await makeStore(in: directory).load())
     #expect(reopened.snapshotStatus == .loaded)
     let expectedSnapshot = interruption == .afterReplacement ? snapshot : oldSnapshot
     #expect(reopened.snapshot == expectedSnapshot)
@@ -109,26 +105,26 @@ struct JSONLRecordFileAtomicReplacementTests {
     #expect(replayed["updated"] == "edited")
 
     // A subsequent successful snapshot also works with any leftover .tmp file.
-    try makeStore(in: directory).writeSnapshot(replayed)
-    let recovered = makeStore(in: directory).load()
+    try await makeStore(in: directory).checkpoint(replayed, recovering: true)
+    let recovered = (await makeStore(in: directory).load())
     #expect(recovered.snapshot == snapshot)
     #expect(recovered.ops.isEmpty)
     let temporarySnapshot = directory.appendingPathComponent("snapshot.json.tmp")
     #expect(!FileManager.default.fileExists(atPath: temporarySnapshot.path))
   }
 
-  @Test func successfulReplacementKeepsHistoryAndTruncatesLog() throws {
+  @Test func successfulReplacementKeepsHistoryAndTruncatesLog() async throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = makeStore(in: directory)
-    try store.writeSnapshot(["old": "done"])
+    try await store.checkpoint(["old": "done"], recovering: true)
     let snapshot = ["old": "done", "new": "done"]
     store.append(Mutation(key: "new", value: "done"))
     store.drainSynchronously()
 
-    try store.writeSnapshot(snapshot)
+    try await store.checkpoint(snapshot, recovering: true)
 
-    let reopened = makeStore(in: directory).load()
+    let reopened = (await makeStore(in: directory).load())
     #expect(reopened.snapshotStatus == .loaded)
     #expect(reopened.snapshot == snapshot)
     #expect(reopened.ops.isEmpty)

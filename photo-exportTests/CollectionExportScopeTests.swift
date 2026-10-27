@@ -28,7 +28,7 @@ import Testing
     }
 
     @MainActor private final class Fixture {
-      let h = ExportManagerHarness(label: "CollectionExportScope")
+      let h = await ExportManagerHarness(label: "CollectionExportScope")
       let library: PhotoLibraryManager
       let counter = BodyInvalidationCounter()
       let gate = AsyncCheckpoint()

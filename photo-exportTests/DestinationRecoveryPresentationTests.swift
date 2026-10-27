@@ -51,7 +51,7 @@ import Testing
           volumeNotificationCenter: NotificationCenter(),
           validationScopeAcquirer: { _ in scope.allowed }, validationScopeReleaser: { _ in })
         library = PhotoLibraryManager(overrideService: service)
-        let export = ExportManagerHarness(
+        let export = await ExportManagerHarness(
           label: "DestinationRecoveryPresentation", destinationId: "A",
           storeRootURL: root.appendingPathComponent("Records"), userDefaults: defaults,
           photoLib: service, dest: fakeDestination)

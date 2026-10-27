@@ -24,9 +24,9 @@ struct ExportManagerVideoRenderTests {
     let store: ExportRecordStore
   }
 
-  private func makeHarness() -> Harness {
+  private func makeHarness() async -> Harness {
     let renderer = FakeMediaRenderer()
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "VideoRenderTest", userDefaults: TestScratch.defaults("VideoRender"),
       mediaRenderer: renderer)
     return Harness(
@@ -50,7 +50,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 1. Render path takes over when no .fullSizeVideo resource exists
 
   @Test func adjustedVideoWithOnlyOriginalResourceGoesThroughRenderer() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -74,7 +74,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 2. Fast path when .fullSizeVideo IS present (rare but real)
 
   @Test func adjustedVideoWithFullSizeVideoUsesResourceWriter() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -101,7 +101,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 3. Render failure → recoverable .failed, then fallback covers it
 
   @Test func renderFailureRecordsRecoverableEditedFailure() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -135,7 +135,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 4. No edited-side bytes available at all
 
   @Test func adjustedVideoWithNoResourcesFailsRecoverably() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -161,7 +161,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 5. editedWithOriginals: edited via renderer, original via writer
 
   @Test func editedWithOriginalsModeUsesRendererPlusWriterForVideo() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .editedWithOriginals
 
@@ -185,7 +185,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 6. Cancel during render
 
   @Test func cancelDuringRenderRemovesInProgressRecord() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -231,7 +231,7 @@ struct ExportManagerVideoRenderTests {
   /// `exportSingleVariant` still runs on the cancellation path — pinning this is what lets
   /// `VariantExporter` extraction in Phase 3 move the cleanup without silently regressing it.
   @Test func cancelDuringRenderLeavesNoTempFileInDestination() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -275,7 +275,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 7. Stale .tmp from a prior render run is cleared
 
   @Test func staleTempFileFromPriorRenderIsRemovedBeforeWrite() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -300,7 +300,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 8. Move failure after a successful render cleans up tmp
 
   @Test func moveFailureAfterRenderCleansTempAndMarksFailed() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
     h.fileSystem.moveError = NSError(
@@ -324,7 +324,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 9. Re-edit after successful export lands at (1) suffix
 
   @Test func reEditedVideoLandsAtCollisionSuffix() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -358,7 +358,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 10. Unedited video keeps using the writer
 
   @Test func uneditedVideoNeverReachesRenderer() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -382,7 +382,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 11. Render-activity defer clears state on success
 
   @Test func renderActivityClearsAfterSuccessfulRender() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 
@@ -399,7 +399,7 @@ struct ExportManagerVideoRenderTests {
   // MARK: - 12. Renderer reports success but writes a zero-byte file
 
   @Test func zeroByteRenderSuccessStillCompletesPipeline() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.dest.cleanup() }
     h.manager.versionSelection = .edited
 

@@ -41,7 +41,8 @@ struct ExportPreparationTests {
   @Test func progressPublicationCancellationPreventsPhysicalDispatch() async throws {
     let gate = LeafGate()
     let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
-    let h = ExportManagerHarness(label: "CancelDuringFilename", destinationIOFactory: { _ in io })
+    let h = await ExportManagerHarness(
+      label: "CancelDuringFilename", destinationIOFactory: { _ in io })
     defer {
       gate.release()
       cleanup(h)
@@ -74,7 +75,7 @@ struct ExportPreparationTests {
   func firstMarkRefusesClaimMadeByFilenameSubscriber(paired: Bool) async throws {
     let gate = LeafGate()
     let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
-    let h = ExportManagerHarness(label: "FirstMarkClaim", destinationIOFactory: { _ in io })
+    let h = await ExportManagerHarness(label: "FirstMarkClaim", destinationIOFactory: { _ in io })
     defer {
       gate.release()
       cleanup(h)
@@ -103,7 +104,7 @@ struct ExportPreparationTests {
   }
 
   @Test func remappedMarkRechecksAfterFilenamePublication() async throws {
-    let h = ExportManagerHarness(label: "RemappedMarkClaim")
+    let h = await ExportManagerHarness(label: "RemappedMarkClaim")
     let written = AsyncCheckpoint()
     h.writer.afterWriteCheckpoint = written
     try await withCleanup {

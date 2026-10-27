@@ -21,13 +21,13 @@ final class CollectionImportHarness {
   init(
     _ label: String, videoLayout: ExportVideoLayout = .subfolder,
     recordLogIO: any JSONLRecordLogIO = ProductionJSONLRecordLogIO()
-  ) {
+  ) async {
     storeRoot = TestScratch.directory(label)
     timeline = ExportRecordStore(baseDirectoryURL: storeRoot, recordLogIO: recordLogIO)
     collections = CollectionExportRecordStore(
       baseDirectoryURL: storeRoot, recordLogIO: recordLogIO)
-    timeline.configure(for: destinationId)
-    collections.configure(for: destinationId)
+    await timeline.configureAndWait(for: destinationId)
+    await collections.configureAndWait(for: destinationId)
     manager = ExportManager(
       photoLibraryService: library, exportDestination: destination,
       exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -47,12 +47,12 @@ final class CollectionImportHarness {
   }
 
   /// Starts both stores on an empty history for the same folder, as after a reinstall.
-  func wipeHistory() {
+  func wipeHistory() async {
     timeline.drainSynchronously()
     collections.drainSynchronously()
     destinationId += "-wiped"
-    timeline.configure(for: destinationId)
-    collections.configure(for: destinationId)
+    await timeline.configureAndWait(for: destinationId)
+    await collections.configureAndWait(for: destinationId)
   }
 
   func importBackup() async {
