@@ -217,6 +217,7 @@ CORE_ONLY = [
     "photo-export/Helpers/Logger+App.swift",
     "photo-export/App/DiagnosticReporter.swift",
     "photo-export/Export/ExportRunWatchdog.swift",
+    "photo-export/Export/ExportMeasurements.swift",
     "photo-export/App/BodyInvalidationCounter.swift",
     "photo-export/Views/Shared/ExportControlProbe.swift",
     "photo-export/Views/Shared/AssetGridTile.swift",

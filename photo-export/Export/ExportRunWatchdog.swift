@@ -26,13 +26,15 @@ final class ExportRunWatchdog {
   }
 
   private let enabled: Bool
+  private weak var measurements: ExportMeasurements?
   private let logger = Logger(subsystem: Logger.appSubsystem, category: "Export.Run")
   private var observer: CFRunLoopObserver?
   private var turnStart: UInt64?
   private var counts = TurnCounts()
 
-  init(enabled: Bool = false) {
+  init(enabled: Bool = false, measurements: ExportMeasurements? = nil) {
     self.enabled = enabled
+    self.measurements = measurements
   }
 
   func begin() {
@@ -73,6 +75,7 @@ final class ExportRunWatchdog {
   private func finishTurn(at now: UInt64) {
     guard let start = turnStart else { return }
     turnStart = nil
+    measurements?.recordTurn(nanoseconds: now - start)
     let milliseconds = Double(now - start) / 1_000_000
     if counts.record(milliseconds: milliseconds) {
       logger.info(

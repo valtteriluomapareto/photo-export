@@ -132,7 +132,11 @@ class ExportMeasurementReplayTests(unittest.TestCase):
 
     def test_dropped_messages_or_malformed_events_fail_visibly(self):
         for extra in [{"dropped": 1}, {"schema": 1, "session": SESSION, "type": "completion", "pid": 42}]:
-            result, data, _, _ = self.run_replay(events()[:3] + [extra] + events()[3:])
+            result, data, _, archive = self.run_replay(events()[:3] + [extra] + events()[3:])
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(data["eligibleRuns"], 0)
+            replay = [json.loads(line) for line in archive.splitlines()]
+            result, data, _, _ = self.run_replay(replay)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(data["eligibleRuns"], 0)
 

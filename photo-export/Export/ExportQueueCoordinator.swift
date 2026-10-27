@@ -63,9 +63,9 @@ final class ExportQueueCoordinator: ObservableObject {
       guard isRunning != oldValue else { return }
       if isRunning {
         runInterval = Self.signposter.beginInterval("ExportRun")
-        runWatchdog.begin()
+        if measurements == nil { runWatchdog.begin() }
       } else if let state = runInterval {
-        runWatchdog.end()
+        if measurements == nil { runWatchdog.end() }
         Self.signposter.endInterval("ExportRun", state)
         runInterval = nil
       }
@@ -86,6 +86,8 @@ final class ExportQueueCoordinator: ObservableObject {
     category: "Export.Run")
   private var runInterval: OSSignpostIntervalState?
   private let runWatchdog: ExportRunWatchdog
+  private let measurements: ExportMeasurements?
+  var measurementJob: ExportMeasurements.Job? { measurements?.currentJob }
 
   // MARK: - Cooperative cancellation
 
@@ -117,6 +119,7 @@ final class ExportQueueCoordinator: ObservableObject {
   /// `ExportManager` (which routes through here) and by `ImportCoordinator`'s
   /// cancel path (which holds a direct reference).
   func bumpGeneration() {
+    measurements?.invalidate("superseded")
     generation += 1
   }
 
@@ -210,9 +213,24 @@ final class ExportQueueCoordinator: ObservableObject {
   private let logger = Logger.app(.exportQueueCoordinator)
   private weak var host: Host?
 
-  init(host: Host, watchdogEnabled: Bool = false) {
+  init(host: Host, measurements: ExportMeasurements? = nil, watchdogEnabled: Bool = false) {
     self.host = host
-    self.runWatchdog = ExportRunWatchdog(enabled: watchdogEnabled)
+    self.measurements = measurements
+    self.runWatchdog = ExportRunWatchdog(
+      enabled: watchdogEnabled || measurements != nil, measurements: measurements)
+  }
+
+  /// Capture includes preparation and every queue fragment of the logical activity.
+  func beginMeasurementRun(automatic: Bool) {
+    guard let measurements else { return }
+    measurements.beginRun(automatic: automatic)
+    runWatchdog.begin()
+  }
+
+  func endMeasurementRun() {
+    guard let measurements else { return }
+    runWatchdog.end()
+    measurements.endRun()
   }
 
   // MARK: - Pause / resume
@@ -221,6 +239,7 @@ final class ExportQueueCoordinator: ObservableObject {
   /// admission check (`canTogglePause`) lives on `ExportManager` — pause is also valid
   /// during the "jobs queued, run loop not started yet" window the manager handles.
   func pause() {
+    measurements?.invalidate("paused")
     host?.beginProgressUpdates()
     defer { host?.endProgressUpdates() }
     isPaused = true
@@ -249,6 +268,7 @@ final class ExportQueueCoordinator: ObservableObject {
     jobStorage.append(contentsOf: jobs)
     if !jobs.isEmpty { placementRevision &+= 1 }
     totalJobsEnqueued += jobs.count
+    measurements?.enqueued(jobs.count)
     for job in jobs {
       queuedCountsByPlacementId[job.placement.id, default: 0] += 1
     }
@@ -272,6 +292,7 @@ final class ExportQueueCoordinator: ObservableObject {
     defer { host?.endProgressUpdates() }
     let previous = queueFingerprint
     let removed = pendingJobs.count
+    if removed > 0 { measurements?.invalidate("pending-cleared") }
     removePendingJobs()
     if !queuedCountsByPlacementId.isEmpty { placementRevision &+= 1 }
     queuedCountsByPlacementId.removeAll()
@@ -291,6 +312,7 @@ final class ExportQueueCoordinator: ObservableObject {
   /// split lets `clearPending` (queue-only drop, no cancellation of in-flight work)
   /// share the queue teardown logic.
   func teardownQueue() {
+    measurements?.invalidate("cancelled")
     host?.beginProgressUpdates()
     defer { host?.endProgressUpdates() }
     let previous = queueFingerprint
@@ -389,7 +411,9 @@ final class ExportQueueCoordinator: ObservableObject {
     guard isCurrent(currentGen) else { return }
     currentTask = Task(priority: .utility) { [weak self, weak host] in
       guard let self, self.isCurrent(currentGen) else { return }
+      let measurement = self.measurements?.beginJob(assetId: job.assetLocalIdentifier)
       await host?.performExport(job: job, generation: currentGen)
+      self.measurements?.endJob(measurement)
       await MainActor.run { [weak self] in
         guard let self, self.isCurrent(currentGen) else { return }
         host?.beginProgressUpdates()
