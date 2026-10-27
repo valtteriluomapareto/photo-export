@@ -16,7 +16,7 @@ RUN = "11111111-1111-4111-8111-111111111111"
 def events(run=RUN, offset=0, invalid=False):
     rows = [dict(type="ready", session=SESSION, schema=1, pid=42)]
     body = [
-        dict(type="runBegin"), dict(type="enqueued", count=2),
+        dict(type="runBegin", automatic=False), dict(type="enqueued", count=2),
         dict(type="jobBegin", job=1, asset=1),
         dict(type="completion", job=1, asset=1, atNs=offset + 1_000_000_000),
         dict(type="completion", job=1, asset=1, atNs=offset + 2_000_000_000),
@@ -169,6 +169,49 @@ class ExportMeasurementReplayTests(unittest.TestCase):
         self.assertAlmostEqual(data["stagingFraction"], 5 / 12)
         self.assertFalse(data["stagingMeets50Percent"])
 
+    def test_missing_or_malformed_required_fields_save_partial_results(self):
+        mutations = [
+            ("automatic", None), ("terminal-wall", None), ("kind", {}),
+            ("kind", []), ("reason", {}), ("reason", []),
+        ]
+        for field, value in mutations:
+            rows = events()
+            if field == "automatic":
+                del rows[1]["automatic"]
+            elif field == "terminal-wall":
+                del rows[-1]["wallNs"]
+            elif field == "kind":
+                rows[-1]["type"] = value
+            else:
+                rows[-1]["reason"] = value
+            with self.subTest(field=field, value=value):
+                result, data, report, _ = self.run_replay(rows)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIsNotNone(data)
+                self.assertEqual(data["eligibleRuns"], 0)
+                self.assertTrue(report)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_staging_only_run_remains_in_combined_staging_population(self):
+        rows = [row for row in events() if row.get("job") != 2 and row["type"] != "turn"
+                and not (row["type"] == "completion" and row["atNs"] == 2_000_000_000)]
+        sequence = 0
+        for row in rows:
+            if row["type"] == "ready":
+                continue
+            sequence += 1
+            row["seq"] = sequence
+            if row["type"] == "enqueued":
+                row["count"] = 1
+            elif row["type"] == "runEnd":
+                row.update(jobs=1, enqueued=1, completions=1)
+        result, data, _, _ = self.run_replay(rows)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(data["runs"][0]["throughputValid"])
+        self.assertTrue(data["runs"][0]["stagingValid"])
+        self.assertEqual(data["stagingRuns"], 1)
+        self.assertEqual(data["stagingFraction"], 0.5)
+
 
 class ExportMeasurementLiveTests(unittest.TestCase):
     @classmethod
@@ -276,6 +319,35 @@ class ExportMeasurementLiveTests(unittest.TestCase):
                 self.module.live_capture(args, self.module.Capture(SESSION), io.StringIO(), {})
         self.assertEqual(run.call_count, 1)
         child.wait.assert_called_once()
+
+    def test_debug_payload_changes_the_measured_app_identity(self):
+        import plistlib
+        with tempfile.TemporaryDirectory() as folder:
+            app = pathlib.Path(folder) / "Photo Export.app"
+            binaries = app / "Contents/MacOS"
+            binaries.mkdir(parents=True)
+            (binaries / "Photo Export").write_bytes(b"unchanged launcher")
+            (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": "Photo Export"}))
+            payload = binaries / "Photo Export.debug.dylib"
+            payload.write_bytes(b"implementation one")
+            first = self.module.app_metadata(app)[1]
+            payload.write_bytes(b"implementation two")
+            second = self.module.app_metadata(app)[1]
+            self.assertNotEqual(first.get("appSHA256") or first.get("binarySHA256"),
+                                second.get("appSHA256") or second.get("binarySHA256"))
+
+    def test_paste_ready_summary_contains_build_and_os_provenance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            capture = self.module.Capture(SESSION)
+            for row in events():
+                capture.consume(row)
+            metadata = {"appVersion": "1.6.6", "appBuild": "42", "appBuildToolchain": "26Z123",
+                        "macOS": "26.1", "appSHA256": "a" * 64}
+            output = pathlib.Path(folder)
+            self.module.save_report(output, capture, "nas", 1, metadata)
+            report = (output / "summary.md").read_text()
+            for value in ["1.6.6", "42", "26Z123", "26.1", "a" * 64]:
+                self.assertIn(value, report)
 
 
 if __name__ == "__main__":
