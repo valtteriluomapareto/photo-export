@@ -551,8 +551,7 @@ import Testing
         f.set(placement, placement.id == f.current.id ? .failed : .done)
       }
       if let stable = f.unchanged { f.set(stable, .done, assetId: f.unchangedAsset.id) }
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       f.show()
       try await loaded(f)
       let firstMutations = f.records.mutationCounter
@@ -586,8 +585,7 @@ import Testing
       ]
       f.set(f.old, .done)
       f.set(try #require(f.unchanged), .done, assetId: f.unchangedAsset.id)
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       let mutations = f.records.mutationCounter
       f.show()
       try await loaded(f)
@@ -633,8 +631,7 @@ import Testing
       f.set(favorites, .done)
       f.service.favoritesAssets = [f.asset]
       f.service.collectionTreeError = CocoaError(.fileReadUnknown)
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       f.show(selectionOverride: .favorites)
       let original = await observe {
         f.counter.renderedText["collection-summary"] == ["1/1"]
