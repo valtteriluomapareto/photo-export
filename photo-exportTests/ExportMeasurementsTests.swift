@@ -160,8 +160,9 @@ struct ExportMeasurementsTests {
     photos.assetsByYearMonth["2026-1"] = [asset]
     photos.favoritesAssets = [asset]
     photos.resourcesByAssetId[asset.id] = [
-      .init(type: route == "render" ? .video : .photo,
-            originalFilename: route == "heic" ? "IMG.HEIC" : "IMG.JPG", fileSize: 12)
+      .init(
+        type: route == "render" ? .video : .photo,
+        originalFilename: route == "heic" ? "IMG.HEIC" : "IMG.JPG", fileSize: 12)
     ]
     let writer = FakeAssetResourceWriter()
     writer.writeHook = { _ in clock.advance(60) }
@@ -206,6 +207,47 @@ struct ExportMeasurementsTests {
     #expect((job["wallNs"] as? UInt64 ?? 0) >= expected + 40)
     #expect(c.rows("completion").count == 1)
     #expect(c.rows("runEnd").last?["valid"] as? Bool == true)
+  }
+
+  @Test(arguments: ["pause", "clear"])
+  func actualQueueChangesRejectTruncatedOrResumedSamples(action: String) async throws {
+    let c = Capture()
+    let writer = FakeAssetResourceWriter()
+    let checkpoint = AsyncCheckpoint()
+    writer.checkpoint = checkpoint
+    let h = ExportManagerHarness(
+      label: "InterruptedMeasurements", writer: writer, exportMeasurements: c.measurements)
+    let date = Calendar.current.date(from: DateComponents(year: 2026, month: 1, day: 15))
+    h.photoLib.assetsByYearMonth["2026-1"] = (1...2).map {
+      TestAssetFactory.makeAsset(id: "job-\($0)", creationDate: date)
+    }
+    for asset in h.photoLib.assetsByYearMonth["2026-1"]! {
+      h.photoLib.resourcesByAssetId[asset.id] = [
+        .init(type: .photo, originalFilename: "\(asset.id).JPG")
+      ]
+    }
+    try await withCleanup {
+      h.manager.startExportMonth(year: 2026, month: 1)
+      try #require(await checkpoint.waitForEnter(count: 1))
+      let first = try #require(h.manager.currentTask)
+      if action == "pause" { h.manager.pause() } else { h.manager.clearPending() }
+      c.clock.advance(100)
+      await checkpoint.releaseAll()
+      await first.value
+      if action == "pause" { h.manager.resume() }
+      await h.manager.waitForQueueDrained()
+      let end = try #require(c.rows("runEnd").first)
+      #expect(end["valid"] as? Bool == false)
+      #expect(end["reason"] as? String == (action == "pause" ? "paused" : "pending-cleared"))
+      #expect(c.rows("runBegin").count == 1)
+    } cleanup: {
+      h.manager.cancelAndClear()
+      await checkpoint.releaseAll()
+      h.store.drainSynchronously()
+      h.collectionStore.drainSynchronously()
+      h.dest.cleanup()
+      try? FileManager.default.removeItem(at: h.storeRoot)
+    }
   }
 
 }
