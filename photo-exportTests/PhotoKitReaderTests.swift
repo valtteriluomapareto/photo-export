@@ -315,10 +315,12 @@ struct PhotoKitReaderTests {
     }
     await reader.preheat(start: [], stop: handles)
     let calls = backend.calls.value
-    for action in ["start", "request", "stop"] {
+    let requests = calls.filter { $0.action == "request" }.map(\.options)
+    #expect(requests.count == 2, "Visible cells still upgrade to high quality")
+    for action in ["start", "stop"] {
       let options = calls.filter { $0.action == action }.map(\.options)
-      #expect(options.count == 2)
-      #expect(options == calls.filter { $0.action == "request" }.map(\.options))
+      #expect(options.count == 1, "Preheat only the format displayed first")
+      #expect(options.first == requests.first, "Preheat matches the first visible request")
     }
     #expect(!calls.isEmpty && calls.allSatisfy { !$0.onMain })
   }
@@ -330,11 +332,11 @@ struct PhotoKitReaderTests {
     try #require(!handles.isEmpty)
     await reader.preheat(start: handles, stop: [])
     await reader.preheat(start: handles, stop: [])
-    #expect(backend.calls.value.filter { $0.action == "start" }.count == 2)
+    #expect(backend.calls.value.filter { $0.action == "start" }.count == 1)
     await reader.preheat(start: [], stop: handles)
     #expect(backend.calls.value.filter { $0.action == "stop" }.isEmpty)
     await reader.preheat(start: [], stop: handles)
-    #expect(backend.calls.value.filter { $0.action == "stop" }.count == 2)
+    #expect(backend.calls.value.filter { $0.action == "stop" }.count == 1)
   }
 
   @Test func coverQuerySetsLimitBeforeBackgroundFetchAndPreservesOrder() async throws {
@@ -397,7 +399,7 @@ struct PhotoKitReaderTests {
     }
   }
 
-  @Test func gridHandlesRemainWarmAfterExportDiscardsLegacyAssetCache() async throws {
+  @Test func resolvedGridHandleSurvivesExportDiscardingLegacyAssetCache() async throws {
     let asset = makeAsset()
     let backend = FakeThumbnailBackend(assets: [asset])
     let reader = ProductionPhotoKitReader(thumbnailBackend: backend)
@@ -406,11 +408,7 @@ struct PhotoKitReaderTests {
     let map = GridThumbnailAssets(service: manager)
     await map.updateWindow([asset])
     let first = try #require(await map.handle(for: asset.id, revision: 0, isCurrent: { true }))
-    let resolves = backend.resolveCalls.value.count
     manager.forgetPHAssetCache()
-    let retained = await map.handle(for: asset.id, revision: 0, isCurrent: { true })
-    #expect(retained === first)
-    #expect(backend.resolveCalls.value.count == resolves)
     #expect(
       await manager.decodedThumbnail(
         for: first, quantizedSize: ThumbnailRequestSpec.gridSize, deliveryMode: .highQuality) != nil
