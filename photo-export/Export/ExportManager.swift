@@ -640,7 +640,7 @@ final class ExportManager {
     assetResourceWriter: any AssetResourceWriter = ProductionAssetResourceWriter(),
     mediaRenderer: (any MediaRenderer)? = nil,
     imageConverter: any ImageConverter = ProductionImageConverter(),
-    localHEICStorage: LocalHEICStorage? = nil,
+    localHEICStorage: LocalHEICStorage,
     fileSystem: any FileSystemService = FileIOService(),
     phAssetCacheControl: any PHAssetCacheControlling = NoOpPHAssetCacheControl(),
     backupDirectoryReader: any BackupDirectoryReading = ProductionBackupDirectoryReader(),
@@ -670,9 +670,7 @@ final class ExportManager {
       collectionStore: self.collectionExportRecordStore)
     self.assetResourceWriter = assetResourceWriter
     self.imageConverter = imageConverter
-    self.localHEICStorage =
-      localHEICStorage
-      ?? LocalHEICStorage(root: exportRecordStore.storeRootURL.appendingPathComponent("heic-temp"))
+    self.localHEICStorage = localHEICStorage
     self.fileSystem = fileSystem
     self.destinationResolver = ExportDestinationResolver(fileSystem: fileSystem)
     // Provisional renderer — gives `self.mediaRenderer` a value so all

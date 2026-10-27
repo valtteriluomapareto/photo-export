@@ -41,7 +41,7 @@ struct AppComposition {
   /// has been; `nil` lands on the default Timeline month.
   var screenshotSurfaceKey: String?
 
-  var localHEICStorage: LocalHEICStorage?
+  var localHEICStorage: LocalHEICStorage
 
   /// The shipping app.
   static func production() -> AppComposition {
