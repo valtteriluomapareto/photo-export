@@ -13,9 +13,20 @@ extension PhotoKitReading {
 struct PhotoKitAssetSnapshot: Sendable {
   let descriptor: AssetDescriptor
   let resources: [ResourceDescriptor]
+  let resourceWriter: (any AssetResourceWriter)?
+
+  init(
+    descriptor: AssetDescriptor, resources: [ResourceDescriptor],
+    resourceWriter: (any AssetResourceWriter)? = nil
+  ) {
+    self.descriptor = descriptor
+    self.resources = resources
+    self.resourceWriter = resourceWriter
+  }
 
   static func mapping(
-    _ asset: AssetDescriptor, resources: [ResourceDescriptor], livePhotosPaired: Bool
+    _ asset: AssetDescriptor, resources: [ResourceDescriptor], livePhotosPaired: Bool,
+    resourceWriter: (any AssetResourceWriter)? = nil
   ) -> Self {
     let original = ResourceSelection.selectOriginalResource(
       from: resources, mediaType: asset.mediaType)
@@ -30,7 +41,7 @@ struct PhotoKitAssetSnapshot: Sendable {
         pixelWidth: asset.pixelWidth, pixelHeight: asset.pixelHeight, duration: asset.duration,
         hasAdjustments: asset.hasAdjustments, originalUTI: original?.uniformTypeIdentifier,
         isLivePhoto: live),
-      resources: resources)
+      resources: resources, resourceWriter: resourceWriter)
   }
 }
 

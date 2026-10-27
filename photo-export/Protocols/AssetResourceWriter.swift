@@ -5,4 +5,11 @@ import Foundation
 protocol AssetResourceWriter: Sendable {
   func writeResource(_ resource: ResourceDescriptor, forAssetId assetId: String, to url: URL)
     async throws
+
+  /// Stops new writes and releases job resources after admitted physical writes complete.
+  func close() async
+}
+
+extension AssetResourceWriter {
+  func close() async {}
 }
