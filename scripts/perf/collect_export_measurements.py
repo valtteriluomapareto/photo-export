@@ -64,12 +64,16 @@ class Capture:
             pid = raw.get("processID")
         else:
             event, pid = raw, raw.get("pid")
-        if not isinstance(event, dict) or event.get("session") != self.session:
+        if not isinstance(event, dict):
+            self.errors.append("malformed measurement object")
+            return None
+        if event.get("session") != self.session:
             return None
         if self.pid is not None and pid != self.pid:
             return None
         kind = event.get("type")
-        if event.get("schema") != 1 or kind not in KINDS or not integer(pid, 1):
+        if (type(event.get("schema")) is not int or event["schema"] != 1
+                or not isinstance(kind, str) or kind not in KINDS or not integer(pid, 1)):
             self.errors.append("unsupported or malformed measurement event")
             return None
         if kind == "ready":
@@ -87,18 +91,25 @@ class Capture:
         if not integer(event.get("seq"), 1):
             self.errors.append("measurement has no valid sequence")
             return None
-        clean = {key: event[key] for key in KINDS[kind] if key in event}
-        if "reason" in clean and clean["reason"] not in REASONS:
-            clean["reason"] = "invalid-stage-time"
-            self.errors.append("unknown measurement status")
-        for key in list(clean):
-            if key == "reason":
+        optional = {"stageNs", "stageValid"} if kind == "jobEnd" else set()
+        if not (KINDS[kind] - optional).issubset(event):
+            self.errors.append("missing required measurement field")
+            return None
+        clean = {}
+        for key in KINDS[kind]:
+            if key not in event:
                 continue
-            valid = type(clean[key]) is bool if key in {"valid", "stageValid", "automatic"} else integer(clean[key])
-            if not valid:
-                clean[key] = None
-                if key not in {"stageNs", "stageValid"}:
-                    self.errors.append("non-numeric measurement field")
+            value = event[key]
+            if key == "reason":
+                valid = isinstance(value, str) and value in REASONS
+            elif key in {"valid", "stageValid", "automatic"}:
+                valid = type(value) is bool
+            else:
+                valid = integer(value, 1 if key in {"job", "asset", "count"} else 0)
+            if not valid and key not in optional:
+                self.errors.append("malformed required measurement field")
+                return None
+            clean[key] = value if valid else None
         clean.update(schema=1, session=self.session, type=kind, pid=pid,
                      run=event["run"], seq=event["seq"])
         if clean["run"] in self.sealed:
@@ -173,8 +184,8 @@ def summarize(rows, capture_error=False):
     return {
         "run": rows[0]["run"], "complete": complete, "issues": issues,
         "throughputValid": throughput_valid, "stagingValid": staging_valid,
-        "automatic": rows[0].get("automatic", False),
-        "eligible": throughput_valid and rows[0].get("automatic", False) is False,
+        "automatic": rows[0].get("automatic") if rows[0]["type"] == "runBegin" else None,
+        "eligible": throughput_valid and rows[0].get("automatic") is False,
         "assets": len(assets), "variantCompletions": len(completions),
         "completionWindowSeconds": window, "assetsPerSecond": rate,
         "logicalRunSeconds": end.get("wallNs", 0) / 1e9 if integer(end.get("wallNs")) else None,
@@ -191,13 +202,15 @@ def summarize(rows, capture_error=False):
 def save_report(output, capture, label, requested, metadata, partial=False):
     rows = capture.summaries()
     rates = [row["assetsPerSecond"] for row in rows if row["eligible"]]
-    staged = [row for row in rows if row["eligible"] and row["stagingValid"]]
+    staging_candidates = [row for row in rows if row["complete"] and row["automatic"] is False]
+    staged = [row for row in staging_candidates if row["stagingValid"]]
     weighted = (sum(row["stagingSeconds"] for row in staged) / sum(row["jobWallSeconds"] for row in staged)
-                if staged and len(staged) == len(rates) else None)
+                if staged and len(staged) == len(staging_candidates) else None)
     result = {"schema": 1, "label": label, "session": capture.session, "requestedRuns": requested,
               "eligibleRuns": len(rates), "partial": partial or len(rates) < requested,
               "medianAssetsPerSecond": statistics.median(rates) if rates else None,
               "stagingFraction": weighted, "stagingMeets50Percent": weighted >= 0.5 if weighted is not None else None,
+              "stagingRuns": len(staged), "stagingCandidateRuns": len(staging_candidates),
               "captureErrors": capture.errors, "metadata": metadata, "runs": rows}
     (output / "results.json").write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
     clean_label = re.sub(r"[\r\n|]", " ", label)
@@ -219,10 +232,14 @@ def save_report(output, capture, label, requested, metadata, partial=False):
             lines.append(f'\nRun {n}: ' + "; ".join(row["issues"]) + ".\n")
     if rates:
         lines += ["", f"Median assets/s: {statistics.median(rates):.6f}"]
-    lines += ["", "Combined staging (weighted by job wall): " + (f"{weighted:.1%}" if weighted is not None else "unavailable")]
+    lines += ["", "Combined staging (weighted by job wall): " + (f"{weighted:.1%}" if weighted is not None else "unavailable"),
+              f"Staging population: {len(staged)} measured / {len(staging_candidates)} complete manual runs; independent of throughput availability."]
     if capture.errors:
         lines += ["", "Capture errors: " + "; ".join(capture.errors)]
-    lines += ["", "Build identity: `" + metadata.get("binarySHA256", "unavailable in replay") + "`.",
+    lines += ["", f"App: {metadata.get('appVersion', 'unavailable')} (build {metadata.get('appBuild', 'unavailable')}).",
+              f"App build toolchain: {metadata.get('appBuildToolchain', 'unavailable in replay')}.",
+              f"Measurement macOS: {metadata.get('macOS', 'unavailable in replay')}.",
+              "App bundle SHA-256 (including Debug code): `" + metadata.get("appSHA256", "unavailable in replay") + "`.",
               "No filenames, Photos identifiers or destination paths are included in this report."]
     (output / "summary.md").write_text("\n".join(lines) + "\n")
     return result
@@ -246,14 +263,36 @@ def app_metadata(app):
     executable = info["CFBundleExecutable"]
     if not isinstance(executable, str) or Path(executable).name != executable:
         raise ValueError("app has no valid executable")
+    contents = app / "Contents"
+    components = []
+    def fail_walk(error):
+        raise error
+    for base, directories, files in os.walk(contents, followlinks=False, onerror=fail_walk):
+        for name in directories + files:
+            path = Path(base) / name
+            if path.is_symlink() or path.is_file():
+                components.append(path)
     digest = hashlib.sha256()
-    with (app / "Contents/MacOS" / executable).open("rb") as binary:
-        for chunk in iter(lambda: binary.read(1024 * 1024), b""):
-            digest.update(chunk)
+    for path in sorted(components, key=lambda item: item.relative_to(contents).as_posix()):
+        entry = {"path": path.relative_to(contents).as_posix()}
+        if path.is_symlink():
+            try:
+                path.resolve().relative_to(contents.resolve())
+            except ValueError as error:
+                raise ValueError("App has external links; supply a self-contained copied build.") from error
+            entry.update(kind="link", target=os.readlink(path))
+        else:
+            component = hashlib.sha256()
+            with path.open("rb") as binary:
+                for chunk in iter(lambda: binary.read(1024 * 1024), b""):
+                    component.update(chunk)
+            entry.update(kind="file", sha256=component.hexdigest())
+        digest.update(json.dumps(entry, sort_keys=True).encode() + b"\n")
     return executable, {"appVersion": info.get("CFBundleShortVersionString"),
                         "appBuild": info.get("CFBundleVersion"),
                         "appBuildToolchain": info.get("DTXcodeBuild", "unavailable"),
-                        "macOS": platform.mac_ver()[0], "binarySHA256": digest.hexdigest()}
+                        "macOS": platform.mac_ver()[0], "appSHA256": digest.hexdigest()}
+
 
 
 def live_capture(args, capture, archive, metadata):
@@ -368,7 +407,9 @@ def main(argv=None):
     except (ValueError, OSError) as error:
         parser.exit(2, f"measurement collector: {error}\n")
     capture = Capture(session)
-    metadata = {"source": "replay" if args.replay else "live", "macOS": platform.mac_ver()[0]}
+    metadata = {"source": "replay" if args.replay else "live"}
+    if not args.replay:
+        metadata["macOS"] = platform.mac_ver()[0]
     status = 0
     try:
         with (output / "events.ndjson").open("w") as archive:

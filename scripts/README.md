@@ -62,8 +62,8 @@ in the replay input are local to each run and are not Photos identifiers.
   baselines. Staging validity is reported separately from completion-window validity.
 
 The app's build toolchain comes from its bundle metadata when available; the executable
-SHA-256 identifies the exact measured binary. This does not claim that an installed
-Xcode version built an arbitrary supplied app. For offline report regeneration:
+bundle SHA-256 identifies the measured app, including Debug implementation dylibs. This does not claim that an installed
+Xcode version built an arbitrary supplied app. For offline report regeneration (retain the original `results.json` for build provenance):
 
 ```bash
 scripts/perf/collect-export-measurements.sh --replay /capture/events.ndjson \
