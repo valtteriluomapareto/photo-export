@@ -12,6 +12,16 @@ struct TestFakeBehaviorTests {
     Calendar.current.date(from: DateComponents(year: year, month: month, day: day))!
   }
 
+  @Test func readingThumbnailReaderDoesNotRetainTheLibrary() {
+    weak var released: FakePhotoLibraryService?
+    autoreleasepool {
+      let service = FakePhotoLibraryService()
+      released = service
+      _ = service.thumbnailReader
+    }
+    #expect(released == nil)
+  }
+
   @Test func timelineUsesCreationDatesRatherThanBucketKeys() async throws {
     let service = FakePhotoLibraryService()
     service.assetsByYearMonth["2025-1"] = [
