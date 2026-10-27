@@ -134,7 +134,7 @@ import Testing
         if whatsNewSeen { whatsNew.markAsSeen() }
         if selectFolder {
           try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-          destination.setSelectedFolderForTesting(folder)
+          await destination.persistSelectionAndWait(folder)
           await destination.revalidateAndWait()
         }
       }
@@ -308,7 +308,7 @@ import Testing
         f.show(.content)
         try #require(await observe { f.counter.count(for: "onboarding-auto-skip-checked") > 0 })
         try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
-        f.destination.setSelectedFolderForTesting(f.folder)
+        await f.destination.persistSelectionAndWait(f.folder)
         await f.destination.revalidateAndWait()
         try #require(
           await observe { f.counter.renderedText["onboarding-export-control"]?.first == "true" })
@@ -375,7 +375,7 @@ import Testing
         toggle()
         try #require(await observe { f.counter.renderedText[key]?.last == "true" })
         try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
-        f.destination.setSelectedFolderForTesting(f.folder)
+        await f.destination.persistSelectionAndWait(f.folder)
         await f.destination.revalidateAndWait()
         try #require(await observe { f.counter.renderedText[key]?.first == "true" })
         let bodies = f.counter.count(for: "content-root")

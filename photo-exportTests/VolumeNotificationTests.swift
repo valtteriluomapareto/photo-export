@@ -41,10 +41,10 @@ struct VolumeNotificationTests {
         fingerprints += 1
         return nil
       },
-      volumeNotificationCenter: NotificationCenter(),
+      bookmarkSaver: { _ in true }, volumeNotificationCenter: NotificationCenter(),
       validationScopeAcquirer: { _ in false },
       validationScopeReleaser: { _ in releases += 1 })
-    manager.setSelectedFolderForTesting(URL(fileURLWithPath: "/unreachable-test-volume"))
+    await manager.persistSelectionAndWait(TestScratch.directory("UnreachableVolume"))
     await manager.revalidateAndWait()
     #expect(!manager.isAvailable && !manager.isWritable)
     #expect(manager.destinationId == nil)
@@ -68,7 +68,7 @@ struct VolumeNotificationTests {
     var releases = 0
     let manager = ExportDestinationManager(
       skipRestore: true, userDefaults: defaults,
-      volumeNotificationCenter: center,
+      bookmarkSaver: { _ in true }, volumeNotificationCenter: center,
       validationScopeAcquirer: { _ in
         acquisitions += 1
         return true
@@ -77,8 +77,7 @@ struct VolumeNotificationTests {
         releases += 1
         completed.continuation.yield(())
       })
-    manager.setSelectedFolderForTesting(folder)
-    await manager.revalidateAndWait()
+    await manager.persistSelectionAndWait(folder)
     _ = await validationIterator.next()
     let stableId = try #require(manager.destinationId)
     let timeline = ExportRecordStore(baseDirectoryURL: root.appendingPathComponent("Records"))
