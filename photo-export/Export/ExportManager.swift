@@ -494,7 +494,8 @@ final class ExportManager {
   private func beginRunActivityIfNeeded() {
     guard !holdsRunActivity else { return }
     holdsRunActivity = true
-    queueCoordinator.beginMeasurementRun(automatic: activeRunContext?.source == .autoSync)
+    queueCoordinator.beginMeasurementRun(
+      automatic: activeRunContext?.source == .autoSync, convertHEICToJPEG: convertHEICToJPEG)
     runActivity.begin()
   }
 
@@ -1995,7 +1996,6 @@ final class ExportManager {
   }
 
   private func noteManualPreparationFailure(_ message: String) {
-    exportMeasurements?.invalidate("scan-failed")
     guard manualRunFeedback?.generation == generation else { return }
     if manualRunFeedback?.failureMessage == nil { manualRunFeedback?.failureMessage = message }
   }
@@ -2701,7 +2701,6 @@ final class ExportManager {
     let owner = generation
     guard isCurrent(owner), !Task.isCancelled else { return }
     if manualRunFeedback?.generation == owner { manualRunFeedback?.failureSignals += 1 }
-    exportMeasurements?.invalidate("variant-failed")
     activeRunBookkeeping?.failedCount += 1
     activeRunBookkeeping?.failures.append(
       ExportRunFailureDetail(

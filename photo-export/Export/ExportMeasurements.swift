@@ -1,17 +1,12 @@
 import Foundation
 import OSLog
 
-/// Opt-in numeric evidence. Each logical activity owns its jobs until it seals.
+/// Opt-in numeric timings. Tokens belong to one logical export activity.
 @MainActor
 final class ExportMeasurements {
   private final class Run {
     let id = UUID().uuidString
     let start: UInt64
-    var sequence = 0
-    var enqueued = 0
-    var finished = 0
-    var completions = 0
-    var reason: String?
     var assets: [String: Int] = [:]
     init(start: UInt64) { self.start = start }
   }
@@ -20,37 +15,28 @@ final class ExportMeasurements {
   final class Job {
     fileprivate weak var owner: ExportMeasurements?
     fileprivate let runId: String
-    fileprivate let number: Int
     fileprivate let asset: Int
     fileprivate let start: UInt64
     fileprivate var staging: UInt64 = 0
     fileprivate var finished = false
-    fileprivate var stageOpen = false
 
     fileprivate init(
-      owner: ExportMeasurements, runId: String, number: Int, asset: Int, start: UInt64
+      owner: ExportMeasurements, runId: String, asset: Int, start: UInt64
     ) {
       self.owner = owner
       self.runId = runId
-      self.number = number
       self.asset = asset
       self.start = start
     }
 
     func beginStage() -> Stage? {
       guard let owner, owner.owns(self) else { return nil }
-      guard !stageOpen else {
-        owner.invalidate("overlapping-stages")
-        return nil
-      }
-      stageOpen = true
       return Stage(job: self, start: owner.now())
     }
 
     func committed() {
       guard let owner, owner.owns(self) else { return }
-      owner.run?.completions += 1
-      owner.emit("completion", ["job": number, "asset": asset, "atNs": owner.now()])
+      owner.emit("completion", ["asset": asset, "atNs": owner.now()])
     }
   }
 
@@ -68,12 +54,8 @@ final class ExportMeasurements {
       finished = true
       guard let owner = job.owner, owner.owns(job) else { return }
       let end = owner.now()
-      guard end >= start else {
-        owner.invalidate("clock-regressed")
-        return
-      }
+      guard end >= start else { return }
       job.staging += end - start
-      job.stageOpen = false
     }
   }
 
@@ -109,29 +91,19 @@ final class ExportMeasurements {
     write(["type": "ready"])
   }
 
-  func beginRun(automatic: Bool = false) {
+  func beginRun(automatic: Bool = false, convertHEICToJPEG: Bool = false) {
     guard run == nil else { return }
     run = Run(start: now())
-    emit("runBegin", ["automatic": automatic])
-  }
-
-  func enqueued(_ count: Int) {
-    guard let run, count > 0 else { return }
-    run.enqueued += count
-    emit("enqueued", ["count": count])
+    emit("runBegin", ["automatic": automatic, "convertHEICToJPEG": convertHEICToJPEG])
   }
 
   func beginJob(assetId: String) -> Job? {
     guard let run else { return nil }
-    guard currentJob == nil else {
-      invalidate("overlapping-jobs")
-      return nil
-    }
+    guard currentJob == nil else { return nil }
     let asset = run.assets[assetId] ?? run.assets.count + 1
     run.assets[assetId] = asset
-    let job = Job(owner: self, runId: run.id, number: run.finished + 1, asset: asset, start: now())
+    let job = Job(owner: self, runId: run.id, asset: asset, start: now())
     currentJob = job
-    emit("jobBegin", ["job": job.number, "asset": asset])
     return job
   }
 
@@ -140,25 +112,14 @@ final class ExportMeasurements {
   }
 
   func endJob(_ job: Job?) {
-    guard let job, owns(job), let run else { return }
+    guard let job, owns(job) else { return }
     let end = now()
     let wall = end >= job.start ? end - job.start : 0
-    let stageValid = end >= job.start && job.staging <= wall && !job.stageOpen
     emit(
       "jobEnd",
-      [
-        "job": job.number, "asset": job.asset, "wallNs": wall, "stageNs": job.staging,
-        "stageValid": stageValid,
-      ])
+      ["wallNs": wall, "stageNs": job.staging])
     job.finished = true
     currentJob = nil
-    run.finished += 1
-  }
-
-  func invalidate(_ reason: String) {
-    guard let run, run.reason == nil else { return }
-    run.reason = reason
-    emit("invalidated", ["reason": reason])
   }
 
   func recordTurn(nanoseconds: UInt64) {
@@ -168,29 +129,17 @@ final class ExportMeasurements {
 
   func endRun() {
     guard let run else { return }
-    if currentJob != nil { invalidate("job-still-active") }
-    if run.finished != run.enqueued { invalidate("job-count-mismatch") }
-    if run.enqueued == 0 { invalidate("no-jobs") }
     let end = now()
-    if end < run.start { invalidate("clock-regressed") }
-    emit(
-      "runEnd",
-      [
-        "valid": run.reason == nil, "reason": run.reason ?? "complete",
-        "jobs": run.finished, "enqueued": run.enqueued, "completions": run.completions,
-        "wallNs": end >= run.start ? end - run.start : 0,
-      ])
+    emit("runEnd", ["wallNs": end >= run.start ? end - run.start : 0])
     currentJob = nil
     self.run = nil
   }
 
   private func emit(_ type: String, _ fields: [String: Any] = [:]) {
     guard let run else { return }
-    run.sequence += 1
     var event = fields
     event["type"] = type
     event["run"] = run.id
-    event["seq"] = run.sequence
     write(event)
   }
 
