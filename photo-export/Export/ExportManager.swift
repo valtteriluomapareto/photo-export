@@ -2497,15 +2497,8 @@ final class ExportManager {
   // The sentinel-message `recordVariantFailed` overload is declared above.
   // Cancellation goes directly through the exporter's queue coordinator.
 
-  @ObservationIgnored private var requestedAssetFilename: String?
-
   func setCurrentAssetFilename(_ name: String?) {
-    requestedAssetFilename = name
     progressState.currentAssetFilename = name
-    // A synchronous cancellation may replace the requested value before storage completes.
-    while progressState.currentAssetFilename != requestedAssetFilename {
-      progressState.currentAssetFilename = requestedAssetFilename
-    }
   }
 
   func setCurrentJobVariant(_ variant: ExportVariant?) {

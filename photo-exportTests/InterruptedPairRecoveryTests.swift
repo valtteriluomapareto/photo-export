@@ -473,12 +473,13 @@ struct InterruptedPairRecoveryTests {
       await f.select("B")
       f.writer.checkpoint = replacement
       f.start()
-      try #require(await reached { await replacement.enteredSoFar > 0 })
-      // Reaching this main-actor code while the physical probe is held also proves
-      // inspection did not block the main actor.
-      #expect(f.variants()[.original]?.status == .inProgress)
+      // Selection remains responsive while admitted physical IO finishes on the serial worker.
+      #expect(f.destination.selectedFolderURL?.lastPathComponent == "B")
+      #expect(f.writer.writeCalls.isEmpty)
       probe.release()
       await old?.value
+      try #require(await reached { await replacement.enteredSoFar > 0 })
+      #expect(f.variants()[.original]?.status == .inProgress)
       #expect(f.variants()[.originalPairedVideo] == nil)
       #expect(f.files.timestampCalls.isEmpty)
       #expect(f.writer.writeCalls.count == 1)

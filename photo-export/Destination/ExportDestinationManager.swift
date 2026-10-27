@@ -93,49 +93,26 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   private let validationScopeReleaser: ((URL) -> Void)?
 
   private let validationProbe: any DestinationValidationProbing
-  private let validationIO = DestinationIO()
   private var validationGeneration = 0
   private var validationTask: Task<Void, Never>?
   private var isValidating = false
-  private var desiredSelectedFolder: URL?
   private struct ValidationPresentation {
     let available: Bool
     let writable: Bool
     let status: ExportDestinationStatus
     let identity: DestinationIdentity
   }
-  private var validationPresentation = ValidationPresentation(
-    available: false, writable: false, status: .noSelection, identity: .unavailable)
-
   private func invalidateValidation() {
     validationGeneration += 1
     validationTask?.cancel()
     validationTask = nil
   }
 
-  private func publishSelectedFolder(_ url: URL?) {
-    desiredSelectedFolder = url
-    selectedFolderURL = url
-    while selectedFolderURL != desiredSelectedFolder {
-      selectedFolderURL = desiredSelectedFolder
-    }
-  }
-
-  /// Reconcile synchronous subscriber reentry before leaving the owning main turn.
   private func publishValidation(_ next: ValidationPresentation) {
-    validationPresentation = next
-    while true {
-      let generation = validationGeneration
-      let current = validationPresentation
-      isAvailable = current.available
-      if generation != validationGeneration { continue }
-      isWritable = current.writable
-      if generation != validationGeneration { continue }
-      status = current.status
-      if generation != validationGeneration { continue }
-      if identity != current.identity { identity = current.identity }
-      if generation == validationGeneration { return }
-    }
+    isAvailable = next.available
+    isWritable = next.writable
+    status = next.status
+    if identity != next.identity { identity = next.identity }
   }
 
   /// The **persisted** stable id, kept privately across launches for reuse. Distinct from the
@@ -427,7 +404,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Resolves the same-vs-different-folder decision for an explicitly picked folder, then
   /// applies it. Split out from `selectFolder()` (which owns the non-testable `NSOpenPanel`) so
   /// the re-selection rule can be unit-tested via the injected `sameFolderEvidenceProvider`.
-  private func processSelectedFolder(_ url: URL, synchronously: Bool = false) {
+  func processSelectedFolder(_ url: URL) {
+    let selection = selectionDecision(for: url)
+    applySelection(url, decision: selection.decision, checkHistory: selection.checkHistory)
+  }
+
+  private func selectionDecision(for url: URL) -> (
+    decision: FolderSelectionDecision, checkHistory: Bool
+  ) {
     let evidence = sameFolderEvidenceProvider?(url) ?? defaultSameFolderEvidence(forPicked: url)
     let decision: FolderSelectionDecision
     switch evidence {
@@ -438,10 +422,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     case .ambiguous:
       decision = ambiguityResolver?(url) ?? resolveAmbiguousSelection(for: url)
     }
-    applySelection(
-      url, decision: decision,
-      checkHistory: evidence == .ambiguous && decision == .sameDestination,
-      synchronously: synchronously)
+    return (decision, evidence == .ambiguous && decision == .sameDestination)
   }
 
   /// Applies a pick and, when `checkHistory`, asks the app to check the export history against
@@ -449,17 +430,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// Returns whether the check was requested.
   @discardableResult
   private func applySelection(
-    _ url: URL, decision: FolderSelectionDecision, checkHistory: Bool,
-    synchronously: Bool = false
+    _ url: URL, decision: FolderSelectionDecision, checkHistory: Bool
   ) -> Bool {
-    var checked = false
-    let applied = applyFolderSelection(url, decision: decision, synchronously: synchronously) {
-      [weak self] in
+    let applied = applyFolderSelection(url, decision: decision) { [weak self] in
       guard let self, checkHistory, self.identity.stableId != nil else { return }
-      checked = true
       self.onAmbiguousSameFolderChosen?()
     }
-    return synchronously ? checked : checkHistory && applied
+    return checkHistory && applied
   }
 
   /// The stored bookmark won't resolve, so we can't tell whether the user re-picked the same
@@ -489,7 +466,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     persistedStableId = nil
     userDefaults.removeObject(forKey: stableIdDefaultsKey)
     userDefaults.removeObject(forKey: bookmarkDefaultsKey)
-    publishSelectedFolder(nil)
+    selectedFolderURL = nil
     guard generation == validationGeneration else { return }
     publishValidation(
       ValidationPresentation(
@@ -543,40 +520,51 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     invalidateValidation()
     isValidating = false
     let generation = validationGeneration
-    publishSelectedFolder(url)
+    selectedFolderURL = url
     guard generation == validationGeneration else { return }
     publishValidation(
       ValidationPresentation(
         available: true, writable: true, status: .ready, identity: identity))
   }
 
-  /// Exercises the production bookmark save path for unit tests as a fresh selection
-  /// (`.newDestination`), seeding a new stable id.
-  func persistSelectedFolderForTesting(_ url: URL) {
-    applyFolderSelection(url, decision: .newDestination, synchronously: true)
-  }
+  #if DEBUG
+    // These adapters preserve synchronous callers in the protected regression suites.
+    func persistSelectedFolderForTesting(_ url: URL) {
+      guard saveSelection(url, decision: .newDestination) else { return }
+      revalidateForTesting()
+    }
 
-  /// Drives the full selection flow (evidence → decision → apply) for unit tests, bypassing the
-  /// `NSOpenPanel`. Pair with an injected `sameFolderEvidenceProvider` to exercise the
-  /// re-selection rule.
-  func selectFolderForTesting(_ url: URL) {
-    processSelectedFolder(url, synchronously: true)
-  }
+    func selectFolderForTesting(_ url: URL) {
+      let selection = selectionDecision(for: url)
+      _ = applySelectionForTesting(
+        url, decision: selection.decision, checkHistory: selection.checkHistory)
+    }
 
-  /// `selectFolderKeepingHistory()` without the `NSOpenPanel`.
-  @discardableResult
-  func selectFolderKeepingHistoryForTesting(_ url: URL) -> Bool {
-    applySelection(url, decision: .sameDestination, checkHistory: true, synchronously: true)
-  }
+    @discardableResult
+    func selectFolderKeepingHistoryForTesting(_ url: URL) -> Bool {
+      applySelectionForTesting(url, decision: .sameDestination, checkHistory: true)
+    }
 
-  /// Re-runs validation against the current selection, mirroring what the volume
-  /// mount/unmount notifications do. Lets tests simulate a remount — after swapping the
-  /// injected `fingerprintProvider`'s result — without posting a real `NSWorkspace`
-  /// notification.
-  func revalidateForTesting() {
-    guard let url = selectedFolderURL else { return }
-    validate(url: url, synchronously: true)
-  }
+    private func applySelectionForTesting(
+      _ url: URL, decision: FolderSelectionDecision, checkHistory: Bool
+    ) -> Bool {
+      guard saveSelection(url, decision: decision) else { return false }
+      var checked = false
+      let finish = prepareValidation(url: url) { [weak self] in
+        guard let self, checkHistory, self.identity.stableId != nil else { return }
+        checked = true
+        self.onAmbiguousSameFolderChosen?()
+      }
+      finish?(validationProbe.inspect(url))
+      return checked
+    }
+
+    func revalidateForTesting() {
+      guard let url = selectedFolderURL else { return }
+      let finish = prepareValidation(url: url, onValidated: {})
+      finish?(validationProbe.inspect(url))
+    }
+  #endif
 
   // MARK: - Internal Helpers
 
@@ -585,15 +573,16 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// same folder); `.newDestination` forgets both so a fresh id is seeded by `validate`.
   /// Returns false when the bookmark couldn't be saved and nothing changed.
   @discardableResult
-  func applyFolderSelection(_ url: URL, decision: FolderSelectionDecision) -> Bool {
-    applyFolderSelection(url, decision: decision, synchronously: false)
-  }
-
-  @discardableResult
-  private func applyFolderSelection(
-    _ url: URL, decision: FolderSelectionDecision, synchronously: Bool,
+  func applyFolderSelection(
+    _ url: URL, decision: FolderSelectionDecision,
     onValidated: @escaping @MainActor () -> Void = {}
   ) -> Bool {
+    guard saveSelection(url, decision: decision) else { return false }
+    validate(url: url, onValidated: onValidated)
+    return true
+  }
+
+  private func saveSelection(_ url: URL, decision: FolderSelectionDecision) -> Bool {
     logger.info(
       "User selected export folder: \(url.path, privacy: .public) (decision: \(String(describing: decision), privacy: .public))"
     )
@@ -627,9 +616,8 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     let generation = validationGeneration
     isValidating = true
     guard generation == validationGeneration else { return false }
-    publishSelectedFolder(url)
+    selectedFolderURL = url
     guard generation == validationGeneration else { return false }
-    validate(url: url, synchronously: synchronously, onValidated: onValidated)
     return true
   }
 
@@ -791,7 +779,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         relativeTo: nil,
         bookmarkDataIsStale: &isStale
       )
-      publishSelectedFolder(url)
+      selectedFolderURL = url
       validate(url: url) { [weak self] in
         guard let self, isStale, self.isAvailable else { return }
         self.logger.info("Bookmark data is stale; refreshing now that destination validated")
@@ -809,7 +797,7 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
         "Failed to restore bookmark: \(String(describing: error), privacy: .public)")
       invalidateValidation()
       isValidating = false
-      publishSelectedFolder(nil)
+      selectedFolderURL = nil
       publishValidation(
         ValidationPresentation(
           available: false, writable: false, status: .permissionRequired, identity: .unavailable))
@@ -835,10 +823,22 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
   }
 
-  private func validate(
-    url: URL, synchronously: Bool = false,
-    onValidated: @escaping @MainActor () -> Void = {}
-  ) {
+  func validate(url: URL, onValidated: @escaping @MainActor () -> Void = {}) {
+    guard let finish = prepareValidation(url: url, onValidated: onValidated) else { return }
+    let probe = validationProbe
+    validationTask = Task {
+      let result = await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .utility).async {
+          continuation.resume(returning: probe.inspect(url))
+        }
+      }
+      finish(result)
+    }
+  }
+
+  private func prepareValidation(
+    url: URL, onValidated: @escaping @MainActor () -> Void
+  ) -> (@MainActor (DestinationValidationResult) -> Void)? {
     invalidateValidation()
     let generation = validationGeneration
     // Keep public availability complete while queued work waits for current validation.
@@ -846,35 +846,23 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     let started = validationScopeAcquirer?(url) ?? url.startAccessingSecurityScopedResource()
     guard generation == validationGeneration, selectedFolderURL == url else {
       if started { releaseValidationScope(url) }
-      return
+      return nil
     }
     guard started else {
       isValidating = false
       publishValidation(
         ValidationPresentation(
           available: false, writable: false, status: .permissionRequired, identity: .unavailable))
-      guard generation == validationGeneration, selectedFolderURL == url else { return }
+      guard generation == validationGeneration, selectedFolderURL == url else { return nil }
       onValidated()
-      return
+      return nil
     }
-    // Injected fingerprints are test values; the production resource reads stay inside the leaf.
+    // Injected fingerprints are test values; production resource reads stay on the worker.
     let fingerprint = fingerprintProvider.map { $0(url) }
-    if synchronously {
-      let result = validationProbe.inspect(url)
-      releaseValidationScope(url)
-      finishValidation(
-        result, url: url, generation: generation, fingerprint: fingerprint,
-        onValidated: onValidated)
-      return
-    }
-    let probe = validationProbe
-    let io = validationIO
     let release = validationScopeReleaser
-    validationTask = Task { [weak self] in
-      let result = await io.run { probe.inspect(url) }
+    return { [weak self] result in
       if let release { release(url) } else { url.stopAccessingSecurityScopedResource() }
       guard let self else { return }
-      guard !Task.isCancelled else { return }
       self.finishValidation(
         result, url: url, generation: generation, fingerprint: fingerprint,
         onValidated: onValidated)

@@ -5,17 +5,10 @@ import Foundation
 @MainActor
 struct ServiceThumbnailReader: ThumbnailReading {
   let service: any PhotoLibraryService
-  let requireKnownAsset: Bool
-
-  init(service: any PhotoLibraryService, requireKnownAsset: Bool = false) {
-    self.service = service
-    self.requireKnownAsset = requireKnownAsset
-  }
 
   func resolveAssets(ids: [String]) async -> [ThumbnailAsset] {
     ids.compactMap { id -> ThumbnailAsset? in
       if let asset = service.fetchAssetDescriptor(for: id) { return .synthetic(asset) }
-      guard !requireKnownAsset else { return nil }
       // Legacy synthetic decoders can provide an image by identifier without a catalog row.
       return .synthetic(
         AssetDescriptor(
