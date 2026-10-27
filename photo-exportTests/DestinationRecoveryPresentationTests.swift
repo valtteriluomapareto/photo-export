@@ -65,7 +65,7 @@ import Testing
           whatsNew: whatsNew)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         if !restoreFailure {
-          destination.setSelectedFolderForTesting(folder)
+          await destination.persistSelectionAndWait(folder)
           await destination.revalidateAndWait()
         }
         service.collectionTree = [
@@ -87,7 +87,7 @@ import Testing
           try FileManager.default.removeItem(at: folder)
         }
         if problem == .unreachable {
-          destination.setSelectedFolderForTesting(URL(fileURLWithPath: folder.path))
+          await destination.persistSelectionAndWait(URL(fileURLWithPath: folder.path))
         }
         await destination.revalidateAndWait()
       }
@@ -164,7 +164,7 @@ import Testing
       #expect(f.destination.destinationId == id)
       let file = f.root.appendingPathComponent("regular-file")
       try Data("file".utf8).write(to: file)
-      f.destination.setSelectedFolderForTesting(file)
+      await f.destination.persistSelectionAndWait(file)
       await f.destination.revalidateAndWait()
       #expect(f.destination.statusMessage == "Selected path is not a folder")
     }

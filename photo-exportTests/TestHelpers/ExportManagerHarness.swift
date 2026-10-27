@@ -30,10 +30,7 @@ final class ExportManagerHarness {
     imageConverter: any ImageConverter = ProductionImageConverter(),
     runActivity: (any ExportRunActivity)? = nil,
     exportMeasurements: ExportMeasurements? = nil,
-    destinationIOFactory: @escaping @MainActor (String?) -> any DestinationIOExecuting = {
-      _ in
-      DestinationIO()
-    }
+    destinationIO: any DestinationIOExecuting = DestinationIO()
   ) async {
     self.photoLib = photoLib ?? FakePhotoLibraryService()
     self.dest = dest ?? FakeExportDestination()
@@ -56,7 +53,7 @@ final class ExportManagerHarness {
       imageConverter: imageConverter,
       fileSystem: fileSystem,
       runActivity: runActivity, exportMeasurements: exportMeasurements,
-      destinationIOFactory: destinationIOFactory,
+      destinationIO: destinationIO,
       userDefaults: defaults)
   }
 }

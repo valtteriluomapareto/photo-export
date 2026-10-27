@@ -341,7 +341,14 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     let url = URL(
       fileURLWithPath: "/private/var/photo-export-screenshot-mode/\(displayName)",
       isDirectory: true)
-    setSelectedFolderForTesting(url)
+    invalidateValidation()
+    isValidating = false
+    let generation = validationGeneration
+    selectedFolderURL = url
+    guard generation == validationGeneration else { return }
+    publishValidation(
+      ValidationPresentation(
+        available: true, writable: true, status: .ready, identity: identity))
   }
 
   func selectFolder() {
@@ -357,9 +364,13 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
   /// couldn't be saved or isn't available.
   @discardableResult
   func selectFolderKeepingHistory() async -> Bool {
-    guard let url = runFolderPanel(),
-      applySelection(url, decision: .sameDestination, checkHistory: true)
-    else { return false }
+    guard let url = runFolderPanel() else { return false }
+    return await selectFolderKeepingHistory(at: url)
+  }
+
+  @discardableResult
+  func selectFolderKeepingHistory(at url: URL) async -> Bool {
+    guard applySelection(url, decision: .sameDestination, checkHistory: true) else { return false }
     let generation = validationGeneration
     await waitForValidation()
     return generation == validationGeneration && selectedFolderURL == url
@@ -512,59 +523,6 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     try currentDirectoryAccess().urlForRelativeDirectory(
       relativePath, createIfNeeded: createIfNeeded)
   }
-
-  // MARK: - Testing Support
-
-  /// Directly sets the folder URL for unit tests.
-  func setSelectedFolderForTesting(_ url: URL) {
-    invalidateValidation()
-    isValidating = false
-    let generation = validationGeneration
-    selectedFolderURL = url
-    guard generation == validationGeneration else { return }
-    publishValidation(
-      ValidationPresentation(
-        available: true, writable: true, status: .ready, identity: identity))
-  }
-
-  #if DEBUG
-    // These adapters preserve synchronous callers in the protected regression suites.
-    func persistSelectedFolderForTesting(_ url: URL) {
-      guard saveSelection(url, decision: .newDestination) else { return }
-      revalidateForTesting()
-    }
-
-    func selectFolderForTesting(_ url: URL) {
-      let selection = selectionDecision(for: url)
-      _ = applySelectionForTesting(
-        url, decision: selection.decision, checkHistory: selection.checkHistory)
-    }
-
-    @discardableResult
-    func selectFolderKeepingHistoryForTesting(_ url: URL) -> Bool {
-      applySelectionForTesting(url, decision: .sameDestination, checkHistory: true)
-    }
-
-    private func applySelectionForTesting(
-      _ url: URL, decision: FolderSelectionDecision, checkHistory: Bool
-    ) -> Bool {
-      guard saveSelection(url, decision: decision) else { return false }
-      var checked = false
-      let finish = prepareValidation(url: url) { [weak self] in
-        guard let self, checkHistory, self.identity.stableId != nil else { return }
-        checked = true
-        self.onAmbiguousSameFolderChosen?()
-      }
-      finish?(validationProbe.inspect(url))
-      return checked
-    }
-
-    func revalidateForTesting() {
-      guard let url = selectedFolderURL else { return }
-      let finish = prepareValidation(url: url, onValidated: {})
-      finish?(validationProbe.inspect(url))
-    }
-  #endif
 
   // MARK: - Internal Helpers
 
@@ -823,44 +781,33 @@ final class ExportDestinationManager: ObservableObject, ExportDestination {
     }
   }
 
-  func validate(url: URL, onValidated: @escaping @MainActor () -> Void = {}) {
-    guard let finish = prepareValidation(url: url, onValidated: onValidated) else { return }
-    let probe = validationProbe
-    validationTask = Task {
-      let result = await withCheckedContinuation { continuation in
-        DispatchQueue.global(qos: .utility).async {
-          continuation.resume(returning: probe.inspect(url))
-        }
-      }
-      finish(result)
-    }
-  }
-
-  private func prepareValidation(
-    url: URL, onValidated: @escaping @MainActor () -> Void
-  ) -> (@MainActor (DestinationValidationResult) -> Void)? {
+  private func validate(url: URL, onValidated: @escaping @MainActor () -> Void = {}) {
     invalidateValidation()
     let generation = validationGeneration
-    // Keep public availability complete while queued work waits for current validation.
     isValidating = true
     let started = validationScopeAcquirer?(url) ?? url.startAccessingSecurityScopedResource()
     guard generation == validationGeneration, selectedFolderURL == url else {
       if started { releaseValidationScope(url) }
-      return nil
+      return
     }
     guard started else {
       isValidating = false
       publishValidation(
         ValidationPresentation(
           available: false, writable: false, status: .permissionRequired, identity: .unavailable))
-      guard generation == validationGeneration, selectedFolderURL == url else { return nil }
+      guard generation == validationGeneration, selectedFolderURL == url else { return }
       onValidated()
-      return nil
+      return
     }
-    // Injected fingerprints are test values; production resource reads stay on the worker.
     let fingerprint = fingerprintProvider.map { $0(url) }
+    let probe = validationProbe
     let release = validationScopeReleaser
-    return { [weak self] result in
+    validationTask = Task { [weak self] in
+      let result = await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .utility).async {
+          continuation.resume(returning: probe.inspect(url))
+        }
+      }
       if let release { release(url) } else { url.stopAccessingSecurityScopedResource() }
       guard let self else { return }
       self.finishValidation(

@@ -160,7 +160,7 @@ struct ExportMeasurementsTests {
     let h = await ExportManagerHarness(
       label: "ProducerMeasurements", photoLib: photos, writer: writer, fileSystem: files,
       mediaRenderer: renderer, imageConverter: TimedConverter(clock: clock),
-      exportMeasurements: c.measurements, destinationIOFactory: { _ in io })
+      exportMeasurements: c.measurements, destinationIO: io)
     defer {
       h.manager.cancelAndClear()
       h.store.drainSynchronously()
