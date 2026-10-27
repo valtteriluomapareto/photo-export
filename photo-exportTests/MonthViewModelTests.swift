@@ -273,9 +273,8 @@ struct MonthViewModelTests {
             submitted += 1
             await grid.updateWindow(window)
           })
+        try #require(await eventually("scrolling window submitted") { submitted == updates.count })
       }
-      try #require(
-        await eventually("all scrolling windows submitted") { submitted == windows.count })
       await firstResolve.releaseAll()
       await initial.value
       for update in updates { await update.value }
