@@ -244,11 +244,28 @@ import Testing
               descriptor: asset, resources: service.resourcesByAssetId[asset.id] ?? [])
           )
         })
-      let reader = ProductionPhotoKitReader { id, _ in snapshots[id] }
+      let pacedWriter = PacedWriter()
+      let reader = ProductionPhotoKitReader(
+        resourceOwner: ProductionPhotoKitResourceOwner(
+          backend: .init { id in
+            guard let snapshot = snapshots[id] else { return nil }
+            return .init(descriptor: snapshot.descriptor) {
+              snapshot.resources.map { resource in
+                .init(descriptor: resource) { url, completion in
+                  Task {
+                    do {
+                      try await pacedWriter.writeResource(resource, forAssetId: id, to: url)
+                      completion(nil)
+                    } catch { completion(error) }
+                  }
+                }
+              }
+            }
+          }))
       let manager = ExportManager(
         photoLibraryService: service, photoKitReader: reader, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
-        assetResourceWriter: PacedWriter(), fileSystem: FakeFileSystem(), userDefaults: defaults)
+        assetResourceWriter: pacedWriter, fileSystem: FakeFileSystem(), userDefaults: defaults)
       let destinationManager = ExportDestinationManager(skipRestore: true, userDefaults: defaults)
       destinationManager.configureForScreenshotMode()
       let autoSync = AutoSyncManager()
