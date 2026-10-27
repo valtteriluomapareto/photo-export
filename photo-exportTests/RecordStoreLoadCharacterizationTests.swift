@@ -177,7 +177,7 @@ struct RecordStoreLoadCharacterizationTests {
     try FileManager.default.removeItem(at: logURL)
     let absent = file.load()
     #expect(absent.ops.isEmpty && absent.ioFailure == nil)
-    file.append(Entry(id: "c"), currentSnapshot: { Snapshot(ids: ["c"]) })
+    file.append(Entry(id: "c"))
     try await file.flush()
 
     #expect(try Data(contentsOf: logURL) == (try line("c")))
@@ -200,7 +200,7 @@ struct RecordStoreLoadCharacterizationTests {
     #expect(unreadable.ioFailure is ReadFailure)
     #expect(unreadable.ops.isEmpty)
     io.heal()
-    file.append(Entry(id: "c"), currentSnapshot: { Snapshot(ids: ["a", "c"]) })
+    file.append(Entry(id: "c"))
     try await file.flush()
 
     let separator = earlierNeedsSeparator ? Data([0x0A]) : Data()

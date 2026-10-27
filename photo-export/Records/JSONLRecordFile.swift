@@ -66,7 +66,7 @@ final class RecordValueTransfer<Value: Sendable>: Sendable {
 /// the log. An interruption before log truncation leaves a replayable log intact.
 ///
 /// `@MainActor` isolates the calling-actor side: every entry point (`load`, `append`,
-/// `writeSnapshot`, `resetToEmpty`, `clearOnDiskState`, `drainSynchronously`) and every
+/// `writeSnapshot`, `resetToEmpty`, `drainSynchronously`) and every
 /// mutable property (including `submittedRevision` and the replay budget) must be touched from the main actor.
 /// Both production composing stores (`ExportRecordStore`,
 /// `CollectionExportRecordStore`) are themselves `@MainActor`, so this matches how the
@@ -92,7 +92,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
   private let fileReplacer: any AtomicFileReplacing
   private let logIO: any JSONLRecordLogIO
   private let ioFailureState = JSONLIOFailureState()
-  private let fileManager = FileManager.default
 
   /// Called on the main actor once for a persistence failure, including asynchronous
   /// append and compaction failures. The owner must retain its in-memory records for retry.
@@ -346,7 +345,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
 
   /// Appends and synchronizes each operation independently. The owner closes mutation
   /// admission before requesting a checkpoint; appends never capture a history snapshot.
-  func append(_ op: LogOp, currentSnapshot: () -> Snapshot) {
+  func append(_ op: LogOp) {
     submittedRevision += 1
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = dateEncodingStrategy
@@ -500,24 +499,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     deliverPendingFailure()
     if let failure { throw failure }
     flushedRevision = max(flushedRevision, revision)
-  }
-
-  /// Removes the snapshot and log files (best effort). Used by `resetToEmpty()` after the
-  /// composing store renames the corrupt snapshot to `.broken-<ISO8601>`.
-  func clearOnDiskState() {
-    let urls = [snapshotURL, logURL]
-    for url in urls {
-      do {
-        if fileManager.fileExists(atPath: url.path) {
-          try fileManager.removeItem(at: url)
-          if url == logURL { needsLogSeparator = false }
-        }
-      } catch {
-        logger.error(
-          "Failed to remove \(url.path, privacy: .public) during reset: \(String(describing: error), privacy: .public)"
-        )
-      }
-    }
   }
 
   // MARK: - Synchronous IO drain

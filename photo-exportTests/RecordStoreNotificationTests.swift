@@ -186,7 +186,7 @@ struct RecordStoreNotificationTests {
     } else {
       await f.timeline.configureAndWait(for: "A")
     }
-    #expect(f.counter == baseline + 1)
+    #expect(f.counter == baseline + 2)
     if collection {
       #expect(f.collections.state == .failed)
       await f.collections.resetHistory()
@@ -196,27 +196,29 @@ struct RecordStoreNotificationTests {
       await f.timeline.resetHistory()
       #expect(f.timeline.state == .ready)
     }
-    #expect(f.counter == baseline + 2)
+    #expect(f.counter == baseline + 3)
     #expect(f.record("old") == nil)
     f.clock.advance(by: 1)
-    #expect(f.counter == baseline + 2)
+    #expect(f.counter == baseline + 3)
     await f.close()
   }
 
   @Test(arguments: [false, true], [false, true])
-  func immediateDestinationPublicationCancelsOldWindow(collection: Bool, clear: Bool) async {
+  func immediateDestinationPublicationCancelsOldWindow(collection: Bool, clear: Bool) async throws {
     let f = await Fixture(collection: collection)
     f.write("old")
+    try await f.timeline.flush()
+    try await f.collections.flush()
     let baseline = f.counter
     if collection {
       await f.collections.configureAndWait(for: clear ? nil : "B")
     } else {
       await f.timeline.configureAndWait(for: clear ? nil : "B")
     }
-    #expect(f.counter == baseline + 1)
+    #expect(f.counter == baseline + (clear ? 1 : 2))
     #expect(f.record("old") == nil)
     f.clock.advance(by: 1)
-    #expect(f.counter == baseline + 1)
+    #expect(f.counter == baseline + (clear ? 1 : 2))
     await f.close()
   }
 

@@ -84,9 +84,9 @@ struct JSONLRecordFileTailRecoveryTests {
     let initial = first.load()
     let expectedPrefix = tail == .complete ? ["a", "b"] : ["a"]
     #expect(initial.ops.map(\.id) == expectedPrefix)
-    first.append(Operation(id: "c"), currentSnapshot: { Snapshot(ids: expectedPrefix + ["c"]) })
+    first.append(Operation(id: "c"))
     first.append(
-      Operation(id: "d"), currentSnapshot: { Snapshot(ids: expectedPrefix + ["c", "d"]) })
+      Operation(id: "d"))
     try await first.flush()
     let raw = try Data(contentsOf: root.appendingPathComponent("log.jsonl"))
     #expect(raw.starts(with: original + Data([0x0A])))
@@ -95,7 +95,7 @@ struct JSONLRecordFileTailRecoveryTests {
     #expect(reloaded.ops.map(\.id) == expectedPrefix + ["c", "d"])
     #expect(reloaded.malformedLineCount == (tail == .complete ? 0 : 1))
     second.append(
-      Operation(id: "e"), currentSnapshot: { Snapshot(ids: expectedPrefix + ["c", "d", "e"]) })
+      Operation(id: "e"))
     try await second.flush()
     let last = file(root).load()
     #expect(last.ops.map(\.id) == expectedPrefix + ["c", "d", "e"])
@@ -110,7 +110,7 @@ struct JSONLRecordFileTailRecoveryTests {
     let io = RecordingIO()
     let subject = file(root, io: io)
     _ = subject.load()
-    subject.append(Operation(id: "c"), currentSnapshot: { Snapshot(ids: ["c"]) })
+    subject.append(Operation(id: "c"))
     try await subject.flush()
     let writes = io.writes
     try #require(writes.count == 1, "One operation and all boundary bytes must use one write")
@@ -133,8 +133,8 @@ struct JSONLRecordFileTailRecoveryTests {
     var failures = 0
     subject.onPersistenceFailure = { _ in failures += 1 }
     let retained = Snapshot(ids: ["a", "b", "c", "d"])
-    subject.append(Operation(id: "c"), currentSnapshot: { retained })
-    subject.append(Operation(id: "d"), currentSnapshot: { retained })
+    subject.append(Operation(id: "c"))
+    subject.append(Operation(id: "d"))
     await #expect(throws: Failure.self) { try await subject.flush() }
     #expect(failures == 1)
     #expect(subject.hasUnflushedChanges)
@@ -150,7 +150,7 @@ struct JSONLRecordFileTailRecoveryTests {
     let recording = RecordingIO()
     let reopened = file(root, io: recording)
     #expect(reopened.load().snapshot == retained)
-    reopened.append(Operation(id: "e"), currentSnapshot: { Snapshot(ids: retained.ids + ["e"]) })
+    reopened.append(Operation(id: "e"))
     try await reopened.flush()
     #expect(recording.writes.count == 1)
     #expect(recording.writes.first?.first != 0x0A)
@@ -174,7 +174,7 @@ struct JSONLRecordFileTailRecoveryTests {
     } else {
       try subject.writeSnapshot(snapshot)
     }
-    subject.append(Operation(id: "c"), currentSnapshot: { Snapshot(ids: snapshot.ids + ["c"]) })
+    subject.append(Operation(id: "c"))
     try await subject.flush()
     #expect(io.writes.count == 1)
     #expect(io.writes.first?.first != 0x0A)
@@ -188,7 +188,7 @@ struct JSONLRecordFileTailRecoveryTests {
     let subject = file(root, replacer: FailedReplacement())
     _ = subject.load()
     #expect(throws: Failure.self) { try subject.writeSnapshot(Snapshot(ids: ["a", "b"])) }
-    subject.append(Operation(id: "c"), currentSnapshot: { Snapshot(ids: ["a", "b", "c"]) })
+    subject.append(Operation(id: "c"))
     try await subject.flush()
     let reloaded = file(root).load()
     #expect(reloaded.snapshot == nil)

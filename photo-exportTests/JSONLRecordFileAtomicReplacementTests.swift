@@ -80,8 +80,7 @@ struct JSONLRecordFileAtomicReplacementTests {
       default: mutation = Mutation(key: "new", value: "done")
       }
       snapshot[mutation.key] = mutation.value
-      let frozen = snapshot
-      store.append(mutation, currentSnapshot: { frozen })
+      store.append(mutation)
     }
     store.drainSynchronously()
 
@@ -124,7 +123,7 @@ struct JSONLRecordFileAtomicReplacementTests {
     let store = makeStore(in: directory)
     try store.writeSnapshot(["old": "done"])
     let snapshot = ["old": "done", "new": "done"]
-    store.append(Mutation(key: "new", value: "done"), currentSnapshot: { snapshot })
+    store.append(Mutation(key: "new", value: "done"))
     store.drainSynchronously()
 
     try store.writeSnapshot(snapshot)

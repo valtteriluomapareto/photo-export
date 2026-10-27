@@ -182,6 +182,7 @@ final class CollectionExportRecordStore {
   @ObservationIgnored private var applyingCancellationCleanup = false
   private(set) var persistenceError: String?
   @ObservationIgnored private var hasUnsavedChanges = false
+  @ObservationIgnored private var resettingCorruptFile: RecordFile?
   // Immediate ownership token, separate from coalesced UI notifications. Any
   // configuration, accepted mutation, reset or newer reconciliation invalidates probes.
   @ObservationIgnored private var reconciliationRevision: UInt64 = 0
@@ -515,7 +516,9 @@ final class CollectionExportRecordStore {
     file.onPersistenceFailure = { [weak self, weak file] error in
       guard let self, let file else { return }
       // A failed reset leaves corrupt history unreadable; its IO failure remains latched.
-      guard self.jsonl !== file || self.state != .failed else { return }
+      guard self.resettingCorruptFile !== file,
+        self.jsonl !== file || self.state != .failed
+      else { return }
       if let context = self.finalCommitContext, context.file === file {
         self.retainFinalCommitFailure(error, context: context)
       }
@@ -943,6 +946,8 @@ final class CollectionExportRecordStore {
     let ticket = mutationTicket
     let operation = mutationAdmission.requestCheckpoint { [weak self] in
       guard let self, mutationTicket == ticket else { return }
+      resettingCorruptFile = file
+      defer { resettingCorruptFile = nil }
       do {
         try await file.checkpoint(Snapshot.empty, recovering: true, resetCorrupt: true)
         guard mutationTicket == ticket else { return }
@@ -1638,8 +1643,7 @@ final class CollectionExportRecordStore {
       if context.snapshot.placements[placement.id] == nil {
         context.snapshot.placements[placement.id] = placement
         context.file.append(
-          .upsertPlacement(placementId: placement.id, placement: placement),
-          currentSnapshot: { context.snapshot })
+          .upsertPlacement(placementId: placement.id, placement: placement))
       }
       var body = context.snapshot.records[placement.id]?[assetId] ?? RecordBody(variants: [:])
       body.variants[variant.rawValue] = done
@@ -1656,8 +1660,7 @@ final class CollectionExportRecordStore {
       }
       context.snapshot.records[placement.id, default: [:]][assetId] = body
       context.file.append(
-        .upsertRecord(placementId: placement.id, assetId: assetId, body: body),
-        currentSnapshot: { context.snapshot })
+        .upsertRecord(placementId: placement.id, assetId: assetId, body: body))
     }
     return { [self] finalFilename in
       defer { if finalCommitContext === context { finalCommitContext = nil } }
@@ -1830,14 +1833,7 @@ final class CollectionExportRecordStore {
     }
     scheduleCoalescedNotify()
     guard state == .ready || applyingCancellationCleanup, let jsonl else { return }
-    jsonl.append(
-      op,
-      currentSnapshot: {
-        Snapshot(
-          version: Constants.snapshotVersion,
-          placements: self.placements,
-          records: self.recordBodies)
-      })
+    jsonl.append(op)
   }
 
   private func apply(_ op: LogOp) {

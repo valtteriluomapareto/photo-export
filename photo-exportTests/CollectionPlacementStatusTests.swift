@@ -509,11 +509,11 @@ import Testing
       defer { f.close() }
       f.set(f.old, .done)
       if let stable = f.unchanged { f.set(stable, .done, assetId: f.unchangedAsset.id) }
-      let notified = await observe { f.records.mutationCounter > 1 }
-      try #require(notified)
+      f.records.flushPendingNotifications()
       let mutations = f.records.mutationCounter
       f.show()
       try await loaded(f)
+      try await f.barrier()
       await expectStatus(f, exported: false, currentExists: false)
       try await verifyUnchangedHistory(f, mutations: mutations)
       #expect(f.old.id != f.current.id)

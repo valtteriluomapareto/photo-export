@@ -148,6 +148,7 @@ final class ExportRecordStore {
   @ObservationIgnored private var applyingCancellationCleanup = false
   private(set) var persistenceError: String?
   @ObservationIgnored private var hasUnsavedChanges = false
+  @ObservationIgnored private var resettingCorruptFile: RecordFile?
   // Immediate ownership token, separate from coalesced UI notifications. Any
   // configuration, accepted mutation, reset or newer reconciliation invalidates probes.
   @ObservationIgnored private var reconciliationRevision: UInt64 = 0
@@ -479,7 +480,9 @@ final class ExportRecordStore {
     file.onPersistenceFailure = { [weak self, weak file] error in
       guard let self, let file else { return }
       // A failed reset leaves corrupt history unreadable; its IO failure remains latched.
-      guard self.jsonl !== file || self.state != .failed else { return }
+      guard self.resettingCorruptFile !== file,
+        self.jsonl !== file || self.state != .failed
+      else { return }
       if let context = self.finalCommitContext, context.file === file {
         self.retainFinalCommitFailure(error, context: context)
       }
@@ -671,6 +674,8 @@ final class ExportRecordStore {
     let ticket = mutationTicket
     let operation = mutationAdmission.requestCheckpoint { [weak self] in
       guard let self, mutationTicket == ticket else { return }
+      resettingCorruptFile = file
+      defer { resettingCorruptFile = nil }
       do {
         try await file.checkpoint([:], recovering: true, resetCorrupt: true)
         guard mutationTicket == ticket else { return }
@@ -1433,7 +1438,7 @@ final class ExportRecordStore {
         record.variants[.edited] = edited
       }
       context.snapshot[assetId] = record
-      context.file.append(.upsert(record), currentSnapshot: { context.snapshot })
+      context.file.append(.upsert(record))
     }
     return { [self] finalFilename in
       defer { if finalCommitContext === context { finalCommitContext = nil } }
@@ -1591,7 +1596,7 @@ final class ExportRecordStore {
 
     // If not configured to any destination, do not persist
     guard state == .ready || applyingCancellationCleanup, let jsonl else { return }
-    jsonl.append(mutation, currentSnapshot: { self.recordsById })
+    jsonl.append(mutation)
   }
 
   /// Applies a mutation to in-memory state and updates `monthCounters` incrementally by

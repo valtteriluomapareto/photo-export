@@ -232,9 +232,9 @@ struct RecordStoreObservationTests {
 
   /// The counter already coalesces writes; query notifications are missing until it is tracked.
   @Test(arguments: [false, true])
-  func queryNotificationsKeepTheCoalescedRate(collection: Bool) async {
+  func queryNotificationsKeepTheCoalescedRate(collection: Bool) async throws {
     let f = await Fixture()
-    await withCleanup {
+    try await withCleanup {
       let probe = ObservationProbe { f.readRecord(collection) }
       let before = f.counter(collection)
       for index in 0..<5 { f.write("burst-\(index)", collection: collection) }
@@ -243,9 +243,11 @@ struct RecordStoreObservationTests {
       f.clock.advance(by: 0.201)
       #expect(f.counter(collection) == before + 1)
       #expect(probe.changeCount == 1)
+      try await f.timeline.flush()
+      try await f.collections.flush()
       await f.configure("B", collection: collection)
-      #expect(f.counter(collection) == before + 2)
-      #expect(probe.changeCount == 2)
+      #expect(f.counter(collection) == before + 3)
+      #expect(probe.changeCount == 3)
     } cleanup: {
       await f.close()
     }

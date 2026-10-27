@@ -79,7 +79,7 @@ struct JSONLRecordFileRollbackTests {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let (file, _) = makeStore(at: dir)
-    file.append(Operation(key: "crossing", value: "v"), currentSnapshot: { ConditionalSnapshot() })
+    file.append(Operation(key: "crossing", value: "v"))
     try await file.flush()
     let logURL = dir.appendingPathComponent("log.jsonl")
     let durableLog = try Data(contentsOf: logURL)
@@ -124,7 +124,7 @@ struct JSONLRecordFileRollbackTests {
     )
 
     let op = Operation(key: "k", value: "v")
-    file.append(op, currentSnapshot: { ConditionalSnapshot() })
+    file.append(op)
     await drainIOAndRollbacks(file)
 
     // Log file does not exist (write failed; rollback fired).
@@ -141,7 +141,7 @@ struct JSONLRecordFileRollbackTests {
     try FileManager.default.createDirectory(
       at: nonexistentDir, withIntermediateDirectories: true)
     let recovered = Operation(key: "ok", value: "v")
-    file.append(recovered, currentSnapshot: { ConditionalSnapshot() })
+    file.append(recovered)
     await drainIOAndRollbacks(file)
     #expect(file.load().ops.isEmpty)
 
@@ -149,7 +149,7 @@ struct JSONLRecordFileRollbackTests {
     // proceed, and reopening recovers both the originally failed and later operation.
     try file.writeSnapshot(ConditionalSnapshot(records: ["k": "v", "ok": "v"]))
     let afterRecovery = Operation(key: "later", value: "v")
-    file.append(afterRecovery, currentSnapshot: { ConditionalSnapshot() })
+    file.append(afterRecovery)
     await drainIOAndRollbacks(file)
 
     let loadedAfterRecovery = file.load()
