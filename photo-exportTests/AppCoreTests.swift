@@ -58,7 +58,7 @@ import Testing
     let asset = TestAssetFactory.makeAsset(id: "composed-thumbnail")
     let backend = FakeThumbnailBackend(assets: [asset])
     let service = try #require(composition.photoLibraryServiceOverride as? FakePhotoLibraryService)
-    service.thumbnailReader = ProductionThumbnailReader(backend: backend)
+    service.thumbnailReaderOverride = ProductionThumbnailReader(backend: backend)
     let core = makeCore(composition)
     let handle = try #require(
       await core.photoLibraryManager.resolveThumbnailAssets(ids: [asset.id]).first)

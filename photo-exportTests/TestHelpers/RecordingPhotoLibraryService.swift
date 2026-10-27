@@ -7,8 +7,11 @@ import Photos
 /// returns empty results. For checking that code makes no library calls at all, such as a view
 /// model's init, which `@State` repeats on every view init.
 @MainActor
-final class RecordingPhotoLibraryService: PhotoLibraryService {
-  let thumbnailReader: any ThumbnailReading = FakePhotoLibraryService()
+final class RecordingPhotoLibraryService: PhotoLibraryService, ThumbnailReading {
+  var thumbnailReader: any ThumbnailReading {
+    record("thumbnailReader")
+    return self
+  }
   private let recorded = LockedBox<[String]>([])
   /// Every call so far, in order.
   var calls: [String] { recorded.value }
@@ -106,21 +109,20 @@ final class RecordingPhotoLibraryService: PhotoLibraryService {
     record("cachedCountAdjustedAssets(in:)")
     return 0
   }
-  func startCachingThumbnails(for assets: [AssetDescriptor]) {
-    record("startCachingThumbnails(for:)")
+  func resolveAssets(ids: [String]) async -> [ThumbnailAsset] {
+    record("resolveAssets(ids:)")
+    return []
   }
-  func stopCachingThumbnails(for assets: [AssetDescriptor]) {
-    record("stopCachingThumbnails(for:)")
-  }
-  func loadThumbnail(for assetId: String, allowNetwork: Bool) async -> NSImage? {
-    record("loadThumbnail(for:allowNetwork:)")
+  func image(for asset: ThumbnailAsset, spec: ThumbnailRequestSpec) async -> CGImage? {
+    record("image(for:spec:)")
     return nil
   }
-  func loadThumbnailHighQuality(
-    for assetId: String, pixelSize: CGSize?, allowNetwork: Bool
-  ) async -> NSImage? {
-    record("loadThumbnailHighQuality(for:pixelSize:allowNetwork:)")
-    return nil
+  func preheat(start: [ThumbnailAsset], stop: [ThumbnailAsset]) async {
+    record("preheat(start:stop:)")
+  }
+  func coverThumbnails(in scope: PhotoFetchScope, limit: Int) async throws -> [ThumbnailAsset] {
+    record("coverThumbnails(in:limit:)")
+    return []
   }
   func decodedThumbnail(
     for assetId: String, quantizedSize: CGSize, deliveryMode: ThumbnailDeliveryMode

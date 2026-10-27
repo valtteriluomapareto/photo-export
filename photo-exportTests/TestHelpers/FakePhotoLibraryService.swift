@@ -20,7 +20,8 @@ final class FakePhotoLibraryService: PhotoLibraryService, ThumbnailReading {
     }
   }
 
-  lazy var thumbnailReader: any ThumbnailReading = self
+  var thumbnailReaderOverride: (any ThumbnailReading)?
+  var thumbnailReader: any ThumbnailReading { thumbnailReaderOverride ?? self }
   private var preheatRegistrations = ThumbnailPreheatRegistrations<ThumbnailAsset>()
 
   func resolveAssets(ids: [String]) async -> [ThumbnailAsset] {

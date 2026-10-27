@@ -360,7 +360,7 @@ struct PhotoKitReaderTests {
     let backend = FakeThumbnailBackend(assets: [asset])
     let reader = ProductionThumbnailReader(backend: backend)
     let service = FakePhotoLibraryService()
-    service.thumbnailReader = reader
+    service.thumbnailReaderOverride = reader
     let manager = PhotoLibraryManager(overrideService: service)
     let gate = Gate()
     backend.resolveOverride.mutate { value in
@@ -405,7 +405,7 @@ struct PhotoKitReaderTests {
     let backend = FakeThumbnailBackend(assets: [asset])
     let reader = ProductionThumbnailReader(backend: backend)
     let service = FakePhotoLibraryService()
-    service.thumbnailReader = reader
+    service.thumbnailReaderOverride = reader
     let manager = PhotoLibraryManager(overrideService: service)
     let map = GridThumbnailAssets(service: manager)
     await map.updateWindow([asset])
@@ -445,7 +445,7 @@ struct PhotoKitReaderTests {
     let backend = FakeThumbnailBackend(assets: assets)
     let reader = ProductionThumbnailReader(backend: backend)
     let service = FakePhotoLibraryService()
-    service.thumbnailReader = reader
+    service.thumbnailReaderOverride = reader
     let library = PhotoLibraryManager(overrideService: service)
     let album = PhotoCollectionDescriptor(
       id: "album", localIdentifier: "album", title: "Album", kind: .album,
