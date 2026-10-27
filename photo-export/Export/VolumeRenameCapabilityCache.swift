@@ -1,5 +1,4 @@
 import AppKit
-import Darwin
 import Foundation
 import os
 
@@ -11,13 +10,14 @@ final class VolumeRenameCapabilityCache: Sendable {
     var values: [String: Bool] = [:]
   }
   private let state = OSAllocatedUnfairLock(initialState: State())
+  // Observer tokens never escape this lock; callbacks use the separate capability-state lock.
   private let subscriptions = OSAllocatedUnfairLock(
-    initialState: [(NotificationCenter, NSObjectProtocol)]())
+    uncheckedState: [(NotificationCenter, NSObjectProtocol)]())
   private let identity: @Sendable (URL) -> String?
   private let probe: @Sendable (URL) -> Bool?
 
   init(
-    identity: @escaping @Sendable (URL) -> String? = mountedVolumeIdentity,
+    identity: @escaping @Sendable (URL) -> String? = { FileIOService.mountedVolumeIdentity($0) },
     probe: @escaping @Sendable (URL) -> Bool? = FileIOService.probeExclusiveRename
   ) {
     self.identity = identity
@@ -62,13 +62,4 @@ final class VolumeRenameCapabilityCache: Sendable {
     }
   }
 
-  private static func mountedVolumeIdentity(_ directory: URL) -> String? {
-    var info = statfs()
-    guard statfs(directory.path, &info) == 0 else { return nil }
-    let id = info.f_fsid.val
-    let mount = withUnsafePointer(to: &info.f_mntonname) {
-      $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
-    }
-    return "\(id.0):\(id.1):\(mount)"
-  }
 }

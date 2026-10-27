@@ -127,16 +127,24 @@ final class LocalHEICStorage: Sendable {
   static func localizing(_ error: Error) -> Error {
     if error is Failure || error is CancellationError { return error }
     let ns = error as NSError
+    let localCodes: [Int32] = [ENOSPC, EACCES, EPERM, EROFS, ENOENT, ENOTDIR, EIO]
     let local: Bool
     switch ns.domain {
     case NSPOSIXErrorDomain:
-      local = [ENOSPC, EACCES, EPERM, EROFS, ENOENT, ENOTDIR, EIO].contains(Int32(ns.code))
+      local = localCodes.contains(Int32(ns.code))
     case NSCocoaErrorDomain:
-      local = [
-        NSFileWriteOutOfSpaceError, NSFileWriteNoPermissionError,
-        NSFileReadNoPermissionError, NSFileNoSuchFileError, NSFileReadNoSuchFileError,
-        NSFileWriteVolumeReadOnlyError,
-      ].contains(ns.code)
+      local =
+        [
+          NSFileWriteOutOfSpaceError, NSFileWriteNoPermissionError,
+          NSFileReadNoPermissionError, NSFileNoSuchFileError, NSFileReadNoSuchFileError,
+          NSFileWriteVolumeReadOnlyError,
+        ].contains(ns.code)
+        || {
+          guard let cause = ns.userInfo[NSUnderlyingErrorKey] as? NSError,
+            cause.domain == NSPOSIXErrorDomain
+          else { return false }
+          return localCodes.contains(Int32(cause.code))
+        }()
     default: local = false
     }
     return local ? Failure(detail: ns.localizedDescription) : error

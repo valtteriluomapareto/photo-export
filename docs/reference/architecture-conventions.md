@@ -64,13 +64,15 @@ The main data paths are:
 1. Photos → `PhotoLibraryManager` → app-owned descriptors for views and export planning.
    Thumbnail caching and progressive grid loading stay behind the library service. At job
    execution, the injected `PhotoKitReading` reader refreshes one descriptor/resource snapshot
-   on its own serial utility queue. Framework objects stay inside that read; cancellation,
-   destination and history ownership are checked before its values can authorize export IO.
+   on a serial utility owner. Framework objects stay with that private per-job owner until
+   physical writes finish and the job closes; only value metadata and an opaque writer carrying
+   the session identity and owner cross awaits. Cancellation, destination and history ownership
+   are checked before those values can authorize export IO.
    Shipping composition selects `ProductionPhotoKitReader`, and screenshot composition selects
    `ScreenshotPhotoKitReader` backed by the same curated library as the UI. Public resource UTIs
    identify the original format. The optional resource-local `fileSize` KVC read preserves
    known-size interrupted-file verification; its undocumented thread safety remains an explicit
-   limitation, with access confined to the serial reader.
+   limitation, with access confined to the serial resource owner.
 2. A manual action or AutoSync run → `ExportManager` → job planning and
    `ExportQueueCoordinator` → `VariantExporter`. Resource, render and conversion
    producers write an attempt-owned stage through the injected service seams.
@@ -376,7 +378,10 @@ still refuses synchronously.
 
 Every byte-producing attempt (PhotoKit resource, render, HEIC conversion or reuse)
 owns a short hidden UUID stage adjacent to its final destination. HEIC source bytes
-use a side-file derived from that attempt's stage. Physical producers may outlive
+use a unique input in app-owned local temporary storage; capacity checks and cleanup belong
+there, while the JPEG stage stays at the destination. Launch sweeps only recognized local
+input directories whose process owner is proven dead, preserving live owners and links.
+Physical producers may outlive
 Task cancellation: cleanup removes only their own stages, producer errors recheck
 generation before reaching outcome recording, and HEIC materialization rechecks before
 starting conversion. Callers also recheck after exporter awaits and before failure/fallback

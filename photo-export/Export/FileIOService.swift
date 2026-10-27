@@ -50,6 +50,16 @@ struct FileIOService: FileSystemService, AtomicFileReplacing {
     }
   }
 
+  static func mountedVolumeIdentity(_ directory: URL) -> String? {
+    var info = statfs()
+    guard statfs(directory.path, &info) == 0 else { return nil }
+    let id = info.f_fsid.val
+    let mount = withUnsafePointer(to: &info.f_mntonname) {
+      $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+    }
+    return "\(id.0):\(id.1):\(mount)"
+  }
+
   /// Reads `VOL_CAP_INT_RENAME_EXCL` from the volume's interface capabilities. A volume
   /// that cannot be queried, or does not mark the bit valid, is treated as not capable.
   /// getattrlist(2) documents `EINVAL` for volume attributes on a path that is not the
