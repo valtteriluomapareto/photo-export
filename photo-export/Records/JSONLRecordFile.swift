@@ -100,10 +100,13 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
 
   // MARK: - Mutation-count state
 
-  private var replayBudget = RecordReplayBudget()
-  var needsMaintenance: Bool { replayBudget.needsCheckpoint }
-  var needsIdleMaintenance: Bool { replayBudget.needsIdleCheckpoint }
-  var hasReplayWork: Bool { replayBudget.hasWork }
+  private var replayOperationCount = 0
+  private var replayBytes = 0
+  var needsMaintenance: Bool { replayOperationCount >= 4_000 || replayBytes >= 3_000_000 }
+  var needsIdleMaintenance: Bool {
+    replayOperationCount >= Constants.compactEveryNMutations || needsMaintenance
+  }
+  var hasReplayWork: Bool { replayOperationCount > 0 || replayBytes > 0 }
   private var submittedRevision = 0
   private var flushedRevision = 0
   /// A recovered complete or partial final line must not absorb the next operation.
@@ -165,7 +168,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     /// new line. `nil` when the log read failed: the file keeps what it knew before.
     let needsLogSeparator: Bool?
     var replayBytes: Int = 0
-    var replayNanoseconds: UInt64 = 0
   }
 
   /// The snapshot and log bytes as read, before any decoding. A missing file has neither
@@ -185,7 +187,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     let inputs = readInputs
     let result = inputs.decode(inputs.read())
     adoptLogSeparator(result.needsLogSeparator)
-    adoptReplayBudget(result)
+    adoptReplaySize(operationCount: result.ops.count, bytes: result.replayBytes)
     return result
   }
 
@@ -221,12 +223,9 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     if let separator { needsLogSeparator = separator }
   }
 
-  func adoptReplayBudget(_ budget: RecordReplayBudget) { replayBudget = budget }
-
-  func adoptReplayBudget(_ loaded: LoadResult) {
-    replayBudget.adopt(
-      operationCount: loaded.ops.count, encodedBytes: loaded.replayBytes,
-      measuredNanoseconds: loaded.replayNanoseconds)
+  func adoptReplaySize(operationCount: Int, bytes: Int) {
+    replayOperationCount = operationCount
+    replayBytes = bytes
   }
 
   /// Reads the snapshot, then the log. File IO only: nothing is decoded or logged, so the
@@ -281,7 +280,6 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
       }
     }
 
-    let replayStart = DispatchTime.now().uptimeNanoseconds
     var ops: [LogOp] = []
     var malformedLineCount = 0
     let needsLogSeparator: Bool?
@@ -321,8 +319,7 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     return LoadResult(
       snapshot: snapshot, snapshotStatus: snapshotStatus, ops: ops,
       malformedLineCount: malformedLineCount, ioFailure: ioFailure,
-      needsLogSeparator: needsLogSeparator, replayBytes: raw.logData?.count ?? 0,
-      replayNanoseconds: DispatchTime.now().uptimeNanoseconds - replayStart)
+      needsLogSeparator: needsLogSeparator, replayBytes: raw.logData?.count ?? 0)
   }
 
   /// Renames the corrupt snapshot to `<name>.broken-<ISO8601>` and writes a fresh empty
@@ -365,7 +362,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
       return
     }
 
-    replayBudget.record(encodedBytes: opData.count)
+    replayOperationCount += 1
+    replayBytes += opData.count
 
     let logURL = self.logURL
     let logger = self.logger
@@ -437,7 +435,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
     }
     deliverPendingFailure()
     try result.get()
-    replayBudget.didCheckpoint()
+    replayOperationCount = 0
+    replayBytes = 0
     flushedRevision = max(flushedRevision, revision)
     needsLogSeparator = false
   }
@@ -481,7 +480,8 @@ final class JSONLRecordFile<Snapshot: Codable & Sendable, LogOp: Codable & Senda
         fileReplacer: fileReplacer)
       ioFailureState.clear()
     }
-    replayBudget.didCheckpoint()
+    replayOperationCount = 0
+    replayBytes = 0
     flushedRevision = submittedRevision
     needsLogSeparator = false
   }
