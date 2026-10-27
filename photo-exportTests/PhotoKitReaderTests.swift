@@ -484,3 +484,6 @@ struct PhotoKitReaderTests {
   }
 
 }
+
+// Preserve the protected screenshot tests while sharing the service-backed implementation.
+typealias ScreenshotPhotoKitReader = PhotoLibraryServiceReader
