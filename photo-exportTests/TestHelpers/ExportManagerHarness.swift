@@ -29,6 +29,7 @@ final class ExportManagerHarness {
     mediaRenderer: (any MediaRenderer)? = nil,
     imageConverter: any ImageConverter = ProductionImageConverter(),
     runActivity: (any ExportRunActivity)? = nil,
+    exportMeasurements: ExportMeasurements? = nil,
     destinationIOFactory: @escaping @MainActor (String?) -> any DestinationIOExecuting = { _ in
       DestinationIO()
     }
@@ -53,7 +54,8 @@ final class ExportManagerHarness {
       mediaRenderer: mediaRenderer,
       imageConverter: imageConverter,
       fileSystem: fileSystem,
-      runActivity: runActivity, destinationIOFactory: destinationIOFactory,
+      runActivity: runActivity, exportMeasurements: exportMeasurements,
+      destinationIOFactory: destinationIOFactory,
       userDefaults: defaults)
   }
 }
