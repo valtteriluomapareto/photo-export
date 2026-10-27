@@ -219,7 +219,7 @@ struct DestinationIOTests {
   @MainActor
   @Test func admittedOldCommitAndCleanupKeepTheirDestinationContext() async throws {
     let identity = QueueIdentity()
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "CapturedDestinationIO", destinationId: "A",
       destinationIO: identity.executor("A"))
     let gate = Gate()
@@ -275,7 +275,7 @@ struct DestinationIOTests {
   @MainActor
   @Test func destinationChangesReuseOneSerialWorker() async throws {
     let io = RecordingDestinationIO()
-    let h = ExportManagerHarness(label: "DestinationContexts", destinationIO: io)
+    let h = await ExportManagerHarness(label: "DestinationContexts", destinationIO: io)
     defer {
       h.store.drainSynchronously()
       h.collectionStore.drainSynchronously()

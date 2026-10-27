@@ -52,7 +52,7 @@ struct LibraryRefreshHostedTests {
     let phase = Phase()
     let window: NSWindow
 
-    init(collections: Bool = false) {
+    init(collections: Bool = false) async {
       let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
       let assets = [TestAssetFactory.makeAsset(id: "A", creationDate: date)]
       service.assetsByYearMonth["2026-9"] = assets
@@ -65,7 +65,7 @@ struct LibraryRefreshHostedTests {
       ]
       service.assetsByAlbumLocalId["family"] = assets
       library = PhotoLibraryManager(overrideService: service, refreshClock: clock)
-      export = ExportManagerHarness(label: "LibraryRefreshHosted", photoLib: service)
+      export = await ExportManagerHarness(label: "LibraryRefreshHosted", photoLib: service)
       let destination = ExportDestinationManager(skipRestore: true, userDefaults: export.defaults)
       let harness = HostedViewHarness(
         library: library, export: export, destination: destination, autoSync: AutoSyncManager(),
@@ -103,7 +103,7 @@ struct LibraryRefreshHostedTests {
   }
 
   @Test func fiveInvalidationsProduceOneGridRefreshAndInventoryLoad() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     try await withCleanup {
       f.show()
       try #require(
@@ -146,7 +146,7 @@ struct LibraryRefreshHostedTests {
   }
 
   @Test func countBatchRendersOnceAndNeverPublishesPartialCounts() async throws {
-    let f = Fixture(collections: true)
+    let f = await Fixture(collections: true)
     let favorite = AsyncCheckpoint()
     let album = AsyncCheckpoint()
     try await withCleanup {

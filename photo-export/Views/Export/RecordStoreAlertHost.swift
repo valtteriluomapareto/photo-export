@@ -40,10 +40,14 @@ struct RecordStoreAlertHost: ViewModifier {
       .onChange(of: exportRecordStore.destinationId) { timelineDismissed = false }
       .onChange(of: collectionExportRecordStore.destinationId) { collectionDismissed = false }
       .onChange(of: exportRecordStore.state) { _, state in
-        if state == .ready || state == .unconfigured { timelineDismissed = false }
+        if state == .ready || state == .unconfigured || state == .failed {
+          timelineDismissed = false
+        }
       }
       .onChange(of: collectionExportRecordStore.state) { _, state in
-        if state == .ready || state == .unconfigured { collectionDismissed = false }
+        if state == .ready || state == .unconfigured || state == .failed {
+          collectionDismissed = false
+        }
       }
       .sheet(isPresented: $isShowingRecoveryImport) {
         ImportView()
@@ -136,7 +140,7 @@ struct RecordStoreAlertHost: ViewModifier {
       get: {
         // Only show the collection alert when the timeline alert isn't already active so
         // SwiftUI doesn't try to present two alerts on the same view at once.
-        !exportRecordStore.state.needsRecovery
+        (!exportRecordStore.state.needsRecovery || timelineDismissed)
           && collectionExportRecordStore.state.needsRecovery && !collectionDismissed
       },
       set: { if !$0 { collectionDismissed = true } }

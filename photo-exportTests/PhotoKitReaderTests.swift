@@ -37,7 +37,7 @@ struct PhotoKitReaderTests {
             }
           }
         }))
-    let h = ExportManagerHarness(label: "ExportPhotoKitReader", photoKitReader: reader)
+    let h = await ExportManagerHarness(label: "ExportPhotoKitReader", photoKitReader: reader)
     defer {
       h.manager.cancelAndClear()
       h.store.drainSynchronously()
@@ -215,7 +215,7 @@ struct PhotoKitReaderTests {
             ]
           }
         }))
-    let h = ExportManagerHarness(label: "HeldPhotoKitReader", photoKitReader: reader)
+    let h = await ExportManagerHarness(label: "HeldPhotoKitReader", photoKitReader: reader)
     try await withCleanup {
       h.photoLib.assetsByYearMonth["2025-4"] = [asset]
       h.manager.startExportMonth(year: 2025, month: 4)

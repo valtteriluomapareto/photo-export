@@ -92,7 +92,7 @@ struct ExportManagerObservationTests {
   /// Already passes: changing a property invalidates only its own readers.
   @Test(arguments: PlainProperty.allCases)
   func plainTrackedPropertiesRegisterDependencies(property: PlainProperty) async throws {
-    let h = ExportManagerHarness(label: "PlainManagerDependency-\(property.rawValue)")
+    let h = await ExportManagerHarness(label: "PlainManagerDependency-\(property.rawValue)")
     try await withCleanup {
       #expect(!h.manager.isPaused)
       #expect(h.manager.videoLayout == .flat)

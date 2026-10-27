@@ -32,16 +32,16 @@ final class ExportManagerHarness {
     runActivity: (any ExportRunActivity)? = nil,
     exportMeasurements: ExportMeasurements? = nil,
     destinationIO: any DestinationIOExecuting = DestinationIO()
-  ) {
+  ) async {
     self.photoLib = photoLib ?? FakePhotoLibraryService()
     self.dest = dest ?? FakeExportDestination()
     self.writer = writer
     self.fileSystem = fileSystem
     storeRoot = storeRootURL ?? TestScratch.directory(label)
     store = ExportRecordStore(baseDirectoryURL: storeRoot)
-    store.configure(for: destinationId)
+    await store.configureAndWait(for: destinationId)
     collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: destinationId)
+    await collectionStore.configureAndWait(for: destinationId)
     defaults = userDefaults ?? TestScratch.defaults(label)
     manager = ExportManager(
       photoLibraryService: self.photoLib,

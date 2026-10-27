@@ -172,10 +172,10 @@ struct RecordStoreLoadCharacterizationTests {
     let logURL = root.appendingPathComponent("log.jsonl")
     try Data(try line("a").dropLast()).write(to: logURL)
     let file = makeFile(root, io: FaultyReadIO())
-    _ = file.load()
+    _ = (await file.load())
 
     try FileManager.default.removeItem(at: logURL)
-    let absent = file.load()
+    let absent = (await file.load())
     #expect(absent.ops.isEmpty && absent.ioFailure == nil)
     file.append(Entry(id: "c"))
     try await file.flush()
@@ -193,10 +193,10 @@ struct RecordStoreLoadCharacterizationTests {
     try seeded.write(to: logURL)
     let io = FaultyReadIO()
     let file = makeFile(root, io: io)
-    #expect(file.load().ops == [Entry(id: "a")])
+    #expect((await file.load()).ops == [Entry(id: "a")])
 
     io.fail(logURL, with: ReadFailure(name: "log"))
-    let unreadable = file.load()
+    let unreadable = (await file.load())
     #expect(unreadable.ioFailure is ReadFailure)
     #expect(unreadable.ops.isEmpty)
     io.heal()
@@ -205,7 +205,7 @@ struct RecordStoreLoadCharacterizationTests {
 
     let separator = earlierNeedsSeparator ? Data([0x0A]) : Data()
     #expect(try Data(contentsOf: logURL) == seeded + separator + (try line("c")))
-    let reloaded = makeFile(root, io: FaultyReadIO()).load()
+    let reloaded = (await makeFile(root, io: FaultyReadIO()).load())
     #expect(reloaded.ops == [Entry(id: "a"), Entry(id: "c")])
     #expect(reloaded.malformedLineCount == 0)
   }

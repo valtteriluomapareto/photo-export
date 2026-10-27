@@ -71,7 +71,7 @@ struct CollectionBackupImportTests {
   /// the import, every manual collection export and every Auto Export collection run writes,
   /// copies and moves nothing.
   @Test func importAdoptsAlbumHistorySoExportsWriteNothing() async throws {
-    let control = CollectionImportHarness("CollectionBackupImportControl")
+    let control = await CollectionImportHarness("CollectionBackupImportControl")
     try plantExportedCollections(in: control)
     let favorites = await control.manager.runExport(
       context: ExportRunContext(
@@ -85,7 +85,7 @@ struct CollectionBackupImportTests {
       "without history the exports write files again")
     await control.cleanup()
 
-    let h = CollectionImportHarness("CollectionBackupImportRepro")
+    let h = await CollectionImportHarness("CollectionBackupImportRepro")
     try plantExportedCollections(in: h)
     let before = try Fixture.listing(of: h.root)
     try #require(before.count == 5)
@@ -132,7 +132,7 @@ struct CollectionBackupImportTests {
 
   @Test(arguments: RoundTrip.allCases)
   func exportWipeImportRoundTripRestoresPlacements(_ roundTrip: RoundTrip) async throws {
-    let h = CollectionImportHarness(
+    let h = await CollectionImportHarness(
       "CollectionBackupImportRoundTrip",
       videoLayout: roundTrip == .flatVideos ? .flat : .subfolder)
     h.manager.versionSelection = roundTrip.selection
@@ -232,7 +232,7 @@ struct CollectionBackupImportTests {
     let copies = h.fileSystem.copyCalls.count
     let moves = h.fileSystem.moveCalls.count
 
-    h.wipeHistory()
+    await h.wipeHistory()
     try #require(h.collections.placements.isEmpty)
     await h.importBackup()
     try #require(h.manager.importError == nil)

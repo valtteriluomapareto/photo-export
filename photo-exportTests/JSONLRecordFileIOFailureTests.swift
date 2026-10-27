@@ -98,66 +98,66 @@ struct JSONLRecordFileIOFailureTests {
     #expect(file.hasUnflushedChanges)
     try await file.flush()
     #expect(!file.hasUnflushedChanges)
-    #expect(file.load().ops.count == 2)
+    #expect((await file.load()).ops.count == 2)
   }
 
-  @Test func missingLogIsHealthyButUnreadableLogIsNot() throws {
+  @Test func missingLogIsHealthyButUnreadableLogIsNot() async throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let file = makeFile(at: directory)
-    let absent = file.load()
+    let absent = (await file.load())
     #expect(absent.snapshotStatus == .absent)
     #expect(absent.ops.isEmpty)
     #expect(absent.ioFailure == nil)
 
     let logURL = directory.appendingPathComponent("log.jsonl")
     try FileManager.default.createDirectory(at: logURL, withIntermediateDirectories: false)
-    let unreadable = file.load()
+    let unreadable = (await file.load())
     #expect(unreadable.ops.isEmpty)
     #expect(unreadable.ioFailure != nil)
   }
 
-  @Test func injectedReadErrorCannotBecomeAnEmptyHealthyLog() throws {
+  @Test func injectedReadErrorCannotBecomeAnEmptyHealthyLog() async throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let file = makeFile(at: directory, logIO: FailingLogIO(fault: nil, failRead: true))
-    let loaded = file.load()
+    let loaded = (await file.load())
     #expect(loaded.ops.isEmpty)
     #expect(loaded.ioFailure is InjectedError)
   }
 
-  @Test func danglingLogSymlinkIsNotMistakenForMissingLog() throws {
+  @Test func danglingLogSymlinkIsNotMistakenForMissingLog() async throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let linkURL = directory.appendingPathComponent("log.jsonl")
     try FileManager.default.createSymbolicLink(
       at: linkURL, withDestinationURL: directory.appendingPathComponent("missing-target"))
-    let loaded = makeFile(at: directory).load()
+    let loaded = (await makeFile(at: directory).load())
     #expect(loaded.ops.isEmpty)
     #expect(loaded.ioFailure != nil)
   }
 
-  @Test func unreadableSnapshotIsIOFailureButMalformedSnapshotIsCorruption() throws {
+  @Test func unreadableSnapshotIsIOFailureButMalformedSnapshotIsCorruption() async throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let snapshotURL = directory.appendingPathComponent("snapshot.json")
     try FileManager.default.createDirectory(at: snapshotURL, withIntermediateDirectories: false)
-    let unreadable = makeFile(at: directory).load()
+    let unreadable = (await makeFile(at: directory).load())
     #expect(unreadable.snapshotStatus == .absent)
     #expect(unreadable.ioFailure != nil)
 
     try FileManager.default.removeItem(at: snapshotURL)
     try Data("not-json".utf8).write(to: snapshotURL)
-    let malformed = makeFile(at: directory).load()
+    let malformed = (await makeFile(at: directory).load())
     #expect(malformed.snapshotStatus == .corrupt)
     #expect(malformed.ioFailure == nil)
   }
 
-  @Test func truncatedFinalLineRemainsRecoverable() throws {
+  @Test func truncatedFinalLineRemainsRecoverable() async throws {
     let directory = try makeDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -167,7 +167,7 @@ struct JSONLRecordFileIOFailureTests {
     bytes.append(contentsOf: "{\"key\":\"partial\"".utf8)
     try bytes.write(to: directory.appendingPathComponent("log.jsonl"))
 
-    let loaded = makeFile(at: directory).load()
+    let loaded = (await makeFile(at: directory).load())
     #expect(loaded.ops == [op])
     #expect(loaded.malformedLineCount == 1)
     #expect(loaded.ioFailure == nil)
@@ -189,14 +189,14 @@ struct JSONLRecordFileIOFailureTests {
     file.append(Mutation(key: "second", value: "2"))
     await #expect(throws: (any Error).self) { try await file.flush() }
     #expect(failures.count == 1)
-    let beforeRetry = makeFile(at: directory).load()
+    let beforeRetry = (await makeFile(at: directory).load())
     #expect(beforeRetry.ops.allSatisfy { $0.key != "second" })
 
     // Retry writes the entire retained state, then releases the failure latch. The
     // injected append fault remains active, but snapshot recovery itself is independent.
-    try file.writeSnapshot(retained)
+    try await file.checkpoint(retained, recovering: true)
     try await file.flush()
-    let reopened = makeFile(at: directory).load()
+    let reopened = (await makeFile(at: directory).load())
     #expect(reopened.ioFailure == nil)
     #expect(reopened.snapshot == retained)
     #expect(reopened.ops.isEmpty)

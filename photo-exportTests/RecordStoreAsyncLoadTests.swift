@@ -583,14 +583,16 @@ struct RecordStoreAsyncLoadTests {
     let queue = DispatchQueue(label: "RecordStoreAsyncLoad.reload")
     let logger = Logger(subsystem: TestLogging.subsystem, category: "RecordStoreAsyncLoad")
     if collection {
-      let reload = CollectionExportRecordStore.RecordFile(
-        snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger
-      ).load()
+      let reload =
+        (await CollectionExportRecordStore.RecordFile(
+          snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger
+        ).load())
       (malformed, ops) = (reload.malformedLineCount, reload.ops.count)
     } else {
-      let reload = ExportRecordStore.RecordFile(
-        snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger
-      ).load()
+      let reload =
+        (await ExportRecordStore.RecordFile(
+          snapshotURL: f.url("A", snapshot: true), logURL: log, ioQueue: queue, logger: logger
+        ).load())
       (malformed, ops) = (reload.malformedLineCount, reload.ops.count)
     }
     #expect(ops == completeLines + 1)

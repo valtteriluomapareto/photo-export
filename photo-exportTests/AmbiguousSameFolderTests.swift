@@ -111,13 +111,13 @@ struct AmbiguousSameFolderTests {
     collectionLocalIdentifier: "album-1", relativePath: "Collections/Albums/Italy/",
     createdAt: Date(timeIntervalSince1970: 1_700_000_000))
 
-  private func makeHarness(configureTimeline: Bool = true) -> Harness {
+  private func makeHarness(configureTimeline: Bool = true) async -> Harness {
     let dest = FakeExportDestination()
     let storeRoot = TestScratch.directory("UnclearPickImport")
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
-    if configureTimeline { timeline.configure(for: "test") }
+    if configureTimeline { await timeline.configureAndWait(for: "test") }
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: dest,
       exportRecordStore: timeline, collectionExportRecordStore: collection,
@@ -144,7 +144,7 @@ struct AmbiguousSameFolderTests {
   /// A folder that holds none of the history's files is not the previous backup: nothing is
   /// pruned, and the import says so instead of reporting a completed import.
   @Test func folderWithoutAnyOfTheHistoryKeepsItUntouched() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     seedHistory(h)
 
@@ -162,7 +162,7 @@ struct AmbiguousSameFolderTests {
   /// When some of the history is there, the import runs as usual and prunes only what's missing,
   /// in both stores.
   @Test func folderWithPartOfTheHistoryPrunesOnlyWhatIsMissing() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     seedHistory(h)
     try h.plant("2025/03/", "A.HEIC")
@@ -178,7 +178,7 @@ struct AmbiguousSameFolderTests {
 
   /// Album history alone is evidence: a collections-only user's folder is recognized.
   @Test func albumHistoryAloneIsEnoughEvidence() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.collection.upsertPlacement(Self.italy)
     h.collection.markVariantExported(
@@ -199,7 +199,7 @@ struct AmbiguousSameFolderTests {
 
   /// With no history there is nothing to protect, so the import runs normally.
   @Test func emptyHistoryImportsNormally() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
 
     h.manager.startImportForConfirmedSameFolder()
@@ -212,7 +212,7 @@ struct AmbiguousSameFolderTests {
   /// A check that can't start says why, instead of silently doing nothing; a plain import keeps
   /// its quiet refusal.
   @Test func refusedCheckExplainsWhyAndKeepsHistory() async throws {
-    let h = makeHarness(configureTimeline: false)
+    let h = await makeHarness(configureTimeline: false)
     defer { h.cleanup() }
 
     h.manager.startImport()
@@ -486,7 +486,7 @@ struct AmbiguousSameFolderTests {
   /// While the user decides, AutoSync sees an import in progress and manual exports are refused;
   /// a destination change ends the wait.
   @Test func missingPreviousBackupHoldsExportsUntilTheDestinationChanges() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     seedHistory(h)
     var held: [Bool] = []
@@ -513,9 +513,9 @@ struct AmbiguousSameFolderTests {
     let storeRoot = TestScratch.directory("UnclearPickCancel")
     let timeline = ExportRecordStore(
       baseDirectoryURL: storeRoot, reconciliationFileChecker: checker)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let manager = ExportManager(
       photoLibraryService: FakePhotoLibraryService(), exportDestination: dest,
       exportRecordStore: timeline, collectionExportRecordStore: collection,
@@ -545,12 +545,12 @@ struct AmbiguousSameFolderTests {
   /// Album history that can't be read doesn't count as evidence either way: missing timeline
   /// history still keeps everything untouched.
   @Test func unreadableAlbumHistoryDoesNotMaskAMissingBackup() async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     h.timeline.markVariantExported(
       assetId: "asset-A", variant: .original, year: 2025, month: 3,
       relPath: "2025/03/", filename: "A.HEIC", exportedAt: Date())
-    h.collection.configure(for: nil)
+    await h.collection.configureAndWait(for: nil)
 
     h.manager.startImportForConfirmedSameFolder()
     await h.manager.waitForImportCompletion()
@@ -560,8 +560,8 @@ struct AmbiguousSameFolderTests {
   }
 
   /// While a migration conflict is open its recovery owns the records, so no check starts.
-  @Test func noCheckWhileAMigrationConflictIsOpen() {
-    let h = makeHarness()
+  @Test func noCheckWhileAMigrationConflictIsOpen() async {
+    let h = await makeHarness()
     defer { h.cleanup() }
     let suite = TestScratch.suiteName("UnclearPickConflict")
     let defaults = TestScratch.defaults(suiteName: suite)
@@ -587,7 +587,7 @@ struct AmbiguousSameFolderTests {
   func continuingAfterUseAsNewFolderEndsTheWaitOnlyWhenSomethingChanged(
     _ newFolder: NewFolderCase
   ) async throws {
-    let h = makeHarness()
+    let h = await makeHarness()
     defer { h.cleanup() }
     seedHistory(h)
     h.manager.startImportForConfirmedSameFolder()
@@ -643,9 +643,9 @@ struct AmbiguousSameFolderTests {
     let dest = FakeExportDestination()
     let storeRoot = TestScratch.directory("UnclearPickBusy")
     let timeline = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timeline.configure(for: "test")
+    await timeline.configureAndWait(for: "test")
     let collection = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collection.configure(for: "test")
+    await collection.configureAndWait(for: "test")
     let manager = ExportManager(
       photoLibraryService: library, exportDestination: dest,
       exportRecordStore: timeline, collectionExportRecordStore: collection,

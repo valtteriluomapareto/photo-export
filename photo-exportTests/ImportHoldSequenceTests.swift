@@ -61,7 +61,7 @@ struct ImportHoldSequenceTests {
 
   /// Already passes: an ordinary import holds exports exactly until its task completes.
   @Test func plainImportHoldsOnceAndReleasesOnce() async throws {
-    let h = ExportManagerHarness(label: "ImportHoldPlain")
+    let h = await ExportManagerHarness(label: "ImportHoldPlain")
     let trace = Trace(h.manager)
     try await withCleanup {
       h.manager.startImport()
@@ -75,7 +75,7 @@ struct ImportHoldSequenceTests {
 
   /// Already passes: a completed missing-backup check retains its hold after activity ends.
   @Test func missingBackupKeepsTheHoldAfterTheImportEnds() async throws {
-    let h = ExportManagerHarness(label: "ImportHoldMissing")
+    let h = await ExportManagerHarness(label: "ImportHoldMissing")
     let trace = Trace(h.manager)
     seedHistory(h)
     try await withCleanup {
@@ -91,7 +91,7 @@ struct ImportHoldSequenceTests {
 
   /// Already passes: reacquiring the active flag precedes clearing the existing missing hold.
   @Test func recheckWhileMissingHasNoGap() async throws {
-    let h = ExportManagerHarness(label: "ImportHoldRecheck")
+    let h = await ExportManagerHarness(label: "ImportHoldRecheck")
     let trace = Trace(h.manager)
     seedHistory(h)
     try await withCleanup {
@@ -110,7 +110,7 @@ struct ImportHoldSequenceTests {
 
   /// Already passes: abandoning a missing-backup decision releases the composite hold once.
   @Test func cancelAndClearReleasesAMissingBackupHold() async throws {
-    let h = ExportManagerHarness(label: "ImportHoldClear")
+    let h = await ExportManagerHarness(label: "ImportHoldClear")
     let trace = Trace(h.manager)
     seedHistory(h)
     try await withCleanup {
@@ -127,7 +127,7 @@ struct ImportHoldSequenceTests {
 
   /// Delivery and missing-flag isolation already hold before replacing the Published storage.
   @Test func missingBackupFlagNotifiesOnlyItself() async throws {
-    let h = ExportManagerHarness(label: "ImportHoldDependency")
+    let h = await ExportManagerHarness(label: "ImportHoldDependency")
     let trace = Trace(h.manager)
     seedHistory(h)
     try await withCleanup {

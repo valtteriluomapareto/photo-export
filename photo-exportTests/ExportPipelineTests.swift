@@ -21,11 +21,11 @@ struct ExportPipelineTests {
   private func makeTestHarness(
     storeRootURL: URL? = nil, userDefaults: UserDefaults? = nil,
     fileSystem: FakeFileSystem = FakeFileSystem()
-  ) -> (
+  ) async -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore
   ) {
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "ExportPipelineTest", storeRootURL: storeRootURL,
       userDefaults: userDefaults ?? TestScratch.defaults("ExportPipeline"), fileSystem: fileSystem)
     return (h.manager, h.photoLib, h.dest, h.writer, h.fileSystem, h.store)
@@ -34,7 +34,7 @@ struct ExportPipelineTests {
   // MARK: - Export happy path
 
   @Test func exportHappyPath() async throws {
-    let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, fileSystem, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -78,7 +78,7 @@ struct ExportPipelineTests {
   // MARK: - Missing asset descriptor
 
   @Test func missingAssetDescriptorRecordsFailure() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     // Simulate an asset that exists at enqueue time but disappears before
@@ -108,7 +108,7 @@ struct ExportPipelineTests {
   // MARK: - No exportable resource
 
   @Test func noExportableResourceMarkedFailed() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -129,7 +129,7 @@ struct ExportPipelineTests {
   // MARK: - Write failure
 
   @Test func writeFailureCleansUpAndMarksFailure() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -163,7 +163,7 @@ struct ExportPipelineTests {
   // MARK: - Atomic move failure
 
   @Test func moveFailureMarksFailureAndCleansUpTempFile() async throws {
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -198,7 +198,8 @@ struct ExportPipelineTests {
   /// and commits to ` (1)`. The variant is re-marked in progress under the new name first.
   @Test func lateCollisionAtTheFinalNameKeepsTheExistingFile() async throws {
     let storeRoot = TestScratch.directory("ExportPipelineTest")
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness(storeRootURL: storeRoot)
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness(
+      storeRootURL: storeRoot)
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -270,7 +271,7 @@ struct ExportPipelineTests {
         return EEXIST
       },
       capability: { _ in true })
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness(
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness(
       fileSystem: FakeFileSystem(real: commit))
     defer { dest.cleanup() }
 
@@ -315,7 +316,7 @@ struct ExportPipelineTests {
         return EEXIST
       },
       capability: { _ in true })
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness(
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness(
       fileSystem: FakeFileSystem(real: commit))
     defer { dest.cleanup() }
 
@@ -353,7 +354,7 @@ struct ExportPipelineTests {
   /// A paired original-side slot has one fixed name, so a file that takes it before the
   /// commit fails that variant with `Export:2` instead of moving the pair to ` (1)`.
   @Test func lateCollisionAtAPairedSlotStillFails() async throws {
-    let (manager, photoLib, dest, _, fileSystem, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, fileSystem, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -398,7 +399,7 @@ struct ExportPipelineTests {
   // MARK: - Pause/resume cycle
 
   @Test func pauseAndResumeBehavior() async throws {
-    let (manager, photoLib, dest, _, _, _) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, _) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset1 = TestAssetFactory.makeAsset(
@@ -432,7 +433,7 @@ struct ExportPipelineTests {
   // MARK: - Queue draining
 
   @Test func queueDrainsAllJobsInOrder() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     // Enqueue assets across two months
@@ -464,7 +465,7 @@ struct ExportPipelineTests {
   // MARK: - Duplicate skipping
 
   @Test func alreadyExportedAssetNotReEnqueued() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -492,7 +493,7 @@ struct ExportPipelineTests {
   @Test(.timeLimit(.minutes(2))) func cancelAndClearResetsAllState() async throws {
     let root = TestScratch.directory("ExportPipeline")
     let suite = TestScratch.suiteName("cancel-reset")
-    let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness(
+    let (manager, photoLib, dest, writer, fileSystem, store) = await makeTestHarness(
       storeRootURL: root, userDefaults: TestScratch.defaults(suiteName: suite))
     let gate = AsyncCheckpoint()
     writer.checkpoint = gate
@@ -562,7 +563,7 @@ struct ExportPipelineTests {
   @Test(.timeLimit(.minutes(2))) func oldGenerationTasksExitCleanly() async throws {
     let root = TestScratch.directory("ExportPipeline")
     let suite = TestScratch.suiteName("cancel-generation")
-    let (manager, photoLib, dest, writer, fileSystem, store) = makeTestHarness(
+    let (manager, photoLib, dest, writer, fileSystem, store) = await makeTestHarness(
       storeRootURL: root, userDefaults: TestScratch.defaults(suiteName: suite))
     let oldGate = AsyncCheckpoint()
     let newGate = AsyncCheckpoint()
@@ -642,7 +643,7 @@ struct ExportPipelineTests {
   // MARK: - Scoped access pairing
 
   @Test func scopedAccessAlwaysPaired() async throws {
-    let (manager, photoLib, dest, _, _, _) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, _) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -663,7 +664,7 @@ struct ExportPipelineTests {
   // MARK: - Resource type selection priority
 
   @Test func selectsPrimaryResourceInPriorityOrder() async throws {
-    let (manager, photoLib, dest, writer, _, _) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, _) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset = TestAssetFactory.makeAsset(
@@ -689,7 +690,7 @@ struct ExportPipelineTests {
   // MARK: - Multiple assets exported with correct filenames
 
   @Test func multipleAssetsGetCorrectFilenames() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let asset1 = TestAssetFactory.makeAsset(

@@ -17,11 +17,11 @@ struct CrossStoreIndependenceTests {
 
   // MARK: - Fixtures
 
-  private func makeManager(suiteName: String? = nil) throws -> (
+  private func makeManager(suiteName: String? = nil) async throws -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore, CollectionExportRecordStore, URL
   ) {
-    let harness = ExportManagerHarness(
+    let harness = await ExportManagerHarness(
       label: "CrossStoreInd",
       userDefaults: TestScratch.defaults(
         suiteName: suiteName ?? TestScratch.suiteName("CrossStore")))
@@ -55,7 +55,7 @@ struct CrossStoreIndependenceTests {
   @Test func favoritesFailureDoesNotMutateTimelineStore() async throws {
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -90,7 +90,7 @@ struct CrossStoreIndependenceTests {
   @Test func timelineFailureDoesNotMutateCollectionStore() async throws {
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -128,7 +128,7 @@ struct CrossStoreIndependenceTests {
     let suite = TestScratch.suiteName("cancel-timeline")
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager(suiteName: suite)
+    ) = try await makeManager(suiteName: suite)
     let gate = AsyncCheckpoint()
     writer.checkpoint = gate
     var tasks: [Task<Void, Never>] = []
@@ -203,7 +203,7 @@ struct CrossStoreIndependenceTests {
     let suite = TestScratch.suiteName("cancel-favorites")
     let (
       manager, photoLib, dest, writer, _, timelineStore, collectionStore, storeRoot
-    ) = try makeManager(suiteName: suite)
+    ) = try await makeManager(suiteName: suite)
     let gate = AsyncCheckpoint()
     writer.checkpoint = gate
     var tasks: [Task<Void, Never>] = []
@@ -266,7 +266,7 @@ struct CrossStoreIndependenceTests {
   @Test func failedCollectionStoreDoesNotBlockTimelineExport() async throws {
     let (
       manager, photoLib, dest, writer, _, _, collectionStore, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -303,7 +303,7 @@ struct CrossStoreIndependenceTests {
   @Test func failedTimelineStoreDoesNotBlockCollectionExport() async throws {
     let (
       manager, photoLib, dest, writer, _, timelineStore, _, storeRoot
-    ) = try makeManager()
+    ) = try await makeManager()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()

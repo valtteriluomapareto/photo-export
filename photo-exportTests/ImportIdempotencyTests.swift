@@ -21,11 +21,11 @@ struct ImportIdempotencyTests {
 
   // MARK: - Fixtures (mirrored from ExportManagerImportTests)
 
-  private func makeTestHarness() -> (
+  private func makeTestHarness() async -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, ExportRecordStore, URL,
     CollectionExportRecordStore
   ) {
-    let harness = ExportManagerHarness(
+    let harness = await ExportManagerHarness(
       label: "ImportIdempotency")
     return (
       harness.manager, harness.photoLib, harness.dest, harness.store, harness.storeRoot,
@@ -120,7 +120,7 @@ struct ImportIdempotencyTests {
   /// catch reorderings incidentally (e.g. via a different `prunedRecords` count on a
   /// ghost file); this test pins the contract directly.
   @Test func importStageSequenceMatchesContract() async throws {
-    let (manager, photoLib, dest, _, storeRoot, _) = makeTestHarness()
+    let (manager, photoLib, dest, _, storeRoot, _) = await makeTestHarness()
     defer {
       try? FileManager.default.removeItem(at: storeRoot)
       dest.cleanup()
@@ -174,7 +174,7 @@ struct ImportIdempotencyTests {
   /// (including `exportDate`) and their on-disk files unchanged, and report the same
   /// counts.
   @Test func bulkImportIsIdempotent() async throws {
-    let (manager, photoLib, dest, store, storeRoot, collections) = makeTestHarness()
+    let (manager, photoLib, dest, store, storeRoot, collections) = await makeTestHarness()
     defer {
       store.drainSynchronously()
       collections.drainSynchronously()
@@ -287,7 +287,7 @@ struct ImportIdempotencyTests {
   /// Album, shared-album and Favorites folders imported twice: the second import adopts the
   /// same placements, reports the same counts and writes no bytes to either history.
   @Test func collectionAdoptionIsIdempotent() async throws {
-    let (manager, photoLib, dest, store, storeRoot, collections) = makeTestHarness()
+    let (manager, photoLib, dest, store, storeRoot, collections) = await makeTestHarness()
     defer {
       store.drainSynchronously()
       collections.drainSynchronously()

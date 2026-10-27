@@ -51,9 +51,9 @@ struct FilenameClaimsTests {
 
   private static func root() -> URL { TestScratch.directory("FilenameClaims") }
 
-  private static func timelineStore(_ root: URL) -> ExportRecordStore {
+  private static func timelineStore(_ root: URL) async -> ExportRecordStore {
     let store = ExportRecordStore(baseDirectoryURL: root)
-    store.configure(for: "dest")
+    await store.configureAndWait(for: "dest")
     return store
   }
 
@@ -78,10 +78,10 @@ struct FilenameClaimsTests {
 
   /// The job's own variant record is not a claim; the asset's other variants are, and only
   /// in the folder their records name.
-  @Test func timelineClaimsExcludeOnlyTheVariantBeingWritten() {
+  @Test func timelineClaimsExcludeOnlyTheVariantBeingWritten() async {
     let root = Self.root()
     defer { try? FileManager.default.removeItem(at: root) }
-    let store = Self.timelineStore(root)
+    let store = await Self.timelineStore(root)
     Self.exported(store, "asset", filename: "IMG.JPG")
     Self.exported(store, "asset", .edited, filename: "IMG (1).JPG")
     Self.exported(store, "clip", filename: "CLIP.MOV", subfolder: "videos")
@@ -98,10 +98,10 @@ struct FilenameClaimsTests {
 
   /// The index is built on the first query; it reflects every mutation made before that one,
   /// and those made after it.
-  @Test func claimsBuiltOnFirstQueryMatchEarlierAndLaterMutations() {
+  @Test func claimsBuiltOnFirstQueryMatchEarlierAndLaterMutations() async {
     let root = Self.root()
     defer { try? FileManager.default.removeItem(at: root) }
-    let store = Self.timelineStore(root)
+    let store = await Self.timelineStore(root)
     Self.exported(store, "a", filename: "A.JPG")
     Self.exported(store, "b", filename: "B.JPG")
     store.removeVariant(assetId: "b", variant: .original)
@@ -113,7 +113,7 @@ struct FilenameClaimsTests {
     #expect(!Self.claimed(store, "A.JPG"))
 
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    collections.configure(for: "dest")
+    await collections.configureAndWait(for: "dest")
     let favorites = ExportPlacement.favorites()
     collections.upsertPlacement(favorites)
     collections.markVariantExported(
@@ -129,10 +129,10 @@ struct FilenameClaimsTests {
 
   /// A query for a whole asset leaves out every one of its own variants, and only in the
   /// folder they name: another asset's record still counts there and elsewhere.
-  @Test func timelineClaimsCanExcludeAWholeAsset() {
+  @Test func timelineClaimsCanExcludeAWholeAsset() async {
     let root = Self.root()
     defer { try? FileManager.default.removeItem(at: root) }
-    let store = Self.timelineStore(root)
+    let store = await Self.timelineStore(root)
     Self.exported(store, "asset", filename: "IMG.JPG")
     Self.exported(store, "asset", .edited, filename: "IMG (1).JPG")
     Self.exported(store, "other", filename: "OTHER.JPG")
@@ -150,11 +150,11 @@ struct FilenameClaimsTests {
     #expect(!claimed("IMG.JPG", "july", 7))
   }
 
-  @Test func collectionClaimsCanExcludeAWholeAsset() {
+  @Test func collectionClaimsCanExcludeAWholeAsset() async {
     let root = Self.root()
     defer { try? FileManager.default.removeItem(at: root) }
     let store = CollectionExportRecordStore(baseDirectoryURL: root)
-    store.configure(for: "dest")
+    await store.configureAndWait(for: "dest")
     let favorites = ExportPlacement.favorites()
     let album = ExportPlacement(
       kind: .album, id: "album:1", displayName: "Trip", collectionLocalIdentifier: "1",
@@ -181,10 +181,10 @@ struct FilenameClaimsTests {
 
   /// The own record is subtracted only in the folder it names: another asset's claim in a
   /// different month still counts there.
-  @Test func ownRecordIsExcludedOnlyInItsOwnFolder() {
+  @Test func ownRecordIsExcludedOnlyInItsOwnFolder() async {
     let root = Self.root()
     defer { try? FileManager.default.removeItem(at: root) }
-    let store = Self.timelineStore(root)
+    let store = await Self.timelineStore(root)
     Self.exported(store, "own", filename: "X.JPG", month: 6)
     Self.exported(store, "other", filename: "X.JPG", month: 7)
 
@@ -197,7 +197,7 @@ struct FilenameClaimsTests {
   @Test func timelineClaimsFollowEveryMutation() async throws {
     let root = Self.root()
     defer { try? FileManager.default.removeItem(at: root) }
-    let store = Self.timelineStore(root)
+    let store = await Self.timelineStore(root)
     Self.exported(store, "a", filename: "A.JPG")
     Self.exported(store, "b", filename: "A.JPG")
     store.removeVariant(assetId: "a", variant: .original)
@@ -224,7 +224,7 @@ struct FilenameClaimsTests {
     #expect(Self.claimed(store, "IMPORTED.JPG"))
 
     try await store.flush()
-    store.configure(for: "dest")
+    await store.configureAndWait(for: "dest")
     #expect(Self.claimed(store, "B.JPG", month: 7))
     #expect(Self.claimed(store, "IMPORTED.JPG"))
     #expect(!Self.claimed(store, "A.JPG"))
@@ -242,10 +242,10 @@ struct FilenameClaimsTests {
     try Data("corrupt".utf8).write(
       to: root.appendingPathComponent("dest").appendingPathComponent(
         ExportRecordStore.Constants.snapshotFileName))
-    store.configure(for: "dest")
+    await store.configureAndWait(for: "dest")
     #expect(store.state == .failed)
     #expect(!Self.claimed(store, "B.JPG", month: 7))
-    store.resetToEmpty()
+    await store.resetHistory()
     #expect(!Self.claimed(store, "B.JPG", month: 7))
   }
 
@@ -263,7 +263,7 @@ struct FilenameClaimsTests {
     let root = Self.root()
     defer { try? FileManager.default.removeItem(at: root) }
     let store = CollectionExportRecordStore(baseDirectoryURL: root)
-    store.configure(for: "dest")
+    await store.configureAndWait(for: "dest")
     let favorites = ExportPlacement.favorites()
     let album = ExportPlacement(
       kind: .album, id: "album:1", displayName: "Trip", collectionLocalIdentifier: "1",
@@ -293,7 +293,7 @@ struct FilenameClaimsTests {
     #expect(Self.collectionClaimed(store, "A.JPG", placement: album))
 
     try await store.flush()
-    store.configure(for: "dest")
+    await store.configureAndWait(for: "dest")
     #expect(Self.collectionClaimed(store, "A.JPG", placement: album))
     #expect(Self.collectionClaimed(store, "V.MOV", placement: album, subfolder: "videos"))
     #expect(!Self.collectionClaimed(store, "A.JPG", placement: favorites))
@@ -305,11 +305,11 @@ struct FilenameClaimsTests {
 
   /// Exporting a recorded asset again under another name moves its claim to the new name, and
   /// deleting the placement then releases the new name too.
-  @Test func collectionReexportUnderANewNameMovesTheClaim() {
+  @Test func collectionReexportUnderANewNameMovesTheClaim() async {
     let root = Self.root()
     defer { try? FileManager.default.removeItem(at: root) }
     let store = CollectionExportRecordStore(baseDirectoryURL: root)
-    store.configure(for: "dest")
+    await store.configureAndWait(for: "dest")
     defer { store.drainSynchronously() }
     let album = ExportPlacement(
       kind: .album, id: "album:1", displayName: "Trip", collectionLocalIdentifier: "1",

@@ -390,6 +390,54 @@ struct FinalCommitCancellationTests {
     }
   }
 
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true], [false, true])
+  func unreadableCompletionSurvivesFailedReloadOrFolderRoundTrip(collection: Bool, switchAway: Bool)
+    async throws
+  {
+    let f = try await Fixture(collection: collection, phase: .move)
+    try await withCleanup {
+      try await f.sentinel("seed")
+      f.start()
+      await f.gate.entered.waitForEnter(count: 1)
+      let old = try #require(f.manager.currentTask)
+      f.manager.cancelAndClear()
+      await f.select("B")
+      let name =
+        collection
+        ? CollectionExportRecordStore.Constants.logFileName
+        : ExportRecordStore.Constants.logFileName
+      let log = f.root.appendingPathComponent("A").appendingPathComponent(name)
+      let originalLog = try Data(contentsOf: log)
+      try FileManager.default.removeItem(at: log)
+      try FileManager.default.createDirectory(at: log, withIntermediateDirectories: false)
+      await f.select("A")
+      #expect((collection ? f.collections.state : f.timeline.state) == .persistenceFailed)
+      f.gate.release()
+      await old.value
+      #expect(f.variants()[.original]?.filename == "FILE.JPG")
+      if switchAway { await f.select("B") }
+      await f.select("A")
+      #expect((collection ? f.collections.state : f.timeline.state) == .persistenceFailed)
+      #expect(f.variants("seed")[.original]?.status == .done)
+      #expect(f.variants()[.original]?.status == .done)
+      try FileManager.default.removeItem(at: log)
+      try originalLog.write(to: log)
+      await f.timeline.retryHistoryPersistence()
+      await f.collections.retryHistoryPersistence()
+      #expect((collection ? f.collections.state : f.timeline.state) == .ready)
+      await f.select("B")
+      await f.select("A")
+      #expect(f.variants("seed")[.original]?.status == .done)
+      #expect(f.variants()[.original]?.filename == "FILE.JPG")
+      f.start()
+      await f.manager.waitForQueueDrained()
+      #expect(f.writer.writeCalls.count == 1)
+      #expect(try f.filesInA() == ["FILE.JPG"])
+    } cleanup: {
+      await f.cleanup()
+    }
+  }
+
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func deletedCollectionPlacementIsRestoredForCommittedOutput(switchAway: Bool) async throws {
     let f = try await Fixture(collection: true, phase: .move)

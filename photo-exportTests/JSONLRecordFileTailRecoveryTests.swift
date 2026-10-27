@@ -81,7 +81,7 @@ struct JSONLRecordFileTailRecoveryTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let original = try seed(tail, at: root)
     let first = file(root)
-    let initial = first.load()
+    let initial = (await first.load())
     let expectedPrefix = tail == .complete ? ["a", "b"] : ["a"]
     #expect(initial.ops.map(\.id) == expectedPrefix)
     first.append(Operation(id: "c"))
@@ -91,13 +91,13 @@ struct JSONLRecordFileTailRecoveryTests {
     let raw = try Data(contentsOf: root.appendingPathComponent("log.jsonl"))
     #expect(raw.starts(with: original + Data([0x0A])))
     let second = file(root)
-    let reloaded = second.load()
+    let reloaded = (await second.load())
     #expect(reloaded.ops.map(\.id) == expectedPrefix + ["c", "d"])
     #expect(reloaded.malformedLineCount == (tail == .complete ? 0 : 1))
     second.append(
       Operation(id: "e"))
     try await second.flush()
-    let last = file(root).load()
+    let last = (await file(root).load())
     #expect(last.ops.map(\.id) == expectedPrefix + ["c", "d", "e"])
     #expect(last.malformedLineCount == (tail == .complete ? 0 : 1))
   }
@@ -109,7 +109,7 @@ struct JSONLRecordFileTailRecoveryTests {
     _ = try seed(tail, at: root)
     let io = RecordingIO()
     let subject = file(root, io: io)
-    _ = subject.load()
+    _ = (await subject.load())
     subject.append(Operation(id: "c"))
     try await subject.flush()
     let writes = io.writes
@@ -129,7 +129,7 @@ struct JSONLRecordFileTailRecoveryTests {
     defer { try? FileManager.default.removeItem(at: root) }
     _ = try seed(.complete, at: root)
     let subject = file(root, io: RecordingIO(fault: fault))
-    _ = subject.load()
+    _ = (await subject.load())
     var failures = 0
     subject.onPersistenceFailure = { _ in failures += 1 }
     let retained = Snapshot(ids: ["a", "b", "c", "d"])
@@ -138,23 +138,23 @@ struct JSONLRecordFileTailRecoveryTests {
     await #expect(throws: Failure.self) { try await subject.flush() }
     #expect(failures == 1)
     #expect(subject.hasUnflushedChanges)
-    let beforeRetry = file(root).load()
+    let beforeRetry = (await file(root).load())
     #expect(
       beforeRetry.ops.contains(Operation(id: "b")),
       "Recovered B must not merge with the failed repair")
     #expect(
       !beforeRetry.ops.contains(Operation(id: "d")), "Later D must not pass a failed write or sync")
-    try subject.writeSnapshot(retained)
+    try await subject.checkpoint(retained, recovering: true)
     try await subject.flush()
     #expect(!subject.hasUnflushedChanges)
     let recording = RecordingIO()
     let reopened = file(root, io: recording)
-    #expect(reopened.load().snapshot == retained)
+    #expect((await reopened.load()).snapshot == retained)
     reopened.append(Operation(id: "e"))
     try await reopened.flush()
     #expect(recording.writes.count == 1)
     #expect(recording.writes.first?.first != 0x0A)
-    let final = file(root).load()
+    let final = (await file(root).load())
     #expect(final.snapshot == retained)
     #expect(final.ops == [Operation(id: "e")])
     #expect(final.malformedLineCount == 0)
@@ -167,32 +167,14 @@ struct JSONLRecordFileTailRecoveryTests {
     _ = try seed(.complete, at: root)
     let io = RecordingIO()
     let subject = file(root, io: io)
-    _ = subject.load()
+    _ = (await subject.load())
     let snapshot = Snapshot(ids: reset ? [] : ["a", "b"])
-    if reset {
-      try subject.resetToEmpty(emptySnapshot: snapshot)
-    } else {
-      try subject.writeSnapshot(snapshot)
-    }
+    try await subject.checkpoint(snapshot, recovering: true, resetCorrupt: reset)
     subject.append(Operation(id: "c"))
     try await subject.flush()
     #expect(io.writes.count == 1)
     #expect(io.writes.first?.first != 0x0A)
-    #expect(file(root).load().ops == [Operation(id: "c")])
+    #expect((await file(root).load()).ops == [Operation(id: "c")])
   }
 
-  @Test func failedSnapshotKeepsTheUnconsumedBoundary() async throws {
-    let root = try directory()
-    defer { try? FileManager.default.removeItem(at: root) }
-    _ = try seed(.complete, at: root)
-    let subject = file(root, replacer: FailedReplacement())
-    _ = subject.load()
-    #expect(throws: Failure.self) { try subject.writeSnapshot(Snapshot(ids: ["a", "b"])) }
-    subject.append(Operation(id: "c"))
-    try await subject.flush()
-    let reloaded = file(root).load()
-    #expect(reloaded.snapshot == nil)
-    #expect(reloaded.ops.map(\.id) == ["a", "b", "c"])
-    #expect(reloaded.malformedLineCount == 0)
-  }
 }

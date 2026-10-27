@@ -11,11 +11,11 @@ import Testing
 struct EditedModeExportTests {
   // MARK: - Test harness
 
-  private func makeTestHarness() -> (
+  private func makeTestHarness() async -> (
     ExportManager, FakePhotoLibraryService, FakeExportDestination, FakeAssetResourceWriter,
     FakeFileSystem, ExportRecordStore
   ) {
-    let h = ExportManagerHarness(
+    let h = await ExportManagerHarness(
       label: "EditedModeTest", userDefaults: TestScratch.defaults("EditedMode"))
     return (h.manager, h.photoLib, h.dest, h.writer, h.fileSystem, h.store)
   }
@@ -23,7 +23,7 @@ struct EditedModeExportTests {
   // MARK: - Default mode: unedited asset writes original at the natural stem
 
   @Test func editedDefaultExportsUneditedAtOriginalFilename() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
@@ -50,7 +50,7 @@ struct EditedModeExportTests {
   // MARK: - Default mode: adjusted asset writes the edit at the natural stem
 
   @Test func editedDefaultWritesEditAtNaturalStem() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
@@ -78,7 +78,7 @@ struct EditedModeExportTests {
   // MARK: - HEIC original + JPEG edit → edit lands at IMG_0001.JPG
 
   @Test func heicOriginalPlusJpegEditProducesJpegAtNaturalStem() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
@@ -103,7 +103,7 @@ struct EditedModeExportTests {
   // MARK: - editedWithOriginals adjusted asset writes both files paired
 
   @Test func editedWithOriginalsWritesPrimaryAndOrigCompanion() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
@@ -129,7 +129,7 @@ struct EditedModeExportTests {
   }
 
   @Test func editedWithOriginalsUneditedAssetWritesOriginalOnly() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
@@ -162,7 +162,7 @@ struct EditedModeExportTests {
   // widening the render path to images later.
 
   @Test func defaultModeAdjustedPhotoFailsWhenFullSizePhotoUnavailable() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
@@ -194,7 +194,7 @@ struct EditedModeExportTests {
   // MARK: - Companion follows the asset's collision-suffixed group stem
 
   @Test func pairedCompanionFollowsCollisionSuffix() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
@@ -231,7 +231,7 @@ struct EditedModeExportTests {
   // MARK: - Step-1 fail-path guard for paired `_orig` companion
 
   @Test func pairedCompanionFailsInsteadOfOverwritingAnotherAssetsFile() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     // Default mode for asset B first: writes the edit at the natural stem.
@@ -274,7 +274,7 @@ struct EditedModeExportTests {
   // MARK: - Stale .tmp cleanup
 
   @Test func staleTempFileIsRemovedBeforeWrite() async throws {
-    let (manager, photoLib, dest, _, _, _) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, _) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
@@ -301,7 +301,7 @@ struct EditedModeExportTests {
   // MARK: - Switching selection enqueues only the missing variant
 
   @Test func switchingToIncludeOriginalsEnqueuesOnlyMissingOriginal() async throws {
-    let (manager, photoLib, dest, writer, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, writer, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     manager.versionSelection = .edited
@@ -334,7 +334,7 @@ struct EditedModeExportTests {
   // MARK: - Post-edit re-export collides at natural stem with one-time `(1)` suffix
 
   @Test func postEditReExportLandsAtCollisionSuffixedPath() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
@@ -373,7 +373,7 @@ struct EditedModeExportTests {
   // MARK: - Inherited group stem with a real `_orig` user filename
 
   @Test func userOrigFilenameStaysOnItsGroupStemAfterAdjustment() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .edited
 
@@ -409,7 +409,7 @@ struct EditedModeExportTests {
   // MARK: - Pre-allocation: pre-seeded natural-stem file forces pair onto next stem
 
   @Test func freshPairAvoidsSplitWhenNaturalEditedStemIsTaken() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
@@ -439,7 +439,7 @@ struct EditedModeExportTests {
 
   @Test(arguments: [false, true])
   func collisionShiftedPairSharesStemAndPreservesClaimedMembers(livePhoto: Bool) async throws {
-    let (manager, library, destination, _, _, records) = makeTestHarness()
+    let (manager, library, destination, _, _, records) = await makeTestHarness()
     defer { destination.cleanup() }
     manager.versionSelection = .editedWithOriginals
     manager.livePhotosPairedExport = livePhoto
@@ -487,7 +487,7 @@ struct EditedModeExportTests {
   // MARK: - Sidebar summary accuracy
 
   @Test func sidebarSummaryForEditedWithOriginalsAdjustedOnlyOneVariantDone() async throws {
-    let (_, _, dest, _, _, store) = makeTestHarness()
+    let (_, _, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     // Asset is adjusted; only `.edited.done` recorded (no `.original.done`).
@@ -505,7 +505,7 @@ struct EditedModeExportTests {
   }
 
   @Test func sidebarSummaryCountsBothVariantsDone() async throws {
-    let (_, _, dest, _, _, store) = makeTestHarness()
+    let (_, _, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
 
     let now = Date()
@@ -530,7 +530,7 @@ struct EditedModeExportTests {
   // MARK: - Original succeeds and edited fails independently
 
   @Test func originalSucceedsEvenIfEditedFails() async throws {
-    let (manager, photoLib, dest, _, _, store) = makeTestHarness()
+    let (manager, photoLib, dest, _, _, store) = await makeTestHarness()
     defer { dest.cleanup() }
     manager.versionSelection = .editedWithOriginals
 
