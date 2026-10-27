@@ -141,3 +141,77 @@ class ExportMeasurementReplayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExportMeasurementLiveTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("measurement_collector", SCRIPT)
+        cls.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.module)
+
+    def test_real_pipe_buffering_and_owned_child_cleanup(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import plistlib
+        import io
+        actual_popen = subprocess.Popen
+        children, calls = [], []
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            app = root / "Photo Export.app"
+            (app / "Contents/MacOS").mkdir(parents=True)
+            (app / "Contents/MacOS/Photo Export").write_bytes(b"fixture")
+            (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": "Photo Export"}))
+            source = root / "fake_log.py"
+            source.write_text(
+                "import os,json,sys\n"
+                "print('Filtering the log data using fixture',flush=True)\n"
+                "sys.stdin.readline()\n"
+                "rows=json.loads(sys.argv[1])\n"
+                "for r in rows: r['pid']=os.getpid()\n"
+                "os.write(1,(''.join(json.dumps(r)+'\\n' for r in rows)).encode())\n"
+                "sys.stdin.read()\n")
+            def popen(command, **kwargs):
+                calls.append(command)
+                if command[0] == "/usr/bin/log":
+                    child = actual_popen([sys.executable, str(source), json.dumps(events())],
+                                         stdin=subprocess.PIPE, **kwargs)
+                else:
+                    child = actual_popen([sys.executable, "-c", "import sys;sys.stdin.read()"],
+                                         stdin=subprocess.PIPE)
+                children.append(child)
+                return child
+            def run(command, **kwargs):
+                calls.append(command)
+                if command[0] == "/usr/bin/pgrep":
+                    return SimpleNamespace(returncode=1)
+                # Emit every event in one write only after the launch command, exercising buffered-pipe handling.
+                children[0].stdin.write(b"launch\n")
+                children[0].stdin.flush()
+                return SimpleNamespace(returncode=0)
+            args = SimpleNamespace(app=app, label="nas", runs=1)
+            capture = self.module.Capture(SESSION)
+            with patch.object(self.module.subprocess, "Popen", side_effect=popen), \
+                 patch.object(self.module.subprocess, "run", side_effect=run):
+                self.module.live_capture(args, capture, io.StringIO(), {})
+            self.assertEqual(capture.eligible_count(), 1)
+            self.assertTrue(all(child.poll() is not None for child in children))
+            self.assertEqual(calls[1][0], "/usr/bin/log")
+            self.assertIn("--export-measurements", calls[-1])
+            self.assertFalse(any("quit" in str(command) for command in calls))
+            for child in children:
+                if child.stdin:
+                    child.stdin.close()
+
+    def test_existing_app_refused_before_log_or_launch(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import io
+        args = SimpleNamespace(app=pathlib.Path("fixture.app"), label="nas", runs=1)
+        with patch.object(self.module, "app_metadata", return_value=("Photo Export", {})), \
+             patch.object(self.module.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
+             patch.object(self.module.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(ValueError, "already running"):
+                self.module.live_capture(args, self.module.Capture(SESSION), io.StringIO(), {})
+            popen.assert_not_called()

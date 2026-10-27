@@ -12,14 +12,15 @@ struct ExportMeasurementsTests {
     nonisolated func now() -> UInt64 { value.withLock { $0 } }
     nonisolated func advance(_ amount: UInt64) { value.withLock { $0 += amount } }
   }
+  @MainActor
   private final class Capture {
     let clock = Clock()
     var events: [[String: Any]] = []
     lazy var measurements = ExportMeasurements(
-      session: UUID().uuidString, now: { self.clock.now() },
-      emit: { message in
+      session: UUID().uuidString, now: { [clock] in clock.now() },
+      emit: { [weak self] message in
         let data = Data(message.dropFirst("MEASURE ".count).utf8)
-        self.events.append(try! JSONSerialization.jsonObject(with: data) as! [String: Any])
+        self?.events.append(try! JSONSerialization.jsonObject(with: data) as! [String: Any])
       })
     func rows(_ type: String) -> [[String: Any]] { events.filter { $0["type"] as? String == type } }
   }
@@ -139,4 +140,72 @@ struct ExportMeasurementsTests {
     #expect(c.rows("completion").count == 1)
     #expect(c.rows("runEnd").last?["valid"] as? Bool == true)
   }
+  private struct TimedConverter: ImageConverter {
+    let clock: Clock
+    func convertHEIC(at sourceURL: URL, to destURL: URL, quality: Double) async throws {
+      clock.advance(20)
+      try Data("jpeg".utf8).write(to: destURL)
+    }
+  }
+
+  @Test(arguments: ["heic", "render", "reuse-fallback"])
+  func actualProducerLegsAreTimedButRepairAndCleanupAreNot(route: String) async throws {
+    let c = Capture()
+    let clock = c.clock
+    let photos = FakePhotoLibraryService()
+    let date = Calendar.current.date(from: DateComponents(year: 2026, month: 1, day: 15))
+    let asset = TestAssetFactory.makeAsset(
+      id: "producer", creationDate: date, mediaType: route == "render" ? .video : .image,
+      hasAdjustments: route == "render", originalUTI: route == "heic" ? "public.heic" : nil)
+    photos.assetsByYearMonth["2026-1"] = [asset]
+    photos.favoritesAssets = [asset]
+    photos.resourcesByAssetId[asset.id] = [
+      .init(type: route == "render" ? .video : .photo,
+            originalFilename: route == "heic" ? "IMG.HEIC" : "IMG.JPG", fileSize: 12)
+    ]
+    let writer = FakeAssetResourceWriter()
+    writer.writeHook = { _ in clock.advance(60) }
+    let renderer = FakeMediaRenderer()
+    renderer.fileWriter = { url in
+      clock.advance(70)
+      try? Data("rendered".utf8).write(to: url)
+    }
+    let files = FakeFileSystem()
+    files.afterTimestampsHook = { _ in clock.advance(40) }
+    files.copyHook = { _, _ in clock.advance(20) }
+    let io = RecordingDestinationIO(beforeLeaf: { _ in
+      // Utility work outside producers, including directory repair and cleanup, remains job overhead.
+      if route == "heic" { clock.advance(10) }
+    })
+    let h = ExportManagerHarness(
+      label: "ProducerMeasurements", photoLib: photos, writer: writer, fileSystem: files,
+      mediaRenderer: renderer, imageConverter: TimedConverter(clock: clock),
+      exportMeasurements: c.measurements, destinationIOFactory: { _ in io })
+    defer {
+      h.manager.cancelAndClear()
+      h.store.drainSynchronously()
+      h.collectionStore.drainSynchronously()
+      h.dest.cleanup()
+      try? FileManager.default.removeItem(at: h.storeRoot)
+    }
+    h.manager.convertHEICToJPEG = route == "heic"
+    if route == "reuse-fallback" {
+      // The missing old file forces a failed copy attempt followed by resource production.
+      _ = try h.dest.urlForRelativeDirectory("2026/01/", createIfNeeded: true)
+      h.store.markVariantExported(
+        assetId: asset.id, variant: .original, year: 2026, month: 1, relPath: "2026/01/",
+        filename: "missing.JPG", exportedAt: Date())
+      h.manager.startExportFavorites()
+    } else {
+      h.manager.startExportMonth(year: 2026, month: 1)
+    }
+    await h.manager.waitForQueueDrained()
+    let job = try #require(c.rows("jobEnd").first)
+    let expected: UInt64 = route == "render" ? 70 : 80
+    #expect(job["stageNs"] as? UInt64 == expected)
+    #expect((job["wallNs"] as? UInt64 ?? 0) >= expected + 40)
+    #expect(c.rows("completion").count == 1)
+    #expect(c.rows("runEnd").last?["valid"] as? Bool == true)
+  }
+
 }
