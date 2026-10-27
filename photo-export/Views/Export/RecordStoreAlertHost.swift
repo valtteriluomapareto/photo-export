@@ -11,20 +11,8 @@ struct RecordStoreAlertHost: ViewModifier {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @State private var isShowingRecoveryImport = false
-  @State private var timelineRetry:
-    (store: ExportRecordStore, destinationId: String, error: String?)?
-  @State private var collectionRetry:
-    (store: CollectionExportRecordStore, destinationId: String, error: String?)?
-
-  private var isRetryingTimeline: Bool {
-    timelineRetry?.store === exportRecordStore
-      && timelineRetry?.destinationId == exportRecordStore.destinationId
-  }
-
-  private var isRetryingCollection: Bool {
-    collectionRetry?.store === collectionExportRecordStore
-      && collectionRetry?.destinationId == collectionExportRecordStore.destinationId
-  }
+  @State private var timelineDismissed = false
+  @State private var collectionDismissed = false
 
   func body(content: Content) -> some View {
     timelineAlert(content: content)
@@ -32,19 +20,8 @@ struct RecordStoreAlertHost: ViewModifier {
         "Photo Export couldn't access collections progress",
         isPresented: collectionAlertBinding,
         actions: {
-          if collectionExportRecordStore.state == .persistenceFailed || isRetryingCollection {
-            Button("Retry") {
-              let store = collectionExportRecordStore
-              guard let destinationId = store.destinationId else { return }
-              collectionRetry = (store, destinationId, store.persistenceError)
-              Task {
-                await store.retryHistoryPersistence()
-                if collectionRetry?.store === store, collectionRetry?.destinationId == destinationId
-                {
-                  collectionRetry = nil
-                }
-              }
-            }
+          if collectionExportRecordStore.state == .persistenceFailed {
+            Button("Retry") { Task { await collectionExportRecordStore.retryHistoryPersistence() } }
           } else {
             Button("Reset Records", role: .destructive) {
               Task { await collectionExportRecordStore.resetHistory() }
@@ -53,16 +30,21 @@ struct RecordStoreAlertHost: ViewModifier {
           Button("Quit") { NSApplication.shared.terminate(nil) }
         },
         message: {
-          if collectionExportRecordStore.state == .persistenceFailed || isRetryingCollection {
-            Text(
-              storageFailureMessage(
-                isRetryingCollection
-                  ? collectionRetry?.error : collectionExportRecordStore.persistenceError))
+          if collectionExportRecordStore.state == .persistenceFailed {
+            Text(storageFailureMessage(collectionExportRecordStore.persistenceError))
           } else {
             Text(collectionResetMessage)
           }
         }
       )
+      .onChange(of: exportRecordStore.destinationId) { timelineDismissed = false }
+      .onChange(of: collectionExportRecordStore.destinationId) { collectionDismissed = false }
+      .onChange(of: exportRecordStore.state) { _, state in
+        if state == .ready || state == .unconfigured { timelineDismissed = false }
+      }
+      .onChange(of: collectionExportRecordStore.state) { _, state in
+        if state == .ready || state == .unconfigured { collectionDismissed = false }
+      }
       .sheet(isPresented: $isShowingRecoveryImport) {
         ImportView()
       }
@@ -74,18 +56,8 @@ struct RecordStoreAlertHost: ViewModifier {
         "Photo Export couldn't access timeline progress",
         isPresented: timelineAlertBinding,
         actions: {
-          if exportRecordStore.state == .persistenceFailed || isRetryingTimeline {
-            Button("Retry") {
-              let store = exportRecordStore
-              guard let destinationId = store.destinationId else { return }
-              timelineRetry = (store, destinationId, store.persistenceError)
-              Task {
-                await store.retryHistoryPersistence()
-                if timelineRetry?.store === store, timelineRetry?.destinationId == destinationId {
-                  timelineRetry = nil
-                }
-              }
-            }
+          if exportRecordStore.state == .persistenceFailed {
+            Button("Retry") { Task { await exportRecordStore.retryHistoryPersistence() } }
           } else {
             Button("Reset and Rebuild from Folder…", action: resetAndRebuild)
               .disabled(!canRebuild)
@@ -96,10 +68,8 @@ struct RecordStoreAlertHost: ViewModifier {
           Button("Quit") { NSApplication.shared.terminate(nil) }
         },
         message: {
-          if exportRecordStore.state == .persistenceFailed || isRetryingTimeline {
-            Text(
-              storageFailureMessage(
-                isRetryingTimeline ? timelineRetry?.error : exportRecordStore.persistenceError))
+          if exportRecordStore.state == .persistenceFailed {
+            Text(storageFailureMessage(exportRecordStore.persistenceError))
           } else {
             Text(timelineResetMessage)
           }
@@ -156,8 +126,8 @@ struct RecordStoreAlertHost: ViewModifier {
 
   private var timelineAlertBinding: Binding<Bool> {
     Binding(
-      get: { exportRecordStore.state.needsRecovery || isRetryingTimeline },
-      set: { _ in }  // dismissal handled by the actions above
+      get: { exportRecordStore.state.needsRecovery && !timelineDismissed },
+      set: { if !$0 { timelineDismissed = true } }
     )
   }
 
@@ -166,10 +136,10 @@ struct RecordStoreAlertHost: ViewModifier {
       get: {
         // Only show the collection alert when the timeline alert isn't already active so
         // SwiftUI doesn't try to present two alerts on the same view at once.
-        !exportRecordStore.state.needsRecovery && !isRetryingTimeline
-          && (collectionExportRecordStore.state.needsRecovery || isRetryingCollection)
+        !exportRecordStore.state.needsRecovery
+          && collectionExportRecordStore.state.needsRecovery && !collectionDismissed
       },
-      set: { _ in }
+      set: { if !$0 { collectionDismissed = true } }
     )
   }
 }
