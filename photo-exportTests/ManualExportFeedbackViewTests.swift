@@ -49,7 +49,7 @@ import Testing
       var settingsWindow: NSWindow?
       var selectedAtOpen: String?
 
-      init() {
+      init() async {
         defaults = TestScratch.defaults(suiteName: suite)
         defaults.set(SettingsTab.advanced.rawValue, forKey: SettingsTab.storageKey)
         var composition = AppCoreTestHarness.makeTestComposition(label: "ManualFeedbackCore")
@@ -58,8 +58,8 @@ import Testing
         composition.loginItemService = loginService
         core = AppCoreTestHarness.makeCore(composition)
         core.exportDestinationManager.configureForScreenshotMode()
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         manager.progressState.totalJobsEnqueued = 3
         manager.progressState.totalJobsCompleted = 3
       }
@@ -152,7 +152,7 @@ import Testing
 
     @Test
     func progressContentWaitsForClockTicksAndShowsLatestValues() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       let clock = TestClock()
       let progress = ExportProgressState(clock: clock)
@@ -189,7 +189,7 @@ import Testing
 
     @Test(arguments: [120.0, 600.0])
     func multilineFailureFitsFirstLayoutAndMountedReplacements(initialHeight: Double) async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       let path =
         "/Volumes/Family Photo Backup/Collections/Albums/"
@@ -248,7 +248,7 @@ import Testing
     func failureShowsOutcomeAndSelectsIssuesBeforeOpeningSettings(settingsAlreadyOpen: Bool)
       async throws
     {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: nil)
@@ -277,7 +277,7 @@ import Testing
       #expect(f.selectedAtOpen == nil, "A retained action must not reopen a dismissed summary")
     }
     @Test func settingsSharedEnvironmentSupportsAllTabs() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
       f.showSettings()
@@ -296,7 +296,7 @@ import Testing
     /// The Auto Export tab's login toggle and footer read the controller's status, so a
     /// refresh that finds a new status must re-render them.
     @Test func autoExportTabFollowsLoginItemStatus() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.defaults.set(SettingsTab.autoExport.rawValue, forKey: SettingsTab.storageKey)
       f.showSettings()
@@ -309,7 +309,7 @@ import Testing
     }
 
     @Test func dismissRetiresOldCountersAndCannotDismissReplacement() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       defer { f.close() }
       f.manager.progressState.manualSummary = ManualExportSummary(
         completedCount: 3, failedCount: 1, failureMessage: nil)
@@ -335,7 +335,7 @@ import Testing
     }
 
     @Test func successExpiryRetiresCounters() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let expiry = AsyncCheckpoint()
       try await withCleanup {
         f.manager.progressState.manualSummary = ManualExportSummary(
@@ -358,7 +358,7 @@ import Testing
     }
 
     @Test func oldSuccessExpiryCannotDismissNewFailure() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       let expiry = AsyncCheckpoint()
       try await withCleanup {
         let success = ManualExportSummary(completedCount: 3, failedCount: 0, failureMessage: nil)

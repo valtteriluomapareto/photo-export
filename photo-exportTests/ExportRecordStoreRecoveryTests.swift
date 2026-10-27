@@ -40,7 +40,7 @@ struct ExportRecordStoreRecoveryTests {
 
   // MARK: - Snapshot + log overlay
 
-  @Test func snapshotPlusLogOverlayProducesCorrectState() throws {
+  @Test func snapshotPlusLogOverlayProducesCorrectState() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let dest = "overlay-test"
@@ -79,7 +79,7 @@ struct ExportRecordStoreRecoveryTests {
 
     // Load and verify
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: dest)
+    await store.configureAndWait(for: dest)
 
     #expect(store.recordsById.count == 4)
     #expect(store.recordsById["a"]?.variants[.original]?.status == .done)
@@ -103,7 +103,7 @@ struct ExportRecordStoreRecoveryTests {
   /// reproduces `.failed`) and the no-silent-recovery property: if the snapshot was the
   /// authoritative state and it's unreadable, log-only replay could yield an inconsistent
   /// view; users get a Reset action in Phase 4 to consciously discard the corrupt snapshot.
-  @Test func corruptedSnapshotTransitionsToFailedAndPreservesFile() throws {
+  @Test func corruptedSnapshotTransitionsToFailedAndPreservesFile() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let dest = "corrupted-snap"
@@ -127,7 +127,7 @@ struct ExportRecordStoreRecoveryTests {
     try logData.write(to: logURL(base: base, dest: dest))
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: dest)
+    await store.configureAndWait(for: dest)
 
     // Store transitions to `.failed`; in-memory state stays empty.
     #expect(store.state == .failed)
@@ -140,7 +140,7 @@ struct ExportRecordStoreRecoveryTests {
     // snapshot at the canonical path. After the call, both files exist on disk: the
     // forensic `.broken-<ISO8601>` (preserves the corrupt bytes for inspection) and the
     // new empty `export-records.json`.
-    store.resetToEmpty()
+    await store.resetHistory()
     #expect(store.state == .ready)
     #expect(store.recordsById.isEmpty)
     let dirContents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
@@ -154,7 +154,7 @@ struct ExportRecordStoreRecoveryTests {
 
   // MARK: - Empty snapshot + populated log
 
-  @Test func emptySnapshotWithPopulatedLogUsesLogOnly() throws {
+  @Test func emptySnapshotWithPopulatedLogUsesLogOnly() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let dest = "no-snap"
@@ -176,7 +176,7 @@ struct ExportRecordStoreRecoveryTests {
     try logData.write(to: logURL(base: base, dest: dest))
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: dest)
+    await store.configureAndWait(for: dest)
 
     #expect(store.recordsById.count == 5)
     for i in 1...5 {
@@ -186,7 +186,7 @@ struct ExportRecordStoreRecoveryTests {
 
   // MARK: - Log with mixed valid/corrupted lines
 
-  @Test func corruptedLogLinesAreSkipped() throws {
+  @Test func corruptedLogLinesAreSkipped() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let dest = "mixed-log"
@@ -213,7 +213,7 @@ struct ExportRecordStoreRecoveryTests {
     try logData.write(to: logURL(base: base, dest: dest))
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: dest)
+    await store.configureAndWait(for: dest)
 
     // Both good records should be loaded, corrupted line skipped
     #expect(store.recordsById.count == 2)
@@ -229,10 +229,10 @@ struct ExportRecordStoreRecoveryTests {
     let dest = "compact-test"
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: dest)
+    await store.configureAndWait(for: dest)
 
     // Accumulate history, then request explicit idle maintenance.
-    let threshold = ExportRecordStore.Constants.compactEveryNMutations
+    let threshold = ExportRecordStore.RecordFile.Constants.compactEveryNMutations
     for i in 1...threshold {
       store.markExported(
         assetId: "asset-\(i)", year: 2025, month: (i % 12) + 1,
@@ -246,7 +246,7 @@ struct ExportRecordStoreRecoveryTests {
 
     // Verify the snapshot is valid JSON and contains the expected records
     let store2 = ExportRecordStore(baseDirectoryURL: base)
-    store2.configure(for: dest)
+    await store2.configureAndWait(for: dest)
     #expect(store2.recordsById.count == threshold)
   }
 
@@ -256,9 +256,9 @@ struct ExportRecordStoreRecoveryTests {
     let dest = "compact-race"
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: dest)
+    await store.configureAndWait(for: dest)
 
-    let threshold = ExportRecordStore.Constants.compactEveryNMutations
+    let threshold = ExportRecordStore.RecordFile.Constants.compactEveryNMutations
     // Include the last mutation in the checkpoint before reopening.
     for i in 1...(threshold + 1) {
       store.markExported(
@@ -270,14 +270,14 @@ struct ExportRecordStoreRecoveryTests {
     try await store.checkpointHistory()
 
     let store2 = ExportRecordStore(baseDirectoryURL: base)
-    store2.configure(for: dest)
+    await store2.configureAndWait(for: dest)
 
     #expect(store2.recordsById.count == threshold + 1)
   }
 
   // MARK: - Delete mutation in log
 
-  @Test func deleteMutationRemovesRecord() throws {
+  @Test func deleteMutationRemovesRecord() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let dest = "delete-test"
@@ -301,7 +301,7 @@ struct ExportRecordStoreRecoveryTests {
     try logData.write(to: logURL(base: base, dest: dest))
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: dest)
+    await store.configureAndWait(for: dest)
 
     #expect(store.recordsById["to-delete"] == nil)
     #expect(store.recordCount(year: 2025, month: 1, variant: .original, status: .done) == 0)
@@ -309,13 +309,13 @@ struct ExportRecordStoreRecoveryTests {
 
   // MARK: - Persistence round-trip
 
-  @Test func mutationsPersistedAndReloadable() throws {
+  @Test func mutationsPersistedAndReloadable() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let dest = "roundtrip"
 
     let store1 = ExportRecordStore(baseDirectoryURL: base)
-    store1.configure(for: dest)
+    await store1.configureAndWait(for: dest)
 
     store1.markExported(
       assetId: "rt-1", year: 2025, month: 3, relPath: "2025/03/",
@@ -325,7 +325,7 @@ struct ExportRecordStoreRecoveryTests {
 
     // Create a fresh store and reload
     let store2 = ExportRecordStore(baseDirectoryURL: base)
-    store2.configure(for: dest)
+    await store2.configureAndWait(for: dest)
 
     #expect(store2.recordsById.count == 2)
     #expect(store2.recordsById["rt-1"]?.variants[.original]?.status == .done)

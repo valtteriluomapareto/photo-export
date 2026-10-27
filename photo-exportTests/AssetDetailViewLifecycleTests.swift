@@ -80,9 +80,9 @@ struct AssetDetailViewLifecycleTests {
     let photoLibraryManager = PhotoLibraryManager(overrideService: service)
     let storeRoot = TestScratch.directory("AssetDetailLifecycle")
     let exportRecordStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    exportRecordStore.configure(for: "detail-test")
+    await exportRecordStore.configureAndWait(for: "detail-test")
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: "detail-test")
+    await collectionStore.configureAndWait(for: "detail-test")
     let selection = Selection(asset: first)
     let hostingView = NSHostingView(
       rootView: HostedDetail(

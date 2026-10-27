@@ -88,7 +88,7 @@ import Testing
         let root = TestScratch.directory("MainThreadBenchRecords")
         try seedTimelineSnapshot(root: root, destinationId: "D", count: 500_000)
         let store = ExportRecordStore(baseDirectoryURL: root, notificationClock: TestClock())
-        store.configure(for: "D")
+        await store.configureAndWait(for: "D")
         defer { store.drainSynchronously() }
         copySamples.append(frozenDictionaryCopy(store))
         claimSamples.append(
@@ -233,8 +233,8 @@ import Testing
       let library = PhotoLibraryManager(overrideService: service)
       let timeline = ExportRecordStore(baseDirectoryURL: root)
       let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       let destination = FakeExportDestination()
       let snapshots = Dictionary(
         uniqueKeysWithValues: service.assetsByYearMonth.values.flatMap { $0 }.map { asset in

@@ -19,11 +19,11 @@ struct ExportMonthResumeTests {
     let manager: ExportManager
     var tasks: [Task<Void, Never>] = []
 
-    init() {
+    init() async {
       store = ExportRecordStore(baseDirectoryURL: root)
       collections = CollectionExportRecordStore(baseDirectoryURL: root)
-      store.configure(for: "test")
-      collections.configure(for: "test")
+      await store.configureAndWait(for: "test")
+      await collections.configureAndWait(for: "test")
       writer.checkpoint = gate
       manager = ExportManager(
         photoLibraryService: library, exportDestination: destination,
@@ -73,7 +73,7 @@ struct ExportMonthResumeTests {
 
   @Test(.timeLimit(.minutes(1)))
   func parkedMonthResumesOriginalMixedQueueWithoutRescanning() async throws {
-    let f = Fixture()
+    let f = await Fixture()
     do {
       f.add("done")
       f.add("first")
@@ -153,7 +153,7 @@ struct ExportMonthResumeTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func monthActionResumesWhileMatchingWriterIsHeld(hasMatchingPendingJob: Bool) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     do {
       f.add("first")
       if hasMatchingPendingJob { f.add("second") }
@@ -198,7 +198,7 @@ struct ExportMonthResumeTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: Rejection.allCases)
   func matchingQueueStillRespectsAdmission(rejection: Rejection) async throws {
-    let f = Fixture()
+    let f = await Fixture()
     do {
       f.add("pending")
       switch rejection {
@@ -208,7 +208,7 @@ struct ExportMonthResumeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("invalid json".utf8).write(
           to: directory.appendingPathComponent("export-records.json"))
-        f.store.configure(for: "broken")
+        await f.store.configureAndWait(for: "broken")
         let failed = f.store.state == .failed
         try #require(failed)
       case .importing:
@@ -241,7 +241,7 @@ struct ExportMonthResumeTests {
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func absentMonthUsesNormalEnqueueAndDoesNotResumeUnrelatedQueue(stalePlacement: Bool) async throws
   {
-    let f = Fixture()
+    let f = await Fixture()
     do {
       f.add("finished")
       f.add("other", month: 2)

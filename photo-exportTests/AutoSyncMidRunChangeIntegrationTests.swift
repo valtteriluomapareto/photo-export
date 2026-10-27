@@ -74,9 +74,9 @@ struct AutoSyncMidRunChangeIntegrationTests {
     )
     let destinationId = destinationSnapshot.id!
     let timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-    timelineStore.configure(for: destinationId)
+    await timelineStore.configureAndWait(for: destinationId)
     let collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-    collectionStore.configure(for: destinationId)
+    await collectionStore.configureAndWait(for: destinationId)
 
     let builder = FakeAutoSyncEnvironmentBuilder()
     let exportManager = ExportManager(

@@ -85,7 +85,7 @@ import Testing
       let counter = BodyInvalidationCounter()
       let window: NSWindow
 
-      init(includeAlbum: Bool = false, staticCollections: Bool = false) {
+      init(includeAlbum: Bool = false, staticCollections: Bool = false) async {
         defaults = TestScratch.defaults(suiteName: suite)
         let date = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15))!
         let assets = ["first", "second"].map {
@@ -113,8 +113,8 @@ import Testing
           overrideService: service, countInvalidationOverride: invalidateCounts)
         timeline = ExportRecordStore(baseDirectoryURL: root)
         collections = CollectionExportRecordStore(baseDirectoryURL: root)
-        timeline.configure(for: "A")
-        collections.configure(for: "A")
+        await timeline.configureAndWait(for: "A")
+        await collections.configureAndWait(for: "A")
         collections.upsertPlacement(.favorites())
         collections.flushPendingNotifications()
         manager = ExportManager(
@@ -182,7 +182,7 @@ import Testing
     /// Already passes: the static sidebar parent reads none of these manager publications.
     @Test(.timeLimit(.minutes(1)))
     func collectionsSidebarSkipsManagerPublicationsItDoesNotRead() async throws {
-      let f = Fixture(staticCollections: true)
+      let f = await Fixture(staticCollections: true)
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -217,7 +217,7 @@ import Testing
     /// Already passes: revoking access clears the years and granting access reloads them.
     @Test(.timeLimit(.minutes(1)))
     func timelineSidebarClearsOnRevokeAndReloadsOnGrant() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -244,7 +244,7 @@ import Testing
     /// Already passes: Favorites and the recursive album row refresh their cached counts.
     @Test(.timeLimit(.minutes(1)))
     func initialInventoryScansRunOffMain() async throws {
-      let f = Fixture(includeAlbum: true)
+      let f = await Fixture(includeAlbum: true)
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -264,7 +264,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func collectionRowCountsReloadAfterALibraryChange() async throws {
-      let f = Fixture(includeAlbum: true)
+      let f = await Fixture(includeAlbum: true)
       try await withCleanup {
         try #require(
           await observe(in: f.window) {
@@ -291,7 +291,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func queuePublicationsAvoidTimelineWorkAndRealSidebarChangesStillRefresh() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       var failure: Error?
       do {
         try #require(
@@ -342,7 +342,7 @@ import Testing
 
     @Test(.timeLimit(.minutes(1)))
     func queueAndRecordPublicationsSkipTheCollectionsSidebarBody() async throws {
-      let f = Fixture()
+      let f = await Fixture()
       try await withCleanup {
         try #require(
           await observe {

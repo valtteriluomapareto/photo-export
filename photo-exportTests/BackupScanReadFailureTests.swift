@@ -96,8 +96,8 @@ struct BackupScanReadFailureTests {
     let reader = Reader(root: destination.rootURL, failure: .monthEnumeration)
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    timeline.configure(for: "A")
-    collections.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
+    await collections.configureAndWait(for: "A")
     timeline.markVariantExported(
       assetId: "history", variant: .original, year: 2025, month: 3, relPath: "2025/03/",
       filename: "HISTORY.JPG", exportedAt: Date(timeIntervalSince1970: 1_700_000_000))
@@ -127,8 +127,8 @@ struct BackupScanReadFailureTests {
     try await collections.flush()
     let freshTimeline = ExportRecordStore(baseDirectoryURL: root)
     let freshCollections = CollectionExportRecordStore(baseDirectoryURL: root)
-    freshTimeline.configure(for: "A")
-    freshCollections.configure(for: "A")
+    await freshTimeline.configureAndWait(for: "A")
+    await freshCollections.configureAndWait(for: "A")
     #expect(freshTimeline.recordsById == beforeTimeline)
     #expect(freshCollections.recordBodies == beforeCollections)
     #expect(destination.beginScopedAccessCount == 1 && destination.endScopedAccessCount == 1)

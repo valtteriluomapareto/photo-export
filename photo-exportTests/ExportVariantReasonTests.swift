@@ -106,8 +106,8 @@ struct ExportVariantReasonStoreTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    timeline.configure(for: "dest")
-    collections.configure(for: "dest")
+    await timeline.configureAndWait(for: "dest")
+    await collections.configureAndWait(for: "dest")
     let router = RecordStoreRouter(timelineStore: timeline, collectionStore: collections)
     let favorite = ExportPlacement.favorites()
     collections.upsertPlacement(favorite)
@@ -134,8 +134,8 @@ struct ExportVariantReasonStoreTests {
     collections.drainSynchronously()
     let reopenedTimeline = ExportRecordStore(baseDirectoryURL: root)
     let reopenedCollections = CollectionExportRecordStore(baseDirectoryURL: root)
-    reopenedTimeline.configure(for: "dest")
-    reopenedCollections.configure(for: "dest")
+    await reopenedTimeline.configureAndWait(for: "dest")
+    await reopenedCollections.configureAndWait(for: "dest")
     #expect(reopenedTimeline.isExported(asset: asset, selection: .edited, livePhotosPaired: false))
     #expect(
       reopenedCollections.isExported(
@@ -216,8 +216,8 @@ extension ExportVariantReasonStoreTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    timeline.configure(for: "dest")
-    collections.configure(for: "dest")
+    await timeline.configureAndWait(for: "dest")
+    await collections.configureAndWait(for: "dest")
     let favorite = ExportPlacement.favorites()
     collections.upsertPlacement(favorite)
     let router = RecordStoreRouter(timelineStore: timeline, collectionStore: collections)
@@ -250,8 +250,8 @@ extension ExportVariantReasonStoreTests {
     collections.drainSynchronously()
     let reloadedTimeline = ExportRecordStore(baseDirectoryURL: root)
     let reloadedCollections = CollectionExportRecordStore(baseDirectoryURL: root)
-    reloadedTimeline.configure(for: "dest")
-    reloadedCollections.configure(for: "dest")
+    await reloadedTimeline.configureAndWait(for: "dest")
+    await reloadedCollections.configureAndWait(for: "dest")
     for store in [timeline, reloadedTimeline] {
       #expect(
         store.sidebarSummary(

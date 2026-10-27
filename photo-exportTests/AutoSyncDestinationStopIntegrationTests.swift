@@ -56,7 +56,7 @@ struct AutoSyncDestinationStopIntegrationTests {
     let autoSync = AutoSyncManager()
     private(set) var summaries: SummaryProbe?
 
-    init(files: FakeFileSystem = FakeFileSystem()) {
+    init(files: FakeFileSystem = FakeFileSystem()) async {
       guard let stableId = destinationSnapshot.stableId else {
         preconditionFailure("The harness destination has a stable id")
       }
@@ -74,9 +74,9 @@ struct AutoSyncDestinationStopIntegrationTests {
         ]
       }
       timelineStore = ExportRecordStore(baseDirectoryURL: storeRoot)
-      timelineStore.configure(for: destinationId)
+      await timelineStore.configureAndWait(for: destinationId)
       collectionStore = CollectionExportRecordStore(baseDirectoryURL: storeRoot)
-      collectionStore.configure(for: destinationId)
+      await collectionStore.configureAndWait(for: destinationId)
       exportManager = ExportManager(
         photoLibraryService: photoLibrary,
         exportDestination: destination,
@@ -164,7 +164,7 @@ struct AutoSyncDestinationStopIntegrationTests {
           unreachable.value ? ENOTCONN : FileIOService.systemRename(source, destination, flags)
         },
         capability: { _ in true }))
-    let h = Harness(files: files)
+    let h = await Harness(files: files)
     defer { h.close() }
     h.attach()
     // Pending Photos work that the resume hook would otherwise reschedule.
@@ -202,7 +202,7 @@ struct AutoSyncDestinationStopIntegrationTests {
   /// permission failure. That includes an item an older version had stored as an `unknown`
   /// failure with a backoff deadline: it now needs the user, so it is held until **Retry**.
   @Test func readOnlyFolderStopsTheRunAndHoldsALegacyUnknownEntry() async throws {
-    let h = Harness()
+    let h = await Harness()
     defer { h.close() }
     let readOnly = ExportDestinationManager.ExportDestinationError.notWritable
     let bridged = readOnly as NSError

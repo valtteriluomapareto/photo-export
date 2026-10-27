@@ -19,11 +19,11 @@ struct ExportProgressStateTests {
     let collections: CollectionExportRecordStore
     let manager: ExportManager
 
-    init() {
+    init() async {
       timeline = ExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
       collections = CollectionExportRecordStore(baseDirectoryURL: root, notificationClock: clock)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       manager = ExportManager(
         photoLibraryService: service, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -54,7 +54,7 @@ struct ExportProgressStateTests {
   @Test(arguments: ["enqueue", "completion", "pause", "replacement"])
   func immediateBoundaryCancellationKeepsCoordinatorAndMirrorsCleared(boundary: String) async throws
   {
-    let f = Fixture()
+    let f = await Fixture()
     let gate = AsyncCheckpoint()
     try await withCleanup {
       let progress = f.manager.progressState
@@ -169,7 +169,7 @@ struct ExportProgressStateTests {
   }
 
   @Test func startPauseAndCancelFlushExactManagerSourcesImmediately() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let progress = f.manager.progressState
       f.enqueue()
@@ -226,7 +226,7 @@ struct ExportProgressStateTests {
   }
 
   @Test func cancellationDuringPresentationPublicationCannotRestoreOldProgress() async {
-    let f = Fixture()
+    let f = await Fixture()
     await withCleanup {
       let progress = f.manager.progressState
       f.enqueue()

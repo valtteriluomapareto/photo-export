@@ -40,8 +40,12 @@ struct RecordStoreAsyncLoadTests {
       collection ? collections.mutationCounter : timeline.mutationCounter
     }
 
-    func configure(_ id: String?) {
-      if collection { collections.configure(for: id) } else { timeline.configure(for: id) }
+    func configure(_ id: String?) async {
+      if collection {
+        await collections.configureAndWait(for: id)
+      } else {
+        await timeline.configureAndWait(for: id)
+      }
     }
 
     func begin(_ id: String?) {
@@ -67,7 +71,7 @@ struct RecordStoreAsyncLoadTests {
     /// Writes `assets` (asset id → filename) into `destination`'s history and leaves the store
     /// configured for it.
     func seed(_ destination: String, _ assets: [String: String]) async throws {
-      configure(destination)
+      await configure(destination)
       for (assetId, filename) in assets.sorted(by: { $0.key < $1.key }) {
         mark(assetId, filename)
       }
@@ -98,15 +102,15 @@ struct RecordStoreAsyncLoadTests {
     }
 
     /// What fresh stores read from `destination`'s files for `assetId`.
-    func filenameOnDisk(_ destination: String, _ assetId: String = "asset") -> String? {
+    func filenameOnDisk(_ destination: String, _ assetId: String = "asset") async -> String? {
       let timeline = ExportRecordStore(baseDirectoryURL: root)
       let collections = CollectionExportRecordStore(baseDirectoryURL: root)
       defer {
         timeline.drainSynchronously()
         collections.drainSynchronously()
       }
-      timeline.configure(for: destination)
-      collections.configure(for: destination)
+      await timeline.configureAndWait(for: destination)
+      await collections.configureAndWait(for: destination)
       return RecordStoreRouter(timelineStore: timeline, collectionStore: collections)
         .variants(forAssetId: assetId, placement: placement)[.original]?.filename
     }
@@ -116,12 +120,16 @@ struct RecordStoreAsyncLoadTests {
         name, placement: placement, subfolder: nil, exceptVariant: .original, of: "someone-else")
     }
 
-    func resetToEmpty() {
-      if collection { collections.resetToEmpty() } else { timeline.resetToEmpty() }
+    func resetHistory() async {
+      if collection { await collections.resetHistory() } else { await timeline.resetHistory() }
     }
 
-    func retryPersistence() {
-      if collection { collections.retryPersistence() } else { timeline.retryPersistence() }
+    func retryHistoryPersistence() async {
+      if collection {
+        await collections.retryHistoryPersistence()
+      } else {
+        await timeline.retryHistoryPersistence()
+      }
     }
 
     func url(_ destination: String, snapshot: Bool) -> URL {
@@ -160,7 +168,7 @@ struct RecordStoreAsyncLoadTests {
     let f = Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
-    f.configure("B")
+    await f.configure("B")
     f.io.hold(f.url("A", snapshot: true))
     let mainThreadReads = f.io.mainThreadReads.count
 
@@ -200,7 +208,7 @@ struct RecordStoreAsyncLoadTests {
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
     try await f.seed("B", ["b1": "B1.JPG"])
-    f.configure(nil)
+    await f.configure(nil)
 
     // A, then B, in one turn. A's read is not held, so it finishes first and is discarded.
     let start = f.finishedLoads
@@ -220,7 +228,7 @@ struct RecordStoreAsyncLoadTests {
     #expect(f.finishedLoads == start + 2)
 
     // A, B, then A again: only the last load of A publishes.
-    f.configure(nil)
+    await f.configure(nil)
     let restart = f.finishedLoads
     let snapshotA = f.url("A", snapshot: true)
     f.io.hold(snapshotA, fromRead: f.io.readCount(of: snapshotA) + 2)
@@ -253,7 +261,7 @@ struct RecordStoreAsyncLoadTests {
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
     try await f.seed("B", ["b1": "B1.JPG"])
-    f.configure(nil)
+    await f.configure(nil)
     let snapshotA = f.url("A", snapshot: true)
     f.io.hold(snapshotA)
     f.begin("A")
@@ -273,11 +281,11 @@ struct RecordStoreAsyncLoadTests {
       #expect(f.waiters == 0)
     case .clearedBlocking:
       f.io.release(snapshotA)
-      f.configure(nil)
+      await f.configure(nil)
       #expect(f.waiters == 0)
     case .otherDestinationBlocking:
       f.io.release(snapshotA)
-      f.configure("B")
+      await f.configure("B")
       #expect(f.waiters == 0)
     case .otherDestinationAsync:
       f.io.release(snapshotA)
@@ -311,7 +319,7 @@ struct RecordStoreAsyncLoadTests {
     let f = Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
-    f.configure(nil)
+    await f.configure(nil)
     let snapshot = f.url("A", snapshot: true)
     let corrupt = Data("corrupt snapshot".utf8)
     try corrupt.write(to: snapshot)
@@ -334,7 +342,7 @@ struct RecordStoreAsyncLoadTests {
     let f = Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
-    f.configure(nil)
+    await f.configure(nil)
     let snapshot = f.url("A", snapshot: true)
     try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: false)
     f.io.hold(snapshot)
@@ -366,7 +374,7 @@ struct RecordStoreAsyncLoadTests {
     defer { f.cleanup() }
     try await f.seed("A", ["old": "OLD.JPG"])
     let acknowledge = try f.capture()
-    f.configure("B")
+    await f.configure("B")
     let snapshot = f.url("A", snapshot: true)
     let log = f.url("A", snapshot: false)
     let logBytes = try Data(contentsOf: log)
@@ -398,13 +406,13 @@ struct RecordStoreAsyncLoadTests {
       #expect(f.filename("old") == "OLD.JPG")
       #expect(f.isClaimed(Self.committed))
       try await f.flush()
-      f.configure("B")
-      f.configure("A")
+      await f.configure("B")
+      await f.configure("A")
       #expect(f.filename() == Self.committed)
     case .corrupt:
       #expect(f.state == .failed)
       #expect(f.filename() == nil)
-      f.resetToEmpty()
+      await f.resetHistory()
       #expect(f.state == .ready)
       #expect(f.filename() == Self.committed)
       #expect(f.isClaimed(Self.committed))
@@ -415,10 +423,10 @@ struct RecordStoreAsyncLoadTests {
       #expect(f.isClaimed("OLD.JPG"))
       try FileManager.default.removeItem(at: log)
       try logBytes.write(to: log)
-      f.retryPersistence()
+      await f.retryHistoryPersistence()
       #expect(f.state == .ready)
-      f.configure("B")
-      f.configure("A")
+      await f.configure("B")
+      await f.configure("A")
       #expect(f.filename() == Self.committed)
       #expect(f.filename("old") == "OLD.JPG")
     }
@@ -439,7 +447,7 @@ struct RecordStoreAsyncLoadTests {
     try await f.seed("B", ["b1": "B1.JPG"])
     try await f.seed("A", ["old": "OLD.JPG"])
     let acknowledge = try f.capture()
-    f.configure("B")
+    await f.configure("B")
     f.begin("A")
     try #require(f.state == .loading)
     // As in `finalCommitDuringLoadIsReplayed`, the main actor stays with the acknowledgement,
@@ -449,16 +457,16 @@ struct RecordStoreAsyncLoadTests {
 
     switch departure {
     case .otherDestinationAsync: f.begin("B")
-    case .otherDestinationBlocking: f.configure("B")
+    case .otherDestinationBlocking: await f.configure("B")
     case .cleared: f.begin(nil)
     }
     await f.settle()
     #expect(f.filename() == nil, "the commit landed in the history the store moved to")
 
-    #expect(f.filenameOnDisk("A") == Self.committed, "the commit is not in A's files")
-    #expect(f.filenameOnDisk("A", "old") == "OLD.JPG")
-    #expect(f.filenameOnDisk("B") == nil)
-    f.configure("A")
+    #expect(await f.filenameOnDisk("A") == Self.committed, "the commit is not in A's files")
+    #expect(await f.filenameOnDisk("A", "old") == "OLD.JPG")
+    #expect(await f.filenameOnDisk("B") == nil)
+    await f.configure("A")
     #expect(f.state == .ready)
     #expect(f.filename() == Self.committed)
     #expect(f.filename("old") == "OLD.JPG")
@@ -472,7 +480,7 @@ struct RecordStoreAsyncLoadTests {
     let f = Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("A", ["old": "OLD.JPG"])
-    f.configure("B")
+    await f.configure("B")
     let snapshot = f.url("A", snapshot: true)
     f.io.hold(snapshot)
     f.begin("A")
@@ -524,7 +532,7 @@ struct RecordStoreAsyncLoadTests {
     let f = Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
-    f.configure("B")
+    await f.configure("B")
     let snapshot = f.url("A", snapshot: true)
     f.io.hold(snapshot)
     f.begin("A")
@@ -548,7 +556,7 @@ struct RecordStoreAsyncLoadTests {
     let f = Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
-    f.configure(nil)
+    await f.configure(nil)
     let log = f.url("A", snapshot: false)
     var bytes = try Data(contentsOf: log)
     let completeLines = bytes.split(separator: 0x0A).count
@@ -587,8 +595,8 @@ struct RecordStoreAsyncLoadTests {
     }
     #expect(ops == completeLines + 1)
     #expect(malformed == (tail == .partialLine ? 1 : 0))
-    f.configure("B")
-    f.configure("A")
+    await f.configure("B")
+    await f.configure("A")
     #expect(f.filename("a1") == "A1.JPG")
     #expect(f.filename("a2") == "A2.JPG")
   }
@@ -601,7 +609,7 @@ struct RecordStoreAsyncLoadTests {
     let f = Fixture(collection: collection)
     defer { f.cleanup() }
     try await f.seed("A", ["a1": "A1.JPG"])
-    f.configure(nil)
+    await f.configure(nil)
     let states = ObservedValues { f.state }
     let snapshot = f.url("A", snapshot: true)
     f.io.hold(snapshot)
@@ -616,23 +624,6 @@ struct RecordStoreAsyncLoadTests {
     #expect(f.mutationCounter == whileLoading + 1, "finishing the load did not notify")
   }
 
-  /// The blocking `configure(for:)` publishes the loaded state once, without `.loading`.
-  @Test(arguments: [false, true])
-  func blockingConfigurePublishesNoLoading(collection: Bool) async throws {
-    let f = Fixture(collection: collection)
-    defer { f.cleanup() }
-    try await f.seed("A", ["a1": "A1.JPG"])
-    f.configure(nil)
-    let states = ObservedValues { f.state }
-    let before = f.mutationCounter
-
-    f.configure("A")
-
-    #expect(states.values == [.ready])
-    #expect(f.mutationCounter == before + 1)
-    #expect(f.filename("a1") == "A1.JPG")
-  }
-
   // MARK: - Queue order
 
   /// An append that is still queued when the destination is switched away and back is part of
@@ -642,7 +633,7 @@ struct RecordStoreAsyncLoadTests {
   func asyncLoadReadsAfterQueuedAppends(collection: Bool) async throws {
     let f = Fixture(collection: collection)
     defer { f.cleanup() }
-    f.configure("A")
+    await f.configure("A")
     f.mark("a1", "A1.JPG")
     f.begin("B")
     f.begin("A")

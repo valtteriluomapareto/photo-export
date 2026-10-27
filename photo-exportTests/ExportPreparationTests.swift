@@ -188,7 +188,7 @@ struct ExportPreparationTests {
     init(
       io: any DestinationIOExecuting,
       validationProbe: any DestinationValidationProbing = ProductionDestinationValidationProbe()
-    ) throws {
+    ) async throws {
       let first = root.appendingPathComponent("A")
       try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
       let realDestination = ExportDestinationManager(
@@ -199,8 +199,8 @@ struct ExportPreparationTests {
       destination = ScratchDestination(realDestination)
       timeline = ExportRecordStore(baseDirectoryURL: recordsRoot)
       collections = CollectionExportRecordStore(baseDirectoryURL: recordsRoot)
-      timeline.configure(for: "A")
-      collections.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
+      await collections.configureAndWait(for: "A")
       manager = ExportManager(
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
@@ -236,7 +236,7 @@ struct ExportPreparationTests {
 
   @Test func queuedJobWaitsForCurrentValidationWithoutReportingDestinationFailure() async throws {
     let probe = HeldValidation()
-    let f = try PreparationFixture(io: RecordingDestinationIO(), validationProbe: probe)
+    let f = try await PreparationFixture(io: RecordingDestinationIO(), validationProbe: probe)
     defer {
       probe.gate.release()
       f.cleanup()
@@ -267,7 +267,7 @@ struct ExportPreparationTests {
 
   @Test func preparationFilesystemCallsUseCapturedWorker() async throws {
     let io = RecordingDestinationIO()
-    let f = try PreparationFixture(io: io)
+    let f = try await PreparationFixture(io: io)
     defer { f.cleanup() }
     f.manager.startExportMonth(year: 2025, month: 4)
     await f.manager.waitForQueueDrained()
@@ -281,7 +281,7 @@ struct ExportPreparationTests {
   @Test func destinationReplacementDuringPrepareCannotDispatchOrBorrowNewScope() async throws {
     let gate = LeafGate()
     let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
-    let f = try PreparationFixture(io: io)
+    let f = try await PreparationFixture(io: io)
     defer {
       gate.release()
       f.cleanup()
@@ -294,8 +294,8 @@ struct ExportPreparationTests {
     let second = f.root.appendingPathComponent("B")
     try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
     f.destination.manager.setSelectedFolderForTesting(second)
-    f.timeline.configure(for: "B")
-    f.collections.configure(for: "B")
+    await f.timeline.configureAndWait(for: "B")
+    await f.collections.configureAndWait(for: "B")
     #expect(f.destination.closed.isEmpty)
     gate.release()
     await old.value

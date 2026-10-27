@@ -66,12 +66,12 @@ struct ExportIssuesProjectionTests {
     #expect(rows.allSatisfy { $0.retry == nil && $0.scopeKey == nil })
   }
 
-  @Test func retryMetadataSurvivesRealFractionalTimePersistence() throws {
+  @Test func retryMetadataSurvivesRealFractionalTimePersistence() async throws {
     let root = TestScratch.directory("ExportIssuesProjection")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
     defer { store.drainSynchronously() }
-    store.configure(for: "A")
+    await store.configureAndWait(for: "A")
     store.markVariantInProgress(
       assetId: "asset", variant: .original, year: 2026, month: 10,
       relPath: "2026/10/", filename: "x.heic")
@@ -81,7 +81,7 @@ struct ExportIssuesProjectionTests {
     try retries.save(retry(at: date), destinationId: "A")
     store.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: root)
-    reopened.configure(for: "A")
+    await reopened.configureAndWait(for: "A")
     let savedDate = reopened.recordsById["asset"]?.variants[.original]?.exportDate
     #expect(savedDate != date, "fixture must exercise existing whole-second record persistence")
     let rows = ExportIssuesProjection.make(
@@ -92,12 +92,12 @@ struct ExportIssuesProjectionTests {
     #expect(rows.first?.retry?.lastFailedAt == date)
   }
 
-  @Test func recoveredInterruptionDoesNotBorrowEarlierSuccessfulTime() throws {
+  @Test func recoveredInterruptionDoesNotBorrowEarlierSuccessfulTime() async throws {
     let root = TestScratch.directory("ExportIssuesProjection")
     defer { try? FileManager.default.removeItem(at: root) }
     let store = ExportRecordStore(baseDirectoryURL: root)
     defer { store.drainSynchronously() }
-    store.configure(for: "A")
+    await store.configureAndWait(for: "A")
     store.markVariantInProgress(
       assetId: "asset", variant: .original, year: 2026, month: 10,
       relPath: "2026/10/", filename: "x.heic")
@@ -109,7 +109,7 @@ struct ExportIssuesProjectionTests {
       relPath: "2026/10/", filename: "x.heic")
     store.drainSynchronously()
     let reopened = ExportRecordStore(baseDirectoryURL: root)
-    reopened.configure(for: "A")
+    await reopened.configureAndWait(for: "A")
     let rows = ExportIssuesProjection.make(
       destinationId: "A", timeline: reopened.recordsById,
       retryState: retry(at: date), retryDestinationId: "A")
@@ -124,12 +124,12 @@ struct ExportIssuesProjectionTests {
 struct ExportIssuesIntegrationTests {
   private let date = Date(timeIntervalSince1970: 1_800_000_000)
 
-  @Test func partialStoresKeepKnownFailuresAndDestinationSwitchesDoNotMix() throws {
+  @Test func partialStoresKeepKnownFailuresAndDestinationSwitchesDoNotMix() async throws {
     let root = TestScratch.directory("ExportIssuesProjection")
     defer { try? FileManager.default.removeItem(at: root) }
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     defer { timeline.drainSynchronously() }
-    timeline.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
     timeline.markVariantInProgress(
       assetId: "same", variant: .original, year: 2026, month: 10,
       relPath: "2026/10/", filename: "x")
@@ -137,7 +137,7 @@ struct ExportIssuesIntegrationTests {
       assetId: "same", variant: .original, error: "manual failure", at: date)
     try Data("corrupt".utf8).write(to: root.appendingPathComponent("A/collection-records.json"))
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    collections.configure(for: "A")
+    await collections.configureAndWait(for: "A")
     let partial = ExportIssuesProjection.snapshot(
       destinationId: "A", timeline: timeline, collections: collections,
       retryState: .empty, retryDestinationId: nil)
@@ -147,13 +147,13 @@ struct ExportIssuesIntegrationTests {
       destinationId: "B", timeline: timeline, collections: collections,
       retryState: .empty, retryDestinationId: "A")
     #expect(switching.rows.isEmpty)
-    timeline.configure(for: "B")
+    await timeline.configureAndWait(for: "B")
     #expect(
       ExportIssuesProjection.snapshot(
         destinationId: "B", timeline: timeline, collections: collections,
         retryState: .empty, retryDestinationId: "A"
       ).rows.isEmpty)
-    timeline.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
     let back = ExportIssuesProjection.snapshot(
       destinationId: "A", timeline: timeline, collections: collections,
       retryState: .empty, retryDestinationId: "B")

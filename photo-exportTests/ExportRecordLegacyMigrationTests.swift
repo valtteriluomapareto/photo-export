@@ -20,7 +20,7 @@ struct ExportRecordLegacyMigrationTests {
 
   // MARK: - Legacy .done → .original done
 
-  @Test func legacyDoneDecodesAsOriginalDone() throws {
+  @Test func legacyDoneDecodesAsOriginalDone() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let json = """
@@ -40,7 +40,7 @@ struct ExportRecordLegacyMigrationTests {
     try writeLegacySnapshot(json, at: base, dest: "legacy")
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: "legacy")
+    await store.configureAndWait(for: "legacy")
 
     let record = store.exportInfo(assetId: "legacy-done")
     #expect(record?.variants[.original]?.status == .done)
@@ -51,7 +51,7 @@ struct ExportRecordLegacyMigrationTests {
 
   // MARK: - Legacy .failed → .original failed
 
-  @Test func legacyFailedDecodesAsOriginalFailed() throws {
+  @Test func legacyFailedDecodesAsOriginalFailed() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let json = """
@@ -71,7 +71,7 @@ struct ExportRecordLegacyMigrationTests {
     try writeLegacySnapshot(json, at: base, dest: "legacy")
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: "legacy")
+    await store.configureAndWait(for: "legacy")
 
     let record = store.exportInfo(assetId: "legacy-fail")
     #expect(record?.variants[.original]?.status == .failed)
@@ -80,7 +80,7 @@ struct ExportRecordLegacyMigrationTests {
 
   // MARK: - Legacy .inProgress → .failed with interrupted message
 
-  @Test func legacyInProgressRecoversToFailed() throws {
+  @Test func legacyInProgressRecoversToFailed() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let json = """
@@ -100,7 +100,7 @@ struct ExportRecordLegacyMigrationTests {
     try writeLegacySnapshot(json, at: base, dest: "legacy")
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: "legacy")
+    await store.configureAndWait(for: "legacy")
 
     let record = store.exportInfo(assetId: "legacy-inprog")
     #expect(record?.variants[.original]?.status == .failed)
@@ -110,7 +110,7 @@ struct ExportRecordLegacyMigrationTests {
 
   // MARK: - New schema .inProgress also converted on load
 
-  @Test func newSchemaInProgressRecoversOnLoad() throws {
+  @Test func newSchemaInProgressRecoversOnLoad() async throws {
     let base = makeTempDir()
     defer { try? FileManager.default.removeItem(at: base) }
     let json = """
@@ -140,7 +140,7 @@ struct ExportRecordLegacyMigrationTests {
     try writeLegacySnapshot(json, at: base, dest: "modern")
 
     let store = ExportRecordStore(baseDirectoryURL: base)
-    store.configure(for: "modern")
+    await store.configureAndWait(for: "modern")
 
     let record = store.exportInfo(assetId: "new-inprog")
     #expect(record?.variants[.original]?.status == .failed)

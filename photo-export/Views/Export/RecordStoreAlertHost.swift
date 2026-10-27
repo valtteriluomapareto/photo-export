@@ -11,6 +11,8 @@ struct RecordStoreAlertHost: ViewModifier {
   @EnvironmentObject private var exportDestinationManager: ExportDestinationManager
   @Environment(PhotoLibraryManager.self) private var photoLibraryManager
   @State private var isShowingRecoveryImport = false
+  @State private var timelineDismissed = false
+  @State private var collectionDismissed = false
 
   func body(content: Content) -> some View {
     timelineAlert(content: content)
@@ -35,6 +37,14 @@ struct RecordStoreAlertHost: ViewModifier {
           }
         }
       )
+      .onChange(of: exportRecordStore.destinationId) { timelineDismissed = false }
+      .onChange(of: collectionExportRecordStore.destinationId) { collectionDismissed = false }
+      .onChange(of: exportRecordStore.state) { _, state in
+        if state == .ready || state == .unconfigured { timelineDismissed = false }
+      }
+      .onChange(of: collectionExportRecordStore.state) { _, state in
+        if state == .ready || state == .unconfigured { collectionDismissed = false }
+      }
       .sheet(isPresented: $isShowingRecoveryImport) {
         ImportView()
       }
@@ -116,8 +126,8 @@ struct RecordStoreAlertHost: ViewModifier {
 
   private var timelineAlertBinding: Binding<Bool> {
     Binding(
-      get: { exportRecordStore.state.needsRecovery },
-      set: { _ in }  // dismissal handled by the actions above
+      get: { exportRecordStore.state.needsRecovery && !timelineDismissed },
+      set: { if !$0 { timelineDismissed = true } }
     )
   }
 
@@ -127,9 +137,9 @@ struct RecordStoreAlertHost: ViewModifier {
         // Only show the collection alert when the timeline alert isn't already active so
         // SwiftUI doesn't try to present two alerts on the same view at once.
         !exportRecordStore.state.needsRecovery
-          && collectionExportRecordStore.state.needsRecovery
+          && collectionExportRecordStore.state.needsRecovery && !collectionDismissed
       },
-      set: { _ in }
+      set: { if !$0 { collectionDismissed = true } }
     )
   }
 }

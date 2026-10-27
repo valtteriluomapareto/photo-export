@@ -50,8 +50,8 @@ struct PreparedFilenameClaimsTests {
     let root = TestScratch.directory("PreparedClaimsEquivalence")
     let timeline = ExportRecordStore(baseDirectoryURL: root)
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
-    timeline.configure(for: "A")
-    collections.configure(for: "A")
+    await timeline.configureAndWait(for: "A")
+    await collections.configureAndWait(for: "A")
     let placement = ExportPlacement.favorites()
     collections.upsertPlacement(placement)
     var expected: [String: String] = [:]
@@ -105,8 +105,6 @@ struct PreparedFilenameClaimsTests {
         collections.isFilenameClaimed(
           name, placement: placement, subfolder: nil, exceptAsset: "asset-0") == wanted)
     }
-    #expect(timeline.claimsEpoch == timeline.recordsEpoch)
-    #expect(collections.claimsEpoch == collections.recordsEpoch)
     timeline.drainSynchronously()
     collections.drainSynchronously()
     try? FileManager.default.removeItem(at: root)
@@ -123,19 +121,19 @@ struct PreparedFilenameClaimsTests {
     let collections = CollectionExportRecordStore(baseDirectoryURL: root)
     let placement = ExportPlacement.favorites()
     if collection {
-      collections.configure(for: "A")
+      await collections.configureAndWait(for: "A")
       collections.upsertPlacement(placement)
       collections.markVariantInProgress(
         assetId: "seed", placement: placement, variant: .original, filename: "seed.JPG")
       try await collections.flush()
-      collections.configure(for: nil)
+      await collections.configureAndWait(for: nil)
     } else {
-      timeline.configure(for: "A")
+      await timeline.configureAndWait(for: "A")
       timeline.markVariantInProgress(
         assetId: "seed", variant: .original, year: 2026, month: 10,
         relPath: "2026/10/", filename: "seed.JPG")
       try await timeline.flush()
-      timeline.configure(for: nil)
+      await timeline.configureAndWait(for: nil)
     }
     let finished = collection ? collections.finishedLoadCount : timeline.finishedLoadCount
     if collection {
@@ -160,7 +158,11 @@ struct PreparedFilenameClaimsTests {
         : !timeline.isFilenameClaimed(
           "seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe"))
     if supersede {
-      if collection { collections.configure(for: nil) } else { timeline.configure(for: nil) }
+      if collection {
+        await collections.configureAndWait(for: nil)
+      } else {
+        await timeline.configureAndWait(for: nil)
+      }
     }
     await gate.releaseAll()
     try #require(
@@ -177,10 +179,6 @@ struct PreparedFilenameClaimsTests {
           "seed.JPG", placement: placement, subfolder: nil, exceptAsset: "probe") == !supersede
         : timeline.isFilenameClaimed(
           "seed.JPG", year: 2026, month: 10, subfolder: nil, exceptAsset: "probe") == !supersede)
-    #expect(
-      collection
-        ? collections.claimsEpoch == collections.recordsEpoch
-        : timeline.claimsEpoch == timeline.recordsEpoch)
     try? FileManager.default.removeItem(at: root)
   }
 }
