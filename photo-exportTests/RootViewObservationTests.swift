@@ -107,7 +107,7 @@ import Testing
 
       init(
         selectFolder: Bool = true, onboardingComplete: Bool = true, whatsNewSeen: Bool = true
-      ) throws {
+      ) async throws {
         defaults = TestScratch.defaults(suiteName: suite)
         defaults.set(onboardingComplete, forKey: "hasCompletedOnboarding")
         destination = ExportDestinationManager(
@@ -135,7 +135,7 @@ import Testing
         if selectFolder {
           try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
           destination.setSelectedFolderForTesting(folder)
-          destination.revalidateForTesting()
+          await destination.revalidateAndWait()
         }
       }
 
@@ -266,7 +266,7 @@ import Testing
 
     /// Readiness passes before; unrelated-record silence fails on the observing app-style base.
     @Test func mainWindowRootFollowsTimelineReadinessOnly() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.show(.mainWindow)
         let control = "toolbar-export-control"
@@ -303,13 +303,13 @@ import Testing
     }
 
     @Test func contentRouteRendersForHistoryReadinessOnly() async throws {
-      let f = try Fixture(selectFolder: false, onboardingComplete: false)
+      let f = try await Fixture(selectFolder: false, onboardingComplete: false)
       try await withCleanup {
         f.show(.content)
         try #require(await observe { f.counter.count(for: "onboarding-auto-skip-checked") > 0 })
         try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
         f.destination.setSelectedFolderForTesting(f.folder)
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         try #require(
           await observe { f.counter.renderedText["onboarding-export-control"]?.first == "true" })
         await f.quiesce()
@@ -342,7 +342,7 @@ import Testing
 
     @Test(arguments: [LibrarySection.timeline, .collections])
     func appRouteUpdatesToolbarForHistoryReadiness(section: LibrarySection) async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.show(.content, screenshotSurfaceKey: section == .timeline ? nil : "collections-favorites")
         let key = "toolbar-export-control"
@@ -365,7 +365,7 @@ import Testing
     }
 
     @Test func appRouteUpdatesOnboardingAndRetainsOptionsDuringHistoryLoad() async throws {
-      let f = try Fixture(selectFolder: false, onboardingComplete: false)
+      let f = try await Fixture(selectFolder: false, onboardingComplete: false)
       try await withCleanup {
         f.show(.content)
         let key = "onboarding-export-control"
@@ -376,7 +376,7 @@ import Testing
         try #require(await observe { f.counter.renderedText[key]?.last == "true" })
         try FileManager.default.createDirectory(at: f.folder, withIntermediateDirectories: true)
         f.destination.setSelectedFolderForTesting(f.folder)
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         try #require(await observe { f.counter.renderedText[key]?.first == "true" })
         let bodies = f.counter.count(for: "content-root")
         let snapshot = beginHistoryLoad(f, section: .timeline)
@@ -396,7 +396,7 @@ import Testing
 
     /// Fails before collection dependency tracking is limited to the visible section.
     @Test func libraryRootSkipsCollectionRecordChangesInTimeline() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.show(.library)
         try await settle(f, key: "library-root")
@@ -417,7 +417,7 @@ import Testing
     }
 
     @Test func libraryRootSkipsCollectionRecordsWhileAlbumIsSelected() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.service.collectionTree = [
           PhotoCollectionDescriptor(
@@ -448,7 +448,7 @@ import Testing
     }
 
     @Test func libraryRootSkipsUnrelatedTimelineRecordChanges() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.show(.library)
         try await settle(f, key: "library-root")
@@ -458,7 +458,7 @@ import Testing
         #expect(
           f.counter.count(for: "library-root") == bodies,
           "Changes since baseline: \(f.changes(since: baseline))")
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         #expect(await observe { f.counter.count(for: "library-root") > bodies })
       } cleanup: {
         await f.close()
@@ -466,7 +466,7 @@ import Testing
     }
 
     @Test func contentViewSkipsRecordDestinationAndQueuePublicationsWhenRebuilt() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.show(.content)
         try await settle(f, key: "content-root")
@@ -474,7 +474,7 @@ import Testing
         // The first rebuild after the initial render can re-run the body once while SwiftUI
         // settles the view's stored inputs, so the baseline follows one rebuild.
         var hostBodies = f.counter.count(for: "content-host")
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         try #require(await observe { f.counter.count(for: "content-host") > hostBodies })
         await f.quiesce()
         let bodies = f.counter.count(for: "content-root")
@@ -486,7 +486,7 @@ import Testing
           f.counter.count(for: "content-root") == bodies,
           "Changes since baseline: \(f.changes(since: baseline))")
         hostBodies = f.counter.count(for: "content-host")
-        f.destination.revalidateForTesting()
+        await f.destination.revalidateAndWait()
         try #require(await observe { f.counter.count(for: "content-host") > hostBodies })
         await f.quiesce()
         #expect(
@@ -514,7 +514,7 @@ import Testing
 
     /// Already passes: access changes route through denied, restricted and library panes.
     @Test func contentViewRoutesFollowAuthorization() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.show(.content)
         try await settle(f, key: "content-root")
@@ -548,7 +548,7 @@ import Testing
 
     /// Already passes: the selected album title follows the current collection tree.
     @Test func libraryRootTitleFollowsAnAlbumRename() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.service.collectionTree = [familyAlbum("Family")]
         f.show(.library, screenshotSurfaceKey: "collections-album-family")
@@ -567,7 +567,7 @@ import Testing
     /// roots that do not read library content remain unchanged after the render barrier.
     @Test(arguments: LibraryReadSurface.allCases)
     func rootsSkipLibraryChangesTheyDoNotRead(surface: LibraryReadSurface) async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.service.collectionTree = [familyAlbum("Family")]
         let key = surface == .content ? "content-root" : "library-root"
@@ -604,7 +604,7 @@ import Testing
     /// Already passes: the sheet reads the same manager as its library window. A missing
     /// manager injection traps the process; the behavioral mutant injects a different manager.
     @Test func importSheetFollowsTheLibraryManager() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.show(.library)
         try await settle(f, key: "library-root")
@@ -654,7 +654,7 @@ import Testing
 
     @Test(arguments: [LibrarySection.timeline, .collections])
     func toolbarSkipsRecordMutationsDuringExport(section: LibrarySection) async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       let gate = AsyncCheckpoint()
       try await withCleanup {
         f.show(
@@ -713,7 +713,7 @@ import Testing
 
     /// The toolbar tracks admission and pause labels without rebuilding the unrelated root.
     @Test func toolbarExportControlFollowsManualQueueWork() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.show(.library)
         try await settle(f, key: "library-root")
@@ -760,7 +760,7 @@ import Testing
 
     /// Photos access and held export work both close and reopen the rendered admission state.
     @Test func canImportFollowsActiveExportWork() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       let gate = AsyncCheckpoint()
       try await withCleanup {
         f.show(.library)
@@ -816,7 +816,7 @@ import Testing
 
     /// Fails before property-specific manager observation: neither write changes root content.
     @Test func libraryRootSkipsPauseAndVideoLayout() async throws {
-      let f = try Fixture()
+      let f = try await Fixture()
       try await withCleanup {
         f.show(.library)
         try await settle(f, key: "library-root")
@@ -853,7 +853,7 @@ import Testing
     /// The library root presents What's New from `shouldShow`, so dismissing it elsewhere (the
     /// state shared with another window) must re-run the root and close the sheet.
     @Test func whatsNewSheetFollowsShouldShow() async throws {
-      let f = try Fixture(whatsNewSeen: false)
+      let f = try await Fixture(whatsNewSeen: false)
       try await withCleanup {
         f.show(.library)
         try await settle(f, key: "library-root")
@@ -869,7 +869,7 @@ import Testing
 
     @Test(arguments: ExistingState.allCases)
     func onboardingIsSkippedForExistingDestinationOrRecords(state: ExistingState) async throws {
-      let f = try Fixture(selectFolder: state == .destination, onboardingComplete: false)
+      let f = try await Fixture(selectFolder: state == .destination, onboardingComplete: false)
       try await withCleanup {
         if state == .records {
           f.timeline.markVariantExported(
