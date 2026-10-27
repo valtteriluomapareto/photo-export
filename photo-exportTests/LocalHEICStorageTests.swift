@@ -95,24 +95,23 @@ struct LocalHEICStorageTests {
     await manager.localHEICStorage.remove(input)
   }
 
-  @Test func localErrorsRetainLocalProvenance() {
-    let local = LocalHEICStorage.localizing(
-      NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC)))
-    let signal = AutoSyncFailureCategory.classify(local)
-    #expect(signal.category == .unknown)
-    #expect(signal.localizedDescription.contains("local temporary storage"))
-    for code in [ENOSPC, EPERM, ENOENT] {
-      let wrapped = NSError(
-        domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError,
-        userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(code))])
-      let signal = AutoSyncFailureCategory.classify(LocalHEICStorage.localizing(wrapped))
+  @Test func allocationFailureRetainsLocalProvenance() async throws {
+    let parent = TestScratch.directory("HEICAllocationFailure")
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: parent) }
+    let file = parent.appendingPathComponent("file")
+    let bytes = Data("keep".utf8)
+    try bytes.write(to: file)
+    let storage = LocalHEICStorage(root: file.appendingPathComponent("input"))
+    do {
+      _ = try await storage.allocate(sourceBytes: nil)
+      Issue.record("Allocation beneath a regular file must fail")
+    } catch {
+      #expect(error is LocalHEICStorage.Failure)
+      let signal = AutoSyncFailureCategory.classify(error)
       #expect(signal.category == .unknown)
       #expect(signal.localizedDescription.contains("local temporary storage"))
     }
-    let cloud = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
-    #expect(
-      AutoSyncFailureCategory.classify(LocalHEICStorage.localizing(cloud)).category
-        == .iCloudTransient)
-    #expect(LocalHEICStorage.localizing(CancellationError()) is CancellationError)
+    #expect(try Data(contentsOf: file) == bytes)
   }
 }

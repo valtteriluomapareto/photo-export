@@ -12,12 +12,31 @@ struct PhotoKitReaderTests {
   @Test func completedJobAvoidsMainActorMetadataServiceCalls() async throws {
     let asset = makeAsset()
     let resources = [ResourceDescriptor(type: .photo, originalFilename: "READER.JPG", fileSize: 12)]
-    let io = RecordingDestinationIO()
+    let queue = DispatchQueue(label: "test.export-reader")
+    let key = DispatchSpecificKey<Bool>()
+    queue.setSpecific(key: key, value: true)
     let calls = LockedBox<[String]>([])
-    let reader = ProductionPhotoKitReader(io: io) { id, _ in
-      calls.mutate { $0.append(id) }
-      return PhotoKitAssetSnapshot(descriptor: asset, resources: resources)
-    }
+    let writes = LockedBox(0)
+    let workerChecks = LockedBox<[Bool]>([])
+    let reader = ProductionPhotoKitReader(
+      resourceOwner: ProductionPhotoKitResourceOwner(
+        queue: queue,
+        backend: .init { id in
+          calls.mutate { $0.append(id) }
+          workerChecks.mutate { $0.append(DispatchQueue.getSpecific(key: key) == true) }
+          return .init(descriptor: asset) {
+            resources.map { resource in
+              .init(descriptor: resource) { url, completion in
+                writes.mutate { $0 += 1 }
+                workerChecks.mutate { $0.append(DispatchQueue.getSpecific(key: key) == true) }
+                do {
+                  try Data(repeating: 1, count: 12).write(to: url)
+                  completion(nil)
+                } catch { completion(error) }
+              }
+            }
+          }
+        }))
     let h = ExportManagerHarness(label: "ExportPhotoKitReader", photoKitReader: reader)
     defer {
       h.manager.cancelAndClear()
@@ -30,13 +49,13 @@ struct PhotoKitReaderTests {
     h.photoLib.resourcesByAssetId[asset.id] = resources
     h.manager.startExportMonth(year: 2025, month: 4)
     await h.manager.waitForQueueDrained()
-    #expect(h.writer.writeCalls.count == 1, "The completed job is the positive control")
+    #expect(writes.value == 1, "The completed job is the positive control")
+    #expect(h.writer.writeCalls.isEmpty)
     #expect(h.store.exportInfo(assetId: asset.id)?.variants[.original]?.status == .done)
     #expect(h.photoLib.descriptorFetchCalls.isEmpty)
     #expect(h.photoLib.resourcesCallCounts.isEmpty)
     #expect(calls.value == [asset.id])
-    #expect(!io.workerChecks.value.isEmpty)
-    #expect(io.workerChecks.value.allSatisfy { $0 })
+    #expect(workerChecks.value == [true, true])
     #expect(!h.fileSystem.calls.isEmpty)
     #expect(h.fileSystem.calls.allSatisfy { !$0.onMainThread })
   }
@@ -59,18 +78,25 @@ struct PhotoKitReaderTests {
 
   @Test func productionReaderSerializesLeavesAndWaitsForPhysicalCompletion() async throws {
     let gate = Gate()
-    let io = RecordingDestinationIO()
+    let queue = DispatchQueue(label: "test.serial-reader")
+    let key = DispatchSpecificKey<Bool>()
+    queue.setSpecific(key: key, value: true)
+    let workerChecks = LockedBox<[Bool]>([])
     let order = LockedBox<[String]>([])
     let returned = LockedBox(false)
     let asset = makeAsset()
-    let reader = ProductionPhotoKitReader(io: io) { id, _ in
-      order.mutate { $0.append(id) }
-      if id == "held" {
-        gate.hold()
-        order.mutate { $0.append("physical completion") }
-      }
-      return PhotoKitAssetSnapshot(descriptor: asset, resources: [])
-    }
+    let reader = ProductionPhotoKitReader(
+      resourceOwner: ProductionPhotoKitResourceOwner(
+        queue: queue,
+        backend: .init { id in
+          workerChecks.mutate { $0.append(DispatchQueue.getSpecific(key: key) == true) }
+          order.mutate { $0.append(id) }
+          if id == "held" {
+            gate.hold()
+            order.mutate { $0.append("physical completion") }
+          }
+          return .init(descriptor: asset) { [] }
+        }))
     let first = Task {
       let value = await reader.readAsset(id: "held", livePhotosPaired: false)
       returned.mutate { $0 = true }
@@ -79,16 +105,19 @@ struct PhotoKitReaderTests {
     defer { gate.release() }
     try #require(await gate.entered.waitForEnter(count: 1))
     let second = Task { await reader.readAsset(id: "second", livePhotosPaired: false) }
-    try #require(await eventually("second reader leaf admitted") { io.submissions.value == 2 })
     first.cancel()
     #expect(order.value == ["held"])
     #expect(!returned.value)
     gate.release()
-    #expect(await first.value?.descriptor == asset)
-    #expect(await second.value?.descriptor == asset)
+    let firstValue = await first.value
+    let secondValue = await second.value
+    #expect(firstValue?.descriptor == asset)
+    #expect(secondValue?.descriptor == asset)
+    await firstValue?.resourceWriter?.close()
+    await secondValue?.resourceWriter?.close()
     #expect(order.value == ["held", "physical completion", "second"])
     #expect(returned.value)
-    #expect(io.workerChecks.value == [true, true])
+    #expect(workerChecks.value == [true, true])
     await gate.entered.releaseAll()
   }
 
@@ -159,12 +188,24 @@ struct PhotoKitReaderTests {
   func heldReaderCannotAuthorizeChangedExport(invalidation: Invalidation) async throws {
     let gate = Gate()
     let asset = makeAsset()
-    let reader = ProductionPhotoKitReader { _, _ in
-      gate.hold()
-      return PhotoKitAssetSnapshot(
-        descriptor: asset,
-        resources: [.init(type: .photo, originalFilename: "READER.JPG", fileSize: 12)])
-    }
+    let writes = LockedBox(0)
+    let resource = ResourceDescriptor(type: .photo, originalFilename: "READER.JPG", fileSize: 12)
+    let reader = ProductionPhotoKitReader(
+      resourceOwner: ProductionPhotoKitResourceOwner(
+        backend: .init { _ in
+          gate.hold()
+          return .init(descriptor: asset) {
+            [
+              .init(descriptor: resource) { url, completion in
+                writes.mutate { $0 += 1 }
+                do {
+                  try Data(repeating: 1, count: 12).write(to: url)
+                  completion(nil)
+                } catch { completion(error) }
+              }
+            ]
+          }
+        }))
     let h = ExportManagerHarness(label: "HeldPhotoKitReader", photoKitReader: reader)
     try await withCleanup {
       h.photoLib.assetsByYearMonth["2025-4"] = [asset]
@@ -182,6 +223,7 @@ struct PhotoKitReaderTests {
       gate.release()
       await old.value
       #expect(h.dest.beginScopedAccessCount == 0)
+      #expect(writes.value == 0)
       #expect(h.writer.writeCalls.isEmpty)
       #expect(h.fileSystem.calls.isEmpty)
       #expect(h.store.exportInfo(assetId: asset.id) == nil)
