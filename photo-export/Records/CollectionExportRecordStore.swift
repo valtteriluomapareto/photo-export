@@ -1399,7 +1399,7 @@ final class CollectionExportRecordStore {
   ) async throws -> ReconcileSummary {
     guard isCurrent(), !Task.isCancelled, state == .ready else { return .zero }
     reconciliationRevision &+= 1
-    var revision = reconciliationRevision
+    let revision = reconciliationRevision
 
     // Snapshot on main: invalid placement metadata cannot prove a file missing.
     let probes = try completedVariantProbes(root: root)
@@ -1431,29 +1431,20 @@ final class CollectionExportRecordStore {
     let toPrune = try outcome.get()
     var prunedVariants = 0
     var prunedRecords = 0
-    for offset in stride(from: 0, to: toPrune.count, by: 64) {
-      do { try await prepareForMutation() } catch is CancellationError { return .zero }
-      guard isCurrent(), !Task.isCancelled, state == .ready,
-        reconciliationRevision == revision
-      else { return .zero }
-      mutationAdmission.perform {
-        for (placementId, assetId, variantKey) in toPrune[offset..<min(offset + 64, toPrune.count)]
-        {
-          guard var body = recordBodies[placementId]?[assetId] else { continue }
-          guard body.variants.removeValue(forKey: variantKey) != nil else { continue }
-          prunedVariants += 1
-          if body.variants.isEmpty {
-            append(.deleteRecord(placementId: placementId, assetId: assetId))
-            prunedRecords += 1
-          } else {
-            append(.upsertRecord(placementId: placementId, assetId: assetId, body: body))
-          }
+    mutationAdmission.perform {
+      for (placementId, assetId, variantKey) in toPrune {
+        guard var body = recordBodies[placementId]?[assetId] else { continue }
+        guard body.variants.removeValue(forKey: variantKey) != nil else { continue }
+        prunedVariants += 1
+        if body.variants.isEmpty {
+          append(.deleteRecord(placementId: placementId, assetId: assetId))
+          prunedRecords += 1
+        } else {
+          append(.upsertRecord(placementId: placementId, assetId: assetId, body: body))
         }
       }
-      revision = reconciliationRevision
-      requestCheckpointIfPressured()
-      await Task.yield()
     }
+    requestCheckpointIfPressured()
     logger.info(
       "Reconciled collections: pruned \(prunedVariants) variants, \(prunedRecords) records"
     )

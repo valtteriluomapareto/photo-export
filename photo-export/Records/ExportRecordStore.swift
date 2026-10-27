@@ -1379,7 +1379,7 @@ final class ExportRecordStore {
   ) async throws -> ReconcileSummary {
     guard isCurrent(), !Task.isCancelled, state == .ready else { return .zero }
     reconciliationRevision &+= 1
-    var revision = reconciliationRevision
+    let revision = reconciliationRevision
 
     // Snapshot on main: capture every .done variant's expected on-disk path.
     let probes = try completedVariantProbes(root: root)
@@ -1410,28 +1410,20 @@ final class ExportRecordStore {
     let toPrune = try outcome.get()
     var prunedVariants = 0
     var prunedRecords = 0
-    for offset in stride(from: 0, to: toPrune.count, by: 64) {
-      do { try await prepareForMutation() } catch is CancellationError { return .zero }
-      guard isCurrent(), !Task.isCancelled, state == .ready,
-        reconciliationRevision == revision
-      else { return .zero }
-      mutationAdmission.perform {
-        for (assetId, variant) in toPrune[offset..<min(offset + 64, toPrune.count)] {
-          guard var record = recordsById[assetId] else { continue }
-          guard record.variants.removeValue(forKey: variant) != nil else { continue }
-          prunedVariants += 1
-          if record.variants.isEmpty {
-            append(.delete(id: assetId))
-            prunedRecords += 1
-          } else {
-            append(.upsert(record))
-          }
+    mutationAdmission.perform {
+      for (assetId, variant) in toPrune {
+        guard var record = recordsById[assetId] else { continue }
+        guard record.variants.removeValue(forKey: variant) != nil else { continue }
+        prunedVariants += 1
+        if record.variants.isEmpty {
+          append(.delete(id: assetId))
+          prunedRecords += 1
+        } else {
+          append(.upsert(record))
         }
       }
-      revision = reconciliationRevision
-      requestCheckpointIfPressured()
-      await Task.yield()
     }
+    requestCheckpointIfPressured()
     logger.info(
       "Reconciled timeline: pruned \(prunedVariants) variants, \(prunedRecords) records")
     return ReconcileSummary(

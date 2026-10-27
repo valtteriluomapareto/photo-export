@@ -229,7 +229,7 @@ The shared-album pane shows an in-app banner with the same warning so the choice
 
 ## Existing backup import
 
-- Rebuild local export state from an existing backup folder via **File → Import Existing Backup...** (Cmd+Shift+I). Failed imports stop progress with an error and Close/Retry controls. Reconnect or reselect an unavailable folder; resolve export-history alerts before retrying
+- Rebuild local export state from an existing backup folder via **File → Import Existing Backup...** (Cmd+Shift+I). Failed imports, including failures saving history partway through, stop progress with an error and Close/Retry controls. Reconnect or reselect an unavailable folder; resolve export-history alerts before retrying
 - Five-stage process: scan backup folder, read Photos library, match files, rebuild state, reconcile against disk
 - The reconcile step **prunes records for files that no longer exist** at the destination. Cancelled or superseded scans discard their results; switching destinations cannot apply an old scan to the replacement destination’s history, and newer record changes are preserved
 - Rebuilds Favorites, album and shared-album history from the folders under `Collections/` too, so exporting those collections again skips files already there. Folders of albums renamed, moved or deleted in Photos since they were exported are reported and left in place
