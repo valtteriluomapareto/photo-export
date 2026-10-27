@@ -41,7 +41,7 @@ struct ExportPreparationTests {
   @Test func progressPublicationCancellationPreventsPhysicalDispatch() async throws {
     let gate = LeafGate()
     let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
-    let h = ExportManagerHarness(label: "CancelDuringFilename", destinationIOFactory: { _ in io })
+    let h = ExportManagerHarness(label: "CancelDuringFilename", destinationIO: io)
     defer {
       gate.release()
       cleanup(h)
@@ -74,7 +74,7 @@ struct ExportPreparationTests {
   func firstMarkRefusesClaimMadeByFilenameSubscriber(paired: Bool) async throws {
     let gate = LeafGate()
     let io = RecordingDestinationIO(beforeLeaf: { if $0 == 1 { gate.hold() } })
-    let h = ExportManagerHarness(label: "FirstMarkClaim", destinationIOFactory: { _ in io })
+    let h = ExportManagerHarness(label: "FirstMarkClaim", destinationIO: io)
     defer {
       gate.release()
       cleanup(h)
@@ -206,7 +206,7 @@ struct ExportPreparationTests {
         photoLibraryService: photos, exportDestination: destination,
         exportRecordStore: timeline, collectionExportRecordStore: collections,
         assetResourceWriter: writer, fileSystem: files,
-        destinationIOFactory: { _ in io }, userDefaults: TestScratch.defaults("CapturedPreparation")
+        destinationIO: io, userDefaults: TestScratch.defaults("CapturedPreparation")
       )
       let asset = TestAssetFactory.makeAsset(
         id: "prepare",
