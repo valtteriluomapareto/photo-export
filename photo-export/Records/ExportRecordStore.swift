@@ -358,7 +358,7 @@ final class ExportRecordStore {
         let transfer = RecordValueTransfer(consume outcome)
         guard let self else { return }
         try? await self.mutationAdmission.waitUntilOpen(respectingCancellation: false)
-        await MainActor.run {
+        await MainActor.run { [separator] in
           self.installPreparedLoad(ticket, separator: separator, outcome: transfer.take())
         }
       }
