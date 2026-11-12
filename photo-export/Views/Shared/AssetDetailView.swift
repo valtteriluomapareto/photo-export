@@ -173,68 +173,18 @@ private struct AssetDetailStatusView: View {
   @Environment(CollectionExportRecordStore.self) private var collectionExportRecordStore
   let asset: AssetDescriptor
   let placement: ExportPlacement?
-  #if DEBUG
-    @Environment(\.bodyInvalidationCounter) private var bodyCounter
-  #endif
-
-  private struct StatusRow {
-    let text: String
-    let color: Color
-  }
-
   var body: some View {
     let rows = statusRows(for: asset)
-    #if DEBUG
-      // swiftlint:disable:next redundant_discardable_let
-      let _ = bodyCounter?.recordText(rows.map(\.text), for: "asset-detail-status")
-    #endif
     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
       Text(row.text).foregroundColor(row.color)
     }
   }
 
-  private func statusRows(for asset: AssetDescriptor) -> [StatusRow] {
+  private func statusRows(for asset: AssetDescriptor) -> [AssetDetailStatusRow] {
     guard let placement else { return [] }
     let variants = RecordStoreRouter(
       timelineStore: exportRecordStore, collectionStore: collectionExportRecordStore
     ).variants(forAssetId: asset.id, placement: placement)
-    var labels: [(ExportVariant, String)] = [(.original, "Original")]
-    if placement.kind.variantPolicy != .singleResource {
-      if asset.isLivePhoto || variants[.originalPairedVideo] != nil {
-        labels.append((.originalPairedVideo, "Live Photo video"))
-      }
-      if asset.hasAdjustments || variants[.edited] != nil { labels.append((.edited, "Edited")) }
-      if asset.isLivePhoto || variants[.editedPairedVideo] != nil {
-        labels.append((.editedPairedVideo, "Edited Live Photo video"))
-      }
-    }
-    return labels.compactMap { variant, label in
-      variants[variant].map { statusRow($0, label: label) }
-    }
+    return AssetDetailStatusRow.rows(asset: asset, kind: placement.kind, variants: variants)
   }
-
-  private func statusRow(_ variant: ExportVariantRecord, label: String) -> StatusRow {
-    switch variant.status {
-    case .done:
-      let suffix = variant.exportDate.map { " " + Self.dateTimeFormatter.string(from: $0) } ?? ""
-      return StatusRow(text: "\(label): Exported\(suffix)", color: .primary)
-    case .inProgress:
-      return StatusRow(text: "\(label): In progress", color: .primary)
-    case .failed:
-      if let friendly = ExportVariantRecovery.friendlyCopy(for: variant.reason, label: label) {
-        return StatusRow(text: friendly, color: .secondary)
-      }
-      return StatusRow(
-        text: "\(label) failed: \(variant.lastError ?? "Unknown error")", color: .red)
-    case .pending:
-      return StatusRow(text: "\(label): Pending", color: .primary)
-    }
-  }
-
-  private static let dateTimeFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .medium
-    formatter.timeStyle = .short
-    return formatter
-  }()
 }
