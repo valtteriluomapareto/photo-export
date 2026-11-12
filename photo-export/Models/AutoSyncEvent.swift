@@ -72,10 +72,6 @@ enum AutoSyncEvent: Sendable {
   /// This is a transient reducer mirror; the persisted retry format is unchanged.
   case retryStateChanged(destinationId: String, retryState: AutoSyncRetryState)
 
-  /// A user-visible manual full export finished — clears compatible pending auto-sync
-  /// dirty work for the same destination/selection/scope.
-  case manualFullExportCompleted(ExportRunSummary)
-
   /// Persisted dirty state for `destinationId` was loaded from disk. Dispatched
   /// by the manager on destination-change so accumulated targeted-asset work
   /// survives app restart. Carries no effects — the reducer just merges into

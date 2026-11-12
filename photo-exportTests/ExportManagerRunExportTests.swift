@@ -2094,7 +2094,6 @@ struct ExportManagerRunExportTests {
     func didDrainQueue() {}
     func beginProgressUpdates() {}
     func endProgressUpdates() {}
-    func queueContentsDidChange() {}
     func setCurrentJob(_ job: ExportManager.ExportJob) {}
     func clearCurrentJobIdentifiers(keepingPlacement: Bool) {}
   }

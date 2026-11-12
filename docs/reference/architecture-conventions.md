@@ -325,10 +325,6 @@ func bumpGeneration()
 - `cancelImport()` (on `ImportCoordinator`, via the injected `queueCoordinator` reference)
 - Destination or history-save failure teardown from `performExport` (through the same manager teardown helper)
 
-**Which method does NOT bump generation**:
-
-- `clearPending()` — drops queued jobs only. In-flight work that started before `clearPending` keeps its `gen` and finishes normally. If you need to cancel mid-flight, call `cancelAndClear` instead.
-
 **Collaborator seam**: `VariantExporter` and `ImportCoordinator` hold a direct (weak) reference to `ExportQueueCoordinator` for the cancellation helpers; their `Host` protocols no longer carry `isCurrent`, `throwIfCancelledOrStale`, `generation`, or `bumpGeneration` (issue #67 item 2 landed in May 2026). The coordinator's own dispatch loop reads its own `generation` / `isCurrent` directly. New collaborators that need the seam should inject `ExportQueueCoordinator` the same way, not route through `Host`.
 
 ### Preview content ownership
@@ -670,17 +666,16 @@ queueCoordinator.$queueCount
 
 Both objects are `@MainActor`. The coordinator's `@Published` delivery and the manager's bridge delivery and storage are synchronous, so the AutoSync `CombineLatest4` observes consistent state. The synchrony pin is [`ExportQueueStateSnapshotTests.teardownQueue_synchronouslyClearsManagerMirrors`](../../photo-exportTests/ExportQueueStateSnapshotTests.swift) — if you make a mirror async (`.receive(on:)`, `MainActor.run`, etc.) that test fails.
 
-Unpublished queue contents stay owned by the coordinator. It compares the pending-job count,
-processing flag, current task identity and placement counts around queue mutations, then calls
-`Host.queueContentsDidChange()` once when that fingerprint changes. The manager increments
-an Observation-only `queueMutationCounter`; all five queue read-throughs touch it before
-returning the coordinator's values. This adds no `objectWillChange` publication and keeps
-the mirrors above synchronous. A first dequeue changes the contents even while total queue
-depth stays equal, so its readers do not depend on a depth notification.
+Unpublished queue contents stay owned by the coordinator. Queue mutations compare its
+`placementRevision` and refresh the month-specific `MonthQueueState` snapshots when counts
+change. Active-placement changes refresh the old and new month directly. Views observe
+these snapshots rather than manager-wide queue read-through notifications; a first dequeue
+therefore updates its month even when total queue depth stays equal. Task/count conveniences
+used only by tests live in test-target extensions.
 
 ### AutoSync dirty-work acknowledgement
 
-`AutoSyncReducer` captures a `RunDirtyBoundary` (run context, stable destination ID, and scopes changed since start). The fan-out sends `exportRunStarted` before each scope's `await runExport`; synchronous `exportRunStateChanged` observations capture manual runs and never reset an existing boundary for the same run ID. Keep the boundary across the idle publication: the completion summary arrives afterward.
+`AutoSyncReducer` captures a `RunDirtyBoundary` (run context, stable destination ID, and scopes changed since start). The AutoSync fan-out sends `exportRunStarted` before each scope's `await runExport`; repeated starts never reset an existing boundary for the same run ID. Ordinary manual UI actions have no run context and do not acknowledge dirty work through completion summaries. Keep the boundary across the idle publication: the completion summary arrives afterward.
 
 Every export-relevant Photos event invalidates the affected scopes, including repeated changes to the same asset, changes while full reconciliation is already pending, and collection-only changes for album scopes. Successful completion acknowledges only covered, selected scopes that have not changed since the matching run began. Unknown, failed, or destination-mismatched completions cannot clear pending work. The boundary is transient: the existing persisted dirty state remains authoritative after restart, so no persistence migration or counter is needed.
 
@@ -720,9 +715,8 @@ suppresses the hook for that run instead.
 - An Export Now pressed during the run is exempt and still runs. A later trigger during
   the run does not replace it as the pending reason. Switching destinations drops any
   pending reason, Export Now included; the new destination gets its own trigger.
-- A manual export whose summary (`runExport`) reports a stop suppresses the next resume the
-  same way. Toolbar exports publish no summary, so after one of them stops, AutoSync can
-  still try once when its pending work is rescheduled.
+- Manual UI exports publish no completion summary, so after one of them stops, AutoSync
+  can still try once when its pending work is rescheduled.
 - Another reason that arrived during the run and adds no dirty work, such as a scope
   change, goes back into `pendingTriggerReason`. While idle, a held reason never fires on
   its own: a new trigger replaces it, or a resolving blocker (an import or manual export
@@ -892,14 +886,7 @@ Rules:
 `ExportManager` retains a stable public surface by forwarding to coordinators when sensible. Contextual excerpts (search `ExportManager.swift` for these property and method names):
 
 ```swift
-var pendingJobs: [ExportJob] {
-  _ = queueMutationCounter
-  return queueCoordinator.pendingJobs
-}
-var isProcessing: Bool {
-  _ = queueMutationCounter
-  return queueCoordinator.isProcessing
-}
+var pendingJobs: ArraySlice<ExportJob> { queueCoordinator.pendingJobs }
 func processQueueIfNeeded() { queueCoordinator.processQueueIfNeeded() }
 private func resetProgressCounters() { queueCoordinator.resetProgressCounters() }
 ```
@@ -951,7 +938,7 @@ of the legacy queue counters.
 Manual failure counts are placement jobs: compare failure signals around each serialized,
 owned export and credit the job only after its post-export persistence flush. Multiple
 variant failures count once there; `ExportRunSummary.failedCount` retains its existing
-per-variant meaning. Latch scan/authorization/cleared-work reasons across appended actions.
+per-variant meaning. Latch scan/authorization reasons across appended actions.
 Persistence teardown snapshots a stopped outcome before clearing ownership. Cancellation,
 supersession and destination interruption clear feedback. Dismissal and success expiry
 retire the terminal row without resetting coordinator counters or revealing old N/N UI.

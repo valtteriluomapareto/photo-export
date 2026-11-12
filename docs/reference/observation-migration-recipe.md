@@ -13,7 +13,7 @@ carries a Combine contract, and the flip must not change a single delivery.
 
 1. **Subscribers use a named accessor.** Every subscription from outside the type goes through
    an `AnyPublisher` accessor on the owner (`identityPublisher`, `isAvailablePublisher`,
-   `migrationConflictPublisher`, `importStagePublisher`, …), never `owner.$property`. The
+   `migrationConflictPublisher`, `exportRunStatePublisher`, …), never `owner.$property`. The
    owner's own `$property` uses may stay until the flip. `ExportQueueCoordinator` and
    `ImportCoordinator` stay `ObservableObject`, so the coordinator → manager mirror sinks in
    `ExportManager` stay as they are.
@@ -239,23 +239,24 @@ dependency, and that a view holding the manager as a plain `let` refreshes for q
 idle teardown rewrites every input with its current value: Observation stays silent while
 Combine still delivers each write. There is no manager `objectWillChange` publisher.
 
-The five queue read-throughs (`pendingJobs`, `currentTask`, `queuedCountsByPlacementId`,
-`isProcessing` and `queuedCount(year:month:)`) touch `queueMutationCounter`. The coordinator
-reports a changed contents fingerprint through its Host after synchronous queue mutations;
-the manager bumps that macro-tracked stored counter. The first
-dequeue keeps `queueCount` equal, and its bridge's equality guard skips Observation
-notification independently of the toolchain. The contents counter still notifies those
-readers. `isPaused`, `videoLayout`, `importError`, `importResult` and `importSheetRequest`
-are macro-tracked stored properties; changing writes notify only their own readers. Equal
-writes follow the toolchain's macro behavior, characterized by `ObservationEqualWriteTests`;
-neither an unchanged pause flag nor an unchanged import error needs a notification.
+Month queue readers observe the coordinator's per-placement `MonthQueueState.snapshot`.
+Queue count revisions refresh those snapshots, and active-placement changes refresh the old
+and new month directly. A first dequeue therefore changes the month snapshot even while
+`queueCount` stays equal, without a manager-wide contents counter. Unobserved task/count
+conveniences used only by tests live in test-target extensions. `isPaused`, `videoLayout`,
+`importStage`, `importError`, `importResult` and `importSheetRequest` are macro-tracked stored
+properties; changing writes notify only their own readers. Equal writes follow the toolchain's
+macro behavior, characterized by `ObservationEqualWriteTests`.
 
 `canExportTimeline` and `canExportCollection` are admission reads used outside view bodies.
 Views use `ManualExportAvailability` over store state, so those two helpers need no separate
 view dependency.
 
 The settings (`versionSelection`, `convertHEICToJPEG`, `livePhotosPairedExport`) and import
-contract (`isImporting`, `previousBackupMissing`, `importStage`) also use the same bridges.
+contract (`isImporting`, `previousBackupMissing`) also use the same bridges.
+The raw run-context and preparation publisher accessors remain diagnostic seams: their
+nested-subscriber replay/delivery contract differs from the deduplicated composite, and
+`PublisherParityTests` pins it.
 Settings preserve their persistence and store-mirror side effects after delivery; initialization
 seeds the bridges from defaults without those effects and explicitly synchronizes the HEIC
 flag into both stores. The import hold combines activity and the missing-backup decision with

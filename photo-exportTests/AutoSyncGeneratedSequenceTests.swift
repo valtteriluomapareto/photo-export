@@ -104,7 +104,9 @@ struct AutoSyncGeneratedSequenceTests {
       let now = Date(timeIntervalSince1970: 1_700_000_000)
       let scope = AutoExportLibraryScope.allCases[
         generator.pick(AutoExportLibraryScope.allCases.count)]
-      let source: ExportRunSource = generator.pick(2) == 0 ? .autoSync : .manual
+      // Consume the former source choice to preserve all subsequent seeded choices.
+      _ = generator.pick(2)
+      let source = ExportRunSource.autoSync
       let context = ExportRunContext(
         runId: UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", episode + 1))")!,
         source: source, visibility: .userVisible, scope: scope.fullRunScope, selection: .edited,
@@ -119,14 +121,7 @@ struct AutoSyncGeneratedSequenceTests {
         state = AutoSyncReducer.reduce(event, in: state, now: now).0
       }
       func start(_ run: ExportRunContext) {
-        if source == .autoSync {
-          apply(.exportRunStarted(run, destinationId: "A"), "start A \(run.runId)")
-        } else {
-          apply(
-            .exportRunStateChanged(
-              ExportRunState(activeContext: run, isManualActive: true, isAutoSyncActive: false)),
-            "manual start A \(run.runId)")
-        }
+        apply(.exportRunStarted(run, destinationId: "A"), "start A \(run.runId)")
       }
       apply(
         .photosChanged(
@@ -199,9 +194,7 @@ struct AutoSyncGeneratedSequenceTests {
           ? .userCancelled : stoppedBy == .destinationUnavailable ? .destinationUnavailable : nil,
         result: outcome, stoppedBy: stoppedBy)
       apply(
-        source == .autoSync
-          ? .autoSyncRunCompleted(summary, destinationId: "A")
-          : .manualFullExportCompleted(summary),
+        .autoSyncRunCompleted(summary, destinationId: "A"),
         "finish original A \(context.runId): \(outcome) \(stoppedBy?.rawValue ?? "")")
       if mode == 0 {
         let pending = state.dirtyStateByDestination["A"]?.scope(scope)

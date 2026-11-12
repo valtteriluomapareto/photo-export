@@ -227,33 +227,6 @@ struct PublisherParityTests {
     }
   }
 
-  @Test func managerImportStage() async {
-    let f = await ManagerFixture()
-    await withCleanup {
-      await assertPublishedParity(
-        f.manager, \.importStage, { $0.importStagePublisher },
-        change: { f.manager.startImport() },
-        unchangedWrite: .before { f.refuseConfirmedSameFolderCheck() })
-      #expect(f.manager.importStage == .scanningBackupFolder)
-    } cleanup: {
-      await f.close()
-    }
-  }
-
-  @Test func managerIsImportingFlag() async {
-    let f = await ManagerFixture()
-    await withCleanup {
-      await assertPublishedParity(
-        f.manager, \.isImporting, { $0.isImportingFlagOnlyPublisher },
-        change: { f.manager.startImport() },
-        unchangedWrite: .notDrivable(
-          "set when an import starts and cleared once by the import that owns it"))
-      #expect(f.manager.isImporting)
-    } cleanup: {
-      await f.close()
-    }
-  }
-
   /// AutoSync's import hold: `isImporting || previousBackupMissing`, without repeats.
   @Test func managerIsImportingHold() async {
     let f = await ManagerFixture()

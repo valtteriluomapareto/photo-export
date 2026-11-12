@@ -79,8 +79,9 @@ The removed manual-clear comment stated:
 
 > A manual full export for the same destination / selection / scope clears compatible dirty flags.
 
-The current run boundary limits that rule, rather than clearing changes that arrived after
-work started. The [AutoSyncReducer](../../photo-export/AutoSync/AutoSyncReducer.swift) run-boundary comment
+Production manual UI actions do not create awaitable run summaries, so they do not use
+that proposed manual-clear path. AutoSync completions acknowledge only their own start boundary,
+rather than clearing changes that arrived after work started. The [AutoSyncReducer](../../photo-export/AutoSync/AutoSyncReducer.swift) run-boundary comment
 states:
 
 > A single active run only covers work known at its start. A scope is

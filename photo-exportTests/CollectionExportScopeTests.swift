@@ -158,9 +158,7 @@ import Testing
         f.h.manager.cancelAndClear()
         f.h.photoLib.inventoryCheckpoint = nil
         f.h.manager.queueCoordinator.pause()
-        f.h.manager.startExportCollectionsSelection(
-          CollectionsSelectionBuckets(includesFavorites: false, albumIds: ["B"], sharedAlbumIds: [])
-        )
+        f.h.manager.startExportCollectionsSelection(items: [.album(collectionId: "B")])
         let newTasks = f.h.manager.currentPreparationTasks
         for task in newTasks { await task.value }
         await f.gate.releaseAll()

@@ -20,8 +20,7 @@ enum ExportRunScope: Equatable, Codable, Sendable {
   /// separately by `AutoSyncReducer` because it carries its own selection).
   ///
   /// Single source of truth paired with `AutoExportLibraryScope.fullRunScope`.
-  /// `AutoSyncReducer.coveredScopes` and `manualFullExportCompleted` read this
-  /// instead of restating the mapping.
+  /// `AutoSyncReducer.coveredScopes` reads this instead of restating the mapping.
   var clearableScope: AutoExportLibraryScope? {
     switch self {
     case .timelineFullLibrary: return .timeline

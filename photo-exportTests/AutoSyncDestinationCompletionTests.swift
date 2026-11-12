@@ -211,28 +211,4 @@ struct AutoSyncDestinationCompletionTests {
       })
   }
 
-  @Test func manualRunFromPriorDestinationCannotRebindAfterSwitch() {
-    let now = Date(timeIntervalSince1970: 1_700_000_000)
-    var state = AutoSyncReducer.State.initial
-    state.enabled = true
-    state.destination = destination("A")
-    state.scopeSelection = AutoExportScopeSelection(timeline: true)
-    let oldContext = ExportRunContext(
-      source: .manual, visibility: .userVisible,
-      scope: .timelineFullLibrary, selection: .edited)
-    let active = ExportRunState(
-      activeContext: oldContext, isManualActive: true, isAutoSyncActive: false)
-    state = AutoSyncReducer.reduce(.exportRunStateChanged(active), in: state, now: now).0
-    #expect(state.runDirtyBoundary?.destinationId == "A")
-    state =
-      AutoSyncReducer.reduce(
-        .destinationChanged(destination("B")), in: state, now: now
-      ).0
-    state =
-      AutoSyncReducer.reduce(
-        .destinationChanged(destination("A")), in: state, now: now
-      ).0
-    state = AutoSyncReducer.reduce(.exportRunStateChanged(active), in: state, now: now).0
-    #expect(state.runDirtyBoundary == nil)
-  }
 }

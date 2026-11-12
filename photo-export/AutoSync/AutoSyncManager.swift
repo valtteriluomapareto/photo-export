@@ -171,20 +171,6 @@ final class AutoSyncManager: ObservableObject {
       }
       .store(in: &subscriptions)
 
-    // Manual-run completion hook for acknowledging compatible dirty work. AutoSync-
-    // sourced summaries are routed through the `runExport`-await return path
-    // inside `startRun`; filtering here to `.manual` avoids dispatching
-    // `manualFullExportCompleted` for our own runs.
-    environment.exportRunner.completedRunsPublisher
-      .sink { [weak self] summary in
-        dispatchPrecondition(condition: .onQueue(.main))
-        MainActor.assumeIsolated {
-          guard summary.context.source == .manual else { return }
-          self?.dispatch(.manualFullExportCompleted(summary))
-        }
-      }
-      .store(in: &subscriptions)
-
     // Before the enabled flag below, so attaching without access blocks the launch run
     // instead of scheduling it. The value comes from the last refresh; see the refresh
     // points in `scheduleDebounce` and `startRun`.

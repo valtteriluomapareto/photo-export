@@ -55,8 +55,9 @@ struct ExportSettingsCaptureTests {
           years: [2025], months: [.init(year: 2026, month: 2)], selectionOverride: override)
       case .favorites: manager.startExportFavorites(selectionOverride: override)
       case .collectionsSelection:
-        manager.startExportCollectionsSelection(
-          .init(includesFavorites: true, albumIds: ["a"], sharedAlbumIds: ["shared"]))
+        manager.startExportCollectionsSelection(items: [
+          .favorites, .album(collectionId: "a"), .sharedAlbum(collectionId: "shared"),
+        ])
       case .allAlbums: manager.startExportAllAlbums(selectionOverride: override)
       case .allSharedAlbums: manager.startExportAllSharedAlbums(selectionOverride: override)
       case .folder: manager.startExportFolder(folderId: "folder")
@@ -262,7 +263,7 @@ struct ExportSettingsCaptureTests {
     f.manager.progressState.totalJobsEnqueued = 9
     f.manager.progressState.totalJobsCompleted = 4
     let generation = f.manager.generation
-    f.manager.startExportCollectionsSelection(.empty)
+    f.manager.startExportCollectionsSelection(items: [])
     #expect(f.manager.currentPreparationTasks.count == 1)
     #expect(f.manager.emptyRunMessage == "Existing empty message")
     #expect(f.manager.queueWarningMessage == "Existing warning")
